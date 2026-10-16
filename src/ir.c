@@ -13,6 +13,7 @@
  * iris_check_failed. Index and slice bounds are checked in debug and
  * release-safe builds. Debug builds also use AddressSanitizer, which
  * catches use after free. */
+#define _XOPEN_SOURCE 700         /* realpath, for debug info paths */
 #include "iris.h"
 
 #include <math.h>
@@ -61,6 +62,16 @@ typedef struct {
     int spawns;
     const char **temps;     /* the slots of temporary Strings of the statements being written */
     int ntemps, capTemps;
+    StrBuf meta;            /* debug info: files, functions */
+    int metaId;
+    const char **dbgPaths;  /* the files that have a DIFile, and its id */
+    int *dbgIds;
+    int ndbg, capDbg;
+    int dbgScope;           /* the current function's DISubprogram, 0 for none */
+    int dbgLine, dbgCol;    /* where the code being written comes from */
+    Type **dbgTypes;        /* the types that have a debug type, and its id */
+    int *dbgTypeIds;
+    int ndbgT, capDbgT;
     Type **jsonTypes;       /* the types whose JSON tables are written, and their names */
     const char **jsonNames;
     int njson, capJson;
@@ -125,6 +136,8 @@ static void ensureBlock(IR *ir) {
     }
 }
 
+static void putEscaped(StrBuf *b, const char *s, size_t n);
+
 static void ins(IR *ir, const char *f, ...) {
     ensureBlock(ir);
     va_list ap;
@@ -135,8 +148,58 @@ static void ins(IR *ir, const char *f, ...) {
     va_start(ap, f);
     vsnprintf(buf, (size_t)n + 1, f, ap);
     va_end(ap);
-    sbPrintf(&ir->body, "  %s\n", buf);
+    if (ir->dbgScope) {
+        sbPrintf(&ir->body, "  %s, !dbg !DILocation(line: %d, column: %d, scope: !%d)\n", buf, ir->dbgLine,
+                 ir->dbgCol, ir->dbgScope);
+    } else {
+        sbPrintf(&ir->body, "  %s\n", buf);
+    }
     free(buf);
+}
+
+/* The DIFile of a source path, written the first time it is needed. */
+static int dbgFile(IR *ir, const char *path) {
+    for (int i = 0; i < ir->ndbg; i++) {
+        if (strcmp(ir->dbgPaths[i], path) == 0) return ir->dbgIds[i];
+    }
+    if (ir->ndbg == ir->capDbg) {
+        int cap = ir->capDbg ? ir->capDbg * 2 : 8;
+        const char **ps = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        int *ids = arenaAlloc(ir->arena, sizeof(int) * (size_t)cap);
+        if (ir->ndbg) {
+            memcpy(ps, ir->dbgPaths, sizeof(char *) * (size_t)ir->ndbg);
+            memcpy(ids, ir->dbgIds, sizeof(int) * (size_t)ir->ndbg);
+        }
+        ir->dbgPaths = ps;
+        ir->dbgIds = ids;
+        ir->capDbg = cap;
+    }
+    /* the standard library is inside the compiler: its paths stay as they are */
+    char full[4096];
+    const char *name = path, *dir = ".";
+    if (strncmp(path, "std/", 4) != 0 && realpath(path, full)) {
+        char *slash = strrchr(full, '/');
+        *slash = 0;
+        dir = full;
+        name = slash + 1;
+    }
+    int id = ir->metaId++;
+    sbPrintf(&ir->meta, "!%d = !DIFile(filename: \"", id);
+    putEscaped(&ir->meta, name, strlen(name));
+    sbPuts(&ir->meta, "\", directory: \"");
+    putEscaped(&ir->meta, dir, strlen(dir));
+    sbPuts(&ir->meta, "\")\n");
+    ir->dbgPaths[ir->ndbg] = arenaStrndup(ir->arena, path, strlen(path));
+    ir->dbgIds[ir->ndbg++] = id;
+    return id;
+}
+
+/* Where the code written next comes from. */
+static void dbgAt(IR *ir, Node *n) {
+    if (n && n->line > 0) {
+        ir->dbgLine = n->line;
+        ir->dbgCol = n->col;
+    }
 }
 
 static const char *tmp(IR *ir) { return fmt(ir, "%%t%d", ++ir->tmp); }
@@ -187,6 +250,151 @@ static const char *allocaFor(IR *ir, Type *t, const char *hint) {
     const char *name = fmt(ir, "%%v.%s.%d", hint, ++ir->vars);
     sbPrintf(&ir->allocas, "  %s = alloca %s\n", name, llType(ir, t));
     return name;
+}
+
+static int dbgType(IR *ir, Type *t);
+
+/* A struct-like debug type: name, size and members (name, type, offset). */
+static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n) {
+    for (int i = 0; i < n; i++) {
+        int mt = dbgType(ir, types[i]);
+        int m = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %lld, offset: %lld)\n",
+                 m, names[i], mt, (long long)typeSizeOf(types[i]) * 8, (long long)offs[i] * 8);
+        sbPrintf(b, "%s!%d", i ? ", " : "", m);
+    }
+}
+
+/* The debug type of an Iris type, so debuggers can show values. */
+static int dbgType(IR *ir, Type *t) {
+    for (int i = 0; i < ir->ndbgT; i++) {
+        if (ir->dbgTypes[i] == t) return ir->dbgTypeIds[i];
+    }
+    if (ir->ndbgT == ir->capDbgT) {
+        int cap = ir->capDbgT ? ir->capDbgT * 2 : 32;
+        Type **ts = arenaAlloc(ir->arena, sizeof(Type *) * (size_t)cap);
+        int *ids = arenaAlloc(ir->arena, sizeof(int) * (size_t)cap);
+        if (ir->ndbgT) {
+            memcpy(ts, ir->dbgTypes, sizeof(Type *) * (size_t)ir->ndbgT);
+            memcpy(ids, ir->dbgTypeIds, sizeof(int) * (size_t)ir->ndbgT);
+        }
+        ir->dbgTypes = ts;
+        ir->dbgTypeIds = ids;
+        ir->capDbgT = cap;
+    }
+    int id = ir->metaId++;
+    ir->dbgTypes[ir->ndbgT] = t;
+    ir->dbgTypeIds[ir->ndbgT++] = id;
+    long long bits = (long long)typeSizeOf(t) * 8;
+    const char *name = t->name ? t->name : "?";
+    switch (t->kind) {
+    case TY_INT:
+        sbPrintf(&ir->meta, "!%d = !DIBasicType(name: \"%s\", size: %d, encoding: %s)\n", id, name, t->bits,
+                 t->isSigned ? "DW_ATE_signed" : (t->bits == 8 ? "DW_ATE_unsigned_char" : "DW_ATE_unsigned"));
+        break;
+    case TY_FLOAT:
+        sbPrintf(&ir->meta, "!%d = !DIBasicType(name: \"%s\", size: %d, encoding: DW_ATE_float)\n", id, name, t->bits);
+        break;
+    case TY_BOOL:
+        sbPrintf(&ir->meta, "!%d = !DIBasicType(name: \"bool\", size: 8, encoding: DW_ATE_boolean)\n", id);
+        break;
+    case TY_PTR: {
+        int e = t->elem->kind == TY_VOID ? 0 : dbgType(ir, t->elem);
+        if (e) {
+            sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, size: 64)\n", id, e);
+        } else {
+            sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)\n", id);
+        }
+        break;
+    }
+    case TY_SLICE: case TY_STRING: {
+        /* { ptr, len } and String's { ptr, len, cap } */
+        Type elemPtr = {.kind = TY_PTR, .elem = t->kind == TY_STRING ? &tyU8 : t->elem, .name = "ptr"};
+        Type *ep = &elemPtr;
+        Type *pt = NULL;
+        for (int i = 0; i < ir->ndbgT; i++) {
+            if (ir->dbgTypes[i]->kind == TY_PTR && ir->dbgTypes[i]->elem == ep->elem) pt = ir->dbgTypes[i];
+        }
+        if (!pt) {
+            pt = arenaAlloc(ir->arena, sizeof(Type));
+            *pt = elemPtr;
+        }
+        const char *names[3] = {"ptr", "len", "cap"};
+        Type *types[3] = {pt, &tyI64, &tyI64};
+        int64_t offs[3] = {0, 8, 16};
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, t->kind == TY_STRING ? 3 : 2);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
+                 id, name, bits, b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_STRUCT: {
+        NodeList *fs = &t->decl->list;
+        int n = fs->len;
+        const char **names = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(n ? n : 1));
+        Type **types = arenaAlloc(ir->arena, sizeof(Type *) * (size_t)(n ? n : 1));
+        int64_t *offs = arenaAlloc(ir->arena, sizeof(int64_t) * (size_t)(n ? n : 1));
+        for (int i = 0; i < n; i++) {
+            names[i] = fs->items[i]->name;
+            types[i] = fs->items[i]->type;
+            offs[i] = fieldOffset(t, i);
+        }
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, n);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
+                 id, name, bits, b.buf ? b.buf : "");
+        sbFree(&b);
+        break;
+    }
+    case TY_ARRAY: {
+        int e = dbgType(ir, t->elem);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_array_type, baseType: !%d, size: %lld, "
+                            "elements: !{!DISubrange(count: %lld)})\n",
+                 id, e, bits, (long long)t->count);
+        break;
+    }
+    case TY_ENUM:
+        if (!t->hasData) {
+            StrBuf b = {0};
+            for (int i = 0; i < t->decl->list.len; i++) {
+                Node *m = t->decl->list.items[i];
+                sbPrintf(&b, "%s!DIEnumerator(name: \"%s\", value: %lld)", i ? ", " : "", m->name, (long long)m->cval);
+            }
+            sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_enumeration_type, name: \"%s\", size: 32, "
+                                "elements: !{%s})\n",
+                     id, name, b.buf ? b.buf : "");
+            sbFree(&b);
+            break;
+        }
+        /* an enum with data shows as its bytes */
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{})\n",
+                 id, name, bits);
+        break;
+    default:
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{})\n",
+                 id, name, bits > 0 ? bits : 64);
+        break;
+    }
+    return id;
+}
+
+/* A named variable's stack slot, with what a debugger needs to find it.
+ * arg is the parameter's position from 1, or 0 for a local. */
+static const char *varSlot(IR *ir, Type *t, Node *decl, int arg) {
+    const char *slot = allocaFor(ir, t, decl->name);
+    if (ir->dbgScope && decl->name && strcmp(decl->name, "_") != 0) {
+        int file = dbgFile(ir, ir->func->src->path);
+        int ty = dbgType(ir, t);
+        int v = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DILocalVariable(name: \"%s\", %sscope: !%d, file: !%d, line: %d, type: !%d)\n", v,
+                 decl->name, arg ? fmt(ir, "arg: %d, ", arg) : "", ir->dbgScope, file, decl->line, ty);
+        sbPrintf(&ir->allocas,
+                 "  call void @llvm.dbg.declare(metadata ptr %s, metadata !%d, metadata !DIExpression()), "
+                 "!dbg !DILocation(line: %d, column: %d, scope: !%d)\n",
+                 slot, v, decl->line, decl->col, ir->dbgScope);
+    }
+    return slot;
 }
 
 /* A constant integer as LLVM writes it: the value sign-extended from the
@@ -1439,7 +1647,7 @@ static Val emitCatch(IR *ir, Node *e) {
         }
     } else {
         Node *var = e->d;
-        var->ir = allocaFor(ir, &tyErrorValue, var->name);
+        var->ir = varSlot(ir, &tyErrorValue, var, 0);
         ins(ir, "store i64 %s, ptr %s", err, var->ir);
         if (e->c->kind == N_MATCH) {
             Val v = emitMatch(ir, e->c, value);
@@ -1539,6 +1747,7 @@ static Val emitArrayLit(IR *ir, Node *e) {
 }
 
 static Val emitExpr(IR *ir, Node *e) {
+    dbgAt(ir, e);
     if (e->isConst && e->type) {
         if (e->type->kind == TY_BOOL) {
             return val(e->cval ? "true" : "false", &tyBool);
@@ -1852,7 +2061,7 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
                 const char *f = tmp(ir);
                 ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", f, data->ir, room, k);
                 Val v = load(ir, f, data->elems[k]);
-                b->ir = allocaFor(ir, data->elems[k], b->name);
+                b->ir = varSlot(ir, data->elems[k], b, 0);
                 ins(ir, "store %s %s, ptr %s", llType(ir, data->elems[k]), v.s, b->ir);
             }
         }
@@ -1898,7 +2107,7 @@ static void emitFor(IR *ir, Node *s) {
     if ((s->flags & F_FOR_IN) && s->a->kind == N_BINARY && s->a->op == P_DOTDOT) {
         Node *range = s->a, *v = s->list.items[0];
         Type *t = range->type;
-        v->ir = allocaFor(ir, t, v->name);
+        v->ir = varSlot(ir, t, v, 0);
         const char *endSlot = allocaFor(ir, t, "end");
         Val lo = emitExpr(ir, range->a);
         ins(ir, "store %s %s, ptr %s", llType(ir, t), lo.s, v->ir);
@@ -1939,7 +2148,7 @@ static void emitFor(IR *ir, Node *s) {
         if (idx) {
             idx->ir = iSlot;
         }
-        item->ir = allocaFor(ir, ct->elem, item->name);
+        item->ir = varSlot(ir, ct->elem, item, 0);
         ins(ir, "store i64 0, ptr %s", iSlot);
         placeLabel(ir, cond);
         Val i = load(ir, iSlot, &tyI64);
@@ -2186,7 +2395,7 @@ static void emitSelect(IR *ir, Node *s) {
         condBr(ir, is, body, next);
         placeLabel(ir, body);
         if (i < n && arm->d && strcmp(arm->d->name, "_") != 0) {
-            arm->d->ir = allocaFor(ir, arm->d->type, arm->d->name);
+            arm->d->ir = varSlot(ir, arm->d->type, arm->d, 0);
             Val v = load(ir, slots[i], arm->d->type);
             ins(ir, "store %s %s, ptr %s", llType(ir, arm->d->type), v.s, arm->d->ir);
         }
@@ -2206,6 +2415,7 @@ static void emitStmtInner(IR *ir, Node *s);
 
 /* A statement, then the temporary Strings its expressions made. */
 static void emitStmt(IR *ir, Node *s) {
+    dbgAt(ir, s);
     int mark = ir->ntemps;
     emitStmtInner(ir, s);
     if (!ir->terminated) {
@@ -2217,7 +2427,7 @@ static void emitStmt(IR *ir, Node *s) {
 static void emitStmtInner(IR *ir, Node *s) {
     switch (s->kind) {
     case N_VAR: {
-        s->ir = allocaFor(ir, s->type, s->name);
+        s->ir = varSlot(ir, s->type, s, 0);
         if (s->b) {
             Val v = emitExpr(ir, s->b);
             if (!ir->terminated) {
@@ -2248,7 +2458,7 @@ static void emitStmtInner(IR *ir, Node *s) {
                 if (strcmp(id->name, "_") == 0) {
                     continue;
                 }
-                id->ir = allocaFor(ir, id->type, id->name);
+                id->ir = varSlot(ir, id->type, id, 0);
                 const char *x = tmp(ir);
                 ins(ir, "%s = extractvalue %s %s, %d", x, llType(ir, v.t), v.s, i);
                 ins(ir, "store %s %s, ptr %s", llType(ir, id->type), x, id->ir);
@@ -2256,7 +2466,7 @@ static void emitStmtInner(IR *ir, Node *s) {
             return;
         }
         Node *id = s->list.items[0];
-        id->ir = allocaFor(ir, id->type, id->name);
+        id->ir = varSlot(ir, id->type, id, 0);
         Val v = emitExpr(ir, s->b);
         if (!ir->terminated) {
             ins(ir, "store %s %s, ptr %s", llType(ir, id->type), v.s, id->ir);
@@ -2366,14 +2576,34 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->allocas = (StrBuf){0};
     ir->body = (StrBuf){0};
 
+    ir->dbgScope = 0;
+    if (f->src) {
+        /* the function's DISubprogram: debuggers and AddressSanitizer show Iris lines */
+        int file = dbgFile(ir, f->src->path);
+        int sp = ir->metaId++;
+        const char *link = f->ir[1] == '"' ? f->ir + 2 : f->ir + 1;
+        size_t linkLen = strlen(link) - (f->ir[1] == '"' ? 1 : 0);
+        sbPrintf(&ir->meta, "!%d = distinct !DISubprogram(name: \"%s\", linkageName: \"", sp, f->name);
+        putEscaped(&ir->meta, link, linkLen);
+        sbPrintf(&ir->meta, "\", scope: !%d, file: !%d, line: %d, type: !11, scopeLine: %d, "
+                            "spFlags: DISPFlagDefinition%s, unit: !10)\n",
+                 file, file, f->line, f->line, (f->flags & F_EXPORT) ? "" : " | DISPFlagLocalToUnit");
+        ir->dbgScope = sp;
+        ir->dbgLine = f->line;
+        ir->dbgCol = f->col;
+    }
     sbPrintf(out, "define %s%s %s(", (f->flags & F_EXPORT) ? "" : "internal ", llType(ir, f->type), f->ir);
     for (int i = 0; i < f->list.len; i++) {
         Node *p = f->list.items[i];
         sbPrintf(out, "%s%s %%p.%s", i ? ", " : "", llType(ir, p->type), p->name);
-        p->ir = allocaFor(ir, p->type, p->name);
+        p->ir = varSlot(ir, p->type, p, i + 1);
         sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(ir, p->type), p->name, p->ir);
     }
-    sbPuts(out, ir->mode == MODE_DEBUG ? ") #0 {\n" : ") {\n");
+    sbPuts(out, ir->mode == MODE_DEBUG ? ") #0" : ")");
+    if (ir->dbgScope) {
+        sbPrintf(out, " !dbg !%d", ir->dbgScope);
+    }
+    sbPuts(out, " {\n");
 
     ir->defers = NULL;
     if (f->d) {
@@ -2482,6 +2712,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     Node *firstFile = prog->main->files.items[0];
     ir.src = firstFile->src;
     ir.fileStr = cString(&ir, ir.src->path);
+    ir.metaId = 12;                 /* !10 is the compile unit, !11 the function type */
+    int mainFile = dbgFile(&ir, ir.src->path);
 
     StrBuf types = {0}, funcs = {0};
     Node *mainFn = NULL;
@@ -2702,6 +2934,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
            "declare void @iris_write_float(i32, ptr, double, i32)\n"
            "declare void @iris_spawn(ptr, ptr)\n"
+           "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n"
            "declare ptr @iris_thread_new(ptr, ptr)\n"
            "declare void @iris_thread_join(ptr)\n"
            "declare void @iris_thread_detach(ptr)\n"
@@ -2717,6 +2950,15 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i64 @iris_select(i64, ptr, ptr, i64)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
+    sbPrintf(&out, "!llvm.dbg.cu = !{!10}\n!llvm.module.flags = !{!1, !2}\n"
+                   "!1 = !{i32 2, !\"Debug Info Version\", i32 3}\n!2 = !{i32 7, !\"Dwarf Version\", i32 4}\n"
+                   "!10 = distinct !DICompileUnit(language: DW_LANG_C, file: !%d, producer: \"iris %s\", "
+                   "isOptimized: %s, runtimeVersion: 0, emissionKind: FullDebug)\n!11 = !DISubroutineType(types: !{})\n",
+             mainFile, IRIS_VERSION, mode == MODE_DEBUG ? "false" : "true");
+    if (ir.meta.buf) {
+        sbPuts(&out, ir.meta.buf);
+    }
+    sbFree(&ir.meta);
     if (mode == MODE_DEBUG) {
         sbPuts(&out, "attributes #0 = { sanitize_address }\n");
     }
