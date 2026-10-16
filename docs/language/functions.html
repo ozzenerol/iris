@@ -66,6 +66,14 @@ hi, iris</code></pre>
 q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)      <span class="c">// q is 3, r is 2</span></code></pre>
 <p><code>_</code> skips a value:</p>
 <pre class="code"><code>_, r := divmod(<span class="n">17</span>, <span class="n">5</span>)</code></pre>
+<p>Several values can be declared or assigned at once. The values on the right are worked out before any is stored, so this swaps two variables:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    x, y := <span class="n">1</span>, <span class="n">2</span>
+    x, y = y, x
+    print(<span class="s">&quot;{x} {y}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>2 1</code></pre>
+<p>A function's several values must be unpacked into names; they can't be kept in one variable.</p>
 <h2 id="functions-as-values"><a href="#functions-as-values">Functions as values</a></h2>
 <p>A function's name can be passed to another function. The parameter's type is written as the return type followed by the parameter types:</p>
 <pre class="code"><code><span class="t">i64</span> apply(<span class="t">i64</span>(<span class="t">i64</span>) f, <span class="t">i64</span> x) =&gt; f(x)

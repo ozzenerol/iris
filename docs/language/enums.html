@@ -54,13 +54,50 @@ Packet q = .Close(<span class="n">1000</span>, <span class="s">&quot;bye&quot;</
     Data(bytes) =&gt; handle(bytes)
     Close(code, reason) =&gt; print(<span class="s">&quot;closed {code}: {reason}&quot;</span>)
 }</code></pre>
-<p>Every value must have an arm, or there must be a <code>_</code>.</p>
+<p>Every value must have an arm, or there must be a <code>_</code>. A field you don't need is named <code>_</code>, and a value's name without parentheses matches it whatever its data:</p>
+<pre class="code"><code><span class="k">match</span> p {
+    Data(_) =&gt; print(<span class="s">&quot;some data&quot;</span>)
+    Close =&gt; print(<span class="s">&quot;closed&quot;</span>)
+    _ =&gt; {}
+}</code></pre>
+<p>Values of an enum with data can't be compared with <code>==</code>. Use <code>match</code>.</p>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="k">enum</span> Shape {
+    Circle(<span class="t">i64</span> r)
+    Rect(<span class="t">i64</span> w, <span class="t">i64</span> h)
+    Empty
+}
+
+<span class="t">i64</span> area(Shape s) =&gt; <span class="k">match</span> s {
+    Circle(r) =&gt; <span class="n">3</span> * r * r
+    Rect(w, h) =&gt; w * h
+    Empty =&gt; <span class="n">0</span>
+}
+
+<span class="t">void</span> main() {
+    Shape[<span class="n">3</span>] shapes = [Shape.Circle(<span class="n">2</span>), .Rect(<span class="n">5</span>, <span class="n">5</span>), .Empty]
+    <span class="k">for</span> s <span class="k">in</span> shapes {
+        print(<span class="s">&quot;{s}: {area(s)}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>Circle: 12
+Rect: 25
+Empty: 0</code></pre>
 <h2 id="flags"><a href="#flags">Flags</a></h2>
 <p>An enum marked <code>flags</code> gives its values powers of two, so they can be combined with <code>|</code>. <code>has</code> checks for a value:</p>
 <pre class="code"><code><span class="k">enum</span> Perm flags { read, write, exec }
 
 Perm p = .read | .write
 <span class="k">if</span> p.has(.write) { }</code></pre>
+<p><code>&amp;</code>, <code>|</code>, <code>^</code> and <code>~</code> work on flags, and printing shows the names of the values that are set:</p>
+<pre class="code run"><code><span class="k">enum</span> Perm flags { read, write, exec }
+
+<span class="t">void</span> main() {
+    Perm p = .read | .write
+    print(<span class="s">&quot;{p}, write: {p.has(.write)}, exec: {p.has(.exec)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>read|write, write: true, exec: false</code></pre>
+<p>A flag enum can have up to 31 values.</p>
 <div class="pager"><a href="structs.html">&larr; Structs</a><a href="pointers-and-memory.html">Pointers and memory &rarr;</a></div>
 </main></div>
 </body>

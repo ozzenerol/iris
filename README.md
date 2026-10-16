@@ -2,7 +2,7 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-The language is being designed. Version 0.4 runs programs with integers, `bool`, functions, `if`, `for`, `match`, constants, structs, methods, pointers, arrays, slices, strings, enums, errors and `defer`.
+The language is being designed. Version 0.5 runs programs with integers, `bool`, functions, `if`, `for`, `match`, constants, structs, methods, pointers, arrays, slices, strings, enums (also with data), errors, `defer` and several return values.
 
 ## Building
 
