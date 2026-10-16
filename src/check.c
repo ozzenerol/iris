@@ -36,10 +36,12 @@ Type tyStr = {.kind = TY_SLICE, .name = "str", .elem = &tyU8};
 Type tyString = {.kind = TY_STRING, .name = "String", .ir = "%String"};
 Type tyErrorValue = {.kind = TY_ERRVAL, .name = "Error"};
 Type tyErrCode = {.kind = TY_ERRCODE, .name = "error code"};
+Type tyMutex = {.kind = TY_MUTEX, .name = "Mutex"};
+Type tyThread = {.kind = TY_THREAD, .name = "Thread"};
 
 static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &tyU32,
                                &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue,
-                               &tyDuration};
+                               &tyDuration, &tyMutex, &tyThread};
 
 /* types that exist in the language but not in this version yet */
 static const struct {
@@ -260,6 +262,8 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
         sbPrintf(&b, "%s%s", elem->name, elem->kind == TY_PTR ? "*" : " *");
     } else if (kind == TY_CHAN) {
         sbPrintf(&b, "chan[%s]", elem->name);
+    } else if (kind == TY_ATOMIC) {
+        sbPrintf(&b, "Atomic[%s]", elem->name);
     } else if (kind == TY_RESULT) {
         sbPrintf(&b, "!%s", elem->name);
     } else if (kind == TY_SLICE) {
@@ -348,7 +352,8 @@ static bool sameType(Type *a, Type *b) {
     switch (a->kind) {
     case TY_INT: return a->bits == b->bits && a->isSigned == b->isSigned;
     case TY_FLOAT: return a->bits == b->bits;
-    case TY_PTR: case TY_SLICE: case TY_RESULT: case TY_CHAN: return sameType(a->elem, b->elem);
+    case TY_PTR: case TY_SLICE: case TY_RESULT: case TY_CHAN: case TY_ATOMIC:
+        return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
     case TY_TUPLE: case TY_FUNC:
@@ -390,7 +395,9 @@ static int64_t typeSize(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
     case TY_INT: case TY_FLOAT: return t->bits / 8;
-    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: return 8;
+    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD: return 8;
+    case TY_ATOMIC: return typeSize(t->elem);
+    case TY_MUTEX: return 24;
     case TY_SLICE: return 16;
     case TY_STRING: return 24;
     case TY_ERRVAL: case TY_ERRCODE: return 8;
@@ -418,6 +425,7 @@ static int64_t typeSize(Type *t) {
 static int64_t typeAlign(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
+    case TY_ATOMIC: return typeAlign(t->elem);
     case TY_INT: case TY_FLOAT: return t->bits / 8;
     case TY_ARRAY: return typeAlign(t->elem);
     case TY_ENUM: return t->hasData ? 8 : 4;
@@ -714,6 +722,19 @@ static Type *resolveType(Checker *c, Node *t) {
     case N_T_GENERIC: {
         Node *base = t->a;
         Node *d = base->kind == N_T_NAME ? lookup(c, base->name) : NULL;
+        if (!d && base->kind == N_T_NAME && strcmp(base->name, "Atomic") == 0) {
+            if (t->list.len != 1) {
+                error(c, t, "Atomic takes one type: Atomic[i64]");
+                return &tyError;
+            }
+            Type *e = resolveType(c, t->list.items[0]);
+            if (isErr(e)) return e;
+            if (e->kind != TY_INT && e->kind != TY_BOOL) {
+                error(c, t->list.items[0], "Atomic holds an integer or a bool, not %s", e->name);
+                return &tyError;
+            }
+            return compound(TY_ATOMIC, e, 0);
+        }
         if (!d || d->kind != N_STRUCT || !d->list2.len) {
             if (d && d->kind == N_STRUCT) {
                 error(c, t, "%s is not generic", base->name);
@@ -1385,6 +1406,7 @@ static Type *typeFromExpr(Checker *c, Node *e, bool report) {
 /* ---------------------------------------------------------------- constants */
 
 static Type *checkExpr(Checker *c, Node **slot, Type *expected);
+static bool checkStarted(Checker *c, Node **callp, const char *word, const char *what);
 static void checkConstDecl(Checker *c, Node *decl);
 
 static void constError(Checker *c, Node *e, const char *msg) {
@@ -1793,7 +1815,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         } else if (tb->kind == TY_NULL && (ta->kind == TY_PTR || ta->kind == TY_FUNC)) {
             e->b->type = ta;
         } else {
-            if (isNumber(ta) && isNumber(tb)) {
+            if (ta->kind == TY_ATOMIC || tb->kind == TY_ATOMIC) {
+                error(c, e, "an Atomic's value is read with .load()");
+            } else if (isNumber(ta) && isNumber(tb)) {
                 error(c, e, "'%s' can't mix %s and %s; convert one side, for example %s(...)", tokName(op),
                       ta->name, tb->name, isFloat(tb) && !isFloat(ta) ? tb->name : ta->name);
             } else {
@@ -2346,6 +2370,12 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         if (t->kind == TY_STRUCT) resolveStruct(c, t);
         return setType(e, chanOf(t));
     }
+    case N_THREAD: {
+        if (!checkStarted(c, &e->a, "thread", "a thread")) {
+            return setType(e, &tyError);
+        }
+        return setType(e, &tyThread);
+    }
     case N_BINARY:
         return checkBinary(c, e, expected);
     case N_CALL:
@@ -2584,6 +2614,90 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
     }
 }
 
+/* The call after spawn or thread: a function of the program, worked out
+ * now and run later, whose result nobody receives. */
+static bool checkStarted(Checker *c, Node **callp, const char *word, const char *what) {
+    Node *call = *callp;
+    if (call->kind != N_CALL) {
+        error(c, call, "%s starts a function: %s handle(conn)", word, word);
+        checkExpr(c, callp, NULL);
+        return false;
+    }
+    c->allowResult = true;
+    Type *t = checkExpr(c, callp, NULL);
+    call = *callp;
+    if (isErr(t)) return false;
+    if (call->builtin && call->builtin != BI_INDIRECT) {
+        error(c, call, "%s starts a function of the program, not a built-in", word);
+        return false;
+    }
+    if (t->kind == TY_RESULT) {
+        error(c, call, "%s can't return an error, since nothing waits for it; handle the error inside", what);
+        return false;
+    }
+    if (c->inDefer) {
+        error(c, call, "a deferred statement can't %s", word);
+        return false;
+    }
+    return true;
+}
+
+/* Methods of Atomic[T], Mutex and Thread. */
+static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
+    Node *recv = e->a->a;
+    Type *base = t->kind == TY_PTR ? t->elem : t;
+    if (t->kind != TY_PTR && base->kind != TY_THREAD && !addressable(recv)) {
+        error(c, recv, "%s must be called on a variable, a field or through a pointer", name);
+        return setType(e, &tyError);
+    }
+    struct { int kind; const char *name; int bi; int args; } methods[] = {
+        {TY_ATOMIC, "load", BI_ATOMIC_LOAD, 0}, {TY_ATOMIC, "store", BI_ATOMIC_STORE, 1},
+        {TY_ATOMIC, "add", BI_ATOMIC_ADD, 1}, {TY_ATOMIC, "sub", BI_ATOMIC_SUB, 1},
+        {TY_ATOMIC, "swap", BI_ATOMIC_SWAP, 1}, {TY_ATOMIC, "cas", BI_ATOMIC_CAS, 2},
+        {TY_MUTEX, "lock", BI_MUTEX_LOCK, 0}, {TY_MUTEX, "unlock", BI_MUTEX_UNLOCK, 0},
+        {TY_MUTEX, "tryLock", BI_MUTEX_TRY_LOCK, 0}, {TY_THREAD, "join", BI_THREAD_JOIN, 0},
+    };
+    for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
+        if ((int)base->kind != methods[i].kind || strcmp(methods[i].name, name) != 0) continue;
+        int bi = methods[i].bi;
+        if (base->kind == TY_ATOMIC && base->elem->kind == TY_BOOL && (bi == BI_ATOMIC_ADD || bi == BI_ATOMIC_SUB)) {
+            error(c, e, "%s is for numbers; an Atomic[bool] has load, store, swap and cas", name);
+            return setType(e, &tyError);
+        }
+        if (e->list.len != methods[i].args) {
+            if (methods[i].args == 0) {
+                error(c, e, "%s takes no arguments", name);
+            } else if (methods[i].args == 1) {
+                error(c, e, "%s takes one argument, the %s value", name, base->elem->name);
+            } else {
+                error(c, e, "cas takes two arguments: the value expected and the new one");
+            }
+            return setType(e, &tyError);
+        }
+        for (int k = 0; k < e->list.len; k++) {
+            Node **a = &e->list.items[k];
+            if ((*a)->kind == N_NAMED_ARG) {
+                error(c, *a, "%s takes no named arguments", name);
+                return setType(e, &tyError);
+            }
+            Type *at = checkExpr(c, a, base->elem);
+            if (isErr(at)) return setType(e, &tyError);
+            coerce(c, a, base->elem, "the value");
+        }
+        e->builtin = bi;
+        switch (bi) {
+        case BI_ATOMIC_LOAD: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB: case BI_ATOMIC_SWAP:
+            return setType(e, base->elem);
+        case BI_ATOMIC_CAS: case BI_MUTEX_TRY_LOCK:
+            return setType(e, &tyBool);
+        default:
+            return setType(e, &tyVoid);
+        }
+    }
+    error(c, e->a, "%s has no method %s", base->name, name);
+    return setType(e, &tyError);
+}
+
 /* A method call: v.m(...). The receiver becomes the first argument, as a
  * pointer. */
 static Type *checkMethodCall(Checker *c, Node *e) {
@@ -2635,6 +2749,13 @@ static Type *checkMethodCall(Checker *c, Node *e) {
                 e->builtin = BI_STRING_FREE;
             }
             return setType(e, &tyVoid);
+        }
+    }
+
+    {
+        Type *base = t->kind == TY_PTR ? t->elem : t;
+        if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD) {
+            return checkSyncMethod(c, e, t, name);
         }
     }
 
@@ -3489,8 +3610,8 @@ static void checkLocalVar(Checker *c, Node *s) {
     }
     resolveStruct(c, t);
     s->type = t;
-    if (s->flags & (F_THREADLOCAL | F_ATOMIC)) {
-        notYet(c, s, "threadlocal and atomic", "a later version");
+    if (s->flags & F_THREADLOCAL) {
+        error(c, s, "threadlocal is for global variables; a local variable belongs to its task already");
     }
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
@@ -3738,7 +3859,10 @@ static void checkStmt(Checker *c, Node *s) {
         }
         checkExpr(c, &s->a, NULL);
         Node *x = s->a;
-        bool used = x->kind == N_CALL || (x->kind == N_BINARY && x->op == P_LARROW) ||
+        if (x->kind == N_THREAD) {
+            x->ival = 1;            /* nobody joins it: it frees itself */
+        }
+        bool used = x->kind == N_CALL || x->kind == N_THREAD || (x->kind == N_BINARY && x->op == P_LARROW) ||
                     ((x->kind == N_TRY || x->kind == N_CATCH) &&
                                           (x->type == &tyVoid || x->type->kind == TY_NORETURN));
         if (!used && (x->kind == N_TRY || x->kind == N_CATCH) && !isErr(x->type)) {
@@ -3872,26 +3996,9 @@ static void checkStmt(Checker *c, Node *s) {
         c->inDefer = savedDefer;
         return;
     }
-    case N_SPAWN: {
-        Node *call = s->a;
-        if (call->kind != N_CALL) {
-            error(c, call, "spawn starts a function: spawn handle(conn)");
-            checkExpr(c, &s->a, NULL);
-            return;
-        }
-        c->allowResult = true;
-        Type *t = checkExpr(c, &s->a, NULL);
-        call = s->a;
-        if (isErr(t)) return;
-        if (call->builtin && call->builtin != BI_INDIRECT) {
-            error(c, call, "spawn starts a function of the program, not a built-in");
-        } else if (t->kind == TY_RESULT) {
-            error(c, call, "a task can't return an error, since nothing waits for it; handle the error inside");
-        } else if (c->inDefer) {
-            error(c, s, "a deferred statement can't spawn");
-        }
+    case N_SPAWN:
+        checkStarted(c, &s->a, "spawn", "a task");
         return;
-    }
     case N_SELECT: {
         bool hasAfter = false;
         for (int i = 0; i < s->list.len; i++) {
@@ -4521,9 +4628,6 @@ bool checkProgram(Arena *a, Program *prog) {
             Type *t = resolveType(&c, d->a);
             resolveStruct(&c, t);
             d->type = t;
-            if (d->flags & (F_THREADLOCAL | F_ATOMIC)) {
-                notYet(&c, d, "threadlocal and atomic", "a later version");
-            }
             if (d->b && !isErr(t)) {
                 checkGlobalValue(&c, &d->b, t);
             }

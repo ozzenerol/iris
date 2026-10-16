@@ -101,7 +101,7 @@ static const struct {
     {"comptime", K_COMPTIME}, {"when", K_WHEN}, {"import", K_IMPORT},
     {"try", K_TRY}, {"catch", K_CATCH}, {"defer", K_DEFER},
     {"errdefer", K_ERRDEFER}, {"scoped", K_SCOPED}, {"spawn", K_SPAWN},
-    {"select", K_SELECT}, {"chan", K_CHAN}, {"atomic", K_ATOMIC},
+    {"select", K_SELECT}, {"chan", K_CHAN}, {"thread", K_THREAD},
     {"threadlocal", K_THREADLOCAL}, {"asm", K_ASM}, {"test", K_TEST},
     {"true", K_TRUE}, {"false", K_FALSE}, {"null", K_NULL},
 };

@@ -102,6 +102,10 @@ dyn Writer  =  { void *data, WriterTable *table }
 
 Each task has its own stack, 256 KiB with a guard page below it, so running past it crashes instead of corrupting memory. A scheduler in the runtime runs the tasks on top of an event loop. On Linux the loop uses io_uring: reads and accepts are handed to the kernel, and one system call per turn submits them all and collects the results. Where io_uring is missing or blocked, as in many containers, the loop uses epoll, and on macOS it uses kqueue. `IRIS_IO=epoll` picks epoll on Linux. Each file descriptor is added to epoll or kqueue once and stays there until it is closed. Finished tasks keep their stacks for the next spawns, up to 16 per thread. When a task waits for I/O, a channel or a timer, the scheduler saves its registers and switches to another task, with a few instructions of assembly per machine (x86_64 and arm64). When the wait is over, the task continues where it stopped.
 
-`spawn f(a, b)` stores the arguments in memory and starts a task with a small function the compiler writes, which reads them back, makes the call and frees them.
+`spawn f(a, b)` stores the arguments in memory and starts a task with a small function the compiler writes, which reads them back, makes the call and frees them. `thread f(a, b)` does the same on a new thread.
+
+Each thread has its own scheduler. A task that another thread wakes, for example by sending to a channel it waits on, goes into its thread's inbox, and a write to the thread's wake descriptor (an eventfd on Linux, a pipe on macOS) interrupts its event loop. Channels and `Mutex` keep a short spin lock. A task waiting in `select` on several channels can be woken by any of them, so each waker first claims the task; only the first claim wakes it.
+
+`Atomic[T]` methods become LLVM atomic instructions. A `Mutex` is 24 bytes: a spin lock, a flag, and the list of waiting tasks.
 
 A channel is a ring buffer of values with lists of the tasks waiting to put into it or take out of it. `select` puts its task on the list of every channel it waits on, and on the timer list for `after`.

@@ -1,0 +1,9 @@
+// panic: unlock of a Mutex that isn't locked
+
+Mutex mu
+
+void main() {
+    mu.lock()
+    mu.unlock()
+    mu.unlock()
+}

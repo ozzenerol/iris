@@ -160,39 +160,25 @@ void serveConn(net.Conn conn, void(Request *, Response *) handler) {
     }
 }
 
-@extern("iris_thread_start")
-void threadStart(void(u8 *) fn, u8 *arg)
-
 @extern("iris_cpu_count")
 i64 cpuCount()
 
 @extern("iris_listen_per_thread")
 i32 listenPerThread()
 
-struct ThreadArgs {
-    net.Listener ln
-    bool own
-    u16 port
-    str host
-    void(Request *, Response *) handler
-}
-
-void serveThread(u8 *raw) {
-    ThreadArgs *a = raw
-    ln := a.ln
-    if a.own {
-        ln = net.listen(a.port, a.host, true) catch e {
+void serveThread(net.Listener shared, bool own, u16 port, str host, void(Request *, Response *) handler) {
+    ln := shared
+    if own {
+        ln = net.listen(port, host, true) catch e {
             return
         }
     }
-    acceptLoop(ln, a.handler) catch e { }
+    acceptLoop(ln, handler) catch e { }
 }
 
 void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, void(Request *, Response *) handler) {
     for i in 1..n {
-        ThreadArgs[] a = alloc(ThreadArgs, 1)
-        a[0] = ThreadArgs{ln: ln, own: own, port: port, host: host, handler: handler}
-        threadStart(serveThread, &a[0])
+        thread serveThread(ln, own, port, host, handler)
     }
 }
 

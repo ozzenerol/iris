@@ -205,11 +205,11 @@ static const char *jType(JVal *o) {
 static const char *irisKeywords[] = {
     "if", "else", "for", "in", "match", "break", "continue", "return", "struct", "union", "enum",
     "interface", "type", "dyn", "pub", "const", "comptime", "when", "import", "try", "catch",
-    "defer", "errdefer", "scoped", "spawn", "select", "chan", "atomic", "threadlocal", "asm",
+    "defer", "errdefer", "scoped", "spawn", "select", "chan", "thread", "threadlocal", "asm",
     "test", "true", "false", "null", "self", "_",
     /* built-in names and types */
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool", "void", "str", "String",
-    "Error", "print", "panic", "format", "alloc", "free", "error", "sleep", "after", "Duration",
+    "Error", "print", "panic", "format", "alloc", "free", "error", "sleep", "after", "Duration", "Mutex", "Thread", "Atomic",
 };
 
 /* A C name as an Iris name: keywords and built-in names get a _ after them. */

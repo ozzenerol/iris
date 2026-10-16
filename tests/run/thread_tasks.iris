@@ -1,0 +1,22 @@
+// expect: 30 tasks done
+
+Atomic[i64] done
+
+void job() {
+    sleep(1ms)
+    done.add(1)
+}
+
+void starter(i64 n) {
+    for i in 0..n {
+        spawn job()
+    }
+}
+
+void main() {
+    a := thread starter(10)
+    b := thread starter(20)
+    a.join()
+    b.join()
+    print("{done.load()} tasks done")
+}

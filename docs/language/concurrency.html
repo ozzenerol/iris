@@ -10,7 +10,7 @@
 <header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
 <div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html" class="here">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
 <h1>Concurrency</h1>
-<p class="lede">Running several things at once: tasks that take turns while they wait, and channels to pass values between them.</p>
+<p class="lede">Running several things at once: tasks that take turns while they wait, threads that run at the same time, and channels, atomics and locks to share work between them.</p>
 <h2 id="tasks"><a href="#tasks">Tasks</a></h2>
 <p><code>spawn</code> starts a function call as a task and returns right away. The arguments are worked out first. Tasks are cheap, so a server can start one for each connection:</p>
 <pre class="code"><code>!<span class="t">void</span> serve(<span class="t">u16</span> port) {
@@ -77,10 +77,78 @@ jobs &lt;- Job{id: <span class="n">1</span>}</code></pre>
 <pre class="out"><code>total 14
 nothing came</code></pre>
 <h2 id="threads"><a href="#threads">Threads</a></h2>
-<p>A program starts with one thread, and its tasks stay on it. <code>http.serve</code> starts more: an event loop on each CPU core, each with its own tasks. The handler then runs on several threads at once, so data it shares with other handlers must not change while they run.</p>
+<p>A program starts with one thread, and its tasks stay on it. <code>thread</code> starts a function call on a new thread and gives a <code>Thread</code>. Like <code>spawn</code>, the arguments are worked out first:</p>
+<pre class="code"><code>t := thread compress(path, out)
+<span class="c">// other work here</span>
+t.join()</code></pre>
+<p>Threads run at the same time, each on a CPU core when there are enough. Each thread has its own tasks: a task started inside a thread stays on that thread. A thread ends when its function and all the tasks it started have finished. <code>join</code> waits for that, while the other tasks of the joining thread keep running. A <code>Thread</code> is joined once.</p>
+<p><code>thread f()</code> on its own, without keeping the <code>Thread</code>, starts a thread that nobody waits for. The program still ends when <code>main</code> returns.</p>
+<p>Channels work between threads: any task can send to or take from a channel, wherever it runs.</p>
+<pre class="code"><code><span class="t">void</span> worker(<span class="k">chan</span>[Job] jobs, <span class="k">chan</span>[Result] results) {
+    <span class="k">for</span> {
+        j := &lt;-jobs
+        results &lt;- run(j)
+    }
+}
+
+<span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
+    thread worker(jobs, results)
+}</code></pre>
+<p><code>http.serve</code> starts threads too: an event loop on each CPU core. The handler then runs on several threads at once.</p>
 <pre class="code"><code><span class="k">try</span> http.serve(<span class="n">8080</span>, route)              <span class="c">// one thread per core</span>
 <span class="k">try</span> http.serve(<span class="n">8080</span>, route, threads: <span class="n">1</span>)  <span class="c">// everything on one thread</span></code></pre>
-<p>Starting threads yourself, <code>threadlocal</code>, atomics and locks are planned for a later version.</p>
+<h2 id="atomics"><a href="#atomics">Atomics</a></h2>
+<p>A global variable that threads change at the same time needs an atomic or a lock. <code>Atomic[T]</code> holds an integer or a <code>bool</code> that every thread can change safely. It is used only through its methods:</p>
+<pre class="code"><code>Atomic[<span class="t">i64</span>] requests
+
+requests.add(<span class="n">1</span>)             <span class="c">// gives the new value</span>
+n := requests.load()
+requests.store(<span class="n">0</span>)
+old := requests.swap(<span class="n">5</span>)     <span class="c">// gives the old value</span>
+ok := requests.cas(<span class="n">5</span>, <span class="n">6</span>)    <span class="c">// sets 6 if the value is 5; true if it did</span></code></pre>
+<p><code>sub</code> subtracts. An <code>Atomic[bool]</code> has <code>load</code>, <code>store</code>, <code>swap</code> and <code>cas</code>. Every operation is sequentially consistent: all threads see the changes in the same order.</p>
+<h2 id="locks"><a href="#locks">Locks</a></h2>
+<p>A <code>Mutex</code> protects data that takes more than one step to change. A new <code>Mutex</code> is unlocked:</p>
+<pre class="code"><code>Mutex cacheLock
+Map[<span class="t">str</span>, Entry] cache
+
+<span class="t">void</span> put(<span class="t">str</span> key, Entry e) {
+    cacheLock.lock()
+    <span class="k">defer</span> cacheLock.unlock()
+    cache.set(key, e)
+}</code></pre>
+<p>When the lock is taken, <code>lock</code> waits, and the other tasks of the thread keep running meanwhile. <code>unlock</code> hands the lock to the next one waiting. <code>tryLock()</code> takes the lock if it is free and says whether it did. Unlocking a <code>Mutex</code> that isn't locked is a bug and stops the program.</p>
+<p>A <code>Mutex</code> and an <code>Atomic</code> are used where they are declared or through a pointer, never as copies.</p>
+<h2 id="threadlocal"><a href="#threadlocal">threadlocal</a></h2>
+<p>A global variable marked <code>threadlocal</code> has a separate value on each thread:</p>
+<pre class="code"><code><span class="k">threadlocal</span> <span class="t">i64</span> handled
+
+<span class="t">void</span> handle(http.Request *req, http.Response *res) {
+    handled += <span class="n">1</span>
+    res.text(<span class="s">&quot;this thread handled {handled} requests&quot;</span>)
+}</code></pre>
+<p>A complete program:</p>
+<pre class="code run"><code>Atomic[<span class="t">i64</span>] done
+Mutex mu
+<span class="t">i64</span> total
+
+<span class="t">void</span> count(<span class="t">i64</span> n) {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..n {
+        done.add(<span class="n">1</span>)
+        mu.lock()
+        total += <span class="n">2</span>
+        mu.unlock()
+    }
+}
+
+<span class="t">void</span> main() {
+    a := thread count(<span class="n">1000</span>)
+    b := thread count(<span class="n">2000</span>)
+    a.join()
+    b.join()
+    print(<span class="s">&quot;{done.load()} counted, total {total}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3000 counted, total 6000</code></pre>
 <div class="pager"><a href="compile-time.html">&larr; Compile time</a><a href="calling-c.html">Calling C &rarr;</a></div>
 </main></div>
 </body>

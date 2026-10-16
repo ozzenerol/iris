@@ -57,6 +57,12 @@ These are suggestions. They are used in the examples on these pages until they a
 | `u8 *` converts to and from any pointer on its own. | It is what C's `void *` becomes, and C hands those around. |
 | Function values are named functions only: no lambdas and no closures. | No hidden allocation for captured variables; a context pointer does the job, as in C. |
 | Each thread has its own event loop and its tasks never move to another thread. `http.serve` runs one loop per core. | A task needs no locks for its own data, and a server still uses every core. |
+| `thread f(args)` starts a thread and gives a `Thread` to join, written like `spawn`. | One way to start work, whether it is a task or a thread. |
+| A thread ends when its function and the tasks it started have finished. | `join` waits for all the work the thread was given. |
+| Channels work between threads. | They are the simplest way to hand work from one thread to another. |
+| `Atomic[T]` is a type used only through its methods, for integers and `bool`. All operations are sequentially consistent. | A plain read or write of it can't happen by mistake, and there are no memory orders to learn. |
+| `Mutex` has `lock`, `unlock` and `tryLock`, used with `defer`. A task waiting for it lets the other tasks of its thread run. | Nothing new to learn, and a waiting task doesn't stop its thread. |
+| `threadlocal` is for global variables only. | A local variable belongs to one task already. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

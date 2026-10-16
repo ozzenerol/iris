@@ -1,7 +1,7 @@
 // Tasks, channels, select, threads, atomics.
 
 threadlocal i64 requests
-atomic i64 hits
+Atomic[i64] hits
 
 !void serve(u16 port) {
     ln := try net.listen(port)
