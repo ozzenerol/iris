@@ -1,0 +1,13 @@
+// exit: 1
+// stderr: comptime: the code stopped with status 2
+// stderr: panic: no table today
+
+i64 broken() {
+    panic("no table today")
+}
+
+const VALUE = comptime broken()
+
+void main() {
+    print("{VALUE}")
+}

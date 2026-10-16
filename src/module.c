@@ -451,6 +451,13 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     if (L.failed) {
         return NULL;
     }
+    if (gExtraText) {
+        /* comptime's helper: one more file of the program's module */
+        listPush(a, &m->files, parseText(&L, gExtraPath, gExtraText, strlen(gExtraText)));
+        if (L.failed) {
+            return NULL;
+        }
+    }
     /* core: List, Map and the rest that every module sees without an import */
     Node *coreItem = newNode(a, N_IDENT, 0, 0);
     coreItem->name = "core";

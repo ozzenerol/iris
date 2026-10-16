@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.24.0"
+#define IRIS_VERSION "0.25.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -150,6 +150,8 @@ enum {
     F_INTRINSIC = 1 << 18,  /* @builtin in the standard library: the compiler makes the call */
     F_TESTFN = 1 << 19,     /* the function a test block became; text is the test's name */
     F_INSTANCE = 1 << 20,   /* a copy of a generic function or method for one set of types */
+    F_READONLY = 1 << 21,   /* a global made by comptime: it can't change */
+    F_COMPTIMED = 1 << 22,  /* a const whose value comptime worked out; type is its type */
 };
 
 typedef struct Node Node;
@@ -207,6 +209,7 @@ Node *parseSource(Arena *a, Source *src, bool snippet);
 /* Runs a program and waits for it; stdout and stderr go to the files given
  * (NULL: ours). Returns its exit status, 127 if it can't run. */
 int runCommand(char **argv, const char *outPath, const char *errPath);
+char *readAllFile(Arena *a, const char *path, size_t *len);
 bool writeText(const char *path, const char *text, size_t len);
 
 /* fmt.c: the source in the standard layout, or NULL when it has errors */
@@ -251,6 +254,21 @@ typedef struct {
 
 /* iris test: test blocks are compiled, and main runs them */
 extern bool gTesting;
+
+/* comptime.c: 0 no comptime, 1 checking the helper, 2 the program with the values */
+typedef struct {
+    const char *key, *json;
+} ComptimeResult;
+extern int gComptime;
+extern ComptimeResult *gComptimeResults;
+extern int gComptimeCount;
+extern char **gComptimeKeys;
+extern int gComptimeKeyCount;
+extern const char *gExtraPath, *gExtraText;     /* a file added to the program's module */
+char *comptimeKey(Arena *a, Node *n);
+char *comptimeHelperSource(Arena *a, Program *prog);
+Node *comptimeLiteral(Arena *a, const char *json, Type *t, Node *at);
+const char *comptimeResult(const char *key);
 /* test blocks are checked (iris check and iris test) */
 extern bool gWithTests;
 

@@ -1765,6 +1765,88 @@ static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool) {
 }
 
 /* A constant: its value is worked out once, in dependency order. */
+/* const X = comptime f(): the helper program gives the value. While the
+ * helper itself is checked, X is a global with no value yet. True when d
+ * became a read-only global (an array or a struct) and is done. */
+static void checkGlobalValue(Checker *c, Node **slot, Type *t);
+
+static bool checkComptime(Checker *c, Node *d) {
+    Node *ct = d->b;
+    Type *t = checkExpr(c, &ct->a, NULL);
+    if (isErr(t)) {
+        d->type = &tyError;
+        d->state = 2;
+        return true;
+    }
+    if (t->kind == TY_STRING) {
+        t = &tyStr;     /* a String's text becomes a str constant */
+    }
+    bool scalar = t->kind == TY_INT || t->kind == TY_FLOAT || t->kind == TY_BOOL || isStr(t) ||
+                  (t->kind == TY_ENUM && !t->hasData);
+    bool aggregate = t->kind == TY_ARRAY || t->kind == TY_STRUCT;
+    if (!scalar && !aggregate) {
+        error(c, ct, "comptime can give numbers, bool, text, enums, and arrays and structs of those, not %s", t->name);
+        d->type = &tyError;
+        d->state = 2;
+        return true;
+    }
+    if (t->kind == TY_STRUCT && !isJsonStruct(t)) {
+        error(c, ct, "a struct that comptime gives needs @json, which carries it from the helper: %s", t->name);
+        d->type = &tyError;
+        d->state = 2;
+        return true;
+    }
+    if (gComptime == 1 && scalar) {
+        /* the helper: the value isn't known yet, so a zero stands in */
+        const char *zero = t->kind == TY_BOOL ? "false" : isStr(t) ? "\"\"" : "0";
+        char name[300];
+        if (t->kind == TY_ENUM) {
+            snprintf(name, sizeof name, "\"%s\"", t->decl->list.len ? t->decl->list.items[0]->name : "");
+            zero = name;
+        }
+        d->b = comptimeLiteral(c->arena, zero, t, ct);
+        d->type = t;
+        d->flags |= F_COMPTIMED;
+        return false;
+    }
+    if (gComptime == 1) {
+        /* the helper: the value isn't known yet */
+        d->kind = N_VAR;
+        d->type = t;
+        d->b = NULL;
+        d->flags |= F_READONLY;
+        d->state = 2;
+        return true;
+    }
+    const char *json = gComptime == 2 ? comptimeResult(comptimeKey(c->arena, ct)) : NULL;
+    if (!json) {
+        error(c, ct, "comptime only works in a constant at the top of the program's own files");
+        d->type = &tyError;
+        d->state = 2;
+        return true;
+    }
+    Node *v = comptimeLiteral(c->arena, json, t, ct);
+    if (!v) {
+        error(c, ct, "comptime's value can't be made a constant of type %s (a NaN, a slice or a pointer?)", t->name);
+        d->type = &tyError;
+        d->state = 2;
+        return true;
+    }
+    if (scalar) {
+        d->b = v;
+        d->type = t;
+        d->flags |= F_COMPTIMED;
+        return false;   /* checked as the constant it now is */
+    }
+    d->kind = N_VAR;
+    d->type = t;
+    d->b = v;
+    d->flags |= F_READONLY;
+    checkGlobalValue(c, &d->b, t);
+    d->state = 2;
+    return true;
+}
+
 static void checkConstDecl(Checker *c, Node *d) {
     if (d->state == 2) {
         return;
@@ -1780,7 +1862,18 @@ static void checkConstDecl(Checker *c, Node *d) {
     const char *savedModule = c->module;
     c->scope = d->scope;
     c->module = d->module;
-    Type *declared = d->a ? resolveType(c, d->a) : NULL;
+    if (d->b && d->b->kind == N_COMPTIME) {
+        bool done = checkComptime(c, d);
+        c->scope = saved;
+        c->module = savedModule;
+        if (done) {
+            return;
+        }
+        d->state = 1;
+        c->scope = d->scope;
+        c->module = d->module;
+    }
+    Type *declared = d->a ? resolveType(c, d->a) : (d->flags & F_COMPTIMED) ? d->type : NULL;
     int64_t v;
     bool b;
     int before = gErrors;
@@ -2581,6 +2674,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         if (t->kind == TY_STRUCT) resolveStruct(c, t);
         return setType(e, chanOf(t));
     }
+    case N_COMPTIME:
+        error(c, e, "comptime goes in a constant at the top of a file: const TABLE = comptime makeTable()");
+        checkExpr(c, &e->a, expected);
+        return setType(e, &tyError);
     case N_THREAD: {
         if (!checkStarted(c, &e->a, "thread", "a thread")) {
             return setType(e, &tyError);
@@ -4029,7 +4126,28 @@ static void checkBlock(Checker *c, Node *block, bool newScope) {
 }
 
 /* Whether a target can be assigned to; reports why not. */
+/* The comptime global that an element or a field belongs to, if any:
+ * T[0] and LIMITS.max are parts of T and LIMITS. */
+static Node *readonlyRoot(Node *e) {
+    for (;;) {
+        if (e->kind == N_IDENT) {
+            return e->ref && (e->ref->flags & F_READONLY) ? e->ref : NULL;
+        }
+        if ((e->kind == N_INDEX || e->kind == N_FIELD_ACCESS) && e->a && e->a->type &&
+            (e->a->type->kind == TY_ARRAY || e->a->type->kind == TY_STRUCT)) {
+            e = e->a;
+            continue;
+        }
+        return NULL;
+    }
+}
+
 static bool assignable(Checker *c, Node *target) {
+    Node *ro = target->kind != N_IDENT ? readonlyRoot(target) : NULL;
+    if (ro) {
+        error(c, target, "%s is a constant that comptime made, and can't change", ro->name);
+        return false;
+    }
     if (target->kind == N_IDENT) {
         Node *d = target->ref;
         if (!d) {
@@ -4037,6 +4155,10 @@ static bool assignable(Checker *c, Node *target) {
         }
         if (d->kind == N_CONST) {
             error(c, target, "%s is a constant and can't change", target->name);
+            return false;
+        }
+        if (d->flags & F_READONLY) {
+            error(c, target, "%s is a constant that comptime made, and can't change", target->name);
             return false;
         }
         if (d->kind == N_FUNC) {
@@ -5328,8 +5450,8 @@ bool checkProgram(Arena *a, Program *prog) {
         }
     }
 
-    if (!mainFn && gTesting) {
-        /* iris test needs no main */
+    if (!mainFn && (gTesting || gComptime == 1)) {
+        /* iris test and comptime's helper need no main */
     } else if (!mainFn) {
         Node *first = prog->main->files.len ? prog->main->files.items[0] : NULL;
         if (first && first->src) {

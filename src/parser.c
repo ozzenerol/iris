@@ -931,9 +931,10 @@ static Node *parseUnaryInner(Parser *p) {
         return n;
     }
     case K_COMPTIME: {
+        /* comptime takes all of the expression after it */
         next(p);
         Node *n = node(p, N_COMPTIME, t);
-        n->a = parseUnary(p);
+        n->a = parseExpr(p);
         return n;
     }
     default:

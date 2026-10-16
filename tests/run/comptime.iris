@@ -1,0 +1,52 @@
+// stderr: comptime: this line comes from the code comptime ran
+// exit: 0
+// expect: 907060870 832040 832041 IRIS 55 6.28318 99 default high 1996959894
+
+import str
+
+enum Level { low, high }
+
+@json
+struct Limits {
+    i64 max
+    str name
+    Level level
+}
+
+u32[256] makeCrcTable() {
+    u32[256] table
+    for i in 0..256 {
+        u32 c = u32(i)
+        for _ in 0..8 {
+            c = if (c & 1) == 1 { 0xedb88320 ^ (c >> 1) } else { c >> 1 }
+        }
+        table[i] = c
+    }
+    return table
+}
+
+i64 fib(i64 n) => if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+
+String banner() {
+    print("this line comes from the code comptime ran")
+    return str.upper("iris {fib(10)}")
+}
+
+const CRC_TABLE = comptime makeCrcTable()
+const FIB30 = comptime fib(30)
+const BANNER = comptime banner()
+const PI2 = comptime 3.14159 * 2.0
+const LIMITS = comptime Limits{max: 99, name: "default", level: .high}
+const SHIFTED = FIB30 + 1
+
+u32 crc32(str data) {
+    u32 c = 0xffffffff
+    for b in data {
+        c = CRC_TABLE[(c ^ u32(b)) & 0xff] ^ (c >> 8)
+    }
+    return c ^ 0xffffffff
+}
+
+void main() {
+    print("{crc32("hello")} {FIB30} {SHIFTED} {BANNER} {PI2} {LIMITS.max} {LIMITS.name} {LIMITS.level} {CRC_TABLE[1]}")
+}

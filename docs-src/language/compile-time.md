@@ -32,6 +32,19 @@ u32[256] makeCrcTable() {
 const CRC_TABLE = comptime makeCrcTable()
 ```
 
+`comptime` goes in a `const` at the top of one of the program's files, and takes the whole expression after it. The compiler builds the code it needs into a small program, runs it on the machine that builds, and puts the values it gives into the real program. Running the result has no cost: `CRC_TABLE` is a table in the program's read-only memory.
+
+What comptime can give:
+
+| Value | Becomes |
+|---|---|
+| a number, `bool`, `str`, `String` or a plain enum | a constant, like one written out (a `String` becomes a `str`) |
+| an array or a `@json` struct of those | a global that can't change |
+
+Pointers and slices can't come out of comptime, since the memory they point to stays behind. What the code prints shows up while compiling, after `comptime:`, and a panic in it stops the build with its message.
+
+A comptime constant can be used by other constants and by the program, but not yet by the code of another comptime constant: while the helper runs, comptime constants are zeros. Comptime code runs on the machine that builds, also with `--target`.
+
 ## when
 
 `when` includes code only when a condition known at compile time is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:

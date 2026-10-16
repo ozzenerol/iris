@@ -1,0 +1,9 @@
+// error: 8: T is a constant that comptime made, and can't change
+
+i64[3] three() => [1, 2, 3]
+
+const T = comptime three()
+
+void main() {
+    T[0] = 5
+}
