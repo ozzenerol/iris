@@ -1246,7 +1246,7 @@ static Node *parseStmt(Parser *p) {
     case K_DEFER: case K_ERRDEFER: case K_SPAWN: {
         next(p);
         Node *d = node(p, t->kind == K_DEFER ? N_DEFER : t->kind == K_ERRDEFER ? N_ERRDEFER : N_SPAWN, t);
-        d->a = t->kind == K_SPAWN ? parseExpr(p) : at(p, P_LBRACE) ? parseBlock(p) : parseSimpleStmt(p, true);
+        d->a = t->kind == K_SPAWN ? parseExpr(p) : parseStmt(p);
         return d;
     }
     case K_ASM: {

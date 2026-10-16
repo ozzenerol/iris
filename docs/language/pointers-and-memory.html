@@ -88,6 +88,27 @@ free(buf)</code></pre>
     <span class="k">return</span> Server{fd: fd}
 }</code></pre>
 <p>If <code>bind</code> or <code>listen</code> fails, the socket is closed. If they succeed, it stays open.</p>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="t">void</span> work() {
+    <span class="k">defer</span> print(<span class="s">&quot;cleanup 1&quot;</span>)
+    <span class="k">defer</span> print(<span class="s">&quot;cleanup 2&quot;</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        <span class="k">defer</span> print(<span class="s">&quot;end of round {i}&quot;</span>)
+        <span class="k">if</span> i == <span class="n">1</span> {
+            <span class="k">break</span>
+        }
+    }
+    print(<span class="s">&quot;work done&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    work()
+}</code></pre>
+<pre class="out"><code>end of round 0
+end of round 1
+work done
+cleanup 2
+cleanup 1</code></pre>
 <h2 id="scoped"><a href="#scoped">scoped</a></h2>
 <p><code>scoped</code> on a declaration calls the value's <code>free</code> method at the end of the block:</p>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> body = <span class="k">try</span> fs.readAll(<span class="s">&quot;index.html&quot;</span>)

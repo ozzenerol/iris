@@ -40,7 +40,7 @@ Lowering rewrites the checked tree into a smaller language with only simple piec
 
 After lowering, the rest of the compiler never sees these features.
 
-Versions 0.2 and 0.3 have no lowering pass yet. The IR writer handles `match`, `if` values and `for` loops directly. Lowering arrives with `defer` in 0.4.
+So far there is no separate lowering pass. The IR writer does this work itself: it handles `match`, `if` values and loops directly, and for `defer` it keeps a list of deferred statements for each block and writes them out at every way out of the block: the end, `return`, `break`, `continue` and a `try` that fails. A separate pass arrives with generics in 0.6, which need one to make a copy of each generic function for each type it is used with.
 
 ### IR writer
 
@@ -74,7 +74,7 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/parser.c` | The parser. |
 | `src/ast.c` | Syntax tree nodes and the printer for `iris parse`. |
 | `src/check.c` | The checker. |
-| `src/lower.c` | Lowering (from 0.4). |
+| `src/lower.c` | Lowering (from 0.6). |
 | `src/ir.c` | The IR writer. |
 | `runtime/rt.c` | The small part written in C: printing and panics now; error traces and the task scheduler later. |
 | `std/` | The standard library, written in Iris. |

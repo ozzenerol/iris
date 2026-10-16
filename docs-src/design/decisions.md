@@ -38,6 +38,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | A struct field's default value must be known when compiling. | The default is copied into every literal that leaves the field out. |
 | `str` and `u8[]` are one type. | Text is bytes; one type needs one set of rules. |
 | A `String` can be used where a `str` is expected. | Printing, comparing and slicing an owned string need no conversion. |
+| `e.code` can be compared with a value of any enum. | Errors from different parts of a program use different enums. |
+| An error that leaves `main` prints its code, message and trace, and exits with status 1. | Status 2 stays for panics. |
+| Plain enums come in 0.4, with errors; enums with data in 0.5. | Error codes are enum values. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 

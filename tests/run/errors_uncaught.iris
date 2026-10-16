@@ -1,0 +1,20 @@
+// expect: start
+// stderr: error: ConfigError.missing: app.conf: no such file
+// stderr: at open
+// stderr: at loadConfig
+// stderr: at main
+// exit: 1
+
+enum ConfigError { missing }
+
+!void open(str path) => error(ConfigError.missing, "{path}: no such file")
+
+!void loadConfig(str path) {
+    try open(path)
+}
+
+!void main() {
+    print("start")
+    try loadConfig("app.conf")
+    print("never")
+}

@@ -1,0 +1,50 @@
+// expect: saved 80
+// expect: save: defer
+// expect: save: errdefer
+// expect: save: defer
+// expect: caught ParseError.tooBig: 99999 is above 65535
+// expect: loading user 7: not found
+
+enum ParseError { tooBig }
+enum DbError { notFound }
+
+!i64 parsePort(str s) {
+    if s.len > 4 {
+        return error(ParseError.tooBig, "{s} is above 65535")
+    }
+    return 80
+}
+
+!i64 doubled(str s) {
+    p := try parsePort(s)
+    return p * 2
+}
+
+!void save(str what) {
+    defer print("save: defer")
+    errdefer print("save: errdefer")
+    _ = try doubled(what)
+    print("saved {what}")
+}
+
+!str findUser(i64 id) => error(DbError.notFound, "not found")
+
+!str loadUser(i64 id) {
+    name := findUser(id) catch e {
+        return error(e.code, "loading user {id}: {e.message}")
+    }
+    return name
+}
+
+void main() {
+    save("80") catch e {
+        print("unexpected")
+    }
+    save("99999") catch e {
+        print("caught {e.code}: {e.message}")
+    }
+    _ = loadUser(7) catch e {
+        print(e.message)
+        ""
+    }
+}

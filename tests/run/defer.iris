@@ -1,0 +1,67 @@
+// expect: body
+// expect: second
+// expect: first
+// expect: loop 0
+// expect: end of round 0
+// expect: loop 1
+// expect: end of round 1
+// expect: leaving at 2
+// expect: end of round 2
+// expect: value 5
+// expect: freed
+// expect: inner
+// expect: outer
+
+struct Buffer {
+    u8[] data
+}
+
+Buffer buffer(i64 n) => Buffer{data: alloc(u8, n)}
+
+void Buffer.free() {
+    free(self.data)
+    print("freed")
+}
+
+void order() {
+    defer print("first")
+    defer print("second")
+    print("body")
+}
+
+void loops() {
+    for i in 0..5 {
+        defer print("end of round {i}")
+        if i == 2 {
+            print("leaving at {i}")
+            break
+        }
+        print("loop {i}")
+    }
+}
+
+i64 value() {
+    i64 x = 5
+    defer x = 99
+    return x
+}
+
+void scopedBuffer() {
+    scoped Buffer b = buffer(16)
+    b.data[0] = 1
+}
+
+void nested() {
+    defer print("outer")
+    {
+        defer print("inner")
+    }
+}
+
+void main() {
+    order()
+    loops()
+    print("value {value()}")
+    scopedBuffer()
+    nested()
+}

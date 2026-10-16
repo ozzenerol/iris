@@ -30,16 +30,18 @@ Type tyU32 = {.kind = TY_INT, .bits = 32, .name = "u32"};
 Type tyU64 = {.kind = TY_INT, .bits = 64, .name = "u64"};
 Type tyStr = {.kind = TY_SLICE, .name = "str", .elem = &tyU8};
 Type tyString = {.kind = TY_STRING, .name = "String", .ir = "%String"};
+Type tyErrorValue = {.kind = TY_ERRVAL, .name = "Error"};
+Type tyErrCode = {.kind = TY_ERRCODE, .name = "error code"};
 
 static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &tyU32,
-                               &tyU64, &tyBool, &tyStr, &tyVoid, &tyString};
+                               &tyU64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue};
 
 /* types that exist in the language but not in this version yet */
 static const struct {
     const char *name, *version;
 } laterTypes[] = {
     {"f32", "a later version"}, {"f64", "a later version"},
-    {"Duration", "a later version"}, {"Error", "0.4"}, {"Arena", "a later version"},
+    {"Duration", "a later version"}, {"Arena", "a later version"},
 };
 
 /* ---------------------------------------------------------------- scopes */
@@ -72,6 +74,9 @@ typedef struct {
     Loop *loop;
     const char *pendingLabel;
     bool quiet;             /* evalConst: don't report, just answer */
+    bool allowResult;       /* the next expression may be a !T call: try, catch, _ = */
+    int enumKinds;          /* enums numbered so far */
+    bool inDefer;           /* checking the statement of a defer */
 } Checker;
 
 static void checkStmt(Checker *c, Node *s);
@@ -84,7 +89,10 @@ static void error(Checker *c, Node *at, const char *fmt, ...) {
 }
 
 static void notYet(Checker *c, Node *at, const char *what, const char *version) {
-    bool plural = what[strlen(what) - 1] == 's' || strstr(what, " and ");
+    /* "generic types are", "this expression is", "enums whose values carry data are" */
+    const char *sp = strchr(what, ' ');
+    bool firstPlural = sp && sp > what && sp[-1] == 's' && strncmp(what, "this ", 5) != 0;
+    bool plural = what[strlen(what) - 1] == 's' || strstr(what, " and ") || firstPlural;
     error(c, at, "%s %s not supported yet (planned for %s)", what, plural ? "are" : "is", version);
 }
 
@@ -183,6 +191,8 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
     char buf[256];
     if (kind == TY_PTR) {
         snprintf(buf, sizeof buf, "%s%s", elem->name, elem->kind == TY_PTR ? "*" : " *");
+    } else if (kind == TY_RESULT) {
+        snprintf(buf, sizeof buf, "!%s", elem->name);
     } else if (kind == TY_SLICE) {
         snprintf(buf, sizeof buf, "%s[]", elem->name);
     } else {
@@ -199,15 +209,16 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
 static Type *ptrTo(Type *t) { return compound(TY_PTR, t, 0); }
 static Type *sliceOf(Type *t) { return compound(TY_SLICE, t, 0); }
 static Type *arrayOf(Type *t, int64_t n) { return compound(TY_ARRAY, t, n); }
+static Type *resultOf(Type *t) { return compound(TY_RESULT, t, 0); }
 
 static bool sameType(Type *a, Type *b) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
     switch (a->kind) {
     case TY_INT: return a->bits == b->bits && a->isSigned == b->isSigned;
-    case TY_PTR: case TY_SLICE: return sameType(a->elem, b->elem);
+    case TY_PTR: case TY_SLICE: case TY_RESULT: return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
-    case TY_STRUCT: return a->decl == b->decl;
+    case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
     default: return true;
     }
 }
@@ -230,6 +241,71 @@ static Type *structType(Checker *c, Node *decl) {
 }
 
 static Type *resolveType(Checker *c, Node *t);
+static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool);
+
+/* An enum's type. Its values are worked out the first time. Each enum
+ * gets a number, used to tell error codes from different enums apart. */
+static Type *enumType(Checker *c, Node *decl) {
+    if (decl->type) {
+        return decl->type;
+    }
+    Type *t = arenaAlloc(c->arena, sizeof(Type));
+    t->kind = TY_ENUM;
+    t->name = decl->name;
+    t->decl = decl;
+    t->bits = 32;
+    t->count = ++c->enumKinds;
+    decl->type = t;
+    if (decl->flags & F_FLAGS) {
+        notYet(c, decl, "flag enums", "0.5");
+    }
+    if (decl->attrs.len) {
+        notYet(c, decl->attrs.items[0], "attributes", "a later version");
+    }
+    Scope *saved = c->scope;
+    c->scope = c->global;
+    int64_t next = 0;
+    for (int i = 0; i < decl->list.len; i++) {
+        Node *m = decl->list.items[i];
+        if (m->list.len) {
+            notYet(c, m, "enums whose values carry data", "0.5");
+        }
+        if (m->b) {
+            int64_t v;
+            bool b;
+            if (!evalConst(c, m->b, &v, &b) || b) {
+                error(c, m->b, "an enum value must be an integer known when compiling");
+            } else if (v < INT32_MIN || v > INT32_MAX) {
+                error(c, m->b, "an enum value must fit in i32");
+            } else {
+                next = v;
+            }
+        }
+        m->cval = next++;
+        m->isConst = true;
+        m->type = t;
+        for (int j = 0; j < i; j++) {
+            Node *o = decl->list.items[j];
+            if (strcmp(o->name, m->name) == 0) {
+                error(c, m, "%s already has a value named %s", decl->name, m->name);
+            } else if (o->cval == m->cval) {
+                error(c, m, "%s.%s and %s.%s have the same number, %lld", decl->name, o->name, decl->name,
+                      m->name, (long long)m->cval);
+            }
+        }
+    }
+    c->scope = saved;
+    return t;
+}
+
+static Node *enumMember(Type *t, const char *name) {
+    for (int i = 0; i < t->decl->list.len; i++) {
+        if (strcmp(t->decl->list.items[i]->name, name) == 0) {
+            return t->decl->list.items[i];
+        }
+    }
+    return NULL;
+}
 
 /* A type named in an expression, like the first argument of alloc. */
 static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
@@ -241,6 +317,9 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
     Node *d = lookup(c, name);
     if (d && d->kind == N_STRUCT) {
         return structType(c, d);
+    }
+    if (d && d->kind == N_ENUM) {
+        return enumType(c, d);
     }
     if (d && d->kind == N_TYPEDEF) {
         if (d->state == 1) {
@@ -320,9 +399,15 @@ static Type *resolveType(Checker *c, Node *t) {
         }
         return arrayOf(e, (int64_t)t->b->ival);
     }
-    case N_T_ERR:
-        notYet(c, t, "error results (!T)", "0.4");
-        return &tyError;
+    case N_T_ERR: {
+        Type *e = resolveType(c, t->a);
+        if (isErr(e)) return e;
+        if (e->kind == TY_RESULT) {
+            error(c, t, "!!T is the same as !T; write one !");
+            return e;
+        }
+        return resultOf(e);
+    }
     case N_T_TUPLE:
         notYet(c, t, "several return values", "0.5");
         return &tyError;
@@ -405,6 +490,20 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
     if (from->kind == TY_STRING && isStr(to)) {
         *slot = convertNode(c, e, to, false);
         return true;
+    }
+    if (from->kind == TY_ENUM && to->kind == TY_ERRCODE) {
+        if (e->isConst) {
+            e->cval = (int64_t)(((uint64_t)from->count << 32) | (uint32_t)e->cval);
+            e->type = to;
+            e->flags |= F_EXPLICIT;     /* already packed */
+            return true;
+        }
+        *slot = convertNode(c, e, to, false);
+        return true;
+    }
+    if (from->kind == TY_RESULT) {
+        error(c, e, "the error from this call is not handled; use try, catch or _ =");
+        return false;
     }
     if (isInt(from) && isInt(to)) {
         error(c, e, "%s is %s, which doesn't always fit in %s; convert it with %s(...)", what,
@@ -809,7 +908,9 @@ static bool addressable(Node *e) {
     case N_IDENT:
         return e->ref && (e->ref->kind == N_VAR || e->ref->kind == N_PARAM || e->ref->kind == N_IDENT);
     case N_FIELD_ACCESS:
-        return e->a->type && (e->a->type->kind == TY_PTR || addressable(e->a));
+        /* a real field: .len and .name are values, not places */
+        return e->ref && e->ref->kind != N_ENUM_MEMBER && e->a->type &&
+               (e->a->type->kind == TY_PTR || addressable(e->a));
     case N_INDEX:
         return e->a->type && (e->a->type->kind == TY_SLICE || addressable(e->a));
     case N_UNARY:
@@ -821,7 +922,7 @@ static bool addressable(Node *e) {
 
 static bool isComparable(Type *t) {
     switch (t->kind) {
-    case TY_INT: case TY_BOOL: case TY_PTR: case TY_NULL:
+    case TY_INT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ENUM: case TY_ERRCODE:
         return true;
     case TY_SLICE:
         return isStr(t);
@@ -879,7 +980,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         ta = checkExpr(c, &e->a, isInt(tb) ? tb : want);
     } else {
         ta = checkExpr(c, &e->a, want);
-        tb = checkExpr(c, &e->b, isInt(ta) ? ta : want);
+        tb = checkExpr(c, &e->b, isInt(ta) || ta->kind == TY_ENUM ? ta : want);
     }
     if (isErr(ta) || isErr(tb)) {
         return setType(e, compare ? &tyBool : &tyError);
@@ -888,6 +989,15 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
     /* pointer arithmetic: p + n, p - n */
     if ((op == P_PLUS || op == P_MINUS) && ta->kind == TY_PTR && isInt(tb)) {
         return setType(e, ta);
+    }
+
+    /* an enum value compares with an error code */
+    if (ta->kind == TY_ERRCODE && tb->kind == TY_ENUM) {
+        coerce(c, &e->b, &tyErrCode, "the right side");
+        tb = &tyErrCode;
+    } else if (tb->kind == TY_ERRCODE && ta->kind == TY_ENUM) {
+        coerce(c, &e->a, &tyErrCode, "the left side");
+        ta = &tyErrCode;
     }
 
     /* a String compares as its text */
@@ -959,7 +1069,27 @@ static Type *structOf(Type *t) {
 
 static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
+    if (e->a->kind == N_IDENT) {
+        Node *d = lookup(c, e->a->name);
+        if (d && d->kind == N_ENUM) {
+            Type *et = enumType(c, d);
+            Node *m = enumMember(et, e->name);
+            if (!m) {
+                error(c, e, "%s has no value named %s", d->name, e->name);
+                return setType(e, &tyError);
+            }
+            e->a->ref = d;
+            e->ref = m;
+            e->isConst = true;
+            e->cval = m->cval;
+            return setType(e, et);
+        }
+    }
     Type *t = checkExpr(c, &e->a, NULL);
+    if (t->kind == TY_ENUM && strcmp(e->name, "name") == 0) {
+        e->builtin = 1;                 /* the value's name, from the runtime's table */
+        return setType(e, &tyStr);
+    }
     if (isErr(t)) return setType(e, t);
     if (e->a->kind == N_IDENT && e->a->ref && (e->a->ref->kind == N_STRUCT || e->a->ref->kind == N_TYPEDEF)) {
         error(c, e, "%s is a type; methods are called on values", e->a->name);
@@ -975,6 +1105,16 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
             e->cval = base->count;
             return setType(e, &tyI64);
         }
+    }
+    if (t->kind == TY_ERRVAL) {
+        if (strcmp(e->name, "code") == 0) {
+            return setType(e, &tyErrCode);
+        }
+        if (strcmp(e->name, "message") == 0) {
+            return setType(e, &tyStr);
+        }
+        error(c, e, "an Error has a code and a message, not %s", e->name);
+        return setType(e, &tyError);
     }
     Type *st = structOf(t);
     if (!st) {
@@ -1175,7 +1315,27 @@ static Type *checkArrayLit(Checker *c, Node *e, Type *expected) {
     return setType(e, arrayOf(elem, e->list.len));
 }
 
+static Type *checkExprInner(Checker *c, Node **slot, Type *expected);
+
+/* Checks an expression. A !T call is only allowed where try, catch or
+ * _ = deal with its error; they set allowResult. */
 static Type *checkExpr(Checker *c, Node **slot, Type *expected) {
+    bool allow = c->allowResult;
+    c->allowResult = false;
+    Type *t = checkExprInner(c, slot, expected);
+    if (t->kind == TY_RESULT && !allow) {
+        Node *e = *slot;
+        const char *fn = e->kind == N_CALL && e->ref ? e->ref->name : "this call";
+        error(c, e, "the error from %s is not handled; use try, catch or _ =", fn);
+        return setType(e, &tyError);
+    }
+    return t;
+}
+
+static Type *checkTry(Checker *c, Node *e);
+static Type *checkCatch(Checker *c, Node *e, Type *expected);
+
+static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
 
     /* values known when compiling */
@@ -1335,12 +1495,24 @@ static Type *checkExpr(Checker *c, Node **slot, Type *expected) {
     case N_ARRAY_LIT:
         return checkArrayLit(c, e, expected);
     case N_TRY:
+        return checkTry(c, e);
     case N_CATCH:
-        notYet(c, e, "errors (try and catch)", "0.4");
-        return setType(e, &tyError);
-    case N_ENUM_DOT:
-        notYet(c, e, "enums", "0.5");
-        return setType(e, &tyError);
+        return checkCatch(c, e, expected);
+    case N_ENUM_DOT: {
+        if (!expected || expected->kind != TY_ENUM) {
+            error(c, e, "the enum of .%s can't be worked out here; write the enum's name before the dot", e->name);
+            return setType(e, &tyError);
+        }
+        Node *m = enumMember(expected, e->name);
+        if (!m) {
+            error(c, e, "%s has no value named %s", expected->name, e->name);
+            return setType(e, &tyError);
+        }
+        e->ref = m;
+        e->isConst = true;
+        e->cval = m->cval;
+        return setType(e, expected);
+    }
     case N_TUPLE:
         notYet(c, e, "several return values", "0.5");
         return setType(e, &tyError);
@@ -1361,12 +1533,15 @@ static Type *intTypeNamed(const char *name) {
 
 static bool isBuiltinName(const char *name) {
     return strcmp(name, "print") == 0 || strcmp(name, "panic") == 0 || strcmp(name, "format") == 0 ||
-           strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0;
+           strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0 || strcmp(name, "error") == 0;
 }
 
 static bool printable(Type *t) {
-    return isInt(t) || t == &tyBool || isStr(t) || t->kind == TY_STRING;
+    return isInt(t) || t == &tyBool || isStr(t) || t->kind == TY_STRING || t->kind == TY_ENUM ||
+           t->kind == TY_ERRCODE;
 }
+
+static void checkText(Checker *c, Node **slot, const char *fn);
 
 /* print, panic and format: one argument, the text, which may have {}
  * values in it. */
@@ -1375,7 +1550,11 @@ static void checkTextArg(Checker *c, Node *call, const char *fn) {
         error(c, call, "%s takes one argument, the text", fn);
         return;
     }
-    Node *arg = call->list.items[0];
+    checkText(c, &call->list.items[0], fn);
+}
+
+static void checkText(Checker *c, Node **slot, const char *fn) {
+    Node *arg = *slot;
     if (arg->kind == N_INTERP) {
         arg->type = &tyStr;
         for (int i = 0; i < arg->list.len; i++) {
@@ -1393,12 +1572,12 @@ static void checkTextArg(Checker *c, Node *call, const char *fn) {
         }
         return;
     }
-    Type *t = checkExpr(c, &call->list.items[0], &tyStr);
+    Type *t = checkExpr(c, slot, &tyStr);
     if (isErr(t)) {
         return;
     }
     if (t->kind == TY_STRING) {
-        coerce(c, &call->list.items[0], &tyStr, "the text");
+        coerce(c, slot, &tyStr, "the text");
     } else if (!isStr(t)) {
         error(c, arg, "%s takes text, not %s; write %s(\"{...}\") to use a value", fn, t->name, fn);
     }
@@ -1589,6 +1768,71 @@ static Type *checkAlloc(Checker *c, Node *e) {
     return setType(e, sliceOf(t));
 }
 
+static Type *checkTry(Checker *c, Node *e) {
+    c->allowResult = true;
+    Type *t = checkExpr(c, &e->a, NULL);
+    if (isErr(t)) return setType(e, t);
+    if (t->kind != TY_RESULT) {
+        error(c, e, "try needs a call that can fail (one that returns !T), not %s", t->name);
+        return setType(e, &tyError);
+    }
+    if (c->inDefer) {
+        error(c, e, "a deferred statement can't use try; handle the error with catch");
+    } else if (!c->func || c->func->type->kind != TY_RESULT) {
+        error(c, e, "try passes the error to the caller, so %s must return !T; use catch to handle it here",
+              c->func ? c->func->name : "this function");
+    }
+    return setType(e, t->elem);
+}
+
+static void coerceValue(Checker *c, Node *body, Type *t);
+
+static Type *checkCatch(Checker *c, Node *e, Type *expected) {
+    c->allowResult = true;
+    Type *t = checkExpr(c, &e->a, NULL);
+    if (!isErr(t) && t->kind != TY_RESULT) {
+        error(c, e, "catch needs a call that can fail (one that returns !T), not %s", t->name);
+        t = &tyError;
+    }
+    Type *value = t->kind == TY_RESULT ? t->elem : &tyError;
+    if (e->b) {
+        if (value == &tyVoid) {
+            error(c, e->b, "this call gives no value, so catch can't give one; use catch e { ... }");
+            checkExpr(c, &e->b, NULL);
+            return setType(e, &tyVoid);
+        }
+        checkExpr(c, &e->b, isErr(value) ? expected : value);
+        if (!isErr(value)) {
+            coerce(c, &e->b, value, "the value after catch");
+        }
+        return setType(e, value);
+    }
+    /* catch e { ... } or catch e match ... : e is the Error */
+    Node *var = newNode(c->arena, N_IDENT, e->line, e->col);
+    var->name = e->name;
+    var->type = &tyErrorValue;
+    e->d = var;
+    pushScope(c, false);
+    declareLocal(c, e->name, var);
+    Type *res;
+    if (e->c->kind == N_MATCH) {
+        res = value == &tyVoid || isErr(value) ? checkMatch(c, e->c, NULL, false) : checkMatch(c, e->c, value, true);
+        if (value == &tyVoid) res = &tyVoid;
+        e->c->type = res;
+    } else if (value == &tyVoid || isErr(value)) {
+        checkBlock(c, e->c, true);
+        res = isErr(value) ? &tyError : &tyVoid;
+    } else {
+        res = checkBlockValue(c, e->c, value);
+        if (!isErr(res) && res->kind != TY_NORETURN) {
+            coerceValue(c, e->c, value);
+        }
+        res = value;
+    }
+    popScope(c);
+    return setType(e, res);
+}
+
 static Type *checkCall(Checker *c, Node *e, Type *expected) {
     Node *callee = e->a;
     if (callee->kind == N_FIELD_ACCESS) {
@@ -1612,6 +1856,31 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     if (!d && isBuiltinName(name)) {
         if (strcmp(name, "alloc") == 0) {
             return checkAlloc(c, e);
+        }
+        if (strcmp(name, "error") == 0) {
+            /* error(code) or error(code, text): an enum value, or the code of
+             * another error */
+            e->builtin = BI_ERROR;
+            if (e->list.len < 1 || e->list.len > 2 || e->list.items[0]->kind == N_NAMED_ARG) {
+                error(c, e, "error takes a code and, if wanted, a message: error(ParseError.empty, \"...\")");
+                return setType(e, &tyError);
+            }
+            Type *t = checkExpr(c, &e->list.items[0], NULL);
+            if (!isErr(t)) {
+                if (t->kind == TY_ENUM || t->kind == TY_ERRCODE) {
+                    coerce(c, &e->list.items[0], &tyErrCode, "the code");
+                } else {
+                    error(c, e->list.items[0], "an error's code is a value from an enum, not %s", t->name);
+                }
+            }
+            if (e->list.len == 2) {
+                if (e->list.items[1]->kind == N_NAMED_ARG) {
+                    error(c, e->list.items[1], "error's message has no name");
+                } else {
+                    checkText(c, &e->list.items[1], "error");
+                }
+            }
+            return setType(e, &tyErrorValue);
         }
         if (strcmp(name, "free") == 0) {
             e->builtin = BI_FREE;
@@ -1668,9 +1937,7 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     }
 
     if (!d) {
-        if (strcmp(name, "error") == 0) {
-            notYet(c, callee, "errors", "0.4");
-        } else if (typeFromName(c, name, callee, false)) {
+        if (typeFromName(c, name, callee, false)) {
             error(c, callee, "%s is a type; a struct is made with %s{...}", name, name);
         } else {
             error(c, callee, "%s is not declared", name);
@@ -1851,10 +2118,12 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
         coerce(c, &m->a, &tyStr, "the text");
         subject = &tyStr;
     }
-    if (!isErr(subject) && !isInt(subject) && subject != &tyBool && !isStr(subject)) {
-        error(c, m->a, "match works on integers, bool and str, not %s", subject->name);
+    if (!isErr(subject) && !isInt(subject) && subject != &tyBool && !isStr(subject) &&
+        subject->kind != TY_ENUM && subject->kind != TY_ERRCODE) {
+        error(c, m->a, "match works on integers, bool, str and enums, not %s", subject->name);
         subject = &tyError;
     }
+    int covered = 0;
     bool hasWildcard = false, hasTrue = false, hasFalse = false;
     Type *t = expected && !isErr(expected) ? expected : NULL;
     Type *first = NULL;
@@ -1871,6 +2140,8 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
             } else if ((*slot)->type == &tyBool && (*slot)->isConst) {
                 if ((*slot)->cval) hasTrue = true;
                 else hasFalse = true;
+            } else if (subject->kind == TY_ENUM && (*slot)->isConst) {
+                covered++;
             }
         }
         if (wantValue) {
@@ -1887,10 +2158,42 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
             checkStmt(c, arm->c);
         }
     }
+    bool complete = hasWildcard || (hasTrue && hasFalse);
+    if (subject->kind == TY_ENUM && !hasWildcard) {
+        /* every value of the enum needs an arm */
+        StrBuf missing = {0};
+        int nmissing = 0;
+        for (int k = 0; k < subject->decl->list.len; k++) {
+            Node *mem = subject->decl->list.items[k];
+            bool found = false;
+            for (int i = 0; i < m->list.len && !found; i++) {
+                Node *arm = m->list.items[i];
+                for (int j = 0; j < arm->list.len; j++) {
+                    if (arm->list.items[j]->isConst && arm->list.items[j]->cval == mem->cval) {
+                        found = true;
+                    }
+                }
+            }
+            if (!found) {
+                sbPrintf(&missing, "%s%s", nmissing ? ", " : "", mem->name);
+                nmissing++;
+            }
+        }
+        if (nmissing) {
+            error(c, m, "this match has no arm for %s.%s%s%s; add %s or a '_' arm", subject->name,
+                  nmissing == 1 ? "" : "{", missing.buf, nmissing == 1 ? "" : "}", nmissing == 1 ? "it" : "them");
+        }
+        sbFree(&missing);
+        complete = true;
+    }
+    (void)covered;
+    if (complete) {
+        m->cval = 1;                    /* every value has an arm */
+    }
     if (!wantValue) {
         return &tyVoid;
     }
-    if (!hasWildcard && !(hasTrue && hasFalse)) {
+    if (!complete) {
         error(c, m, "a match that gives a value needs a '_' arm for the values not listed");
     }
     Type *res = t ? t : first ? first : &tyNoreturn;
@@ -1956,9 +2259,21 @@ static void checkLocalVar(Checker *c, Node *s) {
     }
     resolveStruct(c, t);
     s->type = t;
-    if (s->flags & (F_SCOPED | F_THREADLOCAL | F_ATOMIC)) {
-        notYet(c, s, (s->flags & F_SCOPED) ? "scoped" : "threadlocal and atomic",
-               (s->flags & F_SCOPED) ? "0.4" : "a later version");
+    if (s->flags & (F_THREADLOCAL | F_ATOMIC)) {
+        notYet(c, s, "threadlocal and atomic", "a later version");
+    }
+    if ((s->flags & F_SCOPED) && !isErr(t)) {
+        /* scoped needs a free method to call at the end of the block */
+        Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
+        if (t->kind == TY_STRING) {
+            s->ref = NULL;
+        } else if (!m) {
+            error(c, s, "scoped needs a type with a free method; %s has none", t->name);
+        } else if (m->list.len != 1) {
+            error(c, s, "scoped calls free() with no arguments, but %s.free takes some", t->name);
+        } else {
+            s->ref = m;
+        }
     }
     if (s->b && !isErr(t)) {
         checkExpr(c, &s->b, t);
@@ -2071,6 +2386,7 @@ static void checkStmt(Checker *c, Node *s) {
             if (s->op != P_ASSIGN) {
                 error(c, s, "'_' can only be assigned with '='");
             }
+            c->allowResult = true;
             Type *t = checkExpr(c, &s->b, NULL);
             if (t == &tyVoid) {
                 error(c, s->b, "this gives no value to drop");
@@ -2117,8 +2433,13 @@ static void checkStmt(Checker *c, Node *s) {
             return;
         }
         checkExpr(c, &s->a, NULL);
-        if (s->a->kind != N_CALL && !isErr(s->a->type)) {
-            error(c, s->a, "this value is not used");
+        Node *x = s->a;
+        bool used = x->kind == N_CALL || ((x->kind == N_TRY || x->kind == N_CATCH) &&
+                                          (x->type == &tyVoid || x->type->kind == TY_NORETURN));
+        if (!used && (x->kind == N_TRY || x->kind == N_CATCH) && !isErr(x->type)) {
+            error(c, x, "the value from this call is not used; assign it, or drop it with _ =");
+        } else if (!used && !isErr(x->type)) {
+            error(c, x, "this value is not used");
         }
         return;
     }
@@ -2133,6 +2454,29 @@ static void checkStmt(Checker *c, Node *s) {
         return;
     case N_RETURN: {
         Type *ret = c->func->type;
+        if (c->inDefer) {
+            error(c, s, "a deferred statement can't return");
+            return;
+        }
+        if (ret->kind == TY_RESULT) {
+            /* return value, return error(...), or return e (an Error) */
+            if (!s->a) {
+                if (ret->elem != &tyVoid) {
+                    error(c, s, "%s must return a value of type %s, or an error", c->func->name, ret->elem->name);
+                }
+                return;
+            }
+            Type *t = checkExpr(c, &s->a, ret->elem == &tyVoid ? NULL : ret->elem);
+            if (isErr(t) || t->kind == TY_ERRVAL) {
+                return;
+            }
+            if (ret->elem == &tyVoid) {
+                error(c, s->a, "%s returns no value, only an error or nothing", c->func->name);
+                return;
+            }
+            coerce(c, &s->a, ret->elem, "the returned value");
+            return;
+        }
         if (!s->a) {
             if (ret != &tyVoid && !isErr(ret)) {
                 error(c, s, "%s must return a value of type %s", c->func->name, ret->name);
@@ -2140,17 +2484,30 @@ static void checkStmt(Checker *c, Node *s) {
             return;
         }
         if (ret == &tyVoid) {
-            error(c, s->a, "%s returns nothing, so 'return' takes no value", c->func->name);
-            checkExpr(c, &s->a, NULL);
+            Type *t = checkExpr(c, &s->a, NULL);
+            if (t->kind == TY_ERRVAL) {
+                error(c, s->a, "%s can't return an error; its return type would have to be !void", c->func->name);
+            } else {
+                error(c, s->a, "%s returns nothing, so 'return' takes no value", c->func->name);
+            }
             return;
         }
-        checkExpr(c, &s->a, ret);
+        Type *rt = checkExpr(c, &s->a, ret);
+        if (rt->kind == TY_ERRVAL) {
+            error(c, s->a, "%s can't return an error; its return type would have to be !%s", c->func->name,
+                  ret->name);
+            return;
+        }
         coerce(c, &s->a, ret, "the returned value");
         return;
     }
     case N_BREAK:
     case N_CONTINUE: {
         const char *word = s->kind == N_BREAK ? "break" : "continue";
+        if (c->inDefer && !c->loop) {
+            error(c, s, "a deferred statement can't use %s", word);
+            return;
+        }
         if (!c->loop) {
             error(c, s, "'%s' can only be used inside a loop", word);
             return;
@@ -2192,9 +2549,24 @@ static void checkStmt(Checker *c, Node *s) {
         return;
     }
     case N_DEFER:
-    case N_ERRDEFER:
-        notYet(c, s, "defer and errdefer", "0.4");
+    case N_ERRDEFER: {
+        if (s->kind == N_ERRDEFER && (!c->func || c->func->type->kind != TY_RESULT)) {
+            error(c, s, "errdefer runs when the function returns an error, so %s must return !T",
+                  c->func ? c->func->name : "the function");
+        }
+        if (c->inDefer) {
+            error(c, s, "a deferred statement can't defer another one");
+            return;
+        }
+        bool savedDefer = c->inDefer;
+        Loop *savedLoop = c->loop;
+        c->inDefer = true;
+        c->loop = NULL;             /* break and continue can't leave the defer */
+        checkStmt(c, s->a);
+        c->loop = savedLoop;
+        c->inDefer = savedDefer;
         return;
+    }
     case N_SPAWN:
     case N_SELECT:
         notYet(c, s, "tasks and channels", "a later version");
@@ -2280,7 +2652,7 @@ static bool canFallThrough(Node *s) {
             }
             if (blockFallsThrough(arm->c)) return true;
         }
-        return !wildcard;
+        return !wildcard && !s->cval;
     }
     default:
         return true;
@@ -2403,7 +2775,12 @@ static void checkFunctionBody(Checker *c, Node *f) {
         }
         declareLocal(c, p->name, p);
     }
-    if (f->d) {
+    if (f->d && f->type->kind == TY_RESULT) {
+        Type *t = checkExpr(c, &f->d, f->type->elem == &tyVoid ? NULL : f->type->elem);
+        if (!isErr(t) && t->kind != TY_ERRVAL && f->type->elem != &tyVoid) {
+            coerce(c, &f->d, f->type->elem, "the returned value");
+        }
+    } else if (f->d) {
         Type *t = checkExpr(c, &f->d, f->type == &tyVoid ? NULL : f->type);
         if (f->type == &tyVoid) {
             if (f->d->kind != N_CALL && !isErr(t)) {
@@ -2414,7 +2791,9 @@ static void checkFunctionBody(Checker *c, Node *f) {
         }
     } else if (f->c) {
         checkBlock(c, f->c, false);
-        if (f->type != &tyVoid && !isErr(f->type) && blockFallsThrough(f->c)) {
+        bool needsReturn = f->type != &tyVoid && !isErr(f->type) &&
+                           !(f->type->kind == TY_RESULT && f->type->elem == &tyVoid);
+        if (needsReturn && blockFallsThrough(f->c)) {
             error(c, f, "%s can reach its end without returning a value", f->name);
         }
     }
@@ -2450,7 +2829,7 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
                 declareGlobal(&c, d, d->name);
             }
             break;
-        case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF:
+        case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF: case N_ENUM:
             declareGlobal(&c, d, d->name);
             break;
         case N_DEFINE:
@@ -2460,9 +2839,6 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
             break;
         case N_IMPORT:
             notYet(&c, d, "imports", "0.7");
-            break;
-        case N_ENUM:
-            notYet(&c, d, "enums", "0.5");
             break;
         case N_INTERFACE:
             notYet(&c, d, "interfaces", "0.6");
@@ -2483,6 +2859,8 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         Node *d = file->list.items[i];
         if (d->kind == N_STRUCT) {
             resolveStruct(&c, structType(&c, d));
+        } else if (d->kind == N_ENUM) {
+            enumType(&c, d);
         } else if (d->kind == N_TYPEDEF) {
             typeFromName(&c, d->name, d, true);
         }
@@ -2548,8 +2926,9 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         if (mainFn->list.len) {
             error(&c, mainFn, "main takes no parameters");
         }
-        if (mainFn->type != &tyVoid && mainFn->type != &tyI32 && !isErr(mainFn->type)) {
-            error(&c, mainFn, "main must return void or i32");
+        Type *mt = mainFn->type;
+        if (mt != &tyVoid && mt != &tyI32 && !isErr(mt) && !(mt->kind == TY_RESULT && mt->elem == &tyVoid)) {
+            error(&c, mainFn, "main must return void, i32 or !void");
         }
     }
     return gErrors == before;

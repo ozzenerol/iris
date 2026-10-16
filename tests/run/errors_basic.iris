@@ -1,0 +1,48 @@
+// expect: 443
+// expect: bad port: 'x1' is not a number (ParseError.notNumber)
+// expect: 8080
+// expect: empty 1
+// expect: 2
+
+enum ParseError { empty, notNumber, tooBig }
+
+bool isDigit(u8 c) => c >= '0' && c <= '9'
+
+!i64 parsePort(str s) {
+    if s.len == 0 {
+        return error(ParseError.empty, "port is empty")
+    }
+    i64 n
+    for c in s {
+        if !isDigit(c) {
+            return error(ParseError.notNumber, "'{s}' is not a number")
+        }
+        n = n * 10 + i64(c - '0')
+    }
+    if n > 65535 {
+        return error(ParseError.tooBig, "{n} is above 65535")
+    }
+    return n
+}
+
+void main() {
+    print("{parsePort("443") catch 0}")
+    port := parsePort("x1") catch e {
+        print("bad port: {e.message} ({e.code})")
+        8080
+    }
+    print("{port}")
+    p2 := parsePort("") catch e match e.code {
+        ParseError.empty => {
+            print("empty 1")
+            1
+        }
+        _ => 2
+    }
+    p3 := parsePort("70000") catch e match e.code {
+        ParseError.empty => 1
+        _ => 2
+    }
+    print("{p3}")
+    _ = p2
+}

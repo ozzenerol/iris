@@ -23,11 +23,20 @@ typedef struct {
     Type *t;
 } Val;
 
+/* The deferred statements of one block, run in reverse when it ends.
+ * Items are N_DEFER and N_ERRDEFER statements, and scoped variables. */
+typedef struct DeferFrame DeferFrame;
+struct DeferFrame {
+    DeferFrame *outer;
+    NodeList items;
+};
+
 typedef struct Loop Loop;
 struct Loop {
     Loop *outer;
     const char *label;
     int breakTo, continueTo;
+    DeferFrame *frame;      /* the frame outside the loop: exits run the ones above it */
 };
 
 typedef struct {
@@ -41,6 +50,7 @@ typedef struct {
     bool terminated;        /* the current block has ended */
     Node *func;
     Loop *loop;
+    DeferFrame *defers;
     const char *pendingLabel;
     const char *fileStr;    /* the source path, as a C string constant */
 } IR;
@@ -71,6 +81,10 @@ static const char *llType(IR *ir, Type *t) {
     case TY_SLICE: return "{ ptr, i64 }";
     case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
     case TY_STRUCT: case TY_STRING: return t->ir;
+    case TY_ENUM: return "i32";
+    case TY_ERRVAL: case TY_ERRCODE: return "i64";
+    case TY_RESULT:
+        return t->elem->kind == TY_VOID ? "i64" : fmt(ir, "{ %s, i64 }", llType(ir, t->elem));
     default: return "void";
     }
 }
@@ -279,6 +293,14 @@ static const char *arrayAddr(IR *ir, Node *e) {
 
 static Val emitConvert(IR *ir, Node *e) {
     Type *to = e->type, *from = e->a->type;
+    if (from->kind == TY_ENUM) {
+        /* an error code: the enum's number in the high half */
+        Val v = emitExpr(ir, e->a);
+        const char *w = tmp(ir), *r = tmp(ir);
+        ins(ir, "%s = zext i32 %s to i64", w, v.s);
+        ins(ir, "%s = or i64 %s, %lld", r, w, (long long)((uint64_t)from->count << 32));
+        return val(r, to);
+    }
     if (from->kind == TY_ARRAY) {
         const char *addr = arrayAddr(ir, e->a);
         return makeSlice(ir, addr, fmt(ir, "%lld", (long long)from->count), to);
@@ -540,6 +562,10 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
             const char *x = tmp(ir);
             ins(ir, "%s = zext i1 %s to i32", x, v.s);
             ins(ir, "call void @iris_write_bool(i32 %d, ptr %s, i32 %s)", sink, dst, x);
+        } else if (v.t->kind == TY_ENUM) {
+            ins(ir, "call void @iris_write_enum(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count, v.s);
+        } else if (v.t->kind == TY_ERRCODE) {
+            ins(ir, "call void @iris_write_errcode(i32 %d, ptr %s, i64 %s)", sink, dst, v.s);
         } else {
             ins(ir, "call void @iris_write_%s(i32 %d, ptr %s, i64 %s)", v.t->isSigned ? "i64" : "u64", sink, dst,
                 toI64(ir, v));
@@ -585,6 +611,17 @@ static Val emitBuiltin(IR *ir, Node *e) {
         }
         ins(ir, "call void @free(ptr %s)", p);
         return val("", &tyVoid);
+    }
+    case BI_ERROR: {
+        Val code = emitExpr(ir, e->list.items[0]);
+        ins(ir, "call void @iris_error_begin()");
+        if (e->list.len == 2) {
+            emitText(ir, e->list.items[1], 4, "null");
+        }
+        const char *r = tmp(ir);
+        ins(ir, "%s = call i64 @iris_error_finish(i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", r, code.s, ir->fileStr,
+            e->line, e->col, fnName(ir));
+        return val(r, &tyErrorValue);
     }
     case BI_STR_COPY: {
         Val v = emitExpr(ir, e->a->a);
@@ -713,6 +750,158 @@ static Val load(IR *ir, const char *addr, Type *t) {
     return val(r, t);
 }
 
+/* ---------------------------------------------------------------- defer and errors */
+
+static void pushFrame(IR *ir, DeferFrame *f) {
+    f->outer = ir->defers;
+    f->items = (NodeList){0};
+    ir->defers = f;
+}
+
+static void popFrame(IR *ir) { ir->defers = ir->defers->outer; }
+
+/* Writes out one frame's deferred statements, last first. errdefer ones
+ * only on the way out with an error. */
+static void runFrame(IR *ir, DeferFrame *f, bool isError) {
+    for (int i = f->items.len - 1; i >= 0; i--) {
+        Node *d = f->items.items[i];
+        if (d->kind == N_VAR) {
+            /* a scoped variable: call its free */
+            if (d->type->kind == TY_STRING) {
+                ins(ir, "call void @iris_string_free(ptr %s)", d->ir);
+            } else {
+                ins(ir, "call void %s(ptr %s)", d->ref->ir, d->ir);
+            }
+            continue;
+        }
+        if (d->kind == N_ERRDEFER && !isError) {
+            continue;
+        }
+        emitStmt(ir, d->a);
+    }
+}
+
+/* Runs the frames from the innermost up to (not including) stop. */
+static void runDefers(IR *ir, DeferFrame *stop, bool isError) {
+    for (DeferFrame *f = ir->defers; f && f != stop; f = f->outer) {
+        runFrame(ir, f, isError);
+    }
+}
+
+/* The error part of a !T value. */
+static const char *errorOf(IR *ir, Val r, Type *rt) {
+    if (rt->elem->kind == TY_VOID) {
+        return r.s;
+    }
+    const char *e = tmp(ir);
+    ins(ir, "%s = extractvalue %s %s, 1", e, llType(ir, rt), r.s);
+    return e;
+}
+
+static void traceAdd(IR *ir, Node *at) {
+    ins(ir, "call void @iris_trace_add(ptr %s, i32 %d, i32 %d, ptr %s)", ir->fileStr, at->line, at->col, fnName(ir));
+}
+
+/* Leaves the function with an error: deferred code first, errdefer too. */
+static void returnError(IR *ir, const char *err) {
+    runDefers(ir, NULL, true);
+    Type *rt = ir->func->type;
+    if (rt->elem->kind == TY_VOID) {
+        ins(ir, "ret i64 %s", err);
+    } else {
+        const char *r = tmp(ir);
+        ins(ir, "%s = insertvalue %s zeroinitializer, i64 %s, 1", r, llType(ir, rt), err);
+        ins(ir, "ret %s %s", llType(ir, rt), r);
+    }
+    ir->terminated = true;
+}
+
+/* Leaves a function that returns !T with a value (or nothing for !void). */
+static void returnValue(IR *ir, Val v) {
+    runDefers(ir, NULL, false);
+    Type *rt = ir->func->type;
+    if (rt->elem->kind == TY_VOID) {
+        ins(ir, "ret i64 0");
+    } else {
+        const char *r = tmp(ir);
+        ins(ir, "%s = insertvalue %s zeroinitializer, %s %s, 0", r, llType(ir, rt), llType(ir, rt->elem), v.s);
+        ins(ir, "ret %s %s", llType(ir, rt), r);
+    }
+    ir->terminated = true;
+}
+
+static Val emitTry(IR *ir, Node *e) {
+    Type *rt = e->a->type;
+    Val r = emitExpr(ir, e->a);
+    const char *err = errorOf(ir, r, rt);
+    const char *bad = tmp(ir);
+    ins(ir, "%s = icmp ne i64 %s, 0", bad, err);
+    int fail = newLabel(ir), ok = newLabel(ir);
+    ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", bad, fail, ok);
+    ir->terminated = true;
+    sbPrintf(&ir->body, "L%d:\n", fail);
+    ir->terminated = false;
+    traceAdd(ir, e);
+    returnError(ir, err);
+    sbPrintf(&ir->body, "L%d:\n", ok);
+    ir->terminated = false;
+    if (rt->elem->kind == TY_VOID) {
+        return val("", &tyVoid);
+    }
+    const char *v = tmp(ir);
+    ins(ir, "%s = extractvalue %s %s, 0", v, llType(ir, rt), r.s);
+    return val(v, rt->elem);
+}
+
+static bool hasValue(Type *t);
+static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t);
+
+static Val emitCatch(IR *ir, Node *e) {
+    Type *rt = e->a->type, *t = rt->elem;
+    bool value = t->kind != TY_VOID && hasValue(e->type);
+    const char *slot = value ? allocaFor(ir, t, "catch") : NULL;
+    Val r = emitExpr(ir, e->a);
+    const char *err = errorOf(ir, r, rt);
+    const char *bad = tmp(ir);
+    ins(ir, "%s = icmp ne i64 %s, 0", bad, err);
+    int onErr = newLabel(ir), ok = newLabel(ir), end = newLabel(ir);
+    condBr(ir, bad, onErr, ok);
+    placeLabel(ir, ok);
+    if (value) {
+        const char *v = tmp(ir);
+        ins(ir, "%s = extractvalue %s %s, 0", v, llType(ir, rt), r.s);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), v, slot);
+    }
+    br(ir, end);
+    placeLabel(ir, onErr);
+    if (e->b) {
+        Val v = emitExpr(ir, e->b);
+        if (!ir->terminated) {
+            ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
+        }
+    } else {
+        Node *var = e->d;
+        var->ir = allocaFor(ir, &tyErrorValue, var->name);
+        ins(ir, "store i64 %s, ptr %s", err, var->ir);
+        if (e->c->kind == N_MATCH) {
+            Val v = emitMatch(ir, e->c, value);
+            if (value && !ir->terminated) {
+                ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
+            }
+        } else if (value) {
+            emitValueBlock(ir, e->c, slot, t);
+        } else {
+            emitBlock(ir, e->c);
+        }
+    }
+    br(ir, end);
+    placeLabel(ir, end);
+    if (!value) {
+        return val("", &tyVoid);
+    }
+    return load(ir, slot, t);
+}
+
 static Val emitSlice(IR *ir, Node *e) {
     Type *bt = e->a->type;
     const char *ptr, *len;
@@ -794,6 +983,12 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->type->kind == TY_INT) {
             return val(intConst(ir, e->cval, e->type), e->type);
         }
+        if (e->type->kind == TY_ENUM) {
+            return val(fmt(ir, "%lld", (long long)(int32_t)e->cval), e->type);
+        }
+        if (e->type->kind == TY_ERRCODE) {
+            return val(fmt(ir, "%lld", (long long)e->cval), e->type);
+        }
     }
     if (e->type && e->type->kind == TY_NULL) {
         return val("null", e->type);
@@ -839,6 +1034,23 @@ static Val emitExpr(IR *ir, Node *e) {
     case N_CALL:
         return emitCall(ir, e);
     case N_FIELD_ACCESS: {
+        if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin) {
+            Val v = emitExpr(ir, e->a);
+            const char *p = tmp(ir), *n = tmp(ir);
+            ins(ir, "%s = call ptr @iris_enum_name(i64 %lld, i32 %s)", p, (long long)v.t->count, v.s);
+            ins(ir, "%s = call i64 @strlen(ptr %s)", n, p);
+            return makeSlice(ir, p, n, &tyStr);
+        }
+        if (e->a->type && e->a->type->kind == TY_ERRVAL) {
+            Val err = emitExpr(ir, e->a);
+            if (strcmp(e->name, "code") == 0) {
+                return val(err.s, &tyErrCode);
+            }
+            const char *p = tmp(ir), *n = tmp(ir);
+            ins(ir, "%s = call ptr @iris_error_message_ptr()", p);
+            ins(ir, "%s = call i64 @iris_error_message_len()", n);
+            return makeSlice(ir, p, n, &tyStr);
+        }
         if (!e->ref) {
             /* .len of a slice or a String (an array's is a constant) */
             Val a = emitExpr(ir, e->a);
@@ -866,6 +1078,10 @@ static Val emitExpr(IR *ir, Node *e) {
         return emitIf(ir, e, true);
     case N_MATCH:
         return emitMatch(ir, e, true);
+    case N_TRY:
+        return emitTry(ir, e);
+    case N_CATCH:
+        return emitCatch(ir, e);
     default:
         return val("undef", e->type ? e->type : &tyVoid);
     }
@@ -890,6 +1106,8 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
         }
         return;
     }
+    DeferFrame frame;
+    pushFrame(ir, &frame);
     for (int i = 0; i < b->list.len; i++) {
         Node *s = b->list.items[i];
         if (i == b->list.len - 1 && s->kind == N_EXPR_STMT) {
@@ -901,6 +1119,10 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
             emitStmt(ir, s);
         }
     }
+    if (!ir->terminated) {
+        runFrame(ir, &frame, false);
+    }
+    popFrame(ir);
 }
 
 static Val emitIf(IR *ir, Node *n, bool wantValue) {
@@ -993,13 +1215,19 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
 /* ---------------------------------------------------------------- statements */
 
 static void emitBlock(IR *ir, Node *b) {
+    DeferFrame frame;
+    pushFrame(ir, &frame);
     for (int i = 0; i < b->list.len; i++) {
         emitStmt(ir, b->list.items[i]);
     }
+    if (!ir->terminated) {
+        runFrame(ir, &frame, false);
+    }
+    popFrame(ir);
 }
 
 static void emitFor(IR *ir, Node *s) {
-    Loop loop = {ir->loop, ir->pendingLabel, 0, 0};
+    Loop loop = {ir->loop, ir->pendingLabel, 0, 0, ir->defers};
     ir->pendingLabel = NULL;
     int cond = newLabel(ir), body = newLabel(ir), post = newLabel(ir), end = newLabel(ir);
     loop.breakTo = end;
@@ -1150,8 +1378,17 @@ static void emitStmt(IR *ir, Node *s) {
         } else {
             ins(ir, "store %s zeroinitializer, ptr %s", llType(ir, s->type), s->ir);
         }
+        if ((s->flags & F_SCOPED) && ir->defers) {
+            listPush(ir->arena, &ir->defers->items, s);
+        }
         return;
     }
+    case N_DEFER:
+    case N_ERRDEFER:
+        if (ir->defers) {
+            listPush(ir->arena, &ir->defers->items, s);
+        }
+        return;
     case N_DEFINE: {
         Node *id = s->list.items[0];
         id->ir = allocaFor(ir, id->type, id->name);
@@ -1182,23 +1419,52 @@ static void emitStmt(IR *ir, Node *s) {
     case N_BLOCK:
         emitBlock(ir, s);
         return;
-    case N_RETURN:
+    case N_RETURN: {
+        Type *rt = ir->func->type;
+        if (rt->kind == TY_RESULT) {
+            if (!s->a) {
+                returnValue(ir, val("", &tyVoid));
+                return;
+            }
+            Val v = emitExpr(ir, s->a);
+            if (ir->terminated) {
+                return;
+            }
+            if (s->a->type->kind == TY_ERRVAL) {
+                if (!(s->a->kind == N_CALL && s->a->builtin == BI_ERROR)) {
+                    traceAdd(ir, s);    /* passing on an error it caught */
+                }
+                returnError(ir, v.s);
+            } else {
+                returnValue(ir, v);
+            }
+            return;
+        }
         if (s->a) {
             Val v = emitExpr(ir, s->a);
             if (!ir->terminated) {
-                ins(ir, "ret %s %s", llType(ir, ir->func->type), v.s);
+                runDefers(ir, NULL, false);
+                ins(ir, "ret %s %s", llType(ir, rt), v.s);
             }
         } else {
+            runDefers(ir, NULL, false);
             ins(ir, "ret void");
         }
         ir->terminated = true;
         return;
-    case N_BREAK:
-        br(ir, findLoop(ir, s->name)->breakTo);
+    }
+    case N_BREAK: {
+        Loop *l = findLoop(ir, s->name);
+        runDefers(ir, l->frame, false);
+        br(ir, l->breakTo);
         return;
-    case N_CONTINUE:
-        br(ir, findLoop(ir, s->name)->continueTo);
+    }
+    case N_CONTINUE: {
+        Loop *l = findLoop(ir, s->name);
+        runDefers(ir, l->frame, false);
+        br(ir, l->continueTo);
         return;
+    }
     case N_LABELED:
         ir->pendingLabel = s->name;
         emitStmt(ir, s->a);
@@ -1231,10 +1497,17 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     }
     sbPuts(out, ir->mode == MODE_DEBUG ? ") #0 {\n" : ") {\n");
 
+    ir->defers = NULL;
     if (f->d) {
         Val v = emitExpr(ir, f->d);
         if (!ir->terminated) {
-            if (f->type->kind == TY_VOID) {
+            if (f->type->kind == TY_RESULT) {
+                if (f->d->type->kind == TY_ERRVAL) {
+                    returnError(ir, v.s);
+                } else {
+                    returnValue(ir, v);
+                }
+            } else if (f->type->kind == TY_VOID) {
                 ins(ir, "ret void");
             } else {
                 ins(ir, "ret %s %s", llType(ir, f->type), v.s);
@@ -1245,6 +1518,8 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
         if (!ir->terminated) {
             if (f->type->kind == TY_VOID) {
                 ins(ir, "ret void");
+            } else if (f->type->kind == TY_RESULT && f->type->elem->kind == TY_VOID) {
+                ins(ir, "ret i64 0");
             } else {
                 ins(ir, "unreachable");
             }
@@ -1370,6 +1645,44 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
         }
     }
 
+    /* the names of every enum's values, for printing them and errors */
+    int nenums = 0;
+    for (int i = 0; i < file->list.len; i++) {
+        if (file->list.items[i]->kind == N_ENUM && file->list.items[i]->type) {
+            nenums++;
+        }
+    }
+    StrBuf table = {0};
+    for (int k = 1; k <= nenums; k++) {
+        for (int i = 0; i < file->list.len; i++) {
+            Node *d = file->list.items[i];
+            if (d->kind != N_ENUM || !d->type || d->type->count != k) {
+                continue;
+            }
+            int n = d->list.len;
+            sbPrintf(&ir.head, "@e%d.values = private constant [%d x i64] [", k, n);
+            for (int j = 0; j < n; j++) {
+                sbPrintf(&ir.head, "%si64 %lld", j ? ", " : "", (long long)d->list.items[j]->cval);
+            }
+            sbPuts(&ir.head, "]\n");
+            const char **names = arenaAlloc(a, sizeof(char *) * (size_t)(n ? n : 1));
+            for (int j = 0; j < n; j++) {
+                names[j] = cString(&ir, d->list.items[j]->name);
+            }
+            sbPrintf(&ir.head, "@e%d.names = private constant [%d x ptr] [", k, n);
+            for (int j = 0; j < n; j++) {
+                sbPrintf(&ir.head, "%sptr %s", j ? ", " : "", names[j]);
+            }
+            sbPuts(&ir.head, "]\n");
+            sbPrintf(&table, "%s{ ptr, i64, ptr, ptr } { ptr %s, i64 %d, ptr @e%d.values, ptr @e%d.names }",
+                     k > 1 ? ", " : "", cString(&ir, d->name), n, k, k);
+        }
+    }
+    sbPrintf(&ir.head, "@iris_enum_table = constant [%d x { ptr, i64, ptr, ptr }] [%s]\n", nenums,
+             table.buf ? table.buf : "");
+    sbPrintf(&ir.head, "@iris_enum_count = constant i64 %d\n", nenums);
+    sbFree(&table);
+
     StrBuf out = {0};
     sbPrintf(&out, "; generated by iris %s from %s\n\n", IRIS_VERSION, src->path);
     sbPuts(&out, types.buf);
@@ -1384,6 +1697,12 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     sbPuts(&out, "  call void @iris_init(i32 %argc, ptr %argv)\n");
     if (mainFn && mainFn->type->kind == TY_INT) {
         sbPrintf(&out, "  %%r = call i32 %s()\n  ret i32 %%r\n}\n\n", mainFn->ir);
+    } else if (mainFn && mainFn->type->kind == TY_RESULT) {
+        /* an error that gets out of main is printed with its trace */
+        sbPrintf(&out, "  %%e = call i64 %s()\n  %%bad = icmp ne i64 %%e, 0\n"
+                       "  br i1 %%bad, label %%fail, label %%ok\nfail:\n"
+                       "  call void @iris_error_report(i64 %%e)\n  unreachable\nok:\n  ret i32 0\n}\n\n",
+                 mainFn->ir);
     } else {
         sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@f.main");
     }
@@ -1403,6 +1722,16 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
            "declare void @iris_check_failed(ptr, ptr, i32, i32, ptr) noreturn\n"
            "declare void @iris_index_failed(i64, i64, ptr, i32, i32, ptr) noreturn\n"
            "declare void @iris_slice_failed(i64, i64, i64, ptr, i32, i32, ptr) noreturn\n"
+           "declare void @iris_write_enum(i32, ptr, i64, i32)\n"
+           "declare void @iris_write_errcode(i32, ptr, i64)\n"
+           "declare void @iris_error_begin()\n"
+           "declare i64 @iris_error_finish(i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_trace_add(ptr, i32, i32, ptr)\n"
+           "declare ptr @iris_error_message_ptr()\n"
+           "declare i64 @iris_error_message_len()\n"
+           "declare void @iris_error_report(i64) noreturn\n"
+           "declare ptr @iris_enum_name(i64, i32)\n"
+           "declare i64 @strlen(ptr)\n"
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     if (mode == MODE_DEBUG) {
         sbPuts(&out, "attributes #0 = { sanitize_address }\n");

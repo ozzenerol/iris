@@ -1,0 +1,38 @@
+// expect: warn true false
+// expect: 404 notFound
+// expect: medium
+// expect: is debug
+// expect: is info
+// expect: is warn
+// expect: is error
+
+enum Level { debug, info, warn, error }
+
+enum Status { ok = 200, notFound = 404, failed = 500 }
+
+str describe(Level l) => match l {
+    Level.debug, Level.info => "low"
+    Level.warn => "medium"
+    Level.error => "high"
+}
+
+void main() {
+    Level l = .warn
+    print("{l} {l == Level.warn} {l == .debug}")
+    Status s = Status.notFound
+    print("{i64(404)} {s}")
+    print(describe(l))
+    for n in 0..4 {
+        Level x = match n { 0 => .debug, 1 => .info, 2 => .warn, _ => .error }
+        printLevel(x)
+    }
+}
+
+void printLevel(Level x) {
+    match x {
+        .debug => print("is debug")
+        .info => print("is info")
+        .warn => print("is warn")
+        .error => print("is error")
+    }
+}

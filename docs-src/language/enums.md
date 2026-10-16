@@ -29,6 +29,29 @@ enum Status { ok = 200, notFound = 404, error = 500 }
 print("level is {l}")       // level is warn
 ```
 
+A `match` on an enum needs an arm for every value, or a `_` arm:
+
+```iris run
+enum Level { debug, info, warn, error }
+
+str weight(Level l) => match l {
+    .debug, .info => "low"
+    .warn => "medium"
+    .error => "high"
+}
+
+void main() {
+    Level l = .warn
+    print("{l} is {weight(l)}")
+    print("{l.name.len} letters")
+}
+```
+
+```output
+warn is medium
+4 letters
+```
+
 ## Enums that carry data
 
 A value can carry data, written like a function's parameters:

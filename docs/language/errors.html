@@ -33,6 +33,31 @@
 }</code></pre>
 <p>An error has a code and a message. The code is a value from an enum and tells the program what went wrong. The message is for people.</p>
 <p><code>!void</code> is a function that returns nothing but can fail.</p>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="k">enum</span> ParseError { empty, notNumber }
+
+!<span class="t">i64</span> parseDigit(<span class="t">str</span> s) {
+    <span class="k">if</span> s.len == <span class="n">0</span> {
+        <span class="k">return</span> error(ParseError.empty, <span class="s">&quot;nothing to parse&quot;</span>)
+    }
+    c := s[<span class="n">0</span>]
+    <span class="k">if</span> c &lt; <span class="s">&#x27;0&#x27;</span> || c &gt; <span class="s">&#x27;9&#x27;</span> {
+        <span class="k">return</span> error(ParseError.notNumber, <span class="s">&quot;&#x27;{s}&#x27; is not a digit&quot;</span>)
+    }
+    <span class="k">return</span> <span class="t">i64</span>(c - <span class="s">&#x27;0&#x27;</span>)
+}
+
+<span class="t">void</span> main() {
+    print(<span class="s">&quot;{parseDigit(&quot;</span><span class="n">7</span><span class="s">&quot;) catch 0}&quot;</span>)
+    n := parseDigit(<span class="s">&quot;x&quot;</span>) <span class="k">catch</span> e {
+        print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
+        -<span class="n">1</span>
+    }
+    print(<span class="s">&quot;{n}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>7
+ParseError.notNumber: &#x27;x&#x27; is not a digit
+-1</code></pre>
 <h2 id="try"><a href="#try">try</a></h2>
 <p><code>try</code> calls the function and, if it returns an error, returns that error from the current function. The current function must also return <code>!</code>:</p>
 <pre class="code"><code>!Config loadConfig(<span class="t">str</span> path) {
@@ -81,6 +106,7 @@ _ = save(<span class="s">&quot;out.txt&quot;</span>, data)      <span class="c">
   at fs.readAll    std/fs.iris:88
   at loadConfig    main.iris:12
   at main          main.iris:31</code></pre>
+<p>The first line is the error's code and message. Below it is the trace: where the error was made, then each <code>try</code> or <code>return e</code> that passed it on. The message holds up to 1024 bytes, and the trace up to 64 steps.</p>
 <h2 id="bugs-and-panic"><a href="#bugs-and-panic">Bugs and panic</a></h2>
 <p><code>!T</code> is for things that can go wrong while the program is correct: a missing file, a closed connection, bad input. A bug, like an index past the end, stops the program right away with a trace. <code>panic(&quot;message&quot;)</code> does the same for a state the program should never reach.</p>
 <p>A stopped program prints <code>panic:</code>, the message and where it happened, and exits with status 2:</p>
