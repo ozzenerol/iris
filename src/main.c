@@ -154,6 +154,7 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
         snprintf(linkArgs[i], sizeof linkArgs[i], "-l%s", links[i]);
         args[n++] = linkArgs[i];
     }
+    args[n++] = "-lm";              /* the math module's functions */
     args[n] = NULL;
     int rc;
     if (mode == MODE_DEBUG) {

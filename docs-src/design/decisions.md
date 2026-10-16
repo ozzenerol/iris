@@ -52,6 +52,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | `.ptr` gives a slice's pointer, and `p[0:n]` slices a pointer without checks. | Needed to hand memory to and from C. |
 | `import c` turns `void *` and function pointers into `u8 *`, and `char` into `u8`. | Text and memory are bytes in Iris; callbacks come later. |
 | A C name that is an Iris keyword or built-in name gets a `_`: `c.free_`. A struct named like a function becomes `c.struct_NAME`. | C keeps struct names apart from other names; Iris doesn't. |
+| An integer constant can be used where a float is expected; an integer variable must be converted with `f64(...)`. | `x * 2` reads naturally; mixing variables stays explicit, as with integers. |
+| Floats print in the fewest digits that read back the same, as plain decimals between 1e-7 and 1e21. | Printing is exact without being noisy. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 

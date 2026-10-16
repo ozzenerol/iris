@@ -3,6 +3,9 @@
 
 pub enum ParseError { empty, notNumber, tooBig }
 
+@extern("iris_str_parse_float")
+i32 rawParseFloat(u8 *p, i64 n, f64 *out)
+
 // Where sub first appears in s, or -1.
 pub i64 find(str s, str sub) {
     if sub.len == 0 {
@@ -157,4 +160,17 @@ pub !i64 parseInt(str s) {
         n = n * 10 + d
     }
     return if negative { -n } else { n }
+}
+
+// The floating point number written in s: 1.5, -2e10, inf, nan.
+pub !f64 parseFloat(str s) {
+    f64 v
+    code := rawParseFloat(s.ptr, s.len, &v)
+    if code == 1 {
+        return error(ParseError.empty, "no number in an empty text")
+    }
+    if code != 0 {
+        return error(ParseError.notNumber, "'{s}' is not a number")
+    }
+    return v
 }

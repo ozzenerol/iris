@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.8.0"
+#define IRIS_VERSION "0.9.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -241,6 +241,7 @@ typedef enum {
     TY_NORETURN,            /* a block that always leaves: return, break, panic */
     TY_BOOL,
     TY_INT,
+    TY_FLOAT,               /* f32, f64: bits */
     TY_NULL,                /* the type of null: becomes any pointer */
     TY_PTR,
     TY_SLICE,               /* str is the slice of u8 */
@@ -278,7 +279,7 @@ struct Type {
 };
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
-extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64;
+extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64;
 
 /* What a call does when it isn't a call to a user function. */
 enum {

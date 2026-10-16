@@ -5,11 +5,11 @@ HDR = $(wildcard src/*.h)
 STD = $(sort $(wildcard std/*/*.iris))
 
 iris: $(SRC) $(HDR) build/runtime.inc build/std.inc
-	$(CC) $(CFLAGS) -Ibuild -o $@ $(SRC)
+	$(CC) $(CFLAGS) -Ibuild -o $@ $(SRC) -lm
 
 # AddressSanitizer and UBSan build, for finding memory bugs in the compiler
 iris-debug: $(SRC) $(HDR) build/runtime.inc build/std.inc
-	$(CC) -std=c11 -O0 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Ibuild -o $@ $(SRC)
+	$(CC) -std=c11 -O0 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Ibuild -o $@ $(SRC) -lm
 
 # the standard library's files, as bytes the compiler carries with it
 build/std.inc: $(STD)

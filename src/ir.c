@@ -15,6 +15,7 @@
  * catches use after free. */
 #include "iris.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -79,6 +80,7 @@ static const char *llType(IR *ir, Type *t) {
         default: return "i64";
         }
     case TY_PTR: case TY_NULL: return "ptr";
+    case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
     case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
@@ -181,6 +183,17 @@ static const char *intConst(IR *ir, int64_t v, Type *t) {
         v = (int64_t)u;
     }
     return fmt(ir, "%lld", (long long)v);
+}
+
+/* A floating point constant: LLVM wants the bits of the double, in hex;
+ * for f32 the value rounded to float first. */
+static const char *floatConst(IR *ir, double v, Type *t) {
+    if (t->bits == 32) {
+        v = (double)(float)v;
+    }
+    uint64_t bits;
+    memcpy(&bits, &v, sizeof bits);
+    return fmt(ir, "0x%016llX", (unsigned long long)bits);
 }
 
 static const char *fnName(IR *ir) { return cString(ir, ir->func ? ir->func->name : "?"); }
@@ -363,6 +376,41 @@ static Val emitConvert(IR *ir, Node *e) {
     }
     Val v = emitExpr(ir, e->a);
     from = v.t;
+    if (from->kind == TY_FLOAT || to->kind == TY_FLOAT) {
+        const char *r = tmp(ir);
+        if (from->kind == TY_FLOAT && to->kind == TY_FLOAT) {
+            if (from->bits == to->bits) return val(v.s, to);
+            ins(ir, "%s = %s %s %s to %s", r, to->bits > from->bits ? "fpext" : "fptrunc", llType(ir, from), v.s,
+                llType(ir, to));
+            return val(r, to);
+        }
+        if (to->kind == TY_FLOAT) {
+            ins(ir, "%s = %s %s %s to %s", r, from->isSigned ? "sitofp" : "uitofp", llType(ir, from), v.s,
+                llType(ir, to));
+            return val(r, to);
+        }
+        /* a float to an integer: in debug builds the value must fit (and not be NaN) */
+        if (checks(ir)) {
+            double lo, hi;          /* the integer must be in [lo, hi) */
+            if (to->isSigned) {
+                lo = -ldexp(1.0, to->bits - 1);
+                hi = ldexp(1.0, to->bits - 1);
+            } else {
+                lo = 0;
+                hi = ldexp(1.0, to->bits);
+            }
+            const char *ft = llType(ir, from);
+            const char *a = tmp(ir), *b = tmp(ir), *ok = tmp(ir), *bad = tmp(ir);
+            /* truncation goes toward zero, so lo - 1 < v < hi is the range */
+            ins(ir, "%s = fcmp ogt %s %s, %s", a, ft, v.s, floatConst(ir, lo - 1, &tyF64));
+            ins(ir, "%s = fcmp olt %s %s, %s", b, ft, v.s, floatConst(ir, hi, &tyF64));
+            ins(ir, "%s = and i1 %s, %s", ok, a, b);
+            ins(ir, "%s = xor i1 %s, true", bad, ok);
+            failIf(ir, bad, e, "the value doesn't fit in the type it is converted to");
+        }
+        ins(ir, "%s = %s %s %s to %s", r, to->isSigned ? "fptosi" : "fptoui", llType(ir, from), v.s, llType(ir, to));
+        return val(r, to);
+    }
     if (from->bits == to->bits && from->isSigned == to->isSigned) {
         return val(v.s, to);
     }
@@ -421,6 +469,10 @@ static Val emitArith(IR *ir, Node *at, TokKind op, Val a, Val b) {
     }
     const char *ty = llType(ir, t);
     const char *r = tmp(ir);
+    if (t->kind == TY_FLOAT) {
+        ins(ir, "%s = %s %s %s, %s", r, op == P_PLUS ? "fadd" : op == P_MINUS ? "fsub" : "fmul", ty, a.s, b.s);
+        return val(r, t);
+    }
     if (checks(ir)) {
         const char *pair = tmp(ir);
         ins(ir, "%s = call { %s, i1 } @llvm.%s.with.overflow.%s(%s %s, %s %s)", pair, ty,
@@ -438,6 +490,11 @@ static Val emitArith(IR *ir, Node *at, TokKind op, Val a, Val b) {
 static Val emitDivide(IR *ir, Node *at, TokKind op, Val a, Val b) {
     Type *t = a.t;
     const char *ty = llType(ir, t);
+    if (t->kind == TY_FLOAT) {
+        const char *r = tmp(ir);
+        ins(ir, "%s = %s %s %s, %s", r, op == P_SLASH ? "fdiv" : "frem", ty, a.s, b.s);
+        return val(r, t);
+    }
     if (ir->mode != MODE_RELEASE_FAST) {
         const char *zero = tmp(ir);
         ins(ir, "%s = icmp eq %s %s, 0", zero, ty, b.s);
@@ -518,11 +575,22 @@ static const char *emitEq(IR *ir, Val a, Val b) {
         return acc;
     }
     const char *r = tmp(ir);
+    if (t->kind == TY_FLOAT) {
+        ins(ir, "%s = fcmp oeq %s %s, %s", r, llType(ir, t), a.s, b.s);
+        return r;
+    }
     ins(ir, "%s = icmp eq %s %s, %s", r, llType(ir, t), a.s, b.s);
     return r;
 }
 
 static Val emitCompare(IR *ir, TokKind op, Val a, Val b) {
+    if (a.t->kind == TY_FLOAT) {
+        const char *cc = op == P_EQ ? "oeq" : op == P_NE ? "une" : op == P_LT ? "olt" : op == P_LE ? "ole"
+                       : op == P_GT ? "ogt" : "oge";
+        const char *r = tmp(ir);
+        ins(ir, "%s = fcmp %s %s %s, %s", r, cc, llType(ir, a.t), a.s, b.s);
+        return val(r, &tyBool);
+    }
     if (op == P_EQ || op == P_NE) {
         if (a.t->kind == TY_NULL) {
             a.t = b.t;
@@ -618,6 +686,13 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
                 enumTag(ir, v));
         } else if (v.t->kind == TY_ERRCODE) {
             ins(ir, "call void @iris_write_errcode(i32 %d, ptr %s, i64 %s)", sink, dst, v.s);
+        } else if (v.t->kind == TY_FLOAT) {
+            const char *x = v.s;
+            if (v.t->bits == 32) {
+                x = tmp(ir);
+                ins(ir, "%s = fpext float %s to double", x, v.s);
+            }
+            ins(ir, "call void @iris_write_float(i32 %d, ptr %s, double %s, i32 %d)", sink, dst, x, v.t->bits);
         } else {
             ins(ir, "call void @iris_write_%s(i32 %d, ptr %s, i64 %s)", v.t->isSigned ? "i64" : "u64", sink, dst,
                 toI64(ir, v));
@@ -792,7 +867,12 @@ static Val emitCall(IR *ir, Node *e) {
         /* an extra argument to C's ...: small integers and bool become int */
         const char *x = v.s;
         Type *t = v.t;
-        if (t->kind == TY_BOOL || (t->kind == TY_INT && t->bits < 32)) {
+        if (t->kind == TY_FLOAT && t->bits == 32) {
+            const char *w = tmp(ir);
+            ins(ir, "%s = fpext float %s to double", w, x);
+            x = w;
+            t = &tyF64;
+        } else if (t->kind == TY_BOOL || (t->kind == TY_INT && t->bits < 32)) {
             const char *w = tmp(ir);
             ins(ir, "%s = %s %s %s to i32", w, t->kind == TY_INT && t->isSigned ? "sext" : "zext", llType(ir, t), x);
             x = w;
@@ -1140,6 +1220,9 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->type->kind == TY_ENUM) {
             return val(fmt(ir, "%lld", (long long)(int32_t)e->cval), e->type);
         }
+        if (e->type->kind == TY_FLOAT) {
+            return val(floatConst(ir, e->fval, e->type), e->type);
+        }
         if (e->type->kind == TY_ERRCODE) {
             return val(fmt(ir, "%lld", (long long)e->cval), e->type);
         }
@@ -1194,6 +1277,11 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->op == P_TILDE) {
             const char *r = tmp(ir);
             ins(ir, "%s = xor %s %s, -1", r, llType(ir, a.t), a.s);
+            return val(r, a.t);
+        }
+        if (a.t->kind == TY_FLOAT) {
+            const char *r = tmp(ir);
+            ins(ir, "%s = fneg %s %s", r, llType(ir, a.t), a.s);
             return val(r, a.t);
         }
         return emitArith(ir, e, P_MINUS, val("0", a.t), a);
@@ -1792,6 +1880,8 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
         return v->cval ? "true" : "false";
     case TY_INT:
         return intConst(ir, v->cval, t);
+    case TY_FLOAT:
+        return floatConst(ir, v->fval, t);
     case TY_PTR:
         return "null";
     case TY_STRUCT: {
@@ -2046,6 +2136,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"
            "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
+           "declare void @iris_write_float(i32, ptr, double, i32)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     if (mode == MODE_DEBUG) {

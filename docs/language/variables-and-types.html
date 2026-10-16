@@ -42,6 +42,20 @@ flags := <span class="n">0b1010</span></code></pre>
 <span class="t">u8</span> small = <span class="t">u8</span>(n)       <span class="c">// written out: n might not fit</span>
 <span class="t">f64</span> avg = <span class="t">f64</span>(total) / <span class="t">f64</span>(count)</code></pre>
 <p>In a debug build, a conversion that loses a value stops the program with an error.</p>
+<h2 id="floating-point"><a href="#floating-point">Floating point</a></h2>
+<p><code>f64</code> and <code>f32</code> hold floating point numbers. A literal with a point or an exponent is an <code>f64</code>: <code>1.5</code>, <code>2e10</code>, <code>1e-3</code>. An integer constant can be used where a float is expected, so <code>x * 2</code> works when <code>x</code> is an <code>f64</code>. A variable of an integer type has to be converted: <code>f64(n)</code>.</p>
+<p><code>f32</code> converts to <code>f64</code> on its own. Converting a float to an integer drops the fraction, toward zero; in a debug build a value that doesn't fit, or isn't a number, stops the program.</p>
+<p>Division by zero gives infinity or NaN, as the hardware does. Floats are printed in the fewest digits that read back as the same number:</p>
+<pre class="code run"><code><span class="k">import</span> math
+
+<span class="t">void</span> main() {
+    <span class="t">f64</span> r = <span class="n">2</span>
+    area := math.pi * r * r
+    print(<span class="s">&quot;{area} {0.1 + 0.2} {1.0 / 3}&quot;</span>)
+    print(<span class="s">&quot;{i64(area)} {math.sqrt(2)} {1e21} {1.0 / 0.0}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>12.566370614359172 0.30000000000000004 0.3333333333333333
+12 1.4142135623730951 1e+21 inf</code></pre>
 <h2 id="operators"><a href="#operators">Operators</a></h2>
 <div class="table"><table><thead><tr><th>Operators</th><th>Meaning</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code></td><td>bits: and, or, xor, not, shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment</td></tr><tr><td><code>a..b</code></td><td>the range from <code>a</code> to <code>b</code>, for <code>for</code> and <code>match</code></td></tr></tbody></table></div>
 <p>They bind in this order, tightest first:</p>

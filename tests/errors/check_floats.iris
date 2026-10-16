@@ -1,0 +1,14 @@
+// error: 9: '&' needs integers, not f64
+// error: 10: '+' can't mix f64 and i64; convert one side, for example f64(...)
+// error: 11: '<<' needs an integer, not f64
+// error: 12: match works on integers, bool, str and enums, not f64
+// error: 13: the value is f64, which doesn't always fit in f32; convert it with f32(...)
+void main() {
+    f64 a = 1.5
+    i64 b = 2
+    x := a & a
+    y := a + b
+    z := a << 1
+    match a { _ => {} }
+    f32 s = a
+}

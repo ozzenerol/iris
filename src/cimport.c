@@ -386,8 +386,12 @@ static bool cType(Arena *a, const char *ct, bool param, StrBuf *out, const char 
                 return false;
             }
             iris = "u8";            /* a pointer to a union: bytes */
-        } else if (strcmp(base, "float") == 0 || strcmp(base, "double") == 0 || strcmp(base, "long double") == 0) {
-            *why = "floating point";
+        } else if (strcmp(base, "float") == 0) {
+            iris = "f32";
+        } else if (strcmp(base, "double") == 0) {
+            iris = "f64";
+        } else if (strcmp(base, "long double") == 0 || strncmp(base, "_Float", 6) == 0 || strcmp(base, "__float128") == 0) {
+            *why = "a floating point type wider than f64";
             return false;
         } else if (nw == 1 && isTypedef(base)) {
             snprintf(named, sizeof named, "%s", irisName(a, base));
