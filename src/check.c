@@ -258,6 +258,8 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
     StrBuf b = {0};
     if (kind == TY_PTR) {
         sbPrintf(&b, "%s%s", elem->name, elem->kind == TY_PTR ? "*" : " *");
+    } else if (kind == TY_CHAN) {
+        sbPrintf(&b, "chan[%s]", elem->name);
     } else if (kind == TY_RESULT) {
         sbPrintf(&b, "!%s", elem->name);
     } else if (kind == TY_SLICE) {
@@ -277,6 +279,7 @@ static Type *ptrTo(Type *t) { return compound(TY_PTR, t, 0); }
 static Type *sliceOf(Type *t) { return compound(TY_SLICE, t, 0); }
 static Type *arrayOf(Type *t, int64_t n) { return compound(TY_ARRAY, t, n); }
 static Type *resultOf(Type *t) { return compound(TY_RESULT, t, 0); }
+static Type *chanOf(Type *t) { return compound(TY_CHAN, t, 0); }
 
 /* R(A, B): a function type */
 static Type *funcOf(Type *ret, Type **params, int n) {
@@ -345,7 +348,7 @@ static bool sameType(Type *a, Type *b) {
     switch (a->kind) {
     case TY_INT: return a->bits == b->bits && a->isSigned == b->isSigned;
     case TY_FLOAT: return a->bits == b->bits;
-    case TY_PTR: case TY_SLICE: case TY_RESULT: return sameType(a->elem, b->elem);
+    case TY_PTR: case TY_SLICE: case TY_RESULT: case TY_CHAN: return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
     case TY_TUPLE: case TY_FUNC:
@@ -387,7 +390,7 @@ static int64_t typeSize(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
     case TY_INT: case TY_FLOAT: return t->bits / 8;
-    case TY_PTR: case TY_NULL: case TY_FUNC: return 8;
+    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: return 8;
     case TY_SLICE: return 16;
     case TY_STRING: return 24;
     case TY_ERRVAL: case TY_ERRCODE: return 8;
@@ -729,6 +732,16 @@ static Type *resolveType(Checker *c, Node *t) {
             if (isErr(args[i])) return args[i];
         }
         return instantiateStruct(c, d, args, t->list.len, t);
+    }
+    case N_T_CHAN: {
+        Type *e = resolveType(c, t->a);
+        if (isErr(e)) return e;
+        if (e == &tyVoid) {
+            error(c, t, "a channel of void carries nothing");
+            return &tyError;
+        }
+        if (e->kind == TY_STRUCT) resolveStruct(c, e);
+        return chanOf(e);
     }
     case N_T_DYN: {
         Node *in = t->a;
@@ -1678,8 +1691,20 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         return setType(e, &tyError);
     }
     if (op == P_LARROW) {
-        notYet(c, e, "channels", "a later version");
-        return setType(e, &tyError);
+        /* ch <- value: a statement */
+        Type *tc = checkExpr(c, &e->a, NULL);
+        if (isErr(tc)) {
+            checkExpr(c, &e->b, NULL);
+            return setType(e, &tyVoid);
+        }
+        if (tc->kind != TY_CHAN) {
+            error(c, e->a, "<- sends to a channel, not to %s", tc->name);
+            checkExpr(c, &e->b, NULL);
+            return setType(e, &tyVoid);
+        }
+        checkExpr(c, &e->b, tc->elem);
+        coerce(c, &e->b, tc->elem, "the value sent");
+        return setType(e, &tyVoid);
     }
     if (op == P_ANDAND || op == P_OROR) {
         checkExpr(c, &e->a, &tyBool);
@@ -2288,10 +2313,38 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             }
             return setType(e, t->elem);
         }
-        default:
-            notYet(c, e, "channels", "a later version");
+        default: {
+            /* <-ch: the next value from a channel, waiting for one */
+            Type *tc = checkExpr(c, &e->a, NULL);
+            if (isErr(tc)) return setType(e, tc);
+            if (tc->kind != TY_CHAN) {
+                error(c, e, "<- takes from a channel, not from %s", tc->name);
+                return setType(e, &tyError);
+            }
+            return setType(e, tc->elem);
+        }
+        }
+    }
+    case N_CHAN_MAKE: {
+        Type *t = resolveType(c, e->a);
+        Type *n = checkExpr(c, &e->b, &tyI64);
+        if (!isErr(n)) {
+            if (!isInt(n)) {
+                error(c, e->b, "a channel's size is an integer, not %s", n->name);
+            } else {
+                coerce(c, &e->b, &tyI64, "the size");
+                if (e->b->isConst && e->b->cval < 1) {
+                    error(c, e->b, "a channel needs room for at least one value");
+                }
+            }
+        }
+        if (isErr(t)) return setType(e, t);
+        if (t == &tyVoid) {
+            error(c, e->a, "a channel of void carries nothing");
             return setType(e, &tyError);
         }
+        if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        return setType(e, chanOf(t));
     }
     case N_BINARY:
         return checkBinary(c, e, expected);
@@ -2378,7 +2431,8 @@ static Type *intTypeNamed(const char *name) {
 
 static bool isBuiltinName(const char *name) {
     return strcmp(name, "print") == 0 || strcmp(name, "panic") == 0 || strcmp(name, "format") == 0 ||
-           strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0 || strcmp(name, "error") == 0;
+           strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0 || strcmp(name, "error") == 0 ||
+           strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0;
 }
 
 static bool printable(Type *t) {
@@ -2894,6 +2948,25 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     if (!d && isBuiltinName(name)) {
         if (strcmp(name, "alloc") == 0) {
             return checkAlloc(c, e);
+        }
+        if (strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0) {
+            e->builtin = name[0] == 's' ? BI_SLEEP : BI_AFTER;
+            if (e->list.len != 1 || e->list.items[0]->kind == N_NAMED_ARG) {
+                error(c, e, "%s takes one Duration: %s(200ms)", name, name);
+                return setType(e, &tyError);
+            }
+            Type *t = checkExpr(c, &e->list.items[0], &tyDuration);
+            if (!isErr(t)) {
+                if (!isInt(t)) {
+                    error(c, e->list.items[0], "%s takes a Duration, not %s", name, t->name);
+                } else {
+                    coerce(c, &e->list.items[0], &tyI64, "the time");
+                }
+            }
+            if (e->builtin == BI_AFTER) {
+                error(c, e, "after is an arm of a select: select { after(5s) => ... }");
+            }
+            return setType(e, &tyVoid);
         }
         if (strcmp(name, "error") == 0) {
             /* error(code) or error(code, text): an enum value, or the code of
@@ -3645,7 +3718,8 @@ static void checkStmt(Checker *c, Node *s) {
         }
         checkExpr(c, &s->a, NULL);
         Node *x = s->a;
-        bool used = x->kind == N_CALL || ((x->kind == N_TRY || x->kind == N_CATCH) &&
+        bool used = x->kind == N_CALL || (x->kind == N_BINARY && x->op == P_LARROW) ||
+                    ((x->kind == N_TRY || x->kind == N_CATCH) &&
                                           (x->type == &tyVoid || x->type->kind == TY_NORETURN));
         if (!used && (x->kind == N_TRY || x->kind == N_CATCH) && !isErr(x->type)) {
             error(c, x, "the value from this call is not used; assign it, or drop it with _ =");
@@ -3778,10 +3852,78 @@ static void checkStmt(Checker *c, Node *s) {
         c->inDefer = savedDefer;
         return;
     }
-    case N_SPAWN:
-    case N_SELECT:
-        notYet(c, s, "tasks and channels", "a later version");
+    case N_SPAWN: {
+        Node *call = s->a;
+        if (call->kind != N_CALL) {
+            error(c, call, "spawn starts a function: spawn handle(conn)");
+            checkExpr(c, &s->a, NULL);
+            return;
+        }
+        c->allowResult = true;
+        Type *t = checkExpr(c, &s->a, NULL);
+        call = s->a;
+        if (isErr(t)) return;
+        if (call->builtin && call->builtin != BI_INDIRECT) {
+            error(c, call, "spawn starts a function of the program, not a built-in");
+        } else if (t->kind == TY_RESULT) {
+            error(c, call, "a task can't return an error, since nothing waits for it; handle the error inside");
+        } else if (c->inDefer) {
+            error(c, s, "a deferred statement can't spawn");
+        }
         return;
+    }
+    case N_SELECT: {
+        bool hasAfter = false;
+        for (int i = 0; i < s->list.len; i++) {
+            Node *arm = s->list.items[i];
+            Node *x = arm->a;
+            pushScope(c, false);
+            if (x->kind == N_UNARY && x->op == P_LARROW) {
+                Type *t = checkExpr(c, &arm->a, NULL);
+                if (arm->name && !isErr(t)) {
+                    Node *var = like(c, N_IDENT, arm);
+                    var->name = arm->name;
+                    var->type = t;
+                    arm->d = var;
+                    if (strcmp(arm->name, "_") != 0) {
+                        declareLocal(c, arm->name, var);
+                    }
+                }
+            } else if (x->kind == N_CALL && x->a->kind == N_IDENT && strcmp(x->a->name, "after") == 0 &&
+                       !lookup(c, "after")) {
+                if (arm->name) {
+                    error(c, arm, "after gives no value to name");
+                }
+                if (hasAfter) {
+                    error(c, x, "a select can have one after arm");
+                }
+                hasAfter = true;
+                x->builtin = BI_AFTER;
+                if (x->list.len != 1 || x->list.items[0]->kind == N_NAMED_ARG) {
+                    error(c, x, "after takes one Duration: after(5s)");
+                } else {
+                    Type *t = checkExpr(c, &x->list.items[0], &tyDuration);
+                    if (!isErr(t) && !isInt(t)) {
+                        error(c, x->list.items[0], "after takes a Duration, not %s", t->name);
+                    } else if (!isErr(t)) {
+                        coerce(c, &x->list.items[0], &tyI64, "the time");
+                    }
+                }
+            } else {
+                error(c, x, "a select arm takes from a channel (<-ch) or waits with after(...)");
+            }
+            if (arm->c->kind == N_BLOCK) {
+                checkBlock(c, arm->c, true);
+            } else {
+                checkStmt(c, arm->c);
+            }
+            popScope(c);
+        }
+        if (s->list.len == 0) {
+            error(c, s, "a select needs at least one arm");
+        }
+        return;
+    }
     case N_WHEN:
         notYet(c, s, "when", "a later version");
         return;

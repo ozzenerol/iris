@@ -56,6 +56,8 @@ typedef struct {
     const char *pendingLabel;
     const char *fileStr;    /* the source path, as a C string constant */
     NodeList vtables;       /* the names of the method tables written so far */
+    StrBuf extra;           /* functions made along the way: the thunks of spawn */
+    int spawns;
 } IR;
 
 static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
@@ -83,7 +85,7 @@ static const char *llType(IR *ir, Type *t) {
         case 32: return "i32";
         default: return "i64";
         }
-    case TY_PTR: case TY_NULL: case TY_FUNC: return "ptr";
+    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: return "ptr";
     case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
@@ -652,6 +654,14 @@ static Val emitBinary(IR *ir, Node *e) {
     if (op == P_ANDAND || op == P_OROR) {
         return emitLogical(ir, e);
     }
+    if (op == P_LARROW) {
+        /* ch <- v: the value goes through memory */
+        Val ch = emitExpr(ir, e->a);
+        Val v = emitExpr(ir, e->b);
+        const char *slot = spill(ir, v);
+        ins(ir, "call void @iris_chan_send(ptr %s, ptr %s)", ch.s, slot);
+        return val("", &tyVoid);
+    }
     Val a = emitExpr(ir, e->a);
     Val b = emitExpr(ir, e->b);
     switch (op) {
@@ -788,6 +798,11 @@ static Val emitBuiltin(IR *ir, Node *e) {
     }
     case BI_ENUM_NEW:
         return emitEnumValue(ir, e->type, e->ref, &e->list);
+    case BI_SLEEP: {
+        Val d = emitExpr(ir, e->list.items[0]);
+        ins(ir, "call void @iris_sleep(i64 %s)", d.s);
+        return val("", &tyVoid);
+    }
     case BI_INDIRECT: {
         Type *ft = e->a->type;
         Val fp = emitExpr(ir, e->a);
@@ -1308,6 +1323,12 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->op == P_STAR) {
             return load(ir, emitAddr(ir, e), e->type);
         }
+        if (e->op == P_LARROW) {
+            Val ch = emitExpr(ir, e->a);
+            const char *slot = allocaFor(ir, e->type, "recv");
+            ins(ir, "call void @iris_chan_recv(ptr %s, ptr %s)", ch.s, slot);
+            return load(ir, slot, e->type);
+        }
         Val a = emitExpr(ir, e->a);
         if (e->op == P_BANG) {
             const char *r = tmp(ir);
@@ -1379,6 +1400,14 @@ static Val emitExpr(IR *ir, Node *e) {
         return emitTry(ir, e);
     case N_CATCH:
         return emitCatch(ir, e);
+    case N_CHAN_MAKE: {
+        Val n = emitExpr(ir, e->b);
+        const char *size = sizeOf(ir, e->type->elem);
+        const char *r = tmp(ir);
+        ins(ir, "%s = call ptr @iris_chan_new(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", r, size, n.s,
+            ir->fileStr, e->line, e->col, fnName(ir));
+        return val(r, e->type);
+    }
     default:
         return val("undef", e->type ? e->type : &tyVoid);
     }
@@ -1710,6 +1739,154 @@ static void emitAssign(IR *ir, Node *s) {
     ins(ir, "store %s %s, ptr %s", llType(ir, t), r.s, addr);
 }
 
+/* spawn f(a, b): the arguments are worked out now and kept on the heap; a
+ * small function (the thunk) the new task runs makes the call and frees
+ * them. */
+static void emitSpawn(IR *ir, Node *call) {
+    bool indirect = call->builtin == BI_INDIRECT;
+    Node *d = call->ref;
+    int n = call->list.len;
+    Val *vals = arenaAlloc(ir->arena, sizeof(Val) * (size_t)(n + 1));
+    StrBuf env = {0};
+    sbPuts(&env, "{ ");
+    int first = 0;
+    Val fp = {0};
+    if (indirect) {
+        fp = emitExpr(ir, call->a);
+        sbPuts(&env, "ptr");
+        first = 1;
+    }
+    for (int i = 0; i < n; i++) {
+        vals[i] = emitExpr(ir, call->list.items[i]);
+        Type *pt = indirect ? call->a->type->elems[i] : (i < d->list.len ? d->list.items[i]->type : vals[i].t);
+        vals[i].t = pt;
+        sbPrintf(&env, "%s%s", (i + first) ? ", " : "", llType(ir, pt));
+    }
+    if (n + first == 0) {
+        sbPuts(&env, "i8");
+    }
+    sbPuts(&env, " }");
+    const char *envTy = sbFinish(&env, ir->arena);
+    const char *szp = tmp(ir), *sz = tmp(ir), *mem = tmp(ir);
+    ins(ir, "%s = getelementptr %s, ptr null, i64 1", szp, envTy);
+    ins(ir, "%s = ptrtoint ptr %s to i64", sz, szp);
+    ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 1, ptr %s, i32 %d, i32 %d, ptr %s)", mem, sz, ir->fileStr,
+        call->line, call->col, fnName(ir));
+    if (indirect) {
+        const char *f0 = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envTy, mem);
+        ins(ir, "store ptr %s, ptr %s", fp.s, f0);
+    }
+    for (int i = 0; i < n; i++) {
+        const char *f = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", f, envTy, mem, i + first);
+        ins(ir, "store %s %s, ptr %s", llType(ir, vals[i].t), vals[i].s, f);
+    }
+    int id = ++ir->spawns;
+    const char *thunk = fmt(ir, "@\"spawn.%d\"", id);
+    ins(ir, "call void @iris_spawn(ptr %s, ptr %s)", thunk, mem);
+
+    /* the thunk */
+    StrBuf *x = &ir->extra;
+    sbPrintf(x, "define internal void %s(ptr %%env)%s {\n", thunk, ir->mode == MODE_DEBUG ? " #0" : "");
+    StrBuf args = {0};
+    for (int i = 0; i < n; i++) {
+        sbPrintf(x, "  %%a%d.p = getelementptr %s, ptr %%env, i32 0, i32 %d\n", i, envTy, i + first);
+        sbPrintf(x, "  %%a%d = load %s, ptr %%a%d.p\n", i, llType(ir, vals[i].t), i);
+        sbPrintf(&args, "%s%s %%a%d", i ? ", " : "", llType(ir, vals[i].t), i);
+    }
+    const char *callee;
+    Type *ret;
+    if (indirect) {
+        sbPrintf(x, "  %%fp.p = getelementptr %s, ptr %%env, i32 0, i32 0\n", envTy);
+        sbPuts(x, "  %fp = load ptr, ptr %fp.p\n");
+        callee = "%fp";
+        ret = call->a->type->elem;
+    } else {
+        callee = d->ir;
+        ret = d->type;
+    }
+    StrBuf fty = {0};
+    if (indirect) {
+        sbPrintf(&fty, "%s (", llType(ir, ret));
+        for (int i = 0; i < n; i++) sbPrintf(&fty, "%s%s", i ? ", " : "", llType(ir, vals[i].t));
+        sbPutc(&fty, ')');
+    } else {
+        sbPuts(&fty, llType(ir, ret));
+    }
+    if (ret->kind == TY_VOID) {
+        sbPrintf(x, "  call %s %s(%s)\n", fty.buf, callee, args.buf ? args.buf : "");
+    } else {
+        sbPrintf(x, "  %%r = call %s %s(%s)\n", fty.buf, callee, args.buf ? args.buf : "");
+    }
+    sbPuts(x, "  call void @free(ptr %env)\n  ret void\n}\n\n");
+    sbFree(&args);
+    sbFree(&fty);
+}
+
+/* select: the channels and where each value goes, then a jump to the arm
+ * whose channel had a value (or the after arm). */
+static void emitSelect(IR *ir, Node *s) {
+    int n = 0;
+    Node *afterArm = NULL;
+    for (int i = 0; i < s->list.len; i++) {
+        if (s->list.items[i]->a->builtin == BI_AFTER) {
+            afterArm = s->list.items[i];
+        } else {
+            n++;
+        }
+    }
+    const char *chans = fmt(ir, "%%v.selchans.%d", ++ir->vars);
+    const char *outs = fmt(ir, "%%v.selouts.%d", ++ir->vars);
+    sbPrintf(&ir->allocas, "  %s = alloca [%d x ptr]\n  %s = alloca [%d x ptr]\n", chans, n ? n : 1, outs, n ? n : 1);
+    Node **recvArms = arenaAlloc(ir->arena, sizeof(Node *) * (size_t)(n ? n : 1));
+    const char **slots = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(n ? n : 1));
+    int k = 0;
+    for (int i = 0; i < s->list.len; i++) {
+        Node *arm = s->list.items[i];
+        if (arm == afterArm) continue;
+        Node *recv = arm->a;
+        Val ch = emitExpr(ir, recv->a);
+        slots[k] = allocaFor(ir, recv->type, "sel");
+        const char *pc = tmp(ir), *po = tmp(ir);
+        ins(ir, "%s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", pc, n, chans, k);
+        ins(ir, "store ptr %s, ptr %s", ch.s, pc);
+        ins(ir, "%s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", po, n, outs, k);
+        ins(ir, "store ptr %s, ptr %s", slots[k], po);
+        recvArms[k++] = arm;
+    }
+    const char *timeout = "-1";
+    if (afterArm) {
+        timeout = emitExpr(ir, afterArm->a->list.items[0]).s;
+    }
+    const char *which = tmp(ir);
+    ins(ir, "%s = call i64 @iris_select(i64 %d, ptr %s, ptr %s, i64 %s)", which, n, chans, outs, timeout);
+    int end = newLabel(ir);
+    for (int i = 0; i <= n; i++) {
+        Node *arm = i < n ? recvArms[i] : afterArm;
+        if (!arm) continue;
+        int body = newLabel(ir), next = newLabel(ir);
+        const char *is = tmp(ir);
+        ins(ir, "%s = icmp eq i64 %s, %d", is, which, i);
+        condBr(ir, is, body, next);
+        placeLabel(ir, body);
+        if (i < n && arm->d && strcmp(arm->d->name, "_") != 0) {
+            arm->d->ir = allocaFor(ir, arm->d->type, arm->d->name);
+            Val v = load(ir, slots[i], arm->d->type);
+            ins(ir, "store %s %s, ptr %s", llType(ir, arm->d->type), v.s, arm->d->ir);
+        }
+        if (arm->c->kind == N_BLOCK) {
+            emitBlock(ir, arm->c);
+        } else {
+            emitStmt(ir, arm->c);
+        }
+        br(ir, end);
+        placeLabel(ir, next);
+    }
+    br(ir, end);
+    placeLabel(ir, end);
+}
+
 static void emitStmt(IR *ir, Node *s) {
     switch (s->kind) {
     case N_VAR: {
@@ -1832,6 +2009,12 @@ static void emitStmt(IR *ir, Node *s) {
         return;
     case N_FOR:
         emitFor(ir, s);
+        return;
+    case N_SPAWN:
+        emitSpawn(ir, s->a);
+        return;
+    case N_SELECT:
+        emitSelect(ir, s);
         return;
     default:
         return;
@@ -2121,6 +2304,10 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
 
     StrBuf out = {0};
     sbPrintf(&out, "; generated by iris %s from %s\n\n", IRIS_VERSION, ir.src->path);
+    if (ir.extra.buf) {
+        sbPuts(&funcs, ir.extra.buf);
+        sbFree(&ir.extra);
+    }
     sbPuts(&out, types.buf);
     if (ir.head.buf) {
         sbPuts(&out, ir.head.buf);
@@ -2182,6 +2369,12 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare ptr @iris_enum_name(i64, i32)\n"
            "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
            "declare void @iris_write_float(i32, ptr, double, i32)\n"
+           "declare void @iris_spawn(ptr, ptr)\n"
+           "declare void @iris_sleep(i64)\n"
+           "declare ptr @iris_chan_new(i64, i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_chan_send(ptr, ptr)\n"
+           "declare void @iris_chan_recv(ptr, ptr)\n"
+           "declare i64 @iris_select(i64, ptr, ptr, i64)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     if (mode == MODE_DEBUG) {

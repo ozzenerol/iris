@@ -56,6 +56,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Floats print in the fewest digits that read back the same, as plain decimals between 1e-7 and 1e21. | Printing is exact without being noisy. |
 | `u8 *` converts to and from any pointer on its own. | It is what C's `void *` becomes, and C hands those around. |
 | Function values are named functions only: no lambdas and no closures. | No hidden allocation for captured variables; a context pointer does the job, as in C. |
+| All tasks run on one thread for now; threads come later. | One event loop is what network servers need, and it keeps channels simple. |
+| A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
+| A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 

@@ -1,11 +1,11 @@
-// error: 8: tasks and channels are not supported yet (planned for a later version)
+// error: 6: threadlocal and atomic are not supported yet (planned for a later version)
 // error: 9: when is not supported yet (planned for a later version)
 // error: 11: @extern is for the standard library; use import c to call C
 import c "stdio.h"
 
+threadlocal i64 counter
+
 void main() {
-    f := 1
-    spawn f
     when os == .linux { }
 }
 @extern("puts")

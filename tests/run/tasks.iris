@@ -1,0 +1,67 @@
+// expect: worker 1 got job 0 job
+// expect: worker 2 got job 1 job
+// expect: worker 1 got job 2 job
+// expect: worker 2 got job 3 job
+// expect: worker 1 got job 4 job
+// expect: worker 2 got job 5 job
+// expect: done 3
+// expect: tick
+// expect: tick
+// expect: tick
+// expect: timeout
+
+struct Job {
+    i64 id
+    str name
+}
+
+void worker(i64 n, chan[Job] jobs, chan[i64] done) {
+    for {
+        j := <-jobs
+        if j.id < 0 {
+            done <- n
+            return
+        }
+        print("worker {n} got job {j.id} {j.name}")
+        sleep(1ms)
+    }
+}
+
+void ticker(chan[str] out) {
+    for i in 0..3 {
+        sleep(5ms)
+        out <- "tick"
+    }
+}
+
+void main() {
+    jobs := chan[Job](4)
+    done := chan[i64](2)
+    spawn worker(1, jobs, done)
+    spawn worker(2, jobs, done)
+    for i in 0..6 {
+        jobs <- Job{id: i, name: "job"}
+    }
+    jobs <- Job{id: -1}
+    jobs <- Job{id: -1}
+    a := <-done
+    b := <-done
+    print("done {a + b}")
+    ticks := chan[str](1)
+    spawn ticker(ticks)
+    n := 0
+    for n < 3 {
+        select {
+            t := <-ticks => {
+                print(t)
+                n += 1
+            }
+            after(100ms) => print("idle")
+        }
+    }
+    quiet := chan[i64](1)
+    select {
+        x := <-quiet => print("got {x}")
+        after(10ms) => print("timeout")
+    }
+}

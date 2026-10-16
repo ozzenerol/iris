@@ -112,6 +112,28 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
+| `net` | TCP: `listen(port, host)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; `NetError` |
+| `http` | `serve(port, handler)` and `serveOn(listener, handler)`: an HTTP/1.1 server where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`) and fills in a `Response` (`status`, `text`, `json`) |
+
+A small web server:
+
+```iris
+import http
+
+void route(http.Request *req, http.Response *res) {
+    match req.path {
+        "/" => res.text("hello from iris\n")
+        _ => {
+            res.status = 404
+            res.text("not found\n")
+        }
+    }
+}
+
+!void main() {
+    try http.serve(8080, route)
+}
+```
 
 A complete program:
 

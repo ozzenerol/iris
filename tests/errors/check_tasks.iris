@@ -1,0 +1,25 @@
+// error: 13: spawn starts a function: spawn handle(conn)
+// error: 14: a task can't return an error, since nothing waits for it; handle the error inside
+// error: 15: spawn starts a function of the program, not a built-in
+// error: 17: <- sends to a channel, not to i64
+// error: 18: <- takes from a channel, not from i64
+// error: 19: after is an arm of a select: select { after(5s) => ... }
+// error: 20: a channel needs room for at least one value
+// error: 22: a select arm takes from a channel (<-ch) or waits with after(...)
+!void fails() { }
+void ok(i64 n) { }
+
+void main() {
+    spawn 5
+    spawn fails()
+    spawn print("x")
+    n := 5
+    n <- 1
+    y := <-n
+    after(1s)
+    ch := chan[i64](0)
+    select {
+        z := ok(1) => {}
+    }
+    spawn ok(1)
+}

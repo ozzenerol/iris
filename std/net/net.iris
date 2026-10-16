@@ -1,0 +1,185 @@
+// TCP: listening for connections, connecting, reading and writing. A
+// task that waits for the network lets the other tasks run.
+
+pub enum NetError { refused, closed, timeout, notFound, inUse, other }
+
+@extern("iris_net_listen")
+i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 *err)
+
+@extern("iris_net_port")
+i64 rawPort(i32 fd)
+
+@extern("iris_net_accept")
+i32 rawAccept(i32 fd, i32 *err)
+
+@extern("iris_net_dial")
+i32 rawDial(u8 *host, i64 hostLen, i64 port, i32 *err)
+
+@extern("iris_net_read")
+i64 rawRead(i32 fd, u8 *buf, i64 len)
+
+@extern("iris_net_write")
+i32 rawWrite(i32 fd, u8 *buf, i64 len)
+
+@extern("iris_net_close")
+void rawClose(i32 fd)
+
+NetError netCode(i32 code) => match code {
+    1 => NetError.refused
+    2 => NetError.closed
+    3 => NetError.timeout
+    4 => NetError.notFound
+    5 => NetError.inUse
+    _ => NetError.other
+}
+
+str reason(i32 code) => match code {
+    1 => "connection refused"
+    2 => "connection closed"
+    3 => "timed out"
+    4 => "no such host"
+    5 => "address in use"
+    _ => "network error"
+}
+
+// A socket that accepts connections.
+pub struct Listener {
+    i32 fd
+    pub u16 port
+}
+
+// A connection. Reads go through a buffer, so lines can be read one at a time.
+pub struct Conn {
+    i32 fd
+    u8[] buf
+    i64 start
+    i64 end
+}
+
+// Listens on port (0 picks a free one; see .port) on host ("" for all addresses).
+pub !Listener listen(u16 port, str host = "") {
+    i32 err
+    fd := rawListen(host.ptr, host.len, i64(port), &err)
+    if fd < 0 {
+        return error(netCode(err), "listening on port {port}: {reason(err)}")
+    }
+    return Listener{fd: fd, port: u16(rawPort(fd))}
+}
+
+// Waits for the next connection.
+pub !Conn Listener.accept() {
+    i32 err
+    fd := rawAccept(self.fd, &err)
+    if fd < 0 {
+        return error(netCode(err), "accepting a connection: {reason(err)}")
+    }
+    return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+}
+
+pub void Listener.close() => rawClose(self.fd)
+
+// Connects to host:port.
+pub !Conn dial(str host, u16 port) {
+    i32 err
+    fd := rawDial(host.ptr, host.len, i64(port), &err)
+    if fd < 0 {
+        return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
+    }
+    return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+}
+
+// Reads into buf: the number of bytes, 0 when the other side has closed.
+pub !i64 Conn.read(u8[] buf) {
+    if self.start < self.end {
+        n := if self.end - self.start < buf.len { self.end - self.start } else { buf.len }
+        for i in 0..n {
+            buf[i] = self.buf[self.start + i]
+        }
+        self.start += n
+        return n
+    }
+    n := rawRead(self.fd, buf.ptr, buf.len)
+    if n < 0 {
+        return error(netCode(i32(-n)), "reading: {reason(i32(-n))}")
+    }
+    return n
+}
+
+// Fills the buffer when it is empty. False at the end of the data.
+!bool Conn.fill() {
+    if self.start < self.end {
+        return true
+    }
+    n := rawRead(self.fd, self.buf.ptr, self.buf.len)
+    if n < 0 {
+        return error(netCode(i32(-n)), "reading: {reason(i32(-n))}")
+    }
+    self.start = 0
+    self.end = n
+    return n > 0
+}
+
+// The next line, without its line break (\n or \r\n). NetError.closed at the end.
+pub !String Conn.readLine() {
+    String line
+    for {
+        more := try self.fill()
+        if !more {
+            if line.len > 0 {
+                return line
+            }
+            line.free()
+            return error(NetError.closed, "reading a line: connection closed")
+        }
+        for i in self.start..self.end {
+            if self.buf[i] == '\n' {
+                line.append(self.buf[self.start:i])
+                self.start = i + 1
+                if line.len > 0 && line.ptr[0:line.len][line.len - 1] == '\r' {
+                    String trimmed = line.ptr[0:line.len - 1].copy()
+                    line.free()
+                    return trimmed
+                }
+                return line
+            }
+        }
+        line.append(self.buf[self.start:self.end])
+        self.start = self.end
+    }
+}
+
+// Reads exactly n bytes into a new String.
+pub !String Conn.readExactly(i64 n) {
+    String out
+    for out.len < n {
+        more := try self.fill()
+        if !more {
+            out.free()
+            return error(NetError.closed, "reading: connection closed")
+        }
+        take := if self.end - self.start < n - out.len { self.end - self.start } else { n - out.len }
+        out.append(self.buf[self.start:self.start + take])
+        self.start += take
+    }
+    return out
+}
+
+// Writes all of data.
+pub !void Conn.write(str data) {
+    code := rawWrite(self.fd, data.ptr, data.len)
+    if code != 0 {
+        return error(netCode(code), "writing: {reason(code)}")
+    }
+}
+
+// Closes the connection.
+pub void Conn.close() {
+    rawClose(self.fd)
+    if self.buf.len > 0 {
+        free(self.buf)
+        self.buf = alloc(u8, 0)
+    }
+}
+
+// Lets the other tasks run.
+pub void yield() => sleep(0ns)

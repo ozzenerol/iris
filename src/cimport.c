@@ -209,7 +209,7 @@ static const char *irisKeywords[] = {
     "test", "true", "false", "null", "self", "_",
     /* built-in names and types */
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool", "void", "str", "String",
-    "Error", "print", "panic", "format", "alloc", "free", "error",
+    "Error", "print", "panic", "format", "alloc", "free", "error", "sleep", "after", "Duration",
 };
 
 /* A C name as an Iris name: keywords and built-in names get a _ after them. */

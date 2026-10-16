@@ -1,0 +1,47 @@
+// expect: echo: hello 0 | echo: second 0
+// expect: echo: hello 1 | echo: second 1
+// expect: echo: hello 2 | echo: second 2
+// expect: NetError.refused
+
+import net
+
+void handle(net.Conn c) {
+    defer c.close()
+    for {
+        line := c.readLine() catch e {
+            return
+        }
+        c.write(format("echo: {line}\n")) catch e {
+            line.free()
+            return
+        }
+        line.free()
+    }
+}
+
+void server(net.Listener ln) {
+    for {
+        conn := ln.accept() catch e {
+            return
+        }
+        spawn handle(conn)
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    for i in 0..3 {
+        c := try net.dial("127.0.0.1", ln.port)
+        scoped String msg = format("hello {i}\nsecond {i}\n")
+        try c.write(msg)
+        scoped String a = try c.readLine()
+        scoped String b = try c.readLine()
+        print("{a} | {b}")
+        c.close()
+    }
+    _ = net.dial("127.0.0.1", 1) catch e {
+        print("{e.code}")
+        net.Conn{}
+    }
+}

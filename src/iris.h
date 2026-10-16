@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.10.1"
+#define IRIS_VERSION "0.11.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -256,6 +256,7 @@ typedef enum {
     TY_TUPLE,               /* several values: elems */
     TY_DYN,                 /* dyn Interface: decl is the N_INTERFACE */
     TY_FUNC,                /* a function: elem is what it returns, elems its parameters */
+    TY_CHAN,                /* chan[T]: elem */
 } TypeKind;
 
 struct Type {
@@ -291,6 +292,8 @@ enum {
     BI_FLAGS_HAS,
     BI_DYN_CALL,            /* a call through dyn: ival is the method's place in the interface */
     BI_INDIRECT,            /* a call through a function value: a is the value */
+    BI_SLEEP,
+    BI_AFTER,               /* after(d), in a select */
 };
 
 /* Checks the program and fills in types. Returns false after errors. */
