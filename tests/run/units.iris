@@ -1,0 +1,11 @@
+// expect: 65536 2097152 3221225472
+// expect: 1 1000 1000000 1000000000 60000000000 3600000000000
+// expect: 4096
+
+void main() {
+    print("{64KiB} {2MiB} {3GiB}")
+    print("{1ns} {1us} {1ms} {1s} {1m} {1h}")
+    u8[] buf = alloc(u8, 4KiB)
+    print("{buf.len}")
+    free(buf)
+}

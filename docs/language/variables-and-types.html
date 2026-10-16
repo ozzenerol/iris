@@ -64,7 +64,7 @@ flags := <span class="n">0b1010</span></code></pre>
 <p>Arithmetic happens in the type of its operands. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so <code>200 + 100</code> overflows. Convert first when the result needs more room: <code>i64(a) + i64(b)</code>.</p>
 <p>Both sides of an operator must have the same type, or one must convert on its own to the other (<code>u8</code> to <code>i64</code>). <code>i32 + u32</code> is an error: write the conversion.</p>
 <h2 id="durations-and-sizes"><a href="#durations-and-sizes">Durations and sizes</a></h2>
-<p>Numbers can carry a unit. Durations are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>, and their type is <code>Duration</code>. Sizes are <code>KiB</code>, <code>MiB</code> and <code>GiB</code>, and they are plain integers.</p>
+<p>Numbers can carry a unit. Durations are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>; a <code>Duration</code> is a number of nanoseconds, so <code>2s</code> is <code>2000000000</code>. Sizes are <code>KiB</code>, <code>MiB</code> and <code>GiB</code>, and they are plain integers: <code>64KiB</code> is <code>65536</code>.</p>
 <pre class="code"><code>sleep(200ms)
 timeout := 30s
 buf := alloc(<span class="t">u8</span>, 64KiB)</code></pre>
