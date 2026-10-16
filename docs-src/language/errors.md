@@ -31,6 +31,38 @@ An error has a code and a message. The code is a value from an enum and tells th
 
 `!void` is a function that returns nothing but can fail.
 
+A complete program:
+
+```iris run
+enum ParseError { empty, notNumber }
+
+!i64 parseDigit(str s) {
+    if s.len == 0 {
+        return error(ParseError.empty, "nothing to parse")
+    }
+    c := s[0]
+    if c < '0' || c > '9' {
+        return error(ParseError.notNumber, "'{s}' is not a digit")
+    }
+    return i64(c - '0')
+}
+
+void main() {
+    print("{parseDigit("7") catch 0}")
+    n := parseDigit("x") catch e {
+        print("{e.code}: {e.message}")
+        -1
+    }
+    print("{n}")
+}
+```
+
+```output
+7
+ParseError.notNumber: 'x' is not a digit
+-1
+```
+
 ## try
 
 `try` calls the function and, if it returns an error, returns that error from the current function. The current function must also return `!`:
@@ -117,6 +149,8 @@ error: fs.notFound: app.conf: no such file
   at loadConfig    main.iris:12
   at main          main.iris:31
 ```
+
+The first line is the error's code and message. Below it is the trace: where the error was made, then each `try` or `return e` that passed it on. The message holds up to 1024 bytes, and the trace up to 64 steps.
 
 ## Bugs and panic
 

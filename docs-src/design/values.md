@@ -60,7 +60,9 @@ Packet  =  { i32 tag, union { u8[] bytes, u16 code } }
 Error  =  { u32 kind, u32 code }
 ```
 
-`kind` says which error enum the code belongs to, and `code` is the value in that enum. An `Error` of zero means no error. The message and the trace are kept in a per-thread buffer, so an `Error` needs no memory of its own.
+`kind` says which error enum the code belongs to, and `code` is the value in that enum. In the compiled program the two are one `i64`, with `kind` in the high half. An `Error` of zero means no error. The message and the trace are kept in a per-thread buffer, so an `Error` needs no memory of its own.
+
+A new error's message is written to a second buffer and swapped in when the error is made, so a message can quote the error it replaces: `error(e.code, "loading user {id}: {e.message}")`.
 
 `!T` is a `T` and an `Error` side by side:
 

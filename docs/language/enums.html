@@ -22,6 +22,22 @@ log(.error, <span class="s">&quot;disk full&quot;</span>)</code></pre>
 <pre class="code"><code><span class="k">enum</span> Status { ok = <span class="n">200</span>, notFound = <span class="n">404</span>, error = <span class="n">500</span> }</code></pre>
 <p><code>.name</code> gives the value's name as a <code>str</code>, and enums can be printed:</p>
 <pre class="code"><code>print(<span class="s">&quot;level is {l}&quot;</span>)       <span class="c">// level is warn</span></code></pre>
+<p>A <code>match</code> on an enum needs an arm for every value, or a <code>_</code> arm:</p>
+<pre class="code run"><code><span class="k">enum</span> Level { debug, info, warn, error }
+
+<span class="t">str</span> weight(Level l) =&gt; <span class="k">match</span> l {
+    .debug, .info =&gt; <span class="s">&quot;low&quot;</span>
+    .warn =&gt; <span class="s">&quot;medium&quot;</span>
+    .error =&gt; <span class="s">&quot;high&quot;</span>
+}
+
+<span class="t">void</span> main() {
+    Level l = .warn
+    print(<span class="s">&quot;{l} is {weight(l)}&quot;</span>)
+    print(<span class="s">&quot;{l.name.len} letters&quot;</span>)
+}</code></pre>
+<pre class="out"><code>warn is medium
+4 letters</code></pre>
 <h2 id="enums-that-carry-data"><a href="#enums-that-carry-data">Enums that carry data</a></h2>
 <p>A value can carry data, written like a function's parameters:</p>
 <pre class="code"><code><span class="k">enum</span> Packet {

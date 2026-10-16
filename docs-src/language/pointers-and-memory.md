@@ -135,6 +135,34 @@ Several defers run in reverse order: `dst` is closed first, then `src`.
 
 If `bind` or `listen` fails, the socket is closed. If they succeed, it stays open.
 
+A complete program:
+
+```iris run
+void work() {
+    defer print("cleanup 1")
+    defer print("cleanup 2")
+    for i in 0..3 {
+        defer print("end of round {i}")
+        if i == 1 {
+            break
+        }
+    }
+    print("work done")
+}
+
+void main() {
+    work()
+}
+```
+
+```output
+end of round 0
+end of round 1
+work done
+cleanup 2
+cleanup 1
+```
+
 ## scoped
 
 `scoped` on a declaration calls the value's `free` method at the end of the block:

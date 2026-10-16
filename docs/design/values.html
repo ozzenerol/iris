@@ -36,7 +36,8 @@
 <h2 id="errors-and-t"><a href="#errors-and-t">Errors and !T</a></h2>
 <p><code>Error</code> holds what went wrong:</p>
 <pre class="out"><code>Error  =  { u32 kind, u32 code }</code></pre>
-<p><code>kind</code> says which error enum the code belongs to, and <code>code</code> is the value in that enum. An <code>Error</code> of zero means no error. The message and the trace are kept in a per-thread buffer, so an <code>Error</code> needs no memory of its own.</p>
+<p><code>kind</code> says which error enum the code belongs to, and <code>code</code> is the value in that enum. In the compiled program the two are one <code>i64</code>, with <code>kind</code> in the high half. An <code>Error</code> of zero means no error. The message and the trace are kept in a per-thread buffer, so an <code>Error</code> needs no memory of its own.</p>
+<p>A new error's message is written to a second buffer and swapped in when the error is made, so a message can quote the error it replaces: <code>error(e.code, &quot;loading user {id}: {e.message}&quot;)</code>.</p>
 <p><code>!T</code> is a <code>T</code> and an <code>Error</code> side by side:</p>
 <pre class="out"><code>!i64  =  { i64 value, Error err }</code></pre>
 <p><code>try f()</code> becomes a call followed by a check. If <code>err</code> is not zero, the current function adds its name and line to the trace and returns the error. When nothing fails, the cost is that one comparison.</p>
