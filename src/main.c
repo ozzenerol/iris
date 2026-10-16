@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -21,7 +23,9 @@ static void usage(FILE *out) {
           "  run [options] <file> [args]  compile and run a program\n"
           "  build [options] <file>       compile a program (-o <name> for the output)\n"
           "  check <file>                 check a program without compiling it\n"
+          "  test [options] [file] [name] run the test blocks (those whose name has <name>)\n"
           "  ir [options] <file>          print the LLVM IR\n"
+          "  fmt [--check] <file|folder>  put code in the standard layout (- for stdin)\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
           "  c <header.h>...              show what import c makes of C headers\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
@@ -273,7 +277,15 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             break;
         }
     }
-    if (!path || (i < argc && strcmp(cmd, "run") != 0)) {
+    bool test = strcmp(cmd, "test") == 0;
+    gWithTests = test || strcmp(cmd, "check") == 0;
+    if (test) {
+        gTesting = true;
+        if (!path) {
+            path = ".";
+        }
+    }
+    if (!path || (i < argc && strcmp(cmd, "run") != 0 && !test)) {
         usage(stderr);
         return 2;
     }
@@ -473,6 +485,95 @@ static int cmdGet(const char *spec) {
     return ok ? 0 : 1;
 }
 
+/* iris fmt on one file: 0 when it is in the layout (or now is), 1 when
+ * --check found it isn't, 2 on an error. */
+static int fmtFile(const char *path, bool check) {
+    Source src;
+    if (strcmp(path, "-") == 0) {
+        StrBuf in = {0};
+        int c;
+        while ((c = getchar()) != EOF) sbPutc(&in, (char)c);
+        src.path = "<stdin>";
+        src.text = in.buf ? in.buf : "";
+        src.len = in.len;
+    } else if (!readFile(path, &src)) {
+        return 2;
+    }
+    Arena a = {0};
+    char *out = formatSource(&a, &src);
+    int rc = 0;
+    if (!out) {
+        rc = 2;
+    } else if (strcmp(path, "-") == 0) {
+        fputs(out, stdout);
+    } else if (strlen(out) != src.len || memcmp(out, src.text, src.len) != 0) {
+        if (check) {
+            printf("%s\n", path);
+            rc = 1;
+        } else if (!writeText(path, out, strlen(out))) {
+            fprintf(stderr, "iris fmt: can't write %s\n", path);
+            rc = 2;
+        }
+    }
+    arenaFree(&a);
+    if (src.len || strcmp(path, "-") != 0) free((char *)src.text);
+    return rc;
+}
+
+/* Every .iris file in a folder and the folders inside it. */
+static int fmtTree(const char *path, bool check) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "iris fmt: can't find %s\n", path);
+        return 2;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        return fmtFile(path, check);
+    }
+    DIR *d = opendir(path);
+    if (!d) {
+        fprintf(stderr, "iris fmt: can't read %s\n", path);
+        return 2;
+    }
+    int worst = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char sub[4096];
+        snprintf(sub, sizeof sub, "%s/%s", path, e->d_name);
+        size_t n = strlen(e->d_name);
+        struct stat es;
+        if (stat(sub, &es) != 0) continue;
+        int rc = 0;
+        if (S_ISDIR(es.st_mode)) {
+            rc = fmtTree(sub, check);
+        } else if (n > 5 && strcmp(e->d_name + n - 5, ".iris") == 0) {
+            rc = fmtFile(sub, check);
+        }
+        if (rc > worst) worst = rc;
+    }
+    closedir(d);
+    return worst;
+}
+
+static int cmdFmt(int argc, char **argv) {
+    bool check = false;
+    int worst = 0, files = 0;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--check") == 0) {
+            check = true;
+            continue;
+        }
+        files++;
+        int rc = strcmp(argv[i], "-") == 0 ? fmtFile("-", false) : fmtTree(argv[i], check);
+        if (rc > worst) worst = rc;
+    }
+    if (!files) {
+        worst = fmtTree(".", check);
+    }
+    return worst;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(stderr);
@@ -488,7 +589,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(cmd, "run") == 0 || strcmp(cmd, "build") == 0 || strcmp(cmd, "check") == 0 ||
-        strcmp(cmd, "ir") == 0) {
+        strcmp(cmd, "ir") == 0 || strcmp(cmd, "test") == 0) {
         return cmdCompile(cmd, argc, argv);
     }
     if (strcmp(cmd, "c") == 0 && argc >= 3) {
@@ -504,6 +605,9 @@ int main(int argc, char **argv) {
         }
         arenaFree(&a);
         return text ? 0 : 1;
+    }
+    if (strcmp(cmd, "fmt") == 0) {
+        return cmdFmt(argc, argv);
     }
     if (strcmp(cmd, "get") == 0 && argc == 3) {
         return cmdGet(argv[2]);

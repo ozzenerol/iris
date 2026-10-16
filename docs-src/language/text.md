@@ -8,14 +8,14 @@ Iris has two types for text: `str` for text you look at and `String` for text yo
 
 ```iris
 str greeting = "hello, world"
-print("{greeting.len}")        // 12
+print("{greeting.len}") // 12
 ```
 
 Slicing a `str` gives another `str` that points into the same text. Nothing is copied.
 
 ```iris
-str word = greeting[0:5]       // "hello"
-str rest = greeting[7:]        // "world"
+str word = greeting[0:5] // "hello"
+str rest = greeting[7:]  // "world"
 ```
 
 `==` compares the bytes of two strings:

@@ -21,7 +21,7 @@ log(.error, <span class="s">&quot;disk full&quot;</span>)</code></pre>
 <p>Each value is a number, starting at 0. A value can be given its number:</p>
 <pre class="code"><code><span class="k">enum</span> Status { ok = <span class="n">200</span>, notFound = <span class="n">404</span>, error = <span class="n">500</span> }</code></pre>
 <p><code>.name</code> gives the value's name as a <code>str</code>, and enums can be printed:</p>
-<pre class="code"><code>print(<span class="s">&quot;level is {l}&quot;</span>)       <span class="c">// level is warn</span></code></pre>
+<pre class="code"><code>print(<span class="s">&quot;level is {l}&quot;</span>) <span class="c">// level is warn</span></code></pre>
 <p>A <code>match</code> on an enum needs an arm for every value, or a <code>_</code> arm:</p>
 <pre class="code run"><code><span class="k">enum</span> Level { debug, info, warn, error }
 

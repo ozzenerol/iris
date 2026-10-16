@@ -95,17 +95,17 @@ t.join()</code></pre>
     thread worker(jobs, results)
 }</code></pre>
 <p><code>http.serve</code> starts threads too: an event loop on each CPU core. The handler then runs on several threads at once.</p>
-<pre class="code"><code><span class="k">try</span> http.serve(<span class="n">8080</span>, route)              <span class="c">// one thread per core</span>
-<span class="k">try</span> http.serve(<span class="n">8080</span>, route, threads: <span class="n">1</span>)  <span class="c">// everything on one thread</span></code></pre>
+<pre class="code"><code><span class="k">try</span> http.serve(<span class="n">8080</span>, route)             <span class="c">// one thread per core</span>
+<span class="k">try</span> http.serve(<span class="n">8080</span>, route, threads: <span class="n">1</span>) <span class="c">// everything on one thread</span></code></pre>
 <h2 id="atomics"><a href="#atomics">Atomics</a></h2>
 <p>A global variable that threads change at the same time needs an atomic or a lock. <code>Atomic[T]</code> holds an integer or a <code>bool</code> that every thread can change safely. It is used only through its methods:</p>
 <pre class="code"><code>Atomic[<span class="t">i64</span>] requests
 
-requests.add(<span class="n">1</span>)             <span class="c">// gives the new value</span>
+requests.add(<span class="n">1</span>) <span class="c">// gives the new value</span>
 n := requests.load()
 requests.store(<span class="n">0</span>)
-old := requests.swap(<span class="n">5</span>)     <span class="c">// gives the old value</span>
-ok := requests.cas(<span class="n">5</span>, <span class="n">6</span>)    <span class="c">// sets 6 if the value is 5; true if it did</span></code></pre>
+old := requests.swap(<span class="n">5</span>)  <span class="c">// gives the old value</span>
+ok := requests.cas(<span class="n">5</span>, <span class="n">6</span>) <span class="c">// sets 6 if the value is 5; true if it did</span></code></pre>
 <p><code>sub</code> subtracts. An <code>Atomic[bool]</code> has <code>load</code>, <code>store</code>, <code>swap</code> and <code>cas</code>. Every operation is sequentially consistent: all threads see the changes in the same order.</p>
 <h2 id="locks"><a href="#locks">Locks</a></h2>
 <p>A <code>Mutex</code> protects data that takes more than one step to change. A new <code>Mutex</code> is unlocked:</p>

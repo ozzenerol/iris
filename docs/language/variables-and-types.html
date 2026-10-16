@@ -16,10 +16,10 @@
 <pre class="code"><code><span class="t">i64</span> count = <span class="n">10</span>
 <span class="t">str</span> name = <span class="s">&quot;iris&quot;</span></code></pre>
 <p><code>:=</code> declares a variable and takes its type from the value:</p>
-<pre class="code"><code>count := <span class="n">10</span>        <span class="c">// i64</span>
-ratio := <span class="n">0.5</span>       <span class="c">// f64</span>
-ok := <span class="k">true</span>         <span class="c">// bool</span>
-name := <span class="s">&quot;iris&quot;</span>     <span class="c">// str</span></code></pre>
+<pre class="code"><code>count := <span class="n">10</span>    <span class="c">// i64</span>
+ratio := <span class="n">0.5</span>   <span class="c">// f64</span>
+ok := <span class="k">true</span>     <span class="c">// bool</span>
+name := <span class="s">&quot;iris&quot;</span> <span class="c">// str</span></code></pre>
 <p>A variable declared without a value starts at zero: <code>0</code>, <code>false</code>, an empty <code>str</code> or a <code>null</code> pointer.</p>
 <pre class="code"><code><span class="t">i64</span> total
 <span class="t">bool</span> done</code></pre>
@@ -38,8 +38,8 @@ flags := <span class="n">0b1010</span></code></pre>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
 <p>A number converts on its own to a type that holds every value it can have, such as <code>u8</code> to <code>i64</code>. Every other conversion is written as the type's name used like a function:</p>
 <pre class="code"><code><span class="t">u8</span> b = <span class="n">200</span>
-<span class="t">i64</span> n = b              <span class="c">// automatic: no value can be lost</span>
-<span class="t">u8</span> small = <span class="t">u8</span>(n)       <span class="c">// written out: n might not fit</span>
+<span class="t">i64</span> n = b        <span class="c">// automatic: no value can be lost</span>
+<span class="t">u8</span> small = <span class="t">u8</span>(n) <span class="c">// written out: n might not fit</span>
 <span class="t">f64</span> avg = <span class="t">f64</span>(total) / <span class="t">f64</span>(count)</code></pre>
 <p>In a debug build, a conversion that loses a value stops the program with an error.</p>
 <h2 id="floating-point"><a href="#floating-point">Floating point</a></h2>

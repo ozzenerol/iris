@@ -14,10 +14,10 @@
 <h2 id="str"><a href="#str">str</a></h2>
 <p><code>str</code> is a slice of bytes (<code>u8[]</code>). It points at text stored somewhere else and knows its length. A string literal is a <code>str</code>.</p>
 <pre class="code"><code><span class="t">str</span> greeting = <span class="s">&quot;hello, world&quot;</span>
-print(<span class="s">&quot;{greeting.len}&quot;</span>)        <span class="c">// 12</span></code></pre>
+print(<span class="s">&quot;{greeting.len}&quot;</span>) <span class="c">// 12</span></code></pre>
 <p>Slicing a <code>str</code> gives another <code>str</code> that points into the same text. Nothing is copied.</p>
-<pre class="code"><code><span class="t">str</span> word = greeting[<span class="n">0</span>:<span class="n">5</span>]       <span class="c">// &quot;hello&quot;</span>
-<span class="t">str</span> rest = greeting[<span class="n">7</span>:]        <span class="c">// &quot;world&quot;</span></code></pre>
+<pre class="code"><code><span class="t">str</span> word = greeting[<span class="n">0</span>:<span class="n">5</span>] <span class="c">// &quot;hello&quot;</span>
+<span class="t">str</span> rest = greeting[<span class="n">7</span>:]  <span class="c">// &quot;world&quot;</span></code></pre>
 <p><code>==</code> compares the bytes of two strings:</p>
 <pre class="code"><code><span class="k">if</span> word == <span class="s">&quot;hello&quot;</span> { }</code></pre>
 <p>Text is stored as UTF-8. <code>len</code> counts bytes, and indexing gives a byte (<code>u8</code>).</p>

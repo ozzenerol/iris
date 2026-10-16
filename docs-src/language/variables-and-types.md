@@ -14,10 +14,10 @@ str name = "iris"
 `:=` declares a variable and takes its type from the value:
 
 ```iris
-count := 10        // i64
-ratio := 0.5       // f64
-ok := true         // bool
-name := "iris"     // str
+count := 10    // i64
+ratio := 0.5   // f64
+ok := true     // bool
+name := "iris" // str
 ```
 
 A variable declared without a value starts at zero: `0`, `false`, an empty `str` or a `null` pointer.
@@ -62,8 +62,8 @@ A number converts on its own to a type that holds every value it can have, such 
 
 ```iris
 u8 b = 200
-i64 n = b              // automatic: no value can be lost
-u8 small = u8(n)       // written out: n might not fit
+i64 n = b        // automatic: no value can be lost
+u8 small = u8(n) // written out: n might not fit
 f64 avg = f64(total) / f64(count)
 ```
 

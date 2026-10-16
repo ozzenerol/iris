@@ -10,10 +10,10 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | `iris build main.iris` | compiles a program, or a project when given its folder; `-o name` names the output |
 | `iris check main.iris` | checks a program without compiling it |
 | `iris ir main.iris` | prints the LLVM IR the compiler writes |
-| `iris test` | runs the tests |
-| `iris fmt` | formats the source files |
+| `iris test` | runs the test blocks |
+| `iris fmt` | puts source files in the standard layout |
 | `iris get <package>@<version>` | downloads a package and adds it to `iris.mod` |
-| `iris doc` | shows the documentation from the comments |
+| `iris doc` | shows the documentation from the comments (planned) |
 | `iris parse file.iris` | prints the syntax tree |
 | `iris lex file.iris` | prints the tokens |
 | `iris c header.h` | shows what `import c` makes of a C header |
@@ -27,11 +27,36 @@ i64 add(i64 a, b) => a + b
 
 test "add" {
     expect(add(2, 3) == 5)
-    expect(add(-1, 1) == 0)
+    expect(add(-1, 1) == 0, "add(-1, 1) is {add(-1, 1)}")
 }
 ```
 
-`iris test` runs every test block. Tests are left out of normal builds.
+`expect(cond)` checks a condition. When it is false, the test fails with the file and line, and the message if one is given, and goes on to the end. A test can use `try`: an error that leaves the test fails it, with the error's trace.
+
+`iris test` runs every test block of the program's module, in the order they are written, and prints a line for each:
+
+```output
+$ iris test
+ok   add
+    main.iris:12:11: expect failed: n is 4
+FAIL parse
+2 tests, 1 passed, 1 failed
+```
+
+The exit status is 1 when a test failed. `iris test main.iris parse` runs only the tests whose name contains `parse`. `iris check` checks test blocks too; `iris run` and `iris build` leave them out.
+
+## Formatting
+
+`iris fmt` puts code in the standard layout: four spaces per level, spaces around operators and after commas, none inside brackets, at most one blank line in a row, and comments at the ends of lines next to each other in one column. Comments and the text in strings stay as they are.
+
+```shell
+iris fmt main.iris       # rewrites the file
+iris fmt .               # every .iris file in the folder and the folders inside it
+iris fmt --check .       # lists the files that aren't in the layout; exit status 1 if any
+iris fmt - < main.iris   # reads standard input and prints the result, for editors
+```
+
+`iris fmt` only changes spacing and line breaks. As a check, it compares the code's tokens before and after, and leaves a file alone if they differ.
 
 ## Build modes
 

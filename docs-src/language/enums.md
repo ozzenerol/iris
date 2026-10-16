@@ -26,7 +26,7 @@ enum Status { ok = 200, notFound = 404, error = 500 }
 `.name` gives the value's name as a `str`, and enums can be printed:
 
 ```iris
-print("level is {l}")       // level is warn
+print("level is {l}") // level is warn
 ```
 
 A `match` on an enum needs an arm for every value, or a `_` arm:

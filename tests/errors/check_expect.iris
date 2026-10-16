@@ -1,0 +1,10 @@
+// error: 5: expect is for test blocks: test "name" { expect(...) }
+// error: 9: expect takes a bool, not i64
+
+void main() {
+    expect(true)
+}
+
+test "bad" {
+    expect(5)
+}

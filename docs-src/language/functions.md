@@ -43,7 +43,7 @@ void reset(i64 *n) {
 }
 
 i64 count = 5
-reset(&count)      // count is now 0
+reset(&count) // count is now 0
 ```
 
 ## Default values
@@ -94,7 +94,7 @@ A function can return several values in parentheses. The caller can unpack them 
 ```iris
 (i64, i64) divmod(i64 a, b) => (a / b, a % b)
 
-q, r := divmod(17, 5)      // q is 3, r is 2
+q, r := divmod(17, 5) // q is 3, r is 2
 ```
 
 `_` skips a value:
@@ -126,7 +126,7 @@ A function's name can be passed to another function. The parameter's type is wri
 ```iris
 i64 apply(i64(i64) f, i64 x) => f(x)
 
-n := apply(square, 4)      // 16
+n := apply(square, 4) // 16
 ```
 
 Iris has no lambdas, so the function passed must have a name. A function value can be kept in a variable, a field or an array, compared with `==`, and is `null` until it is set. Calling a `null` one stops a debug build with an error. Arguments are passed by position; defaults and names don't apply through a function value.

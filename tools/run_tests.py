@@ -11,9 +11,14 @@
                                // panic: MESSAGE   stderr has "panic: MESSAGE", exit 2
                                // stderr: TEXT     stderr has TEXT
                                // mode: MODE       build mode (default debug)
+                               // command: test    use iris test instead of iris run
+                               // args: A B        arguments after the file
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
+  tests/fmt/NAME.iris      `iris fmt -` must print NAME.out, and NAME.out must
+                           stay as it is when formatted again
+  fmt-std                  the standard library is in the standard layout
   get                      iris get with a local git repository (needs git)
   docs                     every ```iris block in docs-src/ must parse
                            (```iris error blocks are skipped); an ```iris run
@@ -21,7 +26,7 @@
                            that follows it
 
 Usage: python3 tools/run_tests.py [--iris PATH] [--update] [NAME...]
-  --update   rewrite the .tree files from the current output
+  --update   rewrite the .tree and fmt .out files from the current output
   NAME       run only tests whose name contains NAME ("docs" for the docs)
 """
 import argparse
@@ -61,6 +66,54 @@ def parse_tests(iris, only, update, failures):
             want = f.read()
         if out != want:
             failures.append((name, diff(want, out)))
+    return count
+
+
+def fmt_tests(iris, only, update, failures):
+    count = 0
+    for path in sorted(glob.glob(os.path.join(ROOT, "tests/fmt/*.iris"))):
+        name = "fmt/" + os.path.basename(path)[:-5]
+        if only and not any(o in name for o in only):
+            continue
+        count += 1
+        want_path = path[:-5] + ".out"
+        with open(path) as f:
+            src = f.read()
+        p = subprocess.run([iris, "fmt", "-"], input=src, capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            failures.append((name, "fmt failed:\n" + p.stderr))
+            continue
+        if update or not os.path.exists(want_path):
+            with open(want_path, "w") as f:
+                f.write(p.stdout)
+            continue
+        with open(want_path) as f:
+            want = f.read()
+        if p.stdout != want:
+            failures.append((name, diff(want, p.stdout)))
+            continue
+        again = subprocess.run([iris, "fmt", "-"], input=want, capture_output=True, text=True, timeout=60)
+        if again.stdout != want:
+            failures.append((name, "formatting the result again changes it:\n" + diff(want, again.stdout)))
+    if not only or any(o in "fmt-std" for o in only):
+        count += 1
+        p = subprocess.run([iris, "fmt", "--check", os.path.join(ROOT, "std")], capture_output=True, text=True,
+                           timeout=60)
+        if p.returncode != 0:
+            failures.append(("fmt-std", "not in the standard layout:\n" + p.stdout + p.stderr))
+    if not only or any(o in "fmt-docs" for o in only):
+        count += 1
+        bad = []
+        for md in sorted(glob.glob(os.path.join(ROOT, "docs-src/**/*.md"), recursive=True)):
+            with open(md) as f:
+                text = f.read()
+            for m in re.finditer(r"```iris( run)?\n(.*?)```", text, re.S):
+                q = subprocess.run([iris, "fmt", "-"], input=m.group(2), capture_output=True, text=True, timeout=60)
+                if q.returncode != 0 or q.stdout != m.group(2):
+                    line = text[:m.start()].count("\n") + 1
+                    bad.append("%s:%d" % (os.path.relpath(md, ROOT), line))
+        if bad:
+            failures.append(("fmt-docs", "examples not in the standard layout:\n" + "\n".join(bad)))
     return count
 
 
@@ -112,7 +165,10 @@ def run_tests(iris, only, failures):
         modes = re.findall(r"^// mode: (\S+)$", text, re.M)
         stderrs = re.findall(r"^// stderr: (.*)$", text, re.M)
         want_exit = int(exits[0]) if exits else (2 if panics or stderrs else 0)
-        args = ["run"] + (["--mode=" + modes[0]] if modes else []) + [path]
+        commands = re.findall(r"^// command: (\S+)$", text, re.M)
+        extra = re.findall(r"^// args: (.*)$", text, re.M)
+        args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
+        args += extra[0].split() if extra else []
         code, out, err = run(iris, args)
         want_out = "".join(line + "\n" for line in expect)
         problems = []
@@ -250,6 +306,7 @@ def main():
     failures = []
     total = 0
     total += parse_tests(args.iris, args.only, args.update, failures)
+    total += fmt_tests(args.iris, args.only, args.update, failures)
     total += error_tests(args.iris, args.only, failures)
     total += run_tests(args.iris, args.only, failures)
     total += project_tests(args.iris, args.only, failures)

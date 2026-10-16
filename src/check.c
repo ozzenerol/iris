@@ -50,6 +50,8 @@ static const struct {
     {"Arena", "a later version"},
 };
 
+bool gTesting, gWithTests;
+
 /* ---------------------------------------------------------------- target */
 
 Target gTarget = {
@@ -2648,7 +2650,7 @@ static Type *intTypeNamed(const char *name) {
 static bool isBuiltinName(const char *name) {
     return strcmp(name, "print") == 0 || strcmp(name, "panic") == 0 || strcmp(name, "format") == 0 ||
            strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0 || strcmp(name, "error") == 0 ||
-           strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0;
+           strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0 || strcmp(name, "expect") == 0;
 }
 
 static bool printable(Type *t) {
@@ -3454,6 +3456,25 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     if (!d && isBuiltinName(name)) {
         if (strcmp(name, "alloc") == 0) {
             return checkAlloc(c, e);
+        }
+        if (strcmp(name, "expect") == 0) {
+            /* expect(cond) or expect(cond, "text"): in a test, a failure is reported and the test goes on */
+            e->builtin = BI_EXPECT;
+            if (!c->func || !(c->func->flags & F_TESTFN)) {
+                error(c, e, "expect is for test blocks: test \"name\" { expect(...) }");
+            }
+            if (e->list.len < 1 || e->list.len > 2 || e->list.items[0]->kind == N_NAMED_ARG) {
+                error(c, e, "expect takes a condition and, if wanted, a message: expect(n == 3, \"n is {n}\")");
+                return setType(e, &tyError);
+            }
+            Type *t = checkExpr(c, &e->list.items[0], &tyBool);
+            if (!isErr(t) && t != &tyBool) {
+                error(c, e->list.items[0], "expect takes a bool, not %s", t->name);
+            }
+            if (e->list.len == 2) {
+                checkText(c, &e->list.items[1], "expect");
+            }
+            return setType(e, &tyVoid);
         }
         if (strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0) {
             e->builtin = name[0] == 's' ? BI_SLEEP : BI_AFTER;
@@ -4939,6 +4960,41 @@ static void expandWhens(Checker *c, NodeList *list) {
     }
 }
 
+/* Test blocks: under iris test, each becomes a !void function that main
+ * calls; otherwise they are left out. Only the program's own module's
+ * tests run. */
+static void expandTests(Checker *c, Program *prog, Module *m, NodeList *list) {
+    NodeList out = {0};
+    bool any = false;
+    for (int i = 0; i < list->len; i++) {
+        Node *d = list->items[i];
+        if (d->kind != N_TEST) {
+            listPush(c->arena, &out, d);
+            continue;
+        }
+        any = true;
+        if (!gWithTests || m != prog->main) {
+            continue;
+        }
+        Node *f = like(c, N_FUNC, d);
+        char name[32];
+        snprintf(name, sizeof name, "test.%d", prog->tests.len + 1);
+        f->name = arenaStrndup(c->arena, name, strlen(name));
+        f->text = d->text;
+        f->flags = F_TESTFN;
+        Node *ret = like(c, N_T_ERR, d);
+        ret->a = like(c, N_T_NAME, d);
+        ret->a->name = "void";
+        f->a = ret;
+        f->c = d->c;
+        listPush(c->arena, &out, f);
+        listPush(c->arena, &prog->tests, f);
+    }
+    if (any) {
+        *list = out;
+    }
+}
+
 bool checkProgram(Arena *a, Program *prog) {
     Checker c = {0};
     c.arena = a;
@@ -4961,6 +5017,7 @@ bool checkProgram(Arena *a, Program *prog) {
             fs->parent = g;
             c.src = file->src;
             expandWhens(&c, &file->list);
+            expandTests(&c, prog, m, &file->list);
             for (int i = 0; i < file->list.len; i++) {
                 Node *d = file->list.items[i];
                 d->scope = fs;
@@ -4995,9 +5052,6 @@ bool checkProgram(Arena *a, Program *prog) {
                     if (d->list.len == 1) {
                         declareGlobal(&c, g, d->list.items[0], d->list.items[0]->name);
                     }
-                    break;
-                case N_TEST:
-                    notYet(&c, d, "tests", "a later version");
                     break;
                 case N_WHEN:
                     notYet(&c, d, "when", "a later version");
@@ -5162,7 +5216,9 @@ bool checkProgram(Arena *a, Program *prog) {
         }
     }
 
-    if (!mainFn) {
+    if (!mainFn && gTesting) {
+        /* iris test needs no main */
+    } else if (!mainFn) {
         Node *first = prog->main->files.len ? prog->main->files.items[0] : NULL;
         if (first && first->src) {
             errorAt(first->src, 1, 1, "the program has no main function");
@@ -5170,7 +5226,7 @@ bool checkProgram(Arena *a, Program *prog) {
             fprintf(stderr, "iris: the program has no main function\n");
             gErrors++;
         }
-    } else {
+    } else if (mainFn) {
         c.src = mainFn->src;
         if (mainFn->list.len) {
             error(&c, mainFn, "main takes no parameters");

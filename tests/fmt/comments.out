@@ -1,0 +1,17 @@
+// top
+
+/* a block
+   comment */
+void main() {
+    a := 1     // one
+    bb := 22   // two
+    ccc := 333 // three
+
+    // own line
+    if a > 0 {
+        // inside
+    }
+    total := a +
+        bb -
+        ccc
+}

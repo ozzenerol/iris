@@ -1,0 +1,47 @@
+// command: test
+// exit: 1
+// expect: ok   add
+// expect: FAIL add fails
+// expect: FAIL parse
+// expect: ok   tasks
+// expect: 4 tests, 2 passed, 2 failed
+// stderr: test_blocks.iris:28:11: expect failed: n is 4
+// stderr: test_blocks.iris:30:11: expect failed
+// stderr: error: ParseError.notNumber: 'nope' is not a number
+// stderr: at test "parse"
+
+import str
+
+i64 add(i64 a, i64 b) => a + b
+
+void square(i64 n, chan[i64] out) {
+    out <- n * n
+}
+
+test "add" {
+    expect(add(2, 3) == 5)
+    expect(add(-1, 1) == 0)
+}
+
+test "add fails" {
+    n := add(2, 2)
+    expect(n == 5, "n is {n}")
+    expect(n == 4)
+    expect(false)
+}
+
+test "parse" {
+    expect(try str.parseInt("42") == 42)
+    _ = try str.parseInt("nope")
+    expect(false, "not reached")
+}
+
+test "tasks" {
+    out := chan[i64](2)
+    spawn square(3, out)
+    expect(<-out == 9)
+}
+
+void main() {
+    print("main is not run by iris test")
+}

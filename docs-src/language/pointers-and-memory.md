@@ -9,7 +9,7 @@ Iris has no garbage collector. The program allocates memory and frees it. This p
 ```iris
 i64 x = 5
 i64 *p = &x
-*p = 6             // x is now 6
+*p = 6 // x is now 6
 ```
 
 A pointer to a struct reaches its fields with a dot:
@@ -58,7 +58,7 @@ i64 sum(i64[] xs) {
 }
 
 i64[3] counts = [1, 2, 3]
-s := sum(counts)           // an array is passed as a slice
+s := sum(counts) // an array is passed as a slice
 ```
 
 `a[i:j]` takes items `i` to `j - 1`. Either end can be left out. A slice shares memory with what it was taken from:

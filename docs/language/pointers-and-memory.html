@@ -15,7 +15,7 @@
 <p><code>&amp;</code> takes the address of a value and <code>*</code> reads or writes through a pointer:</p>
 <pre class="code"><code><span class="t">i64</span> x = <span class="n">5</span>
 <span class="t">i64</span> *p = &amp;x
-*p = <span class="n">6</span>             <span class="c">// x is now 6</span></code></pre>
+*p = <span class="n">6</span> <span class="c">// x is now 6</span></code></pre>
 <p>A pointer to a struct reaches its fields with a dot:</p>
 <pre class="code"><code>Point *pp = &amp;p
 pp.x = <span class="n">10</span></code></pre>
@@ -41,7 +41,7 @@ pp.x = <span class="n">10</span></code></pre>
 }
 
 <span class="t">i64</span>[<span class="n">3</span>] counts = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
-s := sum(counts)           <span class="c">// an array is passed as a slice</span></code></pre>
+s := sum(counts) <span class="c">// an array is passed as a slice</span></code></pre>
 <p><code>a[i:j]</code> takes items <code>i</code> to <code>j - 1</code>. Either end can be left out. A slice shares memory with what it was taken from:</p>
 <pre class="code"><code>n := <span class="k">try</span> conn.read(buf)
 handle(buf[<span class="n">0</span>:n])</code></pre>

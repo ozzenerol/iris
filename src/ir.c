@@ -422,7 +422,12 @@ static const char *floatConst(IR *ir, double v, Type *t) {
     return fmt(ir, "0x%016llX", (unsigned long long)bits);
 }
 
-static const char *fnName(IR *ir) { return cString(ir, ir->func ? ir->func->name : "?"); }
+static const char *fnName(IR *ir) {
+    if (ir->func && (ir->func->flags & F_TESTFN)) {
+        return cString(ir, fmt(ir, "test \"%s\"", ir->func->text));
+    }
+    return cString(ir, ir->func ? ir->func->name : "?");
+}
 
 static void checkFailed(IR *ir, Node *at, const char *msg) {
     const char *m = cString(ir, msg);
@@ -1359,6 +1364,25 @@ static Val emitBuiltin(IR *ir, Node *e) {
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
+    case BI_EXPECT: {
+        Val cond = emitExpr(ir, e->list.items[0]);
+        int fail = newLabel(ir), ok = newLabel(ir);
+        condBr(ir, cond.s, ok, fail);
+        placeLabel(ir, fail);
+        const char *msg = "null";
+        if (e->list.len == 2) {
+            msg = allocaFor(ir, &tyString, "expect");
+            ins(ir, "store %%String zeroinitializer, ptr %s", msg);
+            emitText(ir, e->list.items[1], 3, msg);
+        }
+        ins(ir, "call void @iris_expect_failed(ptr %s, i32 %d, i32 %d, ptr %s)", ir->fileStr, e->line, e->col, msg);
+        if (e->list.len == 2) {
+            ins(ir, "call void @iris_string_free(ptr %s)", msg);
+        }
+        br(ir, ok);
+        placeLabel(ir, ok);
+        return val("", &tyVoid);
+    }
     case BI_STRING_APPEND:
     case BI_STRING_FREE: {
         Node *recv = e->a->a;
@@ -2872,6 +2896,11 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
         sbPuts(&funcs, ir.extra.buf);
         sbFree(&ir.extra);
     }
+    const char **testNames = arenaAlloc(a, sizeof(char *) * (size_t)(prog->tests.len + 1));
+    for (int i = 0; gTesting && i < prog->tests.len; i++) {
+        Node *t = prog->tests.items[i];
+        testNames[i] = stringConst(&ir, t->text, strlen(t->text));
+    }
     sbPuts(&out, types.buf);
     if (ir.head.buf) {
         sbPuts(&out, ir.head.buf);
@@ -2882,7 +2911,18 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     }
     sbPrintf(&out, "define i32 @main(i32 %%argc, ptr %%argv)%s {\n", mode == MODE_DEBUG ? " #0" : "");
     sbPuts(&out, "  call void @iris_init(i32 %argc, ptr %argv)\n");
-    if (mainFn && mainFn->type->kind == TY_INT) {
+    if (gTesting) {
+        /* iris test: each test that the filter lets through, then the summary */
+        for (int i = 0; i < prog->tests.len; i++) {
+            Node *t = prog->tests.items[i];
+            const char *name = testNames[i];
+            sbPrintf(&out, "  %%go%d = call i1 @iris_test_start(ptr %s)\n  br i1 %%go%d, label %%run%d, label %%next%d\n"
+                           "run%d:\n  %%e%d = call i64 %s()\n  call void @iris_test_done(ptr %s, i64 %%e%d)\n"
+                           "  br label %%next%d\nnext%d:\n",
+                     i, name, i, i, i, i, i, t->ir, name, i, i, i);
+        }
+        sbPuts(&out, "  %rc = call i32 @iris_test_summary()\n  ret i32 %rc\n}\n\n");
+    } else if (mainFn && mainFn->type->kind == TY_INT) {
         sbPrintf(&out, "  %%r = call i32 %s()\n  ret i32 %%r\n}\n\n", mainFn->ir);
     } else if (mainFn && mainFn->type->kind == TY_RESULT) {
         /* an error that gets out of main is printed with its trace */
@@ -2940,6 +2980,10 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_thread_detach(ptr)\n"
            "declare void @iris_json_encode(ptr, ptr, ptr)\n"
            "declare void @iris_json_free(ptr, ptr)\n"
+           "declare void @iris_expect_failed(ptr, i32, i32, ptr)\n"
+           "declare i1 @iris_test_start(ptr)\n"
+           "declare void @iris_test_done(ptr, i64)\n"
+           "declare i32 @iris_test_summary()\n"
            "declare void @iris_mutex_lock(ptr)\n"
            "declare zeroext i1 @iris_mutex_try_lock(ptr)\n"
            "declare void @iris_mutex_unlock(ptr, ptr, i32, i32, ptr)\n"
