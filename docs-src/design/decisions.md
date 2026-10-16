@@ -90,6 +90,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Clients always check certificates and host names; there is no switch to turn that off. A test CA is given with `ca` or `SSL_CERT_FILE`. | Safe by default, with a way to trust a private CA. |
 | `random`'s functions use a fast generator (xoshiro256**) per thread; secrets come from `random.bytes`, the system's secure source. | Fast numbers for programs and safe bytes for keys, with the difference in the name. |
 | SHA-256 and HMAC are in the runtime, in C, without OpenSSL. | Hashing works on every machine. |
+| SQL arguments are a list of `sqlite.Value`, an enum with data. | Each value says its SQL type, and one call takes any mix. |
+| `sqlite.scan` fills `@json` structs, by the names JSON uses. | One struct serves the API and the database. |
+| `[]` where a slice is expected is an empty slice. | `exec(sql, [])` and defaults like `args = []` need no special case. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

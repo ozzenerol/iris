@@ -118,6 +118,7 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `base64` | `encode`, `decode`, and the URL-safe `encodeUrl` and `decodeUrl`; `Base64Error` |
 | `hex` | `encode` and `decode`; `HexError` |
 | `url` | `parse(text) Url` (`scheme`, `user`, `host`, `port`, `path`, `query`, `fragment`), `encode` and `decode` for `%XX`; `UrlError` |
+| `sqlite` | `open(path)` gives a `Db` with `exec(sql, args)`, `query(sql, args)`, `lastId()`, `changes()`, `begin`, `commit`, `rollback` and `close`; `Rows` have `next()`, `int(i)`, `float(i)`, `text(i)`, `isNull(i)`, `name(i)`, `columns()` and `close`; `scan(&rows, &value)` fills a `@json` struct; `Value` and `SqlError` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
@@ -158,6 +159,35 @@ print("{r.status} {r.body.len}")
 `http.serveTls(port, handler, certFile, keyFile)` and `r.serveTls(port, certFile, keyFile)` answer HTTPS, with a certificate chain and its key in PEM files.
 
 TLS uses OpenSSL 3 (or 1.1), which the program loads the first time it needs it: building needs nothing extra, and programs without TLS don't need OpenSSL at all. On Linux it comes with the system (`libssl3`); on macOS, `brew install openssl@3`. `IRIS_OPENSSL` can name the `libssl` file to use. A client checks the server's certificate against the ones the system trusts, and the host name against the certificate; `SSL_CERT_FILE` names a different file of trusted certificates. The oldest version allowed is TLS 1.2.
+
+A database, with SQLite. Each `?` takes the next value of the list, and `scan` fills a `@json` struct from a row, each field from the column of the same name:
+
+```iris
+import sqlite
+
+@json
+struct User {
+    i64 id
+    String name
+    i64 age
+}
+
+!void main() {
+    db := try sqlite.open("app.db")
+    defer db.close()
+    try db.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    try db.exec("INSERT INTO users (name, age) VALUES (?, ?)", [.text("ada"), .int(36)])
+    rows := try db.query("SELECT * FROM users WHERE age > ?", [.int(30)])
+    defer rows.close()
+    for try rows.next() {
+        scoped User u
+        try sqlite.scan(&rows, &u)
+        print("{u.id} {u.name}")
+    }
+}
+```
+
+The program loads the system's SQLite the first time it opens a database. It comes with macOS and most Linux systems (`libsqlite3`); `IRIS_SQLITE` can name the library to use. A query waits for the database on its thread.
 
 A complete program:
 

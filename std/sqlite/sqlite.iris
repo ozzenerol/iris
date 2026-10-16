@@ -1,0 +1,231 @@
+// SQLite databases. The system's SQLite is loaded when a program first
+// opens one. Calls wait for the database on the calling thread; a Db can be
+// shared by threads.
+
+pub enum SqlError { failed, busy, constraint }
+
+// A value for a ? in SQL: .int(36), .float(1.5), .text("ada") or .none for
+// NULL.
+pub enum Value { int(i64 v), float(f64 v), text(str v), none }
+
+@extern("iris_sql_open")
+i32 rawOpen(u8 *path, i64 len, u8 **db)
+
+@extern("iris_sql_close")
+void rawClose(u8 *db)
+
+@extern("iris_sql_prepare")
+i32 rawPrepare(u8 *db, u8 *sql, i64 len, i64 *at, u8 **stmt)
+
+@extern("iris_sql_bind")
+i32 rawBind(u8 *stmt, i64 i, i32 kind, i64 iv, f64 fv, u8 *text, i64 len)
+
+@extern("iris_sql_params")
+i64 rawParams(u8 *stmt)
+
+@extern("iris_sql_step")
+i32 rawStep(u8 *stmt)
+
+@extern("iris_sql_finalize")
+void rawFinalize(u8 *stmt)
+
+@extern("iris_sql_columns")
+i64 rawColumns(u8 *stmt)
+
+@extern("iris_sql_type")
+i64 rawType(u8 *stmt, i64 i)
+
+@extern("iris_sql_int")
+i64 rawInt(u8 *stmt, i64 i)
+
+@extern("iris_sql_float")
+f64 rawFloat(u8 *stmt, i64 i)
+
+@extern("iris_sql_text")
+u8 *rawText(u8 *stmt, i64 i, i64 *len)
+
+@extern("iris_sql_name")
+u8 *rawName(u8 *stmt, i64 i, i64 *len)
+
+@extern("iris_sql_last_id")
+i64 rawLastId(u8 *db)
+
+@extern("iris_sql_changes")
+i64 rawChanges(u8 *db)
+
+@extern("iris_sql_scan")
+i32 rawScan(u8 *stmt, u8 *table, u8 *out)
+
+@extern("iris_sql_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_sql_message_len")
+i64 messageLen()
+
+@builtin
+void tableOf()
+
+str message() => messagePtr()[0:messageLen()]
+
+Error sqlError(i32 kind) => match kind {
+    2 => error(SqlError.busy, "{message()}")
+    3 => error(SqlError.constraint, "{message()}")
+    _ => error(SqlError.failed, "{message()}")
+}
+
+// An open database.
+pub struct Db {
+    u8 *handle
+}
+
+// Opens the database in the file at path, making it if needed.
+// ":memory:" is a database that lives in memory until it is closed.
+pub !Db open(str path) {
+    u8 *h
+    kind := rawOpen(path.ptr, path.len, &h)
+    if kind != 0 {
+        return sqlError(kind)
+    }
+    return Db{handle: h}
+}
+
+pub void Db.close() {
+    rawClose(self.handle)
+    self.handle = null
+}
+
+!u8 *Db.prepare(str sql, i64 *at, Value[] args) {
+    u8 *stmt
+    kind := rawPrepare(self.handle, sql.ptr, sql.len, at, &stmt)
+    if kind != 0 {
+        return sqlError(kind)
+    }
+    if stmt == null {
+        return stmt
+    }
+    want := rawParams(stmt)
+    if want != args.len {
+        rawFinalize(stmt)
+        return error(SqlError.failed, "the SQL has {want} ? but {args.len} value{if args.len == 1 { "" } else { "s" }} were given")
+    }
+    for i in 0..args.len {
+        k := match args[i] {
+            .int(v) => rawBind(stmt, i + 1, 0, v, 0.0, null, 0)
+            .float(v) => rawBind(stmt, i + 1, 1, 0, v, null, 0)
+            .text(v) => rawBind(stmt, i + 1, 2, 0, 0.0, v.ptr, v.len)
+            .none => rawBind(stmt, i + 1, 3, 0, 0.0, null, 0)
+        }
+        if k != 0 {
+            rawFinalize(stmt)
+            return sqlError(k)
+        }
+    }
+    return stmt
+}
+
+// Runs SQL that gives no rows: CREATE, INSERT, UPDATE, DELETE. Each ? takes
+// the next of args. Without args, sql can hold several statements.
+pub !void Db.exec(str sql, Value[] args = []) {
+    i64 at
+    for {
+        stmt := try self.prepare(sql, &at, args)
+        if stmt == null {
+            return
+        }
+        for {
+            r := rawStep(stmt)
+            if r < 0 {
+                rawFinalize(stmt)
+                return sqlError(-r)
+            }
+            if r == 0 {
+                break
+            }
+        }
+        rawFinalize(stmt)
+        if args.len > 0 {
+            return
+        }
+    }
+}
+
+// Runs a query; its rows come one at a time from Rows.next.
+pub !Rows Db.query(str sql, Value[] args = []) {
+    i64 at
+    stmt := try self.prepare(sql, &at, args)
+    if stmt == null {
+        return error(SqlError.failed, "the query is empty")
+    }
+    return Rows{stmt: stmt}
+}
+
+// The rowid of the last row INSERT added.
+pub i64 Db.lastId() => rawLastId(self.handle)
+
+// How many rows the last INSERT, UPDATE or DELETE changed.
+pub i64 Db.changes() => rawChanges(self.handle)
+
+pub !void Db.begin() => try self.exec("BEGIN")
+
+pub !void Db.commit() => try self.exec("COMMIT")
+
+pub !void Db.rollback() => try self.exec("ROLLBACK")
+
+// The rows of a query. close gives it back.
+pub struct Rows {
+    u8 *stmt
+    bool done
+}
+
+// Moves to the next row: false when there are no more.
+pub !bool Rows.next() {
+    if self.done {
+        return false
+    }
+    r := rawStep(self.stmt)
+    if r < 0 {
+        return sqlError(-r)
+    }
+    if r == 0 {
+        self.done = true
+        return false
+    }
+    return true
+}
+
+// The number of columns.
+pub i64 Rows.columns() => rawColumns(self.stmt)
+
+// A column's name.
+pub str Rows.name(i64 col) {
+    i64 n
+    p := rawName(self.stmt, col, &n)
+    return p[0:n]
+}
+
+pub i64 Rows.int(i64 col) => rawInt(self.stmt, col)
+
+pub f64 Rows.float(i64 col) => rawFloat(self.stmt, col)
+
+// A column as text, valid until the next call to next.
+pub str Rows.text(i64 col) {
+    i64 n
+    p := rawText(self.stmt, col, &n)
+    return p[0:n]
+}
+
+// Whether a column is NULL.
+pub bool Rows.isNull(i64 col) => rawType(self.stmt, col) == 5
+
+pub void Rows.close() {
+    rawFinalize(self.stmt)
+    self.stmt = null
+}
+
+// Fills a @json struct from the row: each field from the column of the
+// same name (or its @json name). A NULL column leaves the field as it is.
+pub !void scan[T](Rows *rows, T *out) {
+    if rawScan(rows.stmt, tableOf(out), out) != 0 {
+        return error(SqlError.failed, "{message()}")
+    }
+}
