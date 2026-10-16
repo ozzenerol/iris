@@ -111,12 +111,101 @@ static int cmdParse(const char *path, bool snippet) {
     return gErrors ? 1 : 0;
 }
 
+static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir, const char **links,
+                      int nlinks);
+static bool makeTempDir(char *buf, size_t n);
+static void removeTree(const char *dir);
+
+/* comptime: builds the helper for the machine this runs on, runs it, and
+ * keeps the values it printed. False after an error. */
+static bool runComptime(Arena *a, const char *path, const char **includes, int nincludes, char *helperSrc,
+                        Program *prog) {
+    gComptime = 1;
+    gExtraPath = "<comptime>";
+    gExtraText = helperSrc;
+    Arena ha = {0};
+    Program *helper = loadProgram(&ha, path, includes, nincludes);
+    bool ok = helper && !gErrors && checkProgram(&ha, helper);
+    Target saved = gTarget;
+    gTarget.triple = NULL;          /* the helper runs here */
+    char *ir = ok ? writeIR(&ha, helper, MODE_DEBUG) : NULL;
+    char dir[4096];
+    ok = ok && makeTempDir(dir, sizeof dir);
+    char exe[4200], outPath[4200], errPath[4200];
+    if (ok) {
+        snprintf(exe, sizeof exe, "%s/program", dir);
+        snprintf(outPath, sizeof outPath, "%s/comptime.out", dir);
+        snprintf(errPath, sizeof errPath, "%s/comptime.err", dir);
+        const char *links[128];
+        int n = 0;
+        for (int k = 0; k < helper->nlinks; k++) links[n++] = helper->links[k];
+        ok = compileIR(ir, exe, MODE_DEBUG, dir, links, n);
+    }
+    gTarget = saved;
+    if (ok) {
+        char *argv[] = {exe, NULL};
+        fflush(stdout);
+        int rc = runCommand(argv, outPath, errPath);
+        size_t outLen = 0, errLen = 0;
+        char *out = readAllFile(a, outPath, &outLen);
+        char *err = readAllFile(a, errPath, &errLen);
+        if (rc != 0) {
+            fprintf(stderr, "iris: comptime: the code stopped with status %d\n%s", rc, err ? err : "");
+            gErrors++;
+            ok = false;
+        } else {
+            /* lines \x01 N \x02 JSON; the rest is what the code printed itself */
+            gComptimeResults = arenaAlloc(a, sizeof(ComptimeResult) * (size_t)(gComptimeKeyCount + 1));
+            gComptimeCount = 0;
+            for (char *p = out; p && *p;) {
+                char *e = strchr(p, '\n');
+                if (!e) e = p + strlen(p);
+                if (*p == '\x01') {
+                    char *sep = memchr(p, '\x02', (size_t)(e - p));
+                    int idx = atoi(p + 1);
+                    if (sep && idx >= 0 && idx < gComptimeKeyCount) {
+                        gComptimeResults[gComptimeCount].key = gComptimeKeys[idx];
+                        gComptimeResults[gComptimeCount].json = arenaStrndup(a, sep + 1, (size_t)(e - sep - 1));
+                        gComptimeCount++;
+                    }
+                } else if (e > p) {
+                    fprintf(stderr, "comptime: %.*s\n", (int)(e - p), p);
+                }
+                p = *e ? e + 1 : e;
+            }
+        }
+        unlink(outPath);
+        unlink(errPath);
+    }
+    if (dir[0] && ok) removeTree(dir);
+    /* the keys and results live in a; the helper's own tree goes */
+    for (int i = 0; i < gComptimeKeyCount; i++) {
+        gComptimeKeys[i] = arenaStrndup(a, gComptimeKeys[i], strlen(gComptimeKeys[i]));
+    }
+    arenaFree(&ha);
+    gExtraPath = gExtraText = NULL;
+    gComptime = ok ? 2 : 0;
+    (void)prog;
+    return ok;
+}
+
 /* Reads, parses and checks a program and its modules. Returns NULL after
  * errors. */
 static Program *frontEnd(Arena *a, const char *path, const char **includes, int nincludes) {
     Program *prog = loadProgram(a, path, includes, nincludes);
     if (!prog || gErrors) {
         return NULL;
+    }
+    char *helper = comptimeHelperSource(a, prog);
+    if (helper) {
+        if (!runComptime(a, path, includes, nincludes, helper, prog)) {
+            return NULL;
+        }
+        /* again, with the values in place of the comptime expressions */
+        prog = loadProgram(a, path, includes, nincludes);
+        if (!prog || gErrors) {
+            return NULL;
+        }
     }
     if (!checkProgram(a, prog)) {
         return NULL;

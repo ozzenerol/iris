@@ -763,17 +763,6 @@ static void genMacros(Gen *g, const char *text, const char *pre) {
     }
 }
 
-static char *readAllFile(Arena *a, const char *path, size_t *len) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    StrBuf b = {0};
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) sbPutn(&b, buf, n);
-    fclose(f);
-    *len = b.len;
-    return sbFinish(&b, a);
-}
 
 char *cImport(Arena *a, const char **headers, int n, const char **includeDirs, int nInclude,
               NodeList *skipped) {

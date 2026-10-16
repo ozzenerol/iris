@@ -68,6 +68,10 @@ In debug builds the IR writer adds a check before every operation that can go wr
 
 Debug builds also compile with AddressSanitizer: every function gets LLVM's `sanitize_address` attribute and `clang` links with `-fsanitize=address`. That catches use after free and other bad memory accesses. Leak reports are turned off for now.
 
+## comptime
+
+When a program has `const X = comptime expr`, the front end runs twice. First it adds a file to the program's module with a function, `irisComptimeMain`, that prints each comptime expression as JSON (`json.encode`) on a line of its own, checks that program with the comptime constants as zero-valued stand-ins, builds it for the machine it runs on and runs it. Then it loads the program again, and the checker replaces each comptime expression with the literal that the JSON describes: a constant for numbers, `bool`, text and enums, and a read-only global (an LLVM `constant`) for arrays and structs. `src/comptime.c` writes the helper's file and turns JSON into literals.
+
 ## Debug information
 
 The IR writer adds DWARF metadata as it goes. The program gets a compile unit, each source file a `DIFile`, each function a `DISubprogram`, and every instruction a `!DILocation` with the line and column of the statement or expression it comes from. Each named variable and parameter gets a `DILocalVariable` and an `llvm.dbg.declare` on its stack slot, with a debug type made from its Iris type: basic types, pointers, structs with their fields, slices and `String` as structs, arrays and plain enums. All variables share the function's scope, which works because Iris doesn't allow a name to hide another in the same function. clang turns it into DWARF with `-g`, which every build passes.
@@ -96,6 +100,7 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/ir.c` | The IR writer, with the debug information and the JSON tables. |
 | `src/fmt.c` | `iris fmt`. |
 | `src/lsp.c` | `iris lsp`, the language server. |
+| `src/comptime.c` | `comptime`: the helper program and its values. |
 | `runtime/rt.c` | The part written in C: printing, panics, error traces, the task scheduler, threads, the network, JSON and tests. |
 | `editors/vim/` | Syntax files for Vim and Neovim. |
 | `tests/` | Test programs. `tools/run_tests.py` runs them. |

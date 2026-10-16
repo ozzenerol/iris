@@ -2778,6 +2778,12 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
         return floatConst(ir, v->fval, t);
     case TY_PTR:
         return "null";
+    case TY_ENUM:
+        if (!t->hasData) {
+            Node *m = v->ref && v->ref->kind == N_ENUM_MEMBER ? v->ref : NULL;
+            return fmt(ir, "%lld", (long long)(int32_t)(m ? m->cval : v->cval));
+        }
+        return "zeroinitializer";
     case TY_STRUCT: {
         StrBuf b = {0};
         sbPuts(&b, "{ ");
@@ -2908,21 +2914,22 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                 sbFree(&decl);
             } else if (d->flags & F_EXPORT) {
                 d->ir = fmt(&ir, "@%s", d->text);
-                if (strcmp(d->name, "main") == 0 && strcmp(mod, "main") == 0) {
+                if (strcmp(d->name, gComptime == 1 ? "irisComptimeMain" : "main") == 0 && strcmp(mod, "main") == 0) {
                     mainFn = d;
                 }
             } else if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
                 d->ir = fmt(&ir, "@\"m.%s.%s.%s\"", mod, d->list.items[0]->type->elem->name, d->name);
             } else {
                 d->ir = fmt(&ir, "@\"f.%s.%s\"", mod, d->name);
-                if (strcmp(d->name, "main") == 0 && strcmp(mod, "main") == 0) {
+                if (strcmp(d->name, gComptime == 1 ? "irisComptimeMain" : "main") == 0 && strcmp(mod, "main") == 0) {
                     mainFn = d;
                 }
             }
         } else if (d->kind == N_VAR) {
             d->ir = fmt(&ir, "@\"g.%s.%s\"", mod, d->name);
-            sbPrintf(&ir.head, "%s = internal %sglobal %s %s\n", d->ir,
-                     d->flags & F_THREADLOCAL ? "thread_local " : "", llType(&ir, d->type),
+            sbPrintf(&ir.head, "%s = internal %s%s %s %s\n", d->ir,
+                     d->flags & F_THREADLOCAL ? "thread_local " : "",
+                     (d->flags & F_READONLY) && gComptime == 2 ? "constant" : "global", llType(&ir, d->type),
                      constValue(&ir, d->b, d->type));
         } else if (d->kind == N_DEFINE) {
             Node *id = d->list.items[0];

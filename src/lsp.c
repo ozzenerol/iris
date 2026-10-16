@@ -406,6 +406,7 @@ static Program *analyze(const char *path) {
     gDiagHook = collect;
     gReadHook = readDoc;
     gTesting = gWithTests = true;     /* no main needed; tests are checked */
+    gComptime = 1;                      /* comptime values stand in as zeros, as in the helper */
     gErrors = 0;
     Program *prog = loadProgram(&gA, path, NULL, 0);
     if (prog) {

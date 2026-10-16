@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MAX_ERRORS 20
 
@@ -12,6 +13,11 @@ int gErrors;
 void (*gDiagHook)(Source *src, int line, int col, const char *msg);
 
 void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap) {
+    if (gErrors > 0 && src->path && strcmp(src->path, "<comptime>") == 0) {
+        /* comptime's helper repeats a problem already reported in the program */
+        gErrors++;
+        return;
+    }
     if (gDiagHook) {
         /* the language server collects errors instead of printing them */
         char msg[1024];

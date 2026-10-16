@@ -1,0 +1,21 @@
+// error: 14: comptime can give numbers, bool, text, enums, and arrays and structs of those, not i64 *
+// error: 15: a struct that comptime gives needs @json, which carries it from the helper: Plain
+// error: 19: comptime goes in a constant at the top of a file: const TABLE = comptime makeTable()
+struct Plain {
+    i64 x
+}
+
+i64 *where() => null
+
+Plain plain() => Plain{x: 1}
+
+i64[3] three() => [1, 2, 3]
+
+const P = comptime where()
+const Q = comptime plain()
+const T = comptime three()
+
+void main() {
+    x := comptime three()
+    T[0] = 5
+}

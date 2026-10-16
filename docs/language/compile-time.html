@@ -31,6 +31,11 @@
 }
 
 <span class="k">const</span> CRC_TABLE = <span class="k">comptime</span> makeCrcTable()</code></pre>
+<p><code>comptime</code> goes in a <code>const</code> at the top of one of the program's files, and takes the whole expression after it. The compiler builds the code it needs into a small program, runs it on the machine that builds, and puts the values it gives into the real program. Running the result has no cost: <code>CRC_TABLE</code> is a table in the program's read-only memory.</p>
+<p>What comptime can give:</p>
+<div class="table"><table><thead><tr><th>Value</th><th>Becomes</th></tr></thead><tbody><tr><td>a number, <code>bool</code>, <code>str</code>, <code>String</code> or a plain enum</td><td>a constant, like one written out (a <code>String</code> becomes a <code>str</code>)</td></tr><tr><td>an array or a <code>@json</code> struct of those</td><td>a global that can't change</td></tr></tbody></table></div>
+<p>Pointers and slices can't come out of comptime, since the memory they point to stays behind. What the code prints shows up while compiling, after <code>comptime:</code>, and a panic in it stops the build with its message.</p>
+<p>A comptime constant can be used by other constants and by the program, but not yet by the code of another comptime constant: while the helper runs, comptime constants are zeros. Comptime code runs on the machine that builds, also with <code>--target</code>.</p>
 <h2 id="when"><a href="#when">when</a></h2>
 <p><code>when</code> includes code only when a condition known at compile time is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:</p>
 <pre class="code"><code><span class="k">when</span> os == .linux {
