@@ -1,0 +1,113 @@
+// expect: 10 9 81
+// expect: bob
+// expect: age 30
+// expect: 7 104
+// expect: 1.5
+// expect: hello
+// expect: 5 6
+
+struct List[T] {
+    T[] items
+    i64 len
+}
+
+void List[T].push(T value) {
+    if self.len == self.items.len {
+        n := if self.len == 0 { 4 } else { self.len * 2 }
+        T[] bigger = alloc(T, n)
+        for i in 0..self.len {
+            bigger[i] = self.items[i]
+        }
+        if self.items.len > 0 {
+            free(self.items)
+        }
+        self.items = bigger
+    }
+    self.items[self.len] = value
+    self.len += 1
+}
+
+T List[T].get(i64 i) => self.items[i]
+
+void List[T].free() {
+    if self.items.len > 0 {
+        free(self.items)
+    }
+}
+
+struct Pair[A, B] {
+    A first
+    B second
+}
+
+T first[T](T[] items) => items[0]
+
+interface Ordered {
+    i64 compare(Self other)
+}
+
+struct Version {
+    i64 major
+    i64 minor
+}
+
+i64 Version.compare(Version other) {
+    if self.major != other.major {
+        return self.major - other.major
+    }
+    return self.minor - other.minor
+}
+
+T max[T: Ordered](T a, b) => if a.compare(b) >= 0 { a } else { b }
+
+interface Writer {
+    !i64 write(str data)
+}
+
+struct Console {
+    i64 written
+}
+
+!i64 Console.write(str data) {
+    print(data)
+    self.written += data.len
+    return data.len
+}
+
+struct Counter {
+    i64 bytes
+}
+
+!i64 Counter.write(str data) {
+    self.bytes += data.len
+    return data.len
+}
+
+!void log(dyn Writer w, str msg) {
+    _ = try w.write(msg)
+}
+
+!void main() {
+    scoped List[i64] numbers
+    for i in 0..10 {
+        numbers.push(i * i)
+    }
+    print("{numbers.len} {numbers.get(3)} {numbers.get(9)}")
+    List[str] names
+    names.push("ada")
+    names.push("bob")
+    print("{names.get(1)}")
+    names.free()
+    p := Pair[str, i64]{first: "age", second: 30}
+    print("{p.first} {p.second}")
+    i64[3] counts = [7, 8, 9]
+    print("{first(counts)} {first[u8]("hi")}")
+    v := max(Version{major: 1, minor: 2}, Version{major: 1, minor: 5})
+    print("{v.major}.{v.minor}")
+    Console con
+    Counter cnt
+    try log(&con, "hello")
+    try log(&cnt, "four")
+    try log(&cnt, "56")
+    print("{con.written} {cnt.bytes}")
+}

@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.5.0"
+#define IRIS_VERSION "0.6.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -176,6 +176,9 @@ void listPush(Arena *a, NodeList *l, Node *n);
 void printTree(Node *n);
 char *typeString(Arena *a, Node *t);
 
+/* generic.c: a deep copy of a tree, with the checker's fields cleared */
+Node *cloneNode(Arena *a, Node *n);
+
 /* ---------------------------------------------------------------- parser.c */
 
 /* snippet: allow statements at the top level, for checking doc examples. */
@@ -200,6 +203,7 @@ typedef enum {
     TY_ERRVAL,              /* Error: a code and, in the runtime, a message and a trace */
     TY_ERRCODE,             /* e.code: any enum value, with its enum */
     TY_TUPLE,               /* several values: elems */
+    TY_DYN,                 /* dyn Interface: decl is the N_INTERFACE */
 } TypeKind;
 
 struct Type {
@@ -218,6 +222,10 @@ struct Type {
     bool hasData;           /* enums whose values carry data */
     bool isFlags;           /* flag enums */
     int64_t payload;        /* data enums: bytes of room for the largest value's data */
+    Node *generic;          /* instances of generic structs: the generic declaration */
+    Type **args;            /* ... and the types it was made with */
+    int nargs;
+    void *scope;            /* instances: the checker's scope with the type parameters */
 };
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
@@ -229,6 +237,7 @@ enum {
     BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE, BI_ERROR,
     BI_ENUM_NEW,            /* a value of a data enum: ref is the member */
     BI_FLAGS_HAS,
+    BI_DYN_CALL,            /* a call through dyn: ival is the method's place in the interface */
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

@@ -1,0 +1,12 @@
+// error: 7: generic types are nested too deeply
+struct Box[T] {
+    T value
+}
+
+void grow[T](T x) {
+    grow(Box[T]{value: x})
+}
+
+void main() {
+    grow(1)
+}

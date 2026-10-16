@@ -82,7 +82,7 @@ The compiler copies the code of a `defer` to every place where its block can end
 
 ## Generics
 
-Each generic function and struct is compiled once for each set of types it is used with. `max(i64, i64)` and `max(f64, f64)` are two separate functions in the program. Calls are direct, with no lookup at run time.
+Each generic function and struct is compiled once for each set of types it is used with. `max` called with `Version` values and with `Date` values gives two separate functions in the program, `max[Version]` and `max[Date]`. Calls are direct, with no lookup at run time.
 
 ## Interfaces and dyn
 

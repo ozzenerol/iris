@@ -77,7 +77,27 @@ typedef struct {
     bool allowResult;       /* the next expression may be a !T call: try, catch, _ = */
     int enumKinds;          /* enums numbered so far */
     bool inDefer;           /* checking the statement of a defer */
+    /* generics */
+    struct Instance *instances;
+    NodeList *instOut;      /* instances for the IR writer: the file's list2 */
+    NodeList pendFns;       /* instance functions whose bodies are still to check */
+    NodeList pendSites;     /* ... and where each was first used */
+    Scope **pendScopes;
+    int pendCap;
+    int instDepth;
+    int instGen;            /* how many instances deep the body being checked is */
+    NodeList genericMethods;
 } Checker;
+
+typedef struct Instance Instance;
+struct Instance {
+    Instance *next;
+    Node *generic;
+    Type **args;
+    int nargs;
+    Type *type;             /* a struct instance */
+    Node *fn;               /* a function instance */
+};
 
 static void checkStmt(Checker *c, Node *s);
 
@@ -269,7 +289,7 @@ static Type *structType(Checker *c, Node *decl) {
         t->decl = decl;
         t->ir = arenaStrndup(c->arena, "", 0);
         char buf[160];
-        snprintf(buf, sizeof buf, "%%T.%s", decl->name);
+        snprintf(buf, sizeof buf, "%%\"T.%s\"", decl->name);
         t->ir = arenaStrndup(c->arena, buf, strlen(buf));
         decl->type = t;
     }
@@ -354,7 +374,7 @@ static Type *enumType(Checker *c, Node *decl) {
     }
     if (t->hasData) {
         char buf[160];
-        snprintf(buf, sizeof buf, "%%E.%s", decl->name);
+        snprintf(buf, sizeof buf, "%%\"E.%s\"", decl->name);
         t->ir = arenaStrndup(c->arena, buf, strlen(buf));
     }
     if (decl->attrs.len) {
@@ -422,7 +442,7 @@ static Type *enumType(Checker *c, Node *decl) {
         if (fields) {
             size = typeSize(fields);
             char buf[200];
-            snprintf(buf, sizeof buf, "%%E.%s.%s", decl->name, m->name);
+            snprintf(buf, sizeof buf, "%%\"E.%s.%s\"", decl->name, m->name);
             fields->ir = arenaStrndup(c->arena, buf, strlen(buf));
             fields->name = m->name;
             m->d = newNode(c->arena, N_T_TUPLE, m->line, m->col);   /* holds the data's type */
@@ -457,6 +477,9 @@ static Node *enumMember(Type *t, const char *name) {
     return NULL;
 }
 
+static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at);
+static Type *dynType(Checker *c, Node *iface);
+
 /* A type named in an expression, like the first argument of alloc. */
 static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
     for (size_t i = 0; i < sizeof builtinTypes / sizeof builtinTypes[0]; i++) {
@@ -465,6 +488,23 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
         }
     }
     Node *d = lookup(c, name);
+    if (d && d->kind == N_TYPE_PARAM) {
+        return d->type;
+    }
+    if (d && d->kind == N_STRUCT && d->list2.len) {
+        if (report) {
+            error(c, at, "%s is generic; give its types: %s[...]", name, name);
+            return &tyError;
+        }
+        return NULL;
+    }
+    if (d && d->kind == N_INTERFACE) {
+        if (report) {
+            error(c, at, "%s is an interface; use dyn %s, or a type parameter like [T: %s]", name, name, name);
+            return &tyError;
+        }
+        return NULL;
+    }
     if (d && d->kind == N_STRUCT) {
         return structType(c, d);
     }
@@ -575,9 +615,39 @@ static Type *resolveType(Checker *c, Node *t) {
         }
         return tupleOf(elems, t->list.len);
     }
-    case N_T_GENERIC:
-        notYet(c, t, "generic types", "0.6");
-        return &tyError;
+    case N_T_GENERIC: {
+        Node *base = t->a;
+        Node *d = base->kind == N_T_NAME ? lookup(c, base->name) : NULL;
+        if (!d || d->kind != N_STRUCT || !d->list2.len) {
+            if (d && d->kind == N_STRUCT) {
+                error(c, t, "%s is not generic", base->name);
+            } else if (base->kind == N_T_NAME && strchr(base->name, '.')) {
+                notYet(c, t, "types from modules", "0.7");
+            } else {
+                error(c, t, "%s is not a generic struct", base->kind == N_T_NAME ? base->name : "this");
+            }
+            return &tyError;
+        }
+        Type *args[16];
+        if (t->list.len > 16) {
+            error(c, t, "too many type arguments");
+            return &tyError;
+        }
+        for (int i = 0; i < t->list.len; i++) {
+            args[i] = resolveType(c, t->list.items[i]);
+            if (isErr(args[i])) return args[i];
+        }
+        return instantiateStruct(c, d, args, t->list.len, t);
+    }
+    case N_T_DYN: {
+        Node *in = t->a;
+        Node *d = in->kind == N_T_NAME ? lookup(c, in->name) : NULL;
+        if (!d || d->kind != N_INTERFACE) {
+            error(c, t, "dyn needs an interface, not %s", in->kind == N_T_NAME ? in->name : "this");
+            return &tyError;
+        }
+        return dynType(c, d);
+    }
     case N_T_FUNC:
         notYet(c, t, "function types", "a later version");
         return &tyError;
@@ -608,6 +678,8 @@ static bool fitsIn(int64_t v, Type *t) {
     if (t->bits == 64) return true;
     return (uint64_t)v < ((uint64_t)1 << t->bits);
 }
+
+static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report);
 
 static Node *convertNode(Checker *c, Node *e, Type *to, bool explicit) {
     Node *n = newNode(c->arena, N_CONVERT, e->line, e->col);
@@ -669,6 +741,22 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
         error(c, e, "the error from this call is not handled; use try, catch or _ =");
         return false;
     }
+    if (to->kind == TY_DYN) {
+        /* &file -> dyn Writer: a pointer to a struct with the interface's methods */
+        if (from->kind == TY_STRUCT) {
+            error(c, e, "dyn %s takes a pointer; write &", to->decl->name);
+            return false;
+        }
+        if (from->kind != TY_PTR || from->elem->kind != TY_STRUCT) {
+            error(c, e, "%s is %s, but dyn %s needs a pointer to a struct", what, from->name, to->decl->name);
+            return false;
+        }
+        if (!conforms(c, from->elem, to->decl, e, true)) {
+            return false;
+        }
+        *slot = convertNode(c, e, to, false);
+        return true;
+    }
     if (isInt(from) && isInt(to)) {
         error(c, e, "%s is %s, which doesn't always fit in %s; convert it with %s(...)", what,
               from->name, to->name, to->name);
@@ -696,15 +784,12 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     t->state = 1;
     Scope *saved = c->scope;
-    c->scope = c->global;
+    c->scope = t->scope ? (Scope *)t->scope : c->global;
     if (d->flags & F_PACKED) {
         notYet(c, d, "packed structs", "a later version");
     }
     if (d->a) {
         notYet(c, d->a, "align", "a later version");
-    }
-    if (d->list2.len) {
-        notYet(c, d, "generic structs", "0.6");
     }
     if (d->attrs.len) {
         notYet(c, d->attrs.items[0], "attributes", "a later version");
@@ -832,6 +917,321 @@ static Node *fieldStep(Checker *c, Node *base, Node *field, Node *at) {
     f->ival = (uint64_t)fieldIndex(bt->decl, field);
     f->type = field->type;
     return f;
+}
+
+/* ---------------------------------------------------------------- generics */
+
+static void checkSignature(Checker *c, Node *f, Type *recv);
+
+/* "List" and [i64, str] -> "List[i64, str]" */
+static const char *instanceName(Checker *c, const char *name, Type **args, int n) {
+    StrBuf b = {0};
+    sbPrintf(&b, "%s[", name);
+    for (int i = 0; i < n; i++) {
+        sbPrintf(&b, "%s%s", i ? ", " : "", args[i]->name);
+    }
+    sbPutc(&b, ']');
+    return sbFinish(&b, c->arena);
+}
+
+/* A scope where the type parameters stand for the given types. */
+static Scope *paramScope(Checker *c, NodeList *params, Type **args) {
+    Scope *s = arenaAlloc(c->arena, sizeof(Scope));
+    s->parent = c->global;
+    for (int i = 0; i < params->len; i++) {
+        Node *tp = newNode(c->arena, N_TYPE_PARAM, params->items[i]->line, params->items[i]->col);
+        tp->name = params->items[i]->name;
+        tp->type = args[i];
+        addSym(c, s, tp->name, tp);
+    }
+    return s;
+}
+
+static Instance *findInstance(Checker *c, Node *generic, Type **args, int n) {
+    for (Instance *in = c->instances; in; in = in->next) {
+        if (in->generic != generic || in->nargs != n) continue;
+        bool same = true;
+        for (int i = 0; i < n && same; i++) {
+            same = sameType(in->args[i], args[i]);
+        }
+        if (same) return in;
+    }
+    return NULL;
+}
+
+static Instance *newInstance(Checker *c, Node *generic, Type **args, int n) {
+    Instance *in = arenaAlloc(c->arena, sizeof(Instance));
+    in->generic = generic;
+    in->nargs = n;
+    in->args = arenaAlloc(c->arena, sizeof(Type *) * (size_t)(n ? n : 1));
+    memcpy(in->args, args, sizeof(Type *) * (size_t)n);
+    in->next = c->instances;
+    c->instances = in;
+    return in;
+}
+
+static void queueBody(Checker *c, Node *fn, Scope *scope, Node *site) {
+    if (c->pendFns.len == c->pendCap) {
+        int cap = c->pendCap ? c->pendCap * 2 : 16;
+        Scope **ss = arenaAlloc(c->arena, sizeof(Scope *) * (size_t)cap);
+        if (c->pendFns.len) {
+            memcpy(ss, c->pendScopes, sizeof(Scope *) * (size_t)c->pendFns.len);
+        }
+        c->pendScopes = ss;
+        c->pendCap = cap;
+    }
+    c->pendScopes[c->pendFns.len] = scope;
+    fn->cval = c->instGen + 1;
+    listPush(c->arena, &c->pendFns, fn);
+    listPush(c->arena, &c->pendSites, site);
+}
+
+/* Whether t has every method the interface lists, with the same types.
+ * Self in the interface stands for t. */
+static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report) {
+    if (t->kind != TY_STRUCT) {
+        if (report) {
+            error(c, at, "%s has no methods, so it doesn't satisfy %s", t->name, iface->name);
+        }
+        return false;
+    }
+    Scope *s = arenaAlloc(c->arena, sizeof(Scope));
+    s->parent = c->global;
+    Node *self = newNode(c->arena, N_TYPE_PARAM, iface->line, iface->col);
+    self->name = "Self";
+    self->type = t;
+    addSym(c, s, "Self", self);
+    Scope *saved = c->scope;
+    c->scope = s;
+    bool ok = true;
+    for (int i = 0; i < iface->list.len && ok; i++) {
+        Node *want = iface->list.items[i];
+        Node *m = findMethodIn(t, want->name);
+        if (!m) {
+            if (report) {
+                error(c, at, "%s doesn't satisfy %s: it has no method %s", t->name, iface->name, want->name);
+            }
+            ok = false;
+            break;
+        }
+        if (!m->type) {
+            checkSignature(c, m, NULL);
+        }
+        bool same = m->list.len - 1 == want->list.len;
+        int before = gErrors;
+        Type *ret = resolveType(c, want->a);
+        same = same && m->type && sameType(ret, m->type);
+        for (int j = 0; same && j < want->list.len; j++) {
+            Type *pt = resolveType(c, want->list.items[j]->a);
+            same = sameType(pt, m->list.items[j + 1]->type);
+        }
+        if (gErrors != before) {
+            ok = false;
+        } else if (!same) {
+            if (report) {
+                error(c, at, "%s doesn't satisfy %s: its method %s has different types", t->name, iface->name,
+                      want->name);
+            }
+            ok = false;
+        }
+    }
+    c->scope = saved;
+    return ok;
+}
+
+/* Checks the T: Interface bounds of type parameters. */
+static bool checkBounds(Checker *c, NodeList *params, Type **args, Node *at) {
+    bool ok = true;
+    for (int i = 0; i < params->len; i++) {
+        Node *tp = params->items[i];
+        if (!tp->a) continue;
+        Node *d = tp->a->kind == N_T_NAME ? lookup(c, tp->a->name) : NULL;
+        if (!d || d->kind != N_INTERFACE) {
+            error(c, tp->a, "a type parameter's bound must be an interface");
+            ok = false;
+            continue;
+        }
+        if (!conforms(c, args[i], d, at, true)) {
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static void instantiateMethods(Checker *c, Type *t);
+
+/* List[i64]: a copy of the generic struct with T = i64. */
+static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at) {
+    if (n != decl->list2.len) {
+        error(c, at, "%s takes %d type%s, not %d", decl->name, decl->list2.len, decl->list2.len == 1 ? "" : "s", n);
+        return &tyError;
+    }
+    Instance *in = findInstance(c, decl, args, n);
+    if (in) {
+        return in->type;
+    }
+    if (c->instDepth > 64 || c->instGen > 64) {
+        error(c, at, "generic types are nested too deeply");
+        return &tyError;
+    }
+    if (!checkBounds(c, &decl->list2, args, at)) {
+        return &tyError;
+    }
+    in = newInstance(c, decl, args, n);
+    Node *copy = cloneNode(c->arena, decl);
+    copy->list2 = (NodeList){0};
+    copy->name = instanceName(c, decl->name, args, n);
+    Type *t = structType(c, copy);
+    t->generic = decl;
+    t->args = in->args;
+    t->nargs = n;
+    t->scope = paramScope(c, &decl->list2, args);
+    in->type = t;
+    listPush(c->arena, c->instOut, copy);
+    c->instDepth++;
+    resolveStruct(c, t);
+    instantiateMethods(c, t);
+    c->instDepth--;
+    return t;
+}
+
+/* The methods of a generic struct, for one instance of it. */
+static void instantiateMethods(Checker *c, Type *t) {
+    for (int i = 0; i < c->genericMethods.len; i++) {
+        Node *g = c->genericMethods.items[i];
+        if (strcmp(g->b->a->name, t->generic->name) != 0) {
+            continue;
+        }
+        if (g->b->list.len != t->nargs) {
+            continue;               /* reported where the method is declared */
+        }
+        Node *copy = cloneNode(c->arena, g);
+        copy->b = NULL;
+        Scope *s = paramScope(c, &g->b->list, t->args);
+        Scope *saved = c->scope;
+        c->scope = s;
+        checkSignature(c, copy, t);
+        c->scope = saved;
+        queueBody(c, copy, s, t->decl);
+        listPush(c->arena, c->instOut, copy);
+    }
+}
+
+/* max[i64]: a copy of the generic function with T = i64. */
+static Node *instantiateFunc(Checker *c, Node *decl, Type **args, int n, Node *at) {
+    Instance *in = findInstance(c, decl, args, n);
+    if (in) {
+        return in->fn;
+    }
+    if (c->instDepth > 64 || c->instGen > 64) {
+        error(c, at, "generic functions call each other with ever new types");
+        return NULL;
+    }
+    if (!checkBounds(c, &decl->list2, args, at)) {
+        return NULL;
+    }
+    in = newInstance(c, decl, args, n);
+    Node *copy = cloneNode(c->arena, decl);
+    copy->list2 = (NodeList){0};
+    copy->name = instanceName(c, decl->name, args, n);
+    in->fn = copy;
+    Scope *s = paramScope(c, &decl->list2, args);
+    Scope *saved = c->scope;
+    c->scope = s;
+    c->instDepth++;
+    checkSignature(c, copy, NULL);
+    c->instDepth--;
+    c->scope = saved;
+    queueBody(c, copy, s, at);
+    listPush(c->arena, c->instOut, copy);
+    return copy;
+}
+
+/* Works out type parameters by matching a parameter's type with an
+ * argument's type. */
+static void infer(Node *tn, Type *actual, NodeList *params, Type **out) {
+    if (!tn || !actual || isErr(actual)) {
+        return;
+    }
+    switch (tn->kind) {
+    case N_T_NAME:
+        for (int i = 0; i < params->len; i++) {
+            if (strcmp(params->items[i]->name, tn->name) == 0 && !out[i] && actual->kind != TY_NULL) {
+                out[i] = actual;
+            }
+        }
+        return;
+    case N_T_PTR:
+        if (actual->kind == TY_PTR) infer(tn->a, actual->elem, params, out);
+        return;
+    case N_T_SLICE:
+        if (actual->kind == TY_SLICE || actual->kind == TY_ARRAY) infer(tn->a, actual->elem, params, out);
+        return;
+    case N_T_ARRAY:
+        if (actual->kind == TY_ARRAY) infer(tn->a, actual->elem, params, out);
+        return;
+    case N_T_GENERIC:
+        if (actual->kind == TY_STRUCT && actual->generic && tn->a->kind == N_T_NAME &&
+            strcmp(actual->generic->name, tn->a->name) == 0) {
+            for (int i = 0; i < tn->list.len && i < actual->nargs; i++) {
+                infer(tn->list.items[i], actual->args[i], params, out);
+            }
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+/* The dyn type of an interface. Its methods' types are worked out once;
+ * Self has no meaning behind dyn. */
+static Type *dynType(Checker *c, Node *iface) {
+    if (iface->type) {
+        return iface->type;
+    }
+    Type *t = arenaAlloc(c->arena, sizeof(Type));
+    t->kind = TY_DYN;
+    t->decl = iface;
+    char buf[160];
+    snprintf(buf, sizeof buf, "dyn %s", iface->name);
+    t->name = arenaStrndup(c->arena, buf, strlen(buf));
+    iface->type = t;
+    Scope *saved = c->scope;
+    c->scope = c->global;
+    for (int i = 0; i < iface->list.len; i++) {
+        Node *m = iface->list.items[i];
+        m->type = resolveType(c, m->a);
+        for (int j = 0; j < m->list.len; j++) {
+            m->list.items[j]->type = resolveType(c, m->list.items[j]->a);
+        }
+    }
+    c->scope = saved;
+    return t;
+}
+
+/* A type written as an expression: List[i64] in List[i64]{...}, the first
+ * argument of alloc, the [i64] of max[i64](...). */
+static Type *typeFromExpr(Checker *c, Node *e, bool report) {
+    if (e->kind == N_IDENT) {
+        return typeFromName(c, e->name, e, report);
+    }
+    if (e->kind == N_INDEX && e->a->kind == N_IDENT) {
+        Node *d = lookup(c, e->a->name);
+        if (d && d->kind == N_STRUCT && d->list2.len) {
+            Type *args[16];
+            if (e->list.len > 16) return &tyError;
+            for (int i = 0; i < e->list.len; i++) {
+                args[i] = typeFromExpr(c, e->list.items[i], true);
+                if (!args[i] || isErr(args[i])) return &tyError;
+            }
+            return instantiateStruct(c, d, args, e->list.len, e);
+        }
+    }
+    if (report) {
+        error(c, e, "this is not a type");
+        return &tyError;
+    }
+    return NULL;
 }
 
 /* ---------------------------------------------------------------- constants */
@@ -1396,12 +1796,17 @@ static Type *structForLiteral(Checker *c, Node *e, Type *expected) {
         }
         return t;
     }
-    if (e->a->kind != N_IDENT) {
-        if (e->a->kind == N_INDEX) {
-            notYet(c, e->a, "generic types", "0.6");
-        } else {
-            notYet(c, e->a, "types from modules", "0.7");
+    if (e->a->kind == N_INDEX) {
+        Type *t = typeFromExpr(c, e->a, true);
+        if (isErr(t)) return NULL;
+        if (t->kind != TY_STRUCT) {
+            error(c, e->a, "%s is not a struct", t->name);
+            return NULL;
         }
+        return t;
+    }
+    if (e->a->kind != N_IDENT) {
+        notYet(c, e->a, "types from modules", "0.7");
         return NULL;
     }
     Node *d = lookup(c, e->a->name);
@@ -1790,7 +2195,7 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
 
 /* Lines arguments up with parameters: positional first, then named, then
  * defaults. params starts at `first` (1 for a method: 0 is self). */
-static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first, NodeList *out) {
+static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first, NodeList *out, bool checked) {
     int np = fn->list.len;
     Node **args = arenaAlloc(c->arena, sizeof(Node *) * (size_t)(np ? np : 1));
     bool named = false;
@@ -1840,7 +2245,9 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
                 continue;
             }
         } else {
-            checkExpr(c, &args[j], param->type);
+            if (!checked) {
+                checkExpr(c, &args[j], param->type);
+            }
             char what[96];
             snprintf(what, sizeof what, "the argument for %s", param->name);
             coerce(c, &args[j], param->type, what);
@@ -1901,6 +2308,26 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         }
     }
 
+    if (t->kind == TY_DYN) {
+        Node *iface = t->decl;
+        for (int i = 0; i < iface->list.len; i++) {
+            Node *m = iface->list.items[i];
+            if (strcmp(m->name, name) != 0) continue;
+            NodeList args = {0};
+            listPush(c->arena, &args, recv);
+            Node fn = {0};
+            fn.name = m->name;
+            fn.list = m->list;
+            checkArgs(c, e, &fn, &e->list, 0, &args, false);
+            e->list = args;
+            e->builtin = BI_DYN_CALL;
+            e->ival = (uint64_t)i;
+            e->ref = m;
+            return setType(e, m->type);
+        }
+        error(c, callee, "%s has no method %s", iface->name, name);
+        return setType(e, &tyError);
+    }
     if (t->kind == TY_ENUM && t->isFlags && strcmp(name, "has") == 0) {
         if (e->list.len != 1 || e->list.items[0]->kind == N_NAMED_ARG) {
             error(c, e, "has takes one value: p.has(.write)");
@@ -1946,7 +2373,7 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     callee->ref = m;
     NodeList args = {0};
     listPush(c->arena, &args, recv);
-    checkArgs(c, e, m, &e->list, 1, &args);
+    checkArgs(c, e, m, &e->list, 1, &args, false);
     e->list = args;
     e->ref = m;
     return setType(e, m->type);
@@ -1960,11 +2387,11 @@ static Type *checkAlloc(Checker *c, Node *e) {
         return setType(e, &tyError);
     }
     Node *tn = e->list.items[0];
-    if (tn->kind != N_IDENT) {
+    if (tn->kind != N_IDENT && tn->kind != N_INDEX) {
         error(c, tn, "alloc's first argument is a type name");
         return setType(e, &tyError);
     }
-    Type *t = typeFromName(c, tn->name, tn, true);
+    Type *t = typeFromExpr(c, tn, true);
     if (isErr(t)) return setType(e, t);
     if (t == &tyVoid) {
         error(c, tn, "void has no size");
@@ -2048,6 +2475,69 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
     return setType(e, res);
 }
 
+/* A call of a generic function: the types come from [...] after its name,
+ * or are worked out from the arguments. */
+static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
+    int n = d->list2.len;
+    Type *args[16] = {0};
+    if (n > 16) {
+        error(c, e, "too many type parameters");
+        return setType(e, &tyError);
+    }
+    if (typeArgs) {
+        if (typeArgs->list.len != n) {
+            error(c, typeArgs, "%s takes %d type%s, not %d", d->name, n, n == 1 ? "" : "s", typeArgs->list.len);
+            return setType(e, &tyError);
+        }
+        for (int i = 0; i < n; i++) {
+            args[i] = typeFromExpr(c, typeArgs->list.items[i], true);
+            if (isErr(args[i])) return setType(e, &tyError);
+        }
+    }
+    bool bad = false;
+    for (int i = 0; i < e->list.len; i++) {
+        Node *arg = e->list.items[i];
+        Node **slot = arg->kind == N_NAMED_ARG ? &arg->a : &e->list.items[i];
+        if (isErr(checkExpr(c, slot, NULL))) bad = true;
+    }
+    if (bad) return setType(e, &tyError);
+    if (!typeArgs) {
+        int pos = 0;
+        for (int i = 0; i < e->list.len; i++) {
+            Node *arg = e->list.items[i];
+            Node *param = NULL;
+            if (arg->kind == N_NAMED_ARG) {
+                for (int j = 0; j < d->list.len; j++) {
+                    if (strcmp(d->list.items[j]->name, arg->name) == 0) param = d->list.items[j];
+                }
+                if (param) infer(param->a, arg->a->type, &d->list2, args);
+            } else if (pos < d->list.len) {
+                param = d->list.items[pos++];
+                infer(param->a, arg->type, &d->list2, args);
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            if (!args[i]) {
+                error(c, e, "the type %s of %s can't be worked out from the arguments; write %s[...](...)",
+                      d->list2.items[i]->name, d->name, d->name);
+                return setType(e, &tyError);
+            }
+        }
+    }
+    int before = gErrors;
+    Node *inst = instantiateFunc(c, d, args, n, e);
+    if (!inst) return setType(e, &tyError);
+    if (gErrors != before) {
+        return setType(e, &tyError);
+    }
+    e->a->ref = inst;
+    NodeList out = {0};
+    checkArgs(c, e, inst, &e->list, 0, &out, true);
+    e->list = out;
+    e->ref = inst;
+    return setType(e, inst->type);
+}
+
 /* Packet.Data(bytes) or .Close(1000, "bye"): a value of a data enum. */
 static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
     Node *m = enumMember(et, name);
@@ -2063,7 +2553,7 @@ static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
     fn.name = m->name;
     fn.list = m->list;
     NodeList args = {0};
-    checkArgs(c, e, &fn, &e->list, 0, &args);
+    checkArgs(c, e, &fn, &e->list, 0, &args, false);
     e->list = args;
     e->ref = m;
     e->builtin = BI_ENUM_NEW;
@@ -2094,6 +2584,12 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
             return setType(e, &tyError);
         }
         return checkMethodCall(c, e);
+    }
+    if (callee->kind == N_INDEX && callee->a->kind == N_IDENT) {
+        Node *g = lookup(c, callee->a->name);
+        if (g && g->kind == N_FUNC && g->list2.len) {
+            return checkGenericCall(c, e, g, callee);
+        }
     }
     if (callee->kind != N_IDENT) {
         notYet(c, callee, "calling this kind of expression", "a later version");
@@ -2197,9 +2693,12 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         error(c, callee, "%s is not a function", name);
         return setType(e, &tyError);
     }
+    if (d->list2.len) {
+        return checkGenericCall(c, e, d, NULL);
+    }
     callee->ref = d;
     NodeList args = {0};
-    checkArgs(c, e, d, &e->list, 0, &args);
+    checkArgs(c, e, d, &e->list, 0, &args, false);
     e->list = args;
     e->ref = d;
     (void)expected;
@@ -3081,37 +3580,50 @@ static void declareGlobal(Checker *c, Node *d, const char *name) {
     addSym(c, c->global, name, d);
 }
 
-static void checkSignature(Checker *c, Node *f) {
-    if (f->list2.len) {
-        notYet(c, f, "generic functions", "0.6");
+/* A function's or method's types. recv is the receiver of a generic
+ * struct's method, for an instance; otherwise f->b names it. */
+static void checkSignature(Checker *c, Node *f, Type *recv) {
+    if (f->state == 3) {
+        return;                     /* done already */
     }
+    f->state = 3;
     if (f->attrs.len) {
         notYet(c, f->attrs.items[0], "attributes", "a later version");
     }
     f->type = resolveType(c, f->a);
     resolveStruct(c, f->type);
     int first = 0;
-    if (f->b) {
+    if (f->b || recv) {
         /* a method: self, a pointer to the receiver, comes first */
-        Type *rt = resolveType(c, f->b);
+        if (f->list2.len) {
+            notYet(c, f, "methods with type parameters of their own", "a later version");
+        }
+        Type *rt = recv ? recv : resolveType(c, f->b);
         Node *self = newNode(c->arena, N_PARAM, f->line, f->col);
         self->name = "self";
         self->flags |= F_SELF;
         if (rt->kind == TY_STRUCT) {
             self->type = ptrTo(rt);
-            if (findMethodIn(rt, f->name)) {
-                error(c, f, "%s already has a method named %s", rt->name, f->name);
-            } else {
-                resolveStruct(c, rt);
-                Node *path[16];
-                if (findField(rt, f->name, path, 1)) {
-                    error(c, f, "%s already has a field named %s", rt->name, f->name);
+            bool listed = false;
+            for (int i = 0; i < rt->methods.len; i++) {
+                listed = listed || rt->methods.items[i] == f;
+            }
+            resolveStruct(c, rt);
+            Node *path[16];
+            if (findField(rt, f->name, path, 1)) {
+                error(c, f, "%s already has a field named %s", rt->name, f->name);
+            }
+            if (!listed) {
+                if (findMethodIn(rt, f->name)) {
+                    error(c, f, "%s already has a method named %s", rt->name, f->name);
+                } else {
+                    listPush(c->arena, &rt->methods, f);
                 }
-                listPush(c->arena, &rt->methods, f);
             }
         } else {
             if (!isErr(rt)) {
-                error(c, f->b, "methods can only be added to structs declared in this program, not %s", rt->name);
+                error(c, f->b ? f->b : f, "methods can only be added to structs declared in this program, not %s",
+                      rt->name);
             }
             self->type = &tyError;
         }
@@ -3225,6 +3737,7 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
     c.global = pushScope(&c, false);
     gArena = a;
     gTypes = NULL;
+    c.instOut = &file->list2;
     int before = gErrors;
 
     /* names first, so declarations can come in any order */
@@ -3236,7 +3749,7 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
                 declareGlobal(&c, d, d->name);
             }
             break;
-        case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF: case N_ENUM:
+        case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF: case N_ENUM: case N_INTERFACE:
             declareGlobal(&c, d, d->name);
             break;
         case N_DEFINE:
@@ -3246,9 +3759,6 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
             break;
         case N_IMPORT:
             notYet(&c, d, "imports", "0.7");
-            break;
-        case N_INTERFACE:
-            notYet(&c, d, "interfaces", "0.6");
             break;
         case N_TEST:
             notYet(&c, d, "tests", "a later version");
@@ -3262,9 +3772,47 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         }
     }
 
+    /* methods are listed with their structs early, so interfaces can see them */
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
-        if (d->kind == N_STRUCT) {
+        if (d->kind != N_FUNC || !d->b) {
+            continue;
+        }
+        if (d->b->kind == N_T_GENERIC) {
+            Node *g = d->b->a->kind == N_T_NAME ? lookup(&c, d->b->a->name) : NULL;
+            if (!g || g->kind != N_STRUCT || !g->list2.len) {
+                error(&c, d->b, "%s is not a generic struct", d->b->a->kind == N_T_NAME ? d->b->a->name : "this");
+            } else if (g->list2.len != d->b->list.len) {
+                error(&c, d->b, "%s takes %d type%s", g->name, g->list2.len, g->list2.len == 1 ? "" : "s");
+            } else {
+                listPush(a, &c.genericMethods, d);
+            }
+            d->state = 4;               /* generic: checked per instance */
+            continue;
+        }
+        if (d->b->kind != N_T_NAME) {
+            continue;
+        }
+        Node *sd = lookup(&c, d->b->name);
+        if (sd && sd->kind == N_STRUCT && sd->list2.len) {
+            error(&c, d->b, "%s is generic; write %s[...].%s", sd->name, sd->name, d->name);
+            d->state = 4;
+            continue;
+        }
+        if (sd && sd->kind == N_STRUCT) {
+            Type *rt = structType(&c, sd);
+            if (findMethodIn(rt, d->name)) {
+                error(&c, d, "%s already has a method named %s", rt->name, d->name);
+                d->state = 4;
+            } else {
+                listPush(a, &rt->methods, d);
+            }
+        }
+    }
+
+    for (int i = 0; i < file->list.len; i++) {
+        Node *d = file->list.items[i];
+        if (d->kind == N_STRUCT && !d->list2.len) {
             resolveStruct(&c, structType(&c, d));
         } else if (d->kind == N_ENUM) {
             enumType(&c, d);
@@ -3275,15 +3823,15 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
 
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
-        if (d->kind == N_FUNC) {
-            checkSignature(&c, d);
+        if (d->kind == N_FUNC && !d->list2.len && d->state != 4) {
+            checkSignature(&c, d, NULL);
         }
     }
 
     /* field defaults are checked like constants */
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
-        if (d->kind != N_STRUCT) {
+        if (d->kind != N_STRUCT || d->list2.len) {
             continue;
         }
         for (int j = 0; j < d->list.len; j++) {
@@ -3319,10 +3867,40 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
     Node *mainFn = NULL;
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
-        if (d->kind == N_FUNC) {
+        if (d->kind == N_FUNC && !d->list2.len && d->state != 4) {
             checkFunctionBody(&c, d);
             if (!d->b && strcmp(d->name, "main") == 0) {
                 mainFn = d;
+            }
+        }
+    }
+
+    /* the bodies of generic instances; checking one can make more */
+    for (int i = 0; i < c.pendFns.len; i++) {
+        Scope *saved = c.scope;
+        c.scope = c.pendScopes[i];
+        int errs = gErrors;
+        Node *fn = c.pendFns.items[i];
+        c.instGen = (int)fn->cval;
+        checkFunctionBody(&c, fn);
+        c.scope = saved;
+        Node *site = c.pendSites.items[i];
+        if (gErrors != errs && site && site->kind == N_CALL) {
+            error(&c, site, "%s, made here, has the errors above", fn->name);
+        }
+    }
+
+    /* field defaults of generic instances */
+    for (int i = 0; i < file->list2.len; i++) {
+        Node *d = file->list2.items[i];
+        if (d->kind != N_STRUCT) continue;
+        for (int j = 0; j < d->list.len; j++) {
+            Node *f = d->list.items[j];
+            if (f->kind == N_FIELD && f->b && f->type) {
+                Scope *saved = c.scope;
+                c.scope = d->type->scope;
+                checkGlobalValue(&c, &f->b, f->type);
+                c.scope = saved;
             }
         }
     }

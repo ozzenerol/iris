@@ -1,0 +1,62 @@
+// expect: 3
+// expect: 2 x
+// expect: 6
+// expect: 15
+
+struct Node[T] {
+    T value
+    Node[T] *next
+}
+
+struct Stack[T] {
+    Node[T] *top
+    i64 size
+}
+
+void Stack[T].push(T v) {
+    Node[T][] cell = alloc(Node[T], 1)
+    cell[0].value = v
+    cell[0].next = self.top
+    self.top = &cell[0]
+    self.size += 1
+}
+
+T Stack[T].pop() {
+    n := self.top
+    v := n.value
+    self.top = n.next
+    self.size -= 1
+    free(n)
+    return v
+}
+
+struct Pair[A, B] {
+    A first
+    B second
+}
+
+Pair[B, A] swap[A, B](Pair[A, B] p) => Pair[B, A]{first: p.second, second: p.first}
+
+T sum[T](T[] xs) {
+    T total
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+i64 count[T](Stack[T] *s) => s.size
+
+void main() {
+    Stack[i64] s
+    s.push(1)
+    s.push(2)
+    s.push(3)
+    print("{count(&s)}")
+    _ = s.pop()
+    p := swap(Pair[str, i64]{first: "x", second: 2})
+    print("{p.first} {p.second}")
+    print("{s.pop() + s.pop() + 3}")
+    u8[3] small = [4, 5, 6]
+    print("{sum(small)}")
+}

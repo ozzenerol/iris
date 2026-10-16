@@ -53,6 +53,7 @@ typedef struct {
     DeferFrame *defers;
     const char *pendingLabel;
     const char *fileStr;    /* the source path, as a C string constant */
+    NodeList vtables;       /* the names of the method tables written so far */
 } IR;
 
 static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
@@ -78,6 +79,7 @@ static const char *llType(IR *ir, Type *t) {
         default: return "i64";
         }
     case TY_PTR: case TY_NULL: return "ptr";
+    case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
     case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
     case TY_STRUCT: case TY_STRING: return t->ir;
@@ -302,8 +304,43 @@ static const char *arrayAddr(IR *ir, Node *e) {
     return spill(ir, emitExpr(ir, e));
 }
 
+/* The table of a struct's methods for an interface, in the interface's
+ * order: what a dyn value points to. Written once per pair. */
+static const char *vtable(IR *ir, Type *st, Node *iface) {
+    char name[400];
+    snprintf(name, sizeof name, "@\"vt.%s.%s\"", st->name, iface->name);
+    for (int i = 0; i < ir->vtables.len; i++) {
+        if (strcmp(ir->vtables.items[i]->name, name) == 0) {
+            return ir->vtables.items[i]->name;
+        }
+    }
+    Node *rec = newNode(ir->arena, N_IDENT, 0, 0);
+    rec->name = arenaStrndup(ir->arena, name, strlen(name));
+    listPush(ir->arena, &ir->vtables, rec);
+    sbPrintf(&ir->head, "%s = private constant [%d x ptr] [", rec->name, iface->list.len);
+    for (int i = 0; i < iface->list.len; i++) {
+        Node *m = NULL;
+        for (int j = 0; j < st->methods.len; j++) {
+            if (strcmp(st->methods.items[j]->name, iface->list.items[i]->name) == 0) {
+                m = st->methods.items[j];
+            }
+        }
+        sbPrintf(&ir->head, "%sptr %s", i ? ", " : "", m && m->ir ? m->ir : "null");
+    }
+    sbPuts(&ir->head, "]\n");
+    return rec->name;
+}
+
 static Val emitConvert(IR *ir, Node *e) {
     Type *to = e->type, *from = e->a->type;
+    if (to->kind == TY_DYN) {
+        Val p = emitExpr(ir, e->a);
+        const char *vt = vtable(ir, from->elem, to->decl);
+        const char *a = tmp(ir), *b = tmp(ir);
+        ins(ir, "%s = insertvalue { ptr, ptr } undef, ptr %s, 0", a, p.s);
+        ins(ir, "%s = insertvalue { ptr, ptr } %s, ptr %s, 1", b, a, vt);
+        return val(b, to);
+    }
     if (from->kind == TY_ENUM) {
         /* an error code: the enum's number in the high half */
         Val v = emitExpr(ir, e->a);
@@ -663,6 +700,33 @@ static Val emitBuiltin(IR *ir, Node *e) {
     }
     case BI_ENUM_NEW:
         return emitEnumValue(ir, e->type, e->ref, &e->list);
+    case BI_DYN_CALL: {
+        /* the function comes from the table, self is the data pointer */
+        Node *m = e->ref;
+        Val w = emitExpr(ir, e->list.items[0]);
+        const char *data = tmp(ir), *tbl = tmp(ir), *slot = tmp(ir), *fp = tmp(ir);
+        ins(ir, "%s = extractvalue { ptr, ptr } %s, 0", data, w.s);
+        ins(ir, "%s = extractvalue { ptr, ptr } %s, 1", tbl, w.s);
+        ins(ir, "%s = getelementptr ptr, ptr %s, i64 %d", slot, tbl, (int)e->ival);
+        ins(ir, "%s = load ptr, ptr %s", fp, slot);
+        StrBuf args = {0};
+        sbPrintf(&args, "ptr %s", data);
+        for (int i = 1; i < e->list.len; i++) {
+            Val v = emitExpr(ir, e->list.items[i]);
+            sbPrintf(&args, ", %s %s", llType(ir, m->list.items[i - 1]->type), v.s);
+        }
+        Val r;
+        if (m->type->kind == TY_VOID) {
+            ins(ir, "call void %s(%s)", fp, args.buf);
+            r = val("", &tyVoid);
+        } else {
+            const char *t = tmp(ir);
+            ins(ir, "%s = call %s %s(%s)", t, llType(ir, m->type), fp, args.buf);
+            r = val(t, m->type);
+        }
+        sbFree(&args);
+        return r;
+    }
     case BI_FLAGS_HAS: {
         Val a = emitExpr(ir, e->a->a);
         Val b = emitExpr(ir, e->list.items[0]);
@@ -1756,8 +1820,20 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
             }
         }
     }
+    /* the file's declarations, then the instances of generics */
+    NodeList all = {0};
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
+        if ((d->kind == N_FUNC && (d->list2.len || d->state == 4)) || (d->kind == N_STRUCT && d->list2.len)) {
+            continue;                   /* generic: only its instances are compiled */
+        }
+        listPush(a, &all, d);
+    }
+    for (int i = 0; i < file->list2.len; i++) {
+        listPush(a, &all, file->list2.items[i]);
+    }
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind == N_STRUCT && d->type) {
             sbPrintf(&types, "%s = type { ", d->type->ir);
             for (int j = 0; j < d->list.len; j++) {
@@ -1766,13 +1842,13 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
             sbPuts(&types, d->list.len ? " }\n" : "}\n");
         }
     }
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind == N_FUNC) {
-            if (d->b) {
-                d->ir = fmt(&ir, "@m.%s.%s", d->list.items[0]->type->elem->name, d->name);
+            if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
+                d->ir = fmt(&ir, "@\"m.%s.%s\"", d->list.items[0]->type->elem->name, d->name);
             } else {
-                d->ir = fmt(&ir, "@f.%s", d->name);
+                d->ir = fmt(&ir, "@\"f.%s\"", d->name);
                 if (strcmp(d->name, "main") == 0) {
                     mainFn = d;
                 }
@@ -1788,8 +1864,8 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
                      constValue(&ir, d->b, id->type));
         }
     }
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind == N_FUNC) {
             emitFunction(&ir, d, &funcs);
         }
@@ -1854,7 +1930,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
                        "  call void @iris_error_report(i64 %%e)\n  unreachable\nok:\n  ret i32 0\n}\n\n",
                  mainFn->ir);
     } else {
-        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@f.main");
+        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main\"");
     }
     sbPuts(&out,
            "declare void @iris_init(i32, ptr)\n"
