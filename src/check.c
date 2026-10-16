@@ -806,6 +806,17 @@ static Type *resolveType(Checker *c, Node *t) {
             args[i] = resolveType(c, t->list.items[i]);
             if (isErr(args[i])) return args[i];
         }
+        if (d->module && strcmp(d->module, "core") == 0 && strcmp(d->name, "Map") == 0 && t->list.len >= 1) {
+            /* said here, where the map is declared, not inside Map's code */
+            Type *k = args[0];
+            bool ok = k->kind == TY_INT || k->kind == TY_BOOL || k->kind == TY_PTR || isStr(k) ||
+                      (k->kind == TY_ENUM && !k->hasData);
+            if (!ok) {
+                error(c, t->list.items[0], "a Map's keys can be integers, bool, enums, pointers or str, not %s%s",
+                      k->name, k->kind == TY_STRING ? " (use str: the map keeps its own copy)" : "");
+                return &tyError;
+            }
+        }
         return instantiateStruct(c, d, args, t->list.len, t);
     }
     case N_T_CHAN: {
@@ -1443,8 +1454,9 @@ static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node 
 static void instantiateMethods(Checker *c, Type *t) {
     for (int i = 0; i < c->genericMethods.len; i++) {
         Node *g = c->genericMethods.items[i];
-        if (strcmp(g->b->a->name, t->generic->name) != 0) {
-            continue;
+        const char *gm = g->module ? g->module : "main", *tm = t->generic->module ? t->generic->module : "main";
+        if (strcmp(g->b->a->name, t->generic->name) != 0 || strcmp(gm, tm) != 0) {
+            continue;               /* a struct of the same name in another module */
         }
         if (g->b->list.len != t->nargs) {
             continue;               /* reported where the method is declared */
@@ -2343,6 +2355,15 @@ static Type *checkTry(Checker *c, Node *e);
 static Type *checkCatch(Checker *c, Node *e, Type *expected);
 static Type *checkIndirectCall(Checker *c, Node *e, Type *ft);
 
+/* Whether a constant expression is made of durations: 2h + 3m. */
+static bool hasDuration(Node *e) {
+    if (!e) return false;
+    if (e->kind == N_INT) return e->name && !strchr("KMG", e->name[0]);
+    if (e->kind == N_UNARY) return hasDuration(e->a);
+    if (e->kind == N_BINARY) return hasDuration(e->a) || hasDuration(e->b);
+    return false;
+}
+
 static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
 
@@ -2367,8 +2388,8 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             if (e->kind == N_CHAR && !(expected && isInt(expected) && fitsIn(v, expected))) {
                 return setType(e, &tyU8);
             }
-            if (e->kind == N_INT && e->name && !strchr("KMG", e->name[0]) && !(expected && isInt(expected))) {
-                return setType(e, &tyDuration);
+            if (hasDuration(e) && (!expected || expected == &tyDuration || !isInt(expected))) {
+                return setType(e, &tyDuration);     /* 2s, 2h + 3m, -1500ms */
             }
             if (expected && isInt(expected) && fitsIn(v, expected)) {
                 return setType(e, expected);
@@ -3403,6 +3424,24 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         e->c->type = t;
         return setType(e, rt);
     }
+    if (strcmp(d->name, "hashOf") == 0 || strcmp(d->name, "keyOwn") == 0 || strcmp(d->name, "keyFree") == 0) {
+        /* Map's: the hash of a key, a key the map owns, and giving it back */
+        if (e->list.len != 1) {
+            error(c, e, "%s takes one key", d->name);
+            return setType(e, &tyError);
+        }
+        Type *t = checkExpr(c, &e->list.items[0], NULL);
+        if (isErr(t)) return setType(e, &tyError);
+        bool ok = t->kind == TY_INT || t->kind == TY_BOOL || t->kind == TY_PTR || isStr(t) ||
+                  (t->kind == TY_ENUM && !t->hasData);
+        if (!ok) {
+            error(c, e, "a Map's keys can be integers, bool, enums, pointers or str, not %s%s", t->name,
+                  t->kind == TY_STRING ? " (use str: the map keeps its own copy)" : "");
+            return setType(e, &tyError);
+        }
+        e->builtin = d->name[0] == 'h' ? BI_HASH : d->name[3] == 'O' ? BI_KEY_OWN : BI_KEY_FREE;
+        return setType(e, e->builtin == BI_HASH ? &tyU64 : e->builtin == BI_KEY_OWN ? t : &tyVoid);
+    }
     error(c, e, "%s is not a built-in the compiler knows", d->name);
     return setType(e, &tyError);
 }
@@ -4062,6 +4101,37 @@ static void checkForIn(Checker *c, Node *s) {
         t = &tyStr;
     }
     Type *elem = &tyError;
+    Type *st = t->kind == TY_PTR ? t->elem : t;
+    if (!isErr(t) && st->kind == TY_STRUCT) {
+        /* a struct with next(i64 *at) (T, bool) or (K, V, bool): List, Map, or one of yours */
+        resolveStruct(c, st);
+        Node *m = findMethodIn(st, "next");
+        Type *rt = m ? m->type : NULL;
+        bool ok = m && m->list.len == 2 && m->list.items[1]->type && m->list.items[1]->type->kind == TY_PTR &&
+                  m->list.items[1]->type->elem == &tyI64 && rt && rt->kind == TY_TUPLE &&
+                  (rt->nelems == 2 || rt->nelems == 3) && rt->elems[rt->nelems - 1] == &tyBool;
+        if (!ok) {
+            error(c, s->a, "for ... in goes over a %s when it has a method next(i64 *at) that gives the next value "
+                           "and a bool", st->name);
+            return;
+        }
+        if (s->list.len != rt->nelems - 1) {
+            error(c, s, "a %s gives %d value%s per round", st->name, rt->nelems - 1, rt->nelems == 2 ? "" : "s");
+            return;
+        }
+        if (t->kind != TY_PTR && !addressable(s->a)) {
+            s->a->flags |= F_EXPLICIT;      /* a temporary: loop over a copy */
+        }
+        s->ref = m;
+        for (int i = 0; i < s->list.len; i++) {
+            Node *v = s->list.items[i];
+            v->type = rt->elems[i];
+            if (strcmp(v->name, "_") != 0) {
+                declareLocal(c, v->name, v);
+            }
+        }
+        return;
+    }
     if (!isErr(t)) {
         if (t->kind == TY_SLICE || t->kind == TY_ARRAY) {
             elem = t->elem;
@@ -4070,7 +4140,8 @@ static void checkForIn(Checker *c, Node *s) {
                 s->a->flags |= F_EXPLICIT;
             }
         } else {
-            error(c, s->a, "for ... in goes over a range, a slice or an array, not %s", t->name);
+            error(c, s->a, "for ... in goes over a range, a slice, an array, or a struct with a next method, not %s",
+                  t->name);
         }
     }
     Node *item = s->list.items[s->list.len - 1];
@@ -5007,6 +5078,12 @@ bool checkProgram(Arena *a, Program *prog) {
     for (Module *m = prog->modules; m; m = m->next) {
         Scope *g = arenaAlloc(a, sizeof(Scope));
         m->anchor->scope = g;
+    }
+    /* core's names are below every other module's own */
+    if (prog->core) {
+        for (Module *m = prog->modules; m; m = m->next) {
+            if (m != prog->core) ((Scope *)m->anchor->scope)->parent = prog->core->anchor->scope;
+        }
     }
     NodeList all = {0};
     for (Module *m = prog->modules; m; m = m->next) {

@@ -103,12 +103,13 @@ replace github.com/someone/pg => ../pg
 
 ## The standard library
 
-The standard library comes inside the `iris` command. A few names, like `print`, `format`, `alloc`, `free` and `error`, are always there. The rest is in modules:
+The standard library comes inside the `iris` command. A few names, like `print`, `format`, `alloc`, `free` and `error`, are always there, and so are `List` and `Map` (see [Collections](collections.html)). The rest is in modules:
 
 | Module | What it has |
 |---|---|
 | `fs` | `readAll(path) !String`, `writeAll(path, data) !void`, `append(path, data) !void`, `exists(path) bool`, `remove(path) !void`, and `FsError` |
-| `str` | `find`, `contains`, `startsWith`, `endsWith`, `count`, `trim`, `trimLeft`, `trimRight`, `cut(s, sep) (str, str, bool)`, `lower`, `upper`, `replace`, `repeat`, `parseInt(s) !i64` and `parseFloat(s) !f64` |
+| `str` | `find`, `contains`, `startsWith`, `endsWith`, `compare`, `count`, `trim`, `trimLeft`, `trimRight`, `cut(s, sep) (str, str, bool)`, `lower`, `upper`, `replace`, `repeat`, `parseInt(s) !i64` and `parseFloat(s) !f64` |
+| `time` | `now()`, `clock()` for measuring, `date(...)`, `unix(s)`, `parse(iso)`; a `Time` has `iso()`, `format(layout)`, `dateText()`, `local()`, `utc()`, `add(d)`, `sub(t)`, `before`, `after`, `unix()`, `year()` to `nanosecond()` and `weekday()` |
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |

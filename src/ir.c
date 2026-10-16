@@ -938,6 +938,8 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
                 ins(ir, "%s = fpext float %s to double", x, v.s);
             }
             ins(ir, "call void @iris_write_float(i32 %d, ptr %s, double %s, i32 %d)", sink, dst, x, v.t->bits);
+        } else if (v.t == &tyDuration) {
+            ins(ir, "call void @iris_write_duration(i32 %d, ptr %s, i64 %s)", sink, dst, v.s);
         } else {
             ins(ir, "call void @iris_write_%s(i32 %d, ptr %s, i64 %s)", v.t->isSigned ? "i64" : "u64", sink, dst,
                 toI64(ir, v));
@@ -1364,6 +1366,41 @@ static Val emitBuiltin(IR *ir, Node *e) {
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
+    case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: {
+        Node *arg = e->list.items[0];
+        Type *t = arg->type;
+        Val v = emitExpr(ir, arg);
+        if (t->kind == TY_SLICE) {
+            const char *ptr, *len;
+            sliceParts(ir, v, &ptr, &len);
+            const char *r = tmp(ir);
+            if (e->builtin == BI_HASH) {
+                ins(ir, "%s = call i64 @iris_hash_bytes(ptr %s, i64 %s)", r, ptr, len);
+                return val(r, &tyU64);
+            }
+            if (e->builtin == BI_KEY_FREE) {
+                ins(ir, "call void @free(ptr %s)", ptr);
+                return val("", &tyVoid);
+            }
+            ins(ir, "%s = call ptr @iris_bytes_dup(ptr %s, i64 %s)", r, ptr, len);
+            return makeSlice(ir, r, len, t);
+        }
+        if (e->builtin == BI_KEY_OWN) return v;
+        if (e->builtin == BI_KEY_FREE) return val("", &tyVoid);
+        const char *x = tmp(ir), *r = tmp(ir);
+        if (t->kind == TY_PTR) {
+            ins(ir, "%s = ptrtoint ptr %s to i64", x, v.s);
+        } else {
+            const char *lt = llType(ir, t);
+            if (strcmp(lt, "i64") == 0) {
+                x = v.s;
+            } else {
+                ins(ir, "%s = zext %s %s to i64", x, lt, v.s);
+            }
+        }
+        ins(ir, "%s = call i64 @iris_hash_u64(i64 %s)", r, x);
+        return val(r, &tyU64);
+    }
     case BI_EXPECT: {
         Val cond = emitExpr(ir, e->list.items[0]);
         int fail = newLabel(ir), ok = newLabel(ir);
@@ -2151,6 +2188,47 @@ static void emitFor(IR *ir, Node *s) {
         const char *nx = tmp(ir);
         ins(ir, "%s = add %s %s, 1", nx, llType(ir, t), cur.s);
         ins(ir, "store %s %s, ptr %s", llType(ir, t), nx, v->ir);
+        br(ir, cond);
+        placeLabel(ir, end);
+        return;
+    }
+
+    if ((s->flags & F_FOR_IN) && s->ref && s->ref->kind == N_FUNC) {
+        /* over a struct with next(i64 *at): until it gives false */
+        Node *m = s->ref;
+        Type *t = s->a->type, *rt = m->type;
+        const char *recv;
+        if (t->kind == TY_PTR) {
+            recv = emitExpr(ir, s->a).s;
+        } else if (s->a->flags & F_EXPLICIT) {
+            Val v = emitExpr(ir, s->a);
+            recv = allocaFor(ir, t, "iterated");
+            ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, recv);
+        } else {
+            recv = emitAddr(ir, s->a);
+        }
+        const char *at = allocaFor(ir, &tyI64, "at");
+        ins(ir, "store i64 0, ptr %s", at);
+        for (int i = 0; i < s->list.len; i++) {
+            Node *v = s->list.items[i];
+            v->ir = varSlot(ir, v->type, v, 0);
+        }
+        placeLabel(ir, cond);
+        const char *r = tmp(ir), *ok = tmp(ir);
+        ins(ir, "%s = call %s %s(ptr %s, ptr %s)", r, llType(ir, rt), m->ir, recv, at);
+        ins(ir, "%s = extractvalue %s %s, %d", ok, llType(ir, rt), r, rt->nelems - 1);
+        condBr(ir, ok, body, end);
+        placeLabel(ir, body);
+        for (int i = 0; i < s->list.len; i++) {
+            Node *v = s->list.items[i];
+            const char *x = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, %d", x, llType(ir, rt), r, i);
+            ins(ir, "store %s %s, ptr %s", llType(ir, v->type), x, v->ir);
+        }
+        ir->loop = &loop;
+        emitBlock(ir, s->c);
+        ir->loop = loop.outer;
+        placeLabel(ir, post);
         br(ir, cond);
         placeLabel(ir, end);
         return;
@@ -2952,6 +3030,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_str(i32, ptr, ptr, i64)\n"
            "declare void @iris_write_i64(i32, ptr, i64)\n"
            "declare void @iris_write_u64(i32, ptr, i64)\n"
+           "declare void @iris_write_duration(i32, ptr, i64)\n"
            "declare void @iris_write_bool(i32, ptr, i32)\n"
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
@@ -2981,6 +3060,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_json_encode(ptr, ptr, ptr)\n"
            "declare void @iris_json_free(ptr, ptr)\n"
            "declare void @iris_expect_failed(ptr, i32, i32, ptr)\n"
+           "declare i64 @iris_hash_u64(i64)\n"
+           "declare i64 @iris_hash_bytes(ptr, i64)\n"
+           "declare ptr @iris_bytes_dup(ptr, i64)\n"
            "declare i1 @iris_test_start(ptr)\n"
            "declare void @iris_test_done(ptr, i64)\n"
            "declare i32 @iris_test_summary()\n"

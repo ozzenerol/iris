@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.18.0"
+#define IRIS_VERSION "0.19.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -245,6 +245,7 @@ typedef struct {
     const char *links[64];  /* C libraries to link: link lines in iris.mod */
     int nlinks;
     NodeList tests;         /* iris test: the functions the test blocks became */
+    Module *core;           /* std/core: its names are seen by every module */
 } Program;
 
 /* iris test: test blocks are compiled, and main runs them */
@@ -327,6 +328,7 @@ enum {
     BI_THREAD_JOIN,
     BI_JSON_ENCODE, BI_JSON_DECODE, BI_JSON_FREE,
     BI_EXPECT,
+    BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

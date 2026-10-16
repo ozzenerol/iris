@@ -451,6 +451,15 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     if (L.failed) {
         return NULL;
     }
+    /* core: List, Map and the rest that every module sees without an import */
+    Node *coreItem = newNode(a, N_IDENT, 0, 0);
+    coreItem->name = "core";
+    Module *core = loadModule(&L, coreItem);
+    if (core) {
+        loadImports(&L, core);
+        core->state = 2;
+        L.prog->core = core;
+    }
     loadImports(&L, m);
     m->state = 2;
     return L.failed ? NULL : L.prog;

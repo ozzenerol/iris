@@ -77,6 +77,10 @@ These are suggestions. They are used in the examples on these pages until they a
 | `expect` reports a failure and the test goes on; an error from `try` ends the test. | One run shows every failed check of a test. |
 | Test blocks are checked by `iris check` and `iris test`, and left out of programs. | Tests don't rot, and programs don't carry them. |
 | The language server checks the program again for each request, in a child process. | A compiler bug or hang loses one answer, not the editor's server; checking a program takes milliseconds. |
+| `List` and `Map` are generic structs in a `core` module that every module sees. | They are ordinary Iris code, and no import is needed for something every program uses. |
+| A `Map`'s keys are integers, `bool`, enums, pointers or `str`, and a `str` key is copied. | Keys can't dangle, and hashing and comparing need no interfaces. |
+| `for` goes over any struct with `next(i64 *at)`. | One rule covers `List`, `Map` and the program's own types. |
+| A `Duration` prints in units: `1.5s`. | Printed timings are readable without converting. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

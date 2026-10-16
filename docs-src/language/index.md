@@ -12,8 +12,9 @@ A tour of Iris, one topic per page. Each page builds on the ones before it.
 8. [Pointers and memory](pointers-and-memory.html): pointers, slices, allocation, `defer` and `scoped`.
 9. [Errors](errors.html): `!T`, `try` and `catch`.
 10. [Generics](generics.html): generic structs and functions, interfaces.
-11. [Modules](modules.html): splitting a program up and using packages.
-12. [Compile time](compile-time.html): `const`, `comptime`, `when` and attributes.
-13. [Concurrency](concurrency.html): tasks, channels, threads and atomics.
-14. [Calling C](calling-c.html): C headers, callbacks, assembly and SIMD.
-15. [Tools](tools.html): the `iris` command, tests and builds.
+11. [Collections](collections.html): `List`, `Map`, and going over them with `for`.
+12. [Modules](modules.html): splitting a program up and using packages.
+13. [Compile time](compile-time.html): `const`, `comptime`, `when` and attributes.
+14. [Concurrency](concurrency.html): tasks, channels, threads and atomics.
+15. [Calling C](calling-c.html): C headers, callbacks, assembly and SIMD.
+16. [Tools](tools.html): the `iris` command, tests, formatting, editors and builds.

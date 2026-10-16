@@ -1,0 +1,27 @@
+// expect: 3
+// expect: 2
+// expect: 1
+// expect: again 2
+// expect: again 1
+
+struct Countdown {
+    i64 from
+}
+
+(i64, bool) Countdown.next(i64 *at) {
+    if *at >= self.from {
+        return (0, false)
+    }
+    *at += 1
+    return (self.from - *at + 1, true)
+}
+
+void main() {
+    c := Countdown{from: 3}
+    for n in c {
+        print("{n}")
+    }
+    for n in (Countdown{from: 2}) {
+        print("again {n}")
+    }
+}

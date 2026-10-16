@@ -121,7 +121,7 @@ Both sides of an operator must have the same type, or one must convert on its ow
 
 ## Durations and sizes
 
-Numbers can carry a unit. Durations are `ns`, `us`, `ms`, `s`, `m` and `h`; a `Duration` is a number of nanoseconds, so `2s` is `2000000000`. Sizes are `KiB`, `MiB` and `GiB`, and they are plain integers: `64KiB` is `65536`.
+Numbers can carry a unit. Durations are `ns`, `us`, `ms`, `s`, `m` and `h`; a `Duration` is a number of nanoseconds, so `2s` is `2000000000`. A `Duration` prints in units, as `1.5s`, `2h3m0s` or `250us`; `i64(d)` gives the nanoseconds. Sizes are `KiB`, `MiB` and `GiB`, and they are plain integers: `64KiB` is `65536`.
 
 ```iris
 sleep(200ms)
