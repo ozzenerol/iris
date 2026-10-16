@@ -1,0 +1,46 @@
+file
+  import
+    c "sqlite3.h"
+  func onRow
+    attr @export
+    param ctx void *
+    param n i32
+    param values u8 **
+    param names u8 **
+    ret: i32
+    body: block
+      var db c.sqlite3 *
+      if
+        cond: binary !=
+          call
+            callee: field .sqlite3_open
+              name c
+            name path
+            unary &
+              name db
+          field .SQLITE_OK
+            name c
+        then: block
+          return
+            int 1
+      return
+        int 0
+  func cycles
+    ret: u64
+    body: block
+      asm "\n        rdtsc\n        shl rdx, 32\n    "
+  func simd
+    ret: void
+    body: block
+      var a u8x16
+        value: call
+          callee: name load
+          name u8x16
+          name data
+      define mask
+        value: binary ==
+          name a
+          call
+            callee: field .splat
+              name u8x16
+            char 10

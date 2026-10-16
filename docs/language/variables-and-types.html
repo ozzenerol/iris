@@ -42,6 +42,11 @@ flags := <span class="n">0b1010</span></code></pre>
 <span class="t">u8</span> small = <span class="t">u8</span>(n)       <span class="c">// written out: n might not fit</span>
 <span class="t">f64</span> avg = <span class="t">f64</span>(total) / <span class="t">f64</span>(count)</code></pre>
 <p>In a debug build, a conversion that loses a value stops the program with an error.</p>
+<h2 id="operators"><a href="#operators">Operators</a></h2>
+<div class="table"><table><thead><tr><th>Operators</th><th>Meaning</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code></td><td>bits: and, or, xor, not, shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment</td></tr><tr><td><code>a..b</code></td><td>the range from <code>a</code> to <code>b</code>, for <code>for</code> and <code>match</code></td></tr></tbody></table></div>
+<p>They bind in this order, tightest first:</p>
+<ol><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code></li><li><code>&amp;&amp;</code></li><li><code>||</code></li><li><code>..</code></li></ol>
+<p>So <code>a + b * c</code> is <code>a + (b * c)</code>, and <code>x &amp; 1 == 1</code> is <code>(x &amp; 1) == 1</code>. Assignment is a statement, so it can't appear inside an expression.</p>
 <h2 id="durations-and-sizes"><a href="#durations-and-sizes">Durations and sizes</a></h2>
 <p>Numbers can carry a unit. Durations are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>, and their type is <code>Duration</code>. Sizes are <code>KiB</code>, <code>MiB</code> and <code>GiB</code>, and they are plain integers.</p>
 <pre class="code"><code>sleep(200ms)

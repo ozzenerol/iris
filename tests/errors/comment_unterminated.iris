@@ -1,0 +1,4 @@
+// error: 3: this comment has no closing */
+
+/* never closed
+void main() { }

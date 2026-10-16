@@ -1,0 +1,78 @@
+file
+  enum ParseError
+    member empty
+    member notNumber
+  func parsePort
+    param s str
+    ret: !i64
+    body: block
+      if
+        cond: binary ==
+          field .len
+            name s
+          int 0
+        then: block
+          return
+            call
+              callee: name error
+              field .empty
+                name ParseError
+              str "port is empty"
+      return
+        int 80
+  func run
+    ret: !void
+    body: block
+      define cfg
+        value: try
+          call
+            callee: name loadConfig
+            str "app.conf"
+      define port
+        value: catch
+          call: call
+            callee: name parsePort
+            name arg
+          value: int 8080
+      define port2
+        value: catch e
+          call: call
+            callee: name parsePort
+            name arg
+          handler: block
+            call
+              callee: name print
+              interp
+                str "bad port: "
+                field .message
+                  name e
+            int 8080
+      define conn
+        value: catch e
+          call: call
+            callee: field .dial
+              name net
+            name host
+            int 443
+          handler: match
+            subject: field .code
+              name e
+            arm
+              pattern: field .timeout
+                name NetError
+              body: try
+                call
+                  callee: field .dial
+                    name net
+                  name backup
+                  int 443
+            arm
+              pattern: name _
+              body: return
+                name e
+      assign =
+        target: name _
+        value: call
+          callee: name save
+          str "out.txt"
+          name data

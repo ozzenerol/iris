@@ -49,12 +49,12 @@ void main() {
 42
 ```
 
-A long expression can continue on the next line when the line ends with an operator or a comma, or inside parentheses:
+A long expression can continue on the next line when the line ends with an operator or a comma, or inside parentheses or brackets:
 
 ```iris
-total := price * count
-    + shipping
-    - discount
+total := price * count +
+    shipping -
+    discount
 
 connect("example.com",
         port: 443)

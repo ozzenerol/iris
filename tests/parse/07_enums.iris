@@ -1,0 +1,25 @@
+// Enums: plain, with values, with data, flags.
+
+enum Level { debug, info, warn, error }
+
+enum Status { ok = 200, notFound = 404 }
+
+enum Packet {
+    Ping
+    Data(u8[] bytes)
+    Close(u16 code, str reason)
+}
+
+enum Perm flags { read, write, exec }
+
+void use() {
+    Level l = .warn
+    Level m = Level.error
+    Packet q = .Close(1000, "bye")
+    Perm p = .read | .write
+    match q {
+        Ping => send(.Pong)
+        Data(bytes) => handle(bytes)
+        Close(code, reason) => print("closed {code}: {reason}")
+    }
+}

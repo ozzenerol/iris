@@ -1,0 +1,95 @@
+file
+  struct Point
+    field x i64
+    field y i64
+  struct Config pub
+    field host str pub
+      default: str "localhost"
+    field port u16
+      default: int 8080
+    field verbose bool
+  struct TcpHeader packed
+    field srcPort u16be
+    field dstPort u16be
+  struct Counter
+    align: int 64
+    field hits i64
+  struct Flags packed
+    field syn u8
+      bits: int 1
+    field rest u8
+      bits: int 7
+  struct Conn
+    embed Socket
+    field peer str
+  struct User
+    attr @json
+    field id i64
+    field created i64
+      attr @json
+        str "created_at"
+  method Point.dist2
+    param other Point
+    ret: i64
+    body: block
+      define dx
+        value: binary -
+          field .x
+            name self
+          field .x
+            name other
+      return
+        binary *
+          name dx
+          name dx
+  method Point.move
+    param dx i64
+    param dy i64
+    ret: void
+    body: block
+      assign +=
+        target: field .x
+          name self
+        value: name dx
+  func use
+    ret: void
+    body: block
+      define p
+        value: struct-lit
+          type: name Point
+          init x
+            int 1
+          init y
+            int 2
+      var q Point
+        value: struct-lit .
+          init x
+            int 1
+          init y
+            int 2
+      define empty
+        value: struct-lit
+          type: name Point
+      define long
+        value: struct-lit
+          type: name Config
+          init host
+            str "example.com"
+          init port
+            int 9000
+      call
+        callee: name draw
+        struct-lit .
+          init x
+            int 5
+          init y
+            int 5
+      call
+        callee: field .move
+          name p
+        int 3
+        int 3
+      call
+        callee: field .write
+          name c
+        name data

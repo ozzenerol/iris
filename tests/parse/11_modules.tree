@@ -1,0 +1,23 @@
+file
+  import
+    module fs
+    module net
+  import
+    path "github.com/someone/pg"
+    path "net/http"
+  struct Server pub
+    field port u16 pub
+    field fd i32
+  func listen pub
+    param port u16
+    ret: !Server
+    body: block
+      return
+        struct-lit
+          type: name Server
+          init port
+            name port
+  func setOptions
+    param fd i32
+    ret: void
+    body: block

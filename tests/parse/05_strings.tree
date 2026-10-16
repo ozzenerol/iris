@@ -1,0 +1,35 @@
+file
+  func text
+    ret: void
+    body: block
+      define a
+        value: str "plain"
+      define b
+        value: str "tab\there\n\"quoted\" \\ A"
+      define c
+        value: interp
+          str "got "
+          name n
+          str " bytes from "
+          name addr
+      define d
+        value: interp
+          binary *
+            name n
+            int 2
+          str " and "
+          call
+            callee: name f
+            str "x"
+      define e
+        value: str "{not a value}"
+      define q
+        value: interp
+          str "SELECT name\n  FROM users\nWHERE id = "
+          name id
+      define one
+        value: str "single line"
+      define path
+        value: str "C:\\tools\\iris"
+      define pattern
+        value: str "\\d+{2}"

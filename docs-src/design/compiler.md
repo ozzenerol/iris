@@ -12,11 +12,15 @@ Each step reads the result of the one before it. No step looks back.
 
 ### Lexer
 
-The lexer reads the source file and splits it into tokens: names, numbers, strings, operators and keywords. It also decides where statements end. A newline ends a statement unless the line clearly continues, for example when it ends with an operator or a comma, or inside parentheses.
+The lexer reads the source file and splits it into tokens: names, numbers, strings, operators and keywords. It also decides where statements end. A newline ends a statement when the last token on the line is a name, a literal, a closing `)`, `]` or `}`, or one of `return`, `break`, `continue`, `true`, `false` and `null`. Inside `( )` and `[ ]` newlines are ignored. `iris lex file.iris` prints the tokens.
 
 ### Parser
 
 The parser reads the tokens and builds a syntax tree. Each function, statement and expression becomes a node. The parser only checks the shape of the code. It does not know about types. `iris parse file.iris` prints the tree.
+
+Some code can't be sorted out by its shape alone. `List[i64] numbers` declares a variable, while `counts[key] = 1` assigns to an element. The parser first tries to read a type followed by a name. If that fails, it goes back and reads an expression. A name followed by `{` starts a struct literal, except in the head of `if`, `for`, `match` and `when`, where the `{` opens the block.
+
+When the parser finds an error, it reports it, skips to the end of the statement and continues. One run shows every syntax error in the file.
 
 ### Checker
 
@@ -52,9 +56,13 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 
 | Path | Contents |
 |---|---|
+| `src/iris.h` | Declarations shared by all the files. |
 | `src/main.c` | The `iris` command: reads arguments and runs the steps. |
+| `src/arena.c` | Arenas and growing strings. |
+| `src/diag.c` | Error messages. |
 | `src/lexer.c` | The lexer. |
-| `src/parser.c` | The parser and the syntax tree. |
+| `src/parser.c` | The parser. |
+| `src/ast.c` | Syntax tree nodes and the printer for `iris parse`. |
 | `src/check.c` | The checker. |
 | `src/lower.c` | Lowering. |
 | `src/ir.c` | The IR writer. |

@@ -1,0 +1,5 @@
+// error: 4: unexpected 'b' inside {} in a string
+
+void main() {
+    print("{a b}")
+}

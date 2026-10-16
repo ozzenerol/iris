@@ -1,0 +1,22 @@
+// Parameters, defaults, named arguments, several results, function types.
+
+i64 add3(i64 a, b, c) {
+    return a + b + c
+}
+
+i64 square(i64 x) => x * x
+
+void connect(str host, u16 port = 80, Duration timeout = 30s) {
+}
+
+(i64, i64) divmod(i64 a, b) => (a / b, a % b)
+
+i64 apply(i64(i64) f, i64 x) => f(x)
+
+void calls() {
+    connect("example.com", timeout: 5s, port: 443)
+    q, r := divmod(17, 5)
+    _, r2 := divmod(17, 5)
+    n := apply(square, 4)
+    reset(&count)
+}

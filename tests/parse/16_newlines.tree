@@ -1,0 +1,25 @@
+file
+  func lines
+    ret: void
+    body: block
+      define a
+        value: call
+          callee: name f
+          int 1
+          int 2
+      define b
+        value: array
+          int 1
+          int 2
+      define c
+        value: binary &&
+          name x
+          name y
+      if
+        cond: name a
+        then: block
+        else: block
+      define d
+        value: name x
+      unary -
+        name y

@@ -14,22 +14,31 @@
 <h2 id="adding-a-feature"><a href="#adding-a-feature">Adding a feature</a></h2>
 <ol><li>Write the rules. The feature's page in the Language section must say exactly how it behaves. If a rule is not settled, it goes to the maintainer as a question with a suggested answer.</li><li>Write the tests: programs that use the feature, and programs that should fail to compile.</li><li>Implement the feature.</li><li>Run all the tests on the three platforms.</li><li>Commit on a branch and merge it.</li></ol>
 <p>Language design is decided by the maintainer. How the compiler is built inside is decided by whoever writes the code, who then says what they chose.</p>
+<h2 id="building"><a href="#building">Building</a></h2>
+<pre class="code"><code>make              # builds ./iris
+make iris-debug   # builds ./iris-debug with AddressSanitizer
+make test         # runs the tests
+make test-debug   # runs the tests with iris-debug</code></pre>
 <h2 id="tests"><a href="#tests">Tests</a></h2>
-<p>A test is an <code>.iris</code> file in <code>tests/</code>. A comment at the top says what should happen.</p>
-<p>A program that runs and prints:</p>
+<p>Tests are <code>.iris</code> files in <code>tests/</code>. <code>python3 tools/run_tests.py</code> runs them all. Each folder holds one kind:</p>
+<div class="table"><table><thead><tr><th>Folder</th><th>What the test checks</th></tr></thead><tbody><tr><td><code>tests/parse/</code></td><td><code>iris parse</code> succeeds and prints the tree in the <code>.tree</code> file next to it.</td></tr><tr><td><code>tests/errors/</code></td><td><code>iris parse</code> fails with the errors listed at the top of the file.</td></tr><tr><td><code>tests/run/</code></td><td>The program runs and prints what the comment at the top says. Starts in 0.2.</td></tr></tbody></table></div>
+<p>An error test lists each expected error as a comment with its line number:</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="c">// error: 4: this string has no closing quote</span>
+
+<span class="t">void</span> main() {
+    print(&quot;hello)
+}</code></pre>
+<p>A run test says what the program prints:</p>
 <pre class="code"><code><span class="c">// expect: 7</span>
 <span class="t">void</span> main() {
     print(<span class="s">&quot;{3 + 4}&quot;</span>)
 }</code></pre>
-<p>A program that must not compile:</p>
-<pre class="code"><code><span class="c">// error: 3: x is not declared</span>
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{x}&quot;</span>)
-}</code></pre>
-<p>The test runner compiles each file, runs it, and compares the output or the error with the comment. Every example in the Language section is also run as a test.</p>
+<p>Every <code>iris</code> code block in <code>docs-src/</code> must also parse. A block marked <code>iris error</code> is skipped.</p>
+<p>After changing the parser on purpose, <code>python3 tools/run_tests.py --update</code> rewrites the <code>.tree</code> files. Check the diff before committing.</p>
 <h2 id="platforms"><a href="#platforms">Platforms</a></h2>
 <p>Every change is tested on:</p>
 <ul><li>Linux x86_64</li><li>Linux arm64</li><li>macOS arm64</li></ul>
+<p><code>tools/test-platforms.sh</code> builds Iris and runs the tests on all three at once, with the normal and the AddressSanitizer build.</p>
 <h2 id="git"><a href="#git">Git</a></h2>
 <ul><li><code>main</code> always builds and passes the tests.</li><li>One branch per feature or bug: <code>feat/...</code> or <code>fix/...</code>.</li><li>Commit messages are one line, lowercase, starting with <code>feat:</code>, <code>fix:</code>, <code>docs:</code> or <code>test:</code>, and say what changed.</li><li>Changes to the docs only go straight to <code>main</code>.</li><li>The repository is private for now.</li></ul>
 <h2 id="releases"><a href="#releases">Releases</a></h2>

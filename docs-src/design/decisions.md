@@ -32,6 +32,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | A variable can't have the same name as another one in an enclosing block of the same function. | Shadowing hides bugs. |
 | `self` in a method is a pointer to the value. | Methods can change the value without extra syntax. |
 | A bug (index past the end, `panic`) stops the program. `!T` is only for failures a correct program can meet. | Keeps error handling for the cases that need it. |
+| Operators bind in this order, tightest first: `* / % << >> &`, then `+ - | ^`, then comparisons, then `&&`, then `||`, then `..`. `x & 1 == 1` means `(x & 1) == 1`. | Bit tests read the way they are written. |
+| `else` can go on the line after the closing brace. | Both styles work, so neither is a trap. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 
 ## Not in Iris

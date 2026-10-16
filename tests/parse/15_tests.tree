@@ -1,0 +1,18 @@
+file
+  func add
+    param a i64
+    param b i64
+    ret: i64
+    body: binary +
+      name a
+      name b
+  test "add"
+    body: block
+      call
+        callee: name expect
+        binary ==
+          call
+            callee: name add
+            int 2
+            int 3
+          int 5

@@ -1,0 +1,59 @@
+// Structs, literals, methods, embedding, layout.
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+pub struct Config {
+    pub str host = "localhost"
+    u16 port = 8080
+    bool verbose
+}
+
+struct TcpHeader packed {
+    u16be srcPort
+    u16be dstPort
+}
+
+struct Counter align(64) {
+    i64 hits
+}
+
+struct Flags packed {
+    u8 syn : 1
+    u8 rest : 7
+}
+
+struct Conn {
+    Socket
+    str peer
+}
+
+@json
+struct User {
+    i64 id
+    @json("created_at") i64 created
+}
+
+i64 Point.dist2(Point other) {
+    dx := self.x - other.x
+    return dx * dx
+}
+
+void Point.move(i64 dx, dy) {
+    self.x += dx
+}
+
+void use() {
+    p := Point{x: 1, y: 2}
+    Point q = .{x: 1, y: 2}
+    empty := Point{}
+    long := Config{
+        host: "example.com",
+        port: 9000,
+    }
+    draw(.{x: 5, y: 5})
+    p.move(3, 3)
+    c.write(data)
+}

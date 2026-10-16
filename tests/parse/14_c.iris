@@ -1,0 +1,24 @@
+// C headers, exported functions, assembly, SIMD.
+
+import c "sqlite3.h"
+
+@export
+i32 onRow(void *ctx, i32 n, u8 **values, u8 **names) {
+    c.sqlite3 *db
+    if c.sqlite3_open(path, &db) != c.SQLITE_OK {
+        return 1
+    }
+    return 0
+}
+
+u64 cycles() {
+    asm {
+        rdtsc
+        shl rdx, 32
+    }
+}
+
+void simd() {
+    u8x16 a = load(u8x16, data)
+    mask := a == u8x16.splat('\n')
+}

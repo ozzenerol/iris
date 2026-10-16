@@ -1,0 +1,5 @@
+// error: 4: a character literal holds one byte; use a string for more
+
+void main() {
+    c := 'ab'
+}

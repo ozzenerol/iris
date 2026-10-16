@@ -1,0 +1,24 @@
+// !T, try, catch.
+
+enum ParseError { empty, notNumber }
+
+!i64 parsePort(str s) {
+    if s.len == 0 {
+        return error(ParseError.empty, "port is empty")
+    }
+    return 80
+}
+
+!void run() {
+    cfg := try loadConfig("app.conf")
+    port := parsePort(arg) catch 8080
+    port2 := parsePort(arg) catch e {
+        print("bad port: {e.message}")
+        8080
+    }
+    conn := net.dial(host, 443) catch e match e.code {
+        NetError.timeout => try net.dial(backup, 443)
+        _ => return e
+    }
+    _ = save("out.txt", data)
+}

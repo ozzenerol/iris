@@ -1,0 +1,7 @@
+// error: 5: expected '=>', found 'print'
+
+void main() {
+    match x {
+        1 print("one")
+    }
+}

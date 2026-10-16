@@ -1,0 +1,4 @@
+// error: 3: this '{' has no closing '}'
+
+void main() {
+    print("hi")

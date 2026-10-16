@@ -1,0 +1,5 @@
+// error: 4: unknown unit 'kb' after a number (units are ns, us, ms, s, m, h, KiB, MiB, GiB)
+
+void main() {
+    n := 64kb
+}
