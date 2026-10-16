@@ -69,6 +69,30 @@ f64 avg = f64(total) / f64(count)
 
 In a debug build, a conversion that loses a value stops the program with an error.
 
+## Floating point
+
+`f64` and `f32` hold floating point numbers. A literal with a point or an exponent is an `f64`: `1.5`, `2e10`, `1e-3`. An integer constant can be used where a float is expected, so `x * 2` works when `x` is an `f64`. A variable of an integer type has to be converted: `f64(n)`.
+
+`f32` converts to `f64` on its own. Converting a float to an integer drops the fraction, toward zero; in a debug build a value that doesn't fit, or isn't a number, stops the program.
+
+Division by zero gives infinity or NaN, as the hardware does. Floats are printed in the fewest digits that read back as the same number:
+
+```iris run
+import math
+
+void main() {
+    f64 r = 2
+    area := math.pi * r * r
+    print("{area} {0.1 + 0.2} {1.0 / 3}")
+    print("{i64(area)} {math.sqrt(2)} {1e21} {1.0 / 0.0}")
+}
+```
+
+```output
+12.566370614359172 0.30000000000000004 0.3333333333333333
+12 1.4142135623730951 1e+21 inf
+```
+
 ## Operators
 
 | Operators | Meaning |

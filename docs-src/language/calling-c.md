@@ -61,6 +61,7 @@ C types become Iris types of the same size and layout:
 | `char`, `unsigned char`, `signed char` | `u8`, `u8`, `i8` |
 | `short`, `int`, `long`, `long long` | `i16`, `i32`, `i64`, `i64` |
 | `unsigned` versions | `u16`, `u32`, `u64`, `u64` |
+| `float`, `double` | `f32`, `f64` |
 | `T *`, `char *` | `T *`, `u8 *` |
 | `void *` | `u8 *` |
 | a pointer to a function | `u8 *` |
@@ -70,9 +71,9 @@ C types become Iris types of the same size and layout:
 
 A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`. A struct that shares its name with a function, like `struct stat` and `stat()`, is `c.struct_stat`.
 
-Functions with `...`, like `printf`, take extra integers and pointers.
+Functions with `...`, like `printf`, take extra numbers and pointers.
 
-Left out for now, with the reason shown by `iris c`: floating point, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or strings.
+Left out for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or strings.
 
 ## Called from C
 
