@@ -100,4 +100,8 @@ dyn Writer  =  { void *data, WriterTable *table }
 
 ## Tasks
 
-Each task has its own stack. A scheduler runs the tasks on top of an event loop (epoll on Linux, kqueue on macOS, io_uring later). When a task waits for I/O, the scheduler saves its registers and switches to another task. When the I/O is ready, the task continues where it stopped.
+Each task has its own stack, 256 KiB with a guard page below it, so running past it crashes instead of corrupting memory. A scheduler in the runtime runs the tasks on top of an event loop (epoll on Linux, kqueue on macOS, io_uring later). When a task waits for I/O, a channel or a timer, the scheduler saves its registers and switches to another task, with a few instructions of assembly per machine (x86_64 and arm64). When the wait is over, the task continues where it stopped.
+
+`spawn f(a, b)` stores the arguments in memory and starts a task with a small function the compiler writes, which reads them back, makes the call and frees them.
+
+A channel is a ring buffer of values with lists of the tasks waiting to put into it or take out of it. `select` puts its task on the list of every channel it waits on, and on the timer list for `after`.
