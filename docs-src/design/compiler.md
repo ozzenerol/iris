@@ -68,6 +68,10 @@ In debug builds the IR writer adds a check before every operation that can go wr
 
 Debug builds also compile with AddressSanitizer: every function gets LLVM's `sanitize_address` attribute and `clang` links with `-fsanitize=address`. That catches use after free and other bad memory accesses. Leak reports are turned off for now.
 
+## Debug information
+
+The IR writer adds DWARF metadata as it goes. The program gets a compile unit, each source file a `DIFile`, each function a `DISubprogram`, and every instruction a `!DILocation` with the line and column of the statement or expression it comes from. Each named variable and parameter gets a `DILocalVariable` and an `llvm.dbg.declare` on its stack slot, with a debug type made from its Iris type: basic types, pointers, structs with their fields, slices and `String` as structs, arrays and plain enums. All variables share the function's scope, which works because Iris doesn't allow a name to hide another in the same function. clang turns it into DWARF with `-g`, which every build passes.
+
 ## Why the IR is written as text
 
 Writing a text file needs no LLVM headers or libraries. Any machine with `clang` can build Iris programs, and when the output is wrong you can read the `.ll` file. Later, the IR writer can switch to the LLVM C API, for faster builds and a JIT. Only this last step changes.

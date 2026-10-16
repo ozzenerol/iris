@@ -68,6 +68,7 @@ These are suggestions. They are used in the examples on these pages until they a
 | A `@json` struct without a `free` method gets one. | Decoded values work with `scoped`. |
 | A `String` from a call, passed straight to a `str` parameter, is freed when the statement ends. | `res.json(json.encode(u))` needs no variable and doesn't leak. Same rule as text with values. |
 | `r"""..."""` is raw text over several lines. | JSON and other text with quotes and braces can be written as it is. |
+| Every build has DWARF debug information: lines, functions, variables and types. | Debuggers and AddressSanitizer reports show Iris code. It costs nothing at run time. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

@@ -32,7 +32,14 @@
 iris build --target=x86_64-linux
 iris build --target=aarch64-macos</code></pre>
 <h2 id="debugging"><a href="#debugging">Debugging</a></h2>
-<p>Every build includes debug information, so <code>gdb</code> and <code>lldb</code> show Iris source lines and variable names.</p>
+<p>Every build includes debug information, so <code>gdb</code> and <code>lldb</code> work with Iris source lines and names. A breakpoint is set by file and line, and arguments, variables, structs, slices and enums show by name:</p>
+<pre class="out"><code>$ gdb ./server
+(gdb) break main.iris:42
+(gdb) run
+Breakpoint 1, f.main.handle (req=..., res=...) at main.iris:42
+(gdb) info locals
+user = {id = 7, name = {ptr = &quot;Ada&quot;, len = 3, cap = 16}}</code></pre>
+<p>A function's name in the debugger is its module and name: <code>f.main.handle</code>, or <code>m.main.Server.close</code> for a method. In release builds the optimiser may inline a function, which then has no breakpoint of its own.</p>
 <div class="pager"><a href="calling-c.html">&larr; Calling C</a><span></span></div>
 </main></div>
 </body>

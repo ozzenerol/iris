@@ -131,7 +131,10 @@ cleanup 1</code></pre>
 <h2 id="checks-in-debug-builds"><a href="#checks-in-debug-builds">Checks in debug builds</a></h2>
 <p>A debug build stops the program with an error and a trace when it finds:</p>
 <ul><li>an index past the end of an array or slice</li><li>an integer that overflows</li><li>a <code>null</code> pointer being used</li><li>memory used after it was freed, or freed twice</li></ul>
-<p>The last check uses AddressSanitizer, which comes with <code>clang</code>. Its report is longer than a panic and names the function. Line numbers in it come with debug information, in a later version.</p>
+<p>The last check uses AddressSanitizer, which comes with <code>clang</code>. Its report is longer than a panic. It shows where the memory was used, freed and allocated, as Iris lines:</p>
+<pre class="out"><code>ERROR: AddressSanitizer: heap-use-after-free
+    #0 in f.main.use main.iris:2:13
+    #1 in f.main.main main.iris:8:9</code></pre>
 <p>A release build keeps the index checks. A function marked <code>@unchecked</code> has none:</p>
 <pre class="code"><code><span class="a">@unchecked</span>
 <span class="t">u32</span> checksum(<span class="t">u8</span>[] data) {

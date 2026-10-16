@@ -209,7 +209,13 @@ A debug build stops the program with an error and a trace when it finds:
 - a `null` pointer being used
 - memory used after it was freed, or freed twice
 
-The last check uses AddressSanitizer, which comes with `clang`. Its report is longer than a panic and names the function. Line numbers in it come with debug information, in a later version.
+The last check uses AddressSanitizer, which comes with `clang`. Its report is longer than a panic. It shows where the memory was used, freed and allocated, as Iris lines:
+
+```output
+ERROR: AddressSanitizer: heap-use-after-free
+    #0 in f.main.use main.iris:2:13
+    #1 in f.main.main main.iris:8:9
+```
 
 A release build keeps the index checks. A function marked `@unchecked` has none:
 

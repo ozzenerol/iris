@@ -18,5 +18,6 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.12 | Text with values passed straight to `str` parameters, `http.serve` on every CPU core, and io_uring on Linux. | released |
 | 0.13 | `thread`, channels between threads, `Atomic[T]`, `Mutex` and `threadlocal`. | released |
 | 0.14 | `@json` with the `json` module, Strings from calls freed at the end of the statement, and `r"""..."""`. | released |
+| 0.15 | Debug information: `gdb` and `lldb` show Iris lines and values, and AddressSanitizer reports show Iris lines. | released |
 
-After 0.14, in no fixed order: debug info, `comptime` and `when`, more attributes (`@env`, `@inline`), `iris fmt`, the language server, and a JIT for `iris run`.
+After 0.15, in no fixed order: `comptime` and `when`, more attributes (`@env`, `@inline`), `iris fmt`, the language server, and a JIT for `iris run`.
