@@ -13,6 +13,7 @@
                                // mode: MODE       build mode (default debug)
                                // command: test    use iris test instead of iris run
                                // args: A B        arguments after the file
+                               // env: NAME=VALUE  set for the run
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -42,8 +43,9 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def run(iris, args):
-    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+def run(iris, args, env=None):
+    full = dict(os.environ, **(env or {}))
+    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=full)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -170,7 +172,8 @@ def run_tests(iris, only, failures):
         extra = re.findall(r"^// args: (.*)$", text, re.M)
         args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
         args += extra[0].split() if extra else []
-        code, out, err = run(iris, args)
+        envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M)
+        code, out, err = run(iris, args, dict(envs))
         want_out = "".join(line + "\n" for line in expect)
         problems = []
         if out != want_out:

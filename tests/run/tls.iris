@@ -1,0 +1,46 @@
+// expect: server got [hello over tls]
+// expect: client got [HELLO OVER TLS]
+// expect: NetError.tls true
+// expect: NetError.tls true
+
+import net, str
+
+void serve(net.Listener ln, net.TlsConfig *config) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    c.acceptTls(config) catch e {
+        return
+    }
+    scoped String line = c.readLine() catch e {
+        return
+    }
+    print("server got [{line}]")
+    scoped String loud = str.upper(line)
+    loud.append("\n")
+    c.write(loud) catch e { }
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    ln := try net.listen(0, "localhost")
+    spawn serve(ln, &config)
+    c := try net.dialTls("localhost", ln.port, ca: "tests/data/tls/ca.pem")
+    try c.write("hello over tls\n")
+    scoped String back = try c.readLine()
+    print("client got [{back}]")
+    c.close()
+
+    // the system doesn't trust the test CA
+    spawn serve(ln, &config)
+    _ = net.dialTls("localhost", ln.port) catch e {
+        print("{e.code} {str.contains(e.message, "can't be trusted")}")
+        net.Conn{}
+    }
+    _ = net.tlsConfig("tests/data/tls/missing.pem", "tests/data/tls/server.key") catch e {
+        print("{e.code} {str.contains(e.message, "missing.pem")}")
+        net.TlsConfig{}
+    }
+}

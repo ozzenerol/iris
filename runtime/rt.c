@@ -3082,3 +3082,342 @@ int iris_process_run(const Slice *argv, int64_t argc, const char *input, int64_t
     *status = WIFEXITED(st) ? WEXITSTATUS(st) : WIFSIGNALED(st) ? 128 + WTERMSIG(st) : 1;
     return 0;
 }
+
+/* ---------------------------------------------------------------- TLS
+
+   TLS uses OpenSSL, loaded with dlopen the first time a program uses it,
+   so building needs no OpenSSL headers and programs without TLS don't need
+   OpenSSL at all. IRIS_OPENSSL can name libssl; libcrypto is looked for
+   next to it. The sockets stay non-blocking: when OpenSSL wants to read or
+   write, the task waits on the socket and the other tasks run. */
+
+#include <dlfcn.h>
+
+static struct {
+    int loaded;                 /* 1 ready, -1 not found */
+    void *(*clientMethod)(void);
+    void *(*serverMethod)(void);
+    void *(*ctxNew)(void *);
+    void (*ctxFree)(void *);
+    int (*ctxDefaultPaths)(void *);
+    int (*ctxLoadVerify)(void *, const char *, const char *);
+    void (*ctxSetVerify)(void *, int, void *);
+    long (*ctxCtrl)(void *, int, long, void *);
+    int (*ctxUseChain)(void *, const char *);
+    int (*ctxUseKey)(void *, const char *, int);
+    int (*ctxCheckKey)(void *);
+    void *(*sslNew)(void *);
+    void (*sslFree)(void *);
+    int (*sslSetFd)(void *, int);
+    long (*sslCtrl)(void *, int, long, void *);
+    int (*sslSet1Host)(void *, const char *);
+    int (*sslConnect)(void *);
+    int (*sslAccept)(void *);
+    int (*sslRead)(void *, void *, int);
+    int (*sslWrite)(void *, const void *, int);
+    int (*sslGetError)(void *, int);
+    int (*sslShutdown)(void *);
+    long (*sslVerifyResult)(void *);
+    int (*sslGetFd)(void *);
+    unsigned long (*errGet)(void);
+    void (*errString)(unsigned long, char *, size_t);
+    void (*errClear)(void);
+    const char *(*verifyString)(long);
+} ossl;
+
+static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
+static void *clientCtx;
+static _Thread_local char tlsMsg[512];
+static _Thread_local int64_t tlsMsgLen;
+
+const char *iris_tls_message_ptr(void) { return tlsMsg; }
+int64_t iris_tls_message_len(void) { return tlsMsgLen; }
+
+static void tlsSay(const char *what) {
+    tlsMsgLen = snprintf(tlsMsg, sizeof tlsMsg, "%s", what);
+    if (tlsMsgLen >= (int64_t)sizeof tlsMsg) tlsMsgLen = sizeof tlsMsg - 1;
+}
+
+/* The message: what was being done, and OpenSSL's reason when it has one. */
+static void tlsSayOpenssl(const char *what) {
+    unsigned long e = ossl.errGet ? ossl.errGet() : 0;
+    if (e && ossl.errString) {
+        char reason[256];
+        ossl.errString(e, reason, sizeof reason);
+        tlsMsgLen = snprintf(tlsMsg, sizeof tlsMsg, "%s: %s", what, reason);
+    } else {
+        tlsMsgLen = snprintf(tlsMsg, sizeof tlsMsg, "%s", what);
+    }
+    if (tlsMsgLen >= (int64_t)sizeof tlsMsg) tlsMsgLen = sizeof tlsMsg - 1;
+    if (ossl.errClear) ossl.errClear();
+}
+
+static void *openLib(const char *const *names, const char *dirOf, const char *base) {
+    if (dirOf) {
+        /* next to the libssl that IRIS_OPENSSL named */
+        char path[4096];
+        const char *slash = strrchr(dirOf, '/');
+        int n = slash ? (int)(slash - dirOf) : 0;
+        snprintf(path, sizeof path, "%.*s%s%s", n, dirOf, n ? "/" : "", base);
+        void *h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        if (h) return h;
+    }
+    for (int i = 0; names[i]; i++) {
+        void *h = dlopen(names[i], RTLD_NOW | RTLD_GLOBAL);
+        if (h) return h;
+    }
+    return NULL;
+}
+
+static void osslLoad(void) {
+#ifdef __APPLE__
+    static const char *const sslNames[] = {"/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib",
+                                           "/usr/local/opt/openssl@3/lib/libssl.3.dylib",
+                                           "/opt/homebrew/lib/libssl.3.dylib", "/usr/local/lib/libssl.3.dylib", NULL};
+    static const char *const cryptoNames[] = {"/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib",
+                                              "/usr/local/opt/openssl@3/lib/libcrypto.3.dylib",
+                                              "/opt/homebrew/lib/libcrypto.3.dylib", "/usr/local/lib/libcrypto.3.dylib",
+                                              NULL};
+    const char *cryptoBase = "libcrypto.3.dylib";
+#else
+    static const char *const sslNames[] = {"libssl.so.3", "libssl.so.1.1", "libssl.so", NULL};
+    static const char *const cryptoNames[] = {"libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so", NULL};
+    const char *cryptoBase = "libcrypto.so.3";
+#endif
+    const char *env = getenv("IRIS_OPENSSL");
+    void *crypto = openLib(cryptoNames, env && *env ? env : NULL, cryptoBase);
+    void *ssl = NULL;
+    if (env && *env) ssl = dlopen(env, RTLD_NOW | RTLD_GLOBAL);
+    if (!ssl) ssl = openLib(sslNames, NULL, NULL);
+    if (!ssl || !crypto) {
+        ossl.loaded = -1;
+        return;
+    }
+#define SYM(lib, field, name)                                   \
+    do {                                                        \
+        *(void **)&ossl.field = dlsym(lib, name);               \
+        if (!ossl.field) {                                      \
+            ossl.loaded = -1;                                   \
+            return;                                             \
+        }                                                       \
+    } while (0)
+    SYM(ssl, clientMethod, "TLS_client_method");
+    SYM(ssl, serverMethod, "TLS_server_method");
+    SYM(ssl, ctxNew, "SSL_CTX_new");
+    SYM(ssl, ctxFree, "SSL_CTX_free");
+    SYM(ssl, ctxDefaultPaths, "SSL_CTX_set_default_verify_paths");
+    SYM(ssl, ctxLoadVerify, "SSL_CTX_load_verify_locations");
+    SYM(ssl, ctxSetVerify, "SSL_CTX_set_verify");
+    SYM(ssl, ctxCtrl, "SSL_CTX_ctrl");
+    SYM(ssl, ctxUseChain, "SSL_CTX_use_certificate_chain_file");
+    SYM(ssl, ctxUseKey, "SSL_CTX_use_PrivateKey_file");
+    SYM(ssl, ctxCheckKey, "SSL_CTX_check_private_key");
+    SYM(ssl, sslNew, "SSL_new");
+    SYM(ssl, sslFree, "SSL_free");
+    SYM(ssl, sslSetFd, "SSL_set_fd");
+    SYM(ssl, sslCtrl, "SSL_ctrl");
+    SYM(ssl, sslSet1Host, "SSL_set1_host");
+    SYM(ssl, sslConnect, "SSL_connect");
+    SYM(ssl, sslAccept, "SSL_accept");
+    SYM(ssl, sslRead, "SSL_read");
+    SYM(ssl, sslWrite, "SSL_write");
+    SYM(ssl, sslGetError, "SSL_get_error");
+    SYM(ssl, sslShutdown, "SSL_shutdown");
+    SYM(ssl, sslVerifyResult, "SSL_get_verify_result");
+    SYM(ssl, sslGetFd, "SSL_get_fd");
+    SYM(crypto, errGet, "ERR_get_error");
+    SYM(crypto, errString, "ERR_error_string_n");
+    SYM(crypto, errClear, "ERR_clear_error");
+    SYM(crypto, verifyString, "X509_verify_cert_error_string");
+#undef SYM
+    ossl.loaded = 1;
+}
+
+static bool tlsReady(void) {
+    pthread_once(&osslOnce, osslLoad);
+    if (ossl.loaded != 1) {
+#ifdef __APPLE__
+        tlsSay("TLS needs OpenSSL 3: brew install openssl@3, or set IRIS_OPENSSL to its libssl");
+#else
+        tlsSay("TLS needs OpenSSL (libssl3): install it, or set IRIS_OPENSSL to its libssl");
+#endif
+        return false;
+    }
+    return true;
+}
+
+enum { TLS_VERIFY_PEER = 1, TLS_CTRL_MIN_VERSION = 123, TLS_V12 = 0x0303, TLS_CTRL_SNI = 55,
+       TLS_WANT_READ = 2, TLS_WANT_WRITE = 3, TLS_ERROR_SYSCALL = 5, TLS_ZERO_RETURN = 6 };
+
+/* A context for clients: the system's certificates, or the ones in ca. */
+static void *newClientCtx(const char *ca) {
+    void *ctx = ossl.ctxNew(ossl.clientMethod());
+    if (!ctx) return NULL;
+    ossl.ctxCtrl(ctx, TLS_CTRL_MIN_VERSION, TLS_V12, NULL);
+    ossl.ctxSetVerify(ctx, TLS_VERIFY_PEER, NULL);
+    if (ca ? ossl.ctxLoadVerify(ctx, ca, NULL) != 1 : ossl.ctxDefaultPaths(ctx) != 1) {
+        ossl.ctxFree(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+static int lockedClientCtx;
+static void *sharedClientCtx(void) {
+    spinLock(&lockedClientCtx);
+    if (!clientCtx) clientCtx = newClientCtx(NULL);
+    void *c = clientCtx;
+    spinUnlock(&lockedClientCtx);
+    return c;
+}
+
+/* Waits for what OpenSSL asked for; false for any other answer. */
+static bool tlsWait(void *ssl, int r) {
+    int e = ossl.sslGetError(ssl, r);
+    if (e == TLS_WANT_READ) {
+        waitFd(ossl.sslGetFd(ssl), 0);
+        return true;
+    }
+    if (e == TLS_WANT_WRITE) {
+        waitFd(ossl.sslGetFd(ssl), 1);
+        return true;
+    }
+    return false;
+}
+
+/* The client side of a handshake on a connected socket: the server must
+   have a certificate for host. ca, when not empty, is a file of the
+   certificates to trust instead of the system's. NULL on an error, with
+   the message set. */
+void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca, int64_t caLen) {
+    if (!tlsReady()) return NULL;
+    char *h = cpath(host, hostLen), *caPath = caLen > 0 ? cpath(ca, caLen) : NULL;
+    void *ctx = caPath ? newClientCtx(caPath) : sharedClientCtx();
+    void *ssl = ctx ? ossl.sslNew(ctx) : NULL;
+    if (!ssl) {
+        tlsSayOpenssl(caPath ? "reading the certificates to trust" : "starting TLS");
+        free(h);
+        free(caPath);
+        if (caPath && ctx) ossl.ctxFree(ctx);
+        return NULL;
+    }
+    if (caPath) ossl.ctxFree(ctx);      /* the connection keeps its own reference */
+    free(caPath);
+    ossl.sslSetFd(ssl, fd);
+    ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);
+    ossl.sslSet1Host(ssl, h);
+    for (;;) {
+        int r = ossl.sslConnect(ssl);
+        if (r == 1) break;
+        if (tlsWait(ssl, r)) continue;
+        long v = ossl.sslVerifyResult(ssl);
+        if (v != 0) {
+            char what[400];
+            snprintf(what, sizeof what, "its certificate can't be trusted: %s", ossl.verifyString(v));
+            tlsSay(what);
+            if (ossl.errClear) ossl.errClear();
+        } else {
+            tlsSayOpenssl("the TLS handshake failed");
+        }
+        ossl.sslFree(ssl);
+        free(h);
+        return NULL;
+    }
+    free(h);
+    return ssl;
+}
+
+/* A server's certificate chain and key, from PEM files. */
+void *iris_tls_server_ctx(const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
+    if (!tlsReady()) return NULL;
+    char *c = cpath(cert, certLen), *k = cpath(key, keyLen);
+    void *ctx = ossl.ctxNew(ossl.serverMethod());
+    bool ok = ctx != NULL;
+    if (ok) {
+        ossl.ctxCtrl(ctx, TLS_CTRL_MIN_VERSION, TLS_V12, NULL);
+        if (ossl.ctxUseChain(ctx, c) != 1) {
+            char what[300];
+            snprintf(what, sizeof what, "reading the certificate %s", c);
+            tlsSayOpenssl(what);
+            ok = false;
+        } else if (ossl.ctxUseKey(ctx, k, 1) != 1 || ossl.ctxCheckKey(ctx) != 1) {
+            char what[300];
+            snprintf(what, sizeof what, "reading the key %s", k);
+            tlsSayOpenssl(what);
+            ok = false;
+        }
+    } else {
+        tlsSayOpenssl("starting TLS");
+    }
+    free(c);
+    free(k);
+    if (!ok && ctx) {
+        ossl.ctxFree(ctx);
+        ctx = NULL;
+    }
+    return ctx;
+}
+
+void iris_tls_ctx_free(void *ctx) {
+    if (ctx && ossl.loaded == 1) ossl.ctxFree(ctx);
+}
+
+/* The server side of a handshake on an accepted socket. */
+void *iris_tls_accept(void *ctx, int fd) {
+    if (!tlsReady()) return NULL;
+    void *ssl = ossl.sslNew(ctx);
+    if (!ssl) {
+        tlsSayOpenssl("starting TLS");
+        return NULL;
+    }
+    ossl.sslSetFd(ssl, fd);
+    for (;;) {
+        int r = ossl.sslAccept(ssl);
+        if (r == 1) return ssl;
+        if (tlsWait(ssl, r)) continue;
+        tlsSayOpenssl("the TLS handshake failed");
+        ossl.sslFree(ssl);
+        return NULL;
+    }
+}
+
+/* Bytes read (0 when the other side closed), or minus net's error code. */
+int64_t iris_tls_read(void *ssl, char *buf, int64_t len) {
+    int n = len > 0x40000000 ? 0x40000000 : (int)len;
+    for (;;) {
+        int r = ossl.sslRead(ssl, buf, n);
+        if (r > 0) return r;
+        if (tlsWait(ssl, r)) continue;
+        int e = ossl.sslGetError(ssl, r);
+        if (e == TLS_ZERO_RETURN || (e == TLS_ERROR_SYSCALL && errno == 0)) {
+            if (ossl.errClear) ossl.errClear();
+            return 0;
+        }
+        tlsSayOpenssl("reading over TLS");
+        return -7;
+    }
+}
+
+/* 0 when everything was written, else net's error code. */
+int iris_tls_write(void *ssl, const char *data, int64_t len) {
+    while (len > 0) {
+        int n = len > 0x40000000 ? 0x40000000 : (int)len;
+        int r = ossl.sslWrite(ssl, data, n);
+        if (r > 0) {
+            data += r;
+            len -= r;
+            continue;
+        }
+        if (tlsWait(ssl, r)) continue;
+        tlsSayOpenssl("writing over TLS");
+        return 7;
+    }
+    return 0;
+}
+
+void iris_tls_close(void *ssl) {
+    if (!ssl) return;
+    ossl.sslShutdown(ssl);      /* one try: the socket closes right after */
+    if (ossl.errClear) ossl.errClear();
+    ossl.sslFree(ssl);
+}
