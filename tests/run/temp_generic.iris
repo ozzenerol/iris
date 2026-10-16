@@ -1,0 +1,22 @@
+// expect: 3 3
+// expect: ada zoe
+// expect: 4
+
+import str
+
+String shout(str s) => str.upper(s)
+
+i64 size(str s) => s.len
+
+void main() {
+    List[String] names
+    names.push("ada".copy())
+    names.push("zoe".copy())
+    print("{size(names.at(0))} {str.find(names.at(1), "e") + 1}")
+    print("{names.at(0)} {names.at(1)}")
+    print("{size(shout("ab{names.len}x"))}")
+    for n in names {
+        n.free()
+    }
+    names.free()
+}

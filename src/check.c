@@ -1463,6 +1463,7 @@ static void instantiateMethods(Checker *c, Type *t) {
         }
         Node *copy = cloneNode(c->arena, g);
         copy->b = NULL;
+        copy->flags |= F_INSTANCE;
         Scope *s = paramScope(c, g, &g->b->list, t->args);
         Scope *saved = c->scope;
         const char *savedModule = c->module;
@@ -1494,6 +1495,7 @@ static Node *instantiateFunc(Checker *c, Node *decl, Type **args, int n, Node *a
     Node *copy = cloneNode(c->arena, decl);
     copy->list2 = (NodeList){0};
     copy->name = instanceName(c, decl->name, args, n);
+    copy->flags |= F_INSTANCE;
     in->fn = copy;
     Scope *s = paramScope(c, decl, &decl->list2, args);
     Scope *saved = c->scope;
@@ -2702,9 +2704,17 @@ static void markTempString(Node **slot, Type *param) {
         return;
     }
     Node *v = x->a;
-    if (v->kind == N_CALL || (v->kind == N_TRY && v->a && v->a->kind == N_CALL)) {
-        v->flags |= F_TEMPSTR;
+    Node *call = v->kind == N_TRY ? v->a : v;
+    if (!call || call->kind != N_CALL) {
+        return;
     }
+    /* a generic's T is a value stored somewhere: List[String].at gives the
+     * list's String, not a new one */
+    Node *fn = call->ref ? call->ref : call->a ? call->a->ref : NULL;
+    if (fn && fn->kind == N_FUNC && (fn->flags & F_INSTANCE)) {
+        return;
+    }
+    v->flags |= F_TEMPSTR;
 }
 
 /* Whether a value of type t can point into other memory. */

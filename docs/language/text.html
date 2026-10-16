@@ -47,10 +47,10 @@ s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
 <p>Text with values can also be passed straight to a function that takes a <code>str</code>. It is built in a temporary <code>String</code>, which is freed when the statement ends:</p>
 <pre class="code"><code>res.text(<span class="s">&quot;hello {name}&quot;</span>)
 log.write(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)</code></pre>
-<p>A <code>String</code> that a call gives, passed straight to a function that takes a <code>str</code>, is freed when the statement ends too:</p>
+<p>A function that returns a <code>String</code> gives the caller a new String to free. Such a String, passed straight to a function that takes a <code>str</code>, is freed when the statement ends too:</p>
 <pre class="code"><code>res.json(json.encode(user))
 print(json.encode(user))</code></pre>
-<p>Anywhere else, text with values needs <code>format</code>, and a <code>String</code> from a call needs a variable that frees it.</p>
+<p>Anywhere else, text with values needs <code>format</code>, and a <code>String</code> from a call needs a variable that frees it. Calls of generic functions and methods are left alone: <code>list.at(i)</code> on a <code>List[String]</code> gives the String the list holds, which the list frees.</p>
 <p>A call that gives back a <code>str</code>, a slice or a pointer may give back part of its argument. The temporary String would be gone after the statement, so this is an error:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code>t := <span class="t">str</span>.trim(<span class="s">&quot;  {name}  &quot;</span>)     <span class="c">// error: the result may point into the text</span></code></pre>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> padded = format(<span class="s">&quot;  {name}  &quot;</span>)

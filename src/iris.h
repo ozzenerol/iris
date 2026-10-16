@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.20.0"
+#define IRIS_VERSION "0.21.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -149,6 +149,7 @@ enum {
     F_TEMPSTR = 1 << 17,    /* a String from a call passed as a str: freed when the statement ends */
     F_INTRINSIC = 1 << 18,  /* @builtin in the standard library: the compiler makes the call */
     F_TESTFN = 1 << 19,     /* the function a test block became; text is the test's name */
+    F_INSTANCE = 1 << 20,   /* a copy of a generic function or method for one set of types */
 };
 
 typedef struct Node Node;

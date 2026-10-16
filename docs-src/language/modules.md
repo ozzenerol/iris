@@ -117,26 +117,37 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; `NetError` |
 | `json` | `encode(v) String` and `decode(T, text) !T` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
-| `http` | `serve(port, handler, threads)` and `serveOn(listener, handler, threads)`: an HTTP/1.1 server on every CPU core (or on `threads` of them) where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`) and fills in a `Response` (`status`, `text`, `json`) |
+| `http` | a server: `serve(port, handler, threads)` and `serveOn(listener, handler, threads)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `serve`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
 
-A small web server:
+A small web server. A `Router` sends each request to the handler for its method and path; `:id` matches one part of the path and `*path` the rest:
 
 ```iris
 import http
 
-void route(http.Request *req, http.Response *res) {
-    match req.path {
-        "/" => res.text("hello from iris\n")
-        _ => {
-            res.status = 404
-            res.text("not found\n")
-        }
-    }
+void getUser(http.Request *req, http.Response *res) {
+    res.json("{{\"id\": \"{req.param("id")}\"}}")
+}
+
+void createUser(http.Request *req, http.Response *res) {
+    res.status = 201
+    res.text("made {req.body}\n")
 }
 
 !void main() {
-    try http.serve(8080, route)
+    http.Router r
+    r.get("/users/:id", getUser)
+    r.post("/users", createUser)
+    try r.serve(8080)
 }
+```
+
+When several patterns match, the one with the most fixed parts wins, so `/users/me` goes before `/users/:id`. A path no pattern has gets 404, and a path that is there only for other methods gets 405 with an `Allow` header.
+
+The client asks other servers. Only `http://` addresses work for now; `https://` gives `HttpError.tls`:
+
+```iris
+scoped http.Reply r = try http.get("http://localhost:8080/users/7")
+print("{r.status} {r.body}")
 ```
 
 A complete program:
