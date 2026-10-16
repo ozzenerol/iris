@@ -62,6 +62,8 @@ handle(buf[0:n])
 
 Every index is checked. Reading past the end stops the program with an error that says where.
 
+`.ptr` gives a pointer to a slice's first item, for passing to C. A pointer can be sliced with both ends written, `p[0:n]`, to make a slice of memory that C handed over. That slice isn't checked against anything, since a pointer has no length.
+
 A complete program:
 
 ```iris run

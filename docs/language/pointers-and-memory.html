@@ -42,6 +42,7 @@ s := sum(counts)           <span class="c">// an array is passed as a slice</spa
 <pre class="code"><code>n := <span class="k">try</span> conn.read(buf)
 handle(buf[<span class="n">0</span>:n])</code></pre>
 <p>Every index is checked. Reading past the end stops the program with an error that says where.</p>
+<p><code>.ptr</code> gives a pointer to a slice's first item, for passing to C. A pointer can be sliced with both ends written, <code>p[0:n]</code>, to make a slice of memory that C handed over. That slice isn't checked against anything, since a pointer has no length.</p>
 <p>A complete program:</p>
 <pre class="code run"><code><span class="t">i64</span> sum(<span class="t">i64</span>[] xs) {
     <span class="t">i64</span> total

@@ -137,17 +137,29 @@ _ = save("out.txt", data)      // the error is dropped
 When `main` returns `!void`, an error that reaches the end of `main` is printed with the functions it passed through, and the program exits with status 1:
 
 ```iris
+import fs
+
+struct Config {
+    i64 port
+}
+
+!Config loadConfig(str path) {
+    scoped String text = try fs.readAll(path)
+    return Config{port: text.len}
+}
+
 !void main() {
     cfg := try loadConfig("app.conf")
-    try serve(cfg)
+    print("{cfg.port}")
 }
 ```
 
 ```output
-error: fs.notFound: app.conf: no such file
-  at fs.readAll    std/fs.iris:88
-  at loadConfig    main.iris:12
-  at main          main.iris:31
+error: FsError.notFound: app.conf: no such file
+  at fsError     std/fs/fs.iris:18
+  at readAll     std/fs/fs.iris:30
+  at loadConfig  main.iris:8
+  at main        main.iris:13
 ```
 
 The first line is the error's code and message. Below it is the trace: where the error was made, then each `try` or `return e` that passed it on. The message holds up to 1024 bytes, and the trace up to 64 steps.

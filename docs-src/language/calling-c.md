@@ -2,6 +2,8 @@
 
 Iris works directly with C: it can call C functions, be called from C, and drop down to assembly.
 
+`import c` is planned for 0.8. Until then, only the standard library reaches C.
+
 ## Importing a C header
 
 `import c` reads a C header and makes its functions, types and constants available under `c.`:
