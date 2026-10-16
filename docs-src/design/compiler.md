@@ -40,7 +40,7 @@ Lowering rewrites the checked tree into a smaller language with only simple piec
 
 After lowering, the rest of the compiler never sees these features.
 
-Version 0.2 has no lowering pass yet. The IR writer handles `match`, `if` values and `for` loops directly. Lowering arrives with `defer` in 0.4.
+Versions 0.2 and 0.3 have no lowering pass yet. The IR writer handles `match`, `if` values and `for` loops directly. Lowering arrives with `defer` in 0.4.
 
 ### IR writer
 
@@ -54,7 +54,9 @@ The runtime is `runtime/rt.c`. The build turns it into a C string inside the `ir
 
 ## Checks in the generated code
 
-In debug builds the IR writer adds a check before every operation that can go wrong: `+`, `-` and `*` that overflow (using LLVM's `with.overflow` intrinsics), division by zero, shifts by at least the width of the type, and conversions that lose a value. A failed check calls the runtime, which prints `panic:`, the message and the place, and exits with status 2. Release-safe builds keep the division checks. Release-fast builds have none, and arithmetic wraps around.
+In debug builds the IR writer adds a check before every operation that can go wrong: `+`, `-` and `*` that overflow (using LLVM's `with.overflow` intrinsics), division by zero, shifts by at least the width of the type, conversions that lose a value, and `null` pointers. Index and slice bounds are checked in debug and release-safe builds. A failed check calls the runtime, which prints `panic:`, the message and the place, and exits with status 2. Release-safe builds also keep the division checks. Release-fast builds have none, and arithmetic wraps around.
+
+Debug builds also compile with AddressSanitizer: every function gets LLVM's `sanitize_address` attribute and `clang` links with `-fsanitize=address`. That catches use after free and other bad memory accesses. Leak reports are turned off for now.
 
 ## Why the IR is written as text
 

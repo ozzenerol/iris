@@ -72,6 +72,29 @@ The compiler checks each value. Numbers, `bool`, `str`, `String` and enums can b
 scoped String msg = format("{n} bytes")
 ```
 
+A complete program:
+
+```iris run
+void main() {
+    String s = "hello".copy()
+    s.append(", world")
+    print(s)
+    print("{s.len} bytes")
+    s.free()
+
+    host := "localhost"
+    msg := format("connecting to {host}")
+    print(msg)
+    msg.free()
+}
+```
+
+```output
+hello, world
+12 bytes
+connecting to localhost
+```
+
 ## Escapes
 
 | Escape | Meaning |

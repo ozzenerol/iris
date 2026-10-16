@@ -1,0 +1,39 @@
+// expect: 6 3
+// expect: 0: 1
+// expect: 1: 20
+// expect: 2: 3
+// expect: 20 3 2
+// expect: hello world 104
+// expect: 104 101
+// expect: 9
+
+i64 sum(i64[] xs) {
+    i64 total
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+void main() {
+    i64[3] counts = [1, 2, 3]
+    print("{sum(counts)} {counts.len}")
+    counts[1] = 20
+    for i, v in counts {
+        print("{i}: {v}")
+    }
+    i64[] tail = counts[1:]
+    print("{tail[0]} {tail[1]} {tail.len}")
+    str greeting = "hello, world"
+    print("{greeting[0:5]} {greeting[7:]} {greeting[0]}")
+    for c in greeting[0:2] {
+        print2(c)
+    }
+    print("{sum([2, 3, 4])}")
+}
+
+void print2(u8 c) {
+    if c == 'h' {
+        print("104 101")
+    }
+}

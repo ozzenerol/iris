@@ -1,0 +1,55 @@
+// error: 24: Node contains itself; use a pointer (Node *) for the inner one
+// error: 32: Box already has a field named v
+// error: 34: Box already has a method named get
+// error: 35: methods can only be added to structs declared in this program, not i64
+// error: 38: Point has no field z
+// error: 39: x is set twice
+// error: 40: the value for x is str, but i64 is needed
+// error: 41: .{...} needs a known struct type here; write the type's name before the {
+// error: 42: Point has no field w
+// error: 43: Point has no method nothing
+// error: 44: this field belongs to a temporary value; store the value in a variable first
+// error: 45: only a variable, a field or an element has an address
+// error: 46: '*' needs a pointer, not Point
+// error: 48: a pointer can't be indexed; use a slice
+// error: 49: Point can't be indexed
+// error: 50: null can only be a pointer, not i64
+// error: 52: a String is freed with its free method: s.free()
+// error: 53: alloc's first argument is a type name
+struct Point {
+    i64 x
+    i64 y
+}
+
+struct Node {
+    Node next
+}
+
+struct Box {
+    i64 v
+}
+
+void Box.v() { }
+void Box.get() { }
+void Box.get() { }
+void i64.bad() { }
+
+void main() {
+    p := Point{x: 1, z: 2}
+    q := Point{x: 1, x: 2}
+    r := Point{x: "one"}
+    s := .{x: 1}
+    print("{p.w}")
+    p.nothing()
+    Point{}.x = 3
+    t := &5
+    u := *p
+    i64 *ip = &p.x
+    v := ip[0]
+    w := p[0]
+    i64 n = null
+    String str1 = "a".copy()
+    free(str1)
+    a := alloc(5, 2)
+    z := (Point{}).x
+}

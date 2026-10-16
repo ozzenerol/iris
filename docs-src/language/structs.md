@@ -83,7 +83,39 @@ p.move(3, 3)
 d := p.dist2(Point{})
 ```
 
-Because `self` is a pointer, a method can change the value. A method can be declared in any file of the module that declares the type.
+Because `self` is a pointer, a method can change the value. When a method is called on a variable, the method gets the variable's address. When it is called on a temporary value, like `origin().dist2(p)`, the method gets the address of a copy. A method can be declared in any file of the module that declares the type.
+
+A complete program:
+
+```iris run
+struct Point {
+    i64 x
+    i64 y
+}
+
+void Point.move(i64 dx, dy) {
+    self.x += dx
+    self.y += dy
+}
+
+i64 Point.dist2(Point other) {
+    dx := self.x - other.x
+    dy := self.y - other.y
+    return dx * dx + dy * dy
+}
+
+void main() {
+    p := Point{x: 1, y: 2}
+    p.move(2, 2)
+    print("{p.x}, {p.y}")
+    print("{p.dist2(Point{})}")
+}
+```
+
+```output
+3, 4
+25
+```
 
 ## Making and freeing
 

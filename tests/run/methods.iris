@@ -1,0 +1,63 @@
+// expect: 4 5
+// expect: 41
+// expect: 25
+// expect: fd 7 <- hello
+// expect: 7
+// expect: 3
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+i64 Point.dist2(Point other) {
+    dx := self.x - other.x
+    dy := self.y - other.y
+    return dx * dx + dy * dy
+}
+
+void Point.move(i64 dx, dy) {
+    self.x += dx
+    self.y += dy
+}
+
+Point origin() => Point{}
+
+struct Socket {
+    i32 fd
+}
+
+void Socket.write(str data) => print("fd {self.fd} <- {data}")
+
+struct Conn {
+    Socket
+    str peer
+}
+
+struct Counter {
+    i64 n
+}
+
+void Counter.add() {
+    self.n += 1
+}
+
+void main() {
+    p := Point{x: 1, y: 2}
+    p.move(3, 3)
+    print("{p.x} {p.y}")
+    print("{p.dist2(origin())}")
+    pp := &p
+    print("{origin().dist2(Point{x: 3, y: 4})}")
+    conn := Conn{peer: "x"}
+    conn.fd = 7
+    conn.write("hello")
+    print("{conn.Socket.fd}")
+    Counter c
+    Counter *cp = &c
+    cp.add()
+    c.add()
+    cp.add()
+    print("{c.n}")
+    _ = pp
+}

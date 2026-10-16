@@ -1,0 +1,27 @@
+// expect: 0
+// expect: 6 6
+// expect: 30
+// expect: true false
+
+void reset(i64 *n) {
+    *n = 0
+}
+
+void main() {
+    i64 count = 5
+    reset(&count)
+    print("{count}")
+    i64 x = 5
+    i64 *p = &x
+    *p = 6
+    print("{x} {*p}")
+    i64[] items = alloc(i64, 4)
+    items[1] = 10
+    items[2] = 20
+    i64 *first = &items[1]
+    i64 *second = first + 1
+    print("{*first + *second}")
+    free(items)
+    i64 *none = null
+    print("{none == null} {p == null}")
+}

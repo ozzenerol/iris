@@ -42,6 +42,24 @@ s := sum(counts)           <span class="c">// an array is passed as a slice</spa
 <pre class="code"><code>n := <span class="k">try</span> conn.read(buf)
 handle(buf[<span class="n">0</span>:n])</code></pre>
 <p>Every index is checked. Reading past the end stops the program with an error that says where.</p>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="t">i64</span> sum(<span class="t">i64</span>[] xs) {
+    <span class="t">i64</span> total
+    <span class="k">for</span> x <span class="k">in</span> xs {
+        total += x
+    }
+    <span class="k">return</span> total
+}
+
+<span class="t">void</span> main() {
+    <span class="t">i64</span>[] items = alloc(<span class="t">i64</span>, <span class="n">4</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
+        items[i] = i * <span class="n">10</span>
+    }
+    print(<span class="s">&quot;{sum(items)} {sum(items[2:])}&quot;</span>)
+    free(items)
+}</code></pre>
+<pre class="out"><code>60 50</code></pre>
 <h2 id="locals-start-at-zero"><a href="#locals-start-at-zero">Locals start at zero</a></h2>
 <p>Every local variable starts at zero, whether it is a number, a pointer, an array or a struct.</p>
 <h2 id="allocating-and-freeing"><a href="#allocating-and-freeing">Allocating and freeing</a></h2>
@@ -87,6 +105,7 @@ free(buf)</code></pre>
 <h2 id="checks-in-debug-builds"><a href="#checks-in-debug-builds">Checks in debug builds</a></h2>
 <p>A debug build stops the program with an error and a trace when it finds:</p>
 <ul><li>an index past the end of an array or slice</li><li>an integer that overflows</li><li>a <code>null</code> pointer being used</li><li>memory used after it was freed, or freed twice</li></ul>
+<p>The last check uses AddressSanitizer, which comes with <code>clang</code>. Its report is longer than a panic and names the function. Line numbers in it come with debug information, in a later version.</p>
 <p>A release build keeps the index checks. A function marked <code>@unchecked</code> has none:</p>
 <pre class="code"><code><span class="a">@unchecked</span>
 <span class="t">u32</span> checksum(<span class="t">u8</span>[] data) {

@@ -1,0 +1,8 @@
+// mode: release-safe
+// panic: index 5 is out of range for length 2
+
+void main() {
+    i64[] a = alloc(i64, 2)
+    i64 i = 5
+    print("{a[i]}")
+}

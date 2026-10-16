@@ -22,6 +22,7 @@
 <h2 id="string"><a href="#string">String</a></h2>
 <p><code>String</code> is text the program owns. It remembers which allocator its memory came from, so <code>free</code> can give it back.</p>
 <pre class="out"><code>String  =  { u8 *ptr, i64 len, i64 cap, Allocator *alloc }</code></pre>
+<p>Until allocators arrive, <code>String</code> is <code>{ u8 *ptr, i64 len, i64 cap }</code> and its memory comes from <code>malloc</code>.</p>
 <h2 id="arrays"><a href="#arrays">Arrays</a></h2>
 <p><code>u8[512]</code> is 512 bytes in a row, with no length stored. When an array is passed to a function, it becomes a slice.</p>
 <h2 id="structs"><a href="#structs">Structs</a></h2>

@@ -10,10 +10,10 @@ iris: $(SRC) $(HDR) build/runtime.inc
 iris-debug: $(SRC) $(HDR) build/runtime.inc
 	$(CC) -std=c11 -O0 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Ibuild -o $@ $(SRC)
 
-# the runtime's source, as a C string the compiler carries with it
+# the runtime's source, as bytes the compiler carries with it
 build/runtime.inc: runtime/rt.c
 	mkdir -p build
-	sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' runtime/rt.c > $@
+	od -An -v -tx1 runtime/rt.c | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g' > $@
 
 test: iris
 	python3 tools/run_tests.py

@@ -55,7 +55,32 @@ b.x = <span class="n">100</span>       <span class="c">// a.x is still 1</span><
 <pre class="code"><code>p := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
 p.move(<span class="n">3</span>, <span class="n">3</span>)
 d := p.dist2(Point{})</code></pre>
-<p>Because <code>self</code> is a pointer, a method can change the value. A method can be declared in any file of the module that declares the type.</p>
+<p>Because <code>self</code> is a pointer, a method can change the value. When a method is called on a variable, the method gets the variable's address. When it is called on a temporary value, like <code>origin().dist2(p)</code>, the method gets the address of a copy. A method can be declared in any file of the module that declares the type.</p>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="k">struct</span> Point {
+    <span class="t">i64</span> x
+    <span class="t">i64</span> y
+}
+
+<span class="t">void</span> Point.move(<span class="t">i64</span> dx, dy) {
+    self.x += dx
+    self.y += dy
+}
+
+<span class="t">i64</span> Point.dist2(Point other) {
+    dx := self.x - other.x
+    dy := self.y - other.y
+    <span class="k">return</span> dx * dx + dy * dy
+}
+
+<span class="t">void</span> main() {
+    p := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
+    p.move(<span class="n">2</span>, <span class="n">2</span>)
+    print(<span class="s">&quot;{p.x}, {p.y}&quot;</span>)
+    print(<span class="s">&quot;{p.dist2(Point{})}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3, 4
+25</code></pre>
 <h2 id="making-and-freeing"><a href="#making-and-freeing">Making and freeing</a></h2>
 <p>By convention, a function named after the type in lower case makes a value, and a <code>free</code> method releases what it holds:</p>
 <pre class="code"><code><span class="k">struct</span> Buffer {

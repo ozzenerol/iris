@@ -9,6 +9,7 @@
                                // expect: LINE     one per line of output
                                // exit: N          the exit status (default 0)
                                // panic: MESSAGE   stderr has "panic: MESSAGE", exit 2
+                               // stderr: TEXT     stderr has TEXT
                                // mode: MODE       build mode (default debug)
   docs                     every ```iris block in docs-src/ must parse
                            (```iris error blocks are skipped); an ```iris run
@@ -104,7 +105,8 @@ def run_tests(iris, only, failures):
         exits = re.findall(r"^// exit: (\d+)$", text, re.M)
         panics = re.findall(r"^// panic: (.*)$", text, re.M)
         modes = re.findall(r"^// mode: (\S+)$", text, re.M)
-        want_exit = int(exits[0]) if exits else (2 if panics else 0)
+        stderrs = re.findall(r"^// stderr: (.*)$", text, re.M)
+        want_exit = int(exits[0]) if exits else (2 if panics or stderrs else 0)
         args = ["run"] + (["--mode=" + modes[0]] if modes else []) + [path]
         code, out, err = run(iris, args)
         want_out = "".join(line + "\n" for line in expect)
@@ -116,6 +118,9 @@ def run_tests(iris, only, failures):
         for p in panics:
             if "panic: " + p not in err:
                 problems.append("stderr lacks 'panic: %s'" % p)
+        for p in stderrs:
+            if p not in err:
+                problems.append("stderr lacks '%s'" % p)
         if problems:
             failures.append((name, "\n".join(problems) + ("\nstderr:\n" + err if err else "")))
     return count

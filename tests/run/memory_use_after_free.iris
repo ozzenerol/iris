@@ -1,0 +1,7 @@
+// stderr: heap-use-after-free
+
+void main() {
+    u8[] b = alloc(u8, 4)
+    free(b)
+    b[0] = 1
+}

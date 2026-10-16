@@ -9,10 +9,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* runtime/rt.c, turned into a C string by the Makefile */
-static const char runtimeSource[] =
+/* runtime/rt.c, turned into bytes by the Makefile */
+static const char runtimeSource[] = {
 #include "runtime.inc"
-    ;
+    0};
 
 static void usage(FILE *out) {
     fputs("usage: iris <command> [arguments]\n"
@@ -115,13 +115,21 @@ static Node *frontEnd(Arena *a, Source *src, const char *path) {
     return file;
 }
 
-static int runProgram(char **argv) {
+/* Runs a program and waits for it. With errPath, its stderr goes to that
+ * file instead of ours. */
+static int runProgramTo(char **argv, const char *errPath) {
+    fflush(stdout);
+    fflush(stderr);
     pid_t pid = fork();
     if (pid < 0) {
         perror("iris: fork");
         return 1;
     }
     if (pid == 0) {
+        if (errPath) {
+            FILE *f = freopen(errPath, "w", stderr);
+            (void)f;
+        }
         execvp(argv[0], argv);
         fprintf(stderr, "iris: can't run %s\n", argv[0]);
         _exit(127);
@@ -139,6 +147,8 @@ static int runProgram(char **argv) {
     }
     return 1;
 }
+
+static int runProgram(char **argv) { return runProgramTo(argv, NULL); }
 
 static bool writeText(const char *path, const char *text, size_t len) {
     FILE *f = fopen(path, "wb");
@@ -163,9 +173,43 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     if (!cc || !*cc) {
         cc = "clang";
     }
-    char *args[] = {(char *)cc, mode == MODE_DEBUG ? "-O0" : "-O2", "-g", "-Wno-override-module", "-w",
-                    llPath, rtPath, "-o", (char *)out, NULL};
-    int rc = runProgram(args);
+    char *args[12];
+    int n = 0;
+    args[n++] = (char *)cc;
+    args[n++] = mode == MODE_DEBUG ? "-O0" : "-O2";
+    args[n++] = "-g";
+    args[n++] = "-Wno-override-module";
+    args[n++] = "-w";
+    int asan = n;
+    if (mode == MODE_DEBUG) {
+        args[n++] = "-fsanitize=address";   /* use after free, out-of-bounds memory */
+    }
+    args[n++] = llPath;
+    args[n++] = rtPath;
+    args[n++] = "-o";
+    args[n++] = (char *)out;
+    args[n] = NULL;
+    int rc;
+    if (mode == MODE_DEBUG) {
+        /* not every clang has AddressSanitizer's libraries: build without
+         * it when linking with it fails */
+        char errPath[4200];
+        snprintf(errPath, sizeof errPath, "%s/clang.err", dir);
+        rc = runProgramTo(args, errPath);
+        if (rc != 0 && rc != 127) {
+            for (int i = asan; args[i]; i++) {
+                args[i] = args[i + 1];
+            }
+            rc = runProgram(args);
+            if (rc == 0) {
+                fprintf(stderr, "iris: note: this clang can't use AddressSanitizer, so this debug build doesn't "
+                                "check for use after free\n");
+            }
+        }
+        unlink(errPath);
+    } else {
+        rc = runProgram(args);
+    }
     if (rc == 127) {
         fprintf(stderr, "iris: clang is needed to build programs; install it or set IRIS_CC\n");
     }

@@ -62,6 +62,31 @@ handle(buf[0:n])
 
 Every index is checked. Reading past the end stops the program with an error that says where.
 
+A complete program:
+
+```iris run
+i64 sum(i64[] xs) {
+    i64 total
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+void main() {
+    i64[] items = alloc(i64, 4)
+    for i in 0..4 {
+        items[i] = i * 10
+    }
+    print("{sum(items)} {sum(items[2:])}")
+    free(items)
+}
+```
+
+```output
+60 50
+```
+
 ## Locals start at zero
 
 Every local variable starts at zero, whether it is a number, a pointer, an array or a struct.
@@ -145,6 +170,8 @@ A debug build stops the program with an error and a trace when it finds:
 - an integer that overflows
 - a `null` pointer being used
 - memory used after it was freed, or freed twice
+
+The last check uses AddressSanitizer, which comes with `clang`. Its report is longer than a panic and names the function. Line numbers in it come with debug information, in a later version.
 
 A release build keeps the index checks. A function marked `@unchecked` has none:
 

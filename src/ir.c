@@ -4,8 +4,15 @@
  * clang's optimiser turns them into registers. Values in registers are
  * named %t1, %t2, ...; labels L1, L2, ...
  *
+ * An expression is either read as a value (emitExpr) or, when it names a
+ * place in memory, as an address (emitAddr). Assignments, & and method
+ * receivers use addresses.
+ *
  * In debug builds, arithmetic that overflows, division by zero, shifts by
- * too much and conversions that lose a value call iris_check_failed. */
+ * too much, conversions that lose a value and null pointers call
+ * iris_check_failed. Index and slice bounds are checked in debug and
+ * release-safe builds. Debug builds also use AddressSanitizer, which
+ * catches use after free. */
 #include "iris.h"
 
 #include <stdio.h>
@@ -27,7 +34,7 @@ typedef struct {
     Arena *arena;
     Source *src;
     BuildMode mode;
-    StrBuf head;            /* string constants and globals */
+    StrBuf head;            /* types, string constants and globals */
     StrBuf allocas;         /* the current function's entry block */
     StrBuf body;            /* the current function's code */
     int tmp, label, strings, vars;
@@ -39,17 +46,18 @@ typedef struct {
 } IR;
 
 static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
+static bool boundsChecks(IR *ir) { return ir->mode != MODE_RELEASE_FAST; }
 
 static const char *fmt(IR *ir, const char *f, ...) {
     va_list ap;
     va_start(ap, f);
-    char buf[512];
+    char buf[1024];
     vsnprintf(buf, sizeof buf, f, ap);
     va_end(ap);
     return arenaStrndup(ir->arena, buf, strlen(buf));
 }
 
-static const char *llType(Type *t) {
+static const char *llType(IR *ir, Type *t) {
     switch (t->kind) {
     case TY_BOOL: return "i1";
     case TY_INT:
@@ -59,7 +67,10 @@ static const char *llType(Type *t) {
         case 32: return "i32";
         default: return "i64";
         }
-    case TY_STR: return "{ ptr, i64 }";
+    case TY_PTR: case TY_NULL: return "ptr";
+    case TY_SLICE: return "{ ptr, i64 }";
+    case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
+    case TY_STRUCT: case TY_STRING: return t->ir;
     default: return "void";
     }
 }
@@ -77,7 +88,7 @@ static void ins(IR *ir, const char *f, ...) {
     ensureBlock(ir);
     va_list ap;
     va_start(ap, f);
-    char buf[1024];
+    char buf[2048];
     vsnprintf(buf, sizeof buf, f, ap);
     va_end(ap);
     sbPrintf(&ir->body, "  %s\n", buf);
@@ -129,7 +140,7 @@ static const char *cString(IR *ir, const char *s) { return stringConst(ir, s, st
 
 static const char *allocaFor(IR *ir, Type *t, const char *hint) {
     const char *name = fmt(ir, "%%v.%s.%d", hint, ++ir->vars);
-    sbPrintf(&ir->allocas, "  %s = alloca %s\n", name, llType(t));
+    sbPrintf(&ir->allocas, "  %s = alloca %s\n", name, llType(ir, t));
     return name;
 }
 
@@ -147,16 +158,19 @@ static const char *intConst(IR *ir, int64_t v, Type *t) {
     return fmt(ir, "%lld", (long long)v);
 }
 
+static const char *fnName(IR *ir) { return cString(ir, ir->func ? ir->func->name : "?"); }
+
 static void checkFailed(IR *ir, Node *at, const char *msg) {
     const char *m = cString(ir, msg);
-    const char *fn = cString(ir, ir->func ? ir->func->name : "?");
     ins(ir, "call void @iris_check_failed(ptr %s, ptr %s, i32 %d, i32 %d, ptr %s)", m, ir->fileStr,
-        at->line, at->col, fn);
+        at->line, at->col, fnName(ir));
     ins(ir, "unreachable");
     ir->terminated = true;
 }
 
-/* Branches to a failure if cond is true. */
+/* Branches to the failure code if cond is true. Returns the label of the
+ * failure block, which the caller fills (or NULL-like 0 when it used
+ * checkFailed itself). */
 static void failIf(IR *ir, const char *cond, Node *at, const char *msg) {
     int bad = newLabel(ir), ok = newLabel(ir);
     ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", cond, bad, ok);
@@ -168,15 +182,53 @@ static void failIf(IR *ir, const char *cond, Node *at, const char *msg) {
     ir->terminated = false;
 }
 
+static Val val(const char *s, Type *t) { return (Val){s, t}; }
+
+/* The size of a type in bytes, as an i64 value. */
+static const char *sizeOf(IR *ir, Type *t) {
+    const char *p = tmp(ir), *n = tmp(ir);
+    ins(ir, "%s = getelementptr %s, ptr null, i64 1", p, llType(ir, t));
+    ins(ir, "%s = ptrtoint ptr %s to i64", n, p);
+    return n;
+}
+
+static void nullCheck(IR *ir, const char *p, Node *at) {
+    if (!checks(ir)) {
+        return;
+    }
+    const char *z = tmp(ir);
+    ins(ir, "%s = icmp eq ptr %s, null", z, p);
+    failIf(ir, z, at, "null pointer used");
+}
+
+static void indexCheck(IR *ir, const char *idx, const char *len, Node *at) {
+    if (!boundsChecks(ir)) {
+        return;
+    }
+    const char *bad = tmp(ir);
+    ins(ir, "%s = icmp uge i64 %s, %s", bad, idx, len);
+    int fail = newLabel(ir), ok = newLabel(ir);
+    ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", bad, fail, ok);
+    ir->terminated = true;
+    sbPrintf(&ir->body, "L%d:\n", fail);
+    ir->terminated = false;
+    ins(ir, "call void @iris_index_failed(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", idx, len,
+        ir->fileStr, at->line, at->col, fnName(ir));
+    ins(ir, "unreachable");
+    ir->terminated = true;
+    sbPrintf(&ir->body, "L%d:\n", ok);
+    ir->terminated = false;
+}
+
 /* ---------------------------------------------------------------- expressions */
 
 static Val emitExpr(IR *ir, Node *e);
+static const char *emitAddr(IR *ir, Node *e);
 static void emitStmt(IR *ir, Node *s);
 static void emitBlock(IR *ir, Node *b);
 static Val emitIf(IR *ir, Node *n, bool wantValue);
 static Val emitMatch(IR *ir, Node *m, bool wantValue);
-
-static Val val(const char *s, Type *t) { return (Val){s, t}; }
+static bool irAddressable(Node *e);
 
 /* Every value of from fits in to, so no check is needed. */
 static bool widensSafely(Type *from, Type *to) {
@@ -186,36 +238,87 @@ static bool widensSafely(Type *from, Type *to) {
     return !from->isSigned && to->isSigned && from->bits < to->bits;
 }
 
+/* An integer of any width as an i64 index. */
+static const char *toI64(IR *ir, Val v) {
+    if (v.t->bits == 64) {
+        return v.s;
+    }
+    const char *r = tmp(ir);
+    ins(ir, "%s = %s %s %s to i64", r, v.t->isSigned ? "sext" : "zext", llType(ir, v.t), v.s);
+    return r;
+}
+
+/* A value stored in a new stack slot, for things that need an address. */
+static const char *spill(IR *ir, Val v) {
+    const char *slot = allocaFor(ir, v.t, "tmp");
+    ins(ir, "store %s %s, ptr %s", llType(ir, v.t), v.s, slot);
+    return slot;
+}
+
+static Val makeSlice(IR *ir, const char *ptr, const char *len, Type *t) {
+    const char *a = tmp(ir), *b = tmp(ir);
+    ins(ir, "%s = insertvalue { ptr, i64 } undef, ptr %s, 0", a, ptr);
+    ins(ir, "%s = insertvalue { ptr, i64 } %s, i64 %s, 1", b, a, len);
+    return val(b, t);
+}
+
+static void sliceParts(IR *ir, Val s, const char **ptr, const char **len) {
+    *ptr = tmp(ir);
+    *len = tmp(ir);
+    ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", *ptr, s.s);
+    ins(ir, "%s = extractvalue { ptr, i64 } %s, 1", *len, s.s);
+}
+
+/* The address of an array: from its variable, or a temporary copy. */
+static const char *arrayAddr(IR *ir, Node *e) {
+    if (irAddressable(e)) {
+        return emitAddr(ir, e);
+    }
+    return spill(ir, emitExpr(ir, e));
+}
+
 static Val emitConvert(IR *ir, Node *e) {
+    Type *to = e->type, *from = e->a->type;
+    if (from->kind == TY_ARRAY) {
+        const char *addr = arrayAddr(ir, e->a);
+        return makeSlice(ir, addr, fmt(ir, "%lld", (long long)from->count), to);
+    }
+    if (from->kind == TY_STRING) {
+        Val v = emitExpr(ir, e->a);
+        const char *p = tmp(ir), *n = tmp(ir);
+        ins(ir, "%s = extractvalue %%String %s, 0", p, v.s);
+        ins(ir, "%s = extractvalue %%String %s, 1", n, v.s);
+        return makeSlice(ir, p, n, to);
+    }
     Val v = emitExpr(ir, e->a);
-    Type *from = v.t, *to = e->type;
+    from = v.t;
     if (from->bits == to->bits && from->isSigned == to->isSigned) {
         return val(v.s, to);
     }
     const char *r = v.s;
     if (to->bits < from->bits) {
         r = tmp(ir);
-        ins(ir, "%s = trunc %s %s to %s", r, llType(from), v.s, llType(to));
+        ins(ir, "%s = trunc %s %s to %s", r, llType(ir, from), v.s, llType(ir, to));
     } else if (to->bits > from->bits) {
         r = tmp(ir);
-        ins(ir, "%s = %s %s %s to %s", r, from->isSigned ? "sext" : "zext", llType(from), v.s, llType(to));
+        ins(ir, "%s = %s %s %s to %s", r, from->isSigned ? "sext" : "zext", llType(ir, from), v.s, llType(ir, to));
     }
     if ((e->flags & F_EXPLICIT) && checks(ir) && !widensSafely(from, to)) {
         /* convert back and compare; also the sign must survive */
         const char *back = r;
         if (to->bits < from->bits) {
             back = tmp(ir);
-            ins(ir, "%s = %s %s %s to %s", back, to->isSigned ? "sext" : "zext", llType(to), r, llType(from));
+            ins(ir, "%s = %s %s %s to %s", back, to->isSigned ? "sext" : "zext", llType(ir, to), r, llType(ir, from));
         }
         const char *same = tmp(ir);
-        ins(ir, "%s = icmp ne %s %s, %s", same, llType(from), back, v.s);
+        ins(ir, "%s = icmp ne %s %s, %s", same, llType(ir, from), back, v.s);
         failIf(ir, same, e, "the value doesn't fit in the type it is converted to");
         if (from->isSigned != to->isSigned) {
             const char *neg = tmp(ir);
             if (from->isSigned) {
-                ins(ir, "%s = icmp slt %s %s, 0", neg, llType(from), v.s);
+                ins(ir, "%s = icmp slt %s %s, 0", neg, llType(ir, from), v.s);
             } else {
-                ins(ir, "%s = icmp slt %s %s, 0", neg, llType(to), r);
+                ins(ir, "%s = icmp slt %s %s, 0", neg, llType(ir, to), r);
             }
             failIf(ir, neg, e, "the value doesn't fit in the type it is converted to");
         }
@@ -224,16 +327,28 @@ static Val emitConvert(IR *ir, Node *e) {
 }
 
 static const char *overflowIntrinsic(TokKind op, Type *t) {
-    const char *name = op == P_PLUS ? "add" : op == P_MINUS ? "sub" : "mul";
-    return t->isSigned ? (op == P_PLUS ? "sadd" : op == P_MINUS ? "ssub" : "smul")
-                       : (op == P_PLUS ? "uadd" : op == P_MINUS ? "usub" : "umul");
-    (void)name;
+    if (t->isSigned) {
+        return op == P_PLUS ? "sadd" : op == P_MINUS ? "ssub" : "smul";
+    }
+    return op == P_PLUS ? "uadd" : op == P_MINUS ? "usub" : "umul";
 }
 
 /* + - * with an overflow check in debug builds */
 static Val emitArith(IR *ir, Node *at, TokKind op, Val a, Val b) {
     Type *t = a.t;
-    const char *ty = llType(t);
+    if (t->kind == TY_PTR) {
+        /* pointer arithmetic: move by whole items */
+        const char *n = toI64(ir, b);
+        if (op == P_MINUS) {
+            const char *neg = tmp(ir);
+            ins(ir, "%s = sub i64 0, %s", neg, n);
+            n = neg;
+        }
+        const char *r = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", r, llType(ir, t->elem), a.s, n);
+        return val(r, t);
+    }
+    const char *ty = llType(ir, t);
     const char *r = tmp(ir);
     if (checks(ir)) {
         const char *pair = tmp(ir);
@@ -251,7 +366,7 @@ static Val emitArith(IR *ir, Node *at, TokKind op, Val a, Val b) {
 
 static Val emitDivide(IR *ir, Node *at, TokKind op, Val a, Val b) {
     Type *t = a.t;
-    const char *ty = llType(t);
+    const char *ty = llType(ir, t);
     if (ir->mode != MODE_RELEASE_FAST) {
         const char *zero = tmp(ir);
         ins(ir, "%s = icmp eq %s %s, 0", zero, ty, b.s);
@@ -260,7 +375,8 @@ static Val emitDivide(IR *ir, Node *at, TokKind op, Val a, Val b) {
             /* the smallest value divided by -1 doesn't fit */
             const char *m1 = tmp(ir), *mn = tmp(ir), *both = tmp(ir);
             ins(ir, "%s = icmp eq %s %s, -1", m1, ty, b.s);
-            ins(ir, "%s = icmp eq %s %s, %s", mn, ty, a.s, intConst(ir, (int64_t)((uint64_t)1 << 63) >> (64 - t->bits), t));
+            ins(ir, "%s = icmp eq %s %s, %s", mn, ty, a.s,
+                intConst(ir, (int64_t)((uint64_t)1 << 63) >> (64 - t->bits), t));
             ins(ir, "%s = and i1 %s, %s", both, m1, mn);
             failIf(ir, both, at, "integer overflow");
         }
@@ -273,16 +389,16 @@ static Val emitDivide(IR *ir, Node *at, TokKind op, Val a, Val b) {
 
 static Val emitShift(IR *ir, Node *at, TokKind op, Val a, Val b) {
     Type *t = a.t;
-    const char *ty = llType(t);
+    const char *ty = llType(ir, t);
     const char *amt = b.s;
     if (b.t->bits != t->bits) {
-        const char *x = tmp(ir);
-        ins(ir, "%s = %s %s %s to %s", x, b.t->bits > t->bits ? "trunc" : "zext", llType(b.t), b.s, ty);
         if (b.t->bits > t->bits && checks(ir)) {
             const char *big = tmp(ir);
-            ins(ir, "%s = icmp uge %s %s, %d", big, llType(b.t), b.s, t->bits);
+            ins(ir, "%s = icmp uge %s %s, %d", big, llType(ir, b.t), b.s, t->bits);
             failIf(ir, big, at, "shift amount too large");
         }
+        const char *x = tmp(ir);
+        ins(ir, "%s = %s %s %s to %s", x, b.t->bits > t->bits ? "trunc" : "zext", llType(ir, b.t), b.s, ty);
         amt = x;
     }
     if (checks(ir)) {
@@ -300,19 +416,47 @@ static Val emitShift(IR *ir, Node *at, TokKind op, Val a, Val b) {
 }
 
 static const char *strEq(IR *ir, Val a, Val b) {
-    const char *pa = tmp(ir), *la = tmp(ir), *pb = tmp(ir), *lb = tmp(ir), *r = tmp(ir), *c = tmp(ir);
-    ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", pa, a.s);
-    ins(ir, "%s = extractvalue { ptr, i64 } %s, 1", la, a.s);
-    ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", pb, b.s);
-    ins(ir, "%s = extractvalue { ptr, i64 } %s, 1", lb, b.s);
+    const char *pa, *la, *pb, *lb;
+    sliceParts(ir, a, &pa, &la);
+    sliceParts(ir, b, &pb, &lb);
+    const char *r = tmp(ir), *c = tmp(ir);
     ins(ir, "%s = call i32 @iris_str_eq(ptr %s, i64 %s, ptr %s, i64 %s)", r, pa, la, pb, lb);
     ins(ir, "%s = icmp ne i32 %s, 0", c, r);
     return c;
 }
 
+/* a == b for any comparable type, as an i1. */
+static const char *emitEq(IR *ir, Val a, Val b) {
+    Type *t = a.t;
+    if (t->kind == TY_SLICE) {
+        return strEq(ir, a, b);
+    }
+    if (t->kind == TY_STRUCT) {
+        const char *acc = "true";
+        NodeList *fields = &t->decl->list;
+        for (int i = 0; i < fields->len; i++) {
+            Type *ft = fields->items[i]->type;
+            const char *fa = tmp(ir), *fb = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, %d", fa, t->ir, a.s, i);
+            ins(ir, "%s = extractvalue %s %s, %d", fb, t->ir, b.s, i);
+            const char *eq = emitEq(ir, val(fa, ft), val(fb, ft));
+            const char *both = tmp(ir);
+            ins(ir, "%s = and i1 %s, %s", both, acc, eq);
+            acc = both;
+        }
+        return acc;
+    }
+    const char *r = tmp(ir);
+    ins(ir, "%s = icmp eq %s %s, %s", r, llType(ir, t), a.s, b.s);
+    return r;
+}
+
 static Val emitCompare(IR *ir, TokKind op, Val a, Val b) {
-    if (a.t->kind == TY_STR) {
-        const char *eq = strEq(ir, a, b);
+    if (op == P_EQ || op == P_NE) {
+        if (a.t->kind == TY_NULL) {
+            a.t = b.t;
+        }
+        const char *eq = emitEq(ir, a, b);
         if (op == P_NE) {
             const char *r = tmp(ir);
             ins(ir, "%s = xor i1 %s, true", r, eq);
@@ -323,15 +467,13 @@ static Val emitCompare(IR *ir, TokKind op, Val a, Val b) {
     const char *cc;
     bool s = a.t->isSigned;
     switch (op) {
-    case P_EQ: cc = "eq"; break;
-    case P_NE: cc = "ne"; break;
     case P_LT: cc = s ? "slt" : "ult"; break;
     case P_LE: cc = s ? "sle" : "ule"; break;
     case P_GT: cc = s ? "sgt" : "ugt"; break;
     default: cc = s ? "sge" : "uge"; break;
     }
     const char *r = tmp(ir);
-    ins(ir, "%s = icmp %s %s %s, %s", r, cc, llType(a.t), a.s, b.s);
+    ins(ir, "%s = icmp %s %s %s, %s", r, cc, llType(ir, a.t), a.s, b.s);
     return val(r, &tyBool);
 }
 
@@ -370,7 +512,7 @@ static Val emitBinary(IR *ir, Node *e) {
         return emitShift(ir, e, op, a, b);
     case P_AMP: case P_PIPE: case P_CARET: {
         const char *r = tmp(ir);
-        ins(ir, "%s = %s %s %s, %s", r, op == P_AMP ? "and" : op == P_PIPE ? "or" : "xor", llType(a.t), a.s, b.s);
+        ins(ir, "%s = %s %s %s, %s", r, op == P_AMP ? "and" : op == P_PIPE ? "or" : "xor", llType(ir, a.t), a.s, b.s);
         return val(r, a.t);
     }
     default:
@@ -378,59 +520,111 @@ static Val emitBinary(IR *ir, Node *e) {
     }
 }
 
-/* Writes the pieces of print or panic text to a runtime stream. */
-static void emitText(IR *ir, Node *arg, int stream) {
-    Node *parts[1] = {arg};
+/* Writes the pieces of text to a runtime sink: 1 stdout, 2 the panic
+ * message, 3 the String at dst. */
+static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
+    Node *single[1] = {arg};
     int n = 1;
-    Node **list = parts;
+    Node **list = single;
     if (arg->kind == N_INTERP) {
         list = arg->list.items;
         n = arg->list.len;
     }
     for (int i = 0; i < n; i++) {
-        Node *p = list[i];
-        Val v = emitExpr(ir, p);
-        if (v.t->kind == TY_STR) {
-            const char *ptr = tmp(ir), *len = tmp(ir);
-            ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", ptr, v.s);
-            ins(ir, "%s = extractvalue { ptr, i64 } %s, 1", len, v.s);
-            ins(ir, "call void @iris_write_str(i32 %d, ptr %s, i64 %s)", stream, ptr, len);
+        Val v = emitExpr(ir, list[i]);
+        if (v.t->kind == TY_SLICE) {
+            const char *ptr, *len;
+            sliceParts(ir, v, &ptr, &len);
+            ins(ir, "call void @iris_write_str(i32 %d, ptr %s, ptr %s, i64 %s)", sink, dst, ptr, len);
         } else if (v.t->kind == TY_BOOL) {
             const char *x = tmp(ir);
             ins(ir, "%s = zext i1 %s to i32", x, v.s);
-            ins(ir, "call void @iris_write_bool(i32 %d, i32 %s)", stream, x);
+            ins(ir, "call void @iris_write_bool(i32 %d, ptr %s, i32 %s)", sink, dst, x);
         } else {
-            const char *x = v.s;
-            if (v.t->bits < 64) {
-                x = tmp(ir);
-                ins(ir, "%s = %s %s %s to i64", x, v.t->isSigned ? "sext" : "zext", llType(v.t), v.s);
-            }
-            ins(ir, "call void @iris_write_%s(i32 %d, i64 %s)", v.t->isSigned ? "i64" : "u64", stream, x);
+            ins(ir, "call void @iris_write_%s(i32 %d, ptr %s, i64 %s)", v.t->isSigned ? "i64" : "u64", sink, dst,
+                toI64(ir, v));
         }
     }
 }
 
-static Val emitCall(IR *ir, Node *e) {
-    Node *callee = e->a;
-    Node *d = callee->ref;
-    if (!d) {
-        if (strcmp(callee->name, "print") == 0) {
-            emitText(ir, e->list.items[0], 1);
-            ins(ir, "call void @iris_print_end()");
-            return val("", &tyVoid);
-        }
-        /* panic */
-        emitText(ir, e->list.items[0], 2);
-        const char *fn = cString(ir, ir->func->name);
-        ins(ir, "call void @iris_panic(ptr %s, i32 %d, i32 %d, ptr %s)", ir->fileStr, e->line, e->col, fn);
+static Val emitBuiltin(IR *ir, Node *e) {
+    switch (e->builtin) {
+    case BI_PRINT:
+        emitText(ir, e->list.items[0], 1, "null");
+        ins(ir, "call void @iris_print_end()");
+        return val("", &tyVoid);
+    case BI_PANIC:
+        emitText(ir, e->list.items[0], 2, "null");
+        ins(ir, "call void @iris_panic(ptr %s, i32 %d, i32 %d, ptr %s)", ir->fileStr, e->line, e->col, fnName(ir));
         ins(ir, "unreachable");
         ir->terminated = true;
         return val("", &tyNoreturn);
+    case BI_FORMAT: {
+        const char *slot = allocaFor(ir, &tyString, "fmt");
+        ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+        emitText(ir, e->list.items[0], 3, slot);
+        const char *r = tmp(ir);
+        ins(ir, "%s = load %%String, ptr %s", r, slot);
+        return val(r, &tyString);
     }
+    case BI_ALLOC: {
+        Type *t = e->list.items[0]->type;
+        const char *size = sizeOf(ir, t);
+        Val n = emitExpr(ir, e->list.items[1]);
+        const char *p = tmp(ir);
+        ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", p, size, n.s,
+            ir->fileStr, e->line, e->col, fnName(ir));
+        return makeSlice(ir, p, n.s, e->type);
+    }
+    case BI_FREE: {
+        Val v = emitExpr(ir, e->list.items[0]);
+        const char *p = v.s;
+        if (v.t->kind == TY_SLICE) {
+            p = tmp(ir);
+            ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", p, v.s);
+        }
+        ins(ir, "call void @free(ptr %s)", p);
+        return val("", &tyVoid);
+    }
+    case BI_STR_COPY: {
+        Val v = emitExpr(ir, e->a->a);
+        const char *ptr, *len;
+        sliceParts(ir, v, &ptr, &len);
+        const char *slot = allocaFor(ir, &tyString, "copy");
+        ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+        ins(ir, "call void @iris_string_append(ptr %s, ptr %s, i64 %s)", slot, ptr, len);
+        const char *r = tmp(ir);
+        ins(ir, "%s = load %%String, ptr %s", r, slot);
+        return val(r, &tyString);
+    }
+    case BI_STRING_APPEND:
+    case BI_STRING_FREE: {
+        Node *recv = e->a->a;
+        const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+        if (e->builtin == BI_STRING_FREE) {
+            ins(ir, "call void @iris_string_free(ptr %s)", addr);
+        } else {
+            Val v = emitExpr(ir, e->list.items[0]);
+            const char *ptr, *len;
+            sliceParts(ir, v, &ptr, &len);
+            ins(ir, "call void @iris_string_append(ptr %s, ptr %s, i64 %s)", addr, ptr, len);
+        }
+        return val("", &tyVoid);
+    }
+    default:
+        return val("undef", &tyVoid);
+    }
+}
+
+static Val emitCall(IR *ir, Node *e) {
+    if (e->builtin) {
+        return emitBuiltin(ir, e);
+    }
+    Node *d = e->ref;
     StrBuf args = {0};
     for (int i = 0; i < e->list.len; i++) {
         Val v = emitExpr(ir, e->list.items[i]);
-        sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(d->list.items[i]->type), v.s);
+        sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, d->list.items[i]->type), v.s);
     }
     const char *a = args.buf ? args.buf : "";
     Val r;
@@ -439,11 +633,157 @@ static Val emitCall(IR *ir, Node *e) {
         r = val("", &tyVoid);
     } else {
         const char *t = tmp(ir);
-        ins(ir, "%s = call %s %s(%s)", t, llType(d->type), d->ir, a);
+        ins(ir, "%s = call %s %s(%s)", t, llType(ir, d->type), d->ir, a);
         r = val(t, d->type);
     }
     sbFree(&args);
     return r;
+}
+
+/* Mirrors the checker's idea of a place in memory. */
+static bool irAddressable(Node *e) {
+    switch (e->kind) {
+    case N_IDENT:
+        return e->ref && (e->ref->kind == N_VAR || e->ref->kind == N_PARAM || e->ref->kind == N_IDENT);
+    case N_FIELD_ACCESS:
+        return e->ref && e->a->type && (e->a->type->kind == TY_PTR || irAddressable(e->a));
+    case N_INDEX:
+        return e->a->type && (e->a->type->kind == TY_SLICE || irAddressable(e->a));
+    case N_UNARY:
+        return e->op == P_STAR;
+    default:
+        return false;
+    }
+}
+
+static const char *emitAddr(IR *ir, Node *e) {
+    switch (e->kind) {
+    case N_IDENT:
+        return e->ref->ir;
+    case N_FIELD_ACCESS: {
+        Type *bt = e->a->type;
+        const char *base;
+        Type *st = bt;
+        if (bt->kind == TY_PTR) {
+            base = emitExpr(ir, e->a).s;
+            nullCheck(ir, base, e);
+            st = bt->elem;
+        } else if (irAddressable(e->a)) {
+            base = emitAddr(ir, e->a);
+        } else {
+            base = spill(ir, emitExpr(ir, e->a));
+        }
+        const char *r = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", r, st->ir, base, (int)e->ival);
+        return r;
+    }
+    case N_INDEX: {
+        Type *bt = e->a->type;
+        Val ix = emitExpr(ir, e->list.items[0]);
+        if (bt->kind == TY_ARRAY) {
+            const char *base = arrayAddr(ir, e->a);
+            const char *i = toI64(ir, ix);
+            indexCheck(ir, i, fmt(ir, "%lld", (long long)bt->count), e);
+            const char *r = tmp(ir);
+            ins(ir, "%s = getelementptr %s, ptr %s, i64 0, i64 %s", r, llType(ir, bt), base, i);
+            return r;
+        }
+        Val s = emitExpr(ir, e->a);
+        const char *i = toI64(ir, ix);
+        const char *ptr, *len;
+        sliceParts(ir, s, &ptr, &len);
+        indexCheck(ir, i, len, e);
+        const char *r = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", r, llType(ir, bt->elem), ptr, i);
+        return r;
+    }
+    case N_UNARY: {
+        Val p = emitExpr(ir, e->a);
+        nullCheck(ir, p.s, e);
+        return p.s;
+    }
+    default:
+        return spill(ir, emitExpr(ir, e));
+    }
+}
+
+static Val load(IR *ir, const char *addr, Type *t) {
+    const char *r = tmp(ir);
+    ins(ir, "%s = load %s, ptr %s", r, llType(ir, t), addr);
+    return val(r, t);
+}
+
+static Val emitSlice(IR *ir, Node *e) {
+    Type *bt = e->a->type;
+    const char *ptr, *len;
+    if (bt->kind == TY_ARRAY) {
+        ptr = emitAddr(ir, e->a);
+        len = fmt(ir, "%lld", (long long)bt->count);
+    } else {
+        sliceParts(ir, emitExpr(ir, e->a), &ptr, &len);
+    }
+    const char *lo = e->b ? toI64(ir, emitExpr(ir, e->b)) : "0";
+    const char *hi = e->c ? toI64(ir, emitExpr(ir, e->c)) : len;
+    if (boundsChecks(ir) && (e->b || e->c)) {
+        const char *a = tmp(ir), *b = tmp(ir), *bad = tmp(ir);
+        ins(ir, "%s = icmp ugt i64 %s, %s", a, lo, hi);
+        ins(ir, "%s = icmp ugt i64 %s, %s", b, hi, len);
+        ins(ir, "%s = or i1 %s, %s", bad, a, b);
+        int fail = newLabel(ir), ok = newLabel(ir);
+        ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", bad, fail, ok);
+        ir->terminated = true;
+        sbPrintf(&ir->body, "L%d:\n", fail);
+        ir->terminated = false;
+        ins(ir, "call void @iris_slice_failed(i64 %s, i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", lo, hi, len,
+            ir->fileStr, e->line, e->col, fnName(ir));
+        ins(ir, "unreachable");
+        ir->terminated = true;
+        sbPrintf(&ir->body, "L%d:\n", ok);
+        ir->terminated = false;
+    }
+    const char *start = tmp(ir), *n = tmp(ir);
+    ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", start, llType(ir, e->type->elem), ptr, lo);
+    ins(ir, "%s = sub i64 %s, %s", n, hi, lo);
+    return makeSlice(ir, start, n, e->type);
+}
+
+static Val emitStructLit(IR *ir, Node *e) {
+    Type *t = e->type;
+    Node *d = t->decl;
+    const char *acc = "zeroinitializer";
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        Node *value = NULL;
+        for (int j = 0; j < e->list.len; j++) {
+            if (e->list.items[j]->ref == f) {
+                value = e->list.items[j]->a;
+            }
+        }
+        if (!value && f->kind == N_FIELD) {
+            value = f->b;
+        }
+        if (!value) {
+            continue;
+        }
+        Val v = emitExpr(ir, value);
+        const char *r = tmp(ir);
+        ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, t->ir, acc, llType(ir, f->type), v.s, i);
+        acc = r;
+    }
+    return val(acc, t);
+}
+
+static Val emitArrayLit(IR *ir, Node *e) {
+    Type *t = e->type;
+    const char *ty = llType(ir, t);
+    const char *acc = "zeroinitializer";
+    for (int i = 0; i < e->list.len; i++) {
+        Val v = emitExpr(ir, e->list.items[i]);
+        const char *r = tmp(ir);
+        ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, ty, acc, llType(ir, t->elem), v.s, i);
+        acc = r;
+    }
+    return val(acc, t);
 }
 
 static Val emitExpr(IR *ir, Node *e) {
@@ -455,35 +795,43 @@ static Val emitExpr(IR *ir, Node *e) {
             return val(intConst(ir, e->cval, e->type), e->type);
         }
     }
+    if (e->type && e->type->kind == TY_NULL) {
+        return val("null", e->type);
+    }
     switch (e->kind) {
     case N_STRING: {
         const char *g = stringConst(ir, e->text, e->textLen);
         return val(fmt(ir, "{ ptr %s, i64 %zu }", g, e->textLen), &tyStr);
     }
+    case N_NULL:
+        return val("null", e->type);
     case N_IDENT: {
         Node *d = e->ref;
         if (d->kind == N_CONST) {
-            /* a str constant */
-            return emitExpr(ir, d->b);
+            return emitExpr(ir, d->b);  /* a str constant */
         }
-        const char *r = tmp(ir);
-        ins(ir, "%s = load %s, ptr %s", r, llType(d->type), d->ir);
-        return val(r, d->type);
+        return load(ir, d->ir, d->type);
     }
     case N_CONVERT:
         return emitConvert(ir, e);
     case N_UNARY: {
+        if (e->op == P_AMP) {
+            return val(emitAddr(ir, e->a), e->type);
+        }
+        if (e->op == P_STAR) {
+            return load(ir, emitAddr(ir, e), e->type);
+        }
         Val a = emitExpr(ir, e->a);
-        const char *r = tmp(ir);
         if (e->op == P_BANG) {
+            const char *r = tmp(ir);
             ins(ir, "%s = xor i1 %s, true", r, a.s);
             return val(r, &tyBool);
         }
         if (e->op == P_TILDE) {
-            ins(ir, "%s = xor %s %s, -1", r, llType(a.t), a.s);
+            const char *r = tmp(ir);
+            ins(ir, "%s = xor %s %s, -1", r, llType(ir, a.t), a.s);
             return val(r, a.t);
         }
-        ir->tmp--;              /* r unused: - is 0 - x */
         return emitArith(ir, e, P_MINUS, val("0", a.t), a);
     }
     case N_BINARY:
@@ -491,11 +839,29 @@ static Val emitExpr(IR *ir, Node *e) {
     case N_CALL:
         return emitCall(ir, e);
     case N_FIELD_ACCESS: {
+        if (!e->ref) {
+            /* .len of a slice or a String (an array's is a constant) */
+            Val a = emitExpr(ir, e->a);
+            const char *r = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, 1", r, llType(ir, a.t), a.s);
+            return val(r, &tyI64);
+        }
+        if (irAddressable(e)) {
+            return load(ir, emitAddr(ir, e), e->type);
+        }
         Val a = emitExpr(ir, e->a);
         const char *r = tmp(ir);
-        ins(ir, "%s = extractvalue { ptr, i64 } %s, 1", r, a.s);
-        return val(r, &tyI64);
+        ins(ir, "%s = extractvalue %s %s, %d", r, a.t->ir, a.s, (int)e->ival);
+        return val(r, e->type);
     }
+    case N_INDEX:
+        return load(ir, emitAddr(ir, e), e->type);
+    case N_SLICE:
+        return emitSlice(ir, e);
+    case N_STRUCT_LIT:
+        return emitStructLit(ir, e);
+    case N_ARRAY_LIT:
+        return emitArrayLit(ir, e);
     case N_IF:
         return emitIf(ir, e, true);
     case N_MATCH:
@@ -507,13 +873,17 @@ static Val emitExpr(IR *ir, Node *e) {
 
 /* ---------------------------------------------------------------- control flow */
 
+static bool hasValue(Type *t) {
+    return t && t->kind != TY_VOID && t->kind != TY_NORETURN && t->kind != TY_ERROR;
+}
+
 /* Runs a value block and stores its value in slot (unless it leaves). */
 static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
     if (b->kind != N_BLOCK) {
         if (b->kind == N_EXPR_STMT) {
             Val v = emitExpr(ir, b->a);
             if (!ir->terminated && v.t->kind != TY_NORETURN) {
-                ins(ir, "store %s %s, ptr %s", llType(t), v.s, slot);
+                ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
             }
         } else {
             emitStmt(ir, b);
@@ -525,7 +895,7 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
         if (i == b->list.len - 1 && s->kind == N_EXPR_STMT) {
             Val v = emitExpr(ir, s->a);
             if (!ir->terminated && v.t->kind != TY_NORETURN) {
-                ins(ir, "store %s %s, ptr %s", llType(t), v.s, slot);
+                ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
             }
         } else {
             emitStmt(ir, s);
@@ -535,7 +905,7 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
 
 static Val emitIf(IR *ir, Node *n, bool wantValue) {
     Type *t = n->type;
-    bool value = wantValue && t && (t->kind == TY_INT || t->kind == TY_BOOL || t->kind == TY_STR);
+    bool value = wantValue && hasValue(t);
     const char *slot = value ? allocaFor(ir, t, "if") : NULL;
     Val c = emitExpr(ir, n->a);
     int yes = newLabel(ir), no = newLabel(ir), end = newLabel(ir);
@@ -552,7 +922,7 @@ static Val emitIf(IR *ir, Node *n, bool wantValue) {
         if (n->d->kind == N_IF) {
             Val v = emitIf(ir, n->d, value);
             if (value && !ir->terminated) {
-                ins(ir, "store %s %s, ptr %s", llType(t), v.s, slot);
+                ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
             }
         } else if (value) {
             emitValueBlock(ir, n->d, slot, t);
@@ -565,16 +935,14 @@ static Val emitIf(IR *ir, Node *n, bool wantValue) {
     if (!value) {
         return val("", &tyVoid);
     }
-    const char *r = tmp(ir);
-    ins(ir, "%s = load %s, ptr %s", r, llType(t), slot);
-    return val(r, t);
+    return load(ir, slot, t);
 }
 
 static bool wildcard(Node *p) { return p->kind == N_IDENT && strcmp(p->name, "_") == 0; }
 
 static Val emitMatch(IR *ir, Node *m, bool wantValue) {
     Type *t = m->type;
-    bool value = wantValue && t && (t->kind == TY_INT || t->kind == TY_BOOL || t->kind == TY_STR);
+    bool value = wantValue && hasValue(t);
     const char *slot = value ? allocaFor(ir, t, "match") : NULL;
     Val subject = emitExpr(ir, m->a);
     int end = newLabel(ir);
@@ -589,7 +957,7 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
             } else if (p->kind == N_BINARY && p->op == P_DOTDOT) {
                 const char *lo = tmp(ir), *hi = tmp(ir), *both = tmp(ir);
                 bool s = subject.t->isSigned;
-                const char *ty = llType(subject.t);
+                const char *ty = llType(ir, subject.t);
                 ins(ir, "%s = icmp %s %s %s, %s", lo, s ? "sge" : "uge", ty, subject.s, intConst(ir, p->a->cval, subject.t));
                 ins(ir, "%s = icmp %s %s %s, %s", hi, s ? "sle" : "ule", ty, subject.s, intConst(ir, p->b->cval, subject.t));
                 ins(ir, "%s = and i1 %s, %s", both, lo, hi);
@@ -619,9 +987,7 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
     if (!value) {
         return val("", &tyVoid);
     }
-    const char *r = tmp(ir);
-    ins(ir, "%s = load %s, ptr %s", r, llType(t), slot);
-    return val(r, t);
+    return load(ir, slot, t);
 }
 
 /* ---------------------------------------------------------------- statements */
@@ -639,30 +1005,74 @@ static void emitFor(IR *ir, Node *s) {
     loop.breakTo = end;
     loop.continueTo = post;
 
-    if (s->flags & F_FOR_IN) {
+    if ((s->flags & F_FOR_IN) && s->a->kind == N_BINARY && s->a->op == P_DOTDOT) {
         Node *range = s->a, *v = s->list.items[0];
         Type *t = range->type;
         v->ir = allocaFor(ir, t, v->name);
         const char *endSlot = allocaFor(ir, t, "end");
         Val lo = emitExpr(ir, range->a);
-        ins(ir, "store %s %s, ptr %s", llType(t), lo.s, v->ir);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), lo.s, v->ir);
         Val hi = emitExpr(ir, range->b);
-        ins(ir, "store %s %s, ptr %s", llType(t), hi.s, endSlot);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), hi.s, endSlot);
         placeLabel(ir, cond);
-        const char *i = tmp(ir), *e = tmp(ir), *more = tmp(ir);
-        ins(ir, "%s = load %s, ptr %s", i, llType(t), v->ir);
-        ins(ir, "%s = load %s, ptr %s", e, llType(t), endSlot);
-        ins(ir, "%s = icmp %s %s %s, %s", more, t->isSigned ? "slt" : "ult", llType(t), i, e);
+        Val i = load(ir, v->ir, t), e = load(ir, endSlot, t);
+        const char *more = tmp(ir);
+        ins(ir, "%s = icmp %s %s %s, %s", more, t->isSigned ? "slt" : "ult", llType(ir, t), i.s, e.s);
         condBr(ir, more, body, end);
         placeLabel(ir, body);
         ir->loop = &loop;
         emitBlock(ir, s->c);
         ir->loop = loop.outer;
         placeLabel(ir, post);
-        const char *cur = tmp(ir), *nx = tmp(ir);
-        ins(ir, "%s = load %s, ptr %s", cur, llType(t), v->ir);
-        ins(ir, "%s = add %s %s, 1", nx, llType(t), cur);
-        ins(ir, "store %s %s, ptr %s", llType(t), nx, v->ir);
+        Val cur = load(ir, v->ir, t);
+        const char *nx = tmp(ir);
+        ins(ir, "%s = add %s %s, 1", nx, llType(ir, t), cur.s);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), nx, v->ir);
+        br(ir, cond);
+        placeLabel(ir, end);
+        return;
+    }
+
+    if (s->flags & F_FOR_IN) {
+        /* over the items of a slice or an array */
+        Type *ct = s->a->type;
+        const char *ptr, *len;
+        if (ct->kind == TY_ARRAY) {
+            ptr = arrayAddr(ir, s->a);
+            len = fmt(ir, "%lld", (long long)ct->count);
+        } else {
+            sliceParts(ir, emitExpr(ir, s->a), &ptr, &len);
+        }
+        Node *item = s->list.items[s->list.len - 1];
+        Node *idx = s->list.len == 2 ? s->list.items[0] : NULL;
+        const char *iSlot = allocaFor(ir, &tyI64, idx ? idx->name : "i");
+        if (idx) {
+            idx->ir = iSlot;
+        }
+        item->ir = allocaFor(ir, ct->elem, item->name);
+        ins(ir, "store i64 0, ptr %s", iSlot);
+        placeLabel(ir, cond);
+        Val i = load(ir, iSlot, &tyI64);
+        const char *more = tmp(ir);
+        ins(ir, "%s = icmp ult i64 %s, %s", more, i.s, len);
+        condBr(ir, more, body, end);
+        placeLabel(ir, body);
+        const char *at = tmp(ir);
+        if (ct->kind == TY_ARRAY) {
+            ins(ir, "%s = getelementptr %s, ptr %s, i64 0, i64 %s", at, llType(ir, ct), ptr, i.s);
+        } else {
+            ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", at, llType(ir, ct->elem), ptr, i.s);
+        }
+        Val x = load(ir, at, ct->elem);
+        ins(ir, "store %s %s, ptr %s", llType(ir, ct->elem), x.s, item->ir);
+        ir->loop = &loop;
+        emitBlock(ir, s->c);
+        ir->loop = loop.outer;
+        placeLabel(ir, post);
+        Val cur = load(ir, iSlot, &tyI64);
+        const char *nx = tmp(ir);
+        ins(ir, "%s = add i64 %s, 1", nx, cur.s);
+        ins(ir, "store i64 %s, ptr %s", nx, iSlot);
         br(ir, cond);
         placeLabel(ir, end);
         return;
@@ -693,6 +1103,41 @@ static Loop *findLoop(IR *ir, const char *label) {
     return ir->loop;
 }
 
+static void emitAssign(IR *ir, Node *s) {
+    Node *target = s->list.items[0];
+    if (target->kind == N_IDENT && strcmp(target->name, "_") == 0) {
+        emitExpr(ir, s->b);
+        return;
+    }
+    Type *t = target->type;
+    if (s->op == P_ASSIGN) {
+        Val v = emitExpr(ir, s->b);
+        const char *addr = emitAddr(ir, target);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, addr);
+        return;
+    }
+    const char *addr = emitAddr(ir, target);
+    Val a = load(ir, addr, t);
+    Val b = emitExpr(ir, s->b);
+    Val r;
+    switch (s->op) {
+    case P_PLUS_ASSIGN: r = emitArith(ir, s, P_PLUS, a, b); break;
+    case P_MINUS_ASSIGN: r = emitArith(ir, s, P_MINUS, a, b); break;
+    case P_STAR_ASSIGN: r = emitArith(ir, s, P_STAR, a, b); break;
+    case P_SLASH_ASSIGN: r = emitDivide(ir, s, P_SLASH, a, b); break;
+    case P_PERCENT_ASSIGN: r = emitDivide(ir, s, P_PERCENT, a, b); break;
+    case P_SHL_ASSIGN: r = emitShift(ir, s, P_SHL, a, b); break;
+    case P_SHR_ASSIGN: r = emitShift(ir, s, P_SHR, a, b); break;
+    default: {
+        const char *x = tmp(ir);
+        ins(ir, "%s = %s %s %s, %s", x, s->op == P_AMP_ASSIGN ? "and" : s->op == P_PIPE_ASSIGN ? "or" : "xor",
+            llType(ir, t), a.s, b.s);
+        r = val(x, t);
+    }
+    }
+    ins(ir, "store %s %s, ptr %s", llType(ir, t), r.s, addr);
+}
+
 static void emitStmt(IR *ir, Node *s) {
     switch (s->kind) {
     case N_VAR: {
@@ -700,10 +1145,10 @@ static void emitStmt(IR *ir, Node *s) {
         if (s->b) {
             Val v = emitExpr(ir, s->b);
             if (!ir->terminated) {
-                ins(ir, "store %s %s, ptr %s", llType(s->type), v.s, s->ir);
+                ins(ir, "store %s %s, ptr %s", llType(ir, s->type), v.s, s->ir);
             }
         } else {
-            ins(ir, "store %s zeroinitializer, ptr %s", llType(s->type), s->ir);
+            ins(ir, "store %s zeroinitializer, ptr %s", llType(ir, s->type), s->ir);
         }
         return;
     }
@@ -712,46 +1157,13 @@ static void emitStmt(IR *ir, Node *s) {
         id->ir = allocaFor(ir, id->type, id->name);
         Val v = emitExpr(ir, s->b);
         if (!ir->terminated) {
-            ins(ir, "store %s %s, ptr %s", llType(id->type), v.s, id->ir);
+            ins(ir, "store %s %s, ptr %s", llType(ir, id->type), v.s, id->ir);
         }
         return;
     }
-    case N_ASSIGN: {
-        Node *target = s->list.items[0];
-        if (target->kind == N_IDENT && strcmp(target->name, "_") == 0) {
-            emitExpr(ir, s->b);
-            return;
-        }
-        Node *d = target->ref;
-        Type *t = d->type;
-        if (s->op == P_ASSIGN) {
-            Val v = emitExpr(ir, s->b);
-            ins(ir, "store %s %s, ptr %s", llType(t), v.s, d->ir);
-            return;
-        }
-        const char *cur = tmp(ir);
-        ins(ir, "%s = load %s, ptr %s", cur, llType(t), d->ir);
-        Val a = val(cur, t);
-        Val b = emitExpr(ir, s->b);
-        Val r;
-        switch (s->op) {
-        case P_PLUS_ASSIGN: r = emitArith(ir, s, P_PLUS, a, b); break;
-        case P_MINUS_ASSIGN: r = emitArith(ir, s, P_MINUS, a, b); break;
-        case P_STAR_ASSIGN: r = emitArith(ir, s, P_STAR, a, b); break;
-        case P_SLASH_ASSIGN: r = emitDivide(ir, s, P_SLASH, a, b); break;
-        case P_PERCENT_ASSIGN: r = emitDivide(ir, s, P_PERCENT, a, b); break;
-        case P_SHL_ASSIGN: r = emitShift(ir, s, P_SHL, a, b); break;
-        case P_SHR_ASSIGN: r = emitShift(ir, s, P_SHR, a, b); break;
-        default: {
-            const char *x = tmp(ir);
-            ins(ir, "%s = %s %s %s, %s", x, s->op == P_AMP_ASSIGN ? "and" : s->op == P_PIPE_ASSIGN ? "or" : "xor",
-                llType(t), cur, b.s);
-            r = val(x, t);
-        }
-        }
-        ins(ir, "store %s %s, ptr %s", llType(t), r.s, d->ir);
+    case N_ASSIGN:
+        emitAssign(ir, s);
         return;
-    }
     case N_EXPR_STMT:
         if (s->a->kind == N_IF) {
             emitIf(ir, s->a, false);
@@ -774,7 +1186,7 @@ static void emitStmt(IR *ir, Node *s) {
         if (s->a) {
             Val v = emitExpr(ir, s->a);
             if (!ir->terminated) {
-                ins(ir, "ret %s %s", llType(ir->func->type), v.s);
+                ins(ir, "ret %s %s", llType(ir, ir->func->type), v.s);
             }
         } else {
             ins(ir, "ret void");
@@ -810,14 +1222,14 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->allocas = (StrBuf){0};
     ir->body = (StrBuf){0};
 
-    sbPrintf(out, "define internal %s %s(", llType(f->type), f->ir);
+    sbPrintf(out, "define internal %s %s(", llType(ir, f->type), f->ir);
     for (int i = 0; i < f->list.len; i++) {
         Node *p = f->list.items[i];
-        sbPrintf(out, "%s%s %%p.%s", i ? ", " : "", llType(p->type), p->name);
+        sbPrintf(out, "%s%s %%p.%s", i ? ", " : "", llType(ir, p->type), p->name);
         p->ir = allocaFor(ir, p->type, p->name);
-        sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(p->type), p->name, p->ir);
+        sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(ir, p->type), p->name, p->ir);
     }
-    sbPuts(out, ") {\n");
+    sbPuts(out, ir->mode == MODE_DEBUG ? ") #0 {\n" : ") {\n");
 
     if (f->d) {
         Val v = emitExpr(ir, f->d);
@@ -825,7 +1237,7 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
             if (f->type->kind == TY_VOID) {
                 ins(ir, "ret void");
             } else {
-                ins(ir, "ret %s %s", llType(f->type), v.s);
+                ins(ir, "ret %s %s", llType(ir, f->type), v.s);
             }
         }
     } else {
@@ -852,22 +1264,60 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->func = NULL;
 }
 
-static const char *globalInit(IR *ir, Node *value, Type *t) {
-    if (!value) {
+/* A global's starting value, as an LLVM constant. */
+static const char *constValue(IR *ir, Node *v, Type *t) {
+    if (!v) {
         return "zeroinitializer";
     }
-    if (t->kind == TY_STR) {
-        Node *v = value;
-        if (v->kind == N_IDENT && v->ref && v->ref->kind == N_CONST) {
-            v = v->ref->b;
-        }
+    if (v->kind == N_IDENT && v->ref && v->ref->kind == N_CONST && !v->isConst) {
+        v = v->ref->b;
+    }
+    switch (t->kind) {
+    case TY_SLICE: {
         const char *g = stringConst(ir, v->text, v->textLen);
         return fmt(ir, "{ ptr %s, i64 %zu }", g, v->textLen);
     }
-    if (t->kind == TY_BOOL) {
-        return value->cval ? "true" : "false";
+    case TY_BOOL:
+        return v->cval ? "true" : "false";
+    case TY_INT:
+        return intConst(ir, v->cval, t);
+    case TY_PTR:
+        return "null";
+    case TY_STRUCT: {
+        StrBuf b = {0};
+        sbPuts(&b, "{ ");
+        NodeList *fields = &t->decl->list;
+        for (int i = 0; i < fields->len; i++) {
+            Node *f = fields->items[i];
+            Node *fv = f->kind == N_FIELD ? f->b : NULL;
+            if (v->kind == N_STRUCT_LIT) {
+                for (int j = 0; j < v->list.len; j++) {
+                    if (v->list.items[j]->ref == f) {
+                        fv = v->list.items[j]->a;
+                    }
+                }
+            }
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, f->type), constValue(ir, fv, f->type));
+        }
+        sbPuts(&b, " }");
+        char *s = sbFinish(&b, ir->arena);
+        return s;
     }
-    return intConst(ir, value->cval, t);
+    case TY_ARRAY: {
+        if (v->kind != N_ARRAY_LIT) {
+            return "zeroinitializer";
+        }
+        StrBuf b = {0};
+        sbPuts(&b, "[ ");
+        for (int i = 0; i < v->list.len; i++) {
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, t->elem), constValue(ir, v->list.items[i], t->elem));
+        }
+        sbPuts(&b, " ]");
+        return sbFinish(&b, ir->arena);
+    }
+    default:
+        return "zeroinitializer";
+    }
 }
 
 char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
@@ -877,24 +1327,40 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     ir.mode = mode;
     ir.fileStr = cString(&ir, src->path);
 
-    StrBuf funcs = {0};
+    StrBuf types = {0}, funcs = {0};
     Node *mainFn = NULL;
+    sbPuts(&types, "%String = type { ptr, i64, i64 }\n");
 
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
+        if (d->kind == N_STRUCT && d->type) {
+            sbPrintf(&types, "%s = type { ", d->type->ir);
+            for (int j = 0; j < d->list.len; j++) {
+                sbPrintf(&types, "%s%s", j ? ", " : "", llType(&ir, d->list.items[j]->type));
+            }
+            sbPuts(&types, d->list.len ? " }\n" : "}\n");
+        }
+    }
+    for (int i = 0; i < file->list.len; i++) {
+        Node *d = file->list.items[i];
         if (d->kind == N_FUNC) {
-            d->ir = fmt(&ir, "@f.%s", d->name);
-            if (strcmp(d->name, "main") == 0) {
-                mainFn = d;
+            if (d->b) {
+                d->ir = fmt(&ir, "@m.%s.%s", d->list.items[0]->type->elem->name, d->name);
+            } else {
+                d->ir = fmt(&ir, "@f.%s", d->name);
+                if (strcmp(d->name, "main") == 0) {
+                    mainFn = d;
+                }
             }
         } else if (d->kind == N_VAR) {
             d->ir = fmt(&ir, "@g.%s", d->name);
-            sbPrintf(&ir.head, "%s = internal global %s %s\n", d->ir, llType(d->type), globalInit(&ir, d->b, d->type));
+            sbPrintf(&ir.head, "%s = internal global %s %s\n", d->ir, llType(&ir, d->type),
+                     constValue(&ir, d->b, d->type));
         } else if (d->kind == N_DEFINE) {
             Node *id = d->list.items[0];
             id->ir = fmt(&ir, "@g.%s", id->name);
-            sbPrintf(&ir.head, "%s = internal global %s %s\n", id->ir, llType(id->type),
-                     globalInit(&ir, d->b, id->type));
+            sbPrintf(&ir.head, "%s = internal global %s %s\n", id->ir, llType(&ir, id->type),
+                     constValue(&ir, d->b, id->type));
         }
     }
     for (int i = 0; i < file->list.len; i++) {
@@ -906,6 +1372,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
 
     StrBuf out = {0};
     sbPrintf(&out, "; generated by iris %s from %s\n\n", IRIS_VERSION, src->path);
+    sbPuts(&out, types.buf);
     if (ir.head.buf) {
         sbPuts(&out, ir.head.buf);
     }
@@ -913,7 +1380,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     if (funcs.buf) {
         sbPuts(&out, funcs.buf);
     }
-    sbPuts(&out, "define i32 @main(i32 %argc, ptr %argv) {\n");
+    sbPrintf(&out, "define i32 @main(i32 %%argc, ptr %%argv)%s {\n", mode == MODE_DEBUG ? " #0" : "");
     sbPuts(&out, "  call void @iris_init(i32 %argc, ptr %argv)\n");
     if (mainFn && mainFn->type->kind == TY_INT) {
         sbPrintf(&out, "  %%r = call i32 %s()\n  ret i32 %%r\n}\n\n", mainFn->ir);
@@ -922,15 +1389,25 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     }
     sbPuts(&out,
            "declare void @iris_init(i32, ptr)\n"
-           "declare void @iris_write_str(i32, ptr, i64)\n"
-           "declare void @iris_write_i64(i32, i64)\n"
-           "declare void @iris_write_u64(i32, i64)\n"
-           "declare void @iris_write_bool(i32, i32)\n"
+           "declare void @iris_write_str(i32, ptr, ptr, i64)\n"
+           "declare void @iris_write_i64(i32, ptr, i64)\n"
+           "declare void @iris_write_u64(i32, ptr, i64)\n"
+           "declare void @iris_write_bool(i32, ptr, i32)\n"
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
+           "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
+           "declare void @free(ptr)\n"
+           "declare void @iris_string_append(ptr, ptr, i64)\n"
+           "declare void @iris_string_free(ptr)\n"
            "declare void @iris_panic(ptr, i32, i32, ptr) noreturn\n"
            "declare void @iris_check_failed(ptr, ptr, i32, i32, ptr) noreturn\n"
+           "declare void @iris_index_failed(i64, i64, ptr, i32, i32, ptr) noreturn\n"
+           "declare void @iris_slice_failed(i64, i64, i64, ptr, i32, i32, ptr) noreturn\n"
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
+    if (mode == MODE_DEBUG) {
+        sbPuts(&out, "attributes #0 = { sanitize_address }\n");
+    }
+    sbFree(&types);
     sbFree(&funcs);
     sbFree(&ir.head);
     return sbFinish(&out, a);
