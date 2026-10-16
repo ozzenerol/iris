@@ -44,6 +44,10 @@ s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
 <p>The compiler checks each value. Numbers, <code>bool</code>, <code>str</code>, <code>String</code> and enums can be printed. A struct can be printed if it has a <code>format</code> method. <code>{{</code> and <code>}}</code> write a single brace.</p>
 <p><code>format</code> builds a <code>String</code> the same way:</p>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> msg = format(<span class="s">&quot;{n} bytes&quot;</span>)</code></pre>
+<p>Text with values can also be passed straight to a function that takes a <code>str</code>. It is built in a temporary <code>String</code>, which is freed when the statement ends:</p>
+<pre class="code"><code>res.text(<span class="s">&quot;hello {name}&quot;</span>)
+log.write(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)</code></pre>
+<p>Anywhere else, text with values needs <code>format</code>.</p>
 <p>A complete program:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
     <span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()

@@ -2187,7 +2187,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     case N_STRING:
         return setType(e, &tyStr);
     case N_INTERP:
-        error(c, e, "text with {} values can be passed to print, panic and format");
+        error(c, e, "text with {} values can be passed straight to a function that takes str, or to format to keep it");
         return setType(e, &tyError);
     case N_NULL:
         return setType(e, &tyNull);
@@ -2442,6 +2442,19 @@ static bool printable(Type *t) {
 
 static void checkText(Checker *c, Node **slot, const char *fn);
 
+/* Text with {} values passed straight to a str parameter: built in a
+ * String that lives until the end of the statement. */
+static bool checkTempText(Checker *c, Node **slot, Type *param) {
+    Node *arg = *slot;
+    if (arg->kind != N_INTERP || !isStr(param)) {
+        return false;
+    }
+    checkText(c, slot, "the call");
+    arg->flags |= F_TEMPTEXT;
+    arg->type = &tyStr;
+    return true;
+}
+
 /* print, panic and format: one argument, the text, which may have {}
  * values in it. */
 static void checkTextArg(Checker *c, Node *call, const char *fn) {
@@ -2537,6 +2550,8 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
                 }
                 continue;
             }
+        } else if (!checked && checkTempText(c, &args[j], param->type)) {
+            /* built when the call is made */
         } else {
             if (!checked) {
                 checkExpr(c, &args[j], param->type);
@@ -2606,9 +2621,11 @@ static Type *checkMethodCall(Checker *c, Node *e) {
                     error(c, e, "append takes one argument, the text to add");
                     return setType(e, &tyError);
                 }
-                Type *at = checkExpr(c, &e->list.items[0], &tyStr);
-                if (!isErr(at)) {
-                    coerce(c, &e->list.items[0], &tyStr, "the text to add");
+                if (!checkTempText(c, &e->list.items[0], &tyStr)) {
+                    Type *at = checkExpr(c, &e->list.items[0], &tyStr);
+                    if (!isErr(at)) {
+                        coerce(c, &e->list.items[0], &tyStr, "the text to add");
+                    }
                 }
                 e->builtin = BI_STRING_APPEND;
             } else {
@@ -2871,6 +2888,9 @@ static Type *checkIndirectCall(Checker *c, Node *e, Type *ft) {
         Node **slot = &e->list.items[i];
         if ((*slot)->kind == N_NAMED_ARG) {
             error(c, *slot, "a call through a function value takes its arguments by position");
+            continue;
+        }
+        if (checkTempText(c, slot, ft->elems[i])) {
             continue;
         }
         checkExpr(c, slot, ft->elems[i]);

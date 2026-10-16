@@ -155,6 +155,7 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
         args[n++] = linkArgs[i];
     }
     args[n++] = "-lm";              /* the math module's functions */
+    args[n++] = "-pthread";         /* http.serve's threads */
     args[n] = NULL;
     int rc;
     if (mode == MODE_DEBUG) {

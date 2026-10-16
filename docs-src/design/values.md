@@ -100,7 +100,7 @@ dyn Writer  =  { void *data, WriterTable *table }
 
 ## Tasks
 
-Each task has its own stack, 256 KiB with a guard page below it, so running past it crashes instead of corrupting memory. A scheduler in the runtime runs the tasks on top of an event loop (epoll on Linux, kqueue on macOS, io_uring later). When a task waits for I/O, a channel or a timer, the scheduler saves its registers and switches to another task, with a few instructions of assembly per machine (x86_64 and arm64). When the wait is over, the task continues where it stopped.
+Each task has its own stack, 256 KiB with a guard page below it, so running past it crashes instead of corrupting memory. A scheduler in the runtime runs the tasks on top of an event loop. On Linux the loop uses io_uring: reads and accepts are handed to the kernel, and one system call per turn submits them all and collects the results. Where io_uring is missing or blocked, as in many containers, the loop uses epoll, and on macOS it uses kqueue. `IRIS_IO=epoll` picks epoll on Linux. Each file descriptor is added to epoll or kqueue once and stays there until it is closed. Finished tasks keep their stacks for the next spawns, up to 16 per thread. When a task waits for I/O, a channel or a timer, the scheduler saves its registers and switches to another task, with a few instructions of assembly per machine (x86_64 and arm64). When the wait is over, the task continues where it stopped.
 
 `spawn f(a, b)` stores the arguments in memory and starts a task with a small function the compiler writes, which reads them back, makes the call and frees them.
 

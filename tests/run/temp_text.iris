@@ -1,0 +1,39 @@
+// expect: [n is 42]
+// expect: 6 6
+// expect: x=42;y=84
+// expect: [breaking at 0]
+// expect: [round 0]
+// expect: [round 1]
+// expect: 3
+
+import str
+
+void show(str s) => print("[{s}]")
+
+i64 count(str s) => s.len
+
+i64 loop() {
+    for i in 0..3 {
+        if count("item {i}") > 5 {
+            show("breaking at {i}")
+            break
+        }
+    }
+    for i in 0..2 {
+        show("round {i}")
+        continue
+    }
+    return count("x{1}y")
+}
+
+void main() {
+    n := 42
+    show("n is {n}")
+    print("{count("a {n} b")} {str.find("hello {n}", "4")}")
+    String s
+    s.append("x={n};")
+    s.append("y={n * 2}")
+    print(s)
+    s.free()
+    print("{loop()}")
+}

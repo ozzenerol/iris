@@ -1,0 +1,18 @@
+// mode: release-fast
+// expect: 10000 tasks, sum 49995000
+
+void add(i64 n, chan[i64] out) {
+    out <- n
+}
+
+void main() {
+    out := chan[i64](64)
+    for i in 0..10000 {
+        spawn add(i, out)
+    }
+    i64 sum
+    for i in 0..10000 {
+        sum += <-out
+    }
+    print("10000 tasks, sum {sum}")
+}

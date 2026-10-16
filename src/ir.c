@@ -39,6 +39,7 @@ struct Loop {
     const char *label;
     int breakTo, continueTo;
     DeferFrame *frame;      /* the frame outside the loop: exits run the ones above it */
+    int temps;              /* temporary Strings made before the loop: kept on break */
 };
 
 typedef struct {
@@ -58,6 +59,8 @@ typedef struct {
     NodeList vtables;       /* the names of the method tables written so far */
     StrBuf extra;           /* functions made along the way: the thunks of spawn */
     int spawns;
+    const char **temps;     /* the slots of temporary Strings of the statements being written */
+    int ntemps, capTemps;
 } IR;
 
 static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
@@ -1031,6 +1034,13 @@ static Val load(IR *ir, const char *addr, Type *t) {
     return val(r, t);
 }
 
+/* Frees the temporary Strings made since mark. */
+static void freeTemps(IR *ir, int mark) {
+    for (int i = ir->ntemps - 1; i >= mark; i--) {
+        ins(ir, "call void @iris_string_free(ptr %s)", ir->temps[i]);
+    }
+}
+
 /* ---------------------------------------------------------------- defer and errors */
 
 static void pushFrame(IR *ir, DeferFrame *f) {
@@ -1085,6 +1095,7 @@ static void traceAdd(IR *ir, Node *at) {
 
 /* Leaves the function with an error: deferred code first, errdefer too. */
 static void returnError(IR *ir, const char *err) {
+    freeTemps(ir, 0);
     runDefers(ir, NULL, true);
     Type *rt = ir->func->type;
     if (rt->elem->kind == TY_VOID) {
@@ -1099,6 +1110,7 @@ static void returnError(IR *ir, const char *err) {
 
 /* Leaves a function that returns !T with a value (or nothing for !void). */
 static void returnValue(IR *ir, Val v) {
+    freeTemps(ir, 0);
     runDefers(ir, NULL, false);
     Type *rt = ir->func->type;
     if (rt->elem->kind == TY_VOID) {
@@ -1285,6 +1297,24 @@ static Val emitExpr(IR *ir, Node *e) {
     if ((e->kind == N_FIELD_ACCESS || e->kind == N_ENUM_DOT) && e->type && e->type->kind == TY_ENUM &&
         e->type->hasData && e->ref && e->ref->kind == N_ENUM_MEMBER) {
         return emitEnumValue(ir, e->type, e->ref, NULL);
+    }
+    if (e->kind == N_INTERP && (e->flags & F_TEMPTEXT)) {
+        const char *slot = allocaFor(ir, &tyString, "text");
+        ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+        emitText(ir, e, 3, slot);
+        if (ir->ntemps == ir->capTemps) {
+            int cap = ir->capTemps ? ir->capTemps * 2 : 16;
+            const char **t = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+            if (ir->ntemps) memcpy(t, ir->temps, sizeof(char *) * (size_t)ir->ntemps);
+            ir->temps = t;
+            ir->capTemps = cap;
+        }
+        ir->temps[ir->ntemps++] = slot;
+        Val str = load(ir, slot, &tyString);
+        const char *p = tmp(ir), *n = tmp(ir);
+        ins(ir, "%s = extractvalue %%String %s, 0", p, str.s);
+        ins(ir, "%s = extractvalue %%String %s, 1", n, str.s);
+        return makeSlice(ir, p, n, &tyStr);
     }
     switch (e->kind) {
     case N_TUPLE: {
@@ -1581,7 +1611,7 @@ static void emitBlock(IR *ir, Node *b) {
 }
 
 static void emitFor(IR *ir, Node *s) {
-    Loop loop = {ir->loop, ir->pendingLabel, 0, 0, ir->defers};
+    Loop loop = {ir->loop, ir->pendingLabel, 0, 0, ir->defers, ir->ntemps};
     ir->pendingLabel = NULL;
     int cond = newLabel(ir), body = newLabel(ir), post = newLabel(ir), end = newLabel(ir);
     loop.breakTo = end;
@@ -1887,7 +1917,19 @@ static void emitSelect(IR *ir, Node *s) {
     placeLabel(ir, end);
 }
 
+static void emitStmtInner(IR *ir, Node *s);
+
+/* A statement, then the temporary Strings its expressions made. */
 static void emitStmt(IR *ir, Node *s) {
+    int mark = ir->ntemps;
+    emitStmtInner(ir, s);
+    if (!ir->terminated) {
+        freeTemps(ir, mark);
+    }
+    ir->ntemps = mark;
+}
+
+static void emitStmtInner(IR *ir, Node *s) {
     switch (s->kind) {
     case N_VAR: {
         s->ir = allocaFor(ir, s->type, s->name);
@@ -1981,10 +2023,12 @@ static void emitStmt(IR *ir, Node *s) {
         if (s->a) {
             Val v = emitExpr(ir, s->a);
             if (!ir->terminated) {
+                freeTemps(ir, 0);
                 runDefers(ir, NULL, false);
                 ins(ir, "ret %s %s", llType(ir, rt), v.s);
             }
         } else {
+            freeTemps(ir, 0);
             runDefers(ir, NULL, false);
             ins(ir, "ret void");
         }
@@ -1993,12 +2037,14 @@ static void emitStmt(IR *ir, Node *s) {
     }
     case N_BREAK: {
         Loop *l = findLoop(ir, s->name);
+        freeTemps(ir, l->temps);
         runDefers(ir, l->frame, false);
         br(ir, l->breakTo);
         return;
     }
     case N_CONTINUE: {
         Loop *l = findLoop(ir, s->name);
+        freeTemps(ir, l->temps);
         runDefers(ir, l->frame, false);
         br(ir, l->continueTo);
         return;
