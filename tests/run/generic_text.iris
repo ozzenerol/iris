@@ -1,0 +1,24 @@
+// expect: 3
+// expect: label iris
+// expect: iris!
+
+T first[T](T a, str label) => a
+
+str echo[T](T a) => a
+
+void show(str s) {
+    print(s)
+}
+
+T pass[T](T a, str label) {
+    show(label)
+    return a
+}
+
+void main() {
+    name := "iris"
+    print("{first(3, "label {name}")}")
+    _ = pass(1, "label {name}")
+    scoped String t = format("{name}!")
+    show(echo(t))
+}

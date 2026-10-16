@@ -31,6 +31,8 @@ static void usage(FILE *out) {
           "\n"
           "options:\n"
           "  --mode=debug|release-safe|release-fast   (default: debug)\n"
+          "  --target=<os>   build for another platform: x86_64-linux, aarch64-linux,\n"
+          "                  x86_64-macos, aarch64-macos\n"
           "  -I <folder>      where C headers are, for import c\n"
           "  -l <library>     link a C library: -l sqlite3\n"
           "\n"
@@ -142,6 +144,16 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     args[n++] = "-g";
     args[n++] = "-Wno-override-module";
     args[n++] = "-w";
+    char sysroot[4200];
+    if (gTarget.triple) {
+        args[n++] = "-target";
+        args[n++] = (char *)gTarget.triple;
+        const char *sr = getenv("IRIS_SYSROOT");
+        if (sr && *sr) {
+            snprintf(sysroot, sizeof sysroot, "--sysroot=%s", sr);
+            args[n++] = sysroot;
+        }
+    }
     int asan = n;
     if (mode == MODE_DEBUG) {
         args[n++] = "-fsanitize=address";   /* use after free, out-of-bounds memory */
@@ -180,6 +192,10 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     }
     if (rc == 127) {
         fprintf(stderr, "iris: clang is needed to build programs; install it or set IRIS_CC\n");
+    } else if (rc != 0 && gTarget.triple) {
+        fprintf(stderr, "iris: building for %s-%s needs that platform's C library and linker; set IRIS_SYSROOT "
+                        "to its files (see Tools > Other platforms in the docs)\n",
+                gTarget.arch, gTarget.os);
     }
     return rc == 0;
 }
@@ -241,6 +257,12 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
                 fprintf(stderr, "iris: unknown mode %s\n", argv[i] + 7);
                 return 2;
             }
+        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+            if (!setTarget(argv[i] + 9)) {
+                fprintf(stderr, "iris: unknown target %s; the targets are x86_64-linux, aarch64-linux, "
+                                "x86_64-macos and aarch64-macos\n", argv[i] + 9);
+                return 2;
+            }
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && strcmp(cmd, "build") == 0) {
             out = argv[++i];
         } else if (argv[i][0] == '-' && argv[i][1]) {
@@ -256,6 +278,7 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         return 2;
     }
 
+    gTarget.mode = mode;
     Arena a = {0};
     Program *prog = frontEnd(&a, path, includes, nincludes);
     int rc = 1;

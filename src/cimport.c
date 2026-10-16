@@ -805,6 +805,10 @@ char *cImport(Arena *a, const char **headers, int n, const char **includeDirs, i
     args[na++] = "-ast-dump=json";
     args[na++] = "-fsyntax-only";
     args[na++] = "-w";
+    if (gTarget.triple) {
+        args[na++] = "-target";
+        args[na++] = (char *)gTarget.triple;
+    }
     for (int i = 0; i < nInclude && na < 50; i++) {
         args[na++] = "-I";
         args[na++] = (char *)includeDirs[i];
@@ -828,6 +832,10 @@ char *cImport(Arena *a, const char **headers, int n, const char **includeDirs, i
     args[na++] = "-dM";
     args[na++] = "-E";
     args[na++] = "-w";
+    if (gTarget.triple) {
+        args[na++] = "-target";
+        args[na++] = (char *)gTarget.triple;
+    }
     for (int i = 0; i < nInclude && na < 50; i++) {
         args[na++] = "-I";
         args[na++] = (char *)includeDirs[i];

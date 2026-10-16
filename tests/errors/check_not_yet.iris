@@ -1,10 +1,7 @@
-// error: 7: when is not supported yet (planned for a later version)
-// error: 9: @extern is for the standard library; use import c to call C
+// error: 6: @extern is for the standard library; use import c to call C
 import c "stdio.h"
 
+void main() { }
 
-void main() {
-    when os == .linux { }
-}
 @extern("puts")
 i32 puts(u8 *s)

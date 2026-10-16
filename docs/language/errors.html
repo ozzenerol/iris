@@ -70,6 +70,7 @@ ParseError.notNumber: &#x27;x&#x27; is not a digit
 <h2 id="catch"><a href="#catch">catch</a></h2>
 <p><code>catch</code> handles the error where the call is. With a value after it, that value is used when the call fails:</p>
 <pre class="code"><code>port := parsePort(arg) <span class="k">catch</span> <span class="n">8080</span></code></pre>
+<p>The value after <code>catch</code> is one value: a name, a literal, a call or something in parentheses. The rest of the expression applies to the result, so <code>parsePort(arg) catch 0 != 80</code> compares the port with 80. A longer fallback goes in parentheses: <code>catch (base + 1)</code>.</p>
 <p>With a name and a block, the block runs when the call fails, with the error in that name. The block either gives a value to use or leaves the function:</p>
 <pre class="code"><code>port := parsePort(arg) <span class="k">catch</span> e {
     print(<span class="s">&quot;bad port: {e.message}, using 8080&quot;</span>)

@@ -954,8 +954,31 @@ static int precedence(TokKind k) {
     }
 }
 
+/* An operand: a unary expression, with a catch after it if there is one.
+ * catch takes one value or a block, so in `f() catch 0 != 5` the catch is
+ * done before the comparison. */
+static Node *parseOperand(Parser *p) {
+    Node *e = parseUnary(p);
+    while (at(p, K_CATCH)) {
+        Token *t = next(p);
+        Node *c = node(p, N_CATCH, t);
+        c->a = e;
+        if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_LBRACE) {
+            c->name = tokText(p, next(p));
+            c->c = parseBlock(p);
+        } else if (at(p, T_IDENT) && peekAt(p, 1)->kind == K_MATCH) {
+            c->name = tokText(p, next(p));
+            c->c = parseMatch(p);
+        } else {
+            c->b = parseUnary(p);
+        }
+        e = c;
+    }
+    return e;
+}
+
 static Node *parseBinary(Parser *p, int minPrec) {
-    Node *left = parseUnary(p);
+    Node *left = parseOperand(p);
     for (;;) {
         Token *t = peek(p);
         int prec = precedence(t->kind);
@@ -972,23 +995,7 @@ static Node *parseBinary(Parser *p, int minPrec) {
 }
 
 static Node *parseExpr(Parser *p) {
-    Node *e = parseBinary(p, 1);
-    while (at(p, K_CATCH)) {
-        Token *t = next(p);
-        Node *c = node(p, N_CATCH, t);
-        c->a = e;
-        if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_LBRACE) {
-            c->name = tokText(p, next(p));
-            c->c = parseBlock(p);
-        } else if (at(p, T_IDENT) && peekAt(p, 1)->kind == K_MATCH) {
-            c->name = tokText(p, next(p));
-            c->c = parseMatch(p);
-        } else {
-            c->b = parseBinary(p, 1);
-        }
-        e = c;
-    }
-    return e;
+    return parseBinary(p, 1);
 }
 
 /* An expression where a struct literal can't start, like an if condition:

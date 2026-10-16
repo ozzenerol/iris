@@ -34,7 +34,7 @@ const CRC_TABLE = comptime makeCrcTable()
 
 ## when
 
-`when` includes code only when a condition known at compile time is true. The other branches are not compiled:
+`when` includes code only when a condition known at compile time is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:
 
 ```iris
 when os == .linux {
@@ -44,7 +44,25 @@ when os == .linux {
 }
 ```
 
-The names that `when` can test are `os`, `arch` and `mode` (debug, release-safe or release-fast).
+`when` can test three names, against these values:
+
+| Name | Values |
+|---|---|
+| `os` | `.linux`, `.macos` |
+| `arch` | `.x86_64`, `.arm64` |
+| `mode` | `.debug`, `.releaseSafe`, `.releaseFast` |
+
+Conditions can be joined with `&&`, `||` and `!`, and compared with `==` or `!=`. The values are those of the platform the program is built for, which `--target` can change.
+
+`when` also works outside functions, around declarations:
+
+```iris
+when os == .macos {
+    const LIB = "libsqlite3.dylib"
+} else {
+    const LIB = "libsqlite3.so"
+}
+```
 
 ## Attributes
 
