@@ -1,0 +1,48 @@
+// error: 21: an exported function takes numbers and pointers, not str
+// error: 23: only a plain function can be exported, not a method or a generic
+// error: 38: "bad(name" isn't a C name: letters, digits and _, not starting with a digit
+// error: 44: twice is exported already, on line 42
+// error: 47: the names main and iris_... belong to the runtime; export under another name
+// error: 28: this function takes 1 argument, not 2
+// error: 29: a call through a function value takes its arguments by position
+// error: 30: gen is generic; only a function with fixed types can be used as a value
+// error: 31: the value is i64(i64), but i64(str) is needed
+// error: 33: n is not a function
+// error: 35: the field v is i64, not a function
+struct Box {
+    i64 v
+}
+
+i64 id(i64 x) => x
+T gen[T](T x) => x
+void Box.m() { }
+
+@export
+void bad(str s) { }
+
+@export
+void Box.exp() { }
+
+void main() {
+    f := id
+    _ = f(1, 2)
+    _ = f(x: 1)
+    g := gen
+    i64(str) h = id
+    n := 5
+    n(1)
+    b := Box{v: 1}
+    b.v(2)
+}
+
+@export("bad(name")
+i32 badName() => 1
+
+@export("twice")
+i32 one() => 1
+
+@export("twice")
+i32 two() => 2
+
+@export("iris_init")
+i32 three() => 3

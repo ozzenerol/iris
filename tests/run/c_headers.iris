@@ -1,0 +1,10 @@
+// expect: ok
+
+import c "stdio.h", c "stdlib.h", c "string.h", c "unistd.h", c "sys/stat.h", c "time.h"
+import c "pthread.h", c "errno.h", c "fcntl.h", c "signal.h", c "netdb.h", c "sys/socket.h"
+import c "netinet/in.h", c "arpa/inet.h", c "dirent.h", c "stdint.h", c "ctype.h", c "limits.h"
+import c "poll.h", c "sys/time.h", c "sys/types.h", c "math.h", c "sqlite3.h"
+
+void main() {
+    print("ok")
+}

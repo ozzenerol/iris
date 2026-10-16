@@ -286,16 +286,29 @@ static void loadCImports(Loader *L, Node *file) {
         return;
     }
     StrBuf key = {0};
-    sbPuts(&key, "c:");
+    sbPuts(&key, "c-import:");
     for (int i = 0; i < n; i++) {
         sbPrintf(&key, "%s%s", i ? "," : "", headers[i]);
     }
-    char *path = sbFinish(&key, L->arena);
-    Module *m = findModule(L, path);
+    char *source = sbFinish(&key, L->arena);
+    Module *m = NULL;
+    int count = 0;
+    for (Module *x = L->prog->modules; x; x = x->next) {
+        if (x->isC) {
+            count++;
+            if (strcmp(x->anchor->text, source) == 0) m = x;
+        }
+    }
+    const char *path = source;
     if (!m) {
-        m = newModule(L, path);
+        /* a short name for the compiled code: c1, c2 ... */
+        char shortName[32];
+        snprintf(shortName, sizeof shortName, "c%d", count + 1);
+        m = newModule(L, arenaStrndup(L->arena, shortName, strlen(shortName)));
         m->name = "c";
         m->anchor->name = "c";
+        m->anchor->text = source;
+        m->anchor->flags |= F_C_IMPORT;
         m->isC = true;
         m->state = 2;
         int before = gErrors;

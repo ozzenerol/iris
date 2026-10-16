@@ -17,6 +17,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct {
@@ -63,10 +64,13 @@ static bool boundsChecks(IR *ir) { return ir->mode != MODE_RELEASE_FAST; }
 static const char *fmt(IR *ir, const char *f, ...) {
     va_list ap;
     va_start(ap, f);
-    char buf[1024];
-    vsnprintf(buf, sizeof buf, f, ap);
+    int n = vsnprintf(NULL, 0, f, ap);
     va_end(ap);
-    return arenaStrndup(ir->arena, buf, strlen(buf));
+    char *buf = arenaAlloc(ir->arena, (size_t)n + 1);
+    va_start(ap, f);
+    vsnprintf(buf, (size_t)n + 1, f, ap);
+    va_end(ap);
+    return buf;
 }
 
 static const char *llType(IR *ir, Type *t) {
@@ -79,7 +83,7 @@ static const char *llType(IR *ir, Type *t) {
         case 32: return "i32";
         default: return "i64";
         }
-    case TY_PTR: case TY_NULL: return "ptr";
+    case TY_PTR: case TY_NULL: case TY_FUNC: return "ptr";
     case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
@@ -115,10 +119,14 @@ static void ins(IR *ir, const char *f, ...) {
     ensureBlock(ir);
     va_list ap;
     va_start(ap, f);
-    char buf[2048];
-    vsnprintf(buf, sizeof buf, f, ap);
+    int n = vsnprintf(NULL, 0, f, ap);
+    va_end(ap);
+    char *buf = malloc((size_t)n + 1);
+    va_start(ap, f);
+    vsnprintf(buf, (size_t)n + 1, f, ap);
     va_end(ap);
     sbPrintf(&ir->body, "  %s\n", buf);
+    free(buf);
 }
 
 static const char *tmp(IR *ir) { return fmt(ir, "%%t%d", ++ir->tmp); }
@@ -347,6 +355,10 @@ static const char *vtable(IR *ir, Type *st, Node *iface) {
 
 static Val emitConvert(IR *ir, Node *e) {
     Type *to = e->type, *from = e->a->type;
+    if (to->kind == TY_PTR && from->kind == TY_PTR) {
+        Val p = emitExpr(ir, e->a);
+        return val(p.s, to);        /* all pointers are ptr in LLVM */
+    }
     if (to->kind == TY_DYN) {
         Val p = emitExpr(ir, e->a);
         const char *vt = vtable(ir, from->elem, to->decl);
@@ -776,6 +788,31 @@ static Val emitBuiltin(IR *ir, Node *e) {
     }
     case BI_ENUM_NEW:
         return emitEnumValue(ir, e->type, e->ref, &e->list);
+    case BI_INDIRECT: {
+        Type *ft = e->a->type;
+        Val fp = emitExpr(ir, e->a);
+        nullCheck(ir, fp.s, e);
+        StrBuf args = {0}, fty = {0};
+        sbPrintf(&fty, "%s (", llType(ir, ft->elem));
+        for (int i = 0; i < e->list.len; i++) {
+            Val v = emitExpr(ir, e->list.items[i]);
+            sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, ft->elems[i]), v.s);
+            sbPrintf(&fty, "%s%s", i ? ", " : "", llType(ir, ft->elems[i]));
+        }
+        sbPutc(&fty, ')');
+        Val r;
+        if (ft->elem->kind == TY_VOID) {
+            ins(ir, "call %s %s(%s)", fty.buf, fp.s, args.buf ? args.buf : "");
+            r = val("", &tyVoid);
+        } else {
+            const char *t = tmp(ir);
+            ins(ir, "%s = call %s %s(%s)", t, fty.buf, fp.s, args.buf ? args.buf : "");
+            r = val(t, ft->elem);
+        }
+        sbFree(&args);
+        sbFree(&fty);
+        return r;
+    }
     case BI_DYN_CALL: {
         /* the function comes from the table, self is the data pointer */
         Node *m = e->ref;
@@ -1254,6 +1291,9 @@ static Val emitExpr(IR *ir, Node *e) {
         return val("null", e->type);
     case N_IDENT: {
         Node *d = e->ref;
+        if (d->kind == N_FUNC) {
+            return val(d->ir, e->type);     /* a function as a value: its address */
+        }
         if (d->kind == N_CONST) {
             return emitExpr(ir, d->b);  /* a str constant */
         }
@@ -1812,7 +1852,7 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->allocas = (StrBuf){0};
     ir->body = (StrBuf){0};
 
-    sbPrintf(out, "define internal %s %s(", llType(ir, f->type), f->ir);
+    sbPrintf(out, "define %s%s %s(", (f->flags & F_EXPORT) ? "" : "internal ", llType(ir, f->type), f->ir);
     for (int i = 0; i < f->list.len; i++) {
         Node *p = f->list.items[i];
         sbPrintf(out, "%s%s %%p.%s", i ? ", " : "", llType(ir, p->type), p->name);
@@ -2010,6 +2050,11 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                 sbPuts(&decl, ")\n");
                 sbPuts(&ir.head, decl.buf);
                 sbFree(&decl);
+            } else if (d->flags & F_EXPORT) {
+                d->ir = fmt(&ir, "@%s", d->text);
+                if (strcmp(d->name, "main") == 0 && strcmp(mod, "main") == 0) {
+                    mainFn = d;
+                }
             } else if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
                 d->ir = fmt(&ir, "@\"m.%s.%s.%s\"", mod, d->list.items[0]->type->elem->name, d->name);
             } else {
