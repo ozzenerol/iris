@@ -79,7 +79,14 @@ res.text("hello {name}")
 log.write("got {n} bytes from {addr}")
 ```
 
-Anywhere else, text with values needs `format`.
+A `String` that a call gives, passed straight to a function that takes a `str`, is freed when the statement ends too:
+
+```iris
+res.json(json.encode(user))
+print(json.encode(user))
+```
+
+Anywhere else, text with values needs `format`, and a `String` from a call needs a variable that frees it.
 
 A complete program:
 
@@ -134,6 +141,14 @@ In a raw string, `r"..."`, backslashes and braces are plain characters:
 ```iris
 path := r"C:\tools\iris"
 pattern := r"\d+{2}"
+```
+
+`r"""..."""` is raw text that can also hold quotes and span several lines. The indentation all lines share is removed, as with `"""`. It suits JSON and other text full of quotes and braces:
+
+```iris
+body := r"""
+    {"name": "Ada", "tags": ["admin"]}
+    """
 ```
 
 ## Characters

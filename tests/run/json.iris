@@ -1,0 +1,61 @@
+// expect: 7 [Ada é
+// expect: ] ada@x.io true 1.5 2 Turin 3
+// expect: {"id":7,"full_name":"Ada é\n","email":"ada@x.io","active":true,"score":1.5,"role":"admin","tags":["a","b"],"home":{"city":"Turin","zip":10100},"lucky":[1,2,3]}
+// expect: true b
+// expect: JsonError.missing: the required field "email" is missing
+// expect: JsonError.wrongType: id: expected a number, found a string
+// expect: JsonError.wrongType: id: expected a whole number
+// expect: JsonError.range: home.zip: 70000 doesn't fit in u16
+// expect: JsonError.wrongType: role: "boss" isn't one of the enum's values
+// expect: JsonError.wrongType: tags[0]: expected a string, found a number
+// expect: JsonError.syntax: line 1, column 15: expected a key in quotes
+// expect: JsonError.wrongType: expected an object, found an array
+// expect: JsonError.syntax: line 1, column 16: more text after the value
+
+import json
+
+enum Role { admin, member }
+
+@json
+struct Address {
+    String city
+    u16 zip
+}
+
+@json
+struct User {
+    i64 id
+    @json("full_name") String name
+    @json(required) String email
+    bool active = true
+    f64 score
+    Role role
+    String[] tags
+    Address home
+    i32[3] lucky
+}
+
+!void main() {
+    text := r"""
+        {"id": 7, "full_name": "Ada \u00e9\n", "email": "ada@x.io", "score": 1.5,
+         "role": "admin", "tags": ["a", "b"], "home": {"city": "Turin", "zip": 10100},
+         "lucky": [1, 2, 3], "extra": {"ignored": [1, {"x": null}]}}
+        """
+    scoped User u = try json.decode(User, text)
+    print("{u.id} [{u.name}] {u.email} {u.active} {u.score} {u.tags.len} {u.home.city} {u.lucky[2]}")
+    print(json.encode(u))
+    scoped String again = json.encode(u)
+    scoped User v = try json.decode(User, again)
+    print("{v.name == u.name} {v.tags[1]}")
+
+    bad := [r"""{"id": 1}""", r"""{"id": "x", "email": "e"}""", r"""{"id": 1.5, "email": "e"}""",
+            r"""{"email": "e", "home": {"zip": 70000}}""", r"""{"email": "e", "role": "boss"}""",
+            r"""{"email": "e", "tags": [1]}""", r"""{"email": "e",}""", "[1]", r"""{"email": "e"} x"""]
+    for b in bad {
+        User w = json.decode(User, b) catch e {
+            print("{e.code}: {e.message}")
+            continue
+        }
+        w.free()
+    }
+}

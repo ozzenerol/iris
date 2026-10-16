@@ -1,0 +1,13 @@
+// expect: {"a": "b\\n {x}"}
+// expect:   two
+// expect: {"one": 1}
+
+void main() {
+    x := 1
+    t := r"""
+        {"a": "b\\n {x}"}
+          two
+        """
+    print(t)
+    print(r"""{"one": 1}""")
+}

@@ -1,0 +1,46 @@
+// expect: [HTTP/1.1 201 Created]
+// expect: [Content-Type: application/json]
+// expect: [Content-Length: 38]
+// expect: [Connection: close]
+// expect: []
+// expect: [{"id":1,"name":"Ada","tags":["admin"]}]
+
+import http, json, net
+
+@json
+struct User {
+    i64 id
+    @json(required) String name
+    String[] tags
+}
+
+void route(http.Request *req, http.Response *res) {
+    scoped User u = json.decode(User, req.body) catch e {
+        res.status = 400
+        res.json("{{\"error\": \"{e.message}\"}}")
+        return
+    }
+    u.id = 1
+    res.status = 201
+    res.json(json.encode(u))
+}
+
+void server(net.Listener ln) {
+    http.serveOn(ln, route) catch e { }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    body := r"""{"name": "Ada", "tags": ["admin"]}"""
+    try c.write("POST /users HTTP/1.1\r\nContent-Length: {body.len}\r\nConnection: close\r\n\r\n{body}")
+    for {
+        line := c.readLine() catch e {
+            break
+        }
+        print("[{line}]")
+        line.free()
+    }
+}

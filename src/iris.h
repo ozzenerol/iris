@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.13.0"
+#define IRIS_VERSION "0.14.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -139,6 +139,10 @@ enum {
     F_VARIADIC = 1 << 12,   /* a C function taking more arguments: printf */
     F_EXPORT = 1 << 13,     /* @export: a function C can call by name */
     F_TEMPTEXT = 1 << 14,   /* text with {} values passed as a str: a String until the statement ends */
+    F_JSON = 1 << 15,       /* a struct with @json */
+    F_REQUIRED = 1 << 16,   /* a field with @json(required) */
+    F_TEMPSTR = 1 << 17,    /* a String from a call passed as a str: freed when the statement ends */
+    F_INTRINSIC = 1 << 18,  /* @builtin in the standard library: the compiler makes the call */
 };
 
 typedef struct Node Node;
@@ -286,6 +290,9 @@ struct Type {
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
 extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64, tyDuration, tyMutex, tyThread;
+int64_t typeSizeOf(Type *t);
+int64_t fieldOffset(Type *t, int index);
+bool isJsonStruct(Type *t);
 
 /* What a call does when it isn't a call to a user function. */
 enum {
@@ -300,6 +307,7 @@ enum {
     BI_ATOMIC_LOAD, BI_ATOMIC_STORE, BI_ATOMIC_ADD, BI_ATOMIC_SUB, BI_ATOMIC_SWAP, BI_ATOMIC_CAS,
     BI_MUTEX_LOCK, BI_MUTEX_UNLOCK, BI_MUTEX_TRY_LOCK,
     BI_THREAD_JOIN,
+    BI_JSON_ENCODE, BI_JSON_DECODE, BI_JSON_FREE,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

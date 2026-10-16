@@ -63,6 +63,11 @@ These are suggestions. They are used in the examples on these pages until they a
 | `Atomic[T]` is a type used only through its methods, for integers and `bool`. All operations are sequentially consistent. | A plain read or write of it can't happen by mistake, and there are no memory orders to learn. |
 | `Mutex` has `lock`, `unlock` and `tryLock`, used with `defer`. A task waiting for it lets the other tasks of its thread run. | Nothing new to learn, and a waiting task doesn't stop its thread. |
 | `threadlocal` is for global variables only. | A local variable belongs to one task already. |
+| `@json` works from a table the compiler writes for each type; the runtime encodes, decodes and frees from it. | One small piece of C serves every type, and the program stays small. |
+| A JSON key is the field's name as written. A missing field keeps its default unless it is `@json(required)`. Unknown keys are skipped. | Matches what most APIs send, with one attribute for the strict case. |
+| A `@json` struct without a `free` method gets one. | Decoded values work with `scoped`. |
+| A `String` from a call, passed straight to a `str` parameter, is freed when the statement ends. | `res.json(json.encode(u))` needs no variable and doesn't leak. Same rule as text with values. |
+| `r"""..."""` is raw text over several lines. | JSON and other text with quotes and braces can be written as it is. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

@@ -305,6 +305,26 @@ Token *lexRange(Arena *a, Source *src, const char *start, const char *end,
             }
             continue;
         }
+        if (c == 'r' && L.end - L.p >= 4 && !memcmp(L.p + 1, "\"\"\"", 3)) {
+            /* r"""...""": raw, over several lines */
+            const char *s = L.p;
+            int l = L.line, cl = L.col;
+            for (int i = 0; i < 4; i++) {
+                adv(&L);
+            }
+            while (L.p < L.end && !(L.end - L.p >= 3 && !memcmp(L.p, "\"\"\"", 3))) {
+                adv(&L);
+            }
+            if (L.p >= L.end) {
+                lexError(&L, l, cl, "this string has no closing \"\"\"");
+            } else {
+                adv(&L);
+                adv(&L);
+                adv(&L);
+            }
+            push(&L, T_RSTRING, s, (int)(L.p - s), l, cl);
+            continue;
+        }
         if (c == 'r' && L.p + 1 < L.end && L.p[1] == '"') {
             const char *s = L.p;
             int l = L.line, cl = L.col;

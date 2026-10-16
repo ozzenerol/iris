@@ -1,0 +1,51 @@
+// error: 25: @json on a field takes the JSON name in quotes, required, or both: @json("id", required)
+// error: 26: a JSON name can't be empty
+// error: 22: Bad holds a Plain, which needs @json too
+// error: 23: i64 * can't be turned into JSON
+// error: 24: Shape is an enum with data, which @json can't turn into JSON yet
+// error: 30: @json on a field needs @json on the struct NotJson too
+// error: 33: @json on a struct takes nothing; field names go on the fields: @json("name")
+// error: 46: json.decode can't fill a str, which can't own its text; use a String
+// error: 47: Plain needs @json to be read from JSON
+// error: 49: Plain needs @json to be turned into JSON
+// error: 50: json.decode takes a type and the text: json.decode(User, text)
+import json
+
+struct Plain {
+    i64 x
+}
+
+enum Shape { circle(f64 r), square }
+
+@json
+struct Bad {
+    Plain p
+    i64 *ptr
+    Shape s
+    @json(5) i64 a
+    @json("") i64 b
+}
+
+struct NotJson {
+    @json("x") i64 x
+}
+
+@json("name")
+struct Named {
+    i64 x
+}
+
+@json
+struct View {
+    str name
+}
+
+void main() {
+    v := View{name: "a"}
+    print(json.encode(v))
+    _ = json.decode(View, r"""{}""")
+    _ = json.decode(Plain, r"""{}""")
+    p := Plain{x: 1}
+    print(json.encode(p))
+    _ = json.decode(View)
+}

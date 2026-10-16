@@ -442,6 +442,23 @@ static int64_t typeAlign(Type *t) {
     }
 }
 
+int64_t typeSizeOf(Type *t) {
+    return typeSize(t);
+}
+
+/* Where field `index` of struct t starts, by the same rules as typeSize. */
+int64_t fieldOffset(Type *t, int index) {
+    int64_t off = 0;
+    for (int i = 0; i <= index; i++) {
+        Type *ft = t->decl->list.items[i]->type;
+        int64_t a = typeAlign(ft);
+        off = (off + a - 1) / a * a;
+        if (i == index) break;
+        off += typeSize(ft);
+    }
+    return off;
+}
+
 /* An enum's type. Its values are worked out the first time. Each enum
  * gets a number, used to tell error codes from different enums apart.
  * A value with data carries fields, like a function's parameters; a flag
@@ -930,6 +947,85 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
 
 /* ---------------------------------------------------------------- structs */
 
+/* @json("key"), @json(required) or both, on a field of a @json struct. */
+static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
+    if (strcmp(at->name, "json") != 0) {
+        notYet(c, at, "attributes", "a later version");
+        return;
+    }
+    if (!(d->flags & F_JSON)) {
+        error(c, at, "@json on a field needs @json on the struct %s too", d->name);
+        return;
+    }
+    if (!at->list.len) {
+        error(c, at, "@json on a field takes the JSON name in quotes, required, or both");
+    }
+    for (int i = 0; i < at->list.len; i++) {
+        Node *a = at->list.items[i];
+        if (a->kind == N_STRING && i == 0) {
+            if (!a->textLen) {
+                error(c, a, "a JSON name can't be empty");
+            }
+            f->text = a->text;
+            f->textLen = a->textLen;
+        } else if (a->kind == N_IDENT && strcmp(a->name, "required") == 0) {
+            f->flags |= F_REQUIRED;
+        } else {
+            error(c, a, "@json on a field takes the JSON name in quotes, required, or both: @json(\"id\", required)");
+        }
+    }
+}
+
+bool isJsonStruct(Type *t) {
+    return t->kind == TY_STRUCT && t->decl && (t->decl->flags & F_JSON);
+}
+
+/* What JSON can hold: numbers, bool, text, plain enums, @json structs, and
+ * slices and arrays of those. */
+static bool jsonType(Checker *c, Type *t, Node *at, const char *owner) {
+    switch (t->kind) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING:
+        return true;
+    case TY_ENUM:
+        if (t->hasData || t->isFlags) {
+            error(c, at, "%s is an enum %s, which @json can't turn into JSON yet", t->name,
+                  t->hasData ? "with data" : "of flags");
+            return false;
+        }
+        return true;
+    case TY_SLICE: case TY_ARRAY:
+        return isStr(t) || jsonType(c, t->elem, at, owner);
+    case TY_STRUCT:
+        if (!t->decl || !(t->decl->flags & F_JSON)) {
+            if (t->decl && !t->state) resolveStruct(c, t);
+            if (t->decl && (t->decl->flags & F_JSON)) return true;
+            error(c, at, "%s holds a %s, which needs @json too", owner, t->name);
+            return false;
+        }
+        return true;
+    default:
+        if (!isErr(t)) {
+            error(c, at, "%s can't be turned into JSON", t->name);
+        }
+        return false;
+    }
+}
+
+static void checkJsonFields(Checker *c, Type *t, Node *d) {
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (!f->type || isErr(f->type)) continue;
+        if (f->kind == N_EMBED) {
+            if (!isJsonStruct(f->type)) {
+                error(c, f, "%s embeds %s, which needs @json too", d->name, f->type->name);
+            }
+            continue;
+        }
+        jsonType(c, f->type, f, d->name);
+    }
+    (void)t;
+}
+
 static void resolveStruct(Checker *c, Type *t) {
     if (t->kind != TY_STRUCT || t->state == 2) {
         return;
@@ -951,8 +1047,15 @@ static void resolveStruct(Checker *c, Type *t) {
     if (d->a) {
         notYet(c, d->a, "align", "a later version");
     }
-    if (d->attrs.len) {
-        notYet(c, d->attrs.items[0], "attributes", "a later version");
+    for (int i = 0; i < d->attrs.len; i++) {
+        Node *at = d->attrs.items[i];
+        if (strcmp(at->name, "json") == 0 && !at->list.len) {
+            d->flags |= F_JSON;
+        } else if (strcmp(at->name, "json") == 0) {
+            error(c, at, "@json on a struct takes nothing; field names go on the fields: @json(\"name\")");
+        } else {
+            notYet(c, at, "attributes", "a later version");
+        }
     }
     for (int i = 0; i < d->list.len; i++) {
         Node *f = d->list.items[i];
@@ -981,8 +1084,8 @@ static void resolveStruct(Checker *c, Type *t) {
         if (f->c) {
             notYet(c, f->c, "bitfields", "a later version");
         }
-        if (f->attrs.len) {
-            notYet(c, f->attrs.items[0], "attributes", "a later version");
+        for (int k = 0; k < f->attrs.len; k++) {
+            checkFieldAttr(c, d, f, f->attrs.items[k]);
         }
         for (int j = 0; j < i; j++) {
             Node *g = d->list.items[j];
@@ -994,6 +1097,9 @@ static void resolveStruct(Checker *c, Type *t) {
     c->scope = saved;
     c->module = savedModule;
     t->state = 2;
+    if (d->flags & F_JSON) {
+        checkJsonFields(c, t, d);
+    }
 }
 
 /* Finds a field by name, also inside embedded structs (breadth first).
@@ -2485,6 +2591,19 @@ static bool checkTempText(Checker *c, Node **slot, Type *param) {
     return true;
 }
 
+/* A String that a call made, passed straight to a str parameter: nothing
+ * else can free it, so it is freed when the statement ends. */
+static void markTempString(Node **slot, Type *param) {
+    Node *x = *slot;
+    if (!isStr(param) || x->kind != N_CONVERT || !x->a->type || x->a->type->kind != TY_STRING) {
+        return;
+    }
+    Node *v = x->a;
+    if (v->kind == N_CALL || (v->kind == N_TRY && v->a && v->a->kind == N_CALL)) {
+        v->flags |= F_TEMPSTR;
+    }
+}
+
 /* print, panic and format: one argument, the text, which may have {}
  * values in it. */
 static void checkTextArg(Checker *c, Node *call, const char *fn) {
@@ -2520,6 +2639,7 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
     }
     if (t->kind == TY_STRING) {
         coerce(c, slot, &tyStr, "the text");
+        markTempString(slot, &tyStr);
     } else if (!isStr(t)) {
         error(c, arg, "%s takes text, not %s; write %s(\"{...}\") to use a value", fn, t->name, fn);
     }
@@ -2589,6 +2709,7 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
             char what[96];
             snprintf(what, sizeof what, "the argument for %s", param->name);
             coerce(c, &args[j], param->type, what);
+            markTempString(&args[j], param->type);
         }
         listPush(c->arena, out, args[j]);
     }
@@ -2739,6 +2860,7 @@ static Type *checkMethodCall(Checker *c, Node *e) {
                     Type *at = checkExpr(c, &e->list.items[0], &tyStr);
                     if (!isErr(at)) {
                         coerce(c, &e->list.items[0], &tyStr, "the text to add");
+                        markTempString(&e->list.items[0], &tyStr);
                     }
                 }
                 e->builtin = BI_STRING_APPEND;
@@ -2756,6 +2878,18 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         Type *base = t->kind == TY_PTR ? t->elem : t;
         if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD) {
             return checkSyncMethod(c, e, t, name);
+        }
+        if (isJsonStruct(base) && strcmp(name, "free") == 0 && !findMethodIn(base, "free")) {
+            /* the free @json gives a struct: its Strings and slices */
+            if (t->kind != TY_PTR && !addressable(recv)) {
+                error(c, recv, "free changes the value, so it must be called on a variable");
+                return setType(e, &tyError);
+            }
+            if (e->list.len) {
+                error(c, e, "free takes no arguments");
+            }
+            e->builtin = BI_JSON_FREE;
+            return setType(e, &tyVoid);
         }
     }
 
@@ -3016,6 +3150,7 @@ static Type *checkIndirectCall(Checker *c, Node *e, Type *ft) {
         }
         checkExpr(c, slot, ft->elems[i]);
         coerce(c, slot, ft->elems[i], "the argument");
+        markTempString(slot, ft->elems[i]);
     }
     e->builtin = BI_INDIRECT;
     return setType(e, ft->elem);
@@ -3041,6 +3176,103 @@ static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
     e->ref = m;
     e->builtin = BI_ENUM_NEW;
     return setType(e, et);
+}
+
+/* The type named by a call's argument: json.decode(User, text). */
+static Type *typeArgument(Checker *c, Node *a) {
+    if (a->kind == N_IDENT) {
+        return typeFromName(c, a->name, a, true);
+    }
+    error(c, a, "this should be a type's name: json.decode(User, text)");
+    return &tyError;
+}
+
+/* Whether json.decode can fill a value of type t: str points into memory
+ * it doesn't own, so text must be a String. */
+static bool jsonDecodable(Checker *c, Type *t, Node *at) {
+    if (isStr(t)) {
+        error(c, at, "json.decode can't fill a str, which can't own its text; use a String");
+        return false;
+    }
+    if (t->kind == TY_SLICE || t->kind == TY_ARRAY) {
+        return jsonDecodable(c, t->elem, at);
+    }
+    if (isJsonStruct(t)) {
+        for (int i = 0; i < t->decl->list.len; i++) {
+            Node *f = t->decl->list.items[i];
+            if (f->type && !jsonDecodable(c, f->type, at)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* json.encode(v) and json.decode(T, text). */
+static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
+    for (int i = 0; i < e->list.len; i++) {
+        if (e->list.items[i]->kind == N_NAMED_ARG) {
+            error(c, e->list.items[i], "%s takes its arguments by position", d->name);
+            return setType(e, &tyError);
+        }
+    }
+    if (strcmp(d->name, "encode") == 0) {
+        if (e->list.len != 1) {
+            error(c, e, "json.encode takes one value");
+            return setType(e, &tyError);
+        }
+        Type *t = checkExpr(c, &e->list.items[0], NULL);
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_STRUCT && !isJsonStruct(t)) {
+            error(c, e->list.items[0], "%s needs @json to be turned into JSON", t->name);
+            return setType(e, &tyError);
+        }
+        if (!jsonType(c, t, e->list.items[0], "this value")) return setType(e, &tyError);
+        e->builtin = BI_JSON_ENCODE;
+        return setType(e, &tyString);
+    }
+    if (strcmp(d->name, "decode") == 0) {
+        if (e->list.len != 2) {
+            error(c, e, "json.decode takes a type and the text: json.decode(User, text)");
+            return setType(e, &tyError);
+        }
+        Type *t = typeArgument(c, e->list.items[0]);
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        if (t->kind == TY_STRUCT && !isJsonStruct(t)) {
+            error(c, e->list.items[0], "%s needs @json to be read from JSON", t->name);
+            return setType(e, &tyError);
+        }
+        if (!jsonType(c, t, e->list.items[0], "this value") || !jsonDecodable(c, t, e->list.items[0])) {
+            return setType(e, &tyError);
+        }
+        Node **text = &e->list.items[1];
+        Type *tt = checkExpr(c, text, &tyStr);
+        if (isErr(tt)) return setType(e, &tyError);
+        coerce(c, text, &tyStr, "the text");
+        markTempString(text, &tyStr);
+        Node *into = lookup(c, "json.decodeInto");
+        if (!into) {
+            error(c, e, "json.decode needs the json module's decodeInto");
+            return setType(e, &tyError);
+        }
+        e->ref = into;
+        e->a->ref = d;
+        /* the starting value: the defaults of the struct's fields */
+        if (t->kind == TY_STRUCT) {
+            Node *lit = like(c, N_STRUCT_LIT, e);
+            checkExpr(c, &lit, t);
+            e->b = lit;
+        }
+        e->builtin = BI_JSON_DECODE;
+        e->ival = 0;
+        Type *rt = resultOf(t);
+        e->c = like(c, N_T_NAME, e);
+        e->c->type = t;
+        return setType(e, rt);
+    }
+    error(c, e, "%s is not a built-in the compiler knows", d->name);
+    return setType(e, &tyError);
 }
 
 static Type *checkCall(Checker *c, Node *e, Type *expected) {
@@ -3085,6 +3317,9 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     }
     const char *name = callee->name;
     Node *d = lookup(c, name);
+    if (d && d->kind == N_FUNC && (d->flags & F_INTRINSIC)) {
+        return checkIntrinsic(c, e, d);
+    }
 
     if (!d && isBuiltinName(name)) {
         if (strcmp(name, "alloc") == 0) {
@@ -3616,8 +3851,8 @@ static void checkLocalVar(Checker *c, Node *s) {
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
         Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
-        if (t->kind == TY_STRING) {
-            s->ref = NULL;
+        if (t->kind == TY_STRING || (!m && isJsonStruct(t))) {
+            s->ref = NULL;              /* freed by the runtime */
         } else if (!m) {
             error(c, s, "scoped needs a type with a free method; %s has none", t->name);
         } else if (m->list.len != 1) {
@@ -4223,11 +4458,14 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
                     listPush(c->arena, &c->exports, f);
                 }
             }
+        } else if (strcmp(at->name, "builtin") == 0 && f->module && f->src &&
+                   strncmp(f->src->path, "std/", 4) == 0) {
+            f->flags |= F_INTRINSIC;    /* the compiler makes calls to it */
         } else {
             notYet(c, at, "attributes", "a later version");
         }
     }
-    if (!f->c && !f->d && !(f->flags & F_EXTERN) && !f->b) {
+    if (!f->c && !f->d && !(f->flags & (F_EXTERN | F_INTRINSIC)) && !f->b) {
         error(c, f, "%s has no body", f->name);
     }
     f->type = resolveType(c, f->a);

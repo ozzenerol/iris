@@ -1901,3 +1901,749 @@ int64_t iris_cpu_count(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? n : 1;
 }
+
+/* ---------------------------------------------------------------- json
+
+   json.encode, json.decode and the free of @json structs work from a table
+   the compiler writes for each type (ir.c, jsonType). */
+
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM };
+
+typedef struct JsonType {
+    int32_t kind, size;
+    int64_t count;              /* fields, array items or enum values */
+    const void *items;          /* JsonField[], the element's JsonType, or JsonName[] */
+} JsonType;
+
+typedef struct {
+    const char *name;
+    int64_t nameLen, offset;
+    const JsonType *type;
+    int64_t required;
+} JsonField;
+
+typedef struct {
+    const char *name;
+    int64_t len, value;
+} JsonName;
+
+typedef struct {
+    char *ptr;
+    int64_t len;
+} Slice;
+
+static int64_t readInt(const char *p, int size, bool sign) {
+    switch (size) {
+    case 1: return sign ? *(int8_t *)p : *(uint8_t *)p;
+    case 2: return sign ? *(int16_t *)p : *(uint16_t *)p;
+    case 4: return sign ? *(int32_t *)p : *(uint32_t *)p;
+    default: return *(int64_t *)p;
+    }
+}
+
+static void writeInt(char *p, int size, int64_t v) {
+    switch (size) {
+    case 1: *(int8_t *)p = (int8_t)v; break;
+    case 2: *(int16_t *)p = (int16_t)v; break;
+    case 4: *(int32_t *)p = (int32_t)v; break;
+    default: *(int64_t *)p = v; break;
+    }
+}
+
+static void jsonQuote(IrisString *out, const char *s, int64_t n) {
+    iris_string_append(out, "\"", 1);
+    int64_t start = 0;
+    for (int64_t i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        const char *esc = NULL;
+        char buf[8];
+        switch (ch) {
+        case '"': esc = "\\\""; break;
+        case '\\': esc = "\\\\"; break;
+        case '\n': esc = "\\n"; break;
+        case '\r': esc = "\\r"; break;
+        case '\t': esc = "\\t"; break;
+        case '\b': esc = "\\b"; break;
+        case '\f': esc = "\\f"; break;
+        default:
+            if (ch < 0x20) {
+                snprintf(buf, sizeof buf, "\\u%04x", ch);
+                esc = buf;
+            }
+        }
+        if (esc) {
+            iris_string_append(out, s + start, i - start);
+            iris_string_append(out, esc, (int64_t)strlen(esc));
+            start = i + 1;
+        }
+    }
+    iris_string_append(out, s + start, n - start);
+    iris_string_append(out, "\"", 1);
+}
+
+static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
+    char buf[32];
+    switch (t->kind) {
+    case J_INT: case J_UINT: {
+        int64_t v = readInt(p, t->size, t->kind == J_INT);
+        int n = t->kind == J_INT || t->size < 8 ? snprintf(buf, sizeof buf, "%lld", (long long)v)
+                                                : snprintf(buf, sizeof buf, "%llu", (unsigned long long)v);
+        iris_string_append(out, buf, n);
+        break;
+    }
+    case J_FLOAT: {
+        double v = t->size == 4 ? *(float *)p : *(double *)p;
+        if (v != v || v == 1.0 / 0.0 || v == -1.0 / 0.0) {
+            iris_string_append(out, "null", 4);     /* JSON has no NaN or infinity */
+        } else {
+            iris_write_float(3, out, v, t->size * 8);
+        }
+        break;
+    }
+    case J_BOOL:
+        if (*(uint8_t *)p) {
+            iris_string_append(out, "true", 4);
+        } else {
+            iris_string_append(out, "false", 5);
+        }
+        break;
+    case J_STR: {
+        const Slice *s = (const Slice *)p;
+        jsonQuote(out, s->ptr, s->len);
+        break;
+    }
+    case J_STRING: {
+        const IrisString *s = (const IrisString *)p;
+        jsonQuote(out, s->ptr, s->len);
+        break;
+    }
+    case J_ENUM: {
+        int64_t v = *(int32_t *)p;
+        const JsonName *names = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (names[i].value == v) {
+                jsonQuote(out, names[i].name, names[i].len);
+                return;
+            }
+        }
+        int n = snprintf(buf, sizeof buf, "%lld", (long long)v);
+        iris_string_append(out, buf, n);
+        break;
+    }
+    case J_STRUCT: {
+        const JsonField *fs = t->items;
+        iris_string_append(out, "{", 1);
+        for (int64_t i = 0; i < t->count; i++) {
+            if (i) iris_string_append(out, ",", 1);
+            jsonQuote(out, fs[i].name, fs[i].nameLen);
+            iris_string_append(out, ":", 1);
+            jsonEncode(out, fs[i].type, p + fs[i].offset);
+        }
+        iris_string_append(out, "}", 1);
+        break;
+    }
+    case J_SLICE: case J_ARRAY: {
+        const JsonType *et = t->items;
+        const char *base = p;
+        int64_t n = t->count;
+        if (t->kind == J_SLICE) {
+            base = ((const Slice *)p)->ptr;
+            n = ((const Slice *)p)->len;
+        }
+        iris_string_append(out, "[", 1);
+        for (int64_t i = 0; i < n; i++) {
+            if (i) iris_string_append(out, ",", 1);
+            jsonEncode(out, et, base + i * et->size);
+        }
+        iris_string_append(out, "]", 1);
+        break;
+    }
+    }
+}
+
+void iris_json_encode(const JsonType *t, const char *value, IrisString *out) {
+    jsonEncode(out, t, value);
+}
+
+static bool jsonOwns(const JsonType *t) {
+    switch (t->kind) {
+    case J_STRING: case J_SLICE: return true;
+    case J_ARRAY: return jsonOwns(t->items);
+    case J_STRUCT: {
+        const JsonField *fs = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (jsonOwns(fs[i].type)) return true;
+        }
+        return false;
+    }
+    default: return false;
+    }
+}
+
+/* Frees the Strings and slices inside the value at p, and empties them. */
+static void jsonFree(const JsonType *t, char *p) {
+    switch (t->kind) {
+    case J_STRING:
+        iris_string_free((IrisString *)p);
+        break;
+    case J_STRUCT: {
+        const JsonField *fs = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (jsonOwns(fs[i].type)) jsonFree(fs[i].type, p + fs[i].offset);
+        }
+        break;
+    }
+    case J_ARRAY: {
+        const JsonType *et = t->items;
+        if (jsonOwns(et)) {
+            for (int64_t i = 0; i < t->count; i++) jsonFree(et, p + i * et->size);
+        }
+        break;
+    }
+    case J_SLICE: {
+        const JsonType *et = t->items;
+        Slice *s = (Slice *)p;
+        if (jsonOwns(et)) {
+            for (int64_t i = 0; i < s->len; i++) jsonFree(et, s->ptr + i * et->size);
+        }
+        free(s->ptr);
+        s->ptr = NULL;
+        s->len = 0;
+        break;
+    }
+    }
+}
+
+void iris_json_free(const JsonType *t, char *value) {
+    jsonFree(t, value);
+}
+
+/* The reader: one pass over the text, filling the value in place. */
+typedef struct {
+    const char *s, *p, *end;
+    int code;                   /* 0, or 1 syntax, 2 type, 3 missing, 4 range */
+    int depth;
+    char path[256];
+    size_t pathLen;
+} JsonIn;
+
+static _Thread_local char jsonMsg[512];
+static _Thread_local int64_t jsonMsgLen;
+
+const char *iris_json_message_ptr(void) { return jsonMsg; }
+int64_t iris_json_message_len(void) { return jsonMsgLen; }
+
+static bool jsonFail(JsonIn *in, int code, const char *what) {
+    if (in->code) return false;
+    in->code = code;
+    if (code == 1) {
+        int line = 1, col = 1;
+        for (const char *q = in->s; q < in->p && q < in->end; q++) {
+            if (*q == '\n') {
+                line++;
+                col = 1;
+            } else {
+                col++;
+            }
+        }
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "line %d, column %d: %s", line, col, what);
+    } else if (in->pathLen) {
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s: %s", in->path, what);
+    } else {
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s", what);
+    }
+    if (jsonMsgLen >= (int64_t)sizeof jsonMsg) jsonMsgLen = sizeof jsonMsg - 1;
+    return false;
+}
+
+static void jsonWs(JsonIn *in) {
+    while (in->p < in->end && (*in->p == ' ' || *in->p == '\t' || *in->p == '\n' || *in->p == '\r')) in->p++;
+}
+
+static const char *jsonFound(JsonIn *in) {
+    jsonWs(in);
+    if (in->p >= in->end) return "the end of the text";
+    switch (*in->p) {
+    case '"': return "a string";
+    case '{': return "an object";
+    case '[': return "an array";
+    case 't': case 'f': return "a bool";
+    case 'n': return "null";
+    default: return (*in->p == '-' || (*in->p >= '0' && *in->p <= '9')) ? "a number" : "something else";
+    }
+}
+
+static bool jsonExpected(JsonIn *in, const char *what) {
+    char msg[96];
+    const char *found = jsonFound(in);
+    if (!strcmp(found, "something else") || !strcmp(found, "the end of the text")) {
+        snprintf(msg, sizeof msg, "expected %s, found %s", what, found);
+        return jsonFail(in, 1, msg);
+    }
+    snprintf(msg, sizeof msg, "expected %s, found %s", what, found);
+    return jsonFail(in, 2, msg);
+}
+
+static bool jsonLit(JsonIn *in, const char *word) {
+    size_t n = strlen(word);
+    if ((size_t)(in->end - in->p) >= n && !memcmp(in->p, word, n)) {
+        in->p += n;
+        return true;
+    }
+    return false;
+}
+
+static void putUtf8(IrisString *out, uint32_t c) {
+    char b[4];
+    int n;
+    if (c < 0x80) {
+        b[0] = (char)c;
+        n = 1;
+    } else if (c < 0x800) {
+        b[0] = (char)(0xc0 | (c >> 6));
+        b[1] = (char)(0x80 | (c & 0x3f));
+        n = 2;
+    } else if (c < 0x10000) {
+        b[0] = (char)(0xe0 | (c >> 12));
+        b[1] = (char)(0x80 | ((c >> 6) & 0x3f));
+        b[2] = (char)(0x80 | (c & 0x3f));
+        n = 3;
+    } else {
+        b[0] = (char)(0xf0 | (c >> 18));
+        b[1] = (char)(0x80 | ((c >> 12) & 0x3f));
+        b[2] = (char)(0x80 | ((c >> 6) & 0x3f));
+        b[3] = (char)(0x80 | (c & 0x3f));
+        n = 4;
+    }
+    iris_string_append(out, b, n);
+}
+
+static int hexDigits(const char *p) {
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = p[i];
+        v <<= 4;
+        if (c >= '0' && c <= '9') v |= c - '0';
+        else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+        else return -1;
+    }
+    return v;
+}
+
+/* A string, at the opening quote, into out (appended). */
+static bool jsonString(JsonIn *in, IrisString *out) {
+    in->p++;
+    const char *start = in->p;
+    while (in->p < in->end) {
+        unsigned char c = (unsigned char)*in->p;
+        if (c == '"') {
+            if (out) iris_string_append(out, start, in->p - start);
+            in->p++;
+            return true;
+        }
+        if (c < 0x20) {
+            return jsonFail(in, 1, "a control character inside a string");
+        }
+        if (c != '\\') {
+            in->p++;
+            continue;
+        }
+        if (out) iris_string_append(out, start, in->p - start);
+        in->p++;
+        if (in->p >= in->end) break;
+        char e = *in->p++;
+        char ch = 0;
+        switch (e) {
+        case '"': ch = '"'; break;
+        case '\\': ch = '\\'; break;
+        case '/': ch = '/'; break;
+        case 'b': ch = '\b'; break;
+        case 'f': ch = '\f'; break;
+        case 'n': ch = '\n'; break;
+        case 'r': ch = '\r'; break;
+        case 't': ch = '\t'; break;
+        case 'u': {
+            if (in->end - in->p < 4 || hexDigits(in->p) < 0) {
+                return jsonFail(in, 1, "a \\u escape needs four hex digits");
+            }
+            uint32_t cp = (uint32_t)hexDigits(in->p);
+            in->p += 4;
+            if (cp >= 0xd800 && cp < 0xdc00 && in->end - in->p >= 6 && in->p[0] == '\\' && in->p[1] == 'u' &&
+                hexDigits(in->p + 2) >= 0xdc00 && hexDigits(in->p + 2) < 0xe000) {
+                cp = 0x10000 + ((cp - 0xd800) << 10) + ((uint32_t)hexDigits(in->p + 2) - 0xdc00);
+                in->p += 6;
+            } else if (cp >= 0xd800 && cp < 0xe000) {
+                cp = 0xfffd;            /* half a pair: the replacement character */
+            }
+            if (out) putUtf8(out, cp);
+            start = in->p;
+            continue;
+        }
+        default:
+            in->p--;
+            return jsonFail(in, 1, "an unknown escape in a string");
+        }
+        if (out) iris_string_append(out, &ch, 1);
+        start = in->p;
+    }
+    return jsonFail(in, 1, "a string that doesn't end");
+}
+
+/* The extent of a number. */
+static bool jsonNumber(JsonIn *in, const char **start, size_t *n, bool *integer) {
+    const char *p = in->p;
+    *start = p;
+    *integer = true;
+    if (p < in->end && *p == '-') p++;
+    if (p >= in->end || *p < '0' || *p > '9') return jsonFail(in, 1, "a number that isn't one");
+    if (*p == '0') {
+        p++;
+    } else {
+        while (p < in->end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p < in->end && *p == '.') {
+        *integer = false;
+        p++;
+        if (p >= in->end || *p < '0' || *p > '9') return jsonFail(in, 1, "a number that isn't one");
+        while (p < in->end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p < in->end && (*p == 'e' || *p == 'E')) {
+        *integer = false;
+        p++;
+        if (p < in->end && (*p == '+' || *p == '-')) p++;
+        if (p >= in->end || *p < '0' || *p > '9') return jsonFail(in, 1, "a number that isn't one");
+        while (p < in->end && *p >= '0' && *p <= '9') p++;
+    }
+    *n = (size_t)(p - *start);
+    in->p = p;
+    return true;
+}
+
+static bool jsonSkip(JsonIn *in);
+
+static bool jsonDeeper(JsonIn *in) {
+    if (++in->depth > 512) {
+        return jsonFail(in, 1, "the text is nested too deeply");
+    }
+    return true;
+}
+
+static bool jsonSkipContainer(JsonIn *in, char close) {
+    if (!jsonDeeper(in)) return false;
+    in->p++;
+    jsonWs(in);
+    if (in->p < in->end && *in->p == close) {
+        in->p++;
+        in->depth--;
+        return true;
+    }
+    for (;;) {
+        jsonWs(in);
+        if (close == '}') {
+            if (in->p >= in->end || *in->p != '"') return jsonFail(in, 1, "expected a key in quotes");
+            if (!jsonString(in, NULL)) return false;
+            jsonWs(in);
+            if (in->p >= in->end || *in->p != ':') return jsonFail(in, 1, "expected ':' after the key");
+            in->p++;
+        }
+        if (!jsonSkip(in)) return false;
+        jsonWs(in);
+        if (in->p < in->end && *in->p == ',') {
+            in->p++;
+            continue;
+        }
+        if (in->p < in->end && *in->p == close) {
+            in->p++;
+            in->depth--;
+            return true;
+        }
+        return jsonFail(in, 1, close == '}' ? "expected ',' or '}'" : "expected ',' or ']'");
+    }
+}
+
+/* Reads past one value of any kind. */
+static bool jsonSkip(JsonIn *in) {
+    jsonWs(in);
+    if (in->p >= in->end) return jsonFail(in, 1, "expected a value, found the end of the text");
+    switch (*in->p) {
+    case '"': return jsonString(in, NULL);
+    case '{': return jsonSkipContainer(in, '}');
+    case '[': return jsonSkipContainer(in, ']');
+    case 't': if (jsonLit(in, "true")) return true; break;
+    case 'f': if (jsonLit(in, "false")) return true; break;
+    case 'n': if (jsonLit(in, "null")) return true; break;
+    default: {
+        const char *s;
+        size_t n;
+        bool integer;
+        return jsonNumber(in, &s, &n, &integer);
+    }
+    }
+    return jsonFail(in, 1, "expected a value");
+}
+
+static void pathPush(JsonIn *in, const char *fmtStr, const char *s, int64_t n) {
+    size_t room = sizeof in->path - in->pathLen;
+    int w = snprintf(in->path + in->pathLen, room, fmtStr, (int)n, s);
+    if (w > 0) in->pathLen += (size_t)w < room ? (size_t)w : room - 1;
+}
+
+static bool jsonValue(JsonIn *in, const JsonType *t, char *p);
+
+static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
+    const JsonField *fs = t->items;
+    unsigned char seenSmall[64];
+    unsigned char *seen = t->count <= 64 ? seenSmall : calloc((size_t)t->count, 1);
+    if (!seen) outOfMemory();
+    memset(seen, 0, t->count <= 64 ? sizeof seenSmall : 0);
+    IrisString key = {0};
+    bool ok = jsonDeeper(in);
+    if (ok) {
+        in->p++;
+        jsonWs(in);
+        if (in->p < in->end && *in->p == '}') {
+            in->p++;
+        } else {
+            for (;;) {
+                jsonWs(in);
+                if (in->p >= in->end || *in->p != '"') {
+                    ok = jsonFail(in, 1, "expected a key in quotes");
+                    break;
+                }
+                key.len = 0;
+                if (!jsonString(in, &key)) {
+                    ok = false;
+                    break;
+                }
+                jsonWs(in);
+                if (in->p >= in->end || *in->p != ':') {
+                    ok = jsonFail(in, 1, "expected ':' after the key");
+                    break;
+                }
+                in->p++;
+                int64_t f = -1;
+                for (int64_t i = 0; i < t->count; i++) {
+                    if (fs[i].nameLen == key.len && !memcmp(fs[i].name, key.ptr, (size_t)key.len)) {
+                        f = i;
+                        break;
+                    }
+                }
+                if (f < 0) {
+                    ok = jsonSkip(in);  /* a key the struct doesn't have */
+                } else {
+                    size_t saved = in->pathLen;
+                    pathPush(in, in->pathLen ? ".%.*s" : "%.*s", fs[f].name, fs[f].nameLen);
+                    ok = jsonValue(in, fs[f].type, p + fs[f].offset);
+                    in->pathLen = saved;
+                    in->path[saved] = 0;
+                    seen[f] = 1;
+                }
+                if (!ok) break;
+                jsonWs(in);
+                if (in->p < in->end && *in->p == ',') {
+                    in->p++;
+                    continue;
+                }
+                if (in->p < in->end && *in->p == '}') {
+                    in->p++;
+                    break;
+                }
+                ok = jsonFail(in, 1, "expected ',' or '}'");
+                break;
+            }
+        }
+        in->depth--;
+    }
+    for (int64_t i = 0; ok && i < t->count; i++) {
+        if (fs[i].required && !seen[i]) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "the required field \"%.*s\" is missing", (int)fs[i].nameLen, fs[i].name);
+            ok = jsonFail(in, 3, msg);
+        }
+    }
+    iris_string_free(&key);
+    if (seen != seenSmall) free(seen);
+    return ok;
+}
+
+static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
+    const JsonType *et = t->items;
+    bool slice = t->kind == J_SLICE;
+    char *buf = slice ? NULL : p;
+    int64_t n = 0, cap = slice ? 0 : t->count;
+    if (slice) {
+        jsonFree(t, p);         /* what was there before */
+    }
+    if (!jsonDeeper(in)) return false;
+    in->p++;
+    jsonWs(in);
+    bool ok = true;
+    if (in->p < in->end && *in->p == ']') {
+        in->p++;
+    } else {
+        for (;;) {
+            if (n == cap) {
+                if (!slice) {
+                    char msg[96];
+                    snprintf(msg, sizeof msg, "more than %lld items", (long long)t->count);
+                    ok = jsonFail(in, 2, msg);
+                    break;
+                }
+                int64_t ncap = cap ? cap * 2 : 8;
+                char *nb = realloc(buf, (size_t)(ncap * et->size));
+                if (!nb) outOfMemory();
+                memset(nb + cap * et->size, 0, (size_t)((ncap - cap) * et->size));
+                buf = nb;
+                cap = ncap;
+            }
+            size_t saved = in->pathLen;
+            pathPush(in, "[%d]%s", "", n);
+            ok = jsonValue(in, et, buf + n * et->size);
+            in->pathLen = saved;
+            in->path[saved] = 0;
+            n++;
+            if (!ok) break;
+            jsonWs(in);
+            if (in->p < in->end && *in->p == ',') {
+                in->p++;
+                jsonWs(in);
+                continue;
+            }
+            if (in->p < in->end && *in->p == ']') {
+                in->p++;
+                break;
+            }
+            ok = jsonFail(in, 1, "expected ',' or ']'");
+            break;
+        }
+    }
+    in->depth--;
+    if (slice) {
+        Slice *s = (Slice *)p;
+        s->ptr = buf;
+        s->len = n;
+        if (!n) {
+            free(buf);
+            s->ptr = NULL;
+        }
+    }
+    return ok;
+}
+
+static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
+    jsonWs(in);
+    if (in->p >= in->end) return jsonFail(in, 1, "expected a value, found the end of the text");
+    if (*in->p == 'n' && jsonLit(in, "null")) {
+        return true;            /* null leaves the value as it is */
+    }
+    switch (t->kind) {
+    case J_INT: case J_UINT: case J_FLOAT: {
+        if (*in->p != '-' && (*in->p < '0' || *in->p > '9')) return jsonExpected(in, "a number");
+        const char *s;
+        size_t n;
+        bool integer;
+        if (!jsonNumber(in, &s, &n, &integer)) return false;
+        char num[64];
+        if (n >= sizeof num) n = sizeof num - 1;
+        memcpy(num, s, n);
+        num[n] = 0;
+        if (t->kind == J_FLOAT) {
+            double v = strtod(num, NULL);
+            if (t->size == 4) *(float *)p = (float)v;
+            else *(double *)p = v;
+            return true;
+        }
+        if (!integer) return jsonFail(in, 2, "expected a whole number");
+        errno = 0;
+        char msg[128];
+        if (t->kind == J_INT) {
+            long long v = strtoll(num, NULL, 10);
+            int bits = t->size * 8;
+            bool fits = errno == 0 && (bits == 64 || (v >= -(1LL << (bits - 1)) && v < (1LL << (bits - 1))));
+            if (!fits) {
+                snprintf(msg, sizeof msg, "%s doesn't fit in i%d", num, bits);
+                return jsonFail(in, 4, msg);
+            }
+            writeInt(p, t->size, v);
+        } else {
+            unsigned long long v = num[0] == '-' ? 0 : strtoull(num, NULL, 10);
+            int bits = t->size * 8;
+            bool fits = num[0] != '-' && errno == 0 && (bits == 64 || v < (1ULL << bits));
+            if (!fits) {
+                snprintf(msg, sizeof msg, "%s doesn't fit in u%d", num, bits);
+                return jsonFail(in, 4, msg);
+            }
+            writeInt(p, t->size, (int64_t)v);
+        }
+        return true;
+    }
+    case J_BOOL:
+        if (jsonLit(in, "true")) {
+            *(uint8_t *)p = 1;
+            return true;
+        }
+        if (jsonLit(in, "false")) {
+            *(uint8_t *)p = 0;
+            return true;
+        }
+        return jsonExpected(in, "true or false");
+    case J_STRING: {
+        if (*in->p != '"') return jsonExpected(in, "a string");
+        IrisString *s = (IrisString *)p;
+        iris_string_free(s);
+        bool ok = jsonString(in, s);
+        if (ok && !s->ptr) iris_string_append(s, "", 0);
+        return ok;
+    }
+    case J_ENUM: {
+        if (*in->p != '"') return jsonExpected(in, "a string");
+        IrisString name = {0};
+        bool ok = jsonString(in, &name);
+        if (ok) {
+            const JsonName *names = t->items;
+            int64_t i = 0;
+            while (i < t->count && !(names[i].len == name.len && !memcmp(names[i].name, name.ptr, (size_t)name.len))) {
+                i++;
+            }
+            if (i < t->count) {
+                *(int32_t *)p = (int32_t)names[i].value;
+            } else {
+                char msg[160];
+                snprintf(msg, sizeof msg, "\"%.*s\" isn't one of the enum's values", (int)(name.len > 60 ? 60 : name.len),
+                         name.ptr ? name.ptr : "");
+                ok = jsonFail(in, 2, msg);
+            }
+        }
+        iris_string_free(&name);
+        return ok;
+    }
+    case J_STRUCT:
+        if (*in->p != '{') return jsonExpected(in, "an object");
+        return jsonStruct(in, t, p);
+    case J_SLICE: case J_ARRAY:
+        if (*in->p != '[') return jsonExpected(in, "an array");
+        return jsonList(in, t, p);
+    default:
+        return jsonFail(in, 2, "this kind of value can't be read from JSON");
+    }
+}
+
+/* json.decode: fills the value at out from text. 0, or the code of the
+   error, whose message iris_json_message_ptr/len give. On an error what
+   was filled in is freed. */
+int iris_json_decode(const JsonType *t, const char *text, int64_t len, char *out) {
+    JsonIn in = {.s = text, .p = text, .end = text + len};
+    bool ok = jsonValue(&in, t, out);
+    if (ok) {
+        jsonWs(&in);
+        if (in.p < in.end) {
+            ok = jsonFail(&in, 1, "more text after the value");
+        }
+    }
+    if (!ok) {
+        jsonFree(t, out);
+        return in.code ? in.code : 1;
+    }
+    return 0;
+}
