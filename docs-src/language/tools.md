@@ -16,6 +16,7 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | `iris doc` | shows the documentation from the comments |
 | `iris parse file.iris` | prints the syntax tree |
 | `iris lex file.iris` | prints the tokens |
+| `iris c header.h` | shows what `import c` makes of a C header |
 
 ## Tests
 
@@ -44,7 +45,7 @@ test "add" {
 iris build --mode=release-safe main.iris
 ```
 
-`iris run` and `iris build` use `clang`, version 15 or newer, to compile the IR. Set `IRIS_CC` to use a different one.
+`iris run` and `iris build` use `clang`, version 15 or newer, to compile the IR. Set `IRIS_CC` to use a different one. `-l name` links a C library and `-I folder` adds a folder for C headers.
 
 ## Other platforms
 

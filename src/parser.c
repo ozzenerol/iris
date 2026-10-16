@@ -156,6 +156,10 @@ static void endStatement(Parser *p, bool braceOk) {
     if (at(p, T_EOF) || (braceOk && at(p, P_RBRACE))) {
         return;
     }
+    /* a type that ends in * at the end of a line: type Handle = Node * */
+    if (p->pos > 0 && p->toks[p->pos - 1].kind == P_STAR && peek(p)->line > p->toks[p->pos - 1].line) {
+        return;
+    }
     fail(p, peek(p), "expected the end of the line, found %s", describe(p, peek(p)));
 }
 

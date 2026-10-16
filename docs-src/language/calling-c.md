@@ -2,38 +2,77 @@
 
 Iris works directly with C: it can call C functions, be called from C, and drop down to assembly.
 
-`import c` is planned for 0.8. Until then, only the standard library reaches C.
-
 ## Importing a C header
 
-`import c` reads a C header and makes its functions, types and constants available under `c.`:
+`import c` reads C headers with `clang` and makes their functions, structs, types and integer and string constants available under `c.`:
+
+```iris run
+import c "stdio.h", c "string.h"
+
+void main() {
+    c.puts("hello from C\0".ptr)
+    n := c.strlen("iris\0".ptr)
+    c.printf("%s has %ld letters\n\0".ptr, "iris\0".ptr, n)
+}
+```
+
+```output
+hello from C
+iris has 4 letters
+```
+
+All the headers a file imports share one `c`. Headers are found where `clang` looks for them, in the project's root, and in folders given with `-I`.
+
+A library is linked with `-l`, or with a `link` line in `iris.mod`:
+
+```shell
+iris run -l sqlite3 main.iris
+```
+
+```output
+module github.com/me/app
+
+link sqlite3
+```
 
 ```iris
 import c "sqlite3.h"
 
 !void open(str path) {
     c.sqlite3 *db
-    if c.sqlite3_open(path, &db) != c.SQLITE_OK {
+    if c.sqlite3_open(path.ptr, &db) != c.SQLITE_OK {
         return error(DbError.open, "can't open {path}")
     }
 }
 ```
 
-The library is linked with `iris build --link sqlite3`, or with a `link` line in `iris.mod`.
+`iris c header.h` prints what Iris makes of a header, and what it leaves out and why.
+
+## Text
+
+C expects text to end with a zero byte, and Iris text doesn't. Pass `.ptr` of text that ends with `\0`, as in the examples above. A C string can be read back with a slice of the pointer: `p[0:c.strlen(p)]`.
 
 ## Types
 
-Iris types have the same size and layout as their C equivalents:
+C types become Iris types of the same size and layout:
 
 | C | Iris |
 |---|---|
-| `int8_t` ... `int64_t` | `i8` ... `i64` |
-| `uint8_t` ... `uint64_t` | `u8` ... `u64` |
-| `float`, `double` | `f32`, `f64` |
-| `char *` | `u8 *` |
-| `struct` | `struct` with the same fields |
+| `char`, `unsigned char`, `signed char` | `u8`, `u8`, `i8` |
+| `short`, `int`, `long`, `long long` | `i16`, `i32`, `i64`, `i64` |
+| `unsigned` versions | `u16`, `u32`, `u64`, `u64` |
+| `T *`, `char *` | `T *`, `u8 *` |
+| `void *` | `u8 *` |
+| a pointer to a function | `u8 *` |
+| `struct` | a `struct` with the same fields, or an empty one when only pointers to it make sense |
+| `enum` | its values as `i32` constants |
+| `typedef` | a `type` alias |
 
-A `str` passed where C expects `char *` is copied to a temporary string that ends with a zero byte. `str.fromC(p)` turns a C string back into a `str`.
+A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`. A struct that shares its name with a function, like `struct stat` and `stat()`, is `c.struct_stat`.
+
+Functions with `...`, like `printf`, take extra integers and pointers.
+
+Left out for now, with the reason shown by `iris c`: floating point, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or strings.
 
 ## Called from C
 
@@ -41,7 +80,7 @@ A `str` passed where C expects `char *` is copied to a temporary string that end
 
 ```iris
 @export
-i32 onRow(void *ctx, i32 n, u8 **values, u8 **names) {
+i32 onRow(u8 *ctx, i32 n, u8 **values, u8 **names) {
     return 0
 }
 ```

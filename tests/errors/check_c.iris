@@ -1,0 +1,10 @@
+// error: 7: c.sqrt can't be used from Iris yet: it has floating point
+// error: 8: C takes text as a pointer; pass .ptr, ending the text with \0
+// error: 9: the C headers imported here have no NOT_A_THING (only functions, structs, types and integer constants come through)
+import c "math.h", c "stdio.h"
+
+void main() {
+    x := c.sqrt(2)
+    _ = c.printf("%s\0".ptr, "text")
+    y := c.NOT_A_THING
+}

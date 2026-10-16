@@ -785,18 +785,43 @@ static Val emitCall(IR *ir, Node *e) {
     StrBuf args = {0};
     for (int i = 0; i < e->list.len; i++) {
         Val v = emitExpr(ir, e->list.items[i]);
-        sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, d->list.items[i]->type), v.s);
+        if (i < d->list.len) {
+            sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, d->list.items[i]->type), v.s);
+            continue;
+        }
+        /* an extra argument to C's ...: small integers and bool become int */
+        const char *x = v.s;
+        Type *t = v.t;
+        if (t->kind == TY_BOOL || (t->kind == TY_INT && t->bits < 32)) {
+            const char *w = tmp(ir);
+            ins(ir, "%s = %s %s %s to i32", w, t->kind == TY_INT && t->isSigned ? "sext" : "zext", llType(ir, t), x);
+            x = w;
+            t = &tyI32;
+        }
+        sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, t), x);
     }
     const char *a = args.buf ? args.buf : "";
+    /* a variadic call names the function's type */
+    StrBuf fty = {0};
+    if (d->flags & F_VARIADIC) {
+        sbPrintf(&fty, "%s (", llType(ir, d->type));
+        for (int i = 0; i < d->list.len; i++) {
+            sbPrintf(&fty, "%s%s", i ? ", " : "", llType(ir, d->list.items[i]->type));
+        }
+        sbPuts(&fty, d->list.len ? ", ...)" : "...)");
+    } else {
+        sbPuts(&fty, llType(ir, d->type));
+    }
     Val r;
     if (d->type->kind == TY_VOID) {
-        ins(ir, "call void %s(%s)", d->ir, a);
+        ins(ir, "call %s %s(%s)", fty.buf, d->ir, a);
         r = val("", &tyVoid);
     } else {
         const char *t = tmp(ir);
-        ins(ir, "%s = call %s %s(%s)", t, llType(ir, d->type), d->ir, a);
+        ins(ir, "%s = call %s %s(%s)", t, fty.buf, d->ir, a);
         r = val(t, d->type);
     }
+    sbFree(&fty);
     sbFree(&args);
     return r;
 }
@@ -1867,16 +1892,30 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
             sbPuts(&types, d->list.len ? " }\n" : "}\n");
         }
     }
+    NodeList externs = {0};         /* C functions declared, by name */
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
         const char *mod = d->module ? d->module : "main";
         if (d->kind == N_FUNC) {
             if (d->flags & F_EXTERN) {
                 d->ir = fmt(&ir, "@%s", d->text);
+                bool dup = false;
+                for (int k = 0; k < externs.len; k++) {
+                    dup = dup || strcmp(externs.items[k]->name, d->text) == 0;
+                }
+                if (dup) {
+                    continue;           /* another module declared it already */
+                }
+                Node *rec = newNode(a, N_IDENT, 0, 0);
+                rec->name = d->text;
+                listPush(a, &externs, rec);
                 StrBuf decl = {0};
                 sbPrintf(&decl, "declare %s %s(", llType(&ir, d->type), d->ir);
                 for (int j = 0; j < d->list.len; j++) {
                     sbPrintf(&decl, "%s%s", j ? ", " : "", llType(&ir, d->list.items[j]->type));
+                }
+                if (d->flags & F_VARIADIC) {
+                    sbPuts(&decl, d->list.len ? ", ..." : "...");
                 }
                 sbPuts(&decl, ")\n");
                 sbPuts(&ir.head, decl.buf);
@@ -1968,6 +2007,20 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     } else {
         sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main.main\"");
     }
+    /* libc functions the generated code uses, unless import c declared them */
+    static const struct { const char *name, *decl; } libc[] = {
+        {"free", "declare void @free(ptr)\n"},
+        {"strlen", "declare i64 @strlen(ptr)\n"},
+    };
+    for (size_t k = 0; k < sizeof libc / sizeof libc[0]; k++) {
+        bool dup = false;
+        for (int j = 0; j < externs.len; j++) {
+            dup = dup || strcmp(externs.items[j]->name, libc[k].name) == 0;
+        }
+        if (!dup) {
+            sbPuts(&out, libc[k].decl);
+        }
+    }
     sbPuts(&out,
            "declare void @iris_init(i32, ptr)\n"
            "declare void @iris_write_str(i32, ptr, ptr, i64)\n"
@@ -1977,7 +2030,6 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
-           "declare void @free(ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"
            "declare void @iris_string_free(ptr)\n"
            "declare void @iris_panic(ptr, i32, i32, ptr) noreturn\n"
@@ -1994,7 +2046,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"
            "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
-           "declare i64 @strlen(ptr)\n"
+           ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     if (mode == MODE_DEBUG) {
         sbPuts(&out, "attributes #0 = { sanitize_address }\n");

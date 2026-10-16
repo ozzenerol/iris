@@ -2311,6 +2311,10 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
             continue;
         }
         if (pos >= np) {
+            if (fn->flags & F_VARIADIC) {
+                pos++;
+                continue;           /* C's ..., checked below */
+            }
             int n = np - first;
             error(c, arg, "%s takes %d argument%s, but more are given", fn->name, n, n == 1 ? "" : "s");
             break;
@@ -2337,6 +2341,26 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
             coerce(c, &args[j], param->type, what);
         }
         listPush(c->arena, out, args[j]);
+    }
+    if (fn->flags & F_VARIADIC) {
+        /* the extra arguments of a C function like printf: integers and pointers */
+        int extra = 0;
+        for (int i = 0; i < given->len; i++) {
+            Node **slot = &given->items[i];
+            if ((*slot)->kind == N_NAMED_ARG) continue;
+            if (extra++ < np - first) continue;
+            Type *t = checked ? (*slot)->type : checkExpr(c, slot, NULL);
+            if (isErr(t)) continue;
+            if (isStr(t) || t->kind == TY_STRING) {
+                error(c, *slot, "C takes text as a pointer; pass .ptr, ending the text with \\0");
+            } else if (!isInt(t) && t->kind != TY_PTR && t->kind != TY_BOOL && t->kind != TY_NULL) {
+                error(c, *slot, "an extra argument to a C function must be an integer or a pointer, not %s", t->name);
+            }
+            if (t->kind == TY_NULL) {
+                (*slot)->type = ptrTo(&tyU8);
+            }
+            listPush(c->arena, out, *slot);
+        }
     }
 }
 
@@ -3689,14 +3713,18 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         if (strcmp(at->name, "extern") == 0) {
             /* @extern("c_name"): a C function; the standard library only */
             bool std = f->module && strcmp(f->module, "main") != 0 && f->src &&
-                       strncmp(f->src->path, "std/", 4) == 0;
+                       (strncmp(f->src->path, "std/", 4) == 0 || strncmp(f->module, "c:", 2) == 0);
             if (!std) {
-                error(c, at, "@extern is for the standard library; your code will use import c (0.8)");
-            } else if (at->list.len != 1 || at->list.items[0]->kind != N_STRING) {
+                error(c, at, "@extern is for the standard library; use import c to call C");
+            } else if (at->list.len < 1 || at->list.len > 2 || at->list.items[0]->kind != N_STRING) {
                 error(c, at, "@extern takes the C function's name in quotes");
             } else {
                 f->flags |= F_EXTERN;
                 f->text = at->list.items[0]->text;
+                if (at->list.len == 2 && at->list.items[1]->kind == N_IDENT &&
+                    strcmp(at->list.items[1]->name, "variadic") == 0) {
+                    f->flags |= F_VARIADIC;
+                }
             }
         } else {
             notYet(c, at, "attributes", "a later version");
@@ -3878,7 +3906,17 @@ static void qualify(Checker *c, Node *n) {
         if (imp && imp->kind == N_IMPORT && imp->scope) {
             Sym *sym = findIn((Scope *)imp->scope, n->name);
             if (!sym) {
-                error(c, n, "the module %s has no %s", imp->name, n->name);
+                const char *why = NULL;
+                for (int i = 0; i < imp->list.len; i++) {
+                    if (strcmp(imp->list.items[i]->name, n->name) == 0) why = imp->list.items[i]->text;
+                }
+                if (why) {
+                    error(c, n, "c.%s can't be used from Iris yet: it has %s", n->name, why);
+                } else if (imp->module && strncmp(imp->module, "c:", 2) == 0) {
+                    error(c, n, "the C headers imported here have no %s (only functions, structs, types and integer constants come through)", n->name);
+                } else {
+                    error(c, n, "the module %s has no %s", imp->name, n->name);
+                }
                 n->flags |= F_REPORTED;
             } else if (!visible(c, sym->decl)) {
                 error(c, n, "%s.%s isn't pub, so only its own module can use it", imp->name, n->name);
@@ -3937,12 +3975,12 @@ bool checkProgram(Arena *a, Program *prog) {
                 if (d->kind == N_IMPORT) {
                     for (int k = 0; k < d->list.len; k++) {
                         Node *item = d->list.items[k];
-                        if (item->flags & F_C_IMPORT) {
-                            notYet(&c, item, "import c", "0.8");
-                            continue;
-                        }
                         if (!item->ref) continue;
-                        if (findIn(fs, item->ref->name)) {
+                        Sym *had = findIn(fs, item->ref->name);
+                        if (had && had->decl == item->ref && (item->flags & F_C_IMPORT)) {
+                            continue;           /* several C headers: one c */
+                        }
+                        if (had) {
                             error(&c, item, "%s is imported twice", item->ref->name);
                             continue;
                         }
