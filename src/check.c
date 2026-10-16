@@ -211,6 +211,36 @@ static Type *sliceOf(Type *t) { return compound(TY_SLICE, t, 0); }
 static Type *arrayOf(Type *t, int64_t n) { return compound(TY_ARRAY, t, n); }
 static Type *resultOf(Type *t) { return compound(TY_RESULT, t, 0); }
 
+/* (A, B, ...) */
+static Type *tupleOf(Type **elems, int n) {
+    for (TypeCache *tc = gTypes; tc; tc = tc->next) {
+        Type *t = tc->t;
+        if (t->kind != TY_TUPLE || t->nelems != n) continue;
+        bool same = true;
+        for (int i = 0; i < n && same; i++) {
+            same = sameType(t->elems[i], elems[i]);
+        }
+        if (same) return t;
+    }
+    Type *t = arenaAlloc(gArena, sizeof(Type));
+    t->kind = TY_TUPLE;
+    t->nelems = n;
+    t->elems = arenaAlloc(gArena, sizeof(Type *) * (size_t)n);
+    StrBuf b = {0};
+    sbPutc(&b, '(');
+    for (int i = 0; i < n; i++) {
+        t->elems[i] = elems[i];
+        sbPrintf(&b, "%s%s", i ? ", " : "", elems[i]->name);
+    }
+    sbPutc(&b, ')');
+    t->name = sbFinish(&b, gArena);
+    TypeCache *tc = arenaAlloc(gArena, sizeof(TypeCache));
+    tc->t = t;
+    tc->next = gTypes;
+    gTypes = tc;
+    return t;
+}
+
 static bool sameType(Type *a, Type *b) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
@@ -219,6 +249,12 @@ static bool sameType(Type *a, Type *b) {
     case TY_PTR: case TY_SLICE: case TY_RESULT: return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
+    case TY_TUPLE:
+        if (a->nelems != b->nelems) return false;
+        for (int i = 0; i < a->nelems; i++) {
+            if (!sameType(a->elems[i], b->elems[i])) return false;
+        }
+        return true;
     default: return true;
     }
 }
@@ -243,8 +279,62 @@ static Type *structType(Checker *c, Node *decl) {
 static Type *resolveType(Checker *c, Node *t);
 static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool);
 
+/* Sizes and alignments, by the same rules as C on 64-bit machines. They
+ * decide how much room a data enum keeps for its values' data. */
+static int64_t typeAlign(Type *t);
+
+static int64_t typeSize(Type *t) {
+    switch (t->kind) {
+    case TY_BOOL: return 1;
+    case TY_INT: return t->bits / 8;
+    case TY_PTR: case TY_NULL: return 8;
+    case TY_SLICE: return 16;
+    case TY_STRING: return 24;
+    case TY_ERRVAL: case TY_ERRCODE: return 8;
+    case TY_ARRAY: return t->count * typeSize(t->elem);
+    case TY_ENUM:
+        return t->hasData ? 8 + ((t->payload + 7) / 8) * 8 : 4;
+    case TY_RESULT:
+        return t->elem->kind == TY_VOID ? 8 : ((typeSize(t->elem) + 7) / 8) * 8 + 8;
+    case TY_STRUCT: case TY_TUPLE: {
+        int64_t off = 0, align = 1;
+        int n = t->kind == TY_TUPLE ? t->nelems : t->decl->list.len;
+        for (int i = 0; i < n; i++) {
+            Type *ft = t->kind == TY_TUPLE ? t->elems[i] : t->decl->list.items[i]->type;
+            if (!ft) continue;
+            int64_t a = typeAlign(ft);
+            off = (off + a - 1) / a * a + typeSize(ft);
+            if (a > align) align = a;
+        }
+        return (off + align - 1) / align * align;
+    }
+    default: return 0;
+    }
+}
+
+static int64_t typeAlign(Type *t) {
+    switch (t->kind) {
+    case TY_BOOL: return 1;
+    case TY_INT: return t->bits / 8;
+    case TY_ARRAY: return typeAlign(t->elem);
+    case TY_ENUM: return t->hasData ? 8 : 4;
+    case TY_STRUCT: case TY_TUPLE: {
+        int64_t align = 1;
+        int n = t->kind == TY_TUPLE ? t->nelems : t->decl->list.len;
+        for (int i = 0; i < n; i++) {
+            Type *ft = t->kind == TY_TUPLE ? t->elems[i] : t->decl->list.items[i]->type;
+            if (ft && typeAlign(ft) > align) align = typeAlign(ft);
+        }
+        return align;
+    }
+    default: return 8;
+    }
+}
+
 /* An enum's type. Its values are worked out the first time. Each enum
- * gets a number, used to tell error codes from different enums apart. */
+ * gets a number, used to tell error codes from different enums apart.
+ * A value with data carries fields, like a function's parameters; a flag
+ * enum's values are powers of two. */
 static Type *enumType(Checker *c, Node *decl) {
     if (decl->type) {
         return decl->type;
@@ -255,25 +345,38 @@ static Type *enumType(Checker *c, Node *decl) {
     t->decl = decl;
     t->bits = 32;
     t->count = ++c->enumKinds;
+    t->isFlags = (decl->flags & F_FLAGS) != 0;
     decl->type = t;
-    if (decl->flags & F_FLAGS) {
-        notYet(c, decl, "flag enums", "0.5");
+    for (int i = 0; i < decl->list.len; i++) {
+        if (decl->list.items[i]->list.len) {
+            t->hasData = true;
+        }
+    }
+    if (t->hasData) {
+        char buf[160];
+        snprintf(buf, sizeof buf, "%%E.%s", decl->name);
+        t->ir = arenaStrndup(c->arena, buf, strlen(buf));
     }
     if (decl->attrs.len) {
         notYet(c, decl->attrs.items[0], "attributes", "a later version");
     }
+    if (t->isFlags && t->hasData) {
+        error(c, decl, "a flag enum's values can't carry data");
+    }
+    if (t->isFlags && decl->list.len > 31) {
+        error(c, decl, "a flag enum can have at most 31 values");
+    }
     Scope *saved = c->scope;
     c->scope = c->global;
-    int64_t next = 0;
+    int64_t next = t->isFlags ? 1 : 0;
     for (int i = 0; i < decl->list.len; i++) {
         Node *m = decl->list.items[i];
-        if (m->list.len) {
-            notYet(c, m, "enums whose values carry data", "0.5");
-        }
         if (m->b) {
             int64_t v;
             bool b;
-            if (!evalConst(c, m->b, &v, &b) || b) {
+            if (t->hasData) {
+                error(c, m->b, "the values of an enum with data can't be given numbers");
+            } else if (!evalConst(c, m->b, &v, &b) || b) {
                 error(c, m->b, "an enum value must be an integer known when compiling");
             } else if (v < INT32_MIN || v > INT32_MAX) {
                 error(c, m->b, "an enum value must fit in i32");
@@ -281,9 +384,53 @@ static Type *enumType(Checker *c, Node *decl) {
                 next = v;
             }
         }
-        m->cval = next++;
-        m->isConst = true;
+        m->cval = next;
+        next = t->isFlags ? (next > 0 && next < (1 << 30) ? next * 2 : next + 1) : next + 1;
+        m->isConst = !t->hasData;
         m->type = t;
+        /* the data a value carries: a struct of its fields */
+        int64_t size = 0;
+        Type *fields = NULL;
+        if (m->list.len) {
+            fields = arenaAlloc(c->arena, sizeof(Type));
+            fields->kind = TY_TUPLE;
+            fields->nelems = m->list.len;
+            fields->elems = arenaAlloc(c->arena, sizeof(Type *) * (size_t)m->list.len);
+        }
+        for (int j = 0; j < m->list.len; j++) {
+            Node *f = m->list.items[j];
+            Type *ft = resolveType(c, f->a);
+            if (ft == &tyVoid) {
+                error(c, f, "a field can't be void");
+                ft = &tyError;
+            }
+            if (ft == t) {
+                error(c, f, "%s can't contain itself; use a pointer (%s *)", decl->name, decl->name);
+                ft = &tyError;
+            }
+            if (ft->kind == TY_STRUCT) {
+                resolveStruct(c, ft);
+            }
+            f->type = ft;
+            fields->elems[j] = ft;
+            for (int k = 0; k < j; k++) {
+                if (strcmp(m->list.items[k]->name, f->name) == 0) {
+                    error(c, f, "%s.%s already has a field named %s", decl->name, m->name, f->name);
+                }
+            }
+        }
+        if (fields) {
+            size = typeSize(fields);
+            char buf[200];
+            snprintf(buf, sizeof buf, "%%E.%s.%s", decl->name, m->name);
+            fields->ir = arenaStrndup(c->arena, buf, strlen(buf));
+            fields->name = m->name;
+            m->d = newNode(c->arena, N_T_TUPLE, m->line, m->col);   /* holds the data's type */
+            m->d->type = fields;
+        }
+        if (size > t->payload) {
+            t->payload = size;
+        }
         for (int j = 0; j < i; j++) {
             Node *o = decl->list.items[j];
             if (strcmp(o->name, m->name) == 0) {
@@ -297,6 +444,9 @@ static Type *enumType(Checker *c, Node *decl) {
     c->scope = saved;
     return t;
 }
+
+/* The fields of a data enum value, or NULL for a value without data. */
+static Type *memberData(Node *m) { return m->d ? m->d->type : NULL; }
 
 static Node *enumMember(Type *t, const char *name) {
     for (int i = 0; i < t->decl->list.len; i++) {
@@ -408,9 +558,23 @@ static Type *resolveType(Checker *c, Node *t) {
         }
         return resultOf(e);
     }
-    case N_T_TUPLE:
-        notYet(c, t, "several return values", "0.5");
-        return &tyError;
+    case N_T_TUPLE: {
+        Type *elems[32];
+        if (t->list.len > 32) {
+            error(c, t, "a tuple can have at most 32 values");
+            return &tyError;
+        }
+        for (int i = 0; i < t->list.len; i++) {
+            elems[i] = resolveType(c, t->list.items[i]);
+            if (isErr(elems[i])) return elems[i];
+            if (elems[i] == &tyVoid) {
+                error(c, t->list.items[i], "a tuple can't hold void");
+                return &tyError;
+            }
+            if (elems[i]->kind == TY_STRUCT) resolveStruct(c, elems[i]);
+        }
+        return tupleOf(elems, t->list.len);
+    }
     case N_T_GENERIC:
         notYet(c, t, "generic types", "0.6");
         return &tyError;
@@ -922,8 +1086,10 @@ static bool addressable(Node *e) {
 
 static bool isComparable(Type *t) {
     switch (t->kind) {
-    case TY_INT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ENUM: case TY_ERRCODE:
+    case TY_INT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE:
         return true;
+    case TY_ENUM:
+        return !t->hasData;
     case TY_SLICE:
         return isStr(t);
     case TY_STRUCT:
@@ -957,8 +1123,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
     }
     bool compare = op == P_EQ || op == P_NE || op == P_LT || op == P_LE || op == P_GT || op == P_GE;
     bool shift = op == P_SHL || op == P_SHR;
+    bool bitOp = op == P_AMP || op == P_PIPE || op == P_CARET;
     Type *want = compare ? NULL : expected;
-    if (want && !isInt(want)) {
+    if (want && !isInt(want) && !(bitOp && want->kind == TY_ENUM && want->isFlags)) {
         want = NULL;
     }
 
@@ -1052,6 +1219,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         }
         return setType(e, &tyBool);
     }
+    if (bitOp && t->kind == TY_ENUM && t->isFlags) {
+        return setType(e, t);
+    }
     if (!isInt(t)) {
         error(c, e, "'%s' needs integers, not %s", tokName(op), t->name);
         return setType(e, &tyError);
@@ -1078,9 +1248,13 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
                 error(c, e, "%s has no value named %s", d->name, e->name);
                 return setType(e, &tyError);
             }
+            if (memberData(m)) {
+                error(c, e, "%s.%s carries data; write %s.%s(...)", d->name, m->name, d->name, m->name);
+                return setType(e, &tyError);
+            }
             e->a->ref = d;
             e->ref = m;
-            e->isConst = true;
+            e->isConst = !et->hasData;
             e->cval = m->cval;
             return setType(e, et);
         }
@@ -1442,7 +1616,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             coerce(c, &e->a, &tyBool, "the value after '!'");
             return setType(e, &tyBool);
         case P_TILDE: {
-            Type *t = checkExpr(c, &e->a, expected && isInt(expected) ? expected : NULL);
+            Type *t = checkExpr(c, &e->a, expected && (isInt(expected) || expected->isFlags) ? expected : NULL);
+            if (t->kind == TY_ENUM && t->isFlags) {
+                return setType(e, t);
+            }
             if (!isErr(t) && !isInt(t)) {
                 error(c, e, "'~' needs an integer, not %s", t->name);
                 return setType(e, &tyError);
@@ -1508,14 +1685,42 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             error(c, e, "%s has no value named %s", expected->name, e->name);
             return setType(e, &tyError);
         }
+        if (memberData(m)) {
+            error(c, e, "%s.%s carries data; write .%s(...)", expected->name, m->name, m->name);
+            return setType(e, &tyError);
+        }
         e->ref = m;
-        e->isConst = true;
+        e->isConst = !expected->hasData;
         e->cval = m->cval;
         return setType(e, expected);
     }
-    case N_TUPLE:
-        notYet(c, e, "several return values", "0.5");
-        return setType(e, &tyError);
+    case N_TUPLE: {
+        Type *elems[32];
+        if (e->list.len > 32) {
+            error(c, e, "a tuple can have at most 32 values");
+            return setType(e, &tyError);
+        }
+        bool bad = false;
+        for (int i = 0; i < e->list.len; i++) {
+            Type *want = expected && expected->kind == TY_TUPLE && expected->nelems == e->list.len
+                             ? expected->elems[i] : NULL;
+            elems[i] = checkExpr(c, &e->list.items[i], want);
+            if (want) {
+                coerce(c, &e->list.items[i], want, "the value");
+                elems[i] = isErr(e->list.items[i]->type) ? want : want;
+            }
+            if (isErr(elems[i])) bad = true;
+            if (elems[i]->kind == TY_VOID || elems[i]->kind == TY_NORETURN) {
+                error(c, e->list.items[i], "this gives no value to put in a tuple");
+                bad = true;
+            } else if (elems[i]->kind == TY_NULL) {
+                error(c, e->list.items[i], "the type of null can't be worked out here");
+                bad = true;
+            }
+        }
+        if (bad) return setType(e, &tyError);
+        return setType(e, tupleOf(elems, e->list.len));
+    }
     default:
         notYet(c, e, "this expression", "a later version");
         return setType(e, &tyError);
@@ -1696,6 +1901,16 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         }
     }
 
+    if (t->kind == TY_ENUM && t->isFlags && strcmp(name, "has") == 0) {
+        if (e->list.len != 1 || e->list.items[0]->kind == N_NAMED_ARG) {
+            error(c, e, "has takes one value: p.has(.write)");
+            return setType(e, &tyError);
+        }
+        checkExpr(c, &e->list.items[0], t);
+        coerce(c, &e->list.items[0], t, "the value");
+        e->builtin = BI_FLAGS_HAS;
+        return setType(e, &tyBool);
+    }
     Type *st = structOf(t);
     if (!st) {
         error(c, callee, "%s has no method %s", t->name, name);
@@ -1833,8 +2048,46 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
     return setType(e, res);
 }
 
+/* Packet.Data(bytes) or .Close(1000, "bye"): a value of a data enum. */
+static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
+    Node *m = enumMember(et, name);
+    if (!m) {
+        error(c, e->a, "%s has no value named %s", et->name, name);
+        return setType(e, &tyError);
+    }
+    if (!memberData(m)) {
+        error(c, e->a, "%s.%s carries no data; write it without ()", et->name, name);
+        return setType(e, &tyError);
+    }
+    Node fn = {0};
+    fn.name = m->name;
+    fn.list = m->list;
+    NodeList args = {0};
+    checkArgs(c, e, &fn, &e->list, 0, &args);
+    e->list = args;
+    e->ref = m;
+    e->builtin = BI_ENUM_NEW;
+    return setType(e, et);
+}
+
 static Type *checkCall(Checker *c, Node *e, Type *expected) {
     Node *callee = e->a;
+    if (callee->kind == N_FIELD_ACCESS && callee->a->kind == N_IDENT) {
+        Node *d = lookup(c, callee->a->name);
+        if (d && d->kind == N_ENUM) {
+            Type *et = enumType(c, d);
+            callee->a->ref = d;
+            return checkEnumNew(c, e, et, callee->name);
+        }
+    }
+    if (callee->kind == N_ENUM_DOT) {
+        if (!expected || expected->kind != TY_ENUM) {
+            error(c, callee, "the enum of .%s can't be worked out here; write the enum's name before the dot",
+                  callee->name);
+            return setType(e, &tyError);
+        }
+        return checkEnumNew(c, e, expected, callee->name);
+    }
     if (callee->kind == N_FIELD_ACCESS) {
         if (callee->a->kind == N_IDENT && !lookup(c, callee->a->name) && !typeFromName(c, callee->a->name, callee, false)) {
             notYet(c, callee, "modules", "0.7");
@@ -1843,11 +2096,7 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         return checkMethodCall(c, e);
     }
     if (callee->kind != N_IDENT) {
-        if (callee->kind == N_ENUM_DOT) {
-            notYet(c, callee, "enums", "0.5");
-        } else {
-            notYet(c, callee, "calling this kind of expression", "a later version");
-        }
+        notYet(c, callee, "calling this kind of expression", "a later version");
         return setType(e, &tyError);
     }
     const char *name = callee->name;
@@ -2075,10 +2324,92 @@ static Type *checkIf(Checker *c, Node *n, Type *expected, bool wantValue) {
 
 static bool isWildcard(Node *p) { return p->kind == N_IDENT && strcmp(p->name, "_") == 0; }
 
-static void checkPattern(Checker *c, Node **slot, Type *subject) {
+/* The enum value a pattern names: Ping, .Ping, Packet.Ping, or the callee
+ * of Data(bytes). */
+static Node *patternMember(Checker *c, Node *p, Type *subject) {
+    if (subject->kind != TY_ENUM) {
+        return NULL;
+    }
+    Node *name = p->kind == N_CALL ? p->a : p;
+    if (name->kind == N_IDENT) {
+        Node *local = lookup(c, name->name);
+        if (local && local->kind != N_FUNC && local->kind != N_ENUM) {
+            return NULL;
+        }
+        return enumMember(subject, name->name);
+    }
+    if (name->kind == N_ENUM_DOT) {
+        return enumMember(subject, name->name);
+    }
+    if (name->kind == N_FIELD_ACCESS && name->a->kind == N_IDENT && strcmp(name->a->name, subject->name) == 0) {
+        return enumMember(subject, name->name);
+    }
+    return NULL;
+}
+
+/* A pattern for an enum value; Data(bytes) also declares bytes. */
+static bool checkEnumPattern(Checker *c, Node *p, Type *subject, bool single) {
+    Node *m = patternMember(c, p, subject);
+    if (!m) {
+        Node *name = p->kind == N_CALL ? p->a : p;
+        if (name->kind == N_IDENT || name->kind == N_ENUM_DOT ||
+            (name->kind == N_FIELD_ACCESS && name->a->kind == N_IDENT && strcmp(name->a->name, subject->name) == 0)) {
+            error(c, p, "%s has no value named %s", subject->name, name->name);
+            p->type = &tyError;
+            return true;
+        }
+        return false;
+    }
+    p->ref = m;
+    p->type = subject;
+    p->isConst = !subject->hasData;
+    p->cval = m->cval;
+    Type *data = memberData(m);
+    if (p->kind != N_CALL) {
+        if (data) {
+            /* Data alone matches any Data value, without naming the fields */
+            p->flags |= F_EXPLICIT;
+        }
+        return true;
+    }
+    if (!data) {
+        error(c, p, "%s.%s carries no data, so it has nothing to name", subject->name, m->name);
+        return true;
+    }
+    if (p->list.len != data->nelems) {
+        error(c, p, "%s.%s carries %d value%s, but the pattern names %d", subject->name, m->name, data->nelems,
+              data->nelems == 1 ? "" : "s", p->list.len);
+        return true;
+    }
+    if (!single) {
+        error(c, p, "a pattern that names values must be the only pattern in its arm");
+        return true;
+    }
+    for (int i = 0; i < p->list.len; i++) {
+        Node *b = p->list.items[i];
+        if (b->kind != N_IDENT) {
+            error(c, b, "a pattern names the values it takes apart; write a name or _");
+            continue;
+        }
+        b->type = data->elems[i];
+        if (strcmp(b->name, "_") != 0) {
+            declareLocal(c, b->name, b);
+        }
+    }
+    return true;
+}
+
+static void checkPattern(Checker *c, Node **slot, Type *subject, bool single) {
     Node *p = *slot;
     if (isWildcard(p)) {
         p->type = subject;
+        return;
+    }
+    if (subject->kind == TY_ENUM && checkEnumPattern(c, p, subject, single)) {
+        return;
+    }
+    if (subject->kind == TY_ENUM && subject->hasData) {
+        error(c, p, "a pattern for %s names one of its values", subject->name);
         return;
     }
     if (p->kind == N_BINARY && p->op == P_DOTDOT) {
@@ -2129,12 +2460,13 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
     Type *first = NULL;
     for (int i = 0; i < m->list.len; i++) {
         Node *arm = m->list.items[i];
+        pushScope(c, false);            /* for the names a pattern takes apart */
         for (int j = 0; j < arm->list.len; j++) {
             Node **slot = &arm->list.items[j];
             if (hasWildcard) {
                 error(c, *slot, "this arm can never run: '_' above it matches everything");
             }
-            checkPattern(c, slot, subject);
+            checkPattern(c, slot, subject, arm->list.len == 1);
             if (isWildcard(*slot)) {
                 hasWildcard = true;
             } else if ((*slot)->type == &tyBool && (*slot)->isConst) {
@@ -2157,6 +2489,7 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
         } else {
             checkStmt(c, arm->c);
         }
+        popScope(c);
     }
     bool complete = hasWildcard || (hasTrue && hasFalse);
     if (subject->kind == TY_ENUM && !hasWildcard) {
@@ -2169,7 +2502,7 @@ static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue) {
             for (int i = 0; i < m->list.len && !found; i++) {
                 Node *arm = m->list.items[i];
                 for (int j = 0; j < arm->list.len; j++) {
-                    if (arm->list.items[j]->isConst && arm->list.items[j]->cval == mem->cval) {
+                    if (arm->list.items[j]->ref == mem) {
                         found = true;
                     }
                 }
@@ -2357,7 +2690,29 @@ static void checkStmt(Checker *c, Node *s) {
         return;
     case N_DEFINE: {
         if (s->list.len != 1) {
-            notYet(c, s, "several return values", "0.5");
+            /* q, r := divmod(17, 5): one name per value of a tuple */
+            Type *t = checkExpr(c, &s->b, NULL);
+            s->type = t;
+            if (!isErr(t) && (t->kind != TY_TUPLE || t->nelems != s->list.len)) {
+                if (t->kind == TY_TUPLE) {
+                    error(c, s->b, "this gives %d values, but %d names are given", t->nelems, s->list.len);
+                } else {
+                    error(c, s->b, "this gives one value, but %d names are given", s->list.len);
+                }
+                t = &tyError;
+            }
+            bool any = false;
+            for (int i = 0; i < s->list.len; i++) {
+                Node *id = s->list.items[i];
+                id->type = isErr(t) ? &tyError : t->elems[i];
+                if (strcmp(id->name, "_") != 0) {
+                    declareLocal(c, id->name, id);
+                    any = true;
+                }
+            }
+            if (!any) {
+                error(c, s, "every name here is _; drop the values with _ = instead");
+            }
             return;
         }
         Node *id = s->list.items[0];
@@ -2370,6 +2725,9 @@ static void checkStmt(Checker *c, Node *s) {
         } else if (t->kind == TY_NULL) {
             error(c, s->b, "the type of null can't be worked out here; declare the pointer's type");
             t = &tyError;
+        } else if (t->kind == TY_TUPLE) {
+            error(c, s->b, "this gives %d values; unpack them into names: a, b := ...", t->nelems);
+            t = &tyError;
         }
         id->type = t;
         s->type = t;
@@ -2378,7 +2736,56 @@ static void checkStmt(Checker *c, Node *s) {
     }
     case N_ASSIGN: {
         if (s->list.len != 1) {
-            notYet(c, s, "several return values", "0.5");
+            /* a, b = b, a: the values are worked out first, then stored */
+            Type *ts[32];
+            if (s->list.len > 32) {
+                error(c, s, "too many names");
+                return;
+            }
+            for (int i = 0; i < s->list.len; i++) {
+                Node **target = &s->list.items[i];
+                if ((*target)->kind == N_IDENT && strcmp((*target)->name, "_") == 0) {
+                    ts[i] = NULL;
+                    (*target)->type = &tyError;
+                    continue;
+                }
+                ts[i] = checkExpr(c, target, NULL);
+                if (!isErr(ts[i]) && !assignable(c, *target)) {
+                    ts[i] = &tyError;
+                }
+            }
+            Type *t;
+            if (s->b->kind == N_TUPLE && s->b->list.len == s->list.len) {
+                for (int i = 0; i < s->list.len; i++) {
+                    checkExpr(c, &s->b->list.items[i], ts[i]);
+                    if (ts[i]) coerce(c, &s->b->list.items[i], ts[i], "the value");
+                }
+                Type *elems[32];
+                for (int i = 0; i < s->list.len; i++) {
+                    elems[i] = ts[i] && !isErr(ts[i]) ? ts[i] : s->b->list.items[i]->type;
+                    if (!elems[i] || isErr(elems[i])) elems[i] = &tyError;
+                }
+                t = tupleOf(elems, s->list.len);
+                s->b->type = t;
+            } else {
+                t = checkExpr(c, &s->b, NULL);
+                if (!isErr(t) && (t->kind != TY_TUPLE || t->nelems != s->list.len)) {
+                    error(c, s->b, "this gives %s, but %d places are given",
+                          t->kind == TY_TUPLE ? "a different number of values" : "one value", s->list.len);
+                    return;
+                }
+                if (!isErr(t)) {
+                    for (int i = 0; i < s->list.len; i++) {
+                        if (ts[i] && !isErr(ts[i]) && !sameType(ts[i], t->elems[i])) {
+                            error(c, s->list.items[i], "value %d is %s, but %s is needed", i + 1, t->elems[i]->name,
+                                  ts[i]->name);
+                        }
+                    }
+                }
+            }
+            if (s->op != P_ASSIGN) {
+                error(c, s, "'%s' takes one target", tokName(s->op));
+            }
             return;
         }
         Node **target = &s->list.items[0];

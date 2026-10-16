@@ -1,0 +1,57 @@
+// expect: ping
+// expect: data of 5 bytes
+// expect: closed 1000: bye
+// expect: Ping Data Close
+// expect: some data
+// expect: a close
+// expect: 3 shapes, area 37
+
+enum Packet {
+    Ping
+    Data(u8[] bytes)
+    Close(u16 code, str reason)
+}
+
+enum Shape {
+    Circle(i64 r)
+    Rect(i64 w, i64 h)
+    Empty
+}
+
+void describe(Packet p) {
+    match p {
+        Ping => print("ping")
+        Data(bytes) => print("data of {bytes.len} bytes")
+        Close(code, reason) => print("closed {code}: {reason}")
+    }
+}
+
+i64 area(Shape s) => match s {
+    Circle(r) => 3 * r * r
+    Rect(w, h) => w * h
+    Empty => 0
+}
+
+void main() {
+    Packet a = Packet.Ping
+    Packet b = .Data("hello")
+    Packet c = Packet.Close(1000, "bye")
+    describe(a)
+    describe(b)
+    describe(c)
+    print("{a} {b} {c.name}")
+    match b {
+        Data(_) => print("some data")
+        _ => print("other")
+    }
+    match c {
+        Close => print("a close")
+        _ => {}
+    }
+    Shape[3] shapes = [Shape.Circle(2), .Rect(5, 5), .Empty]
+    i64 total
+    for s in shapes {
+        total += area(s)
+    }
+    print("{shapes.len} shapes, area {total}")
+}

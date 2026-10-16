@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.4.0"
+#define IRIS_VERSION "0.5.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -199,6 +199,7 @@ typedef enum {
     TY_RESULT,              /* !T: elem is T (tyVoid for !void) */
     TY_ERRVAL,              /* Error: a code and, in the runtime, a message and a trace */
     TY_ERRCODE,             /* e.code: any enum value, with its enum */
+    TY_TUPLE,               /* several values: elems */
 } TypeKind;
 
 struct Type {
@@ -211,7 +212,12 @@ struct Type {
     Node *decl;             /* structs: the N_STRUCT node */
     NodeList methods;       /* structs: N_FUNC nodes with a receiver */
     int state;              /* structs: 0 new, 1 resolving fields, 2 done */
-    const char *ir;         /* structs: the LLVM type name */
+    const char *ir;         /* structs and data enums: the LLVM type name */
+    Type **elems;           /* tuples */
+    int nelems;
+    bool hasData;           /* enums whose values carry data */
+    bool isFlags;           /* flag enums */
+    int64_t payload;        /* data enums: bytes of room for the largest value's data */
 };
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
@@ -221,6 +227,8 @@ extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64;
 enum {
     BI_NONE, BI_PRINT, BI_PANIC, BI_FORMAT, BI_ALLOC, BI_FREE,
     BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE, BI_ERROR,
+    BI_ENUM_NEW,            /* a value of a data enum: ref is the member */
+    BI_FLAGS_HAS,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

@@ -1,15 +1,8 @@
-// error: 7: enums whose values carry data are not supported yet (planned for 0.5)
-// error: 11: flag enums are not supported yet (planned for 0.5)
-// error: 13: generic types are not supported yet (planned for 0.6)
-// error: 15: interfaces are not supported yet (planned for 0.6)
-// error: 19: imports are not supported yet (planned for 0.7)
-enum Packet {
-    Data(u8[] bytes)
-    Ping
-}
-
-enum Perm flags { read, write }
-
+// error: 6: generic types are not supported yet (planned for 0.6)
+// error: 8: interfaces are not supported yet (planned for 0.6)
+// error: 12: imports are not supported yet (planned for 0.7)
+// error: 16: tasks and channels are not supported yet (planned for a later version)
+// error: 17: when is not supported yet (planned for a later version)
 List[i64] numbers
 
 interface Ordered {
@@ -18,4 +11,8 @@ interface Ordered {
 
 import fs
 
-void main() { }
+void main() {
+    f := 1
+    spawn f
+    when os == .linux { }
+}

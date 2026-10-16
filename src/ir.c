@@ -81,7 +81,16 @@ static const char *llType(IR *ir, Type *t) {
     case TY_SLICE: return "{ ptr, i64 }";
     case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
     case TY_STRUCT: case TY_STRING: return t->ir;
-    case TY_ENUM: return "i32";
+    case TY_ENUM: return t->hasData ? t->ir : "i32";
+    case TY_TUPLE: {
+        StrBuf b = {0};
+        sbPuts(&b, "{ ");
+        for (int i = 0; i < t->nelems; i++) {
+            sbPrintf(&b, "%s%s", i ? ", " : "", llType(ir, t->elems[i]));
+        }
+        sbPuts(&b, " }");
+        return sbFinish(&b, ir->arena);
+    }
     case TY_ERRVAL: case TY_ERRCODE: return "i64";
     case TY_RESULT:
         return t->elem->kind == TY_VOID ? "i64" : fmt(ir, "{ %s, i64 }", llType(ir, t->elem));
@@ -243,6 +252,8 @@ static void emitBlock(IR *ir, Node *b);
 static Val emitIf(IR *ir, Node *n, bool wantValue);
 static Val emitMatch(IR *ir, Node *m, bool wantValue);
 static bool irAddressable(Node *e);
+static Val load(IR *ir, const char *addr, Type *t);
+static const char *enumTag(IR *ir, Val v);
 
 /* Every value of from fits in to, so no check is needed. */
 static bool widensSafely(Type *from, Type *to) {
@@ -562,8 +573,11 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
             const char *x = tmp(ir);
             ins(ir, "%s = zext i1 %s to i32", x, v.s);
             ins(ir, "call void @iris_write_bool(i32 %d, ptr %s, i32 %s)", sink, dst, x);
+        } else if (v.t->kind == TY_ENUM && v.t->isFlags) {
+            ins(ir, "call void @iris_write_flags(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count, v.s);
         } else if (v.t->kind == TY_ENUM) {
-            ins(ir, "call void @iris_write_enum(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count, v.s);
+            ins(ir, "call void @iris_write_enum(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count,
+                enumTag(ir, v));
         } else if (v.t->kind == TY_ERRCODE) {
             ins(ir, "call void @iris_write_errcode(i32 %d, ptr %s, i64 %s)", sink, dst, v.s);
         } else {
@@ -571,6 +585,41 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
                 toI64(ir, v));
         }
     }
+}
+
+/* The data of an enum value: its member's fields, as a struct. */
+static Type *memberData(Node *m) { return m->d ? m->d->type : NULL; }
+
+/* A value of a data enum: the tag, then the member's fields in the room
+ * after it. */
+static Val emitEnumValue(IR *ir, Type *et, Node *m, NodeList *args) {
+    const char *slot = allocaFor(ir, et, "enum");
+    ins(ir, "store %s zeroinitializer, ptr %s", et->ir, slot);
+    const char *tag = tmp(ir);
+    ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 0", tag, et->ir, slot);
+    ins(ir, "store i32 %lld, ptr %s", (long long)m->cval, tag);
+    Type *data = memberData(m);
+    if (data && args) {
+        const char *room = tmp(ir);
+        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 1", room, et->ir, slot);
+        for (int i = 0; i < args->len; i++) {
+            Val v = emitExpr(ir, args->items[i]);
+            const char *f = tmp(ir);
+            ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", f, data->ir, room, i);
+            ins(ir, "store %s %s, ptr %s", llType(ir, data->elems[i]), v.s, f);
+        }
+    }
+    return load(ir, slot, et);
+}
+
+/* The tag of an enum value: the value itself for a plain enum. */
+static const char *enumTag(IR *ir, Val v) {
+    if (!v.t->hasData) {
+        return v.s;
+    }
+    const char *t = tmp(ir);
+    ins(ir, "%s = extractvalue %s %s, 0", t, v.t->ir, v.s);
+    return t;
 }
 
 static Val emitBuiltin(IR *ir, Node *e) {
@@ -611,6 +660,16 @@ static Val emitBuiltin(IR *ir, Node *e) {
         }
         ins(ir, "call void @free(ptr %s)", p);
         return val("", &tyVoid);
+    }
+    case BI_ENUM_NEW:
+        return emitEnumValue(ir, e->type, e->ref, &e->list);
+    case BI_FLAGS_HAS: {
+        Val a = emitExpr(ir, e->a->a);
+        Val b = emitExpr(ir, e->list.items[0]);
+        const char *x = tmp(ir), *r = tmp(ir);
+        ins(ir, "%s = and i32 %s, %s", x, a.s, b.s);
+        ins(ir, "%s = icmp eq i32 %s, %s", r, x, b.s);
+        return val(r, &tyBool);
     }
     case BI_ERROR: {
         Val code = emitExpr(ir, e->list.items[0]);
@@ -993,7 +1052,22 @@ static Val emitExpr(IR *ir, Node *e) {
     if (e->type && e->type->kind == TY_NULL) {
         return val("null", e->type);
     }
+    if ((e->kind == N_FIELD_ACCESS || e->kind == N_ENUM_DOT) && e->type && e->type->kind == TY_ENUM &&
+        e->type->hasData && e->ref && e->ref->kind == N_ENUM_MEMBER) {
+        return emitEnumValue(ir, e->type, e->ref, NULL);
+    }
     switch (e->kind) {
+    case N_TUPLE: {
+        const char *ty = llType(ir, e->type);
+        const char *acc = "undef";
+        for (int i = 0; i < e->list.len; i++) {
+            Val v = emitExpr(ir, e->list.items[i]);
+            const char *r = tmp(ir);
+            ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, ty, acc, llType(ir, e->type->elems[i]), v.s, i);
+            acc = r;
+        }
+        return val(acc, e->type);
+    }
     case N_STRING: {
         const char *g = stringConst(ir, e->text, e->textLen);
         return val(fmt(ir, "{ ptr %s, i64 %zu }", g, e->textLen), &tyStr);
@@ -1037,7 +1111,7 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin) {
             Val v = emitExpr(ir, e->a);
             const char *p = tmp(ir), *n = tmp(ir);
-            ins(ir, "%s = call ptr @iris_enum_name(i64 %lld, i32 %s)", p, (long long)v.t->count, v.s);
+            ins(ir, "%s = call ptr @iris_enum_name(i64 %lld, i32 %s)", p, (long long)v.t->count, enumTag(ir, v));
             ins(ir, "%s = call i64 @strlen(ptr %s)", n, p);
             return makeSlice(ir, p, n, &tyStr);
         }
@@ -1167,6 +1241,12 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
     bool value = wantValue && hasValue(t);
     const char *slot = value ? allocaFor(ir, t, "match") : NULL;
     Val subject = emitExpr(ir, m->a);
+    bool dataEnum = subject.t->kind == TY_ENUM && subject.t->hasData;
+    const char *subjAddr = NULL, *tag = NULL;
+    if (dataEnum) {
+        subjAddr = spill(ir, subject);
+        tag = enumTag(ir, subject);
+    }
     int end = newLabel(ir);
     for (int i = 0; i < m->list.len; i++) {
         Node *arm = m->list.items[i];
@@ -1176,6 +1256,10 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
             int tryNext = j + 1 < arm->list.len ? newLabel(ir) : next;
             if (wildcard(p)) {
                 br(ir, body);
+            } else if (dataEnum) {
+                const char *eq = tmp(ir);
+                ins(ir, "%s = icmp eq i32 %s, %lld", eq, tag, (long long)p->ref->cval);
+                condBr(ir, eq, body, tryNext);
             } else if (p->kind == N_BINARY && p->op == P_DOTDOT) {
                 const char *lo = tmp(ir), *hi = tmp(ir), *both = tmp(ir);
                 bool s = subject.t->isSigned;
@@ -1194,6 +1278,24 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
             }
         }
         placeLabel(ir, body);
+        if (dataEnum && arm->list.len == 1 && arm->list.items[0]->kind == N_CALL) {
+            /* take the value apart into the names the pattern gives */
+            Node *p = arm->list.items[0];
+            Type *data = memberData(p->ref);
+            const char *room = tmp(ir);
+            ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 1", room, subject.t->ir, subjAddr);
+            for (int k = 0; k < p->list.len; k++) {
+                Node *b = p->list.items[k];
+                if (strcmp(b->name, "_") == 0) {
+                    continue;
+                }
+                const char *f = tmp(ir);
+                ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", f, data->ir, room, k);
+                Val v = load(ir, f, data->elems[k]);
+                b->ir = allocaFor(ir, data->elems[k], b->name);
+                ins(ir, "store %s %s, ptr %s", llType(ir, data->elems[k]), v.s, b->ir);
+            }
+        }
         if (value) {
             emitValueBlock(ir, arm->c, slot, t);
         } else if (arm->c->kind == N_BLOCK) {
@@ -1332,6 +1434,25 @@ static Loop *findLoop(IR *ir, const char *label) {
 }
 
 static void emitAssign(IR *ir, Node *s) {
+    if (s->list.len > 1) {
+        /* the values first, then the places, so a, b = b, a swaps */
+        Val v = emitExpr(ir, s->b);
+        const char *vals[32];
+        for (int i = 0; i < s->list.len; i++) {
+            const char *x = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, %d", x, llType(ir, v.t), v.s, i);
+            vals[i] = x;
+        }
+        for (int i = 0; i < s->list.len; i++) {
+            Node *t = s->list.items[i];
+            if (t->kind == N_IDENT && strcmp(t->name, "_") == 0) {
+                continue;
+            }
+            const char *addr = emitAddr(ir, t);
+            ins(ir, "store %s %s, ptr %s", llType(ir, t->type), vals[i], addr);
+        }
+        return;
+    }
     Node *target = s->list.items[0];
     if (target->kind == N_IDENT && strcmp(target->name, "_") == 0) {
         emitExpr(ir, s->b);
@@ -1390,6 +1511,23 @@ static void emitStmt(IR *ir, Node *s) {
         }
         return;
     case N_DEFINE: {
+        if (s->list.len > 1) {
+            Val v = emitExpr(ir, s->b);
+            if (ir->terminated) {
+                return;
+            }
+            for (int i = 0; i < s->list.len; i++) {
+                Node *id = s->list.items[i];
+                if (strcmp(id->name, "_") == 0) {
+                    continue;
+                }
+                id->ir = allocaFor(ir, id->type, id->name);
+                const char *x = tmp(ir);
+                ins(ir, "%s = extractvalue %s %s, %d", x, llType(ir, v.t), v.s, i);
+                ins(ir, "store %s %s, ptr %s", llType(ir, id->type), x, id->ir);
+            }
+            return;
+        }
         Node *id = s->list.items[0];
         id->ir = allocaFor(ir, id->type, id->name);
         Val v = emitExpr(ir, s->b);
@@ -1608,6 +1746,18 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
 
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
+        if (d->kind == N_ENUM && d->type && d->type->hasData) {
+            Type *et = d->type;
+            sbPrintf(&types, "%s = type { i32, [%lld x i64] }\n", et->ir, (long long)((et->payload + 7) / 8));
+            for (int j = 0; j < d->list.len; j++) {
+                Type *data = memberData(d->list.items[j]);
+                if (!data) continue;
+                sbPrintf(&types, "%s = type %s\n", data->ir, llType(&ir, data));
+            }
+        }
+    }
+    for (int i = 0; i < file->list.len; i++) {
+        Node *d = file->list.items[i];
         if (d->kind == N_STRUCT && d->type) {
             sbPrintf(&types, "%s = type { ", d->type->ir);
             for (int j = 0; j < d->list.len; j++) {
@@ -1731,6 +1881,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
            "declare i64 @iris_error_message_len()\n"
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"
+           "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
            "declare i64 @strlen(ptr)\n"
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     if (mode == MODE_DEBUG) {

@@ -1,0 +1,18 @@
+// expect: read|write true false
+// expect: read|write|exec
+// expect: write
+// expect: 0 read true
+
+enum Perm flags { read, write, exec }
+
+void main() {
+    Perm p = .read | .write
+    print("{p} {p.has(.write)} {p.has(.exec)}")
+    p = p | Perm.exec
+    print("{p}")
+    Perm w = p & .write
+    print("{w}")
+    Perm none = p & ~p
+    Perm two = Perm.write | Perm.exec
+    print("{none} {Perm.read} {two == .write | .exec}")
+}
