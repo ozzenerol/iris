@@ -1,0 +1,49 @@
+// expect: [HTTP/1.1 200 OK]
+// expect: [Content-Type: text/plain; charset=utf-8]
+// expect: [Content-Length: 15]
+// expect: [Connection: keep-alive]
+// expect: []
+// expect: [hello from irisHTTP/1.1 200 OK]
+// expect: [Content-Type: text/plain; charset=utf-8]
+// expect: [Content-Length: 5]
+// expect: [Connection: keep-alive]
+// expect: []
+// expect: [helloHTTP/1.1 404 Not Found]
+// expect: [Content-Type: text/plain; charset=utf-8]
+// expect: [Content-Length: 9]
+// expect: [Connection: close]
+// expect: []
+// expect: [not found]
+
+import http, net, str
+
+void route(http.Request *req, http.Response *res) {
+    match req.path {
+        "/" => res.text("hello from iris")
+        "/echo" => res.text(req.body)
+        _ => {
+            res.status = 404
+            res.text("not found")
+        }
+    }
+}
+
+void server(net.Listener ln) {
+    http.serveOn(ln, route) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    try c.write("GET / HTTP/1.1\r\nHost: x\r\n\r\nPOST /echo HTTP/1.1\r\nContent-Length: 5\r\n\r\nhelloGET /nope HTTP/1.1\r\nConnection: close\r\n\r\n")
+    for {
+        line := c.readLine() catch e {
+            break
+        }
+        print("[{line}]")
+        line.free()
+    }
+}

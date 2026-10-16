@@ -1,0 +1,175 @@
+// A small HTTP/1.1 server: each connection gets a task, and requests on it
+// are answered one after the other while the client keeps it open.
+
+import net, str
+
+// A request, as the handler sees it.
+pub struct Request {
+    pub String method
+    pub String path
+    pub String body
+    String[] names
+    String[] values
+    i64 count
+}
+
+// The answer the handler fills in. It is sent when the handler returns.
+pub struct Response {
+    pub i32 status
+    String contentType
+    String body
+}
+
+bool sameName(str a, str b) {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        x := a[i]
+        y := b[i]
+        if x >= 'A' && x <= 'Z' { x = x + 32 }
+        if y >= 'A' && y <= 'Z' { y = y + 32 }
+        if x != y {
+            return false
+        }
+    }
+    return true
+}
+
+// The value of a header, "" when the request has none. Names match in any case.
+pub str Request.header(str name) {
+    for i in 0..self.count {
+        if sameName(self.names[i], name) {
+            return self.values[i]
+        }
+    }
+    return ""
+}
+
+void Request.free() {
+    self.method.free()
+    self.path.free()
+    self.body.free()
+    for i in 0..self.count {
+        self.names[i].free()
+        self.values[i].free()
+    }
+    free(self.names)
+    free(self.values)
+}
+
+// Answers with text.
+pub void Response.text(str body) {
+    self.body.free()
+    self.body = body.copy()
+    self.contentType.free()
+    self.contentType = "text/plain; charset=utf-8".copy()
+}
+
+// Answers with JSON text.
+pub void Response.json(str body) {
+    self.body.free()
+    self.body = body.copy()
+    self.contentType.free()
+    self.contentType = "application/json".copy()
+}
+
+str statusText(i32 code) => match code {
+    200 => "OK"
+    201 => "Created"
+    204 => "No Content"
+    301 => "Moved Permanently"
+    302 => "Found"
+    400 => "Bad Request"
+    401 => "Unauthorized"
+    403 => "Forbidden"
+    404 => "Not Found"
+    405 => "Method Not Allowed"
+    500 => "Internal Server Error"
+    _ => "Status"
+}
+
+// Reads one request. False when the client has closed the connection.
+!bool readRequest(net.Conn *c, Request *req) {
+    line := c.readLine() catch e {
+        if e.code == net.NetError.closed {
+            return false
+        }
+        return e
+    }
+    defer line.free()
+    method, rest, ok := str.cut(line, " ")
+    path, _, ok2 := str.cut(rest, " ")
+    if !ok || !ok2 {
+        return error(net.NetError.other, "a request line HTTP doesn't allow: '{line}'")
+    }
+    req.method = method.copy()
+    req.path = path.copy()
+    req.names = alloc(String, 64)
+    req.values = alloc(String, 64)
+    for {
+        scoped String h = try c.readLine()
+        if h.len == 0 {
+            break
+        }
+        name, value, found := str.cut(h, ":")
+        if found && req.count < 64 {
+            req.names[req.count] = str.trim(name).copy()
+            req.values[req.count] = str.trim(value).copy()
+            req.count += 1
+        }
+    }
+    length := str.parseInt(req.header("Content-Length")) catch 0
+    if length > 0 {
+        req.body = try c.readExactly(length)
+    }
+    return true
+}
+
+!void writeResponse(net.Conn *c, Response *res, bool keepAlive) {
+    scoped String head = format("HTTP/1.1 {res.status} {statusText(res.status)}\r\nContent-Type: {res.contentType}\r\nContent-Length: {res.body.len}\r\nConnection: {if keepAlive { "keep-alive" } else { "close" }}\r\n\r\n")
+    head.append(res.body)
+    try c.write(head)
+}
+
+void serveConn(net.Conn conn, void(Request *, Response *) handler) {
+    defer conn.close()
+    for {
+        Request req
+        more := readRequest(&conn, &req) catch e {
+            return
+        }
+        if !more {
+            return
+        }
+        Response res
+        res.status = 200
+        res.contentType = "text/plain; charset=utf-8".copy()
+        handler(&req, &res)
+        keepAlive := !sameName(req.header("Connection"), "close")
+        bool failed = false
+        writeResponse(&conn, &res, keepAlive) catch e {
+            failed = true
+        }
+        res.body.free()
+        res.contentType.free()
+        req.free()
+        if !keepAlive || failed {
+            return
+        }
+    }
+}
+
+// Answers HTTP requests on port with handler, each connection in its own task.
+pub !void serve(u16 port, void(Request *, Response *) handler, str host = "") {
+    ln := try net.listen(port, host)
+    try serveOn(ln, handler)
+}
+
+// Like serve, on a listener that is already open (for port 0).
+pub !void serveOn(net.Listener ln, void(Request *, Response *) handler) {
+    for {
+        conn := try ln.accept()
+        spawn serveConn(conn, handler)
+    }
+}

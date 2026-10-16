@@ -1,0 +1,7 @@
+// panic: every task is waiting and nothing can wake them: a deadlock
+
+void main() {
+    ch := chan[i64](1)
+    x := <-ch
+    print("{x}")
+}
