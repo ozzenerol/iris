@@ -29,6 +29,7 @@ Type tyU8 = {.kind = TY_INT, .bits = 8, .name = "u8"};
 Type tyU16 = {.kind = TY_INT, .bits = 16, .name = "u16"};
 Type tyU32 = {.kind = TY_INT, .bits = 32, .name = "u32"};
 Type tyU64 = {.kind = TY_INT, .bits = 64, .name = "u64"};
+Type tyDuration = {.kind = TY_INT, .bits = 64, .isSigned = true, .name = "Duration"};
 Type tyF32 = {.kind = TY_FLOAT, .bits = 32, .isSigned = true, .name = "f32"};
 Type tyF64 = {.kind = TY_FLOAT, .bits = 64, .isSigned = true, .name = "f64"};
 Type tyStr = {.kind = TY_SLICE, .name = "str", .elem = &tyU8};
@@ -37,13 +38,14 @@ Type tyErrorValue = {.kind = TY_ERRVAL, .name = "Error"};
 Type tyErrCode = {.kind = TY_ERRCODE, .name = "error code"};
 
 static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &tyU32,
-                               &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue};
+                               &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue,
+                               &tyDuration};
 
 /* types that exist in the language but not in this version yet */
 static const struct {
     const char *name, *version;
 } laterTypes[] = {
-    {"Duration", "a later version"}, {"Arena", "a later version"},
+    {"Arena", "a later version"},
 };
 
 /* ---------------------------------------------------------------- scopes */
@@ -1383,12 +1385,31 @@ static void constError(Checker *c, Node *e, const char *msg) {
 static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool) {
     *isBool = false;
     switch (e->kind) {
-    case N_INT:
+    case N_INT: {
         if (e->ival > (uint64_t)INT64_MAX) {
             return false;
         }
-        *out = (int64_t)e->ival;
+        int64_t v = (int64_t)e->ival;
+        if (e->name) {
+            /* units: durations in nanoseconds, sizes in bytes */
+            static const struct { const char *unit; int64_t times; } units[] = {
+                {"ns", 1}, {"us", 1000}, {"ms", 1000000}, {"s", 1000000000LL}, {"m", 60000000000LL},
+                {"h", 3600000000000LL}, {"KiB", 1024}, {"MiB", 1024 * 1024}, {"GiB", 1024LL * 1024 * 1024},
+            };
+            for (size_t i = 0; i < sizeof units / sizeof units[0]; i++) {
+                if (strcmp(units[i].unit, e->name) == 0) {
+                    long long r;
+                    if (__builtin_mul_overflow(v, units[i].times, &r)) {
+                        constError(c, e, "this constant is too large");
+                        return false;
+                    }
+                    v = r;
+                }
+            }
+        }
+        *out = v;
         return true;
+    }
     case N_CHAR:
         *out = (int64_t)e->ival;
         return true;
@@ -2111,6 +2132,9 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             }
             if (e->kind == N_CHAR && !(expected && isInt(expected) && fitsIn(v, expected))) {
                 return setType(e, &tyU8);
+            }
+            if (e->kind == N_INT && e->name && !strchr("KMG", e->name[0]) && !(expected && isInt(expected))) {
+                return setType(e, &tyDuration);
             }
             if (expected && isInt(expected) && fitsIn(v, expected)) {
                 return setType(e, expected);
