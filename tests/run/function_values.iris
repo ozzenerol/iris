@@ -1,0 +1,36 @@
+// expect: 5 6
+// expect: 14
+// expect: 40
+// expect: clicked ok!
+// expect: 7
+// expect: true true false
+
+type Op = i64(i64, i64)
+
+i64 add(i64 a, b) => a + b
+i64 mul(i64 a, b) => a * b
+
+i64 apply(Op f, i64 x, y) => f(x, y)
+
+struct Button {
+    str label
+    void(str) onClick
+}
+
+void shout(str s) => print("clicked {s}!")
+
+i64 twice(i64(i64) f, i64 x) => f(f(x))
+i64 inc(i64 x) => x + 1
+
+void main() {
+    print("{apply(add, 2, 3)} {apply(mul, 2, 3)}")
+    Op[2] ops = [add, mul]
+    for f in ops {
+        print("{f(10, 4)}")
+    }
+    b := Button{label: "ok", onClick: shout}
+    b.onClick(b.label)
+    print("{twice(inc, 5)}")
+    Op none
+    print("{none == null} {ops[0] == add} {ops[0] == mul}")
+}

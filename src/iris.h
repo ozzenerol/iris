@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.9.0"
+#define IRIS_VERSION "0.10.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -138,6 +138,7 @@ enum {
     F_EXTERN = 1 << 10,     /* @extern: a C function, declared without a body */
     F_REPORTED = 1 << 11,   /* an error about this name was reported already */
     F_VARIADIC = 1 << 12,   /* a C function taking more arguments: printf */
+    F_EXPORT = 1 << 13,     /* @export: a function C can call by name */
 };
 
 typedef struct Node Node;
@@ -254,6 +255,7 @@ typedef enum {
     TY_ERRCODE,             /* e.code: any enum value, with its enum */
     TY_TUPLE,               /* several values: elems */
     TY_DYN,                 /* dyn Interface: decl is the N_INTERFACE */
+    TY_FUNC,                /* a function: elem is what it returns, elems its parameters */
 } TypeKind;
 
 struct Type {
@@ -288,6 +290,7 @@ enum {
     BI_ENUM_NEW,            /* a value of a data enum: ref is the member */
     BI_FLAGS_HAS,
     BI_DYN_CALL,            /* a call through dyn: ival is the method's place in the interface */
+    BI_INDIRECT,            /* a call through a function value: a is the value */
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

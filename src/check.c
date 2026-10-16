@@ -11,6 +11,7 @@
  * fits anywhere, so one mistake gives one message. */
 #include "iris.h"
 
+#include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -88,6 +89,7 @@ typedef struct {
     int instDepth;
     int instGen;            /* how many instances deep the body being checked is */
     NodeList genericMethods;
+    NodeList exports;       /* @export functions, to catch two with one name */
 } Checker;
 
 typedef struct Instance Instance;
@@ -251,17 +253,17 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
     t->kind = kind;
     t->elem = elem;
     t->count = count;
-    char buf[256];
+    StrBuf b = {0};
     if (kind == TY_PTR) {
-        snprintf(buf, sizeof buf, "%s%s", elem->name, elem->kind == TY_PTR ? "*" : " *");
+        sbPrintf(&b, "%s%s", elem->name, elem->kind == TY_PTR ? "*" : " *");
     } else if (kind == TY_RESULT) {
-        snprintf(buf, sizeof buf, "!%s", elem->name);
+        sbPrintf(&b, "!%s", elem->name);
     } else if (kind == TY_SLICE) {
-        snprintf(buf, sizeof buf, "%s[]", elem->name);
+        sbPrintf(&b, "%s[]", elem->name);
     } else {
-        snprintf(buf, sizeof buf, "%s[%lld]", elem->name, (long long)count);
+        sbPrintf(&b, "%s[%lld]", elem->name, (long long)count);
     }
-    t->name = arenaStrndup(gArena, buf, strlen(buf));
+    t->name = sbFinish(&b, gArena);
     TypeCache *tc = arenaAlloc(gArena, sizeof(TypeCache));
     tc->t = t;
     tc->next = gTypes;
@@ -273,6 +275,37 @@ static Type *ptrTo(Type *t) { return compound(TY_PTR, t, 0); }
 static Type *sliceOf(Type *t) { return compound(TY_SLICE, t, 0); }
 static Type *arrayOf(Type *t, int64_t n) { return compound(TY_ARRAY, t, n); }
 static Type *resultOf(Type *t) { return compound(TY_RESULT, t, 0); }
+
+/* R(A, B): a function type */
+static Type *funcOf(Type *ret, Type **params, int n) {
+    for (TypeCache *tc = gTypes; tc; tc = tc->next) {
+        Type *t = tc->t;
+        if (t->kind != TY_FUNC || t->nelems != n || !sameType(t->elem, ret)) continue;
+        bool same = true;
+        for (int i = 0; i < n && same; i++) {
+            same = sameType(t->elems[i], params[i]);
+        }
+        if (same) return t;
+    }
+    Type *t = arenaAlloc(gArena, sizeof(Type));
+    t->kind = TY_FUNC;
+    t->elem = ret;
+    t->nelems = n;
+    t->elems = arenaAlloc(gArena, sizeof(Type *) * (size_t)(n ? n : 1));
+    StrBuf b = {0};
+    sbPrintf(&b, "%s(", ret->name);
+    for (int i = 0; i < n; i++) {
+        t->elems[i] = params[i];
+        sbPrintf(&b, "%s%s", i ? ", " : "", params[i]->name);
+    }
+    sbPutc(&b, ')');
+    t->name = sbFinish(&b, gArena);
+    TypeCache *tc = arenaAlloc(gArena, sizeof(TypeCache));
+    tc->t = t;
+    tc->next = gTypes;
+    gTypes = tc;
+    return t;
+}
 
 /* (A, B, ...) */
 static Type *tupleOf(Type **elems, int n) {
@@ -313,8 +346,9 @@ static bool sameType(Type *a, Type *b) {
     case TY_PTR: case TY_SLICE: case TY_RESULT: return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
-    case TY_TUPLE:
+    case TY_TUPLE: case TY_FUNC:
         if (a->nelems != b->nelems) return false;
+        if (a->kind == TY_FUNC && !sameType(a->elem, b->elem)) return false;
         for (int i = 0; i < a->nelems; i++) {
             if (!sameType(a->elems[i], b->elems[i])) return false;
         }
@@ -332,9 +366,9 @@ static Type *structType(Checker *c, Node *decl) {
         t->name = decl->name;
         t->decl = decl;
         t->ir = arenaStrndup(c->arena, "", 0);
-        char buf[160];
-        snprintf(buf, sizeof buf, "%%\"T.%s.%s\"", decl->module ? decl->module : "main", decl->name);
-        t->ir = arenaStrndup(c->arena, buf, strlen(buf));
+        StrBuf b = {0};
+        sbPrintf(&b, "%%\"T.%s.%s\"", decl->module ? decl->module : "main", decl->name);
+        t->ir = sbFinish(&b, c->arena);
         decl->type = t;
     }
     return decl->type;
@@ -351,7 +385,7 @@ static int64_t typeSize(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
     case TY_INT: case TY_FLOAT: return t->bits / 8;
-    case TY_PTR: case TY_NULL: return 8;
+    case TY_PTR: case TY_NULL: case TY_FUNC: return 8;
     case TY_SLICE: return 16;
     case TY_STRING: return 24;
     case TY_ERRVAL: case TY_ERRCODE: return 8;
@@ -417,9 +451,9 @@ static Type *enumType(Checker *c, Node *decl) {
         }
     }
     if (t->hasData) {
-        char buf[160];
-        snprintf(buf, sizeof buf, "%%\"E.%s.%s\"", decl->module ? decl->module : "main", decl->name);
-        t->ir = arenaStrndup(c->arena, buf, strlen(buf));
+        StrBuf b = {0};
+        sbPrintf(&b, "%%\"E.%s.%s\"", decl->module ? decl->module : "main", decl->name);
+        t->ir = sbFinish(&b, c->arena);
     }
     if (decl->attrs.len) {
         notYet(c, decl->attrs.items[0], "attributes", "a later version");
@@ -485,9 +519,9 @@ static Type *enumType(Checker *c, Node *decl) {
         }
         if (fields) {
             size = typeSize(fields);
-            char buf[200];
-            snprintf(buf, sizeof buf, "%%\"E.%s.%s.%s\"", decl->module ? decl->module : "main", decl->name, m->name);
-            fields->ir = arenaStrndup(c->arena, buf, strlen(buf));
+            StrBuf b = {0};
+            sbPrintf(&b, "%%\"E.%s.%s.%s\"", decl->module ? decl->module : "main", decl->name, m->name);
+            fields->ir = sbFinish(&b, c->arena);
             fields->name = m->name;
             m->d = like(c, N_T_TUPLE, m);   /* holds the data's type */
             m->d->type = fields;
@@ -703,9 +737,24 @@ static Type *resolveType(Checker *c, Node *t) {
         }
         return dynType(c, d);
     }
-    case N_T_FUNC:
-        notYet(c, t, "function types", "a later version");
-        return &tyError;
+    case N_T_FUNC: {
+        Type *ret = resolveType(c, t->a);
+        if (isErr(ret)) return ret;
+        Type *params[32];
+        if (t->list.len > 32) {
+            error(c, t, "too many parameters");
+            return &tyError;
+        }
+        for (int i = 0; i < t->list.len; i++) {
+            params[i] = resolveType(c, t->list.items[i]);
+            if (isErr(params[i])) return params[i];
+            if (params[i] == &tyVoid) {
+                error(c, t->list.items[i], "a parameter can't be void");
+                return &tyError;
+            }
+        }
+        return funcOf(ret, params, t->list.len);
+    }
     default:
         notYet(c, t, "this kind of type", "a later version");
         return &tyError;
@@ -783,8 +832,13 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
         *slot = convertNode(c, e, to, false);
         return true;
     }
-    if (from->kind == TY_NULL && to->kind == TY_PTR) {
+    if (from->kind == TY_NULL && (to->kind == TY_PTR || to->kind == TY_FUNC)) {
         e->type = to;
+        return true;
+    }
+    if (from->kind == TY_PTR && to->kind == TY_PTR && (from->elem == &tyU8 || to->elem == &tyU8)) {
+        /* u8 * is also C's void *: any pointer converts to and from it */
+        *slot = convertNode(c, e, to, false);
         return true;
     }
     if (from->kind == TY_ARRAY && to->kind == TY_SLICE && sameType(from->elem, to->elem)) {
@@ -1271,9 +1325,9 @@ static Type *dynType(Checker *c, Node *iface) {
     Type *t = arenaAlloc(c->arena, sizeof(Type));
     t->kind = TY_DYN;
     t->decl = iface;
-    char buf[160];
-    snprintf(buf, sizeof buf, "dyn %s", iface->name);
-    t->name = arenaStrndup(c->arena, buf, strlen(buf));
+    StrBuf b = {0};
+    sbPrintf(&b, "dyn %s", iface->name);
+    t->name = sbFinish(&b, c->arena);
     iface->type = t;
     Scope *saved = c->scope;
     c->scope = iface->scope;
@@ -1578,7 +1632,7 @@ static bool addressable(Node *e) {
 
 static bool isComparable(Type *t) {
     switch (t->kind) {
-    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE:
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE: case TY_FUNC:
         return true;
     case TY_ENUM:
         return !t->hasData;
@@ -1687,10 +1741,10 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
             t = tb;
         } else if (widens(tb, ta)) {
             coerce(c, &e->b, ta, "the right side");
-        } else if (ta->kind == TY_NULL && tb->kind == TY_PTR) {
+        } else if (ta->kind == TY_NULL && (tb->kind == TY_PTR || tb->kind == TY_FUNC)) {
             e->a->type = tb;
             t = tb;
-        } else if (tb->kind == TY_NULL && ta->kind == TY_PTR) {
+        } else if (tb->kind == TY_NULL && (ta->kind == TY_PTR || ta->kind == TY_FUNC)) {
             e->b->type = ta;
         } else {
             if (isNumber(ta) && isNumber(tb)) {
@@ -2032,6 +2086,7 @@ static Type *checkExpr(Checker *c, Node **slot, Type *expected) {
 
 static Type *checkTry(Checker *c, Node *e);
 static Type *checkCatch(Checker *c, Node *e, Type *expected);
+static Type *checkIndirectCall(Checker *c, Node *e, Type *ft);
 
 static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
@@ -2107,9 +2162,34 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         }
         e->ref = d;
         switch (d->kind) {
-        case N_FUNC:
-            notYet(c, e, "functions as values", "a later version");
-            return setType(e, &tyError);
+        case N_FUNC: {
+            /* a function used as a value: its address */
+            if (d->list2.len) {
+                error(c, e, "%s is generic; only a function with fixed types can be used as a value", e->name);
+                return setType(e, &tyError);
+            }
+            if (!d->type) {
+                Scope *saved = c->scope;
+                const char *savedModule = c->module;
+                c->scope = d->scope;
+                c->module = d->module;
+                checkSignature(c, d, NULL);
+                c->scope = saved;
+                c->module = savedModule;
+            }
+            if (isErr(d->type)) return setType(e, &tyError);
+            if (d->flags & F_VARIADIC) {
+                error(c, e, "%s takes C's ..., so it can't be used as a value", e->name);
+                return setType(e, &tyError);
+            }
+            Type *params[64];
+            if (d->list.len > 64) return setType(e, &tyError);
+            for (int i = 0; i < d->list.len; i++) {
+                params[i] = d->list.items[i]->type ? d->list.items[i]->type : &tyError;
+                if (isErr(params[i])) return setType(e, &tyError);
+            }
+            return setType(e, funcOf(d->type, params, d->list.len));
+        }
         case N_STRUCT: case N_TYPEDEF:
             error(c, e, "%s is a type, not a value", e->name);
             return setType(e, &tyError);
@@ -2505,7 +2585,13 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     if (!m) {
         Node *fpath[16];
         if (findField(st, name, fpath, 16)) {
-            notYet(c, callee, "calling a function stored in a field", "a later version");
+            Type *ft = checkExpr(c, &e->a, NULL);
+            if (!isErr(ft) && ft->kind == TY_FUNC) {
+                return checkIndirectCall(c, e, ft);
+            }
+            if (!isErr(ft)) {
+                error(c, callee, "the field %s is %s, not a function", name, ft->name);
+            }
         } else {
             error(c, callee, "%s has no method %s", st->name, name);
         }
@@ -2696,6 +2782,26 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
     return setType(e, inst->type);
 }
 
+/* A call through a function value: the arguments by position. */
+static Type *checkIndirectCall(Checker *c, Node *e, Type *ft) {
+    if (e->list.len != ft->nelems) {
+        error(c, e, "this function takes %d argument%s, not %d", ft->nelems, ft->nelems == 1 ? "" : "s",
+              e->list.len);
+        return setType(e, &tyError);
+    }
+    for (int i = 0; i < e->list.len; i++) {
+        Node **slot = &e->list.items[i];
+        if ((*slot)->kind == N_NAMED_ARG) {
+            error(c, *slot, "a call through a function value takes its arguments by position");
+            continue;
+        }
+        checkExpr(c, slot, ft->elems[i]);
+        coerce(c, slot, ft->elems[i], "the argument");
+    }
+    e->builtin = BI_INDIRECT;
+    return setType(e, ft->elem);
+}
+
 /* Packet.Data(bytes) or .Close(1000, "bye"): a value of a data enum. */
 static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
     Node *m = enumMember(et, name);
@@ -2750,8 +2856,13 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         }
     }
     if (callee->kind != N_IDENT) {
-        notYet(c, callee, "calling this kind of expression", "a later version");
-        return setType(e, &tyError);
+        Type *ft = checkExpr(c, &e->a, NULL);
+        if (isErr(ft)) return setType(e, &tyError);
+        if (ft->kind != TY_FUNC) {
+            error(c, callee, "this is %s, not a function", ft->name);
+            return setType(e, &tyError);
+        }
+        return checkIndirectCall(c, e, ft);
     }
     const char *name = callee->name;
     Node *d = lookup(c, name);
@@ -2855,8 +2966,13 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         return setType(e, &tyError);
     }
     if (d->kind != N_FUNC) {
-        error(c, callee, "%s is not a function", name);
-        return setType(e, &tyError);
+        Type *ft = checkExpr(c, &e->a, NULL);
+        if (isErr(ft)) return setType(e, &tyError);
+        if (ft->kind != TY_FUNC) {
+            error(c, callee, "%s is not a function", name);
+            return setType(e, &tyError);
+        }
+        return checkIndirectCall(c, e, ft);
     }
     if (d->list2.len) {
         return checkGenericCall(c, e, d, NULL);
@@ -3767,7 +3883,7 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         if (strcmp(at->name, "extern") == 0) {
             /* @extern("c_name"): a C function; the standard library only */
             bool std = f->module && strcmp(f->module, "main") != 0 && f->src &&
-                       (strncmp(f->src->path, "std/", 4) == 0 || strncmp(f->module, "c:", 2) == 0);
+                       (strncmp(f->src->path, "std/", 4) == 0 || strncmp(f->src->path, "c-import:", 9) == 0);
             if (!std) {
                 error(c, at, "@extern is for the standard library; use import c to call C");
             } else if (at->list.len < 1 || at->list.len > 2 || at->list.items[0]->kind != N_STRING) {
@@ -3778,6 +3894,40 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
                 if (at->list.len == 2 && at->list.items[1]->kind == N_IDENT &&
                     strcmp(at->list.items[1]->name, "variadic") == 0) {
                     f->flags |= F_VARIADIC;
+                }
+            }
+        } else if (strcmp(at->name, "export") == 0) {
+            /* @export or @export("name"): C can call it by that name */
+            if (f->b || f->list2.len) {
+                error(c, at, "only a plain function can be exported, not a method or a generic");
+            } else if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
+                error(c, at, "@export takes nothing, or the C name in quotes");
+            } else {
+                f->flags |= F_EXPORT;
+                f->text = at->list.len ? at->list.items[0]->text : f->name;
+                bool okName = f->text[0] && !isdigit((unsigned char)f->text[0]);
+                for (const char *q = f->text; *q; q++) {
+                    okName = okName && (isalnum((unsigned char)*q) || *q == '_');
+                }
+                if (!okName) {
+                    error(c, at, "\"%s\" isn't a C name: letters, digits and _, not starting with a digit", f->text);
+                    f->flags &= ~F_EXPORT;
+                }
+                for (int k = 0; okName && k < c->exports.len; k++) {
+                    Node *o = c->exports.items[k];
+                    if (strcmp(o->text, f->text) == 0) {
+                        error(c, at, "%s is exported already, on line %d", f->text, o->line);
+                        f->flags &= ~F_EXPORT;
+                        okName = false;
+                    }
+                }
+                if (okName && (strncmp(f->text, "iris_", 5) == 0 || strcmp(f->text, "main") == 0)) {
+                    error(c, at, "the names main and iris_... belong to the runtime; export under another name");
+                    f->flags &= ~F_EXPORT;
+                    okName = false;
+                }
+                if (okName) {
+                    listPush(c->arena, &c->exports, f);
                 }
             }
         } else {
@@ -3849,11 +3999,23 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
             error(c, p, "a parameter without a default can't follow one with a default");
         }
     }
+    if (f->flags & F_EXPORT) {
+        for (int i = 0; i < f->list.len; i++) {
+            Type *t = f->list.items[i]->type;
+            if (!isErr(t) && !isNumber(t) && t->kind != TY_PTR && t->kind != TY_FUNC) {
+                error(c, f->list.items[i], "an exported function takes numbers and pointers, not %s", t->name);
+            }
+        }
+        Type *r = f->type;
+        if (!isErr(r) && r != &tyVoid && !isNumber(r) && r->kind != TY_PTR) {
+            error(c, f, "an exported function returns a number, a pointer or nothing, not %s", r->name);
+        }
+    }
     if (f->flags & F_EXTERN) {
         /* only what C passes the same way: integers and pointers */
         for (int i = 0; i < f->list.len; i++) {
             Type *t = f->list.items[i]->type;
-            if (!isErr(t) && !isNumber(t) && t->kind != TY_PTR) {
+            if (!isErr(t) && !isNumber(t) && t->kind != TY_PTR && t->kind != TY_FUNC) {
                 error(c, f->list.items[i], "a C function takes numbers and pointers, not %s", t->name);
             }
         }
@@ -3966,7 +4128,7 @@ static void qualify(Checker *c, Node *n) {
                 }
                 if (why) {
                     error(c, n, "c.%s can't be used from Iris yet: it has %s", n->name, why);
-                } else if (imp->module && strncmp(imp->module, "c:", 2) == 0) {
+                } else if (imp->flags & F_C_IMPORT) {
                     error(c, n, "the C headers imported here have no %s (only functions, structs, types and integer constants come through)", n->name);
                 } else {
                     error(c, n, "the module %s has no %s", imp->name, n->name);

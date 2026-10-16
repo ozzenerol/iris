@@ -129,4 +129,33 @@ i64 apply(i64(i64) f, i64 x) => f(x)
 n := apply(square, 4)      // 16
 ```
 
-Iris has no lambdas, so the function passed must have a name.
+Iris has no lambdas, so the function passed must have a name. A function value can be kept in a variable, a field or an array, compared with `==`, and is `null` until it is set. Calling a `null` one stops a debug build with an error. Arguments are passed by position; defaults and names don't apply through a function value.
+
+```iris run
+type Op = i64(i64, i64)
+
+i64 add(i64 a, b) => a + b
+i64 mul(i64 a, b) => a * b
+
+struct Button {
+    str label
+    void(str) onClick
+}
+
+void shout(str s) => print("{s} clicked")
+
+void main() {
+    Op[2] ops = [add, mul]
+    for f in ops {
+        print("{f(6, 7)}")
+    }
+    b := Button{label: "ok", onClick: shout}
+    b.onClick(b.label)
+}
+```
+
+```output
+13
+42
+ok clicked
+```

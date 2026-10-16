@@ -21,6 +21,14 @@ pp.x = 10
 
 A pointer can be `null`. In a debug build, using a `null` pointer stops the program with an error that says where.
 
+`u8 *` also stands for C's `void *`: any pointer converts to `u8 *` on its own, and back:
+
+```iris
+i64 x = 5
+u8 *raw = &x
+i64 *back = raw
+```
+
 Pointer arithmetic works as in C:
 
 ```iris

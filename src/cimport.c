@@ -299,9 +299,56 @@ static bool cType(Arena *a, const char *ct, bool param, StrBuf *out, const char 
         sbPuts(out, "i32");
         return true;
     }
-    /* function pointers: an opaque pointer for now */
-    if (strstr(buf, "(*")) {
-        sbPuts(out, "u8 *");
+    /* a pointer to a function: an Iris function type, R(A, B) */
+    char *fp = strstr(buf, "(*)");
+    if (fp) {
+        char retPart[256], argPart[512];
+        snprintf(retPart, sizeof retPart, "%.*s", (int)(fp - buf), buf);
+        char *open = fp + 3;
+        size_t al = strlen(open);
+        bool ok = open[0] == '(' && al >= 2 && open[al - 1] == ')';
+        if (ok) {
+            snprintf(argPart, sizeof argPart, "%.*s", (int)(al - 2), open + 1);
+        }
+        StrBuf f = {0};
+        const char *w2 = NULL;
+        if (ok && strstr(argPart, "...")) {
+            ok = false;
+        }
+        if (ok && cType(a, retPart, false, &f, &w2) && !gByValue) {
+            sbPutc(&f, '(');
+            /* the parameters, split at commas outside parentheses */
+            int depth = 0, np = 0;
+            char *start = argPart;
+            bool none = strcmp(argPart, "void") == 0 || argPart[0] == 0;
+            for (char *q = argPart; !none && ok; q++) {
+                if (*q == '(') depth++;
+                if (*q == ')') depth--;
+                if ((*q == ',' && depth == 0) || *q == 0) {
+                    char one[256];
+                    snprintf(one, sizeof one, "%.*s", (int)(q - start), start);
+                    StrBuf pt = {0};
+                    if (!cType(a, one, true, &pt, &w2) || gByValue) {
+                        ok = false;
+                    } else {
+                        sbPrintf(&f, "%s%s", np++ ? ", " : "", pt.buf);
+                    }
+                    sbFree(&pt);
+                    start = q + 1;
+                    if (*q == 0) break;
+                }
+            }
+            sbPutc(&f, ')');
+        } else {
+            ok = false;
+        }
+        gByValue = false;
+        if (ok) {
+            sbPuts(out, f.buf);
+        } else {
+            sbPuts(out, "u8 *");        /* a function type Iris can't write: an opaque pointer */
+        }
+        sbFree(&f);
         return true;
     }
     if (strchr(buf, '(')) {

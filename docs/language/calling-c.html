@@ -41,9 +41,25 @@ link sqlite3</code></pre>
 <p>C expects text to end with a zero byte, and Iris text doesn't. Pass <code>.ptr</code> of text that ends with <code>\0</code>, as in the examples above. A C string can be read back with a slice of the pointer: <code>p[0:c.strlen(p)]</code>.</p>
 <h2 id="types"><a href="#types">Types</a></h2>
 <p>C types become Iris types of the same size and layout:</p>
-<div class="table"><table><thead><tr><th>C</th><th>Iris</th></tr></thead><tbody><tr><td><code>char</code>, <code>unsigned char</code>, <code>signed char</code></td><td><code>u8</code>, <code>u8</code>, <code>i8</code></td></tr><tr><td><code>short</code>, <code>int</code>, <code>long</code>, <code>long long</code></td><td><code>i16</code>, <code>i32</code>, <code>i64</code>, <code>i64</code></td></tr><tr><td><code>unsigned</code> versions</td><td><code>u16</code>, <code>u32</code>, <code>u64</code>, <code>u64</code></td></tr><tr><td><code>float</code>, <code>double</code></td><td><code>f32</code>, <code>f64</code></td></tr><tr><td><code>T *</code>, <code>char *</code></td><td><code>T *</code>, <code>u8 *</code></td></tr><tr><td><code>void *</code></td><td><code>u8 *</code></td></tr><tr><td>a pointer to a function</td><td><code>u8 *</code></td></tr><tr><td><code>struct</code></td><td>a <code>struct</code> with the same fields, or an empty one when only pointers to it make sense</td></tr><tr><td><code>enum</code></td><td>its values as <code>i32</code> constants</td></tr><tr><td><code>typedef</code></td><td>a <code>type</code> alias</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>C</th><th>Iris</th></tr></thead><tbody><tr><td><code>char</code>, <code>unsigned char</code>, <code>signed char</code></td><td><code>u8</code>, <code>u8</code>, <code>i8</code></td></tr><tr><td><code>short</code>, <code>int</code>, <code>long</code>, <code>long long</code></td><td><code>i16</code>, <code>i32</code>, <code>i64</code>, <code>i64</code></td></tr><tr><td><code>unsigned</code> versions</td><td><code>u16</code>, <code>u32</code>, <code>u64</code>, <code>u64</code></td></tr><tr><td><code>float</code>, <code>double</code></td><td><code>f32</code>, <code>f64</code></td></tr><tr><td><code>T *</code>, <code>char *</code></td><td><code>T *</code>, <code>u8 *</code></td></tr><tr><td><code>void *</code></td><td><code>u8 *</code></td></tr><tr><td>a pointer to a function</td><td>a function type: <code>int (*)(const void *, const void *)</code> is <code>i32(u8 *, u8 *)</code></td></tr><tr><td><code>struct</code></td><td>a <code>struct</code> with the same fields, or an empty one when only pointers to it make sense</td></tr><tr><td><code>enum</code></td><td>its values as <code>i32</code> constants</td></tr><tr><td><code>typedef</code></td><td>a <code>type</code> alias</td></tr></tbody></table></div>
 <p>A C name that is an Iris keyword or built-in name gets a <code>_</code> after it: <code>c.free_</code>, <code>c.select_</code>. A struct that shares its name with a function, like <code>struct stat</code> and <code>stat()</code>, is <code>c.struct_stat</code>.</p>
 <p>Functions with <code>...</code>, like <code>printf</code>, take extra numbers and pointers.</p>
+<h2 id="callbacks"><a href="#callbacks">Callbacks</a></h2>
+<p>Where C takes a pointer to a function, an Iris function with the same types can be passed. C's <code>void *</code> arguments arrive as <code>u8 *</code>, which converts to the pointer type you need:</p>
+<pre class="code run"><code><span class="k">import</span> c <span class="s">&quot;stdlib.h&quot;</span>
+
+<span class="t">i32</span> compare(<span class="t">u8</span> *pa, <span class="t">u8</span> *pb) {
+    <span class="t">i64</span> *a = pa
+    <span class="t">i64</span> *b = pb
+    <span class="k">return</span> <span class="k">if</span> *a &lt; *b { -<span class="n">1</span> } <span class="k">else</span> <span class="k">if</span> *a &gt; *b { <span class="n">1</span> } <span class="k">else</span> { <span class="n">0</span> }
+}
+
+<span class="t">void</span> main() {
+    <span class="t">i64</span>[<span class="n">5</span>] xs = [<span class="n">5</span>, <span class="n">3</span>, <span class="n">9</span>, <span class="n">1</span>, <span class="n">7</span>]
+    c.qsort(&amp;xs[<span class="n">0</span>], <span class="n">5</span>, <span class="n">8</span>, compare)
+    print(<span class="s">&quot;{xs[0]} {xs[1]} {xs[2]} {xs[3]} {xs[4]}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1 3 5 7 9</code></pre>
 <p>Left out for now, with the reason shown by <code>iris c</code>: <code>long double</code>, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or strings.</p>
 <h2 id="called-from-c"><a href="#called-from-c">Called from C</a></h2>
 <p><code>@export</code> makes an Iris function callable from C with its own name:</p>
@@ -51,7 +67,7 @@ link sqlite3</code></pre>
 <span class="t">i32</span> onRow(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
     <span class="k">return</span> <span class="n">0</span>
 }</code></pre>
-<p>An exported function can't return <code>!T</code>, since C has no way to receive it.</p>
+<p><code>@export(&quot;name&quot;)</code> exports it under another name. An exported function takes and returns numbers and pointers, never <code>!T</code>, since C has no way to receive it. The names <code>main</code> and <code>iris_...</code> belong to the runtime.</p>
 <h2 id="assembly"><a href="#assembly">Assembly</a></h2>
 <p><code>asm</code> holds assembly for the target machine. The last value in <code>rax</code> (or <code>x0</code> on arm64) is the result:</p>
 <pre class="code"><code><span class="t">u64</span> cycles() {
