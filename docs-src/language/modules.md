@@ -107,7 +107,9 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 
 | Module | What it has |
 |---|---|
-| `fs` | `readAll(path) !String`, `writeAll(path, data) !void`, `append(path, data) !void`, `exists(path) bool`, `remove(path) !void`, and `FsError` |
+| `fs` | `readAll`, `writeAll`, `append`, `exists`, `remove`, `stat(path) Info` (`size`, `isDir`, `modified`), `mkdir`, `mkdirAll`, `rename`, `removeAll`, `readDir(path) Dir` (`entries`, sorted by name), and files opened with `open`, `create` and `openAppend`, which have `read`, `readLine`, `readAll`, `write` and `close`; `FsError` |
+| `path` | `join(a, b)`, `base`, `dir`, `ext`, `stem` and `isAbs` |
+| `process` | `run(argv, input)`: runs a program and gives an `Output` with `stdout`, `stderr`, `status` and `ok()`; `ProcessError` |
 | `str` | `find`, `contains`, `startsWith`, `endsWith`, `compare`, `count`, `trim`, `trimLeft`, `trimRight`, `cut(s, sep) (str, str, bool)`, `lower`, `upper`, `replace`, `repeat`, `parseInt(s) !i64` and `parseFloat(s) !f64` |
 | `time` | `now()`, `clock()` for measuring, `date(...)`, `unix(s)`, `parse(iso)`; a `Time` has `iso()`, `format(layout)`, `dateText()`, `local()`, `utc()`, `add(d)`, `sub(t)`, `before`, `after`, `unix()`, `year()` to `nanosecond()` and `weekday()` |
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |

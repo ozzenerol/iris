@@ -1,0 +1,73 @@
+// Paths of files and folders, as text: joining them and taking them apart.
+// They use /, as Linux and macOS do.
+
+// Two paths joined with a /. When b starts with /, it is b.
+pub String join(str a, str b) {
+    if a.len == 0 || (b.len > 0 && b[0] == '/') {
+        return b.copy()
+    }
+    String out = a.copy()
+    if a[a.len - 1] != '/' {
+        out.append("/")
+    }
+    out.append(b)
+    return out
+}
+
+str trimSlashes(str p) {
+    end := p.len
+    for end > 1 && p[end - 1] == '/' {
+        end -= 1
+    }
+    return p[0:end]
+}
+
+// The last part: base("/home/ada/notes.txt") is "notes.txt".
+pub str base(str p) {
+    t := trimSlashes(p)
+    if t.len == 0 {
+        return "."
+    }
+    i := t.len
+    for i > 0 && t[i - 1] != '/' {
+        i -= 1
+    }
+    return if i == t.len { t } else { t[i:] }
+}
+
+// All but the last part: dir("/home/ada/notes.txt") is "/home/ada".
+pub str dir(str p) {
+    t := trimSlashes(p)
+    i := t.len
+    for i > 0 && t[i - 1] != '/' {
+        i -= 1
+    }
+    if i == 0 {
+        return "."
+    }
+    if i == 1 {
+        return "/"
+    }
+    return t[0:i - 1]
+}
+
+// The extension, with its dot: ext("notes.txt") is ".txt", and "" when
+// there is none.
+pub str ext(str p) {
+    b := base(p)
+    i := b.len
+    for i > 0 && b[i - 1] != '.' {
+        i -= 1
+    }
+    return if i <= 1 { "" } else { b[i - 1:] }
+}
+
+// The last part without its extension: stem("notes.txt") is "notes".
+pub str stem(str p) {
+    b := base(p)
+    e := ext(p)
+    return b[0:b.len - e.len]
+}
+
+// Whether the path starts at the root.
+pub bool isAbs(str p) => p.len > 0 && p[0] == '/'

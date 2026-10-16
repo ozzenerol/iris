@@ -1,0 +1,42 @@
+// Running other programs.
+
+pub enum ProcessError { notFound, failed }
+
+// What a program wrote, and its exit status. free gives the text back.
+pub struct Output {
+    pub String stdout
+    pub String stderr
+    pub i32 status
+}
+
+// Whether the program ended with status 0.
+pub bool Output.ok() => self.status == 0
+
+pub void Output.free() {
+    self.stdout.free()
+    self.stderr.free()
+}
+
+@extern("iris_process_run")
+i32 rawRun(str *argv, i64 argc, u8 *input, i64 inputLen, String *out, String *err, i32 *status)
+
+// Runs argv[0] with the arguments that follow, finds it on PATH when it
+// has no /, gives it input on its standard input, and waits for it to end.
+// The other tasks of the thread run meanwhile. A program that ends with a
+// status other than 0 is no error: see status.
+pub !Output run(str[] argv, str input = "") {
+    if argv.len == 0 {
+        return error(ProcessError.notFound, "run needs the program's name")
+    }
+    Output o
+    code := rawRun(argv.ptr, argv.len, input.ptr, input.len, &o.stdout, &o.stderr, &o.status)
+    if code == 1 {
+        o.free()
+        return error(ProcessError.notFound, "{argv[0]}: no such program")
+    }
+    if code != 0 {
+        o.free()
+        return error(ProcessError.failed, "{argv[0]}: can't be started")
+    }
+    return o
+}

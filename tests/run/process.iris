@@ -1,0 +1,31 @@
+// expect: [out] [err] 3 false
+// expect: [hello]
+// expect: no-such-program-xyz: no such program
+// expect: 3 done
+
+import process, str
+
+void job(i64 n, chan[i64] done) {
+    scoped String script = format("sleep 0.05; echo {n}")
+    scoped process.Output o = process.run(["sh", "-c", script]) catch e {
+        done <- -1
+        return
+    }
+    done <- str.parseInt(str.trim(o.stdout)) catch -1
+}
+
+!void main() {
+    scoped process.Output o = try process.run(["sh", "-c", "echo out; echo err >&2; exit 3"])
+    print("[{str.trim(o.stdout)}] [{str.trim(o.stderr)}] {o.status} {o.ok()}")
+    scoped process.Output c = try process.run(["cat"], "hello")
+    print("[{c.stdout}]")
+    _ = process.run(["no-such-program-xyz"]) catch e {
+        print("{e.message}")
+        process.Output{}
+    }
+    done := chan[i64](2)
+    spawn job(1, done)
+    spawn job(2, done)
+    total := <-done + <-done
+    print("{total} done")
+}

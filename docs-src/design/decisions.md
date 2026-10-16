@@ -81,6 +81,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | A `Map`'s keys are integers, `bool`, enums, pointers or `str`, and a `str` key is copied. | Keys can't dangle, and hashing and comparing need no interfaces. |
 | `for` goes over any struct with `next(i64 *at)`. | One rule covers `List`, `Map` and the program's own types. |
 | A `Duration` prints in units: `1.5s`. | Printed timings are readable without converting. |
+| `process.run` takes the program and its arguments as one list, and a status other than 0 is no error. | No shell quoting problems; the program decides what its status means. |
+| `readDir` gives the names sorted. | The same folder lists the same way on every system. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

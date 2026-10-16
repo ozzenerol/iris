@@ -1,0 +1,17 @@
+// expect: /home/ada/notes.txt /etc a/
+// expect: notes.txt /home/ada .txt notes true false
+// expect: / . (empty) b . /
+// expect: archive.tar .gz
+
+import path
+
+void main() {
+    scoped String a = path.join("/home/ada", "notes.txt")
+    scoped String b = path.join("/home", "/etc")
+    scoped String c = path.join("a/", "")
+    print("{a} {b} {c}")
+    print("{path.base(a)} {path.dir(a)} {path.ext(a)} {path.stem(a)} {path.isAbs(a)} {path.isAbs("x/y")}")
+    e := path.ext(".bashrc")
+    print("{path.base("/")} {path.dir("notes")} {if e.len == 0 { "(empty)" } else { e }} {path.base("a/b/")} {path.dir("")} {path.dir("/x")}")
+    print("{path.stem("archive.tar.gz")} {path.ext("archive.tar.gz")}")
+}

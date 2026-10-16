@@ -1,0 +1,50 @@
+// expect: 21 false true
+// expect: [line 0]
+// expect: [line 1]
+// expect: [line 2]
+// expect: a true
+// expect: moved.txt false
+// expect: false
+// expect: FsError.notFound
+// expect: FsError.isDir
+
+import fs, path, time
+
+!void main() {
+    scoped String base = format("/tmp/iris-test-{time.now().ns}")
+    scoped String sub = path.join(base, "a/b")
+    try fs.mkdirAll(sub)
+    try fs.mkdirAll(sub)
+    scoped String file = path.join(sub, "notes.txt")
+    f := try fs.create(file)
+    for i in 0..3 {
+        try f.write("line {i}\n")
+    }
+    f.close()
+    info := try fs.stat(file)
+    print("{info.size} {info.isDir} {info.modified.year() >= 2026}")
+    r := try fs.open(file)
+    for {
+        scoped String line = r.readLine() catch e {
+            break
+        }
+        print("[{line}]")
+    }
+    r.close()
+    scoped String moved = path.join(base, "moved.txt")
+    try fs.rename(file, moved)
+    scoped fs.Dir d = try fs.readDir(base)
+    for e in d.entries {
+        print("{e.name} {e.isDir}")
+    }
+    try fs.removeAll(base)
+    print("{fs.exists(base)}")
+    _ = fs.open(base) catch e {
+        print("{e.code}")
+        fs.File{}
+    }
+    _ = fs.open("/") catch e {
+        print("{e.code}")
+        fs.File{}
+    }
+}
