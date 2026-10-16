@@ -79,14 +79,14 @@ res.text("hello {name}")
 log.write("got {n} bytes from {addr}")
 ```
 
-A `String` that a call gives, passed straight to a function that takes a `str`, is freed when the statement ends too:
+A function that returns a `String` gives the caller a new String to free. Such a String, passed straight to a function that takes a `str`, is freed when the statement ends too:
 
 ```iris
 res.json(json.encode(user))
 print(json.encode(user))
 ```
 
-Anywhere else, text with values needs `format`, and a `String` from a call needs a variable that frees it.
+Anywhere else, text with values needs `format`, and a `String` from a call needs a variable that frees it. Calls of generic functions and methods are left alone: `list.at(i)` on a `List[String]` gives the String the list holds, which the list frees.
 
 A call that gives back a `str`, a slice or a pointer may give back part of its argument. The temporary String would be gone after the statement, so this is an error:
 

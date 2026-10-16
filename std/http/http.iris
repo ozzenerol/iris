@@ -1,7 +1,11 @@
-// A small HTTP/1.1 server: each connection gets a task, and requests on it
-// are answered one after the other while the client keeps it open.
+// HTTP/1.1: a server, where each connection gets a task and requests on it
+// are answered one after the other while the client keeps it open; a
+// Router that sends each request to the handler for its method and path;
+// and a client for plain http:// addresses.
 
 import net, str
+
+pub enum HttpError { badUrl, tls, badReply }
 
 // A request, as the handler sees it.
 pub struct Request {
@@ -11,6 +15,8 @@ pub struct Request {
     String[] names
     String[] values
     i64 count
+    List[str] paramNames
+    List[str] paramValues
 }
 
 // The answer the handler fills in. It is sent when the handler returns.
@@ -18,6 +24,51 @@ pub struct Response {
     pub i32 status
     String contentType
     String body
+    String headers
+}
+
+// Adds a header to the answer: res.header("Cache-Control", "no-store").
+pub void Response.header(str name, str value) {
+    self.headers.append(name)
+    self.headers.append(": ")
+    self.headers.append(value)
+    self.headers.append("\r\n")
+}
+
+// The value of :name or *name in the Router's pattern that matched, ""
+// when there is none.
+pub str Request.param(str name) {
+    for i in 0..self.paramNames.len {
+        if self.paramNames.at(i) == name {
+            return self.paramValues.at(i)
+        }
+    }
+    return ""
+}
+
+// The path without the query: /users/7 for /users/7?full=1.
+pub str Request.route() {
+    p, _, _ := str.cut(self.path, "?")
+    return p
+}
+
+// A value from the query, as sent (%XX not decoded): query("full") is "1"
+// for /users/7?full=1, and "" when it isn't there.
+pub str Request.query(str name) {
+    _, q, found := str.cut(self.path, "?")
+    if !found {
+        return ""
+    }
+    rest := q
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        key, value, _ := str.cut(pair, "=")
+        if key == name {
+            return value
+        }
+        rest = after
+    }
+    return ""
 }
 
 bool sameName(str a, str b) {
@@ -56,6 +107,8 @@ void Request.free() {
     }
     free(self.names)
     free(self.values)
+    self.paramNames.free()
+    self.paramValues.free()
 }
 
 // Answers with text.
@@ -127,12 +180,12 @@ str statusText(i32 code) => match code {
 }
 
 !void writeResponse(net.Conn *c, Response *res, bool keepAlive) {
-    scoped String head = format("HTTP/1.1 {res.status} {statusText(res.status)}\r\nContent-Type: {res.contentType}\r\nContent-Length: {res.body.len}\r\nConnection: {if keepAlive { "keep-alive" } else { "close" }}\r\n\r\n")
+    scoped String head = format("HTTP/1.1 {res.status} {statusText(res.status)}\r\nContent-Type: {res.contentType}\r\nContent-Length: {res.body.len}\r\n{res.headers}Connection: {if keepAlive { "keep-alive" } else { "close" }}\r\n\r\n")
     head.append(res.body)
     try c.write(head)
 }
 
-void serveConn(net.Conn conn, void(Request *, Response *) handler) {
+void serveConn(net.Conn conn, Target target) {
     defer conn.close()
     for {
         Request req
@@ -145,7 +198,11 @@ void serveConn(net.Conn conn, void(Request *, Response *) handler) {
         Response res
         res.status = 200
         res.contentType = "text/plain; charset=utf-8".copy()
-        handler(&req, &res)
+        if target.router != null {
+            target.router.dispatch(&req, &res)
+        } else {
+            target.handler(&req, &res)
+        }
         keepAlive := !sameName(req.header("Connection"), "close")
         bool failed = false
         writeResponse(&conn, &res, keepAlive) catch e {
@@ -153,6 +210,7 @@ void serveConn(net.Conn conn, void(Request *, Response *) handler) {
         }
         res.body.free()
         res.contentType.free()
+        res.headers.free()
         req.free()
         if !keepAlive || failed {
             return
@@ -166,44 +224,391 @@ i64 cpuCount()
 @extern("iris_listen_per_thread")
 i32 listenPerThread()
 
-void serveThread(net.Listener shared, bool own, u16 port, str host, void(Request *, Response *) handler) {
+// What answers the requests: a handler, or a Router.
+struct Target {
+    void(Request *, Response *) handler
+    Router *router
+}
+
+void serveThread(net.Listener shared, bool own, u16 port, str host, Target target) {
     ln := shared
     if own {
         ln = net.listen(port, host, true) catch e {
             return
         }
     }
-    acceptLoop(ln, handler) catch e { }
+    acceptLoop(ln, target) catch e { }
 }
 
-void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, void(Request *, Response *) handler) {
+void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target target) {
     for i in 1..n {
-        thread serveThread(ln, own, port, host, handler)
+        thread serveThread(ln, own, port, host, target)
     }
 }
 
-!void acceptLoop(net.Listener ln, void(Request *, Response *) handler) {
+!void acceptLoop(net.Listener ln, Target target) {
     for {
         conn := try ln.accept()
-        spawn serveConn(conn, handler)
+        spawn serveConn(conn, target)
     }
+}
+
+!void serveTarget(u16 port, Target target, str host, i64 threads) {
+    n := if threads > 0 { threads } else { cpuCount() }
+    own := listenPerThread() == 1 && port != 0
+    ln := try net.listen(port, host, own)
+    startThreads(n, ln, own, port, host, target)
+    try acceptLoop(ln, target)
+}
+
+!void serveTargetOn(net.Listener ln, Target target, i64 threads) {
+    n := if threads > 0 { threads } else { cpuCount() }
+    startThreads(n, ln, false, 0, "", target)
+    try acceptLoop(ln, target)
 }
 
 // Answers HTTP requests on port with handler, each connection in its own
 // task. threads event loops share the work, one per thread; 0 means one
 // per CPU core. With more than one, handler runs on several threads at once.
 pub !void serve(u16 port, void(Request *, Response *) handler, str host = "", i64 threads = 0) {
-    n := if threads > 0 { threads } else { cpuCount() }
-    own := listenPerThread() == 1 && port != 0
-    ln := try net.listen(port, host, own)
-    startThreads(n, ln, own, port, host, handler)
-    try acceptLoop(ln, handler)
+    try serveTarget(port, Target{handler: handler}, host, threads)
 }
 
 // Like serve, on a listener that is already open (for port 0). Its
 // threads all accept on ln; the default is one.
 pub !void serveOn(net.Listener ln, void(Request *, Response *) handler, i64 threads = 1) {
-    n := if threads > 0 { threads } else { cpuCount() }
-    startThreads(n, ln, false, 0, "", handler)
-    try acceptLoop(ln, handler)
+    try serveTargetOn(ln, Target{handler: handler}, threads)
+}
+
+// ------------------------------------------------------------ the router
+
+struct Route {
+    String method   // "" for any method
+    List[str] parts // the pattern's path, split at /
+    String pattern
+    void(Request *, Response *) handler
+}
+
+// Sends each request to the handler for its method and path. Patterns are
+// paths with :name for one part and *name for the rest: "/users/:id",
+// "/files/*path". When several match, the one with the most fixed parts
+// wins. A path no pattern has gets 404; a path that is
+// there for other methods gets 405 with an Allow header.
+pub struct Router {
+    List[Route] routes
+}
+
+List[str] splitPath(str p) {
+    List[str] parts
+    rest := if p.len > 0 && p[0] == '/' { p[1:] } else { p }
+    if rest.len == 0 {
+        return parts
+    }
+    for {
+        part, after, more := str.cut(rest, "/")
+        parts.push(part)
+        if !more {
+            return parts
+        }
+        rest = after
+    }
+}
+
+// Adds a handler for a pattern, with or without a method in front:
+// "GET /users/:id" or "/health" for every method.
+pub void Router.handle(str pattern, void(Request *, Response *) handler) {
+    method, path, spaced := str.cut(pattern, " ")
+    Route r
+    r.pattern = pattern.copy()
+    r.handler = handler
+    if spaced {
+        r.method = method.copy()
+    } else {
+        path = pattern
+    }
+    r.parts = splitPath(r.pattern[r.pattern.len - path.len:])
+    self.routes.push(r)
+}
+
+pub void Router.get(str path, void(Request *, Response *) handler) => self.add("GET", path, handler)
+
+pub void Router.post(str path, void(Request *, Response *) handler) => self.add("POST", path, handler)
+
+pub void Router.put(str path, void(Request *, Response *) handler) => self.add("PUT", path, handler)
+
+pub void Router.delete(str path, void(Request *, Response *) handler) => self.add("DELETE", path, handler)
+
+pub void Router.patch(str path, void(Request *, Response *) handler) => self.add("PATCH", path, handler)
+
+void Router.add(str method, str path, void(Request *, Response *) handler) {
+    scoped String pattern = format("{method} {path}")
+    self.handle(pattern, handler)
+}
+
+// How well a route's parts match a path: -1 when they don't, else the
+// number of fixed parts.
+i64 score(Route *r, List[str] *parts) {
+    i64 fixed
+    for i in 0..r.parts.len {
+        p := r.parts.at(i)
+        if p.len > 1 && p[0] == '*' {
+            return if i <= parts.len { fixed } else { -1 }
+        }
+        if i >= parts.len {
+            return -1
+        }
+        if p.len > 1 && p[0] == ':' {
+            if parts.at(i).len == 0 {
+                return -1
+            }
+            continue
+        }
+        if p != parts.at(i) {
+            return -1
+        }
+        fixed += 1
+    }
+    return if r.parts.len == parts.len { fixed } else { -1 }
+}
+
+void Router.dispatch(Request *req, Response *res) {
+    scoped List[str] parts = splitPath(req.route())
+    Route *best = null
+    i64 bestScore = -1
+    bool pathFound = false
+    String allow
+    defer allow.free()
+    for i in 0..self.routes.len {
+        r := &self.routes.items()[i]
+        sc := score(r, &parts)
+        if sc < 0 {
+            continue
+        }
+        if r.method.len > 0 && r.method != req.method {
+            pathFound = true
+            if !str.contains(allow, r.method) {
+                if allow.len > 0 {
+                    allow.append(", ")
+                }
+                allow.append(r.method)
+            }
+            continue
+        }
+        if sc > bestScore {
+            best = r
+            bestScore = sc
+        }
+    }
+    if best == null {
+        if pathFound {
+            res.status = 405
+            res.header("Allow", allow)
+            res.text("method not allowed\n")
+        } else {
+            res.status = 404
+            res.text("not found\n")
+        }
+        return
+    }
+    for i in 0..best.parts.len {
+        p := best.parts.at(i)
+        if p.len > 1 && (p[0] == ':' || p[0] == '*') {
+            if p[0] == '*' {
+                route := req.route()
+                rest := ""
+                skip := i
+                at := if route.len > 0 && route[0] == '/' { 1 } else { 0 }
+                for skip > 0 && at < route.len {
+                    if route[at] == '/' {
+                        skip -= 1
+                    }
+                    at += 1
+                }
+                if at <= route.len {
+                    rest = route[at:]
+                }
+                req.paramNames.push(p[1:])
+                req.paramValues.push(rest)
+                break
+            }
+            req.paramNames.push(p[1:])
+            req.paramValues.push(parts.at(i))
+        }
+    }
+    best.handler(req, res)
+}
+
+// Answers HTTP requests on port with the router, as serve does.
+pub !void Router.serve(u16 port, str host = "", i64 threads = 0) {
+    try serveTarget(port, Target{router: self}, host, threads)
+}
+
+// Like serve, on a listener that is already open.
+pub !void Router.serveOn(net.Listener ln, i64 threads = 1) {
+    try serveTargetOn(ln, Target{router: self}, threads)
+}
+
+pub void Router.free() {
+    for r in self.routes {
+        r.method.free()
+        r.pattern.free()
+        r.parts.free()
+    }
+    self.routes.free()
+}
+
+// ------------------------------------------------------------ the client
+
+// The answer to a request the client made. free gives it back.
+pub struct Reply {
+    pub i32 status
+    pub String body
+    List[String] names
+    List[String] values
+}
+
+// The value of a header of the reply, "" when it has none.
+pub str Reply.header(str name) {
+    for i in 0..self.names.len {
+        if sameName(self.names.at(i), name) {
+            return self.values.at(i)
+        }
+    }
+    return ""
+}
+
+pub void Reply.free() {
+    self.body.free()
+    for n in self.names {
+        n.free()
+    }
+    for v in self.values {
+        v.free()
+    }
+    self.names.free()
+    self.values.free()
+}
+
+// Asks for url with GET.
+pub !Reply get(str url) => try send("GET", url)
+
+// Sends body to url with POST.
+pub !Reply post(str url, str contentType, str body) => try send("POST", url, body, contentType)
+
+// Sends a request and reads the reply. Only http:// addresses work for now.
+pub !Reply send(str method, str url, str body = "", str contentType = "") {
+    if str.startsWith(url, "https://") {
+        return error(HttpError.tls, "{url}: https needs TLS, which Iris doesn't have yet")
+    }
+    if !str.startsWith(url, "http://") {
+        return error(HttpError.badUrl, "{url}: the address should start with http://")
+    }
+    rest := url[7:]
+    hostPort, _, _ := str.cut(rest, "/")
+    path := rest[hostPort.len:]
+    if path.len == 0 {
+        path = "/"
+    }
+    host, portText, hasPort := str.cut(hostPort, ":")
+    i64 port = 80
+    if hasPort {
+        port = str.parseInt(portText) catch e {
+            return error(HttpError.badUrl, "{url}: the port isn't a number")
+        }
+    }
+    if host.len == 0 || port < 1 || port > 65535 {
+        return error(HttpError.badUrl, "{url}: no host")
+    }
+    c := try net.dial(host, u16(port))
+    defer c.close()
+    String req = format("{method} {path} HTTP/1.1\r\nHost: {hostPort}\r\nUser-Agent: iris\r\nConnection: close\r\n")
+    defer req.free()
+    if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
+        scoped String length = format("Content-Length: {body.len}\r\n")
+        req.append(length)
+        if contentType.len > 0 {
+            scoped String ct = format("Content-Type: {contentType}\r\n")
+            req.append(ct)
+        }
+    }
+    req.append("\r\n")
+    req.append(body)
+    try c.write(req)
+    return try readReply(&c)
+}
+
+!Reply readReply(net.Conn *c) {
+    Reply r
+    errdefer r.free()
+    scoped String status = try c.readLine()
+    _, after, ok := str.cut(status, " ")
+    code, _, _ := str.cut(after, " ")
+    if !ok || !str.startsWith(status, "HTTP/") {
+        return error(HttpError.badReply, "the server didn't answer in HTTP: '{status}'")
+    }
+    r.status = i32(str.parseInt(code) catch e {
+        return error(HttpError.badReply, "the server's status isn't a number: '{status}'")
+    })
+    for {
+        scoped String h = try c.readLine()
+        if h.len == 0 {
+            break
+        }
+        name, value, found := str.cut(h, ":")
+        if found {
+            r.names.push(str.trim(name).copy())
+            r.values.push(str.trim(value).copy())
+        }
+    }
+    if sameName(r.header("Transfer-Encoding"), "chunked") {
+        for {
+            scoped String sizeLine = try c.readLine()
+            sizeText, _, _ := str.cut(sizeLine, ";")
+            size := try hexNumber(str.trim(sizeText))
+            if size == 0 {
+                break
+            }
+            scoped String chunk = try c.readExactly(size)
+            r.body.append(chunk)
+            scoped String end = try c.readLine()
+        }
+        return r
+    }
+    lengthText := r.header("Content-Length")
+    if lengthText.len > 0 {
+        length := str.parseInt(lengthText) catch e {
+            return error(HttpError.badReply, "the server's Content-Length isn't a number")
+        }
+        if length > 0 {
+            r.body = try c.readExactly(length)
+        }
+        return r
+    }
+    u8[4096] buf
+    for {
+        n := c.read(buf) catch e {
+            break
+        }
+        if n == 0 {
+            break
+        }
+        r.body.append(buf[0:n])
+    }
+    return r
+}
+
+!i64 hexNumber(str s) {
+    if s.len == 0 {
+        return error(HttpError.badReply, "a chunk without a size")
+    }
+    i64 v
+    for i in 0..s.len {
+        ch := s[i]
+        d := if ch >= '0' && ch <= '9' { i64(ch - '0') } else if ch >= 'a' && ch <= 'f' { i64(ch - 'a') + 10 } else if ch >= 'A' && ch <= 'F' { i64(ch - 'A') + 10 } else { -1 }
+        if d < 0 {
+            return error(HttpError.badReply, "a chunk size that isn't hex: '{s}'")
+        }
+        v = v * 16 + d
+    }
+    return v
 }

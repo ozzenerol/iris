@@ -1,0 +1,65 @@
+// expect: 200 [{"id": "7", "full": "yes"}] []
+// expect: 200 [the special one] []
+// expect: 200 [file [a/b/c.txt]] []
+// expect: 200 [file []] []
+// expect: 200 [ok GET] []
+// expect: 404 [not found] []
+// expect: 405 [method not allowed] [POST]
+// expect: 201 made ada /users/9
+// expect: HttpError.tls
+
+import http, net, str
+
+void getUser(http.Request *req, http.Response *res) {
+    res.json("{{\"id\": \"{req.param("id")}\", \"full\": \"{req.query("full")}\"}}")
+}
+
+void createUser(http.Request *req, http.Response *res) {
+    res.status = 201
+    res.header("Location", "/users/9")
+    res.text("made {req.body}")
+}
+
+void me(http.Request *req, http.Response *res) {
+    res.text("the special one")
+}
+
+void files(http.Request *req, http.Response *res) {
+    res.text("file [{req.param("path")}]")
+}
+
+void health(http.Request *req, http.Response *res) {
+    res.text("ok {req.method}")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/users/:id", getUser)
+    r.get("/users/me", me)
+    r.post("/users", createUser)
+    r.get("/files/*path", files)
+    r.handle("/health", health)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+    urls := ["/users/7?full=yes", "/users/me", "/files/a/b/c.txt", "/files/", "/health", "/nope", "/users"]
+    for u in urls {
+        scoped String url = format("{base}{u}")
+        scoped http.Reply rep = try http.get(url)
+        print("{rep.status} [{str.trim(rep.body)}] [{rep.header("Allow")}]")
+    }
+    scoped String post = format("{base}/users")
+    scoped http.Reply made = try http.post(post, "text/plain", "ada")
+    print("{made.status} {made.body} {made.header("Location")}")
+    _ = http.get("https://example.com") catch e {
+        print("{e.code}")
+        http.Reply{}
+    }
+}
