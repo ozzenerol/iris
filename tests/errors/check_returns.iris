@@ -1,7 +1,7 @@
 // error: 5: f can reach its end without returning a value
 // error: 12: g returns nothing, so 'return' takes no value
 // error: 16: h must return a value of type i64
-// error: 19: main must return void or i32
+// error: 19: main must return void, i32 or !void
 i64 f(i64 x) {
     if x > 0 {
         return 1

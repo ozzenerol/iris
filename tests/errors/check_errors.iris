@@ -1,0 +1,61 @@
+// error: 25: try passes the error to the caller, so plain must return !T; use catch to handle it here
+// error: 29: the error from f is not handled; use try, catch or _ =
+// error: 30: the error from f is not handled; use try, catch or _ =
+// error: 31: try needs a call that can fail (one that returns !T), not i64
+// error: 32: a deferred statement can't return
+// error: 34: a deferred statement can't use try; handle the error with catch
+// error: 37: a deferred statement can't use break
+// error: 39: the value after catch is str, but i64 is needed
+// error: 40: this block has to end with a value
+// error: 40: the value from this call is not used; assign it, or drop it with _ =
+// error: 44: errdefer runs when the function returns an error, so k must return !T
+// error: 45: k can't return an error; its return type would have to be !void
+// error: 49: m returns no value, only an error or nothing
+// error: 53: an error's code is a value from an enum, not i64
+// error: 57: unknown type Level
+// error: 58: E has no value named b
+// error: 59: this match has no arm for E.a; add it or a '_' arm
+// error: 60: E has no value named zz
+enum E { a }
+
+!i64 f() => 1
+i64 g() => 1
+
+void plain() {
+    x := try f()
+}
+
+!void h() {
+    f()
+    y := f()
+    z := try g()
+    defer return
+    defer {
+        x := try f()
+    }
+    for i in 0..3 {
+        defer break
+    }
+    v := f() catch "no"
+    f() catch e { print("x") }
+}
+
+void k() {
+    errdefer print("x")
+    return error(E.a)
+}
+
+!void m() {
+    return 5
+}
+
+!void n() {
+    e := error(5)
+}
+
+void main() {
+    Level l = .warn
+    E q = .b
+    match q { }
+    w := E.zz
+}

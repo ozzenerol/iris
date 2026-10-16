@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.3.0"
+#define IRIS_VERSION "0.4.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -195,6 +195,10 @@ typedef enum {
     TY_ARRAY,
     TY_STRUCT,
     TY_STRING,              /* the built-in String */
+    TY_ENUM,                /* count: the enum's error kind number, from 1 */
+    TY_RESULT,              /* !T: elem is T (tyVoid for !void) */
+    TY_ERRVAL,              /* Error: a code and, in the runtime, a message and a trace */
+    TY_ERRCODE,             /* e.code: any enum value, with its enum */
 } TypeKind;
 
 struct Type {
@@ -210,13 +214,13 @@ struct Type {
     const char *ir;         /* structs: the LLVM type name */
 };
 
-extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString;
+extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
 extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64;
 
 /* What a call does when it isn't a call to a user function. */
 enum {
     BI_NONE, BI_PRINT, BI_PANIC, BI_FORMAT, BI_ALLOC, BI_FREE,
-    BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE,
+    BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE, BI_ERROR,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

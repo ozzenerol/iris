@@ -1,0 +1,13 @@
+// error: 8: this can't be assigned to
+// error: 10: this can't be assigned to
+// error: 12: this can't be assigned to
+enum Level { debug }
+
+void main() {
+    str s = "abc"
+    s.len = 2
+    Level l
+    l.name = "x"
+    i64[2] a
+    a.len = 3
+}
