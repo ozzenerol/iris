@@ -74,7 +74,7 @@ The IR writer adds DWARF metadata as it goes. The program gets a compile unit, e
 
 ## Why the IR is written as text
 
-Writing a text file needs no LLVM headers or libraries. Any machine with `clang` can build Iris programs, and when the output is wrong you can read the `.ll` file. Later, the IR writer can switch to the LLVM C API, for faster builds and a JIT. Only this last step changes.
+Writing a text file needs no LLVM headers or libraries. Any machine with `clang` can build Iris programs, and when the output is wrong you can read the `.ll` file.
 
 ## Source layout
 

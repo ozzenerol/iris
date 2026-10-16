@@ -26,4 +26,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.20 | Folders, file information and files read a part at a time in `fs`, the `path` module, and `process.run`. | released |
 | 0.21 | An HTTP `Router` and an HTTP client. | released |
 
-Next in the library: TLS for `https`. After that, in no fixed order: `comptime`, more attributes (`@env`, `@inline`), `iris doc`, and a JIT for `iris run`.
+Next: TLS for `https` (0.22), then random numbers, hashing, Base64 and URL decoding (0.23), a SQLite driver (0.24), `comptime` (0.25), and `iris doc` with the remaining attributes, `@env`, `@inline` and `@unchecked` (0.26).
