@@ -1,0 +1,6 @@
+// panic: shift amount too large
+
+void main() {
+    i64 n = 70
+    print("{1 << n}")
+}

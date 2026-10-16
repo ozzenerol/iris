@@ -1,0 +1,23 @@
+// expect: 65536 1024 10 iris true
+// expect: 3
+
+const KiB = 1024
+const BUF = 64 * KiB
+const i32 LIMIT = 10
+const NAME = "iris"
+const ON = !false
+i64 counter
+started := 0
+
+void bump() {
+    counter += 1
+}
+
+void main() {
+    u16 small = KiB
+    print("{BUF} {small} {LIMIT} {NAME} {ON}")
+    bump()
+    bump()
+    bump()
+    print("{counter + started}")
+}

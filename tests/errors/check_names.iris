@@ -1,0 +1,21 @@
+// error: 20: twice is already declared on line 19
+// error: 21: print is a built-in name
+// error: 10: undefined is not declared
+// error: 13: q is already declared on line 11
+// error: 15: LIMIT is a constant and can't change
+// error: 16: '_' can only be assigned to
+const LIMIT = 3
+
+void main() {
+    y := undefined + 1
+    q := 5
+    {
+        q := 6
+    }
+    LIMIT = 4
+    z := _
+}
+
+void twice() { }
+void twice() { }
+void print() { }

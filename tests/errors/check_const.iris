@@ -1,0 +1,13 @@
+// error: 5: the constant A depends on itself
+// error: 7: this constant is too large
+// error: 8: division by zero in a constant
+// error: 9: a constant's value must be known when compiling
+const A = B + 1
+const B = A
+const BIG = 9223372036854775807 + 1
+const ZERO = 1 / 0
+const CALL = f()
+
+i64 f() => 1
+
+void main() { }

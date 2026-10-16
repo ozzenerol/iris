@@ -1,0 +1,15 @@
+// expect: big medium small
+// expect: 1
+
+str size(i64 n) => if n > 100 { "big" } else if n > 10 { "medium" } else { "small" }
+
+void main() {
+    print("{size(500)} {size(50)} {size(5)}")
+    i64 x = 0
+    if x == 0 {
+        x = 1
+    } else {
+        x = 2
+    }
+    print("{x}")
+}

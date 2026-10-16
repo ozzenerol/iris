@@ -1,0 +1,40 @@
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 4
+// expect: 6
+// expect: 0,0
+// expect: 0,1
+// expect: 1,0
+// expect: 1,1
+// expect: 3
+
+void main() {
+    for i in 0..3 {
+        print("{i}")
+    }
+    n := 0
+    for {
+        n += 1
+        if n == 4 { break }
+    }
+    print("{n}")
+    m := 0
+    for m < 5 {
+        m += 2
+    }
+    print("{m}")
+    outer: for i in 0..3 {
+        for j in 0..3 {
+            if j == 2 { continue outer }
+            if i == 2 { break outer }
+            print("{i},{j}")
+        }
+    }
+    count := 0
+    for i in 0..10 {
+        if i % 3 != 0 { continue }
+        count += 1
+    }
+    print("{count - 1}")
+}

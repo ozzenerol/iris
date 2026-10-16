@@ -1,0 +1,9 @@
+// mode: release-fast
+// expect: -56 255
+
+i8 double(i8 x) => x * 2
+
+void main() {
+    u8 a = 0
+    print("{double(100)} {a - 1}")
+}

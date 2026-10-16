@@ -1,0 +1,8 @@
+// expect: before
+// panic: bad state 7
+
+void main() {
+    print("before")
+    n := 7
+    panic("bad state {n}")
+}

@@ -1,0 +1,29 @@
+// expect: ok not found error error
+// expect: quit unknown help
+// expect: yes no
+// expect: small
+
+str kind(i64 status) => match status {
+    200..299 => "ok"
+    404 => "not found"
+    _ => "error"
+}
+
+str command(str cmd) => match cmd {
+    "exit", "quit" => "quit"
+    "help" => "help"
+    _ => "unknown"
+}
+
+str yesNo(bool b) => match b { true => "yes", false => "no" }
+
+void main() {
+    print("{kind(204)} {kind(404)} {kind(500)} {kind(-1)}")
+    print("{command("exit")} {command("x")} {command("help")}")
+    print("{yesNo(true)} {yesNo(false)}")
+    u8 n = 3
+    match n {
+        0..9 => print("small")
+        _ => print("large")
+    }
+}

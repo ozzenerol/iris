@@ -1,0 +1,7 @@
+// expect: bye
+// exit: 3
+
+i32 main() {
+    print("bye")
+    return 3
+}
