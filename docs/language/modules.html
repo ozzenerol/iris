@@ -28,12 +28,12 @@
 <p>A name is visible only inside its module unless it is marked <code>pub</code>:</p>
 <pre class="code"><code><span class="k">pub</span> <span class="k">struct</span> Server {
     <span class="t">u16</span> port
-    <span class="t">i32</span> fd           <span class="c">// only the net module can use fd</span>
+    <span class="t">i32</span> fd <span class="c">// only the net module can use fd</span>
 }
 
 <span class="k">pub</span> !Server listen(<span class="t">u16</span> port) { }
 
-<span class="t">void</span> setOptions(<span class="t">i32</span> fd) { }     <span class="c">// only inside net</span></code></pre>
+<span class="t">void</span> setOptions(<span class="t">i32</span> fd) { } <span class="c">// only inside net</span></code></pre>
 <p>Fields of a <code>pub</code> struct are visible outside the module only when marked <code>pub</code> themselves, and so are methods:</p>
 <pre class="code"><code><span class="k">pub</span> <span class="k">struct</span> Server {
     <span class="k">pub</span> <span class="t">u16</span> port

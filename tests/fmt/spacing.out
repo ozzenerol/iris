@@ -1,0 +1,27 @@
+import json, str
+enum Perm { read = 1, write = 2 }
+@json("x")
+struct Box[T: Ordered] {
+    T value
+    u8 *raw
+    void(Request *, Response *) handler
+}
+void f(i64[] xs, str s) {
+    n := xs[1:3]
+    p := Perm{}
+    q: Perm = .read | .write
+    ok := !done && -n < 0
+    v := <-ch
+    ch <- v
+    for i in 0..xs.len { }
+    m := match x { 1 | 2 => .a, _ => .b }
+    k := str.parseInt(s) catch -1
+    y := a * b
+    z := *ptr
+    w := &z
+    first[i64](1, 2)
+    c := chan[i64](8)
+    asm {
+        nop
+    }
+}

@@ -128,8 +128,8 @@ for i in 0..4 {
 `http.serve` starts threads too: an event loop on each CPU core. The handler then runs on several threads at once.
 
 ```iris
-try http.serve(8080, route)              // one thread per core
-try http.serve(8080, route, threads: 1)  // everything on one thread
+try http.serve(8080, route)             // one thread per core
+try http.serve(8080, route, threads: 1) // everything on one thread
 ```
 
 ## Atomics
@@ -139,11 +139,11 @@ A global variable that threads change at the same time needs an atomic or a lock
 ```iris
 Atomic[i64] requests
 
-requests.add(1)             // gives the new value
+requests.add(1) // gives the new value
 n := requests.load()
 requests.store(0)
-old := requests.swap(5)     // gives the old value
-ok := requests.cas(5, 6)    // sets 6 if the value is 5; true if it did
+old := requests.swap(5)  // gives the old value
+ok := requests.cas(5, 6) // sets 6 if the value is 5; true if it did
 ```
 
 `sub` subtracts. An `Atomic[bool]` has `load`, `store`, `swap` and `cas`. Every operation is sequentially consistent: all threads see the changes in the same order.

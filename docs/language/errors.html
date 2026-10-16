@@ -95,8 +95,8 @@ conf := loadConfig(path) <span class="k">catch</span> e {
 }</code></pre>
 <h2 id="errors-can-t-be-ignored"><a href="#errors-can-t-be-ignored">Errors can't be ignored</a></h2>
 <p>The result of a function that returns <code>!</code> must go through <code>try</code> or <code>catch</code>. Calling it and doing nothing is a compile error. To drop an error on purpose, assign it to <code>_</code>:</p>
-<pre class="code"><code>save(<span class="s">&quot;out.txt&quot;</span>, data)          <span class="c">// compile error: the error is not handled</span>
-_ = save(<span class="s">&quot;out.txt&quot;</span>, data)      <span class="c">// the error is dropped</span></code></pre>
+<pre class="code"><code>save(<span class="s">&quot;out.txt&quot;</span>, data)     <span class="c">// compile error: the error is not handled</span>
+_ = save(<span class="s">&quot;out.txt&quot;</span>, data) <span class="c">// the error is dropped</span></code></pre>
 <h2 id="errors-in-main"><a href="#errors-in-main">Errors in main</a></h2>
 <p>When <code>main</code> returns <code>!void</code>, an error that reaches the end of <code>main</code> is printed with the functions it passed through, and the program exits with status 1:</p>
 <pre class="code"><code><span class="k">import</span> fs

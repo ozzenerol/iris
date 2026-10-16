@@ -1,0 +1,32 @@
+import str
+// a comment at the top
+struct Node {
+    i64 value // the value
+    Node *next
+}
+
+i64 sum(Node *n, i64 start) {
+    total := start
+    for n != null {
+        total += n.value * 2
+        n = n.next
+    }
+    xs := [1, 2, 3]
+    part := xs[0:2]
+    /* block
+     comment */
+    if !(total > 0) && -total < 5 { return -1 }
+    return total
+}
+
+void main() {
+    Node b = Node{value: 2}
+    a := Node{value: 1, next: &b}
+    print("{sum(&a,10)}")
+    x := str.parseInt("5") catch -1
+    msg := """
+        keep   this
+          as is
+        """
+    print(msg)
+}

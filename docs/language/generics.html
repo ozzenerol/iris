@@ -39,8 +39,8 @@ p := Pair[<span class="t">str</span>, <span class="t">i64</span>]{first: <span c
 <h2 id="generic-functions"><a href="#generic-functions">Generic functions</a></h2>
 <pre class="code"><code>T first[T](T[] items) =&gt; items[<span class="n">0</span>]</code></pre>
 <p>The types are worked out from the arguments, so they rarely need to be written:</p>
-<pre class="code"><code>n := first(counts)           <span class="c">// counts is i64[], so T is i64</span>
-c := first(<span class="s">&quot;hello&quot;</span>)          <span class="c">// str is u8[], so T is u8</span></code></pre>
+<pre class="code"><code>n := first(counts)  <span class="c">// counts is i64[], so T is i64</span>
+c := first(<span class="s">&quot;hello&quot;</span>) <span class="c">// str is u8[], so T is u8</span></code></pre>
 <p>When there is nothing to work them out from, or a different type is wanted, they are written in brackets after the name:</p>
 <pre class="code"><code>x := first[<span class="t">u8</span>](bytes)
 T zero[T]() {

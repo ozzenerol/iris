@@ -35,7 +35,7 @@
 }
 
 <span class="t">i64</span> count = <span class="n">5</span>
-reset(&amp;count)      <span class="c">// count is now 0</span></code></pre>
+reset(&amp;count) <span class="c">// count is now 0</span></code></pre>
 <h2 id="default-values"><a href="#default-values">Default values</a></h2>
 <p>A parameter can have a default value. A call can leave it out.</p>
 <pre class="code"><code><span class="t">void</span> connect(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = 30s) {
@@ -63,7 +63,7 @@ hi, iris</code></pre>
 <p>A function can return several values in parentheses. The caller can unpack them into new variables:</p>
 <pre class="code"><code>(<span class="t">i64</span>, <span class="t">i64</span>) divmod(<span class="t">i64</span> a, b) =&gt; (a / b, a % b)
 
-q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)      <span class="c">// q is 3, r is 2</span></code></pre>
+q, r := divmod(<span class="n">17</span>, <span class="n">5</span>) <span class="c">// q is 3, r is 2</span></code></pre>
 <p><code>_</code> skips a value:</p>
 <pre class="code"><code>_, r := divmod(<span class="n">17</span>, <span class="n">5</span>)</code></pre>
 <p>Several values can be declared or assigned at once. The values on the right are worked out before any is stored, so this swaps two variables:</p>
@@ -78,7 +78,7 @@ q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)      <span c
 <p>A function's name can be passed to another function. The parameter's type is written as the return type followed by the parameter types:</p>
 <pre class="code"><code><span class="t">i64</span> apply(<span class="t">i64</span>(<span class="t">i64</span>) f, <span class="t">i64</span> x) =&gt; f(x)
 
-n := apply(square, <span class="n">4</span>)      <span class="c">// 16</span></code></pre>
+n := apply(square, <span class="n">4</span>) <span class="c">// 16</span></code></pre>
 <p>Iris has no lambdas, so the function passed must have a name. A function value can be kept in a variable, a field or an array, compared with <code>==</code>, and is <code>null</code> until it is set. Calling a <code>null</code> one stops a debug build with an error. Arguments are passed by position; defaults and names don't apply through a function value.</p>
 <pre class="code run"><code><span class="k">type</span> Op = <span class="t">i64</span>(<span class="t">i64</span>, <span class="t">i64</span>)
 

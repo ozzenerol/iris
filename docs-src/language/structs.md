@@ -29,7 +29,7 @@ A struct literal names the fields it sets. Fields left out get their default:
 
 ```iris
 p := Point{x: 1, y: 2}
-c := Config{port: 9000}        // host is "localhost", verbose is false
+c := Config{port: 9000} // host is "localhost", verbose is false
 ```
 
 When the type is already known, the literal can start with a dot instead of the name:
@@ -53,7 +53,7 @@ Assigning a struct copies all its fields. The two copies are separate:
 ```iris
 a := Point{x: 1, y: 2}
 b := a
-b.x = 100       // a.x is still 1
+b.x = 100 // a.x is still 1
 ```
 
 `==` compares two structs field by field.
@@ -156,8 +156,8 @@ struct Conn {
     str peer
 }
 
-c.write(data)        // calls Socket.write
-print("{c.fd}")      // the Socket's fd
+c.write(data)   // calls Socket.write
+print("{c.fd}") // the Socket's fd
 ```
 
 Iris has no inheritance. Embedding is how one type reuses another.

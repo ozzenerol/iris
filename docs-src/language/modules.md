@@ -33,12 +33,12 @@ A name is visible only inside its module unless it is marked `pub`:
 ```iris
 pub struct Server {
     u16 port
-    i32 fd           // only the net module can use fd
+    i32 fd // only the net module can use fd
 }
 
 pub !Server listen(u16 port) { }
 
-void setOptions(i32 fd) { }     // only inside net
+void setOptions(i32 fd) { } // only inside net
 ```
 
 Fields of a `pub` struct are visible outside the module only when marked `pub` themselves, and so are methods:

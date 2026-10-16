@@ -130,8 +130,8 @@ user := db.findUser(id) catch e {
 The result of a function that returns `!` must go through `try` or `catch`. Calling it and doing nothing is a compile error. To drop an error on purpose, assign it to `_`:
 
 ```iris
-save("out.txt", data)          // compile error: the error is not handled
-_ = save("out.txt", data)      // the error is dropped
+save("out.txt", data)     // compile error: the error is not handled
+_ = save("out.txt", data) // the error is dropped
 ```
 
 ## Errors in main

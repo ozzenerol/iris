@@ -1,0 +1,17 @@
+// command: test
+// args: two
+// expect: ok   two
+// expect: ok   twenty-two
+// expect: 2 tests, 2 passed, 0 failed
+
+test "one" {
+    expect(false)
+}
+
+test "two" {
+    expect(true)
+}
+
+test "twenty-two" {
+    expect(1 + 1 == 2)
+}

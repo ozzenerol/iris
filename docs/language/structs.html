@@ -26,7 +26,7 @@
 <h2 id="making-a-value"><a href="#making-a-value">Making a value</a></h2>
 <p>A struct literal names the fields it sets. Fields left out get their default:</p>
 <pre class="code"><code>p := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
-c := Config{port: <span class="n">9000</span>}        <span class="c">// host is &quot;localhost&quot;, verbose is false</span></code></pre>
+c := Config{port: <span class="n">9000</span>} <span class="c">// host is &quot;localhost&quot;, verbose is false</span></code></pre>
 <p>When the type is already known, the literal can start with a dot instead of the name:</p>
 <pre class="code"><code>Point p = .{x: <span class="n">1</span>, y: <span class="n">2</span>}
 draw(.{x: <span class="n">5</span>, y: <span class="n">5</span>})</code></pre>
@@ -37,7 +37,7 @@ print(<span class="s">&quot;{p.x}, {p.y}&quot;</span>)</code></pre>
 <p>Assigning a struct copies all its fields. The two copies are separate:</p>
 <pre class="code"><code>a := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
 b := a
-b.x = <span class="n">100</span>       <span class="c">// a.x is still 1</span></code></pre>
+b.x = <span class="n">100</span> <span class="c">// a.x is still 1</span></code></pre>
 <p><code>==</code> compares two structs field by field.</p>
 <h2 id="methods"><a href="#methods">Methods</a></h2>
 <p>A method is a function declared with the type's name in front. Inside it, <code>self</code> is a pointer to the value it was called on:</p>
@@ -108,8 +108,8 @@ Buffer buffer(<span class="t">i64</span> size) =&gt; Buffer{data: alloc(<span cl
     <span class="t">str</span> peer
 }
 
-c.write(data)        <span class="c">// calls Socket.write</span>
-print(<span class="s">&quot;{c.fd}&quot;</span>)      <span class="c">// the Socket&#x27;s fd</span></code></pre>
+c.write(data)   <span class="c">// calls Socket.write</span>
+print(<span class="s">&quot;{c.fd}&quot;</span>) <span class="c">// the Socket&#x27;s fd</span></code></pre>
 <p>Iris has no inheritance. Embedding is how one type reuses another.</p>
 <div class="pager"><a href="text.html">&larr; Text</a><a href="enums.html">Enums &rarr;</a></div>
 </main></div>

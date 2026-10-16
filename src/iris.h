@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.16.0"
+#define IRIS_VERSION "0.17.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -143,6 +143,7 @@ enum {
     F_REQUIRED = 1 << 16,   /* a field with @json(required) */
     F_TEMPSTR = 1 << 17,    /* a String from a call passed as a str: freed when the statement ends */
     F_INTRINSIC = 1 << 18,  /* @builtin in the standard library: the compiler makes the call */
+    F_TESTFN = 1 << 19,     /* the function a test block became; text is the test's name */
 };
 
 typedef struct Node Node;
@@ -202,6 +203,9 @@ Node *parseSource(Arena *a, Source *src, bool snippet);
 int runCommand(char **argv, const char *outPath, const char *errPath);
 bool writeText(const char *path, const char *text, size_t len);
 
+/* fmt.c: the source in the standard layout, or NULL when it has errors */
+char *formatSource(Arena *a, Source *src);
+
 /* ---------------------------------------------------------------- cimport.c */
 
 /* Reads C headers with clang and writes them as an Iris module: @extern
@@ -232,7 +236,13 @@ typedef struct {
     NodeList instances;     /* filled by the checker: copies of generics */
     const char *links[64];  /* C libraries to link: link lines in iris.mod */
     int nlinks;
+    NodeList tests;         /* iris test: the functions the test blocks became */
 } Program;
+
+/* iris test: test blocks are compiled, and main runs them */
+extern bool gTesting;
+/* test blocks are checked (iris check and iris test) */
+extern bool gWithTests;
 
 /* Reads the program at path (a file or a folder) and every module it
  * imports. includes: folders for C headers (-I). Returns NULL after errors. */
@@ -308,6 +318,7 @@ enum {
     BI_MUTEX_LOCK, BI_MUTEX_UNLOCK, BI_MUTEX_TRY_LOCK,
     BI_THREAD_JOIN,
     BI_JSON_ENCODE, BI_JSON_DECODE, BI_JSON_FREE,
+    BI_EXPECT,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

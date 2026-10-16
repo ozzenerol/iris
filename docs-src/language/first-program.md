@@ -27,9 +27,9 @@ Every program starts in `main`. `print` writes its text followed by a newline.
 `main` can be written three ways:
 
 ```iris
-void main() { }        // always succeeds
-i32 main() { }         // returns an exit status
-!void main() { }       // can fail
+void main() { }  // always succeeds
+i32 main() { }   // returns an exit status
+!void main() { } // can fail
 ```
 
 When `!void main` returns an error, the program prints the error and exits with status 1. The [Errors](errors.html) page covers this.
@@ -57,7 +57,7 @@ total := price * count +
     discount
 
 connect("example.com",
-        port: 443)
+    port: 443)
 ```
 
 Blocks always need braces, even for one statement. Conditions need no parentheses.

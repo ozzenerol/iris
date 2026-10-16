@@ -2647,3 +2647,62 @@ int iris_json_decode(const JsonType *t, const char *text, int64_t len, char *out
     }
     return 0;
 }
+
+/* ---------------------------------------------------------------- tests
+
+   iris test: main calls iris_test_start before each test (false: the
+   filter, the program's first argument, leaves it out), the test, then
+   iris_test_done with the error it returned. */
+
+static int testsRun, testsFailed;
+static int testFailedNow;
+
+bool iris_test_start(const char *name) {
+    if (gArgc > 1 && !strstr(name, gArgv[1])) {
+        return false;
+    }
+    testFailedNow = 0;
+    testsRun++;
+    return true;
+}
+
+void iris_expect_failed(const char *file, int line, int col, IrisString *msg) {
+    fflush(stdout);
+    if (msg && msg->len) {
+        fprintf(stderr, "    %s:%d:%d: expect failed: %.*s\n", file, line, col, (int)msg->len, msg->ptr);
+    } else {
+        fprintf(stderr, "    %s:%d:%d: expect failed\n", file, line, col);
+    }
+    testFailedNow = 1;
+}
+
+void iris_test_done(const char *name, int64_t err) {
+    fflush(stdout);
+    if (err) {
+        IrisString s = {0};
+        iris_write_errcode(3, &s, err);
+        fprintf(stderr, "    error: %.*s", (int)s.len, s.ptr);
+        if (msgCurLen) {
+            fprintf(stderr, ": %.*s", (int)msgCurLen, msgCur);
+        }
+        fputc('\n', stderr);
+        for (int i = 0; i < traceLen; i++) {
+            fprintf(stderr, "      at %s  %s:%d\n", trace[i].fn, trace[i].file, trace[i].line);
+        }
+        iris_string_free(&s);
+        testFailedNow = 1;
+    }
+    if (testFailedNow) {
+        testsFailed++;
+        printf("FAIL %s\n", name);
+    } else {
+        printf("ok   %s\n", name);
+    }
+    fflush(stdout);
+}
+
+int iris_test_summary(void) {
+    printf("%d test%s, %d passed, %d failed\n", testsRun, testsRun == 1 ? "" : "s", testsRun - testsFailed,
+           testsFailed);
+    return testsFailed ? 1 : 0;
+}

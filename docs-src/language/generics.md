@@ -49,8 +49,8 @@ T first[T](T[] items) => items[0]
 The types are worked out from the arguments, so they rarely need to be written:
 
 ```iris
-n := first(counts)           // counts is i64[], so T is i64
-c := first("hello")          // str is u8[], so T is u8
+n := first(counts)  // counts is i64[], so T is i64
+c := first("hello") // str is u8[], so T is u8
 ```
 
 When there is nothing to work them out from, or a different type is wanted, they are written in brackets after the name:

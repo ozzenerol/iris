@@ -73,6 +73,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | The value after `catch` is one operand: `f() catch 0 != 5` is `(f() catch 0) != 5`. | The fallback is almost always one value, and comparisons read as expected. |
 | A call that gets temporary text or a temporary String can't return a `str`, slice or pointer. | The result could point into memory freed at the end of the statement. |
 | Copying a `Mutex`, an `Atomic` or a struct that holds one is an error. | A copy would be a second lock that guards nothing. |
+| `iris fmt` works on tokens and has no settings. Where spacing is ambiguous it keeps what was written. | One layout for everyone, and comments and strings can't be damaged. |
+| `expect` reports a failure and the test goes on; an error from `try` ends the test. | One run shows every failed check of a test. |
+| Test blocks are checked by `iris check` and `iris test`, and left out of programs. | Tests don't rot, and programs don't carry them. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
