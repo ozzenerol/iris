@@ -1,0 +1,37 @@
+// expect: 3 2
+// expect: 2
+// expect: 2 1
+// expect: example.com:443
+// expect: none:0
+// expect: 10 20 30
+
+(i64, i64) divmod(i64 a, b) => (a / b, a % b)
+
+enum HostError { noPort }
+
+!(str, u16) splitHost(str addr) {
+    for i, c in addr {
+        if c == ':' {
+            return (addr[0:i], 443)
+        }
+    }
+    return error(HostError.noPort, "no port in {addr}")
+}
+
+(i64, i64, i64) three() => (10, 20, 30)
+
+void main() {
+    q, r := divmod(17, 5)
+    print("{q} {r}")
+    _, r2 := divmod(20, 6)
+    print("{r2}")
+    x, y := 1, 2
+    x, y = y, x
+    print("{x} {y}")
+    host, port := splitHost("example.com:443") catch ("none", u16(0))
+    print("{host}:{port}")
+    h2, p2 := splitHost("nope") catch ("none", u16(0))
+    print("{h2}:{p2}")
+    a, b, c := three()
+    print("{a} {b} {c}")
+}

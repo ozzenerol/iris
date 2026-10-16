@@ -77,7 +77,46 @@ match p {
 }
 ```
 
-Every value must have an arm, or there must be a `_`.
+Every value must have an arm, or there must be a `_`. A field you don't need is named `_`, and a value's name without parentheses matches it whatever its data:
+
+```iris
+match p {
+    Data(_) => print("some data")
+    Close => print("closed")
+    _ => {}
+}
+```
+
+Values of an enum with data can't be compared with `==`. Use `match`.
+
+A complete program:
+
+```iris run
+enum Shape {
+    Circle(i64 r)
+    Rect(i64 w, i64 h)
+    Empty
+}
+
+i64 area(Shape s) => match s {
+    Circle(r) => 3 * r * r
+    Rect(w, h) => w * h
+    Empty => 0
+}
+
+void main() {
+    Shape[3] shapes = [Shape.Circle(2), .Rect(5, 5), .Empty]
+    for s in shapes {
+        print("{s}: {area(s)}")
+    }
+}
+```
+
+```output
+Circle: 12
+Rect: 25
+Empty: 0
+```
 
 ## Flags
 
@@ -89,3 +128,20 @@ enum Perm flags { read, write, exec }
 Perm p = .read | .write
 if p.has(.write) { }
 ```
+
+`&`, `|`, `^` and `~` work on flags, and printing shows the names of the values that are set:
+
+```iris run
+enum Perm flags { read, write, exec }
+
+void main() {
+    Perm p = .read | .write
+    print("{p}, write: {p.has(.write)}, exec: {p.has(.exec)}")
+}
+```
+
+```output
+read|write, write: true, exec: false
+```
+
+A flag enum can have up to 31 values.

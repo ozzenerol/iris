@@ -1,0 +1,53 @@
+// error: 24: Bad can't contain itself; use a pointer (Bad *)
+// error: 25: the values of an enum with data can't be given numbers
+// error: 28: a flag enum's values can't carry data
+// error: 35: Packet.Data carries data; write Packet.Data(...)
+// error: 36: Packet.Ping carries no data; write it without ()
+// error: 37: Close needs a value for reason
+// error: 38: Packet has no value named Nope
+// error: 40: Packet.Data carries 1 value, but the pattern names 2
+// error: 41: Packet.Ping carries no data, so it has nothing to name
+// error: 42: a pattern that names values must be the only pattern in its arm
+// error: 45: this match has no arm for Packet.{Data, Close}; add them or a '_' arm
+// error: 48: '==' can't compare Packet values
+// error: 49: this gives 2 values; unpack them into names: a, b := ...
+// error: 50: this gives 2 values, but 3 names are given
+// error: 51: this gives one value, but 2 names are given
+// error: 52: every name here is _; drop the values with _ = instead
+enum Packet {
+    Ping
+    Data(u8[] bytes)
+    Close(u16 code, str reason)
+}
+
+enum Bad {
+    Self(Bad inner)
+    Num = 3
+}
+
+enum Mixed flags {
+    A(i64 x)
+}
+
+(i64, i64) two() => (1, 2)
+
+void main() {
+    a := Packet.Data
+    b := Packet.Ping(1)
+    Packet c = .Close(1)
+    d := Packet.Nope(1)
+    match c {
+        Data(x, y) => {}
+        Ping(z) => {}
+        Data(q), Ping => {}
+        _ => {}
+    }
+    match c {
+        Ping => {}
+    }
+    e := c == Packet.Ping
+    x := two()
+    m, n, o := two()
+    m2, n2 := 5
+    _, _ := two()
+}

@@ -103,6 +103,22 @@ q, r := divmod(17, 5)      // q is 3, r is 2
 _, r := divmod(17, 5)
 ```
 
+Several values can be declared or assigned at once. The values on the right are worked out before any is stored, so this swaps two variables:
+
+```iris run
+void main() {
+    x, y := 1, 2
+    x, y = y, x
+    print("{x} {y}")
+}
+```
+
+```output
+2 1
+```
+
+A function's several values must be unpacked into names; they can't be kept in one variable.
+
 ## Functions as values
 
 A function's name can be passed to another function. The parameter's type is written as the return type followed by the parameter types:

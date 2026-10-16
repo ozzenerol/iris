@@ -31,6 +31,7 @@
 <p>A plain enum is a 32-bit integer, like a C enum.</p>
 <p>An enum whose values carry data is a tag followed by room for the largest value's data:</p>
 <pre class="out"><code>Packet  =  { i32 tag, union { u8[] bytes, u16 code } }</code></pre>
+<p>In LLVM IR the room is an array of 8-byte words, <code>{ i32, [N x i64] }</code>, and each value's data is a struct of its fields stored in that room. The compiler works out the sizes with the same layout rules as C.</p>
 <h2 id="several-return-values"><a href="#several-return-values">Several return values</a></h2>
 <p><code>(i64, i64)</code> is a struct with two fields. A function that returns one returns that struct.</p>
 <h2 id="errors-and-t"><a href="#errors-and-t">Errors and !T</a></h2>

@@ -160,6 +160,33 @@ void iris_write_enum(int sink, IrisString *dst, int64_t kind, int32_t value) {
     }
 }
 
+/* A flag enum's value: the names of its set values, joined by | */
+void iris_write_flags(int sink, IrisString *dst, int64_t kind, int32_t value) {
+    if (value == 0 || kind < 1 || kind > iris_enum_count) {
+        iris_write_i64(sink, dst, value);
+        return;
+    }
+    const IrisEnum *e = &iris_enum_table[kind - 1];
+    uint32_t left = (uint32_t)value;
+    int written = 0;
+    for (int64_t i = 0; i < e->count; i++) {
+        uint32_t bit = (uint32_t)e->values[i];
+        if (bit && (left & bit) == bit) {
+            if (written++) {
+                put(sink, dst, "|", 1);
+            }
+            put(sink, dst, e->names[i], strlen(e->names[i]));
+            left &= ~bit;
+        }
+    }
+    if (left) {
+        if (written) {
+            put(sink, dst, "|", 1);
+        }
+        iris_write_i64(sink, dst, (int64_t)left);
+    }
+}
+
 /* An error code as Enum.value */
 void iris_write_errcode(int sink, IrisString *dst, int64_t code) {
     const char *en;

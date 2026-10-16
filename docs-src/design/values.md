@@ -48,6 +48,8 @@ An enum whose values carry data is a tag followed by room for the largest value'
 Packet  =  { i32 tag, union { u8[] bytes, u16 code } }
 ```
 
+In LLVM IR the room is an array of 8-byte words, `{ i32, [N x i64] }`, and each value's data is a struct of its fields stored in that room. The compiler works out the sizes with the same layout rules as C.
+
 ## Several return values
 
 `(i64, i64)` is a struct with two fields. A function that returns one returns that struct.

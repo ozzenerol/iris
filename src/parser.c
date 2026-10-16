@@ -1159,11 +1159,29 @@ static Node *parseVarRest(Parser *p, Node *type, unsigned flags) {
     return v;
 }
 
+/* The right side of := or =: one expression, or several separated by
+ * commas, which become a tuple: x, y := 1, 2 */
+static Node *parseValues(Parser *p, bool allowList) {
+    Token *t = peek(p);
+    Node *e = parseExpr(p);
+    if (!allowList || !at(p, P_COMMA)) {
+        return e;
+    }
+    Node *tup = node(p, N_TUPLE, t);
+    push(p, &tup->list, e);
+    while (accept(p, P_COMMA)) {
+        push(p, &tup->list, parseExpr(p));
+    }
+    return tup;
+}
+
 /* A declaration, assignment, := or expression statement. allowList is
  * false in match arms, where a comma ends the arm. */
 static Node *parseSimpleStmt(Parser *p, bool allowList) {
     Token *t = peek(p);
-    if (startsType(p)) {
+    /* in a match arm (allowList false) a declaration makes no sense, so
+     * `w * h` is a product, not a pointer declaration */
+    if (allowList && startsType(p)) {
         int save = p->pos;
         Node *type = tryType(p);
         if (type && declFollows(p)) {
@@ -1188,7 +1206,7 @@ static Node *parseSimpleStmt(Parser *p, bool allowList) {
             }
         }
         d->list = targets;
-        d->b = parseExpr(p);
+        d->b = parseValues(p, allowList);
         return d;
     }
     if (isAssignOp(op->kind)) {
@@ -1196,7 +1214,7 @@ static Node *parseSimpleStmt(Parser *p, bool allowList) {
         Node *a = node(p, N_ASSIGN, op);
         a->op = op->kind;
         a->list = targets;
-        a->b = parseExpr(p);
+        a->b = parseValues(p, allowList && op->kind == P_ASSIGN);
         if (targets.len > 1 && op->kind != P_ASSIGN) {
             fail(p, op, "'%s' takes one target", tokName(op->kind));
         }
