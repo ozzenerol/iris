@@ -2,6 +2,8 @@
  * stdio's stdout buffer, which C flushes when the program ends. */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -124,6 +126,67 @@ void iris_write_u64(int sink, IrisString *dst, int64_t v) {
     char buf[32];
     int n = snprintf(buf, sizeof buf, "%llu", (unsigned long long)(uint64_t)v);
     put(sink, dst, buf, (size_t)n);
+}
+
+/* A float in the fewest digits that read back as the same value, written
+ * as a plain decimal unless it is very large or very small: 100, 0.25,
+ * 1e+21, 1e-07. */
+void iris_write_float(int sink, IrisString *dst, double v, int bits) {
+    char buf[64];
+    int n = 0;
+    if (v != v) {
+        put(sink, dst, "nan", 3);
+        return;
+    }
+    if (v == 1.0 / 0.0 || v == -1.0 / 0.0) {
+        put(sink, dst, v > 0 ? "inf" : "-inf", v > 0 ? 3 : 4);
+        return;
+    }
+    if (v == 0) {
+        put(sink, dst, signbit(v) ? "-0" : "0", signbit(v) ? 2 : 1);
+        return;
+    }
+    /* the shortest digits: d.ddde+XX */
+    int prec = 0;
+    for (prec = 0; prec < 17; prec++) {
+        snprintf(buf, sizeof buf, "%.*e", prec, v);
+        double back = strtod(buf, NULL);
+        if (bits == 32 ? (float)back == (float)v : back == v) {
+            break;
+        }
+    }
+    char *ep = strchr(buf, 'e');
+    int exp10 = atoi(ep + 1);
+    if (exp10 < -6 || exp10 >= 21) {
+        /* the exponent form, without padding zeros: 1e+21, 1.5e-7 */
+        n = snprintf(buf + (ep - buf), sizeof buf - (size_t)(ep - buf), "e%c%d", exp10 < 0 ? '-' : '+',
+                     exp10 < 0 ? -exp10 : exp10);
+        put(sink, dst, buf, strlen(buf));
+        return;
+    }
+    /* the digits without the point and the exponent */
+    char digits[32];
+    int nd = 0;
+    bool neg = buf[0] == '-';
+    for (char *q = buf + (neg ? 1 : 0); q < ep; q++) {
+        if (*q != '.') digits[nd++] = *q;
+    }
+    char out[64];
+    int o = 0;
+    if (neg) out[o++] = '-';
+    if (exp10 < 0) {
+        out[o++] = '0';
+        out[o++] = '.';
+        for (int i = 0; i < -exp10 - 1; i++) out[o++] = '0';
+        for (int i = 0; i < nd; i++) out[o++] = digits[i];
+    } else {
+        for (int i = 0; i <= exp10; i++) out[o++] = i < nd ? digits[i] : '0';
+        if (nd > exp10 + 1) {
+            out[o++] = '.';
+            for (int i = exp10 + 1; i < nd; i++) out[o++] = digits[i];
+        }
+    }
+    put(sink, dst, out, (size_t)o);
 }
 
 void iris_write_bool(int sink, IrisString *dst, int v) {
@@ -461,4 +524,24 @@ int iris_io_read_all(IrisString *out) {
 void iris_io_ewrite(const char *p, int64_t n) {
     fflush(stdout);
     fwrite(p, 1, (size_t)n, stderr);
+}
+
+/* str.parseFloat: 0 ok, 1 empty, 2 not a number */
+int iris_str_parse_float(const char *p, int64_t n, double *out) {
+    if (n == 0) {
+        return 1;
+    }
+    char buf[128];
+    if (n >= (int64_t)sizeof buf) {
+        return 2;
+    }
+    memcpy(buf, p, (size_t)n);
+    buf[n] = 0;
+    char *end;
+    double v = strtod(buf, &end);
+    if (*end || end == buf) {
+        return 2;
+    }
+    *out = v;
+    return 0;
 }

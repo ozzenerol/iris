@@ -1,0 +1,42 @@
+// expect: 3.75 3 0.75 -1.5 1
+// expect: 0.30000000000000004 0.3333333333333333 1e+21 1e-7 100 9.81
+// expect: true true true inf
+// expect: 3.5 3 -2 250
+// expect: 1.4142135623730951 -2 3 1024
+// expect: 5 12.566371 0.5
+// expect: -1250 -1
+// expect: 0.1 0.10000000149011612
+// expect: 1
+
+import math, str, c "math.h"
+
+const GRAVITY = 9.81
+const f32 HALF = 0.5
+
+struct Point {
+    f64 x
+    f64 y
+}
+
+f64 dist(Point a, b) => math.hypot(a.x - b.x, a.y - b.y)
+
+f32 area(f32 r) => f32(math.pi) * r * r
+
+void main() {
+    f64 a = 1.5
+    b := 2.25
+    print("{a + b} {a * 2} {b / 3} {-a} {10.0 % 3}")
+    print("{0.1 + 0.2} {1.0 / 3} {1e21} {1e-7} {100.0} {GRAVITY}")
+    print("{a < b} {a == 1.5} {math.isNaN(0.0 / 0.0)} {math.inf()}")
+    i64 n = 7
+    f64 x = f64(n) / 2
+    print("{x} {i64(x)} {i64(-2.7)} {u8(250.9)}")
+    print("{math.sqrt(2)} {math.floor(-1.5)} {math.round(2.5)} {math.pow(2, 10)}")
+    print("{dist(Point{x: 0, y: 0}, Point{x: 3, y: 4})} {area(2)} {HALF}")
+    v := str.parseFloat("-12.5e2") catch 0
+    print("{v} {str.parseFloat("x") catch -1}")
+    f32 small = 0.1
+    f64 widened = small
+    print("{small} {widened}")
+    print("{c.cos(0)}")
+}

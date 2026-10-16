@@ -28,19 +28,20 @@ Type tyU8 = {.kind = TY_INT, .bits = 8, .name = "u8"};
 Type tyU16 = {.kind = TY_INT, .bits = 16, .name = "u16"};
 Type tyU32 = {.kind = TY_INT, .bits = 32, .name = "u32"};
 Type tyU64 = {.kind = TY_INT, .bits = 64, .name = "u64"};
+Type tyF32 = {.kind = TY_FLOAT, .bits = 32, .isSigned = true, .name = "f32"};
+Type tyF64 = {.kind = TY_FLOAT, .bits = 64, .isSigned = true, .name = "f64"};
 Type tyStr = {.kind = TY_SLICE, .name = "str", .elem = &tyU8};
 Type tyString = {.kind = TY_STRING, .name = "String", .ir = "%String"};
 Type tyErrorValue = {.kind = TY_ERRVAL, .name = "Error"};
 Type tyErrCode = {.kind = TY_ERRCODE, .name = "error code"};
 
 static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &tyU32,
-                               &tyU64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue};
+                               &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue};
 
 /* types that exist in the language but not in this version yet */
 static const struct {
     const char *name, *version;
 } laterTypes[] = {
-    {"f32", "a later version"}, {"f64", "a later version"},
     {"Duration", "a later version"}, {"Arena", "a later version"},
 };
 
@@ -221,6 +222,8 @@ static void declareLocal(Checker *c, const char *name, Node *decl) {
 /* ---------------------------------------------------------------- types */
 
 static bool isInt(Type *t) { return t->kind == TY_INT; }
+static bool isFloat(Type *t) { return t->kind == TY_FLOAT; }
+static bool isNumber(Type *t) { return t->kind == TY_INT || t->kind == TY_FLOAT; }
 static bool isErr(Type *t) { return t->kind == TY_ERROR; }
 static bool isStr(Type *t) { return t->kind == TY_SLICE && t->elem == &tyU8; }
 
@@ -306,6 +309,7 @@ static bool sameType(Type *a, Type *b) {
     if (a->kind != b->kind) return false;
     switch (a->kind) {
     case TY_INT: return a->bits == b->bits && a->isSigned == b->isSigned;
+    case TY_FLOAT: return a->bits == b->bits;
     case TY_PTR: case TY_SLICE: case TY_RESULT: return sameType(a->elem, b->elem);
     case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
@@ -346,7 +350,7 @@ static int64_t typeAlign(Type *t);
 static int64_t typeSize(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
-    case TY_INT: return t->bits / 8;
+    case TY_INT: case TY_FLOAT: return t->bits / 8;
     case TY_PTR: case TY_NULL: return 8;
     case TY_SLICE: return 16;
     case TY_STRING: return 24;
@@ -375,7 +379,7 @@ static int64_t typeSize(Type *t) {
 static int64_t typeAlign(Type *t) {
     switch (t->kind) {
     case TY_BOOL: return 1;
-    case TY_INT: return t->bits / 8;
+    case TY_INT: case TY_FLOAT: return t->bits / 8;
     case TY_ARRAY: return typeAlign(t->elem);
     case TY_ENUM: return t->hasData ? 8 : 4;
     case TY_STRUCT: case TY_TUPLE: {
@@ -710,6 +714,9 @@ static Type *resolveType(Checker *c, Node *t) {
 
 /* Every value of `from` fits in `to`. */
 static bool widens(Type *from, Type *to) {
+    if (isFloat(from) && isFloat(to)) {
+        return from->bits <= to->bits;
+    }
     if (!isInt(from) || !isInt(to)) {
         return false;
     }
@@ -762,6 +769,16 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
         error(c, e, "%lld doesn't fit in %s", (long long)e->cval, to->name);
         return false;
     }
+    if (e->isConst && isInt(from) && isFloat(to)) {
+        /* 2 where a float is needed: 2.0 */
+        e->fval = from->isSigned ? (double)e->cval : (double)(uint64_t)e->cval;
+        e->type = to;
+        return true;
+    }
+    if (e->isConst && isFloat(from) && isFloat(to)) {
+        e->type = to;
+        return true;
+    }
     if (widens(from, to)) {
         *slot = convertNode(c, e, to, false);
         return true;
@@ -808,7 +825,7 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
         *slot = convertNode(c, e, to, false);
         return true;
     }
-    if (isInt(from) && isInt(to)) {
+    if (isNumber(from) && isNumber(to)) {
         error(c, e, "%s is %s, which doesn't always fit in %s; convert it with %s(...)", what,
               from->name, to->name, to->name);
         return false;
@@ -1331,7 +1348,7 @@ static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool) {
             return false;
         }
         checkConstDecl(c, d);
-        if (!d->isConst) {
+        if (!d->isConst || (d->type && isFloat(d->type))) {
             return false;
         }
         *out = d->cval;
@@ -1458,7 +1475,17 @@ static void checkConstDecl(Checker *c, Node *d) {
     int64_t v;
     bool b;
     int before = gErrors;
-    if (d->b->kind == N_STRING) {
+    bool negFloat = d->b->kind == N_UNARY && d->b->op == P_MINUS && d->b->a->kind == N_FLOAT;
+    if (d->b->kind == N_FLOAT || negFloat) {
+        Type *ft = declared && isFloat(declared) ? declared : &tyF64;
+        if (declared && !isErr(declared) && !isFloat(declared)) {
+            error(c, d->b, "the value is a floating point number, but %s is needed", declared->name);
+        }
+        checkExpr(c, &d->b, ft);
+        d->isConst = true;
+        d->fval = d->b->fval;
+        d->type = ft;
+    } else if (d->b->kind == N_STRING) {
         checkExpr(c, &d->b, NULL);
         d->type = &tyStr;
         if (declared && !isStr(declared) && !isErr(declared)) {
@@ -1551,7 +1578,7 @@ static bool addressable(Node *e) {
 
 static bool isComparable(Type *t) {
     switch (t->kind) {
-    case TY_INT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE:
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE:
         return true;
     case TY_ENUM:
         return !t->hasData;
@@ -1590,7 +1617,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
     bool shift = op == P_SHL || op == P_SHR;
     bool bitOp = op == P_AMP || op == P_PIPE || op == P_CARET;
     Type *want = compare ? NULL : expected;
-    if (want && !isInt(want) && !(bitOp && want->kind == TY_ENUM && want->isFlags)) {
+    if (want && !isNumber(want) && !(bitOp && want->kind == TY_ENUM && want->isFlags)) {
         want = NULL;
     }
 
@@ -1612,7 +1639,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         ta = checkExpr(c, &e->a, isInt(tb) ? tb : want);
     } else {
         ta = checkExpr(c, &e->a, want);
-        tb = checkExpr(c, &e->b, isInt(ta) || ta->kind == TY_ENUM ? ta : want);
+        tb = checkExpr(c, &e->b, isNumber(ta) || ta->kind == TY_ENUM ? ta : want);
     }
     if (isErr(ta) || isErr(tb)) {
         return setType(e, compare ? &tyBool : &tyError);
@@ -1645,7 +1672,12 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
     /* bring both sides to one type */
     Type *t = ta;
     if (!sameType(ta, tb)) {
-        if (e->a->isConst && isInt(ta) && isInt(tb)) {
+        if (e->a->isConst && isNumber(ta) && isFloat(tb) && (isInt(ta) || isFloat(ta))) {
+            coerce(c, &e->a, tb, "the left side");
+            t = tb;
+        } else if (e->b->isConst && isFloat(ta) && isNumber(tb)) {
+            coerce(c, &e->b, ta, "the right side");
+        } else if (e->a->isConst && isInt(ta) && isInt(tb)) {
             coerce(c, &e->a, tb, "the left side");
             t = tb;
         } else if (e->b->isConst && isInt(ta) && isInt(tb)) {
@@ -1661,9 +1693,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         } else if (tb->kind == TY_NULL && ta->kind == TY_PTR) {
             e->b->type = ta;
         } else {
-            if (isInt(ta) && isInt(tb)) {
+            if (isNumber(ta) && isNumber(tb)) {
                 error(c, e, "'%s' can't mix %s and %s; convert one side, for example %s(...)", tokName(op),
-                      ta->name, tb->name, ta->name);
+                      ta->name, tb->name, isFloat(tb) && !isFloat(ta) ? tb->name : ta->name);
             } else {
                 error(c, e, "'%s' can't mix %s and %s", tokName(op), ta->name, tb->name);
             }
@@ -1679,12 +1711,15 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
             if (!isComparable(t)) {
                 error(c, e, "'%s' can't compare %s values", tokName(op), t->name);
             }
-        } else if (!isInt(t)) {
+        } else if (!isNumber(t)) {
             error(c, e, "'%s' can't compare %s values", tokName(op), t->name);
         }
         return setType(e, &tyBool);
     }
     if (bitOp && t->kind == TY_ENUM && t->isFlags) {
+        return setType(e, t);
+    }
+    if (isFloat(t) && (op == P_PLUS || op == P_MINUS || op == P_STAR || op == P_SLASH || op == P_PERCENT)) {
         return setType(e, t);
     }
     if (!isInt(t)) {
@@ -2043,8 +2078,8 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         error(c, e, "%s is too large for i64", e->text);
         return setType(e, &tyError);
     case N_FLOAT:
-        notYet(c, e, "floating point numbers", "a later version");
-        return setType(e, &tyError);
+        e->isConst = true;
+        return setType(e, expected == &tyF32 ? &tyF32 : &tyF64);
     case N_STRING:
         return setType(e, &tyStr);
     case N_INTERP:
@@ -2080,6 +2115,11 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             return setType(e, &tyError);
         case N_CONST:
             checkConstDecl(c, d);
+            if (d->type && isFloat(d->type)) {
+                e->isConst = true;
+                e->fval = d->fval;
+                return setType(e, expected == &tyF32 ? &tyF32 : d->type);
+            }
             return setType(e, d->type);
         default:
             return setType(e, d->type ? d->type : &tyError);
@@ -2088,8 +2128,15 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     case N_UNARY: {
         switch (e->op) {
         case P_MINUS: {
-            Type *t = checkExpr(c, &e->a, expected && isInt(expected) ? expected : NULL);
+            Type *t = checkExpr(c, &e->a, expected && isNumber(expected) ? expected : NULL);
             if (isErr(t)) return setType(e, t);
+            if (isFloat(t)) {
+                if (e->a->isConst) {
+                    e->isConst = true;
+                    e->fval = -e->a->fval;
+                }
+                return setType(e, t);
+            }
             if (!isInt(t)) {
                 error(c, e, "'-' needs a number, not %s", t->name);
                 return setType(e, &tyError);
@@ -2218,7 +2265,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
 
 static Type *intTypeNamed(const char *name) {
     for (size_t i = 0; i < sizeof builtinTypes / sizeof builtinTypes[0]; i++) {
-        if (isInt(builtinTypes[i]) && strcmp(builtinTypes[i]->name, name) == 0) {
+        if (isNumber(builtinTypes[i]) && strcmp(builtinTypes[i]->name, name) == 0) {
             return builtinTypes[i];
         }
     }
@@ -2231,7 +2278,7 @@ static bool isBuiltinName(const char *name) {
 }
 
 static bool printable(Type *t) {
-    return isInt(t) || t == &tyBool || isStr(t) || t->kind == TY_STRING || t->kind == TY_ENUM ||
+    return isNumber(t) || t == &tyBool || isStr(t) || t->kind == TY_STRING || t->kind == TY_ENUM ||
            t->kind == TY_ERRCODE;
 }
 
@@ -2353,8 +2400,8 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
             if (isErr(t)) continue;
             if (isStr(t) || t->kind == TY_STRING) {
                 error(c, *slot, "C takes text as a pointer; pass .ptr, ending the text with \\0");
-            } else if (!isInt(t) && t->kind != TY_PTR && t->kind != TY_BOOL && t->kind != TY_NULL) {
-                error(c, *slot, "an extra argument to a C function must be an integer or a pointer, not %s", t->name);
+            } else if (!isNumber(t) && t->kind != TY_PTR && t->kind != TY_BOOL && t->kind != TY_NULL) {
+                error(c, *slot, "an extra argument to a C function must be a number or a pointer, not %s", t->name);
             }
             if (t->kind == TY_NULL) {
                 (*slot)->type = ptrTo(&tyU8);
@@ -2771,12 +2818,19 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         }
         Type *t = checkExpr(c, &e->list.items[0], NULL);
         if (isErr(t)) return setType(e, &tyError);
-        if (!isInt(t)) {
-            error(c, e->list.items[0], "%s(...) converts integers, not %s", name, t->name);
+        if (!isNumber(t)) {
+            error(c, e->list.items[0], "%s(...) converts numbers, not %s", name, t->name);
             return setType(e, &tyError);
         }
         Node *arg = e->list.items[0];
-        if (arg->isConst) {
+        if (arg->isConst && (isFloat(conv) || isFloat(t))) {
+            if (isFloat(conv)) {
+                coerce(c, &e->list.items[0], conv, "the value");
+                *e = *e->list.items[0];
+                return conv;
+            }
+            /* a float constant to an integer: done when the program runs */
+        } else if (arg->isConst) {
             if (!fitsIn(arg->cval, conv)) {
                 error(c, arg, "%lld doesn't fit in %s", (long long)arg->cval, conv->name);
             }
@@ -3799,13 +3853,13 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         /* only what C passes the same way: integers and pointers */
         for (int i = 0; i < f->list.len; i++) {
             Type *t = f->list.items[i]->type;
-            if (!isErr(t) && !isInt(t) && t->kind != TY_PTR) {
-                error(c, f->list.items[i], "a C function takes integers and pointers, not %s", t->name);
+            if (!isErr(t) && !isNumber(t) && t->kind != TY_PTR) {
+                error(c, f->list.items[i], "a C function takes numbers and pointers, not %s", t->name);
             }
         }
         Type *r = f->type;
-        if (!isErr(r) && r != &tyVoid && !isInt(r) && r->kind != TY_PTR) {
-            error(c, f, "a C function returns an integer, a pointer or nothing, not %s", r->name);
+        if (!isErr(r) && r != &tyVoid && !isNumber(r) && r->kind != TY_PTR) {
+            error(c, f, "a C function returns a number, a pointer or nothing, not %s", r->name);
         }
     }
 }

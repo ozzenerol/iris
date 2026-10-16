@@ -1,0 +1,67 @@
+// Floating point math: roots, powers, logarithms, rounding and angles.
+
+pub const pi = 3.141592653589793
+pub const e = 2.718281828459045
+
+@extern("sqrt")
+pub f64 sqrt(f64 x)
+
+@extern("cbrt")
+pub f64 cbrt(f64 x)
+
+@extern("pow")
+pub f64 pow(f64 x, f64 y)
+
+@extern("exp")
+pub f64 exp(f64 x)
+
+@extern("log")
+pub f64 log(f64 x)
+
+@extern("log2")
+pub f64 log2(f64 x)
+
+@extern("log10")
+pub f64 log10(f64 x)
+
+@extern("floor")
+pub f64 floor(f64 x)
+
+@extern("ceil")
+pub f64 ceil(f64 x)
+
+@extern("round")
+pub f64 round(f64 x)
+
+@extern("trunc")
+pub f64 trunc(f64 x)
+
+@extern("fabs")
+pub f64 abs(f64 x)
+
+@extern("sin")
+pub f64 sin(f64 x)
+
+@extern("cos")
+pub f64 cos(f64 x)
+
+@extern("tan")
+pub f64 tan(f64 x)
+
+@extern("atan2")
+pub f64 atan2(f64 y, f64 x)
+
+@extern("hypot")
+pub f64 hypot(f64 x, f64 y)
+
+// The smaller of a and b.
+pub f64 min(f64 a, b) => if a < b { a } else { b }
+
+// The larger of a and b.
+pub f64 max(f64 a, b) => if a > b { a } else { b }
+
+// Whether x is not a number (NaN).
+pub bool isNaN(f64 x) => x != x
+
+// Infinity.
+pub f64 inf() => 1.0 / 0.0

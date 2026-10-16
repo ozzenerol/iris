@@ -5,7 +5,7 @@
 // error: 17: '-' can't be used on u32, which has no negative values
 // error: 18: '<' can't compare str values
 // error: 19: the value is i64, which doesn't always fit in u8; convert it with u8(...)
-// error: 20: floating point numbers are not supported yet (planned for a later version)
+// error: 20: the value is f64, which doesn't always fit in i64; convert it with i64(...)
 void main() {
     u8 small = 300
     i32 a = 5
@@ -17,5 +17,5 @@ void main() {
     d := -c
     e := "a" < "b"
     u8 f = b
-    g := 0.5
+    i64 g = 0.5
 }

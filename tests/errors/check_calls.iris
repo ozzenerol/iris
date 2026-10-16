@@ -3,7 +3,7 @@
 // error: 14: g needs a value for b
 // error: 15: an argument without a name can't follow a named one
 // error: 16: print takes text, not i64; write print("{...}") to use a value
-// error: 17: i64(...) converts integers, not str
+// error: 17: i64(...) converts numbers, not str
 // error: 18: x is given twice
 void f(i64 x) { }
 void g(i64 a, b) { }

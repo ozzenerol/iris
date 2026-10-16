@@ -1,0 +1,9 @@
+// expect: 3
+// panic: the value doesn't fit in the type it is converted to
+
+void main() {
+    f64 big = 3.9
+    print("{i32(big)}")
+    big = 1e300
+    print("{i32(big)}")
+}
