@@ -1,0 +1,16 @@
+// error: main.iris:11: the field fd of Server isn't pub, so only its own module can use it
+// error: main.iris:12: net.secret isn't pub, so only its own module can use it
+// error: main.iris:13: the module net has no Nope
+// error: main.iris:14: the field fd of Server isn't pub, so only its own module can set it
+// error: main.iris:15: net is the name of an imported module
+import "net"
+
+void main() {
+    s := net.listen(1)
+    _ = s.port
+    x := s.fd
+    y := net.secret()
+    n := net.Nope
+    z := net.Server{port: 1, fd: 2}
+    net := 5
+}

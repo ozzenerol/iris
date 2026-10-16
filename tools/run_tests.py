@@ -11,6 +11,10 @@
                                // panic: MESSAGE   stderr has "panic: MESSAGE", exit 2
                                // stderr: TEXT     stderr has TEXT
                                // mode: MODE       build mode (default debug)
+  tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
+                           print what main.iris's comments say; with
+                           // error: FILE:LINE: MESSAGE lines, `iris check` must fail
+  get                      iris get with a local git repository (needs git)
   docs                     every ```iris block in docs-src/ must parse
                            (```iris error blocks are skipped); an ```iris run
                            block must also run and print the ```output block
@@ -24,6 +28,7 @@ import argparse
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run(iris, args):
-    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60)
+    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -126,6 +131,64 @@ def run_tests(iris, only, failures):
     return count
 
 
+def project_tests(iris, only, failures):
+    count = 0
+    for d in sorted(glob.glob(os.path.join(ROOT, "tests/projects/*/"))):
+        name = "projects/" + os.path.basename(d.rstrip("/"))
+        if only and not any(o in name for o in only):
+            continue
+        count += 1
+        text = open(os.path.join(d, "main.iris")).read()
+        errors = re.findall(r"^// error: (\S+?):(\d+): (.*)$", text, re.M)
+        if errors:
+            code, out, err = run(iris, ["check", d])
+            if code == 0:
+                failures.append((name, "compiled, but should have failed"))
+                continue
+            for f, line, msg in errors:
+                pat = re.compile(r"%s:%s:\d+: error: %s$" % (re.escape(f), line, re.escape(msg.strip())), re.M)
+                if not pat.search(err):
+                    failures.append((name, "missing error %s:%s: %s\ngot:\n%s" % (f, line, msg, err)))
+                    break
+            continue
+        expect = re.findall(r"^// expect:(?: (.*))?$", text, re.M)
+        code, out, err = run(iris, ["run", d])
+        want = "".join(l + "\n" for l in expect)
+        if code != 0 or out != want:
+            failures.append((name, "exit %d\n%s%s" % (code, diff(want, out).replace("tree", "output"), err)))
+    return count
+
+
+def get_test(iris, only, failures):
+    if only and not any(o in "get" for o in only):
+        return 0
+    if not shutil.which("git"):
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = os.path.join(tmp, "base", "example.com", "x", "greet")
+        os.makedirs(repo)
+        with open(os.path.join(repo, "greet.iris"), "w") as f:
+            f.write('pub str hi() => "hi from a package"\n')
+        g = ["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(g + ["add", "."], check=True)
+        subprocess.run(g + ["commit", "-qm", "init"], check=True)
+        subprocess.run(g + ["tag", "v1.0.0"], check=True)
+        app = os.path.join(tmp, "app")
+        os.makedirs(app)
+        with open(os.path.join(app, "iris.mod"), "w") as f:
+            f.write("module example.com/me/app\n")
+        with open(os.path.join(app, "main.iris"), "w") as f:
+            f.write('import "example.com/x/greet"\n\nvoid main() {\n    print(greet.hi())\n}\n')
+        env = dict(os.environ, IRIS_PATH=os.path.join(tmp, "cache"), IRIS_GET_BASE=os.path.join(tmp, "base"))
+        p = subprocess.run([iris, "get", "example.com/x/greet@v1.0.0"], cwd=app, env=env, capture_output=True, text=True)
+        mod = open(os.path.join(app, "iris.mod")).read()
+        r = subprocess.run([iris, "run", "."], cwd=app, env=env, capture_output=True, text=True)
+        if p.returncode != 0 or "require example.com/x/greet v1.0.0" not in mod or r.stdout != "hi from a package\n":
+            failures.append(("get", "get: %s %s\nmod: %s\nrun: %s %s" % (p.stdout, p.stderr, mod, r.stdout, r.stderr)))
+    return 1
+
+
 def doc_tests(iris, only, failures):
     if only and not any(o in "docs" for o in only):
         return 0
@@ -182,12 +245,15 @@ def main():
     ap.add_argument("--update", action="store_true")
     ap.add_argument("only", nargs="*")
     args = ap.parse_args()
+    args.iris = os.path.abspath(args.iris)
 
     failures = []
     total = 0
     total += parse_tests(args.iris, args.only, args.update, failures)
     total += error_tests(args.iris, args.only, failures)
     total += run_tests(args.iris, args.only, failures)
+    total += project_tests(args.iris, args.only, failures)
+    total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
 
     for name, why in failures:

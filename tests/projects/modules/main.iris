@@ -1,0 +1,16 @@
+// expect: 8080 default 8080
+// expect: hello, iris (1)
+// expect: tcp
+// expect: send hi to 1.2.3.4
+
+import "net", "github.com/someone/greet"
+
+!void main() {
+    s := net.listen(8080)
+    print("{s.port} {describe(s)} {net.DEFAULT_PORT}")
+    print(greet.hello("iris"))
+    k := net.Kind.tcp
+    print("{k}")
+    c := net.Conn{peer: "1.2.3.4"}
+    c.send("hi")
+}

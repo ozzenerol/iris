@@ -1,0 +1,60 @@
+// Files: reading, writing, checking and removing them.
+
+pub enum FsError { notFound, permission, exists, isDir, other }
+
+@extern("iris_fs_read_all")
+i32 rawReadAll(u8 *path, i64 pathLen, String *out)
+
+@extern("iris_fs_write")
+i32 rawWrite(u8 *path, i64 pathLen, u8 *data, i64 dataLen, i32 append)
+
+@extern("iris_fs_exists")
+i32 rawExists(u8 *path, i64 pathLen)
+
+@extern("iris_fs_remove")
+i32 rawRemove(u8 *path, i64 pathLen)
+
+Error fsError(i32 code, str path) => match code {
+    1 => error(FsError.notFound, "{path}: no such file")
+    2 => error(FsError.permission, "{path}: permission denied")
+    3 => error(FsError.exists, "{path}: already exists")
+    4 => error(FsError.isDir, "{path}: is a folder")
+    _ => error(FsError.other, "{path}: can't be used")
+}
+
+// The whole file, as text the caller owns.
+pub !String readAll(str path) {
+    String s
+    code := rawReadAll(path.ptr, path.len, &s)
+    if code != 0 {
+        return fsError(code, path)
+    }
+    return s
+}
+
+// Replaces the file's contents, creating it if needed.
+pub !void writeAll(str path, str data) {
+    code := rawWrite(path.ptr, path.len, data.ptr, data.len, 0)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Adds to the end of the file, creating it if needed.
+pub !void append(str path, str data) {
+    code := rawWrite(path.ptr, path.len, data.ptr, data.len, 1)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Whether a file or folder exists at path.
+pub bool exists(str path) => rawExists(path.ptr, path.len) != 0
+
+// Removes a file.
+pub !void remove(str path) {
+    code := rawRemove(path.ptr, path.len)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}

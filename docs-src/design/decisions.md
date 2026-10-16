@@ -46,6 +46,10 @@ These are suggestions. They are used in the examples on these pages until they a
 | Only structs have methods, so only structs satisfy interfaces. | Integers stay plain values; a generic function over numbers needs no bound. |
 | A generic struct's types are always written out: `List[str] names`. There are no static methods like `List[str].new()`. | One way to make a value: a declaration or a literal. |
 | A generic function is checked for each set of types it is used with, not on its own. | Errors point at the generic code and at the use that caused them. |
+| A folder with `iris.mod` is a project, and each of its folders is a module. A file outside a project is a program on its own. | Projects get modules; small programs and scripts stay one file. |
+| A package's version is a tag in its repository, and `iris get` downloads it with git. | No package server to run. |
+| Until `import c`, the standard library reaches C through `@extern("name")` on functions without a body, which only the standard library may use. | Keeps C out of user code until there is a proper way in. |
+| `.ptr` gives a slice's pointer, and `p[0:n]` slices a pointer without checks. | Needed to hand memory to and from C. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 

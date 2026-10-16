@@ -5,10 +5,16 @@ How source code becomes a program, step by step.
 ## The steps
 
 ```output
-source -> lexer -> parser -> checker -> lowering -> IR writer -> clang -> program
+files -> loader -> lexer -> parser -> checker -> IR writer -> clang -> program
 ```
 
+### Loader
+
+The loader (`src/module.c`) finds the files to compile. It looks for `iris.mod` from the program's folder upward. With one, the program is every `.iris` file in its folder; without, the program is the one file. Then it follows the imports: the standard library's files are carried inside the `iris` binary, project modules are folders from the root, and packages come from `replace` folders or the package cache. Each module's files are parsed once; a circle of imports is an error.
+
 Each step reads the result of the one before it. No step looks back.
+
+The checker gives each module its own scope for names and each file one for its imports. Before checking, it rewrites `fs.readAll` into one qualified name, checking that `readAll` exists in `fs` and is `pub`. The IR writer puts the module in every name it writes (`@"f.fs.readAll"`), so modules can use the same names.
 
 ### Lexer
 
@@ -77,9 +83,10 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/ast.c` | Syntax tree nodes and the printer for `iris parse`. |
 | `src/check.c` | The checker. |
 | `src/generic.c` | Copies of trees, for generic instances. |
+| `src/module.c` | The loader: projects, imports, packages. |
+| `std/` | The standard library, in Iris. The build carries it inside `iris`, like the runtime. |
 | `src/ir.c` | The IR writer. |
 | `runtime/rt.c` | The small part written in C: printing and panics now; error traces and the task scheduler later. |
-| `std/` | The standard library, written in Iris. |
 | `tests/` | Test programs. |
 
 ## Memory inside the compiler

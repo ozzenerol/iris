@@ -1,10 +1,13 @@
-// error: 4: imports are not supported yet (planned for 0.7)
-// error: 8: tasks and channels are not supported yet (planned for a later version)
-// error: 9: when is not supported yet (planned for a later version)
-import fs
+// error: 5: import c is not supported yet (planned for 0.8)
+// error: 9: tasks and channels are not supported yet (planned for a later version)
+// error: 10: when is not supported yet (planned for a later version)
+// error: 12: @extern is for the standard library; your code will use import c (0.8)
+import c "stdio.h"
 
 void main() {
     f := 1
     spawn f
     when os == .linux { }
 }
+@extern("puts")
+i32 puts(u8 *s)

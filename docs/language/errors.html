@@ -98,14 +98,26 @@ conf := loadConfig(path) <span class="k">catch</span> e {
 _ = save(<span class="s">&quot;out.txt&quot;</span>, data)      <span class="c">// the error is dropped</span></code></pre>
 <h2 id="errors-in-main"><a href="#errors-in-main">Errors in main</a></h2>
 <p>When <code>main</code> returns <code>!void</code>, an error that reaches the end of <code>main</code> is printed with the functions it passed through, and the program exits with status 1:</p>
-<pre class="code"><code>!<span class="t">void</span> main() {
+<pre class="code"><code><span class="k">import</span> fs
+
+<span class="k">struct</span> Config {
+    <span class="t">i64</span> port
+}
+
+!Config loadConfig(<span class="t">str</span> path) {
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
+    <span class="k">return</span> Config{port: text.len}
+}
+
+!<span class="t">void</span> main() {
     cfg := <span class="k">try</span> loadConfig(<span class="s">&quot;app.conf&quot;</span>)
-    <span class="k">try</span> serve(cfg)
+    print(<span class="s">&quot;{cfg.port}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>error: fs.notFound: app.conf: no such file
-  at fs.readAll    std/fs.iris:88
-  at loadConfig    main.iris:12
-  at main          main.iris:31</code></pre>
+<pre class="out"><code>error: FsError.notFound: app.conf: no such file
+  at fsError     std/fs/fs.iris:18
+  at readAll     std/fs/fs.iris:30
+  at loadConfig  main.iris:8
+  at main        main.iris:13</code></pre>
 <p>The first line is the error's code and message. Below it is the trace: where the error was made, then each <code>try</code> or <code>return e</code> that passed it on. The message holds up to 1024 bytes, and the trace up to 64 steps.</p>
 <h2 id="bugs-and-panic"><a href="#bugs-and-panic">Bugs and panic</a></h2>
 <p><code>!T</code> is for things that can go wrong while the program is correct: a missing file, a closed connection, bad input. A bug, like an index past the end, stops the program right away with a trace. <code>panic(&quot;message&quot;)</code> does the same for a state the program should never reach.</p>

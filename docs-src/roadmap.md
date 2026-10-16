@@ -10,6 +10,7 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.4 | `!T`, `try`, `catch`, `defer`, `errdefer`, `scoped`, error traces, and plain enums for error codes. | released |
 | 0.5 | Enums with data, flag enums, patterns that take values apart, and several return values. | released |
 | 0.6 | Generic structs and functions, interfaces as bounds, and `dyn`. | released |
-| 0.7 | Modules, packages, `import c`, and the first parts of the standard library (`io`, `fs`, `str`). | next |
+| 0.7 | Modules, projects, packages with `iris get`, and the first standard library modules: `io`, `fs`, `str` and `os`. | released |
+| 0.8 | `import c`: C headers read with clang, C functions, structs and constants. | next |
 
-After 0.7, in no fixed order: `comptime` and `when`, attributes, tasks and the network library, `iris fmt`, the language server, and a JIT for `iris run`.
+After 0.8, in no fixed order: `comptime` and `when`, attributes, tasks and the network library, `iris fmt`, the language server, and a JIT for `iris run`.

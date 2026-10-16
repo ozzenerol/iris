@@ -68,8 +68,8 @@ struct Loop {
 typedef struct {
     Arena *arena;
     Source *src;
-    Scope *global;
     Scope *scope;
+    const char *module;     /* the module of the code being checked */
     Node *func;             /* the function being checked */
     Loop *loop;
     const char *pendingLabel;
@@ -104,8 +104,15 @@ static void checkStmt(Checker *c, Node *s);
 static void error(Checker *c, Node *at, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    verrorAt(c->src, at->line, at->col, fmt, ap);
+    verrorAt(at->src ? at->src : c->src, at->line, at->col, fmt, ap);
     va_end(ap);
+}
+
+/* A new node at the same place as another. */
+static Node *like(Checker *c, NodeKind kind, Node *at) {
+    Node *n = newNode(c->arena, kind, at->line, at->col);
+    n->src = at->src;
+    return n;
 }
 
 static void notYet(Checker *c, Node *at, const char *what, const char *version) {
@@ -135,7 +142,7 @@ static Sym *findIn(Scope *s, const char *name) {
     return NULL;
 }
 
-static Node *lookup(Checker *c, const char *name) {
+static Node *lookupPlain(Checker *c, const char *name) {
     for (Scope *s = c->scope; s; s = s->parent) {
         Sym *sym = findIn(s, name);
         if (sym) {
@@ -143,6 +150,34 @@ static Node *lookup(Checker *c, const char *name) {
         }
     }
     return NULL;
+}
+
+static bool visible(Checker *c, Node *d) {
+    return !d->module || !c->module || strcmp(d->module, c->module) == 0 || (d->flags & F_PUB);
+}
+
+/* A name, or mod.name for a name in an imported module (pub only). */
+static Node *lookup(Checker *c, const char *name) {
+    const char *dot = strchr(name, '.');
+    if (!dot) {
+        return lookupPlain(c, name);
+    }
+    char mod[128];
+    size_t n = (size_t)(dot - name);
+    if (n >= sizeof mod) {
+        return NULL;
+    }
+    memcpy(mod, name, n);
+    mod[n] = 0;
+    Node *imp = lookupPlain(c, mod);
+    if (!imp || imp->kind != N_IMPORT || !imp->scope) {
+        return NULL;
+    }
+    Sym *sym = findIn((Scope *)imp->scope, dot + 1);
+    if (!sym || !visible(c, sym->decl)) {
+        return NULL;
+    }
+    return sym->decl;
 }
 
 static void addSym(Checker *c, Scope *s, const char *name, Node *decl) {
@@ -174,6 +209,11 @@ static void declareLocal(Checker *c, const char *name, Node *decl) {
         if (s->function) {
             break;
         }
+    }
+    Node *imp = lookupPlain(c, name);
+    if (imp && imp->kind == N_IMPORT) {
+        error(c, decl, "%s is the name of an imported module", name);
+        return;
     }
     addSym(c, c->scope, name, decl);
 }
@@ -289,7 +329,7 @@ static Type *structType(Checker *c, Node *decl) {
         t->decl = decl;
         t->ir = arenaStrndup(c->arena, "", 0);
         char buf[160];
-        snprintf(buf, sizeof buf, "%%\"T.%s\"", decl->name);
+        snprintf(buf, sizeof buf, "%%\"T.%s.%s\"", decl->module ? decl->module : "main", decl->name);
         t->ir = arenaStrndup(c->arena, buf, strlen(buf));
         decl->type = t;
     }
@@ -374,7 +414,7 @@ static Type *enumType(Checker *c, Node *decl) {
     }
     if (t->hasData) {
         char buf[160];
-        snprintf(buf, sizeof buf, "%%\"E.%s\"", decl->name);
+        snprintf(buf, sizeof buf, "%%\"E.%s.%s\"", decl->module ? decl->module : "main", decl->name);
         t->ir = arenaStrndup(c->arena, buf, strlen(buf));
     }
     if (decl->attrs.len) {
@@ -387,7 +427,7 @@ static Type *enumType(Checker *c, Node *decl) {
         error(c, decl, "a flag enum can have at most 31 values");
     }
     Scope *saved = c->scope;
-    c->scope = c->global;
+    c->scope = decl->scope;
     int64_t next = t->isFlags ? 1 : 0;
     for (int i = 0; i < decl->list.len; i++) {
         Node *m = decl->list.items[i];
@@ -442,10 +482,10 @@ static Type *enumType(Checker *c, Node *decl) {
         if (fields) {
             size = typeSize(fields);
             char buf[200];
-            snprintf(buf, sizeof buf, "%%\"E.%s.%s\"", decl->name, m->name);
+            snprintf(buf, sizeof buf, "%%\"E.%s.%s.%s\"", decl->module ? decl->module : "main", decl->name, m->name);
             fields->ir = arenaStrndup(c->arena, buf, strlen(buf));
             fields->name = m->name;
-            m->d = newNode(c->arena, N_T_TUPLE, m->line, m->col);   /* holds the data's type */
+            m->d = like(c, N_T_TUPLE, m);   /* holds the data's type */
             m->d->type = fields;
         }
         if (size > t->payload) {
@@ -520,7 +560,7 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
         if (d->state == 0) {
             d->state = 1;
             Scope *saved = c->scope;
-            c->scope = c->global;
+            c->scope = d->scope;
             Type *t = resolveType(c, d->a);
             c->scope = saved;
             if (d->state == 1) {
@@ -553,8 +593,21 @@ static Type *resolveType(Checker *c, Node *t) {
     }
     switch (t->kind) {
     case N_T_NAME:
-        if (strchr(t->name, '.')) {
-            notYet(c, t, "types from modules", "0.7");
+        if (strchr(t->name, '.') && !lookup(c, t->name)) {
+            /* mod.Type: say what is wrong with it */
+            const char *dot = strchr(t->name, '.');
+            char mod[128];
+            size_t n = (size_t)(dot - t->name) < sizeof mod - 1 ? (size_t)(dot - t->name) : sizeof mod - 1;
+            memcpy(mod, t->name, n);
+            mod[n] = 0;
+            Node *imp = lookupPlain(c, mod);
+            if (!imp || imp->kind != N_IMPORT) {
+                error(c, t, "%s is not an imported module", mod);
+            } else if (findIn((Scope *)imp->scope, dot + 1)) {
+                error(c, t, "%s isn't pub, so only its own module can use it", t->name);
+            } else {
+                error(c, t, "the module %s has no %s", mod, dot + 1);
+            }
             return &tyError;
         }
         return typeFromName(c, t->name, t, true);
@@ -621,8 +674,6 @@ static Type *resolveType(Checker *c, Node *t) {
         if (!d || d->kind != N_STRUCT || !d->list2.len) {
             if (d && d->kind == N_STRUCT) {
                 error(c, t, "%s is not generic", base->name);
-            } else if (base->kind == N_T_NAME && strchr(base->name, '.')) {
-                notYet(c, t, "types from modules", "0.7");
             } else {
                 error(c, t, "%s is not a generic struct", base->kind == N_T_NAME ? base->name : "this");
             }
@@ -682,7 +733,7 @@ static bool fitsIn(int64_t v, Type *t) {
 static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report);
 
 static Node *convertNode(Checker *c, Node *e, Type *to, bool explicit) {
-    Node *n = newNode(c->arena, N_CONVERT, e->line, e->col);
+    Node *n = like(c, N_CONVERT, e);
     n->a = e;
     n->type = to;
     if (explicit) {
@@ -784,7 +835,9 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     t->state = 1;
     Scope *saved = c->scope;
-    c->scope = t->scope ? (Scope *)t->scope : c->global;
+    const char *savedModule = c->module;
+    c->scope = t->scope ? (Scope *)t->scope : (Scope *)d->scope;
+    c->module = d->module;
     if (d->flags & F_PACKED) {
         notYet(c, d, "packed structs", "a later version");
     }
@@ -832,6 +885,7 @@ static void resolveStruct(Checker *c, Type *t) {
         }
     }
     c->scope = saved;
+    c->module = savedModule;
     t->state = 2;
 }
 
@@ -909,7 +963,7 @@ static int fieldIndex(Node *structDecl, Node *field) {
 
 /* A field access node for one step of a path. */
 static Node *fieldStep(Checker *c, Node *base, Node *field, Node *at) {
-    Node *f = newNode(c->arena, N_FIELD_ACCESS, at->line, at->col);
+    Node *f = like(c, N_FIELD_ACCESS, at);
     f->a = base;
     f->name = field->name;
     f->ref = field;
@@ -935,11 +989,11 @@ static const char *instanceName(Checker *c, const char *name, Type **args, int n
 }
 
 /* A scope where the type parameters stand for the given types. */
-static Scope *paramScope(Checker *c, NodeList *params, Type **args) {
+static Scope *paramScope(Checker *c, Node *generic, NodeList *params, Type **args) {
     Scope *s = arenaAlloc(c->arena, sizeof(Scope));
-    s->parent = c->global;
+    s->parent = generic->scope;
     for (int i = 0; i < params->len; i++) {
-        Node *tp = newNode(c->arena, N_TYPE_PARAM, params->items[i]->line, params->items[i]->col);
+        Node *tp = like(c, N_TYPE_PARAM, params->items[i]);
         tp->name = params->items[i]->name;
         tp->type = args[i];
         addSym(c, s, tp->name, tp);
@@ -996,8 +1050,8 @@ static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report) {
         return false;
     }
     Scope *s = arenaAlloc(c->arena, sizeof(Scope));
-    s->parent = c->global;
-    Node *self = newNode(c->arena, N_TYPE_PARAM, iface->line, iface->col);
+    s->parent = iface->scope;
+    Node *self = like(c, N_TYPE_PARAM, iface);
     self->name = "Self";
     self->type = t;
     addSym(c, s, "Self", self);
@@ -1085,7 +1139,7 @@ static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node 
     t->generic = decl;
     t->args = in->args;
     t->nargs = n;
-    t->scope = paramScope(c, &decl->list2, args);
+    t->scope = paramScope(c, decl, &decl->list2, args);
     in->type = t;
     listPush(c->arena, c->instOut, copy);
     c->instDepth++;
@@ -1107,11 +1161,15 @@ static void instantiateMethods(Checker *c, Type *t) {
         }
         Node *copy = cloneNode(c->arena, g);
         copy->b = NULL;
-        Scope *s = paramScope(c, &g->b->list, t->args);
+        Scope *s = paramScope(c, g, &g->b->list, t->args);
         Scope *saved = c->scope;
+        const char *savedModule = c->module;
         c->scope = s;
+        c->module = g->module;
+        copy->scope = s;
         checkSignature(c, copy, t);
         c->scope = saved;
+        c->module = savedModule;
         queueBody(c, copy, s, t->decl);
         listPush(c->arena, c->instOut, copy);
     }
@@ -1135,13 +1193,17 @@ static Node *instantiateFunc(Checker *c, Node *decl, Type **args, int n, Node *a
     copy->list2 = (NodeList){0};
     copy->name = instanceName(c, decl->name, args, n);
     in->fn = copy;
-    Scope *s = paramScope(c, &decl->list2, args);
+    Scope *s = paramScope(c, decl, &decl->list2, args);
     Scope *saved = c->scope;
+    const char *savedModule = c->module;
     c->scope = s;
+    c->module = decl->module;
+    copy->scope = s;
     c->instDepth++;
     checkSignature(c, copy, NULL);
     c->instDepth--;
     c->scope = saved;
+    c->module = savedModule;
     queueBody(c, copy, s, at);
     listPush(c->arena, c->instOut, copy);
     return copy;
@@ -1197,7 +1259,7 @@ static Type *dynType(Checker *c, Node *iface) {
     t->name = arenaStrndup(c->arena, buf, strlen(buf));
     iface->type = t;
     Scope *saved = c->scope;
-    c->scope = c->global;
+    c->scope = iface->scope;
     for (int i = 0; i < iface->list.len; i++) {
         Node *m = iface->list.items[i];
         m->type = resolveType(c, m->a);
@@ -1389,7 +1451,9 @@ static void checkConstDecl(Checker *c, Node *d) {
     }
     d->state = 1;
     Scope *saved = c->scope;
-    c->scope = c->global;
+    const char *savedModule = c->module;
+    c->scope = d->scope;
+    c->module = d->module;
     Type *declared = d->a ? resolveType(c, d->a) : NULL;
     int64_t v;
     bool b;
@@ -1427,6 +1491,7 @@ static void checkConstDecl(Checker *c, Node *d) {
         d->type = &tyError;
     }
     c->scope = saved;
+    c->module = savedModule;
     d->state = 2;
 }
 
@@ -1669,6 +1734,10 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         error(c, e, "%s is a type; methods are called on values", e->a->name);
         return setType(e, &tyError);
     }
+    if (strcmp(e->name, "ptr") == 0 && (t->kind == TY_SLICE || t->kind == TY_STRING)) {
+        e->builtin = 2;                 /* the pointer to the first item */
+        return setType(e, ptrTo(t->kind == TY_STRING ? &tyU8 : t->elem));
+    }
     if (strcmp(e->name, "len") == 0) {
         Type *base = t->kind == TY_PTR && t->elem->kind == TY_ARRAY ? t->elem : t;
         if (base->kind == TY_SLICE || base->kind == TY_STRING) {
@@ -1720,6 +1789,10 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
     e->a = base;
     e->ref = path[n - 1];
     e->ival = (uint64_t)fieldIndex(structOf(base->type)->decl, path[n - 1]);
+    Node *owner = structOf(base->type)->decl;
+    if (owner->module && c->module && strcmp(owner->module, c->module) != 0 && !(path[n - 1]->flags & F_PUB)) {
+        error(c, e, "the field %s of %s isn't pub, so only its own module can use it", e->name, owner->name);
+    }
     (void)expected;
     return setType(e, path[n - 1]->type);
 }
@@ -1780,6 +1853,14 @@ static Type *checkSlice(Checker *c, Node *e) {
         }
         return setType(e, sliceOf(t->elem));
     }
+    if (t->kind == TY_PTR) {
+        /* p[a:b]: the items a pointer points at, for C's memory; not checked */
+        if (!e->c) {
+            error(c, e, "slicing a pointer needs an end: p[0:n]");
+            return setType(e, &tyError);
+        }
+        return setType(e, sliceOf(t->elem));
+    }
     if (t->kind != TY_SLICE) {
         error(c, e, "%s can't be sliced", t->name);
         return setType(e, &tyError);
@@ -1806,7 +1887,7 @@ static Type *structForLiteral(Checker *c, Node *e, Type *expected) {
         return t;
     }
     if (e->a->kind != N_IDENT) {
-        notYet(c, e->a, "types from modules", "0.7");
+        error(c, e->a, "a struct literal starts with the struct's name");
         return NULL;
     }
     Node *d = lookup(c, e->a->name);
@@ -1853,6 +1934,9 @@ static Type *checkStructLit(Checker *c, Node *e, Type *expected) {
             continue;
         }
         init->ref = field;
+        if (d->module && c->module && strcmp(d->module, c->module) != 0 && !(field->flags & F_PUB)) {
+            error(c, init, "the field %s of %s isn't pub, so only its own module can set it", init->name, t->name);
+        }
         checkExpr(c, &init->a, field->type);
         char what[96];
         snprintf(what, sizeof what, "the value for %s", init->name);
@@ -1981,7 +2065,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
                 error(c, e, "%s can only be called", e->name);
             } else if (typeFromName(c, e->name, e, false)) {
                 error(c, e, "%s is a type, not a value", e->name);
-            } else {
+            } else if (!(e->flags & F_REPORTED)) {
                 error(c, e, "%s is not declared", e->name);
             }
             return setType(e, &tyError);
@@ -2364,13 +2448,16 @@ static Type *checkMethodCall(Checker *c, Node *e) {
             /* a temporary: the IR writer stores it first */
             recv->flags |= F_EXPLICIT;
         }
-        Node *addr = newNode(c->arena, N_UNARY, recv->line, recv->col);
+        Node *addr = like(c, N_UNARY, recv);
         addr->op = P_AMP;
         addr->a = recv;
         addr->type = ptrTo(recv->type);
         recv = addr;
     }
     callee->ref = m;
+    if (!visible(c, m)) {
+        error(c, callee, "the method %s of %s isn't pub, so only its own module can call it", name, st->name);
+    }
     NodeList args = {0};
     listPush(c->arena, &args, recv);
     checkArgs(c, e, m, &e->list, 1, &args, false);
@@ -2450,7 +2537,7 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
         return setType(e, value);
     }
     /* catch e { ... } or catch e match ... : e is the Error */
-    Node *var = newNode(c->arena, N_IDENT, e->line, e->col);
+    Node *var = like(c, N_IDENT, e);
     var->name = e->name;
     var->type = &tyErrorValue;
     e->d = var;
@@ -2684,7 +2771,7 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     if (!d) {
         if (typeFromName(c, name, callee, false)) {
             error(c, callee, "%s is a type; a struct is made with %s{...}", name, name);
-        } else {
+        } else if (!(callee->flags & F_REPORTED)) {
             error(c, callee, "%s is not declared", name);
         }
         return setType(e, &tyError);
@@ -3567,17 +3654,27 @@ static bool canFallThrough(Node *s) {
 
 /* ---------------------------------------------------------------- declarations */
 
-static void declareGlobal(Checker *c, Node *d, const char *name) {
-    Sym *old = findIn(c->global, name);
+static void declareGlobal(Checker *c, Scope *g, Node *d, const char *name) {
+    Sym *old = findIn(g, name);
     if (old) {
-        error(c, d, "%s is already declared on line %d", name, old->decl->line);
+        if (old->decl->src && d->src && old->decl->src != d->src) {
+            error(c, d, "%s is already declared in %s, line %d", name, old->decl->src->path, old->decl->line);
+        } else {
+            error(c, d, "%s is already declared on line %d", name, old->decl->line);
+        }
         return;
     }
-    if (isBuiltinName(name) || typeFromName(c, name, d, false)) {
+    for (size_t i = 0; i < sizeof builtinTypes / sizeof builtinTypes[0]; i++) {
+        if (strcmp(builtinTypes[i]->name, name) == 0) {
+            error(c, d, "%s is a built-in name", name);
+            return;
+        }
+    }
+    if (isBuiltinName(name)) {
         error(c, d, "%s is a built-in name", name);
         return;
     }
-    addSym(c, c->global, name, d);
+    addSym(c, g, name, d);
 }
 
 /* A function's or method's types. recv is the receiver of a generic
@@ -3587,8 +3684,26 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         return;                     /* done already */
     }
     f->state = 3;
-    if (f->attrs.len) {
-        notYet(c, f->attrs.items[0], "attributes", "a later version");
+    for (int i = 0; i < f->attrs.len; i++) {
+        Node *at = f->attrs.items[i];
+        if (strcmp(at->name, "extern") == 0) {
+            /* @extern("c_name"): a C function; the standard library only */
+            bool std = f->module && strcmp(f->module, "main") != 0 && f->src &&
+                       strncmp(f->src->path, "std/", 4) == 0;
+            if (!std) {
+                error(c, at, "@extern is for the standard library; your code will use import c (0.8)");
+            } else if (at->list.len != 1 || at->list.items[0]->kind != N_STRING) {
+                error(c, at, "@extern takes the C function's name in quotes");
+            } else {
+                f->flags |= F_EXTERN;
+                f->text = at->list.items[0]->text;
+            }
+        } else {
+            notYet(c, at, "attributes", "a later version");
+        }
+    }
+    if (!f->c && !f->d && !(f->flags & F_EXTERN) && !f->b) {
+        error(c, f, "%s has no body", f->name);
     }
     f->type = resolveType(c, f->a);
     resolveStruct(c, f->type);
@@ -3599,7 +3714,7 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
             notYet(c, f, "methods with type parameters of their own", "a later version");
         }
         Type *rt = recv ? recv : resolveType(c, f->b);
-        Node *self = newNode(c->arena, N_PARAM, f->line, f->col);
+        Node *self = like(c, N_PARAM, f);
         self->name = "self";
         self->flags |= F_SELF;
         if (rt->kind == TY_STRUCT) {
@@ -3652,6 +3767,19 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
             error(c, p, "a parameter without a default can't follow one with a default");
         }
     }
+    if (f->flags & F_EXTERN) {
+        /* only what C passes the same way: integers and pointers */
+        for (int i = 0; i < f->list.len; i++) {
+            Type *t = f->list.items[i]->type;
+            if (!isErr(t) && !isInt(t) && t->kind != TY_PTR) {
+                error(c, f->list.items[i], "a C function takes integers and pointers, not %s", t->name);
+            }
+        }
+        Type *r = f->type;
+        if (!isErr(r) && r != &tyVoid && !isInt(r) && r->kind != TY_PTR) {
+            error(c, f, "a C function returns an integer, a pointer or nothing, not %s", r->name);
+        }
+    }
 }
 
 static bool isConstValue(Node *e) {
@@ -3677,14 +3805,21 @@ static bool isConstValue(Node *e) {
 }
 
 static void checkFunctionBody(Checker *c, Node *f) {
+    if (f->flags & F_EXTERN) {
+        return;                     /* a C function: no body */
+    }
     c->func = f;
+    Scope *outer = c->scope;
+    const char *outerModule = c->module;
+    c->scope = f->scope;
+    c->module = f->module;
     pushScope(c, true);
     for (int i = 0; i < f->list.len; i++) {
         Node *p = f->list.items[i];
         if (p->b) {
-            /* defaults are checked like arguments, in the global scope */
+            /* defaults are checked like arguments, outside the function */
             Scope *saved = c->scope;
-            c->scope = c->global;
+            c->scope = f->scope;
             checkExpr(c, &p->b, p->type);
             coerce(c, &p->b, p->type, "the default value");
             if (!isConstValue(p->b) && !isErr(p->b->type)) {
@@ -3718,6 +3853,8 @@ static void checkFunctionBody(Checker *c, Node *f) {
     }
     popScope(c);
     c->func = NULL;
+    c->scope = outer;
+    c->module = outerModule;
 }
 
 static void checkGlobalValue(Checker *c, Node **slot, Type *t) {
@@ -3730,60 +3867,145 @@ static void checkGlobalValue(Checker *c, Node **slot, Type *t) {
     }
 }
 
-bool checkProgram(Arena *a, Source *src, Node *file) {
+/* Rewrites mod.name into one name, "mod.name", which lookup finds in the
+ * module. Reports names that don't exist or aren't pub. */
+static void qualify(Checker *c, Node *n) {
+    if (!n) {
+        return;
+    }
+    if (n->kind == N_FIELD_ACCESS && n->a && n->a->kind == N_IDENT && !strchr(n->a->name, '.')) {
+        Node *imp = lookupPlain(c, n->a->name);
+        if (imp && imp->kind == N_IMPORT && imp->scope) {
+            Sym *sym = findIn((Scope *)imp->scope, n->name);
+            if (!sym) {
+                error(c, n, "the module %s has no %s", imp->name, n->name);
+                n->flags |= F_REPORTED;
+            } else if (!visible(c, sym->decl)) {
+                error(c, n, "%s.%s isn't pub, so only its own module can use it", imp->name, n->name);
+                n->flags |= F_REPORTED;
+            }
+            size_t len = strlen(imp->name) + strlen(n->name) + 2;
+            char *full = arenaAlloc(c->arena, len);
+            snprintf(full, len, "%s.%s", imp->name, n->name);
+            n->kind = N_IDENT;
+            n->name = full;
+            n->a = NULL;
+            return;
+        }
+    }
+    qualify(c, n->a);
+    qualify(c, n->b);
+    qualify(c, n->c);
+    qualify(c, n->d);
+    for (int i = 0; i < n->list.len; i++) qualify(c, n->list.items[i]);
+    for (int i = 0; i < n->list2.len; i++) qualify(c, n->list2.items[i]);
+    for (int i = 0; i < n->attrs.len; i++) qualify(c, n->attrs.items[i]);
+}
+
+/* Puts the checker in a top-level declaration's module and file. */
+static void enter(Checker *c, Node *d) {
+    c->scope = d->scope;
+    c->module = d->module;
+    c->src = d->src;
+}
+
+bool checkProgram(Arena *a, Program *prog) {
     Checker c = {0};
     c.arena = a;
-    c.src = src;
-    c.global = pushScope(&c, false);
     gArena = a;
     gTypes = NULL;
-    c.instOut = &file->list2;
+    c.instOut = &prog->instances;
     int before = gErrors;
 
-    /* names first, so declarations can come in any order */
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
-        switch (d->kind) {
-        case N_FUNC:
-            if (!d->b) {
-                declareGlobal(&c, d, d->name);
+    /* every module gets a scope for its names, every file one for its imports */
+    for (Module *m = prog->modules; m; m = m->next) {
+        Scope *g = arenaAlloc(a, sizeof(Scope));
+        m->anchor->scope = g;
+    }
+    NodeList all = {0};
+    for (Module *m = prog->modules; m; m = m->next) {
+        Scope *g = m->anchor->scope;
+        for (int f = 0; f < m->files.len; f++) {
+            Node *file = m->files.items[f];
+            Scope *fs = arenaAlloc(a, sizeof(Scope));
+            fs->parent = g;
+            c.src = file->src;
+            for (int i = 0; i < file->list.len; i++) {
+                Node *d = file->list.items[i];
+                d->scope = fs;
+                d->module = m->path;
+                if (d->kind == N_IMPORT) {
+                    for (int k = 0; k < d->list.len; k++) {
+                        Node *item = d->list.items[k];
+                        if (item->flags & F_C_IMPORT) {
+                            notYet(&c, item, "import c", "0.8");
+                            continue;
+                        }
+                        if (!item->ref) continue;
+                        if (findIn(fs, item->ref->name)) {
+                            error(&c, item, "%s is imported twice", item->ref->name);
+                            continue;
+                        }
+                        addSym(&c, fs, item->ref->name, item->ref);
+                    }
+                    continue;
+                }
+                listPush(a, &all, d);
+                switch (d->kind) {
+                case N_FUNC:
+                    if (!d->b) {
+                        declareGlobal(&c, g, d, d->name);
+                    }
+                    break;
+                case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF: case N_ENUM: case N_INTERFACE:
+                    declareGlobal(&c, g, d, d->name);
+                    break;
+                case N_DEFINE:
+                    if (d->list.len == 1) {
+                        declareGlobal(&c, g, d->list.items[0], d->list.items[0]->name);
+                    }
+                    break;
+                case N_TEST:
+                    notYet(&c, d, "tests", "a later version");
+                    break;
+                case N_WHEN:
+                    notYet(&c, d, "when", "a later version");
+                    break;
+                default:
+                    error(&c, d, "this can't appear outside a function");
+                    break;
+                }
             }
-            break;
-        case N_CONST: case N_VAR: case N_STRUCT: case N_TYPEDEF: case N_ENUM: case N_INTERFACE:
-            declareGlobal(&c, d, d->name);
-            break;
-        case N_DEFINE:
-            if (d->list.len == 1) {
-                declareGlobal(&c, d->list.items[0], d->list.items[0]->name);
+            /* an import can't share a name with the module's own names */
+            for (int k = 0; k < fs->n; k++) {
+                Sym *own = findIn(g, fs->syms[k].name);
+                if (own) {
+                    error(&c, own->decl, "%s is also the name of an imported module", fs->syms[k].name);
+                }
             }
-            break;
-        case N_IMPORT:
-            notYet(&c, d, "imports", "0.7");
-            break;
-        case N_TEST:
-            notYet(&c, d, "tests", "a later version");
-            break;
-        case N_WHEN:
-            notYet(&c, d, "when", "a later version");
-            break;
-        default:
-            error(&c, d, "this can't appear outside a function");
-            break;
         }
     }
 
+    for (int i = 0; i < all.len; i++) {
+        enter(&c, all.items[i]);
+        qualify(&c, all.items[i]);
+    }
+
     /* methods are listed with their structs early, so interfaces can see them */
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind != N_FUNC || !d->b) {
             continue;
         }
+        enter(&c, d);
         if (d->b->kind == N_T_GENERIC) {
             Node *g = d->b->a->kind == N_T_NAME ? lookup(&c, d->b->a->name) : NULL;
             if (!g || g->kind != N_STRUCT || !g->list2.len) {
                 error(&c, d->b, "%s is not a generic struct", d->b->a->kind == N_T_NAME ? d->b->a->name : "this");
             } else if (g->list2.len != d->b->list.len) {
                 error(&c, d->b, "%s takes %d type%s", g->name, g->list2.len, g->list2.len == 1 ? "" : "s");
+            } else if (g->module != d->module) {
+                error(&c, d->b, "methods can only be added to structs of the same module");
             } else {
                 listPush(a, &c.genericMethods, d);
             }
@@ -3800,6 +4022,11 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
             continue;
         }
         if (sd && sd->kind == N_STRUCT) {
+            if (sd->module != d->module) {
+                error(&c, d->b, "methods can only be added to structs of the same module");
+                d->state = 4;
+                continue;
+            }
             Type *rt = structType(&c, sd);
             if (findMethodIn(rt, d->name)) {
                 error(&c, d, "%s already has a method named %s", rt->name, d->name);
@@ -3810,8 +4037,9 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         }
     }
 
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
+        enter(&c, d);
         if (d->kind == N_STRUCT && !d->list2.len) {
             resolveStruct(&c, structType(&c, d));
         } else if (d->kind == N_ENUM) {
@@ -3821,19 +4049,21 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         }
     }
 
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind == N_FUNC && !d->list2.len && d->state != 4) {
+            enter(&c, d);
             checkSignature(&c, d, NULL);
         }
     }
 
     /* field defaults are checked like constants */
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind != N_STRUCT || d->list2.len) {
             continue;
         }
+        enter(&c, d);
         for (int j = 0; j < d->list.len; j++) {
             Node *f = d->list.items[j];
             if (f->kind == N_FIELD && f->b && f->type) {
@@ -3842,8 +4072,9 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
         }
     }
 
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
+        enter(&c, d);
         if (d->kind == N_CONST) {
             checkConstDecl(&c, d);
         } else if (d->kind == N_VAR) {
@@ -3861,15 +4092,16 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
             checkGlobalValue(&c, &d->b, NULL);
             id->type = d->b->type;
             d->type = d->b->type;
+            id->module = d->module;
         }
     }
 
     Node *mainFn = NULL;
-    for (int i = 0; i < file->list.len; i++) {
-        Node *d = file->list.items[i];
+    for (int i = 0; i < all.len; i++) {
+        Node *d = all.items[i];
         if (d->kind == N_FUNC && !d->list2.len && d->state != 4) {
             checkFunctionBody(&c, d);
-            if (!d->b && strcmp(d->name, "main") == 0) {
+            if (!d->b && strcmp(d->name, "main") == 0 && strcmp(d->module, "main") == 0) {
                 mainFn = d;
             }
         }
@@ -3877,13 +4109,11 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
 
     /* the bodies of generic instances; checking one can make more */
     for (int i = 0; i < c.pendFns.len; i++) {
-        Scope *saved = c.scope;
-        c.scope = c.pendScopes[i];
-        int errs = gErrors;
         Node *fn = c.pendFns.items[i];
+        int errs = gErrors;
         c.instGen = (int)fn->cval;
+        fn->scope = c.pendScopes[i];
         checkFunctionBody(&c, fn);
-        c.scope = saved;
         Node *site = c.pendSites.items[i];
         if (gErrors != errs && site && site->kind == N_CALL) {
             error(&c, site, "%s, made here, has the errors above", fn->name);
@@ -3891,23 +4121,29 @@ bool checkProgram(Arena *a, Source *src, Node *file) {
     }
 
     /* field defaults of generic instances */
-    for (int i = 0; i < file->list2.len; i++) {
-        Node *d = file->list2.items[i];
+    for (int i = 0; i < prog->instances.len; i++) {
+        Node *d = prog->instances.items[i];
         if (d->kind != N_STRUCT) continue;
         for (int j = 0; j < d->list.len; j++) {
             Node *f = d->list.items[j];
             if (f->kind == N_FIELD && f->b && f->type) {
-                Scope *saved = c.scope;
                 c.scope = d->type->scope;
+                c.module = d->module;
                 checkGlobalValue(&c, &f->b, f->type);
-                c.scope = saved;
             }
         }
     }
 
     if (!mainFn) {
-        errorAt(src, 1, 1, "the program has no main function");
+        Node *first = prog->main->files.len ? prog->main->files.items[0] : NULL;
+        if (first && first->src) {
+            errorAt(first->src, 1, 1, "the program has no main function");
+        } else {
+            fprintf(stderr, "iris: the program has no main function\n");
+            gErrors++;
+        }
     } else {
+        c.src = mainFn->src;
         if (mainFn->list.len) {
             error(&c, mainFn, "main takes no parameters");
         }

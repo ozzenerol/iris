@@ -1,0 +1,42 @@
+// The program's arguments and environment, and leaving the program.
+
+pub enum OsError { notSet }
+
+@extern("iris_os_argc")
+i64 argCount()
+
+@extern("iris_os_arg")
+void rawArg(i64 i, u8 **p, i64 *n)
+
+@extern("iris_os_getenv")
+i32 rawGetenv(u8 *name, i64 nameLen, u8 **p, i64 *n)
+
+@extern("iris_os_exit")
+void rawExit(i32 code)
+
+// How many arguments the program got, counting its own name.
+pub i64 argc() => argCount()
+
+// Argument i; 0 is the program's name. "" past the end.
+pub str arg(i64 i) {
+    if i < 0 || i >= argCount() {
+        return ""
+    }
+    u8 *p
+    i64 n
+    rawArg(i, &p, &n)
+    return p[0:n]
+}
+
+// The value of an environment variable.
+pub !str env(str name) {
+    u8 *p
+    i64 n
+    if rawGetenv(name.ptr, name.len, &p, &n) == 0 {
+        return error(OsError.notSet, "{name} is not set")
+    }
+    return p[0:n]
+}
+
+// Ends the program with an exit status.
+pub void exit(i32 code) => rawExit(code)

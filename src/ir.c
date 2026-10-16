@@ -308,7 +308,8 @@ static const char *arrayAddr(IR *ir, Node *e) {
  * order: what a dyn value points to. Written once per pair. */
 static const char *vtable(IR *ir, Type *st, Node *iface) {
     char name[400];
-    snprintf(name, sizeof name, "@\"vt.%s.%s\"", st->name, iface->name);
+    snprintf(name, sizeof name, "@\"vt.%s.%s.%s.%s\"", st->decl->module ? st->decl->module : "main", st->name,
+             iface->module ? iface->module : "main", iface->name);
     for (int i = 0; i < ir->vtables.len; i++) {
         if (strcmp(ir->vtables.items[i]->name, name) == 0) {
             return ir->vtables.items[i]->name;
@@ -1028,15 +1029,20 @@ static Val emitCatch(IR *ir, Node *e) {
 static Val emitSlice(IR *ir, Node *e) {
     Type *bt = e->a->type;
     const char *ptr, *len;
+    bool unchecked = false;
     if (bt->kind == TY_ARRAY) {
         ptr = emitAddr(ir, e->a);
         len = fmt(ir, "%lld", (long long)bt->count);
+    } else if (bt->kind == TY_PTR) {
+        ptr = emitExpr(ir, e->a).s;
+        len = "0";
+        unchecked = true;           /* a pointer has no length to check against */
     } else {
         sliceParts(ir, emitExpr(ir, e->a), &ptr, &len);
     }
     const char *lo = e->b ? toI64(ir, emitExpr(ir, e->b)) : "0";
     const char *hi = e->c ? toI64(ir, emitExpr(ir, e->c)) : len;
-    if (boundsChecks(ir) && (e->b || e->c)) {
+    if (boundsChecks(ir) && (e->b || e->c) && !unchecked) {
         const char *a = tmp(ir), *b = tmp(ir), *bad = tmp(ir);
         ins(ir, "%s = icmp ugt i64 %s, %s", a, lo, hi);
         ins(ir, "%s = icmp ugt i64 %s, %s", b, hi, len);
@@ -1190,11 +1196,11 @@ static Val emitExpr(IR *ir, Node *e) {
             return makeSlice(ir, p, n, &tyStr);
         }
         if (!e->ref) {
-            /* .len of a slice or a String (an array's is a constant) */
+            /* .len of a slice or a String (an array's is a constant), or .ptr */
             Val a = emitExpr(ir, e->a);
             const char *r = tmp(ir);
-            ins(ir, "%s = extractvalue %s %s, 1", r, llType(ir, a.t), a.s);
-            return val(r, &tyI64);
+            ins(ir, "%s = extractvalue %s %s, %d", r, llType(ir, a.t), a.s, e->builtin == 2 ? 0 : 1);
+            return val(r, e->builtin == 2 ? e->type : &tyI64);
         }
         if (irAddressable(e)) {
             return load(ir, emitAddr(ir, e), e->type);
@@ -1683,6 +1689,9 @@ static void emitStmt(IR *ir, Node *s) {
 
 static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->func = f;
+    if (f->src) {
+        ir->fileStr = cString(ir, f->src->path);
+    }
     ir->tmp = 0;
     ir->label = 0;
     ir->vars = 0;
@@ -1797,16 +1806,32 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
     }
 }
 
-char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
+char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     IR ir = {0};
     ir.arena = a;
-    ir.src = src;
     ir.mode = mode;
-    ir.fileStr = cString(&ir, src->path);
+    Node *firstFile = prog->main->files.items[0];
+    ir.src = firstFile->src;
+    ir.fileStr = cString(&ir, ir.src->path);
 
     StrBuf types = {0}, funcs = {0};
     Node *mainFn = NULL;
     sbPuts(&types, "%String = type { ptr, i64, i64 }\n");
+
+    /* every module's declarations, in one list */
+    Node fileNode = {0};
+    Node *file = &fileNode;
+    for (Module *m = prog->modules; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            Node *fn = m->files.items[f];
+            for (int i = 0; i < fn->list.len; i++) {
+                if (fn->list.items[i]->kind != N_IMPORT) {
+                    listPush(a, &file->list, fn->list.items[i]);
+                }
+            }
+        }
+    }
+    file->list2 = prog->instances;
 
     for (int i = 0; i < file->list.len; i++) {
         Node *d = file->list.items[i];
@@ -1844,29 +1869,40 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     }
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
+        const char *mod = d->module ? d->module : "main";
         if (d->kind == N_FUNC) {
-            if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
-                d->ir = fmt(&ir, "@\"m.%s.%s\"", d->list.items[0]->type->elem->name, d->name);
+            if (d->flags & F_EXTERN) {
+                d->ir = fmt(&ir, "@%s", d->text);
+                StrBuf decl = {0};
+                sbPrintf(&decl, "declare %s %s(", llType(&ir, d->type), d->ir);
+                for (int j = 0; j < d->list.len; j++) {
+                    sbPrintf(&decl, "%s%s", j ? ", " : "", llType(&ir, d->list.items[j]->type));
+                }
+                sbPuts(&decl, ")\n");
+                sbPuts(&ir.head, decl.buf);
+                sbFree(&decl);
+            } else if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
+                d->ir = fmt(&ir, "@\"m.%s.%s.%s\"", mod, d->list.items[0]->type->elem->name, d->name);
             } else {
-                d->ir = fmt(&ir, "@\"f.%s\"", d->name);
-                if (strcmp(d->name, "main") == 0) {
+                d->ir = fmt(&ir, "@\"f.%s.%s\"", mod, d->name);
+                if (strcmp(d->name, "main") == 0 && strcmp(mod, "main") == 0) {
                     mainFn = d;
                 }
             }
         } else if (d->kind == N_VAR) {
-            d->ir = fmt(&ir, "@g.%s", d->name);
+            d->ir = fmt(&ir, "@\"g.%s.%s\"", mod, d->name);
             sbPrintf(&ir.head, "%s = internal global %s %s\n", d->ir, llType(&ir, d->type),
                      constValue(&ir, d->b, d->type));
         } else if (d->kind == N_DEFINE) {
             Node *id = d->list.items[0];
-            id->ir = fmt(&ir, "@g.%s", id->name);
+            id->ir = fmt(&ir, "@\"g.%s.%s\"", mod, id->name);
             sbPrintf(&ir.head, "%s = internal global %s %s\n", id->ir, llType(&ir, id->type),
                      constValue(&ir, d->b, id->type));
         }
     }
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
-        if (d->kind == N_FUNC) {
+        if (d->kind == N_FUNC && !(d->flags & F_EXTERN)) {
             emitFunction(&ir, d, &funcs);
         }
     }
@@ -1910,7 +1946,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
     sbFree(&table);
 
     StrBuf out = {0};
-    sbPrintf(&out, "; generated by iris %s from %s\n\n", IRIS_VERSION, src->path);
+    sbPrintf(&out, "; generated by iris %s from %s\n\n", IRIS_VERSION, ir.src->path);
     sbPuts(&out, types.buf);
     if (ir.head.buf) {
         sbPuts(&out, ir.head.buf);
@@ -1930,7 +1966,7 @@ char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode) {
                        "  call void @iris_error_report(i64 %%e)\n  unreachable\nok:\n  ret i32 0\n}\n\n",
                  mainFn->ir);
     } else {
-        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main\"");
+        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main.main\"");
     }
     sbPuts(&out,
            "declare void @iris_init(i32, ptr)\n"

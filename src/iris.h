@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.6.0"
+#define IRIS_VERSION "0.7.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -135,6 +135,8 @@ enum {
     F_FOR_IN = 1 << 7,
     F_EXPLICIT = 1 << 8,
     F_SELF = 1 << 9,
+    F_EXTERN = 1 << 10,     /* @extern: a C function, declared without a body */
+    F_REPORTED = 1 << 11,   /* an error about this name was reported already */
 };
 
 typedef struct Node Node;
@@ -150,6 +152,7 @@ typedef struct {
 struct Node {
     NodeKind kind;
     int line, col;
+    Source *src;            /* the file it comes from */
     unsigned flags;
     TokKind op;             /* unary, binary and assignment operators */
     const char *name;       /* names, labels, units */
@@ -168,6 +171,8 @@ struct Node {
     int state;              /* checker bookkeeping (constants: 0 new, 1 busy, 2 done) */
     int builtin;            /* calls: BI_... */
     const char *ir;         /* the IR writer's name for a variable or function */
+    void *scope;            /* top-level declarations: the checker's scope for their names */
+    const char *module;     /* top-level declarations: the module's name, "main" for the program */
 };
 
 Node *newNode(Arena *a, NodeKind kind, int line, int col);
@@ -183,6 +188,30 @@ Node *cloneNode(Arena *a, Node *n);
 
 /* snippet: allow statements at the top level, for checking doc examples. */
 Node *parseSource(Arena *a, Source *src, bool snippet);
+
+/* ---------------------------------------------------------------- module.c */
+
+/* A module: a folder of files, or the one file of a small program. */
+typedef struct Module Module;
+struct Module {
+    Module *next;
+    const char *path;       /* as imported: "fs", "net/http", "github.com/x/pg"; "main" for the program */
+    const char *name;       /* what code calls it: the last part of the path */
+    bool isStd;             /* from the standard library inside iris */
+    NodeList files;         /* N_FILE nodes */
+    Node *anchor;           /* stands for the module in import lists (N_IMPORT); ref of each import item */
+    int state;              /* loading: 0 new, 1 loading, 2 done */
+};
+
+typedef struct {
+    Module *modules;        /* every module, the program's first */
+    Module *main;
+    NodeList instances;     /* filled by the checker: copies of generics */
+} Program;
+
+/* Reads the program at path (a file or a folder) and every module it
+ * imports. Returns NULL after errors. */
+Program *loadProgram(Arena *a, const char *path);
 
 /* ---------------------------------------------------------------- check.c */
 
@@ -241,13 +270,13 @@ enum {
 };
 
 /* Checks the program and fills in types. Returns false after errors. */
-bool checkProgram(Arena *a, Source *src, Node *file);
+bool checkProgram(Arena *a, Program *prog);
 
 /* ---------------------------------------------------------------- ir.c */
 
 typedef enum { MODE_DEBUG, MODE_RELEASE_SAFE, MODE_RELEASE_FAST } BuildMode;
 
 /* Writes the checked program as LLVM IR. */
-char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode);
+char *writeIR(Arena *a, Program *prog, BuildMode mode);
 
 #endif

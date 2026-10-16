@@ -1,0 +1,4 @@
+// error: b/b.iris:1: modules import each other in a circle, through a
+import "a"
+
+void main() { }

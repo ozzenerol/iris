@@ -10,9 +10,9 @@
 <header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
 <div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html" class="here">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
 <h1>Modules</h1>
-<p class="lede">How a program is split into parts, and how packages are used.</p>
-<h2 id="modules"><a href="#modules">Modules</a></h2>
-<p>A module is a folder of <code>.iris</code> files. All files in the folder belong to the module and see each other's names.</p>
+<p class="lede">How a program is split into parts, how packages are used, and what the standard library has.</p>
+<h2 id="projects-and-modules"><a href="#projects-and-modules">Projects and modules</a></h2>
+<p>A project is a folder with an <code>iris.mod</code> file. Each folder in it is a module: all its <code>.iris</code> files belong to the module and see each other's names, with no imports between them.</p>
 <pre class="out"><code>myapp/
     iris.mod
     main.iris
@@ -20,7 +20,10 @@
     net/
         server.iris
         client.iris</code></pre>
-<p>Here <code>main.iris</code> and <code>config.iris</code> form the main module, and <code>net/</code> is a module named <code>net</code>.</p>
+<p>Here <code>main.iris</code> and <code>config.iris</code> form the program's module, and <code>net/</code> is a module named <code>net</code>. <code>iris run myapp</code> (or <code>iris run main.iris</code> from inside it) compiles the whole project.</p>
+<p>A file in a folder without <code>iris.mod</code> is a program on its own: <code>iris run hello.iris</code> compiles just that file.</p>
+<p><code>iris.mod</code> names the project and, later, its packages:</p>
+<pre class="out"><code>module github.com/me/myapp</code></pre>
 <h2 id="pub"><a href="#pub">pub</a></h2>
 <p>A name is visible only inside its module unless it is marked <code>pub</code>:</p>
 <pre class="code"><code><span class="k">pub</span> <span class="k">struct</span> Server {
@@ -31,32 +34,55 @@
 <span class="k">pub</span> !Server listen(<span class="t">u16</span> port) { }
 
 <span class="t">void</span> setOptions(<span class="t">i32</span> fd) { }     <span class="c">// only inside net</span></code></pre>
-<p>Fields of a <code>pub</code> struct are visible outside the module only when marked <code>pub</code> themselves:</p>
+<p>Fields of a <code>pub</code> struct are visible outside the module only when marked <code>pub</code> themselves, and so are methods:</p>
 <pre class="code"><code><span class="k">pub</span> <span class="k">struct</span> Server {
     <span class="k">pub</span> <span class="t">u16</span> port
     <span class="t">i32</span> fd
-}</code></pre>
+}
+
+<span class="k">pub</span> <span class="t">void</span> Server.close() { }</code></pre>
+<p>All values of a <code>pub</code> enum are visible.</p>
 <h2 id="import"><a href="#import">import</a></h2>
-<p><code>import</code> makes another module's names available, written with the module name in front:</p>
-<pre class="code"><code><span class="k">import</span> fs, net
+<p><code>import</code> makes another module's names available, written with the module's name in front:</p>
+<pre class="code"><code><span class="k">import</span> fs, <span class="t">str</span>
 
 !<span class="t">void</span> main() {
-    text := <span class="k">try</span> fs.readAll(<span class="s">&quot;config.txt&quot;</span>)
-    srv := <span class="k">try</span> net.listen(<span class="n">8080</span>)
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(<span class="s">&quot;config.txt&quot;</span>)
+    print(<span class="s">&quot;{str.count(text, &quot;</span>\n<span class="s">&quot;)} lines&quot;</span>)
 }</code></pre>
-<p>A module inside the project is imported by its path from the project's root: <code>import &quot;net/http&quot;</code>, used as <code>http</code>.</p>
+<p>A bare name imports a module of the standard library. A quoted path imports a folder of the project, from the project's root: <code>import &quot;net&quot;</code> or <code>import &quot;net/http&quot;</code>, used as <code>net</code> and <code>http</code>. Imports are written at the top of each file that uses them.</p>
+<p>A module's own names can't be the same as the name of a module it imports, and neither can a local variable's.</p>
+<p>Modules can't import each other in a circle.</p>
 <h2 id="packages"><a href="#packages">Packages</a></h2>
-<p>A package is a module from somewhere else, named by its repository:</p>
+<p>A package is a module from another project, named by its repository:</p>
 <pre class="code"><code><span class="k">import</span> <span class="s">&quot;github.com/someone/pg&quot;</span>
 
 conn := <span class="k">try</span> pg.connect(url)</code></pre>
-<p>The project's <code>iris.mod</code> file names the project and the versions of the packages it uses:</p>
+<p><code>iris get</code> downloads a package at a version, which is a tag in its repository, and adds it to <code>iris.mod</code>:</p>
+<pre class="code"><code>iris get github.com/someone/pg@v1.2.0</code></pre>
 <pre class="out"><code>module github.com/me/myapp
 
 require github.com/someone/pg v1.2.0</code></pre>
-<p><code>iris get</code> adds a package and <code>iris build</code> downloads what is missing.</p>
+<p>Packages are kept in <code>~/.cache/iris/pkg</code> (or in <code>$IRIS_PATH/pkg</code>). To work on a package next to the project, <code>replace</code> points it at a folder:</p>
+<pre class="out"><code>replace github.com/someone/pg =&gt; ../pg</code></pre>
 <h2 id="the-standard-library"><a href="#the-standard-library">The standard library</a></h2>
-<p>The standard library is a set of modules that come with Iris: <code>io</code>, <code>fs</code>, <code>str</code>, <code>net</code>, <code>http</code>, <code>json</code>, <code>time</code>, <code>os</code> and more. They are imported like any other module. A few names, like <code>print</code>, <code>alloc</code>, <code>free</code> and <code>error</code>, are always available without an import.</p>
+<p>The standard library comes inside the <code>iris</code> command. A few names, like <code>print</code>, <code>format</code>, <code>alloc</code>, <code>free</code> and <code>error</code>, are always there. The rest is in modules:</p>
+<div class="table"><table><thead><tr><th>Module</th><th>What it has</th></tr></thead><tbody><tr><td><code>fs</code></td><td><code>readAll(path) !String</code>, <code>writeAll(path, data) !void</code>, <code>append(path, data) !void</code>, <code>exists(path) bool</code>, <code>remove(path) !void</code>, and <code>FsError</code></td></tr><tr><td><code>str</code></td><td><code>find</code>, <code>contains</code>, <code>startsWith</code>, <code>endsWith</code>, <code>count</code>, <code>trim</code>, <code>trimLeft</code>, <code>trimRight</code>, <code>cut(s, sep) (str, str, bool)</code>, <code>lower</code>, <code>upper</code>, <code>replace</code>, <code>repeat</code> and <code>parseInt(s) !i64</code></td></tr><tr><td><code>io</code></td><td><code>readLine() !String</code> and <code>readAll() !String</code> from standard input, <code>ewrite</code> and <code>eprint</code> to standard error, and <code>IoError</code></td></tr><tr><td><code>os</code></td><td><code>argc()</code> and <code>arg(i)</code> for the program's arguments, <code>env(name) !str</code>, <code>exit(code)</code>, and <code>OsError</code></td></tr></tbody></table></div>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">void</span> main() {
+    line := <span class="s">&quot;  name = iris  &quot;</span>
+    key, value, found := <span class="t">str</span>.cut(<span class="t">str</span>.trim(line), <span class="s">&quot;=&quot;</span>)
+    <span class="k">if</span> found {
+        print(<span class="s">&quot;[{str.trim(key)}] is [{str.trim(value)}]&quot;</span>)
+    }
+    <span class="k">scoped</span> <span class="t">String</span> loud = <span class="t">str</span>.upper(<span class="s">&quot;hello&quot;</span>)
+    print(<span class="s">&quot;{loud} {str.parseInt(&quot;</span><span class="n">42</span><span class="s">&quot;) catch 0}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>[name] is [iris]
+HELLO 42</code></pre>
+<p><code>str</code> is also the name of the text type. After <code>import str</code>, <code>str.find</code> is the module's function and <code>str</code> in a declaration is still the type.</p>
 <div class="pager"><a href="generics.html">&larr; Generics</a><a href="compile-time.html">Compile time &rarr;</a></div>
 </main></div>
 </body>

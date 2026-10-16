@@ -118,7 +118,11 @@ static Token *expectIdent(Parser *p, const char *what) {
 
 static char *tokText(Parser *p, Token *t) { return arenaStrndup(p->arena, t->s, (size_t)t->len); }
 
-static Node *node(Parser *p, NodeKind k, Token *t) { return newNode(p->arena, k, t->line, t->col); }
+static Node *node(Parser *p, NodeKind k, Token *t) {
+    Node *n = newNode(p->arena, k, t->line, t->col);
+    n->src = p->src;
+    return n;
+}
 
 static void push(Parser *p, NodeList *l, Node *n) { listPush(p->arena, l, n); }
 
@@ -468,6 +472,7 @@ static Node *parseString(Parser *p, Token *t) {
             }
             if (lit.len) {
                 Node *part = newNode(p->arena, N_STRING, litLine, litCol);
+                part->src = p->src;
                 part->textLen = lit.len;
                 part->text = sbFinish(&lit, p->arena);
                 push(p, &interp->list, part);
@@ -493,6 +498,7 @@ static Node *parseString(Parser *p, Token *t) {
     }
     if (lit.len) {
         Node *part = newNode(p->arena, N_STRING, litLine, litCol);
+        part->src = p->src;
         part->textLen = lit.len;
         part->text = sbFinish(&lit, p->arena);
         push(p, &interp->list, part);
@@ -1407,7 +1413,8 @@ static Node *parseFuncRest(Parser *p, Node *ret, NodeList attrs, unsigned flags,
         f->c = parseBlock(p);
     } else if (accept(p, P_ARROW)) {
         f->d = parseExpr(p);
-    } else if (needBody) {
+    } else if (needBody && !attrs.len) {
+        /* with attributes (@extern) a function can be declared without a body */
         fail(p, peek(p), "expected '{' or '=>' to start the function body, found %s", describe(p, peek(p)));
     }
     return f;
@@ -1731,6 +1738,7 @@ Node *parseSource(Arena *a, Source *src, bool snippet) {
     p.toks = lexRange(a, src, src->text, src->text + src->len, 1, 1, &p.ntoks);
 
     Node *file = newNode(a, N_FILE, 1, 1);
+    file->src = src;
     skipNewlines(&p);
     while (!at(&p, T_EOF)) {
         jmp_buf jb;

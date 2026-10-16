@@ -1,0 +1,5 @@
+pub struct Conn {
+    pub str peer
+}
+
+pub void Conn.send(str data) => print("send {data} to {self.peer}")

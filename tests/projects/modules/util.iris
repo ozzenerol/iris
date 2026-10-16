@@ -1,0 +1,3 @@
+import "net"
+
+str describe(net.Server s) => if s.port == 8080 { "default" } else { "custom" }

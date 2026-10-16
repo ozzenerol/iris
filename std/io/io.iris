@@ -1,0 +1,44 @@
+// Reading from standard input and writing to standard error.
+
+pub enum IoError { eof, other }
+
+@extern("iris_io_read_line")
+i32 rawReadLine(String *out)
+
+@extern("iris_io_read_all")
+i32 rawReadAll(String *out)
+
+@extern("iris_io_ewrite")
+void rawEwrite(u8 *p, i64 n)
+
+// The next line of standard input, without its line break. IoError.eof
+// when there is no more.
+pub !String readLine() {
+    String s
+    code := rawReadLine(&s)
+    if code == 1 {
+        return error(IoError.eof, "end of input")
+    }
+    if code != 0 {
+        return error(IoError.other, "can't read standard input")
+    }
+    return s
+}
+
+// All of standard input.
+pub !String readAll() {
+    String s
+    if rawReadAll(&s) != 0 {
+        return error(IoError.other, "can't read standard input")
+    }
+    return s
+}
+
+// Writes text to standard error.
+pub void ewrite(str text) => rawEwrite(text.ptr, text.len)
+
+// Writes text and a line break to standard error.
+pub void eprint(str text) {
+    rawEwrite(text.ptr, text.len)
+    rawEwrite("\n".ptr, 1)
+}
