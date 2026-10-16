@@ -24,7 +24,7 @@ void handle(net.Conn c) {
 }
 ```
 
-Each task has its own stack. All tasks run on one thread and take turns: when a task waits for the network, a channel or a timer, the next ready task runs. Code in a task is written as if it blocks, with no callbacks.
+Each task has its own stack. The tasks of a thread take turns: when a task waits for the network, a channel or a timer, the next ready task runs. Code in a task is written as if it blocks, with no callbacks.
 
 A task can't return an error, since nothing waits for its result: a spawned function returns no `!T`. The program ends when `main` returns, even if other tasks are still running.
 
@@ -98,4 +98,11 @@ nothing came
 
 ## Threads
 
-Threads, `threadlocal`, atomics and locks are planned for a later version. Until then all tasks run on the program's one thread, which is what the network library needs.
+A program starts with one thread, and its tasks stay on it. `http.serve` starts more: an event loop on each CPU core, each with its own tasks. The handler then runs on several threads at once, so data it shares with other handlers must not change while they run.
+
+```iris
+try http.serve(8080, route)              // one thread per core
+try http.serve(8080, route, threads: 1)  // everything on one thread
+```
+
+Starting threads yourself, `threadlocal`, atomics and locks are planned for a later version.

@@ -1,0 +1,52 @@
+// mode: release-fast
+// expect: 40 of 40 answered
+
+import http, net, str
+
+void route(http.Request *req, http.Response *res) {
+    res.text("hi {req.path}")
+}
+
+void server(net.Listener ln) {
+    http.serveOn(ln, route, 4) catch e {
+        print("server: {e.message}")
+    }
+}
+
+void client(u16 port, i64 i, chan[bool] done) {
+    c := net.dial("127.0.0.1", port) catch e {
+        done <- false
+        return
+    }
+    defer c.close()
+    c.write("GET /{i} HTTP/1.1\r\nConnection: close\r\n\r\n") catch e {
+        done <- false
+        return
+    }
+    found := false
+    for {
+        scoped String line = c.readLine() catch e {
+            break
+        }
+        if str.endsWith(line, "hi /{i}") {
+            found = true
+        }
+    }
+    done <- found
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    done := chan[bool](40)
+    for i in 0..40 {
+        spawn client(ln.port, i, done)
+    }
+    i64 ok
+    for _ in 0..40 {
+        if <-done {
+            ok += 1
+        }
+    }
+    print("{ok} of 40 answered")
+}

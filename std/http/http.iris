@@ -160,16 +160,64 @@ void serveConn(net.Conn conn, void(Request *, Response *) handler) {
     }
 }
 
-// Answers HTTP requests on port with handler, each connection in its own task.
-pub !void serve(u16 port, void(Request *, Response *) handler, str host = "") {
-    ln := try net.listen(port, host)
-    try serveOn(ln, handler)
+@extern("iris_thread_start")
+void threadStart(void(u8 *) fn, u8 *arg)
+
+@extern("iris_cpu_count")
+i64 cpuCount()
+
+@extern("iris_listen_per_thread")
+i32 listenPerThread()
+
+struct ThreadArgs {
+    net.Listener ln
+    bool own
+    u16 port
+    str host
+    void(Request *, Response *) handler
 }
 
-// Like serve, on a listener that is already open (for port 0).
-pub !void serveOn(net.Listener ln, void(Request *, Response *) handler) {
+void serveThread(u8 *raw) {
+    ThreadArgs *a = raw
+    ln := a.ln
+    if a.own {
+        ln = net.listen(a.port, a.host, true) catch e {
+            return
+        }
+    }
+    acceptLoop(ln, a.handler) catch e { }
+}
+
+void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, void(Request *, Response *) handler) {
+    for i in 1..n {
+        ThreadArgs[] a = alloc(ThreadArgs, 1)
+        a[0] = ThreadArgs{ln: ln, own: own, port: port, host: host, handler: handler}
+        threadStart(serveThread, &a[0])
+    }
+}
+
+!void acceptLoop(net.Listener ln, void(Request *, Response *) handler) {
     for {
         conn := try ln.accept()
         spawn serveConn(conn, handler)
     }
+}
+
+// Answers HTTP requests on port with handler, each connection in its own
+// task. threads event loops share the work, one per thread; 0 means one
+// per CPU core. With more than one, handler runs on several threads at once.
+pub !void serve(u16 port, void(Request *, Response *) handler, str host = "", i64 threads = 0) {
+    n := if threads > 0 { threads } else { cpuCount() }
+    own := listenPerThread() == 1 && port != 0
+    ln := try net.listen(port, host, own)
+    startThreads(n, ln, own, port, host, handler)
+    try acceptLoop(ln, handler)
+}
+
+// Like serve, on a listener that is already open (for port 0). Its
+// threads all accept on ln; the default is one.
+pub !void serveOn(net.Listener ln, void(Request *, Response *) handler, i64 threads = 1) {
+    n := if threads > 0 { threads } else { cpuCount() }
+    startThreads(n, ln, false, 0, "", handler)
+    try acceptLoop(ln, handler)
 }

@@ -4,7 +4,7 @@
 pub enum NetError { refused, closed, timeout, notFound, inUse, other }
 
 @extern("iris_net_listen")
-i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 *err)
+i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 shared, i32 *err)
 
 @extern("iris_net_port")
 i64 rawPort(i32 fd)
@@ -56,10 +56,11 @@ pub struct Conn {
     i64 end
 }
 
-// Listens on port (0 picks a free one; see .port) on host ("" for all addresses).
-pub !Listener listen(u16 port, str host = "") {
+// Listens on port (0 picks a free one; see .port) on host ("" for all
+// addresses). shared lets several threads listen on the same port.
+pub !Listener listen(u16 port, str host = "", bool shared = false) {
     i32 err
-    fd := rawListen(host.ptr, host.len, i64(port), &err)
+    fd := rawListen(host.ptr, host.len, i64(port), if shared { 1 } else { 0 }, &err)
     if fd < 0 {
         return error(netCode(err), "listening on port {port}: {reason(err)}")
     }

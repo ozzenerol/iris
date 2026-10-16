@@ -72,6 +72,15 @@ The compiler checks each value. Numbers, `bool`, `str`, `String` and enums can b
 scoped String msg = format("{n} bytes")
 ```
 
+Text with values can also be passed straight to a function that takes a `str`. It is built in a temporary `String`, which is freed when the statement ends:
+
+```iris
+res.text("hello {name}")
+log.write("got {n} bytes from {addr}")
+```
+
+Anywhere else, text with values needs `format`.
+
 A complete program:
 
 ```iris run

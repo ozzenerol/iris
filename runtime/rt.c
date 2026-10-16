@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE        /* MAP_ANON and SO_NOSIGPIPE on macOS */
+#define _GNU_SOURCE             /* sched_getaffinity on Linux */
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -23,8 +24,8 @@ const char *__asan_default_options(void) {
     return "detect_leaks=0:exitcode=2:abort_on_error=0:detect_stack_use_after_return=0";
 }
 
-static char panicBuf[4096];
-static size_t panicLen;
+static _Thread_local char panicBuf[4096];
+static _Thread_local size_t panicLen;
 
 /* The names of every enum's values, written by the compiler. */
 typedef struct {
@@ -574,6 +575,8 @@ int iris_str_parse_float(const char *p, int64_t n, double *out) {
 #include <sys/event.h>
 #else
 #include <sys/epoll.h>
+#include <poll.h>
+#include <sys/syscall.h>
 #endif
 
 #if defined(__has_feature)
@@ -668,20 +671,33 @@ struct Task {
     int ready;                  /* in the ready queue now */
     int dead;
     int64_t wakeAt;             /* sleeping until (ns, monotonic); 0 if not */
+    int ioResult;               /* what the io_uring operation it waited for returned */
     Task *nextSleeper;
     void *asanFake;             /* AddressSanitizer's bookkeeping while switched out */
     const void *asanBottom;     /* the main task's stack, learned on the first switch */
     size_t asanSize;
 };
 
-static Task mainTask;
-static Task *current = &mainTask;
-static Task *readyHead, *readyTail;
-static Task *sleepers;          /* sorted by wakeAt */
-static Task *deadTask;          /* to free once off its stack */
-static int waitingIo;           /* tasks waiting for a file descriptor */
-static int poller = -1;
-static Task *switchedFrom;      /* the task the last switch left */
+/* Each thread has its own scheduler: its tasks never move to another one. */
+static _Thread_local Task mainTask;
+static _Thread_local Task *currentTask;
+static _Thread_local Task *readyHead, *readyTail;
+static _Thread_local Task *sleepers;    /* sorted by wakeAt */
+static _Thread_local Task *deadTask;    /* to free once off its stack */
+static _Thread_local int waitingIo;     /* tasks waiting for a file descriptor */
+static _Thread_local int poller = -1;
+static _Thread_local Task *switchedFrom;    /* the task the last switch left */
+
+/* The tasks waiting on each file descriptor. A descriptor is added to the
+   poller once, edge-triggered, and stays there until it is closed. */
+typedef struct {
+    Task *reader, *writer;
+    int added;
+} FdWait;
+static _Thread_local FdWait *fdWaits;
+static _Thread_local int fdWaitsCap;
+
+#define current (currentTask ? currentTask : (currentTask = &mainTask))
 
 static int64_t nowNs(void) {
     struct timespec ts;
@@ -735,6 +751,181 @@ static void removeSleeper(Task *t) {
     t->wakeAt = 0;
 }
 
+#ifdef __linux__
+/* ------------------------------------------------------------- io_uring
+
+   On Linux the event loop uses io_uring when the kernel allows it: a task
+   that reads or accepts hands the operation to the kernel and waits for
+   its result, and the loop submits all of them with one system call per
+   turn. Where io_uring is missing or blocked (old kernels, containers),
+   or IRIS_IO=epoll is set, it uses epoll. The structures are written out
+   here so that no kernel headers are needed. */
+
+typedef struct {
+    uint32_t sqEntries, cqEntries, flags, sqThreadCpu, sqThreadIdle, features, wqFd, resv[3];
+    uint32_t sqHead, sqTail, sqMask, sqCount, sqFlags, sqDropped, sqArray, sqResv;
+    uint64_t sqUserAddr;
+    uint32_t cqHead, cqTail, cqMask, cqCount, cqOverflow, cqCqes, cqFlags, cqResv;
+    uint64_t cqUserAddr;
+} RingParams;
+
+typedef struct {
+    uint8_t opcode, flags;
+    uint16_t ioprio;
+    int32_t fd;
+    uint64_t off;
+    uint64_t addr;
+    uint32_t len;
+    uint32_t opFlags;
+    uint64_t userData;
+    uint64_t pad[3];
+} RingSqe;
+
+typedef struct {
+    uint64_t userData;
+    int32_t res;
+    uint32_t flags;
+} RingCqe;
+
+enum {
+    RING_OP_POLL_ADD = 6,
+    RING_OP_ACCEPT = 13,
+    RING_OP_RECV = 27,
+    RING_FEAT_SINGLE_MMAP = 1 << 0,
+    RING_FEAT_NODROP = 1 << 1,
+    RING_FEAT_EXT_ARG = 1 << 8,
+    RING_ENTER_GETEVENTS = 1 << 0,
+    RING_ENTER_EXT_ARG = 1 << 3,
+    RING_ENTRIES = 1024,
+};
+
+typedef struct {
+    int fd;
+    uint32_t *sqHead, *sqTail, *sqArray, sqMask, sqCount;
+    uint32_t *cqHead, *cqTail, cqMask;
+    RingSqe *sqes;
+    RingCqe *cqes;
+    unsigned pending;           /* written but not yet submitted */
+} Ring;
+
+static _Thread_local Ring ring = {.fd = -1};
+
+static void schedule(void);
+static void ensurePoller(void);
+
+static bool ringSetup(void) {
+    const char *io = getenv("IRIS_IO");
+    if (io && strcmp(io, "epoll") == 0) {
+        return false;
+    }
+    RingParams p;
+    memset(&p, 0, sizeof p);
+    int fd = (int)syscall(__NR_io_uring_setup, RING_ENTRIES, &p);
+    if (fd < 0) {
+        return false;
+    }
+    uint32_t need = RING_FEAT_SINGLE_MMAP | RING_FEAT_NODROP | RING_FEAT_EXT_ARG;
+    if ((p.features & need) != need) {
+        close(fd);
+        return false;
+    }
+    size_t sqSize = p.sqArray + p.sqEntries * sizeof(uint32_t);
+    size_t cqSize = p.cqCqes + p.cqEntries * sizeof(RingCqe);
+    size_t size = sqSize > cqSize ? sqSize : cqSize;
+    char *rings = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, 0);
+    if (rings == MAP_FAILED) {
+        close(fd);
+        return false;
+    }
+    void *sqes = mmap(NULL, p.sqEntries * sizeof(RingSqe), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+                      fd, 0x10000000);
+    if (sqes == MAP_FAILED) {
+        munmap(rings, size);
+        close(fd);
+        return false;
+    }
+    ring.fd = fd;
+    ring.sqHead = (uint32_t *)(rings + p.sqHead);
+    ring.sqTail = (uint32_t *)(rings + p.sqTail);
+    ring.sqArray = (uint32_t *)(rings + p.sqArray);
+    ring.sqMask = *(uint32_t *)(rings + p.sqMask);
+    ring.sqCount = p.sqEntries;
+    ring.cqHead = (uint32_t *)(rings + p.cqHead);
+    ring.cqTail = (uint32_t *)(rings + p.cqTail);
+    ring.cqMask = *(uint32_t *)(rings + p.cqMask);
+    ring.cqes = (RingCqe *)(rings + p.cqCqes);
+    ring.sqes = sqes;
+    return true;
+}
+
+/* Submits what is written; with wait, also waits up to timeout ns (-1:
+   no limit) for at least one result. */
+static void ringEnter(bool wait, int64_t timeout) {
+    struct {
+        uint64_t sigmask;
+        uint32_t sigmaskSize, pad;
+        uint64_t ts;
+    } arg = {0};
+    struct {
+        int64_t sec, nsec;
+    } ts = {timeout / 1000000000LL, timeout % 1000000000LL};
+    unsigned flags = wait ? RING_ENTER_GETEVENTS : 0;
+    if (wait && timeout >= 0) {
+        arg.ts = (uint64_t)(uintptr_t)&ts;
+        flags |= RING_ENTER_EXT_ARG;
+    }
+    long n = syscall(__NR_io_uring_enter, ring.fd, ring.pending, wait ? 1 : 0, flags,
+                     flags & RING_ENTER_EXT_ARG ? (void *)&arg : NULL, sizeof arg);
+    if (n > 0) {
+        ring.pending -= (unsigned)n < ring.pending ? (unsigned)n : ring.pending;
+    }
+}
+
+/* Hands an operation to the kernel and waits for its result: a count,
+   or -errno. */
+static int ringOp(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags) {
+    uint32_t tail = *ring.sqTail;
+    while (tail - __atomic_load_n(ring.sqHead, __ATOMIC_ACQUIRE) >= ring.sqCount) {
+        ringEnter(false, 0);    /* full: submit what is there */
+    }
+    uint32_t i = tail & ring.sqMask;
+    RingSqe *e = &ring.sqes[i];
+    memset(e, 0, sizeof *e);
+    e->opcode = opcode;
+    e->fd = fd;
+    e->addr = (uint64_t)(uintptr_t)buf;
+    e->len = len;
+    e->opFlags = opFlags;
+    e->userData = (uint64_t)(uintptr_t)current;
+    ring.sqArray[i] = i;
+    __atomic_store_n(ring.sqTail, tail + 1, __ATOMIC_RELEASE);
+    ring.pending++;
+    waitingIo++;
+    schedule();
+    return current->ioResult;
+}
+
+/* Makes the tasks whose operations finished ready. */
+static void ringReap(void) {
+    uint32_t head = *ring.cqHead;
+    uint32_t tail = __atomic_load_n(ring.cqTail, __ATOMIC_ACQUIRE);
+    while (head != tail) {
+        RingCqe *c = &ring.cqes[head & ring.cqMask];
+        Task *t = (Task *)(uintptr_t)c->userData;
+        t->ioResult = c->res;
+        waitingIo--;
+        makeReady(t);
+        head++;
+    }
+    __atomic_store_n(ring.cqHead, head, __ATOMIC_RELEASE);
+}
+
+static bool useRing(void) {
+    ensurePoller();
+    return ring.fd >= 0;
+}
+#endif
+
 static void ensurePoller(void) {
     if (poller >= 0) {
         return;
@@ -742,12 +933,41 @@ static void ensurePoller(void) {
 #ifdef __APPLE__
     poller = kqueue();
 #else
+    if (ringSetup()) {
+        poller = ring.fd;
+        return;
+    }
     poller = epoll_create1(0);
 #endif
     if (poller < 0) {
         fflush(stdout);
         fputs("panic: can't start the event loop\n", stderr);
         exit(2);
+    }
+}
+
+/* Wakes the tasks waiting to read or write fd. */
+static void fdArrived(int fd, int readable, int writable) {
+    if (fd < 0 || fd >= fdWaitsCap) {
+        return;
+    }
+    FdWait *w = &fdWaits[fd];
+    if (readable && w->reader) {
+        makeReady(w->reader);
+        w->reader = NULL;
+        waitingIo--;
+    }
+    if (writable && w->writer) {
+        makeReady(w->writer);
+        w->writer = NULL;
+        waitingIo--;
+    }
+}
+
+/* Forgets what was known about fd: a new or closed descriptor. */
+static void fdForget(int fd) {
+    if (fd >= 0 && fd < fdWaitsCap) {
+        fdWaits[fd] = (FdWait){0};
     }
 }
 
@@ -764,7 +984,10 @@ static void pollEvents(void) {
         fputs("panic: every task is waiting and nothing can wake them: a deadlock\n", stderr);
         exit(2);
     }
-    if (waitingIo > 0) {
+    if (waitingIo > 0 && useRing()) {
+        ringEnter(true, timeout);
+        ringReap();
+    } else if (waitingIo > 0) {
         ensurePoller();
 #ifdef __APPLE__
         struct kevent evs[64];
@@ -776,18 +999,18 @@ static void pollEvents(void) {
         }
         int n = kevent(poller, NULL, 0, evs, 64, tsp);
         for (int i = 0; i < n; i++) {
-            Task *t = evs[i].udata;
-            waitingIo--;
-            makeReady(t);
+            int end = (evs[i].flags & (EV_EOF | EV_ERROR)) != 0;
+            fdArrived((int)evs[i].ident, evs[i].filter == EVFILT_READ || end,
+                      evs[i].filter == EVFILT_WRITE || end);
         }
 #else
         struct epoll_event evs[64];
         int ms = timeout < 0 ? -1 : (int)((timeout + 999999) / 1000000);
         int n = epoll_wait(poller, evs, 64, ms);
         for (int i = 0; i < n; i++) {
-            Task *t = evs[i].data.ptr;
-            waitingIo--;
-            makeReady(t);
+            uint32_t e = evs[i].events;
+            int end = (e & (EPOLLERR | EPOLLHUP)) != 0;
+            fdArrived(evs[i].data.fd, (e & (EPOLLIN | EPOLLRDHUP)) || end, (e & EPOLLOUT) || end);
         }
 #endif
     } else if (timeout > 0) {
@@ -818,12 +1041,29 @@ static void arrived(void *fake) {
 #endif
 }
 
+/* Finished tasks kept with their stacks, so a spawn needs no system call.
+   Not under AddressSanitizer, which tracks each stack's memory. */
+#define TASK_CACHE_MAX 16
+static _Thread_local Task *taskCache[TASK_CACHE_MAX];
+static _Thread_local int taskCacheLen;
+
+static void releaseTask(Task *t) {
+#ifndef IRIS_ASAN
+    if (taskCacheLen < TASK_CACHE_MAX) {
+        taskCache[taskCacheLen++] = t;
+        return;
+    }
+#endif
+    munmap(t->stack - 4096, t->stackSize + 4096);
+    free(t);
+}
+
 static void switchTo(Task *next) {
     Task *prev = current;
     if (next == prev) {
         return;
     }
-    current = next;
+    currentTask = next;
     switchedFrom = prev;
 #ifdef IRIS_ASAN
     __sanitizer_start_switch_fiber(prev->dead ? NULL : &prev->asanFake,
@@ -834,8 +1074,7 @@ static void switchTo(Task *next) {
     arrived(prev->asanFake);
     /* back on this task: free a finished one, now that nobody runs on its stack */
     if (deadTask && deadTask != current) {
-        munmap(deadTask->stack - 4096, deadTask->stackSize + 4096);
-        free(deadTask);
+        releaseTask(deadTask);
         deadTask = NULL;
     }
 }
@@ -853,8 +1092,7 @@ static void schedule(void) {
 static void taskEntry(void) {
     arrived(NULL);
     if (deadTask && deadTask != current) {
-        munmap(deadTask->stack - 4096, deadTask->stackSize + 4096);
-        free(deadTask);
+        releaseTask(deadTask);
         deadTask = NULL;
     }
     current->fn(current->arg);
@@ -866,16 +1104,24 @@ static void taskEntry(void) {
 
 /* spawn: a new task that will run fn(arg) */
 void iris_spawn(void (*fn)(void *), void *arg) {
-    Task *t = calloc(1, sizeof(Task));
-    if (!t) {
-        outOfMemory();
+    Task *t;
+    if (taskCacheLen > 0) {
+        t = taskCache[--taskCacheLen];
+        char *stack = t->stack;
+        *t = (Task){0};
+        t->stack = stack;
+    } else {
+        t = calloc(1, sizeof(Task));
+        if (!t) {
+            outOfMemory();
+        }
+        char *mem = mmap(NULL, STACK_SIZE + 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mem == MAP_FAILED) {
+            outOfMemory();
+        }
+        mprotect(mem, 4096, PROT_NONE);     /* a guard page: overflowing the stack crashes cleanly */
+        t->stack = mem + 4096;
     }
-    char *mem = mmap(NULL, STACK_SIZE + 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (mem == MAP_FAILED) {
-        outOfMemory();
-    }
-    mprotect(mem, 4096, PROT_NONE);     /* a guard page: overflowing the stack crashes cleanly */
-    t->stack = mem + 4096;
     t->stackSize = STACK_SIZE;
     t->fn = fn;
     t->arg = arg;
@@ -908,19 +1154,48 @@ void iris_sleep(int64_t ns) {
 
 /* Waits until fd can be read (write = 0) or written (write = 1). */
 static void waitFd(int fd, int write) {
-    ensurePoller();
-#ifdef __APPLE__
-    struct kevent ev;
-    EV_SET(&ev, fd, write ? EVFILT_WRITE : EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, current);
-    kevent(poller, &ev, 1, NULL, 0, NULL);
-#else
-    struct epoll_event ev;
-    ev.events = (write ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
-    ev.data.ptr = current;
-    if (epoll_ctl(poller, EPOLL_CTL_MOD, fd, &ev) != 0) {
-        epoll_ctl(poller, EPOLL_CTL_ADD, fd, &ev);
+#ifdef __linux__
+    if (useRing()) {
+        ringOp(RING_OP_POLL_ADD, fd, NULL, 0, write ? POLLOUT : POLLIN);
+        return;
     }
 #endif
+    ensurePoller();
+    if (fd >= fdWaitsCap) {
+        int cap = fdWaitsCap ? fdWaitsCap : 256;
+        while (cap <= fd) {
+            cap *= 2;
+        }
+        FdWait *w = realloc(fdWaits, (size_t)cap * sizeof(FdWait));
+        if (!w) {
+            outOfMemory();
+        }
+        memset(w + fdWaitsCap, 0, (size_t)(cap - fdWaitsCap) * sizeof(FdWait));
+        fdWaits = w;
+        fdWaitsCap = cap;
+    }
+    FdWait *w = &fdWaits[fd];
+    if (!w->added) {
+#ifdef __APPLE__
+        struct kevent ev[2];
+        EV_SET(&ev[0], fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+        EV_SET(&ev[1], fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, NULL);
+        kevent(poller, ev, 2, NULL, 0, NULL);
+#else
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+        ev.data.fd = fd;
+        if (epoll_ctl(poller, EPOLL_CTL_ADD, fd, &ev) != 0 && errno == EEXIST) {
+            epoll_ctl(poller, EPOLL_CTL_MOD, fd, &ev);
+        }
+#endif
+        w->added = 1;
+    }
+    if (write) {
+        w->writer = current;
+    } else {
+        w->reader = current;
+    }
     waitingIo++;
     schedule();
 }
@@ -1057,7 +1332,7 @@ static void nonBlocking(int fd) {
 #endif
 }
 
-int iris_net_listen(const char *host, int64_t hostLen, int64_t port, int *err) {
+int iris_net_listen(const char *host, int64_t hostLen, int64_t port, int shared, int *err) {
     char *h = cpath(host, hostLen);
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_UNSPEC;
@@ -1079,6 +1354,10 @@ int iris_net_listen(const char *host, int64_t hostLen, int64_t port, int *err) {
     }
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (shared) {
+        /* several threads listen on the port; the kernel spreads connections */
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
+    }
     if (bind(fd, res->ai_addr, res->ai_addrlen) != 0 || listen(fd, 1024) != 0) {
         *err = netCode(errno);
         close(fd);
@@ -1087,6 +1366,7 @@ int iris_net_listen(const char *host, int64_t hostLen, int64_t port, int *err) {
     }
     freeaddrinfo(res);
     nonBlocking(fd);
+    fdForget(fd);
     *err = 0;
     return fd;
 }
@@ -1106,9 +1386,25 @@ int64_t iris_net_port(int fd) {
 
 int iris_net_accept(int fd, int *err) {
     for (;;) {
+#ifdef __linux__
+        int c;
+        if (useRing()) {
+            c = ringOp(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC);
+            if (c < 0) {
+                errno = -c;
+                c = -1;
+            }
+        } else {
+            c = accept4(fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        }
+#else
         int c = accept(fd, NULL, NULL);
+#endif
         if (c >= 0) {
+            fdForget(c);
+#ifndef __linux__
             nonBlocking(c);
+#endif
             int one = 1;
             setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
             *err = 0;
@@ -1143,6 +1439,7 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err) {
         return -1;
     }
     nonBlocking(fd);
+    fdForget(fd);
     if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
         if (errno != EINPROGRESS) {
             *err = netCode(errno);
@@ -1170,6 +1467,19 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err) {
 
 /* bytes read, 0 at the end, -code on an error */
 int64_t iris_net_read(int fd, char *buf, int64_t len) {
+#ifdef __linux__
+    if (useRing()) {
+        for (;;) {
+            int n = ringOp(RING_OP_RECV, fd, buf, len > 0x7fffffff ? 0x7fffffff : (uint32_t)len, 0);
+            if (n >= 0) {
+                return n;
+            }
+            if (n != -EINTR && n != -EAGAIN) {
+                return -netCode(-n);
+            }
+        }
+    }
+#endif
     for (;;) {
         ssize_t n = read(fd, buf, (size_t)len);
         if (n >= 0) {
@@ -1207,6 +1517,66 @@ int iris_net_write(int fd, const char *buf, int64_t len) {
 
 void iris_net_close(int fd) {
     if (fd >= 0) {
+        fdForget(fd);
         close(fd);
     }
+}
+
+/* ---------------------------------------------------------------- threads */
+
+#include <pthread.h>
+#include <sched.h>
+
+typedef struct {
+    void (*fn)(void *);
+    void *arg;
+} ThreadStart;
+
+static void *threadMain(void *p) {
+    ThreadStart ts = *(ThreadStart *)p;
+    free(p);
+    ts.fn(ts.arg);
+    return NULL;
+}
+
+/* A new thread, with a scheduler of its own, running fn(arg). */
+void iris_thread_start(void (*fn)(void *), void *arg) {
+    ThreadStart *ts = malloc(sizeof(ThreadStart));
+    if (!ts) {
+        outOfMemory();
+    }
+    ts->fn = fn;
+    ts->arg = arg;
+    pthread_t t;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &attr, threadMain, ts) != 0) {
+        fflush(stdout);
+        fputs("panic: can't start a thread\n", stderr);
+        exit(2);
+    }
+    pthread_attr_destroy(&attr);
+}
+
+/* Linux spreads connections over listeners that share a port, so each
+   thread gets its own. macOS gives them all to one, so threads share one. */
+int iris_listen_per_thread(void) {
+#ifdef __linux__
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+/* The cores this process may run on (taskset limits them on Linux). */
+int64_t iris_cpu_count(void) {
+#ifdef __linux__
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0 && CPU_COUNT(&set) > 0) {
+        return CPU_COUNT(&set);
+    }
+#endif
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? n : 1;
 }

@@ -15,5 +15,6 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.9 | Floating point: `f32`, `f64`, the `math` module, `str.parseFloat`, and C's `float` and `double`. | released |
 | 0.10 | Functions as values, callbacks from C, and `@export`. | released |
 | 0.11 | Tasks, channels, `select`, `sleep`, and the `net` and `http` modules. | released |
+| 0.12 | Text with values passed straight to `str` parameters, `http.serve` on every CPU core, and io_uring on Linux. | released |
 
-After 0.11, in no fixed order: threads, atomics and locks, `comptime` and `when`, attributes like `@json`, `iris fmt`, the language server, and a JIT for `iris run`.
+After 0.12, in no fixed order: threads started by the program, atomics and locks, `comptime` and `when`, attributes like `@json`, `iris fmt`, the language server, and a JIT for `iris run`.

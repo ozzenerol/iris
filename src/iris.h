@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.11.0"
+#define IRIS_VERSION "0.12.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -139,6 +139,7 @@ enum {
     F_REPORTED = 1 << 11,   /* an error about this name was reported already */
     F_VARIADIC = 1 << 12,   /* a C function taking more arguments: printf */
     F_EXPORT = 1 << 13,     /* @export: a function C can call by name */
+    F_TEMPTEXT = 1 << 14,   /* text with {} values passed as a str: a String until the statement ends */
 };
 
 typedef struct Node Node;

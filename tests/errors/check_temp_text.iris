@@ -1,0 +1,7 @@
+// error: 5: text with {} values can be passed straight to a function that takes str, or to format to keep it
+void f(str s) { }
+
+void main() {
+    str s = "a {1}"
+    f("fine {2}")
+}
