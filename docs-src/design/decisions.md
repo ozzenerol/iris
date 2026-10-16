@@ -88,6 +88,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | TLS uses OpenSSL, loaded with `dlopen` when a program first uses it. | No headers or link flags to build, and programs without TLS don't depend on OpenSSL. |
 | TLS lives inside `net.Conn`. | Reading lines, the HTTP server and the client work the same over TLS. |
 | Clients always check certificates and host names; there is no switch to turn that off. A test CA is given with `ca` or `SSL_CERT_FILE`. | Safe by default, with a way to trust a private CA. |
+| `random`'s functions use a fast generator (xoshiro256**) per thread; secrets come from `random.bytes`, the system's secure source. | Fast numbers for programs and safe bytes for keys, with the difference in the name. |
+| SHA-256 and HMAC are in the runtime, in C, without OpenSSL. | Hashing works on every machine. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

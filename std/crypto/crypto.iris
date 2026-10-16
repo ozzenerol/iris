@@ -1,0 +1,29 @@
+// Hashes for checking data and signing it: SHA-256 and HMAC-SHA256.
+
+@extern("iris_sha256")
+void rawSha256(u8 *data, i64 len, u8 *out)
+
+@extern("iris_hmac_sha256")
+void rawHmac(u8 *key, i64 keyLen, u8 *data, i64 len, u8 *out)
+
+@extern("iris_const_equal")
+i32 rawEqual(u8 *a, i64 na, u8 *b, i64 nb)
+
+// The SHA-256 hash of data: 32 bytes. hex.encode makes it readable.
+pub u8[32] sha256(str data) {
+    u8[32] out
+    rawSha256(data.ptr, data.len, &out[0])
+    return out
+}
+
+// The HMAC-SHA256 of data with key: 32 bytes that only someone with the
+// key can make.
+pub u8[32] hmacSha256(str key, str data) {
+    u8[32] out
+    rawHmac(key.ptr, key.len, data.ptr, data.len, &out[0])
+    return out
+}
+
+// Whether a and b are the same, taking the same time wherever they differ.
+// Use it to compare hashes and tokens.
+pub bool equal(str a, str b) => rawEqual(a.ptr, a.len, b.ptr, b.len) != 0

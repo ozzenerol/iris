@@ -113,6 +113,11 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `str` | `find`, `contains`, `startsWith`, `endsWith`, `compare`, `count`, `trim`, `trimLeft`, `trimRight`, `cut(s, sep) (str, str, bool)`, `lower`, `upper`, `replace`, `repeat`, `parseInt(s) !i64` and `parseFloat(s) !f64` |
 | `time` | `now()`, `clock()` for measuring, `date(...)`, `unix(s)`, `parse(iso)`; a `Time` has `iso()`, `format(layout)`, `dateText()`, `local()`, `utc()`, `add(d)`, `sub(t)`, `before`, `after`, `unix()`, `year()` to `nanosecond()` and `weekday()` |
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |
+| `random` | `int(lo, hi)`, `float()`, `coin()`, `shuffle(items)`, `bytes(buf)` for keys and tokens from the system's secure source, and `seeded(seed)` for an `Rng` that gives the same numbers again |
+| `crypto` | `sha256(data)` and `hmacSha256(key, data)`, 32 bytes each, and `equal(a, b)`, which compares in the same time wherever they differ |
+| `base64` | `encode`, `decode`, and the URL-safe `encodeUrl` and `decodeUrl`; `Base64Error` |
+| `hex` | `encode` and `decode`; `HexError` |
+| `url` | `parse(text) Url` (`scheme`, `user`, `host`, `port`, `path`, `query`, `fragment`), `encode` and `decode` for `%XX`; `UrlError` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |

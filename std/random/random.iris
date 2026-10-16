@@ -1,0 +1,69 @@
+// Random numbers. The functions here use a fast generator of the thread's
+// own, seeded from the system; they are not for secrets: use bytes for
+// keys and tokens. An Rng gives the same numbers again from the same seed.
+
+@extern("iris_random_os")
+void rawOs(u8 *buf, i64 len)
+
+@extern("iris_random_u64")
+u64 rawU64()
+
+@extern("iris_rng_next")
+u64 rawNext(u64 *state)
+
+@extern("iris_rng_seed")
+void rawSeed(u64 *state, u64 seed)
+
+@extern("iris_rng_below")
+u64 rawBelow(u64 *state, u64 n)
+
+i64 between(u64 *state, i64 lo, i64 hi) {
+    if hi <= lo {
+        panic("random: {lo}..{hi} has no numbers")
+    }
+    span := u64(hi - lo)
+    return lo + i64(rawBelow(state, span))
+}
+
+// A number from lo up to hi - 1: int(1, 7) is a die.
+pub i64 int(i64 lo, i64 hi) => between(null, lo, hi)
+
+// A number from 0 up to 1, never 1.
+pub f64 float() => f64(i64(rawU64() >> 11)) / 9007199254740992.0
+
+// true or false.
+pub bool coin() => rawU64() >> 63 == 1
+
+// Fills buf with bytes from the system's secure source, for keys, tokens
+// and passwords.
+pub void bytes(u8[] buf) => rawOs(buf.ptr, buf.len)
+
+// Puts the items in a random order.
+pub void shuffle[T](T[] items) {
+    i := items.len - 1
+    for i > 0 {
+        j := int(0, i + 1)
+        v := items[i]
+        items[i] = items[j]
+        items[j] = v
+        i -= 1
+    }
+}
+
+// A generator that gives the same numbers from the same seed.
+pub struct Rng {
+    u64[4] state
+}
+
+// A generator started from seed.
+pub Rng seeded(u64 seed) {
+    Rng r
+    rawSeed(&r.state[0], seed)
+    return r
+}
+
+pub i64 Rng.int(i64 lo, i64 hi) => between(&self.state[0], lo, hi)
+
+pub f64 Rng.float() => f64(i64(rawNext(&self.state[0]) >> 11)) / 9007199254740992.0
+
+pub bool Rng.coin() => rawNext(&self.state[0]) >> 63 == 1

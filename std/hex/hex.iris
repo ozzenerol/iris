@@ -1,0 +1,50 @@
+// Hexadecimal: each byte as two digits, 0-9 and a-f.
+
+pub enum HexError { invalid }
+
+const DIGITS = "0123456789abcdef"
+
+// The bytes of data as hex: "hi" is "6869".
+pub String encode(str data) {
+    String out
+    for i in 0..data.len {
+        b := i64(data[i])
+        out.append(DIGITS[b >> 4:(b >> 4) + 1])
+        out.append(DIGITS[b & 15:(b & 15) + 1])
+    }
+    return out
+}
+
+i64 digit(u8 c) {
+    if c >= '0' && c <= '9' {
+        return i64(c - '0')
+    }
+    if c >= 'a' && c <= 'f' {
+        return i64(c - 'a') + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return i64(c - 'A') + 10
+    }
+    return -1
+}
+
+// The bytes of hex text, in either case.
+pub !String decode(str text) {
+    if text.len % 2 != 0 {
+        return error(HexError.invalid, "hex text has an odd number of digits")
+    }
+    String out
+    errdefer out.free()
+    i := 0
+    for i < text.len {
+        hi := digit(text[i])
+        lo := digit(text[i + 1])
+        if hi < 0 || lo < 0 {
+            return error(HexError.invalid, "'{text[i:i + 2]}' isn't hex")
+        }
+        u8[1] b = [u8(hi * 16 + lo)]
+        out.append(b)
+        i += 2
+    }
+    return out
+}

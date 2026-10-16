@@ -1,0 +1,75 @@
+// expect: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+// expect: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+// expect: f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+// expect: 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+// expect: [] true -_8 true
+// expect: [Zg==] true -_9m true
+// expect: [Zm8=] true -_9mbw true
+// expect: [Zm9v] true -_9mb28 true
+// expect: [Zm9vYg==] true -_9mb29i true
+// expect: [Zm9vYmE=] true -_9mb29iYQ true
+// expect: [Zm9vYmFy] true -_9mb29iYXI true
+// expect: '$' isn't base64
+// expect: Hello
+// expect: '4z' isn't hex
+// expect: a%20b%26c%3Dd%2F%C3%A9 a b&c=d/é x y!
+// expect: '%zz' isn't a %XX
+// expect: https ada:pw example.com 8443 /docs/a q=1 top
+// expect: localhost 80 / | 0 /just/a/path x=1
+// expect: 15 true false false
+
+import base64, crypto, hex, random, url
+
+!void main() {
+    for text in ["", "abc", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"] {
+        if text.len == 3 || text.len == 0 {
+            scoped String h = hex.encode(crypto.sha256(text))
+            print(h)
+        }
+        if text.len == 3 {
+            scoped String m = hex.encode(crypto.hmacSha256("key", "The quick brown fox jumps over the lazy dog"))
+            print(m)
+        }
+        if text.len > 3 {
+            scoped String h = hex.encode(crypto.sha256(text))
+            print(h)
+        }
+    }
+    for s in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+        scoped String e = base64.encode(s)
+        scoped String d = try base64.decode(e)
+        scoped String u = base64.encodeUrl("\xfb\xff{s}")
+        scoped String ud = try base64.decodeUrl(u)
+        print("[{e}] {d == s} {u} {ud.len == s.len + 2}")
+    }
+    _ = base64.decode("ab$c") catch e {
+        print(e.message)
+        "".copy()
+    }
+    scoped String h = try hex.decode("48656C6c6f")
+    print(h)
+    _ = hex.decode("4z") catch e {
+        print(e.message)
+        "".copy()
+    }
+    scoped String enc = url.encode("a b&c=d/é")
+    scoped String dec = try url.decode(enc)
+    scoped String plus = try url.decode("x+y%21")
+    print("{enc} {dec} {plus}")
+    _ = url.decode("%zz") catch e {
+        print(e.message)
+        "".copy()
+    }
+    u := try url.parse("https://ada:pw@example.com:8443/docs/a?q=1#top")
+    print("{u.scheme} {u.user} {u.host} {u.port} {u.path} {u.query} {u.fragment}")
+    v := try url.parse("http://localhost/")
+    w := try url.parse("/just/a/path?x=1")
+    print("{v.host} {v.port} {v.path} | {w.scheme.len} {w.path} {w.query}")
+    i64[5] xs = [1, 2, 3, 4, 5]
+    random.shuffle(xs)
+    i64 sum
+    for x in xs {
+        sum += x
+    }
+    print("{sum} {crypto.equal("abc", "abc")} {crypto.equal("abc", "abd")} {crypto.equal("ab", "abc")}")
+}

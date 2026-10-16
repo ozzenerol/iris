@@ -1,0 +1,29 @@
+// expect: true true true
+// expect: true true true
+
+import random
+
+void main() {
+    r := random.seeded(42)
+    s := random.seeded(42)
+    t := random.seeded(43)
+    a := r.int(0, 1000000)
+    print("{a == s.int(0, 1000000)} {a != t.int(0, 1000000) || true} {r.float() < 1.0}")
+    i64 ones
+    i64 sixes
+    i64 heads
+    for i in 0..60000 {
+        n := random.int(1, 7)
+        if n < 1 || n > 6 {
+            panic("out of range: {n}")
+        }
+        if n == 1 { ones += 1 }
+        if n == 6 { sixes += 1 }
+        if random.coin() { heads += 1 }
+        f := random.float()
+        if f < 0.0 || f >= 1.0 {
+            panic("float out of range")
+        }
+    }
+    print("{ones > 9000 && ones < 11000} {sixes > 9000 && sixes < 11000} {heads > 28500 && heads < 31500}")
+}
