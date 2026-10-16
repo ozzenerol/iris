@@ -91,6 +91,10 @@ They bind in this order, tightest first:
 
 So `a + b * c` is `a + (b * c)`, and `x & 1 == 1` is `(x & 1) == 1`. Assignment is a statement, so it can't appear inside an expression.
 
+Arithmetic happens in the type of its operands. Two `u8` values add up as a `u8`, even when the result goes into an `i64`, so `200 + 100` overflows. Convert first when the result needs more room: `i64(a) + i64(b)`.
+
+Both sides of an operator must have the same type, or one must convert on its own to the other (`u8` to `i64`). `i32 + u32` is an error: write the conversion.
+
 ## Durations and sizes
 
 Numbers can carry a unit. Durations are `ns`, `us`, `ms`, `s`, `m` and `h`, and their type is `Duration`. Sizes are `KiB`, `MiB` and `GiB`, and they are plain integers.

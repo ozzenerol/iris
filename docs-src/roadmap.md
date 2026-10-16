@@ -5,10 +5,10 @@ Each step is a release. A release is made when everything in it works and the te
 | Version | Contents | Status |
 |---|---|---|
 | 0.1 | Lexer and parser for the whole syntax. `iris parse` prints the syntax tree. | released |
-| 0.2 | Integers, `bool`, functions, `if`, `for`, `match`, `const`, string literals and `print`. The first programs that run. | next |
-| 0.3 | Pointers, structs, methods, arrays, slices, `str`, `String`, `alloc` and `free`. | planned |
+| 0.2 | Integers, `bool`, functions, default and named arguments, `if`, `for`, `match`, `const`, string literals, `print` and `panic`. The first programs that run. | released |
+| 0.3 | Pointers, structs, methods, arrays, slices, `String`, `format`, `alloc` and `free`. | next |
 | 0.4 | `!T`, `try`, `catch`, `defer`, `errdefer`, `scoped` and error traces. | planned |
-| 0.5 | Enums with data, the rest of `match`, several return values and named arguments. | planned |
+| 0.5 | Enums with data, the rest of `match` and several return values. | planned |
 | 0.6 | Generics and interfaces. | planned |
 | 0.7 | Modules, packages, `import c`, and the first parts of the standard library (`io`, `fs`, `str`). | planned |
 

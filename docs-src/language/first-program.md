@@ -4,7 +4,7 @@ The smallest Iris program, and the basic rules every program follows.
 
 ## Hello
 
-```iris
+```iris run
 void main() {
     print("hello")
 }
@@ -38,7 +38,7 @@ When `!void main` returns an error, the program prints the error and exits with 
 
 A statement ends at the end of its line. There are no semicolons.
 
-```iris
+```iris run
 void main() {
     n := 2
     print("{n * 21}")

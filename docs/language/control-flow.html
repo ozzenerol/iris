@@ -81,6 +81,23 @@
         <span class="k">if</span> cell == <span class="n">0</span> { <span class="k">break</span> outer }
     }
 }</code></pre>
+<h2 id="a-complete-example"><a href="#a-complete-example">A complete example</a></h2>
+<pre class="code run"><code><span class="t">str</span> kind(<span class="t">i64</span> status) =&gt; <span class="k">match</span> status {
+    <span class="n">200</span>..<span class="n">299</span> =&gt; <span class="s">&quot;ok&quot;</span>
+    <span class="n">404</span> =&gt; <span class="s">&quot;not found&quot;</span>
+    _ =&gt; <span class="s">&quot;error&quot;</span>
+}
+
+<span class="t">void</span> main() {
+    <span class="k">for</span> code <span class="k">in</span> <span class="n">199</span>..<span class="n">202</span> {
+        print(<span class="s">&quot;{code}: {kind(code)}&quot;</span>)
+    }
+    print(<span class="s">&quot;404: {kind(404)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>199: error
+200: ok
+201: ok
+404: not found</code></pre>
 <div class="pager"><a href="functions.html">&larr; Functions</a><a href="text.html">Text &rarr;</a></div>
 </main></div>
 </body>

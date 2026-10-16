@@ -58,7 +58,7 @@ connect("example.com")
 connect("example.com", 8080)
 ```
 
-Parameters with a default come after the ones without.
+Parameters with a default come after the ones without. A default must be a value known when compiling.
 
 ## Named arguments
 
@@ -67,6 +67,24 @@ Any argument can be passed by name. Named arguments come after the others, in an
 ```iris
 connect("example.com", timeout: 5s)
 connect("example.com", timeout: 5s, port: 443)
+```
+
+A complete program:
+
+```iris run
+void greet(str name, str greeting = "hello") {
+    print("{greeting}, {name}")
+}
+
+void main() {
+    greet("iris")
+    greet("iris", greeting: "hi")
+}
+```
+
+```output
+hello, iris
+hi, iris
 ```
 
 ## Several return values

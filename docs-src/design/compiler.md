@@ -40,6 +40,8 @@ Lowering rewrites the checked tree into a smaller language with only simple piec
 
 After lowering, the rest of the compiler never sees these features.
 
+Version 0.2 has no lowering pass yet. The IR writer handles `match`, `if` values and `for` loops directly. Lowering arrives with `defer` in 0.4.
+
 ### IR writer
 
 The IR writer turns the lowered code into LLVM IR, as a text file (`.ll`). LLVM IR is the input language of LLVM. It describes the program as simple instructions on typed values.
@@ -47,6 +49,12 @@ The IR writer turns the lowered code into LLVM IR, as a text file (`.ll`). LLVM 
 ### clang
 
 `clang` optimises the IR, turns it into machine code for the target, and links the program with the runtime and any C libraries.
+
+The runtime is `runtime/rt.c`. The build turns it into a C string inside the `iris` binary, so `iris` needs no other files. For each build, `iris` writes the IR and the runtime to a temporary folder, runs `clang` on both, and removes the folder.
+
+## Checks in the generated code
+
+In debug builds the IR writer adds a check before every operation that can go wrong: `+`, `-` and `*` that overflow (using LLVM's `with.overflow` intrinsics), division by zero, shifts by at least the width of the type, and conversions that lose a value. A failed check calls the runtime, which prints `panic:`, the message and the place, and exits with status 2. Release-safe builds keep the division checks. Release-fast builds have none, and arithmetic wraps around.
 
 ## Why the IR is written as text
 
@@ -64,9 +72,9 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/parser.c` | The parser. |
 | `src/ast.c` | Syntax tree nodes and the printer for `iris parse`. |
 | `src/check.c` | The checker. |
-| `src/lower.c` | Lowering. |
+| `src/lower.c` | Lowering (from 0.4). |
 | `src/ir.c` | The IR writer. |
-| `runtime/` | The small part written in C: program start, error traces, the task scheduler. |
+| `runtime/rt.c` | The small part written in C: printing and panics now; error traces and the task scheduler later. |
 | `std/` | The standard library, written in Iris. |
 | `tests/` | Test programs. |
 

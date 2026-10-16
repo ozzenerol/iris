@@ -50,11 +50,13 @@ A `String` can be used wherever a `str` is expected. The `str` points into the `
 
 A name or expression in braces inside a string literal is replaced by its value:
 
-```iris
-n := 42
-addr := "10.0.0.1"
-print("got {n} bytes from {addr}")
-print("{n * 2}")
+```iris run
+void main() {
+    n := 42
+    addr := "10.0.0.1"
+    print("got {n} bytes from {addr}")
+    print("{n * 2}")
+}
 ```
 
 ```output

@@ -122,3 +122,27 @@ outer: for row in rows {
     }
 }
 ```
+
+## A complete example
+
+```iris run
+str kind(i64 status) => match status {
+    200..299 => "ok"
+    404 => "not found"
+    _ => "error"
+}
+
+void main() {
+    for code in 199..202 {
+        print("{code}: {kind(code)}")
+    }
+    print("404: {kind(404)}")
+}
+```
+
+```output
+199: error
+200: ok
+201: ok
+404: not found
+```

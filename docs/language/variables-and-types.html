@@ -47,6 +47,8 @@ flags := <span class="n">0b1010</span></code></pre>
 <p>They bind in this order, tightest first:</p>
 <ol><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code></li><li><code>&amp;&amp;</code></li><li><code>||</code></li><li><code>..</code></li></ol>
 <p>So <code>a + b * c</code> is <code>a + (b * c)</code>, and <code>x &amp; 1 == 1</code> is <code>(x &amp; 1) == 1</code>. Assignment is a statement, so it can't appear inside an expression.</p>
+<p>Arithmetic happens in the type of its operands. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so <code>200 + 100</code> overflows. Convert first when the result needs more room: <code>i64(a) + i64(b)</code>.</p>
+<p>Both sides of an operator must have the same type, or one must convert on its own to the other (<code>u8</code> to <code>i64</code>). <code>i32 + u32</code> is an error: write the conversion.</p>
 <h2 id="durations-and-sizes"><a href="#durations-and-sizes">Durations and sizes</a></h2>
 <p>Numbers can carry a unit. Durations are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>, and their type is <code>Duration</code>. Sizes are <code>KiB</code>, <code>MiB</code> and <code>GiB</code>, and they are plain integers.</p>
 <pre class="code"><code>sleep(200ms)
