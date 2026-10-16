@@ -1,4 +1,6 @@
 __pycache__/
 /build/
 /iris
+/iris-debug
+*.dSYM/
 *.ll
