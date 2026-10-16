@@ -984,10 +984,13 @@ static void pollEvents(void) {
         fputs("panic: every task is waiting and nothing can wake them: a deadlock\n", stderr);
         exit(2);
     }
+#ifdef __linux__
     if (waitingIo > 0 && useRing()) {
         ringEnter(true, timeout);
         ringReap();
-    } else if (waitingIo > 0) {
+    } else
+#endif
+    if (waitingIo > 0) {
         ensurePoller();
 #ifdef __APPLE__
         struct kevent evs[64];
