@@ -22,6 +22,7 @@ static void usage(FILE *out) {
           "  build [options] <file>       compile a program (-o <name> for the output)\n"
           "  check <file>                 check a program without compiling it\n"
           "  ir [options] <file>          print the LLVM IR\n"
+          "  get <package>@<version>      download a package and add it to iris.mod\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
           "  lex <file>                   print the tokens\n"
           "  version                      print the version\n"
@@ -100,19 +101,17 @@ static int cmdParse(const char *path, bool snippet) {
     return gErrors ? 1 : 0;
 }
 
-/* Parses and checks a file. Returns the tree, or NULL after errors. */
-static Node *frontEnd(Arena *a, Source *src, const char *path) {
-    if (!readFile(path, src)) {
+/* Reads, parses and checks a program and its modules. Returns NULL after
+ * errors. */
+static Program *frontEnd(Arena *a, const char *path) {
+    Program *prog = loadProgram(a, path);
+    if (!prog || gErrors) {
         return NULL;
     }
-    Node *file = parseSource(a, src, false);
-    if (gErrors) {
+    if (!checkProgram(a, prog)) {
         return NULL;
     }
-    if (!checkProgram(a, src, file)) {
-        return NULL;
-    }
-    return file;
+    return prog;
 }
 
 /* Runs a program and waits for it. With errPath, its stderr goes to that
@@ -279,17 +278,16 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     }
 
     Arena a = {0};
-    Source src = {0};
-    Node *file = frontEnd(&a, &src, path);
+    Program *prog = frontEnd(&a, path);
     int rc = 1;
-    if (!file) {
+    if (!prog) {
         goto done;
     }
     if (strcmp(cmd, "check") == 0) {
         rc = 0;
         goto done;
     }
-    char *ir = writeIR(&a, &src, file, mode);
+    char *ir = writeIR(&a, prog, mode);
     if (strcmp(cmd, "ir") == 0) {
         fputs(ir, stdout);
         rc = 0;
@@ -302,14 +300,20 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     if (strcmp(cmd, "build") == 0) {
         char def[4096];
         if (!out) {
-            /* hello.iris -> hello */
-            const char *base = strrchr(path, '/');
-            base = base ? base + 1 : path;
+            /* hello.iris -> hello; a folder -> its name */
+            char trimmed[4096];
+            snprintf(trimmed, sizeof trimmed, "%s", path);
+            size_t tl = strlen(trimmed);
+            while (tl > 1 && trimmed[tl - 1] == '/') {
+                trimmed[--tl] = 0;
+            }
+            const char *base = strrchr(trimmed, '/');
+            base = base ? base + 1 : trimmed;
             snprintf(def, sizeof def, "%s", base);
             char *dot = strrchr(def, '.');
-            if (dot && dot != def) {
+            if (dot && dot != def && strcmp(dot, ".iris") == 0) {
                 *dot = 0;
-            } else {
+            } else if (strcmp(def, ".") == 0 || strcmp(def, "..") == 0) {
                 snprintf(def, sizeof def, "a.out");
             }
             out = def;
@@ -338,8 +342,129 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     removeTree(dir);
 done:
     arenaFree(&a);
-    free((char *)src.text);
     return rc;
+}
+
+/* The folder with iris.mod, from the current folder upward. */
+static bool findProject(char *out, size_t n) {
+    char cur[4096];
+    if (!getcwd(cur, sizeof cur)) {
+        return false;
+    }
+    for (;;) {
+        char mod[4200];
+        snprintf(mod, sizeof mod, "%s/iris.mod", cur);
+        FILE *f = fopen(mod, "r");
+        if (f) {
+            fclose(f);
+            snprintf(out, n, "%s", cur);
+            return true;
+        }
+        char *slash = strrchr(cur, '/');
+        if (!slash || slash == cur) {
+            return false;
+        }
+        *slash = 0;
+    }
+}
+
+/* iris get github.com/someone/pg@v1.2.0: clone the tag into the package
+ * cache and put a require line in iris.mod. */
+static int cmdGet(const char *spec) {
+    char root[4096];
+    if (!findProject(root, sizeof root)) {
+        fprintf(stderr, "iris: get needs an iris.mod in this folder or one above it\n");
+        return 1;
+    }
+    const char *at = strrchr(spec, '@');
+    if (!at || at == spec || !at[1]) {
+        fprintf(stderr, "iris: give the version to get: iris get %s@v1.0.0\n", spec);
+        return 2;
+    }
+    char path[1024], version[256];
+    snprintf(path, sizeof path, "%.*s", (int)(at - spec), spec);
+    snprintf(version, sizeof version, "%s", at + 1);
+    if (!strchr(path, '.') || strstr(path, "..") || path[0] == '/') {
+        fprintf(stderr, "iris: %s isn't a package path, like github.com/someone/name\n", path);
+        return 2;
+    }
+
+    const char *cache = getenv("IRIS_PATH");
+    char cacheBuf[4096];
+    if (!cache || !*cache) {
+        const char *home = getenv("HOME");
+        snprintf(cacheBuf, sizeof cacheBuf, "%s/.cache/iris", home ? home : ".");
+        cache = cacheBuf;
+    }
+    char dir[6000];
+    snprintf(dir, sizeof dir, "%s/pkg/%s@%s", cache, path, version);
+    FILE *probe = fopen(dir, "r");
+    if (probe) {
+        fclose(probe);
+    } else {
+        char parent[6000];
+        snprintf(parent, sizeof parent, "%s", dir);
+        char *slash = strrchr(parent, '/');
+        *slash = 0;
+        char *mk[] = {"mkdir", "-p", parent, NULL};
+        if (runProgram(mk) != 0) {
+            return 1;
+        }
+        const char *base = getenv("IRIS_GET_BASE");    /* for tests: a folder of git repositories */
+        char url[2048];
+        if (base && *base) {
+            snprintf(url, sizeof url, "%s/%s", base, path);
+        } else {
+            snprintf(url, sizeof url, "https://%s", path);
+        }
+        char *git[] = {"git", "-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1",
+                       "--branch", version, url, dir, NULL};
+        int rc = runProgram(git);
+        if (rc == 127) {
+            fprintf(stderr, "iris: git is needed to get packages\n");
+            return 1;
+        }
+        if (rc != 0) {
+            fprintf(stderr, "iris: can't get %s at %s\n", path, version);
+            return 1;
+        }
+    }
+
+    /* iris.mod: replace an old require line for the package, or add one */
+    char modPath[4200];
+    snprintf(modPath, sizeof modPath, "%s/iris.mod", root);
+    Source src;
+    if (!readFile(modPath, &src)) {
+        return 1;
+    }
+    StrBuf out = {0};
+    bool done = false;
+    const char *p = src.text, *end = src.text + src.len;
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        size_t len = nl ? (size_t)(nl - p) : (size_t)(end - p);
+        char word[16], pkg[1024];
+        char line[2048];
+        snprintf(line, sizeof line, "%.*s", (int)len, p);
+        if (sscanf(line, "%15s %1023s", word, pkg) == 2 && strcmp(word, "require") == 0 && strcmp(pkg, path) == 0) {
+            sbPrintf(&out, "require %s %s\n", path, version);
+            done = true;
+        } else {
+            sbPutn(&out, p, len);
+            sbPutc(&out, '\n');
+        }
+        p = nl ? nl + 1 : end;
+    }
+    if (!done) {
+        sbPrintf(&out, "require %s %s\n", path, version);
+    }
+    free((char *)src.text);
+    bool ok = writeText(modPath, out.buf, out.len);
+    sbFree(&out);
+    if (ok) {
+        printf("got %s %s\n", path, version);
+    }
+    return ok ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
@@ -359,6 +484,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "run") == 0 || strcmp(cmd, "build") == 0 || strcmp(cmd, "check") == 0 ||
         strcmp(cmd, "ir") == 0) {
         return cmdCompile(cmd, argc, argv);
+    }
+    if (strcmp(cmd, "get") == 0 && argc == 3) {
+        return cmdGet(argv[2]);
     }
     if (strcmp(cmd, "lex") == 0 && argc == 3) {
         return cmdLex(argv[2]);

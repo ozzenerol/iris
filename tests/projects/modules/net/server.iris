@@ -1,0 +1,12 @@
+pub const DEFAULT_PORT = 8080
+
+pub enum Kind { tcp, udp }
+
+pub struct Server {
+    pub u16 port
+    i32 fd
+}
+
+pub Server listen(u16 port) => Server{port: port, fd: secret()}
+
+i32 secret() => 3

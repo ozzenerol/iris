@@ -1,0 +1,160 @@
+// Working with text: searching, trimming, splitting, changing case and
+// reading numbers.
+
+pub enum ParseError { empty, notNumber, tooBig }
+
+// Where sub first appears in s, or -1.
+pub i64 find(str s, str sub) {
+    if sub.len == 0 {
+        return 0
+    }
+    if sub.len > s.len {
+        return -1
+    }
+    for i in 0..s.len - sub.len + 1 {
+        if s[i:i + sub.len] == sub {
+            return i
+        }
+    }
+    return -1
+}
+
+// Whether sub appears in s.
+pub bool contains(str s, str sub) => find(s, sub) >= 0
+
+// Whether s starts with prefix.
+pub bool startsWith(str s, str prefix) => s.len >= prefix.len && s[0:prefix.len] == prefix
+
+// Whether s ends with suffix.
+pub bool endsWith(str s, str suffix) => s.len >= suffix.len && s[s.len - suffix.len:] == suffix
+
+// How many times sub appears in s, not overlapping.
+pub i64 count(str s, str sub) {
+    if sub.len == 0 {
+        return 0
+    }
+    i64 n
+    i64 i
+    for i + sub.len <= s.len {
+        if s[i:i + sub.len] == sub {
+            n += 1
+            i += sub.len
+        } else {
+            i += 1
+        }
+    }
+    return n
+}
+
+bool isSpace(u8 c) => c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+// s without spaces, tabs and line breaks at either end.
+pub str trim(str s) => trimRight(trimLeft(s))
+
+// s without spaces, tabs and line breaks at the start.
+pub str trimLeft(str s) {
+    i64 i
+    for i < s.len && isSpace(s[i]) {
+        i += 1
+    }
+    return s[i:]
+}
+
+// s without spaces, tabs and line breaks at the end.
+pub str trimRight(str s) {
+    i64 n = s.len
+    for n > 0 && isSpace(s[n - 1]) {
+        n -= 1
+    }
+    return s[0:n]
+}
+
+// The text before and after the first sep, and whether sep was found.
+pub (str, str, bool) cut(str s, str sep) {
+    i := find(s, sep)
+    if i < 0 {
+        return (s, "", false)
+    }
+    return (s[0:i], s[i + sep.len:], true)
+}
+
+// A copy of s with ASCII letters in lower case.
+pub String lower(str s) {
+    String out = s.copy()
+    u8[] bytes = out.ptr[0:out.len]
+    for i in 0..bytes.len {
+        if bytes[i] >= 'A' && bytes[i] <= 'Z' {
+            bytes[i] = bytes[i] + 32
+        }
+    }
+    return out
+}
+
+// A copy of s with ASCII letters in upper case.
+pub String upper(str s) {
+    String out = s.copy()
+    u8[] bytes = out.ptr[0:out.len]
+    for i in 0..bytes.len {
+        if bytes[i] >= 'a' && bytes[i] <= 'z' {
+            bytes[i] = bytes[i] - 32
+        }
+    }
+    return out
+}
+
+// s with every old replaced by new.
+pub String replace(str s, str old, str new) {
+    String out
+    if old.len == 0 {
+        out.append(s)
+        return out
+    }
+    i64 i
+    for i < s.len {
+        if i + old.len <= s.len && s[i:i + old.len] == old {
+            out.append(new)
+            i += old.len
+        } else {
+            out.append(s[i:i + 1])
+            i += 1
+        }
+    }
+    return out
+}
+
+// s n times in a row.
+pub String repeat(str s, i64 n) {
+    String out
+    for _ in 0..n {
+        out.append(s)
+    }
+    return out
+}
+
+// The integer written in s, with an optional - or + in front.
+pub !i64 parseInt(str s) {
+    if s.len == 0 {
+        return error(ParseError.empty, "no number in an empty text")
+    }
+    bool negative = s[0] == '-'
+    i64 start = if s[0] == '-' || s[0] == '+' { 1 } else { 0 }
+    if start == s.len {
+        return error(ParseError.notNumber, "'{s}' is not a number")
+    }
+    i64 n
+    for i in start..s.len {
+        c := s[i]
+        if c < '0' || c > '9' {
+            return error(ParseError.notNumber, "'{s}' is not a number")
+        }
+        d := i64(c - '0')
+        if n > (9223372036854775807 - d) / 10 {
+            if negative && n == 922337203685477580 && d == 8 && i == s.len - 1 {
+                return -9223372036854775807 - 1
+            }
+            return error(ParseError.tooBig, "'{s}' doesn't fit in i64")
+        }
+        n = n * 10 + d
+    }
+    return if negative { -n } else { n }
+}

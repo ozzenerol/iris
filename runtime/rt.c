@@ -1,9 +1,13 @@
 /* The Iris runtime: what every program links with. Printing goes through
  * stdio's stdout buffer, which C flushes when the program ends. */
+#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct {
     char *ptr;
@@ -40,9 +44,12 @@ static _Thread_local size_t msgCurLen, msgNextLen;
 static _Thread_local Frame trace[TRACE_MAX];
 static _Thread_local int traceLen, traceDropped;
 
+static int gArgc;
+static char **gArgv;
+
 void iris_init(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    gArgc = argc;
+    gArgv = argv;
 }
 
 static void stop(const char *msg, size_t n, const char *file, int line, int col, const char *fn) {
@@ -298,4 +305,160 @@ void iris_slice_failed(int64_t lo, int64_t hi, int64_t len, const char *file, in
     int n = snprintf(msg, sizeof msg, "slice [%lld:%lld] is out of range for length %lld", (long long)lo,
                      (long long)hi, (long long)len);
     stop(msg, (size_t)n, file, line, col, fn);
+}
+
+/* ---------------------------------------------------------------- std: os, fs, io */
+
+int64_t iris_os_argc(void) { return gArgc; }
+
+void iris_os_arg(int64_t i, const char **p, int64_t *n) {
+    *p = gArgv[i];
+    *n = (int64_t)strlen(gArgv[i]);
+}
+
+/* A C string copy of a (pointer, length) path; NULL if it has a NUL in it. */
+static char *cpath(const char *p, int64_t n) {
+    if (memchr(p, 0, (size_t)n)) {
+        return NULL;
+    }
+    char *s = malloc((size_t)n + 1);
+    if (!s) {
+        outOfMemory();
+    }
+    memcpy(s, p, (size_t)n);
+    s[n] = 0;
+    return s;
+}
+
+int iris_os_getenv(const char *name, int64_t n, const char **p, int64_t *len) {
+    char *k = cpath(name, n);
+    if (!k) {
+        return 0;
+    }
+    const char *v = getenv(k);
+    free(k);
+    if (!v) {
+        return 0;
+    }
+    *p = v;
+    *len = (int64_t)strlen(v);
+    return 1;
+}
+
+void iris_os_exit(int code) {
+    fflush(stdout);
+    exit(code);
+}
+
+/* errno as fs's error codes: 1 notFound, 2 permission, 3 exists, 4 isDir, 5 other */
+static int fsCode(int e) {
+    switch (e) {
+    case ENOENT: case ENOTDIR: return 1;
+    case EACCES: case EPERM: return 2;
+    case EEXIST: return 3;
+    case EISDIR: return 4;
+    default: return 5;
+    }
+}
+
+int iris_fs_read_all(const char *path, int64_t n, IrisString *out) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    struct stat st;
+    if (stat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
+        free(p);
+        return 4;
+    }
+    FILE *f = fopen(p, "rb");
+    int err = errno;
+    free(p);
+    if (!f) {
+        return fsCode(err);
+    }
+    char buf[65536];
+    size_t got;
+    while ((got = fread(buf, 1, sizeof buf, f)) > 0) {
+        iris_string_append(out, buf, (int64_t)got);
+    }
+    int bad = ferror(f);
+    fclose(f);
+    return bad ? 5 : 0;
+}
+
+int iris_fs_write(const char *path, int64_t n, const char *data, int64_t len, int append) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    FILE *f = fopen(p, append ? "ab" : "wb");
+    int err = errno;
+    free(p);
+    if (!f) {
+        return fsCode(err);
+    }
+    size_t put = len ? fwrite(data, 1, (size_t)len, f) : 0;
+    int bad = fclose(f) != 0 || put != (size_t)len;
+    return bad ? 5 : 0;
+}
+
+int iris_fs_exists(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 0;
+    }
+    struct stat st;
+    int ok = stat(p, &st) == 0;
+    free(p);
+    return ok;
+}
+
+int iris_fs_remove(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    int r = remove(p);
+    int err = errno;
+    free(p);
+    return r == 0 ? 0 : fsCode(err);
+}
+
+/* 0 a line, 1 end of input, 2 an error */
+int iris_io_read_line(IrisString *out) {
+    int c;
+    int any = 0;
+    while ((c = fgetc(stdin)) != EOF) {
+        any = 1;
+        if (c == '\n') {
+            break;
+        }
+        char ch = (char)c;
+        iris_string_append(out, &ch, 1);
+    }
+    if (ferror(stdin)) {
+        return 2;
+    }
+    if (!any) {
+        return 1;
+    }
+    if (out->len && out->ptr[out->len - 1] == '\r') {
+        out->len--;
+    }
+    return 0;
+}
+
+int iris_io_read_all(IrisString *out) {
+    char buf[65536];
+    size_t got;
+    while ((got = fread(buf, 1, sizeof buf, stdin)) > 0) {
+        iris_string_append(out, buf, (int64_t)got);
+    }
+    return ferror(stdin) ? 2 : 0;
+}
+
+void iris_io_ewrite(const char *p, int64_t n) {
+    fflush(stdout);
+    fwrite(p, 1, (size_t)n, stderr);
 }

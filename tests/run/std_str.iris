@@ -1,0 +1,45 @@
+// expect: 7 -1 0
+// expect: true false true true
+// expect: [a b] [a b  ] [  a b]
+// expect: key=value: [key] [value] true
+// expect: none: [none] [] false
+// expect: ABC-DEF abc-def
+// expect: a::b::c ababab 2
+// expect: -1234 77 -9223372036854775808
+// expect: ParseError.notNumber
+// expect: ParseError.empty
+// expect: ParseError.tooBig
+
+import str
+
+void main() {
+    s := "hello, world"
+    print("{str.find(s, "world")} {str.find(s, "xyz")} {str.find(s, "")}")
+    print("{str.contains(s, "lo, w")} {str.contains(s, "zz")} {str.startsWith(s, "hell")} {str.endsWith(s, "ld")}")
+    padded := "  a b  "
+    print("[{str.trim(padded)}] [{str.trimLeft(padded)}] [{str.trimRight(padded)}]")
+    k, v, ok := str.cut("key=value", "=")
+    print("key=value: [{k}] [{v}] {ok}")
+    k2, v2, ok2 := str.cut("none", "=")
+    print("none: [{k2}] [{v2}] {ok2}")
+    scoped String up = str.upper("abc-Def")
+    scoped String low = str.lower("ABC-Def")
+    print("{up} {low}")
+    scoped String rep = str.replace("a.b.c", ".", "::")
+    scoped String rr = str.repeat("ab", 3)
+    print("{rep} {rr} {str.count("banana", "an")}")
+    a := str.parseInt("-1234") catch 0
+    b := str.parseInt("+77") catch 0
+    c := str.parseInt("-9223372036854775808") catch 0
+    print("{a} {b} {c}")
+    showError("12x")
+    showError("")
+    showError("99999999999999999999")
+}
+
+void showError(str s) {
+    _ = str.parseInt(s) catch e {
+        print("{e.code}")
+        0
+    }
+}

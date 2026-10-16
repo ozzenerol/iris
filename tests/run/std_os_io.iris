@@ -1,0 +1,17 @@
+// expect: 1 true
+// expect: fallback
+// expect: eof: end of input
+// stderr: a line on stderr
+// exit: 0
+
+import os, io
+
+void main() {
+    print("{os.argc()} {os.arg(0).len > 0}")
+    print("{os.env("IRIS_SURELY_NOT_SET_42") catch "fallback"}")
+    _ = io.readLine() catch e {
+        print("eof: {e.message}")
+        "".copy()
+    }
+    io.eprint("a line on stderr")
+}

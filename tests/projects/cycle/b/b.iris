@@ -1,0 +1,3 @@
+import "a"
+
+pub void g() { }

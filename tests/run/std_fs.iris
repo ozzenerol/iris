@@ -1,0 +1,21 @@
+// expect: 16 true
+// expect: hello
+// expect:   world  
+// expect: false
+// expect: FsError.notFound
+
+import fs
+
+!void main() {
+    path := "__iris_std_fs_test.txt"
+    try fs.writeAll(path, "hello\n")
+    try fs.append(path, "  world  \n")
+    scoped String text = try fs.readAll(path)
+    print("{text.len} {fs.exists(path)}")
+    print(text[0:text.len - 1])
+    try fs.remove(path)
+    print("{fs.exists(path)}")
+    fs.remove(path) catch e {
+        print("{e.code}")
+    }
+}
