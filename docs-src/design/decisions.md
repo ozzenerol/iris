@@ -54,6 +54,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | A C name that is an Iris keyword or built-in name gets a `_`: `c.free_`. A struct named like a function becomes `c.struct_NAME`. | C keeps struct names apart from other names; Iris doesn't. |
 | An integer constant can be used where a float is expected; an integer variable must be converted with `f64(...)`. | `x * 2` reads naturally; mixing variables stays explicit, as with integers. |
 | Floats print in the fewest digits that read back the same, as plain decimals between 1e-7 and 1e21. | Printing is exact without being noisy. |
+| `u8 *` converts to and from any pointer on its own. | It is what C's `void *` becomes, and C hands those around. |
+| Function values are named functions only: no lambdas and no closures. | No hidden allocation for captured variables; a context pointer does the job, as in C. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 

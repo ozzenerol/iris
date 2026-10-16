@@ -20,6 +20,10 @@
 <pre class="code"><code>Point *pp = &amp;p
 pp.x = <span class="n">10</span></code></pre>
 <p>A pointer can be <code>null</code>. In a debug build, using a <code>null</code> pointer stops the program with an error that says where.</p>
+<p><code>u8 *</code> also stands for C's <code>void *</code>: any pointer converts to <code>u8 *</code> on its own, and back:</p>
+<pre class="code"><code><span class="t">i64</span> x = <span class="n">5</span>
+<span class="t">u8</span> *raw = &amp;x
+<span class="t">i64</span> *back = raw</code></pre>
 <p>Pointer arithmetic works as in C:</p>
 <pre class="code"><code><span class="t">u8</span> *end = start + len</code></pre>
 <h2 id="arrays"><a href="#arrays">Arrays</a></h2>

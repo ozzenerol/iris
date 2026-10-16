@@ -13,7 +13,7 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.7 | Modules, projects, packages with `iris get`, and the first standard library modules: `io`, `fs`, `str` and `os`. | released |
 | 0.8 | `import c`: C headers read with clang, C functions (also with `...`), structs, types and constants, and linking C libraries. | released |
 | 0.9 | Floating point: `f32`, `f64`, the `math` module, `str.parseFloat`, and C's `float` and `double`. | released |
-| 0.10 | Functions as values, callbacks from C, and `@export`. | next |
-| 0.11 | Tasks, channels and the network library. | planned |
+| 0.10 | Functions as values, callbacks from C, and `@export`. | released |
+| 0.11 | Tasks, channels and the network library. | next |
 
 After 0.11, in no fixed order: `comptime` and `when`, attributes like `@json`, `iris fmt`, the language server, and a JIT for `iris run`.

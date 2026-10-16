@@ -64,7 +64,7 @@ C types become Iris types of the same size and layout:
 | `float`, `double` | `f32`, `f64` |
 | `T *`, `char *` | `T *`, `u8 *` |
 | `void *` | `u8 *` |
-| a pointer to a function | `u8 *` |
+| a pointer to a function | a function type: `int (*)(const void *, const void *)` is `i32(u8 *, u8 *)` |
 | `struct` | a `struct` with the same fields, or an empty one when only pointers to it make sense |
 | `enum` | its values as `i32` constants |
 | `typedef` | a `type` alias |
@@ -72,6 +72,30 @@ C types become Iris types of the same size and layout:
 A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`. A struct that shares its name with a function, like `struct stat` and `stat()`, is `c.struct_stat`.
 
 Functions with `...`, like `printf`, take extra numbers and pointers.
+
+## Callbacks
+
+Where C takes a pointer to a function, an Iris function with the same types can be passed. C's `void *` arguments arrive as `u8 *`, which converts to the pointer type you need:
+
+```iris run
+import c "stdlib.h"
+
+i32 compare(u8 *pa, u8 *pb) {
+    i64 *a = pa
+    i64 *b = pb
+    return if *a < *b { -1 } else if *a > *b { 1 } else { 0 }
+}
+
+void main() {
+    i64[5] xs = [5, 3, 9, 1, 7]
+    c.qsort(&xs[0], 5, 8, compare)
+    print("{xs[0]} {xs[1]} {xs[2]} {xs[3]} {xs[4]}")
+}
+```
+
+```output
+1 3 5 7 9
+```
 
 Left out for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or strings.
 
@@ -86,7 +110,7 @@ i32 onRow(u8 *ctx, i32 n, u8 **values, u8 **names) {
 }
 ```
 
-An exported function can't return `!T`, since C has no way to receive it.
+`@export("name")` exports it under another name. An exported function takes and returns numbers and pointers, never `!T`, since C has no way to receive it. The names `main` and `iris_...` belong to the runtime.
 
 ## Assembly
 
