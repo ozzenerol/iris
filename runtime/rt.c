@@ -3421,3 +3421,204 @@ void iris_tls_close(void *ssl) {
     if (ossl.errClear) ossl.errClear();
     ossl.sslFree(ssl);
 }
+
+/* ---------------------------------------------------------------- random and crypto */
+
+#ifdef __linux__
+#include <sys/random.h>
+#endif
+
+/* Bytes from the operating system's secure source. */
+void iris_random_os(char *buf, int64_t len) {
+#ifdef __APPLE__
+    arc4random_buf(buf, (size_t)len);
+#else
+    while (len > 0) {
+        ssize_t n = getrandom(buf, (size_t)(len > 256 ? 256 : len), 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            fflush(stdout);
+            fputs("panic: the system's random source failed\n", stderr);
+            exit(2);
+        }
+        buf += n;
+        len -= n;
+    }
+#endif
+}
+
+/* SHA-256 (FIPS 180-4). */
+typedef struct {
+    uint32_t h[8];
+    uint64_t len;
+    unsigned char block[64];
+    size_t used;
+} Sha256;
+
+static const uint32_t shaK[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+};
+
+#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void shaBlock(Sha256 *s, const unsigned char *p) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) {
+        w[i] = (uint32_t)p[i * 4] << 24 | (uint32_t)p[i * 4 + 1] << 16 | (uint32_t)p[i * 4 + 2] << 8 | p[i * 4 + 3];
+    }
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        uint32_t s1 = ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4], f = s->h[5], g = s->h[6], h = s->h[7];
+    for (int i = 0; i < 64; i++) {
+        uint32_t t1 = h + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25)) + ((e & f) ^ (~e & g)) + shaK[i] + w[i];
+        uint32_t t2 = (ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+    }
+    s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
+    s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
+}
+
+static void shaInit(Sha256 *s) {
+    static const uint32_t start[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    memcpy(s->h, start, sizeof start);
+    s->len = 0;
+    s->used = 0;
+}
+
+static void shaAdd(Sha256 *s, const unsigned char *p, size_t n) {
+    s->len += n;
+    while (n > 0) {
+        size_t take = 64 - s->used < n ? 64 - s->used : n;
+        memcpy(s->block + s->used, p, take);
+        s->used += take;
+        p += take;
+        n -= take;
+        if (s->used == 64) {
+            shaBlock(s, s->block);
+            s->used = 0;
+        }
+    }
+}
+
+static void shaEnd(Sha256 *s, unsigned char out[32]) {
+    uint64_t bits = s->len * 8;
+    unsigned char pad = 0x80;
+    shaAdd(s, &pad, 1);
+    unsigned char zero = 0;
+    while (s->used != 56) shaAdd(s, &zero, 1);
+    unsigned char lenBytes[8];
+    for (int i = 0; i < 8; i++) lenBytes[i] = (unsigned char)(bits >> (56 - 8 * i));
+    shaAdd(s, lenBytes, 8);
+    for (int i = 0; i < 8; i++) {
+        out[i * 4] = (unsigned char)(s->h[i] >> 24);
+        out[i * 4 + 1] = (unsigned char)(s->h[i] >> 16);
+        out[i * 4 + 2] = (unsigned char)(s->h[i] >> 8);
+        out[i * 4 + 3] = (unsigned char)s->h[i];
+    }
+}
+
+void iris_sha256(const char *data, int64_t len, unsigned char *out) {
+    Sha256 s;
+    shaInit(&s);
+    shaAdd(&s, (const unsigned char *)data, (size_t)len);
+    shaEnd(&s, out);
+}
+
+/* HMAC-SHA256 (RFC 2104). */
+void iris_hmac_sha256(const char *key, int64_t keyLen, const char *data, int64_t len, unsigned char *out) {
+    unsigned char k[64] = {0};
+    if (keyLen > 64) {
+        iris_sha256(key, keyLen, k);
+    } else {
+        memcpy(k, key, (size_t)keyLen);
+    }
+    unsigned char ipad[64], opad[64], inner[32];
+    for (int i = 0; i < 64; i++) {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    Sha256 s;
+    shaInit(&s);
+    shaAdd(&s, ipad, 64);
+    shaAdd(&s, (const unsigned char *)data, (size_t)len);
+    shaEnd(&s, inner);
+    shaInit(&s);
+    shaAdd(&s, opad, 64);
+    shaAdd(&s, inner, 32);
+    shaEnd(&s, out);
+}
+
+/* Equal without stopping at the first difference, so the time says
+   nothing about where they differ. */
+int iris_const_equal(const char *a, int64_t na, const char *b, int64_t nb) {
+    if (na != nb) return 0;
+    unsigned char d = 0;
+    for (int64_t i = 0; i < na; i++) d |= (unsigned char)(a[i] ^ b[i]);
+    return d == 0;
+}
+
+/* xoshiro256** (Blackman and Vigna): fast, not for secrets. The thread's
+   own generator is seeded from the system on first use. */
+static uint64_t rotl64(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+
+uint64_t iris_rng_next(uint64_t *s) {
+    uint64_t r = rotl64(s[1] * 5, 7) * 9, t = s[1] << 17;
+    s[2] ^= s[0];
+    s[3] ^= s[1];
+    s[1] ^= s[2];
+    s[0] ^= s[3];
+    s[2] ^= t;
+    s[3] = rotl64(s[3], 45);
+    return r;
+}
+
+/* A state from a seed, through splitmix64, so that close seeds differ. */
+void iris_rng_seed(uint64_t *s, uint64_t seed) {
+    for (int i = 0; i < 4; i++) {
+        uint64_t z = (seed += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        s[i] = z ^ (z >> 31);
+    }
+}
+
+static _Thread_local uint64_t threadRng[4];
+static _Thread_local int threadRngReady;
+
+uint64_t iris_random_u64(void) {
+    if (!threadRngReady) {
+        uint64_t seed;
+        iris_random_os((char *)&seed, sizeof seed);
+        iris_rng_seed(threadRng, seed);
+        threadRngReady = 1;
+    }
+    return iris_rng_next(threadRng);
+}
+
+/* A number in [0, n), without the bias of a plain modulo. */
+uint64_t iris_rng_below(uint64_t *s, uint64_t n) {
+    if (n == 0) return 0;
+    uint64_t limit = UINT64_MAX - UINT64_MAX % n;
+    for (;;) {
+        uint64_t x = s ? iris_rng_next(s) : iris_random_u64();
+        if (x < limit) return x % n;
+    }
+}
