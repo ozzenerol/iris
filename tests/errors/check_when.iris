@@ -1,0 +1,10 @@
+// error: 6: os can be .linux or .macos, not .windows
+// error: 7: when can test os, arch and mode, not platform
+// error: 8: when tests os, arch or mode against a value: when os == .linux && arch == .arm64
+// error: 9: mode can be .debug, .releaseSafe or .releaseFast, not .fast
+void main() {
+    when os == .windows { }
+    when platform == .linux { }
+    when os { }
+    when arch == .arm64 || mode == .fast { }
+}

@@ -1,0 +1,32 @@
+// expect: same os: true
+// expect: same arch: true
+// expect: debug: true
+
+when os == .linux {
+    const OS_NAME = "linux"
+} else when os == .macos {
+    const OS_NAME = "macos"
+}
+
+when arch == .arm64 {
+    str archName() => "arm64"
+} else {
+    str archName() => "x86_64"
+}
+
+void main() {
+    when os == .linux {
+        print("same os: {OS_NAME == "linux"}")
+    } else {
+        print("same os: {OS_NAME == "macos"}")
+    }
+    when arch == .x86_64 || arch == .arm64 {
+        print("same arch: {archName().len > 0}")
+    }
+    when mode == .debug && !(mode == .releaseFast) {
+        print("debug: true")
+    } else {
+        print("debug: false")
+        notChecked()
+    }
+}

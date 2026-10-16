@@ -32,13 +32,21 @@
 
 <span class="k">const</span> CRC_TABLE = <span class="k">comptime</span> makeCrcTable()</code></pre>
 <h2 id="when"><a href="#when">when</a></h2>
-<p><code>when</code> includes code only when a condition known at compile time is true. The other branches are not compiled:</p>
+<p><code>when</code> includes code only when a condition known at compile time is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:</p>
 <pre class="code"><code><span class="k">when</span> os == .linux {
     poller := epoll()
 } <span class="k">else</span> <span class="k">when</span> os == .macos {
     poller := kqueue()
 }</code></pre>
-<p>The names that <code>when</code> can test are <code>os</code>, <code>arch</code> and <code>mode</code> (debug, release-safe or release-fast).</p>
+<p><code>when</code> can test three names, against these values:</p>
+<div class="table"><table><thead><tr><th>Name</th><th>Values</th></tr></thead><tbody><tr><td><code>os</code></td><td><code>.linux</code>, <code>.macos</code></td></tr><tr><td><code>arch</code></td><td><code>.x86_64</code>, <code>.arm64</code></td></tr><tr><td><code>mode</code></td><td><code>.debug</code>, <code>.releaseSafe</code>, <code>.releaseFast</code></td></tr></tbody></table></div>
+<p>Conditions can be joined with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>, and compared with <code>==</code> or <code>!=</code>. The values are those of the platform the program is built for, which <code>--target</code> can change.</p>
+<p><code>when</code> also works outside functions, around declarations:</p>
+<pre class="code"><code><span class="k">when</span> os == .macos {
+    <span class="k">const</span> LIB = <span class="s">&quot;libsqlite3.dylib&quot;</span>
+} <span class="k">else</span> {
+    <span class="k">const</span> LIB = <span class="s">&quot;libsqlite3.so&quot;</span>
+}</code></pre>
 <h2 id="attributes"><a href="#attributes">Attributes</a></h2>
 <p>An attribute starts with <code>@</code> and goes before a declaration. Some attributes make the compiler generate code.</p>
 <p><code>@json</code> lets a struct be turned into JSON and read back, with the <code>json</code> module:</p>

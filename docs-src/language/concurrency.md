@@ -165,7 +165,7 @@ void put(str key, Entry e) {
 
 When the lock is taken, `lock` waits, and the other tasks of the thread keep running meanwhile. `unlock` hands the lock to the next one waiting. `tryLock()` takes the lock if it is free and says whether it did. Unlocking a `Mutex` that isn't locked is a bug and stops the program.
 
-A `Mutex` and an `Atomic` are used where they are declared or through a pointer, never as copies.
+A `Mutex` and an `Atomic` are used where they are declared or through a pointer. Copying one, or a struct that holds one, is a compile error, since the copy would guard nothing.
 
 ## threadlocal
 

@@ -52,10 +52,13 @@ iris build --mode=release-safe main.iris
 `--target` builds for another platform:
 
 ```shell
-iris build --target=aarch64-linux
-iris build --target=x86_64-linux
-iris build --target=aarch64-macos
+iris build --target=aarch64-linux main.iris
+iris build --target=x86_64-macos main.iris
 ```
+
+The targets are `x86_64-linux`, `aarch64-linux`, `x86_64-macos` and `aarch64-macos`. `when` sees the target's `os` and `arch`.
+
+On a Mac, both macOS targets work as they are, since Apple's tools have both. For another Linux, clang needs that platform's C library and a linker for it. Set `IRIS_SYSROOT` to a folder with the target's files, or install them where clang looks: on Debian, `gcc-aarch64-linux-gnu` for `aarch64-linux`.
 
 ## Debugging
 

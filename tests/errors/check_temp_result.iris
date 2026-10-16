@@ -1,0 +1,10 @@
+// error: 8: this text is freed when the statement ends, and the call gives back a str that may point into it; keep it in a variable first, with format(...) for text
+// error: 9: this String is freed when the statement ends, and the call gives back a str that may point into it; keep it in a variable first, with format(...) for text
+import str
+
+void main() {
+    name := "iris"
+    n := str.find("hello {name}", "i")
+    t := str.trim("  {name}  ")
+    u := str.trim(name.copy())
+}

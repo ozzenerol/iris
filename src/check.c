@@ -50,6 +50,41 @@ static const struct {
     {"Arena", "a later version"},
 };
 
+/* ---------------------------------------------------------------- target */
+
+Target gTarget = {
+#ifdef __APPLE__
+    .os = "macos",
+#else
+    .os = "linux",
+#endif
+#if defined(__aarch64__)
+    .arch = "arm64",
+#else
+    .arch = "x86_64",
+#endif
+};
+
+bool setTarget(const char *name) {
+    static const struct { const char *name, *os, *arch, *triple; } targets[] = {
+        {"x86_64-linux", "linux", "x86_64", "x86_64-linux-gnu"},
+        {"aarch64-linux", "linux", "arm64", "aarch64-linux-gnu"},
+        {"arm64-linux", "linux", "arm64", "aarch64-linux-gnu"},
+        {"x86_64-macos", "macos", "x86_64", "x86_64-apple-macos11"},
+        {"aarch64-macos", "macos", "arm64", "arm64-apple-macos11"},
+        {"arm64-macos", "macos", "arm64", "arm64-apple-macos11"},
+    };
+    for (size_t i = 0; i < sizeof targets / sizeof targets[0]; i++) {
+        if (strcmp(targets[i].name, name) == 0) {
+            gTarget.os = targets[i].os;
+            gTarget.arch = targets[i].arch;
+            gTarget.triple = targets[i].triple;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ---------------------------------------------------------------- scopes */
 
 typedef struct {
@@ -851,6 +886,43 @@ static Node *convertNode(Checker *c, Node *e, Type *to, bool explicit) {
     return n;
 }
 
+/* The Mutex or Atomic a value holds, if any. */
+static Type *syncInside(Type *t) {
+    switch (t->kind) {
+    case TY_MUTEX: case TY_ATOMIC:
+        return t;
+    case TY_ARRAY:
+        return syncInside(t->elem);
+    case TY_STRUCT:
+        if (!t->decl) return NULL;
+        for (int i = 0; i < t->decl->list.len; i++) {
+            Type *ft = t->decl->list.items[i]->type;
+            Type *in = ft ? syncInside(ft) : NULL;
+            if (in) return in;
+        }
+        return NULL;
+    default:
+        return NULL;
+    }
+}
+
+static bool addressable(Node *e);
+
+/* Copying a Mutex or an Atomic makes a second one that guards nothing:
+ * reading one out of a variable, a field or an element is an error. */
+static bool noCopy(Checker *c, Node *e) {
+    Type *in = e->type ? syncInside(e->type) : NULL;
+    if (!in || !addressable(e)) {
+        return true;
+    }
+    if (in == e->type) {
+        error(c, e, "this %s can't be copied; use a pointer to it: &...", in->name);
+    } else {
+        error(c, e, "this %s holds a %s, so it can't be copied; use a pointer to it: &...", e->type->name, in->name);
+    }
+    return false;
+}
+
 /* Makes the expression in *slot fit `to`, adding a conversion where one
  * happens on its own. what describes the place for the error message.
  * Returns false after an error. */
@@ -859,6 +931,9 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
     Type *from = e->type;
     if (!from || isErr(from) || isErr(to) || from->kind == TY_NORETURN) {
         return true;
+    }
+    if (!noCopy(c, e)) {
+        return false;
     }
     if (sameType(from, to)) {
         return true;
@@ -1513,6 +1588,8 @@ static Type *typeFromExpr(Checker *c, Node *e, bool report) {
 
 static Type *checkExpr(Checker *c, Node **slot, Type *expected);
 static bool checkStarted(Checker *c, Node **callp, const char *word, const char *what);
+static Node *whenBranch(Checker *c, Node *w);
+static void checkTempResult(Checker *c, Node *e);
 static void checkConstDecl(Checker *c, Node *decl);
 
 static void constError(Checker *c, Node *e, const char *msg) {
@@ -2484,8 +2561,11 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     }
     case N_BINARY:
         return checkBinary(c, e, expected);
-    case N_CALL:
-        return checkCall(c, e, expected);
+    case N_CALL: {
+        Type *t = checkCall(c, e, expected);
+        checkTempResult(c, e);
+        return t;
+    }
     case N_IF:
         return setType(e, checkIf(c, e, expected, true));
     case N_MATCH:
@@ -2601,6 +2681,53 @@ static void markTempString(Node **slot, Type *param) {
     Node *v = x->a;
     if (v->kind == N_CALL || (v->kind == N_TRY && v->a && v->a->kind == N_CALL)) {
         v->flags |= F_TEMPSTR;
+    }
+}
+
+/* Whether a value of type t can point into other memory. */
+static bool mayPoint(Type *t) {
+    switch (t->kind) {
+    case TY_PTR: case TY_SLICE: case TY_DYN: case TY_NULL:
+        return true;
+    case TY_ARRAY: case TY_RESULT:
+        return mayPoint(t->elem);
+    case TY_TUPLE:
+        for (int i = 0; i < t->nelems; i++) {
+            if (mayPoint(t->elems[i])) return true;
+        }
+        return false;
+    case TY_STRUCT:
+        if (!t->decl) return false;
+        for (int i = 0; i < t->decl->list.len; i++) {
+            Type *ft = t->decl->list.items[i]->type;
+            if (ft && mayPoint(ft)) return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+static Node *tempArg(Node *a) {
+    if (a->kind == N_NAMED_ARG) a = a->a;
+    if (!a) return NULL;
+    if (a->flags & (F_TEMPTEXT | F_TEMPSTR)) return a;
+    if (a->kind == N_CONVERT && a->a && (a->a->flags & F_TEMPSTR)) return a->a;
+    return NULL;
+}
+
+/* A temporary String is freed when the statement ends, so a call that
+ * gets one can't give back something that may point into it. */
+static void checkTempResult(Checker *c, Node *e) {
+    if (!e->type || isErr(e->type) || !mayPoint(e->type)) return;
+    for (int i = 0; i < e->list.len; i++) {
+        Node *a = tempArg(e->list.items[i]);
+        if (!a) continue;
+        const char *what = a->flags & F_TEMPTEXT ? "this text" : "this String";
+        error(c, a, "%s is freed when the statement ends, and the call gives back a %s that may point into it; "
+                    "keep it in a variable first, with format(...) for text",
+              what, e->type->name);
+        return;
     }
 }
 
@@ -3092,6 +3219,9 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
     for (int i = 0; i < e->list.len; i++) {
         Node *arg = e->list.items[i];
         Node **slot = arg->kind == N_NAMED_ARG ? &arg->a : &e->list.items[i];
+        if (checkTempText(c, slot, &tyStr)) {
+            continue;                   /* text with values: a str built for the call */
+        }
         if (isErr(checkExpr(c, slot, NULL))) bad = true;
     }
     if (bad) return setType(e, &tyError);
@@ -3970,7 +4100,9 @@ static void checkStmt(Checker *c, Node *s) {
         }
         Node *id = s->list.items[0];
         Type *t = checkExpr(c, &s->b, NULL);
-        if (t == &tyVoid) {
+        if (!isErr(t) && !noCopy(c, s->b)) {
+            t = &tyError;
+        } else if (t == &tyVoid) {
             error(c, s->b, "this gives no value to store");
             t = &tyError;
         } else if (t->kind == TY_NORETURN) {
@@ -4286,9 +4418,20 @@ static void checkStmt(Checker *c, Node *s) {
         }
         return;
     }
-    case N_WHEN:
-        notYet(c, s, "when", "a later version");
+    case N_WHEN: {
+        /* only the branch for the target is checked and compiled: it
+         * becomes a plain block */
+        Node *b = whenBranch(c, s);
+        if (b) {
+            *s = *b;
+        } else {
+            s->kind = N_BLOCK;
+            s->list = (NodeList){0};
+            s->a = s->c = s->d = NULL;
+        }
+        checkStmt(c, s);
         return;
+    }
     case N_ASM:
         notYet(c, s, "assembly", "a later version");
         return;
@@ -4694,6 +4837,108 @@ static void enter(Checker *c, Node *d) {
     c->src = d->src;
 }
 
+/* ---------------------------------------------------------------- when */
+
+/* A when condition, worked out for the target: os, arch and mode compared
+ * with values, joined with &&, || and !. */
+static bool whenValue(Checker *c, Node *e, bool *out) {
+    static const struct { const char *name; const char *values[4]; } names[] = {
+        {"os", {"linux", "macos"}},
+        {"arch", {"x86_64", "arm64"}},
+        {"mode", {"debug", "releaseSafe", "releaseFast"}},
+    };
+    switch (e->kind) {
+    case N_BOOL:
+        *out = e->ival != 0;
+        return true;
+    case N_UNARY:
+        if (e->op == P_BANG && whenValue(c, e->a, out)) {
+            *out = !*out;
+            return true;
+        }
+        break;
+    case N_BINARY: {
+        if (e->op == P_ANDAND || e->op == P_OROR) {
+            bool a, b;
+            if (!whenValue(c, e->a, &a) || !whenValue(c, e->b, &b)) return false;
+            *out = e->op == P_ANDAND ? a && b : a || b;
+            return true;
+        }
+        if ((e->op == P_EQ || e->op == P_NE) && e->a->kind == N_IDENT && e->b->kind == N_ENUM_DOT) {
+            for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+                if (strcmp(names[i].name, e->a->name) != 0) continue;
+                const char *now = i == 0 ? gTarget.os : i == 1 ? gTarget.arch
+                                : gTarget.mode == MODE_DEBUG ? "debug"
+                                : gTarget.mode == MODE_RELEASE_SAFE ? "releaseSafe" : "releaseFast";
+                bool known = false;
+                StrBuf list = {0};
+                int count = 0;
+                while (count < 4 && names[i].values[count]) count++;
+                for (int k = 0; k < count; k++) {
+                    known = known || strcmp(names[i].values[k], e->b->name) == 0;
+                    sbPrintf(&list, "%s.%s", k == 0 ? "" : k == count - 1 ? " or " : ", ", names[i].values[k]);
+                }
+                if (!known) {
+                    error(c, e->b, "%s can be %s, not .%s", names[i].name, list.buf, e->b->name);
+                    sbFree(&list);
+                    return false;
+                }
+                sbFree(&list);
+                *out = (strcmp(now, e->b->name) == 0) == (e->op == P_EQ);
+                return true;
+            }
+            error(c, e->a, "when can test os, arch and mode, not %s", e->a->name);
+            return false;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    error(c, e, "when tests os, arch or mode against a value: when os == .linux && arch == .arm64");
+    return false;
+}
+
+/* The branch of a when that is compiled: its block, or NULL for none. */
+static Node *whenBranch(Checker *c, Node *w) {
+    bool v;
+    if (!whenValue(c, w->a, &v)) {
+        return NULL;
+    }
+    if (v) {
+        return w->c;
+    }
+    if (w->d && w->d->kind == N_WHEN) {
+        return whenBranch(c, w->d);
+    }
+    return w->d;
+}
+
+/* Replaces each when among a file's declarations with the declarations of
+ * the branch that is compiled. */
+static void expandWhens(Checker *c, NodeList *list) {
+    NodeList out = {0};
+    bool any = false;
+    for (int i = 0; i < list->len; i++) {
+        Node *d = list->items[i];
+        if (d->kind != N_WHEN) {
+            listPush(c->arena, &out, d);
+            continue;
+        }
+        any = true;
+        Node *b = whenBranch(c, d);
+        if (b) {
+            expandWhens(c, &b->list);
+            for (int k = 0; k < b->list.len; k++) {
+                listPush(c->arena, &out, b->list.items[k]);
+            }
+        }
+    }
+    if (any) {
+        *list = out;
+    }
+}
+
 bool checkProgram(Arena *a, Program *prog) {
     Checker c = {0};
     c.arena = a;
@@ -4715,6 +4960,7 @@ bool checkProgram(Arena *a, Program *prog) {
             Scope *fs = arenaAlloc(a, sizeof(Scope));
             fs->parent = g;
             c.src = file->src;
+            expandWhens(&c, &file->list);
             for (int i = 0; i < file->list.len; i++) {
                 Node *d = file->list.items[i];
                 d->scope = fs;

@@ -1,0 +1,30 @@
+// error: 19: this Atomic[i64] can't be copied; use a pointer to it: &...
+// error: 20: this Mutex can't be copied; use a pointer to it: &...
+// error: 23: this Counter holds a Mutex, so it can't be copied; use a pointer to it: &...
+// error: 24: this Counter holds a Mutex, so it can't be copied; use a pointer to it: &...
+// error: 26: this Counter holds a Mutex, so it can't be copied; use a pointer to it: &...
+struct Counter {
+    Mutex mu
+    i64 n
+}
+
+Mutex global
+
+void take(Mutex m) { }
+void takePtr(Mutex *m) { }
+void count(Counter c) { }
+
+void main() {
+    Atomic[i64] hits
+    copy := hits
+    take(global)
+    takePtr(&global)
+    Counter c
+    count(c)
+    Counter d = c
+    Counter e
+    e = c
+    Counter *p = &c
+    p.mu.lock()
+    p.mu.unlock()
+}

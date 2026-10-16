@@ -118,7 +118,7 @@ Map[<span class="t">str</span>, Entry] cache
     cache.set(key, e)
 }</code></pre>
 <p>When the lock is taken, <code>lock</code> waits, and the other tasks of the thread keep running meanwhile. <code>unlock</code> hands the lock to the next one waiting. <code>tryLock()</code> takes the lock if it is free and says whether it did. Unlocking a <code>Mutex</code> that isn't locked is a bug and stops the program.</p>
-<p>A <code>Mutex</code> and an <code>Atomic</code> are used where they are declared or through a pointer, never as copies.</p>
+<p>A <code>Mutex</code> and an <code>Atomic</code> are used where they are declared or through a pointer. Copying one, or a struct that holds one, is a compile error, since the copy would guard nothing.</p>
 <h2 id="threadlocal"><a href="#threadlocal">threadlocal</a></h2>
 <p>A global variable marked <code>threadlocal</code> has a separate value on each thread:</p>
 <pre class="code"><code><span class="k">threadlocal</span> <span class="t">i64</span> handled

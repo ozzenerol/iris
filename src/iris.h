@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.15.0"
+#define IRIS_VERSION "0.16.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -316,6 +316,15 @@ bool checkProgram(Arena *a, Program *prog);
 /* ---------------------------------------------------------------- ir.c */
 
 typedef enum { MODE_DEBUG, MODE_RELEASE_SAFE, MODE_RELEASE_FAST } BuildMode;
+
+/* What the program is built for: when tests os, arch and mode. triple is
+ * clang's name for it, or NULL for the machine the compiler runs on. */
+typedef struct {
+    const char *os, *arch, *triple;
+    BuildMode mode;
+} Target;
+extern Target gTarget;
+bool setTarget(const char *name);
 
 /* Writes the checked program as LLVM IR. */
 char *writeIR(Arena *a, Program *prog, BuildMode mode);

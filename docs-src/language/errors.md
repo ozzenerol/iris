@@ -86,6 +86,8 @@ If `fs.readAll` fails, `loadConfig` returns the same error right away. `text` is
 port := parsePort(arg) catch 8080
 ```
 
+The value after `catch` is one value: a name, a literal, a call or something in parentheses. The rest of the expression applies to the result, so `parsePort(arg) catch 0 != 80` compares the port with 80. A longer fallback goes in parentheses: `catch (base + 1)`.
+
 With a name and a block, the block runs when the call fails, with the error in that name. The block either gives a value to use or leaves the function:
 
 ```iris

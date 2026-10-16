@@ -1,0 +1,17 @@
+// expect: true
+// expect: 15
+// expect: 9
+// expect: 3
+
+import str
+
+void main() {
+    ok := str.parseInt("5") catch 0 != 5
+    print("{!ok}")
+    n := str.parseInt("5") catch -1 + 10
+    print("{n}")
+    m := str.parseInt("x") catch (-1 + 10)
+    print("{m}")
+    k := str.parseInt("x") catch 1 + str.parseInt("2") catch 0
+    print("{k}")
+}

@@ -28,9 +28,10 @@
 <p><code>iris run</code> and <code>iris build</code> use <code>clang</code>, version 15 or newer, to compile the IR. Set <code>IRIS_CC</code> to use a different one. <code>-l name</code> links a C library and <code>-I folder</code> adds a folder for C headers.</p>
 <h2 id="other-platforms"><a href="#other-platforms">Other platforms</a></h2>
 <p><code>--target</code> builds for another platform:</p>
-<pre class="code"><code>iris build --target=aarch64-linux
-iris build --target=x86_64-linux
-iris build --target=aarch64-macos</code></pre>
+<pre class="code"><code>iris build --target=aarch64-linux main.iris
+iris build --target=x86_64-macos main.iris</code></pre>
+<p>The targets are <code>x86_64-linux</code>, <code>aarch64-linux</code>, <code>x86_64-macos</code> and <code>aarch64-macos</code>. <code>when</code> sees the target's <code>os</code> and <code>arch</code>.</p>
+<p>On a Mac, both macOS targets work as they are, since Apple's tools have both. For another Linux, clang needs that platform's C library and a linker for it. Set <code>IRIS_SYSROOT</code> to a folder with the target's files, or install them where clang looks: on Debian, <code>gcc-aarch64-linux-gnu</code> for <code>aarch64-linux</code>.</p>
 <h2 id="debugging"><a href="#debugging">Debugging</a></h2>
 <p>Every build includes debug information, so <code>gdb</code> and <code>lldb</code> work with Iris source lines and names. A breakpoint is set by file and line, and arguments, variables, structs, slices and enums show by name:</p>
 <pre class="out"><code>$ gdb ./server

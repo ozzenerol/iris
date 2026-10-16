@@ -88,6 +88,17 @@ print(json.encode(user))
 
 Anywhere else, text with values needs `format`, and a `String` from a call needs a variable that frees it.
 
+A call that gives back a `str`, a slice or a pointer may give back part of its argument. The temporary String would be gone after the statement, so this is an error:
+
+```iris error
+t := str.trim("  {name}  ")     // error: the result may point into the text
+```
+
+```iris
+scoped String padded = format("  {name}  ")
+t := str.trim(padded)
+```
+
 A complete program:
 
 ```iris run
