@@ -93,9 +93,12 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/cimport.c` | `import c`: C headers to an Iris module. |
 | `src/proc.c` | Running clang and git. |
 | `std/` | The standard library, in Iris. The build carries it inside `iris`, like the runtime. |
-| `src/ir.c` | The IR writer. |
-| `runtime/rt.c` | The small part written in C: printing and panics now; error traces and the task scheduler later. |
-| `tests/` | Test programs. |
+| `src/ir.c` | The IR writer, with the debug information and the JSON tables. |
+| `src/fmt.c` | `iris fmt`. |
+| `src/lsp.c` | `iris lsp`, the language server. |
+| `runtime/rt.c` | The part written in C: printing, panics, error traces, the task scheduler, threads, the network, JSON and tests. |
+| `editors/vim/` | Syntax files for Vim and Neovim. |
+| `tests/` | Test programs. `tools/run_tests.py` runs them. |
 
 ## Memory inside the compiler
 

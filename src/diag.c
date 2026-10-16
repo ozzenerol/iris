@@ -9,7 +9,17 @@
 
 int gErrors;
 
+void (*gDiagHook)(Source *src, int line, int col, const char *msg);
+
 void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap) {
+    if (gDiagHook) {
+        /* the language server collects errors instead of printing them */
+        char msg[1024];
+        vsnprintf(msg, sizeof msg, fmt, ap);
+        gDiagHook(src, line, col, msg);
+        gErrors++;
+        return;
+    }
     fprintf(stderr, "%s:%d:%d: error: ", src->path, line, col);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);

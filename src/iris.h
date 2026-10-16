@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.17.0"
+#define IRIS_VERSION "0.18.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -43,6 +43,11 @@ typedef struct {
 } Source;
 
 extern int gErrors;
+/* when set, errors go here instead of stderr (the language server) */
+extern void (*gDiagHook)(Source *src, int line, int col, const char *msg);
+/* when set, source files are read through it first (the language server's open documents) */
+extern const char *(*gReadHook)(const char *path, size_t *len);
+const char *stdSource(const char *path);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);
 void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
@@ -205,6 +210,9 @@ bool writeText(const char *path, const char *text, size_t len);
 
 /* fmt.c: the source in the standard layout, or NULL when it has errors */
 char *formatSource(Arena *a, Source *src);
+
+/* lsp.c: the language server on standard input and output */
+int cmdLsp(void);
 
 /* ---------------------------------------------------------------- cimport.c */
 

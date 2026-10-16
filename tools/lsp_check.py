@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Talks to `iris lsp` like an editor and checks its answers.
+
+Usage: python3 tools/lsp_check.py [path/to/iris]
+Prints what failed; exit status 1 if anything did."""
+import json, os, subprocess, sys, tempfile
+
+IRIS = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "iris"))
+
+SOURCE = '''import json
+
+// A point on the screen.
+struct Point {
+    i64 x
+    i64 y
+}
+
+// How far the point is from the corner.
+i64 Point.sum() => self.x + self.y
+
+void main() {
+    p := Point{x: 1, y: 2}
+    print("{p.sum()}")
+    n := missing + 1
+}
+'''
+
+
+class Client:
+    def __init__(self):
+        self.p = subprocess.Popen([IRIS, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.next_id = 0
+
+    def send(self, obj):
+        body = json.dumps(obj).encode()
+        self.p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        self.p.stdin.flush()
+
+    def read(self):
+        length = 0
+        while True:
+            line = self.p.stdout.readline()
+            if not line:
+                return None
+            line = line.strip()
+            if not line:
+                break
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":")[1])
+        return json.loads(self.p.stdout.read(length))
+
+    def request(self, method, params):
+        self.next_id += 1
+        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
+        while True:
+            m = self.read()
+            if m is None or m.get("id") == self.next_id:
+                return m
+
+    def notify(self, method, params):
+        self.send({"jsonrpc": "2.0", "method": method, "params": params})
+
+
+def main():
+    failures = []
+
+    def check(what, ok):
+        if not ok:
+            failures.append(what)
+
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "main.iris")
+    with open(path, "w") as f:
+        f.write("void main() { }\n")       # what is on disk differs: the editor's text wins
+    uri = "file://" + path
+    c = Client()
+    init = c.request("initialize", {"capabilities": {}})
+    check("initialize", init and init["result"]["capabilities"]["hoverProvider"])
+    c.notify("initialized", {})
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "iris", "version": 1, "text": SOURCE}})
+    diag = c.read()
+    msgs = [x["message"] for x in diag["params"]["diagnostics"]] if diag else []
+    check("diagnostics: %r" % msgs, diag and diag["params"]["uri"] == uri and any("missing" in m for m in msgs))
+    if diag and diag["params"]["diagnostics"]:
+        r = diag["params"]["diagnostics"][0]["range"]
+        check("diagnostic range %r" % r, r["start"] == {"line": 14, "character": 9})
+
+    td = {"uri": uri}
+    h = c.request("textDocument/hover", {"textDocument": td, "position": {"line": 13, "character": 15}})
+    hv = h and h["result"] and h["result"]["contents"]["value"]
+    check("hover on sum: %r" % hv, hv and "i64 Point.sum()" in hv and "How far the point" in hv)
+    h = c.request("textDocument/hover", {"textDocument": td, "position": {"line": 12, "character": 4}})
+    hv = h and h["result"] and h["result"]["contents"]["value"]
+    check("hover on p: %r" % hv, hv and "Point p" in hv)
+
+    g = c.request("textDocument/definition", {"textDocument": td, "position": {"line": 12, "character": 10}})
+    loc = g and g["result"]
+    check("definition of Point: %r" % loc, loc and loc["uri"].endswith("main.iris") and loc["range"]["start"]["line"] == 3)
+
+    s = c.request("textDocument/documentSymbol", {"textDocument": td})
+    names = [x["name"] for x in (s and s["result"]) or []]
+    check("symbols: %r" % names, names == ["Point", "Point.sum", "main"])
+
+    # completion after "p." and after "json."
+    text2 = SOURCE.replace('    print("{p.sum()}")', '    p.\n    print("{p.sum()}")')
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"text": text2}]})
+    c.read()
+    comp = c.request("textDocument/completion", {"textDocument": td, "position": {"line": 13, "character": 6}})
+    labels = [x["label"] for x in (comp and comp["result"]) or []]
+    check("completion after p.: %r" % labels, {"x", "y", "sum"} <= set(labels))
+    text3 = SOURCE.replace('    print("{p.sum()}")', '    json.\n    print("{p.sum()}")')
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": 3}, "contentChanges": [{"text": text3}]})
+    c.read()
+    comp = c.request("textDocument/completion", {"textDocument": td, "position": {"line": 13, "character": 9}})
+    labels = [x["label"] for x in (comp and comp["result"]) or []]
+    check("completion after json.: %r" % labels, {"encode", "decode", "JsonError"} <= set(labels))
+
+    # fixing the error clears the diagnostics; formatting
+    fixed = SOURCE.replace("    n := missing + 1\n", "    n:=1+2\n")
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": 4}, "contentChanges": [{"text": fixed}]})
+    diag = c.read()
+    check("diagnostics cleared: %r" % diag, diag and diag["params"]["diagnostics"] == [])
+    fm = c.request("textDocument/formatting", {"textDocument": td, "options": {"tabSize": 4, "insertSpaces": True}})
+    edits = fm and fm["result"]
+    check("formatting: %r" % edits, edits and "n := 1 + 2" in edits[0]["newText"])
+
+    # definition in the standard library opens a copy of it
+    g = c.request("textDocument/definition", {"textDocument": td, "position": {"line": 0, "character": 8}})
+    shut = c.request("shutdown", None)
+    check("shutdown", shut is not None and "result" in shut)
+    c.notify("exit", None)
+    check("exit status", c.p.wait(timeout=10) == 0)
+
+    for f in failures:
+        print("FAIL lsp: " + f)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

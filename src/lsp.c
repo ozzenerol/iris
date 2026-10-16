@@ -1,0 +1,1117 @@
+/* iris lsp: a language server for editors, over standard input and output.
+ *
+ * It answers diagnostics, hover, go to definition, document symbols,
+ * completion after a dot, and formatting. The editor sends whole documents
+ * (full sync); open documents are read instead of the files on disk.
+ *
+ * Each request that needs the compiler runs in a child process (fork): the
+ * child loads and checks the program with the documents as they are in the
+ * editor, writes the replies to a pipe and exits. A compiler crash or a
+ * hang then costs one reply, never the server. */
+
+#define _XOPEN_SOURCE 700         /* realpath, strndup */
+#include "iris.h"
+
+#include <ctype.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* ---------------------------------------------------------------- JSON */
+
+typedef struct J J;
+struct J {
+    char type;          /* o object, a array, s string, n number, t true, f false, z null */
+    char *key;          /* in an object */
+    char *str;
+    double num;
+    J *child, *next;
+};
+
+static void ws(const char **p) {
+    while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r') (*p)++;
+}
+
+static char *jstring(const char **p) {
+    StrBuf b = {0};
+    (*p)++;
+    while (**p && **p != '"') {
+        char c = *(*p)++;
+        if (c != '\\') {
+            sbPutc(&b, c);
+            continue;
+        }
+        char e = *(*p)++;
+        switch (e) {
+        case 'n': sbPutc(&b, '\n'); break;
+        case 't': sbPutc(&b, '\t'); break;
+        case 'r': sbPutc(&b, '\r'); break;
+        case 'b': sbPutc(&b, '\b'); break;
+        case 'f': sbPutc(&b, '\f'); break;
+        case 'u': {
+            unsigned v = 0;
+            for (int i = 0; i < 4 && **p; i++) {
+                char h = *(*p)++;
+                v = v * 16 + (unsigned)(isdigit((unsigned char)h) ? h - '0' : (tolower((unsigned char)h) - 'a' + 10));
+            }
+            if (v >= 0xd800 && v < 0xdc00 && (*p)[0] == '\\' && (*p)[1] == 'u') {
+                unsigned lo = 0;
+                for (int i = 2; i < 6; i++) {
+                    char h = (*p)[i];
+                    lo = lo * 16 + (unsigned)(isdigit((unsigned char)h) ? h - '0' : (tolower((unsigned char)h) - 'a' + 10));
+                }
+                v = 0x10000 + ((v - 0xd800) << 10) + (lo - 0xdc00);
+                *p += 6;
+            }
+            if (v < 0x80) {
+                sbPutc(&b, (char)v);
+            } else if (v < 0x800) {
+                sbPutc(&b, (char)(0xc0 | (v >> 6)));
+                sbPutc(&b, (char)(0x80 | (v & 0x3f)));
+            } else if (v < 0x10000) {
+                sbPutc(&b, (char)(0xe0 | (v >> 12)));
+                sbPutc(&b, (char)(0x80 | ((v >> 6) & 0x3f)));
+                sbPutc(&b, (char)(0x80 | (v & 0x3f)));
+            } else {
+                sbPutc(&b, (char)(0xf0 | (v >> 18)));
+                sbPutc(&b, (char)(0x80 | ((v >> 12) & 0x3f)));
+                sbPutc(&b, (char)(0x80 | ((v >> 6) & 0x3f)));
+                sbPutc(&b, (char)(0x80 | (v & 0x3f)));
+            }
+            break;
+        }
+        default: sbPutc(&b, e); break;
+        }
+    }
+    if (**p == '"') (*p)++;
+    sbPutc(&b, 0);
+    return b.buf;
+}
+
+static J *jparse(const char **p) {
+    ws(p);
+    J *j = calloc(1, sizeof(J));
+    if (!j) exit(2);
+    char c = **p;
+    if (c == '{' || c == '[') {
+        j->type = c == '{' ? 'o' : 'a';
+        (*p)++;
+        J **tail = &j->child;
+        for (;;) {
+            ws(p);
+            if (**p == '}' || **p == ']') {
+                (*p)++;
+                break;
+            }
+            if (!**p) break;
+            char *key = NULL;
+            if (j->type == 'o') {
+                key = jstring(p);
+                ws(p);
+                if (**p == ':') (*p)++;
+            }
+            J *v = jparse(p);
+            v->key = key;
+            *tail = v;
+            tail = &v->next;
+            ws(p);
+            if (**p == ',') (*p)++;
+        }
+    } else if (c == '"') {
+        j->type = 's';
+        j->str = jstring(p);
+    } else if (c == 't' || c == 'f' || c == 'n') {
+        j->type = c == 'n' ? 'z' : c;
+        while (isalpha((unsigned char)**p)) (*p)++;
+    } else {
+        j->type = 'n';
+        char *end;
+        j->num = strtod(*p, &end);
+        *p = end > *p ? end : *p + 1;
+    }
+    return j;
+}
+
+static void jfree(J *j) {
+    while (j) {
+        J *n = j->next;
+        jfree(j->child);
+        free(j->key);
+        free(j->str);
+        free(j);
+        j = n;
+    }
+}
+
+static J *jget(J *o, const char *key) {
+    for (J *c = o ? o->child : NULL; c; c = c->next) {
+        if (c->key && strcmp(c->key, key) == 0) return c;
+    }
+    return NULL;
+}
+
+static const char *jstr(J *o, const char *key) {
+    J *v = jget(o, key);
+    return v && v->type == 's' ? v->str : NULL;
+}
+
+static void putJsonString(StrBuf *b, const char *s, size_t n) {
+    sbPutc(b, '"');
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+        case '"': sbPuts(b, "\\\""); break;
+        case '\\': sbPuts(b, "\\\\"); break;
+        case '\n': sbPuts(b, "\\n"); break;
+        case '\r': sbPuts(b, "\\r"); break;
+        case '\t': sbPuts(b, "\\t"); break;
+        default:
+            if (c < 0x20) {
+                sbPrintf(b, "\\u%04x", c);
+            } else {
+                sbPutc(b, (char)c);
+            }
+        }
+    }
+    sbPutc(b, '"');
+}
+
+static void putStr(StrBuf *b, const char *s) { putJsonString(b, s, strlen(s)); }
+
+/* The id of a request, as it came: a number or a string. */
+static void putId(StrBuf *b, J *id) {
+    if (!id) {
+        sbPuts(b, "null");
+    } else if (id->type == 's') {
+        putStr(b, id->str);
+    } else {
+        sbPrintf(b, "%.0f", id->num);
+    }
+}
+
+/* ---------------------------------------------------------------- transport */
+
+static char *readMessage(void) {
+    size_t len = 0;
+    bool have = false;
+    char line[1024];
+    for (;;) {
+        size_t n = 0;
+        int c;
+        while ((c = getchar()) != EOF && c != '\n') {
+            if (n + 1 < sizeof line) line[n++] = (char)c;
+        }
+        if (c == EOF) return NULL;
+        line[n] = 0;
+        if (n && line[n - 1] == '\r') line[--n] = 0;
+        if (n == 0) {
+            if (have) break;
+            continue;
+        }
+        if (strncasecmp(line, "Content-Length:", 15) == 0) {
+            len = (size_t)strtoul(line + 15, NULL, 10);
+            have = true;
+        }
+    }
+    char *body = malloc(len + 1);
+    if (!body) exit(2);
+    if (fread(body, 1, len, stdin) != len) {
+        free(body);
+        return NULL;
+    }
+    body[len] = 0;
+    return body;
+}
+
+static void sendMsg(const char *body, size_t n) {
+    printf("Content-Length: %zu\r\n\r\n", n);
+    fwrite(body, 1, n, stdout);
+    fflush(stdout);
+}
+
+/* ---------------------------------------------------------------- documents */
+
+typedef struct {
+    char *uri, *path, *text;
+    size_t len;
+} Doc;
+
+static Doc docs[256];
+static int ndocs;
+static char *diagUris[512];     /* files that have diagnostics in the editor now */
+static int ndiagUris;
+
+static char *pathOf(const char *uri) {
+    if (strncmp(uri, "file://", 7) != 0) return strdup(uri);
+    StrBuf b = {0};
+    for (const char *p = uri + 7; *p; p++) {
+        if (*p == '%' && isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2])) {
+            char h[3] = {p[1], p[2], 0};
+            sbPutc(&b, (char)strtol(h, NULL, 16));
+            p += 2;
+        } else {
+            sbPutc(&b, *p);
+        }
+    }
+    sbPutc(&b, 0);
+    return b.buf;
+}
+
+static char *uriOf(const char *path) {
+    StrBuf b = {0};
+    sbPuts(&b, "file://");
+    for (const char *p = path; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || strchr("/-_.~", c)) {
+            sbPutc(&b, (char)c);
+        } else {
+            sbPrintf(&b, "%%%02X", c);
+        }
+    }
+    sbPutc(&b, 0);
+    return b.buf;
+}
+
+static Doc *findDoc(const char *uri) {
+    for (int i = 0; i < ndocs; i++) {
+        if (strcmp(docs[i].uri, uri) == 0) return &docs[i];
+    }
+    return NULL;
+}
+
+static void setDoc(const char *uri, const char *text) {
+    Doc *d = findDoc(uri);
+    if (!d) {
+        if (ndocs == (int)(sizeof docs / sizeof docs[0])) return;
+        d = &docs[ndocs++];
+        d->uri = strdup(uri);
+        d->path = pathOf(uri);
+    } else {
+        free(d->text);
+    }
+    d->text = strdup(text);
+    d->len = strlen(text);
+}
+
+static void closeDoc(const char *uri) {
+    Doc *d = findDoc(uri);
+    if (!d) return;
+    free(d->uri);
+    free(d->path);
+    free(d->text);
+    *d = docs[--ndocs];
+}
+
+/* Paths are compared without "./" parts. */
+static bool samePath(const char *a, const char *b) {
+    char ra[4096], rb[4096];
+    const char *x = realpath(a, ra) ? ra : a;
+    const char *y = realpath(b, rb) ? rb : b;
+    return strcmp(x, y) == 0;
+}
+
+static const char *readDoc(const char *path, size_t *len) {
+    for (int i = 0; i < ndocs; i++) {
+        if (samePath(docs[i].path, path)) {
+            *len = docs[i].len;
+            return docs[i].text;
+        }
+    }
+    return NULL;
+}
+
+/* ---------------------------------------------------------------- positions */
+
+/* LSP counts characters in UTF-16 units, Iris columns in bytes. */
+static int utf16Col(const char *lineStart, const char *end, int col) {
+    int u = 0;
+    const char *p = lineStart;
+    for (int i = 1; i < col && p < end && *p != '\n'; i++, p++) {
+        unsigned char c = (unsigned char)*p;
+        if ((c & 0xc0) == 0x80) continue;
+        u += c >= 0xf0 ? 2 : 1;
+    }
+    return u;
+}
+
+static const char *lineStartOf(const char *text, size_t len, int line) {
+    const char *p = text, *end = text + len;
+    for (int l = 1; l < line && p < end; p++) {
+        if (*p == '\n') l++;
+    }
+    return p;
+}
+
+/* 1-based byte column of a UTF-16 character position on a line. */
+static int byteCol(const char *text, size_t len, int line, int character) {
+    const char *p = lineStartOf(text, len, line), *end = text + len;
+    int u = 0, col = 1;
+    while (p < end && *p != '\n' && u < character) {
+        unsigned char c = (unsigned char)*p;
+        int n = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc0 ? 2 : 1;
+        u += c >= 0xf0 ? 2 : 1;
+        p += n;
+        col += n;
+    }
+    return col;
+}
+
+static void putPos(StrBuf *b, Source *src, int line, int col) {
+    const char *ls = src ? lineStartOf(src->text, src->len, line) : NULL;
+    int c = src ? utf16Col(ls, src->text + src->len, col) : col - 1;
+    sbPrintf(b, "{\"line\":%d,\"character\":%d}", line > 0 ? line - 1 : 0, c);
+}
+
+static int wordLen(Source *src, int line, int col) {
+    const char *p = lineStartOf(src->text, src->len, line) + col - 1, *end = src->text + src->len;
+    int n = 0;
+    while (p + n < end && (isalnum((unsigned char)p[n]) || p[n] == '_')) n++;
+    return n ? n : 1;
+}
+
+static void putRange(StrBuf *b, Source *src, int line, int col, int len) {
+    sbPuts(b, "{\"start\":");
+    putPos(b, src, line, col);
+    sbPuts(b, ",\"end\":");
+    putPos(b, src, line, col + len);
+    sbPutc(b, '}');
+}
+
+/* ---------------------------------------------------------------- analysis (in the child) */
+
+typedef struct {
+    Source *src;
+    int line, col;
+    char *msg;
+} Diag;
+
+static Diag diags[512];
+static int ndiags;
+
+static void collect(Source *src, int line, int col, const char *msg) {
+    if (ndiags < (int)(sizeof diags / sizeof diags[0])) {
+        diags[ndiags++] = (Diag){src, line, col, strdup(msg)};
+    }
+}
+
+static Arena gA;
+
+static Program *analyze(const char *path) {
+    gDiagHook = collect;
+    gReadHook = readDoc;
+    gTesting = gWithTests = true;     /* no main needed; tests are checked */
+    gErrors = 0;
+    Program *prog = loadProgram(&gA, path, NULL, 0);
+    if (prog) {
+        checkProgram(&gA, prog);
+    }
+    return prog;
+}
+
+/* The program's files' sources, by path. */
+static Source *sourceOf(Program *prog, const char *path) {
+    for (Module *m = prog ? prog->modules : NULL; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            Node *file = m->files.items[f];
+            if (file->src && samePath(file->src->path, path)) return file->src;
+        }
+    }
+    return NULL;
+}
+
+/* Where a standard library file can be opened: a copy in the cache. */
+static char *stdCopy(const char *path) {
+    const char *text = stdSource(path);
+    if (!text) return NULL;
+    const char *base = getenv("XDG_CACHE_HOME");
+    char dir[4096];
+    if (base && *base) {
+        snprintf(dir, sizeof dir, "%s/iris/std-%s", base, IRIS_VERSION);
+    } else {
+        snprintf(dir, sizeof dir, "%s/.cache/iris/std-%s", getenv("HOME") ? getenv("HOME") : "/tmp", IRIS_VERSION);
+    }
+    char full[4200];
+    snprintf(full, sizeof full, "%s/%s", dir, path + 4);
+    struct stat st;
+    if (stat(full, &st) != 0) {
+        /* make the folders, then the file */
+        for (char *s = full + 1; *s; s++) {
+            if (*s == '/') {
+                *s = 0;
+                mkdir(full, 0755);
+                *s = '/';
+            }
+        }
+        writeText(full, text, strlen(text));
+    }
+    return strdup(full);
+}
+
+static char *fileUri(const char *path) {
+    for (int i = 0; i < ndocs; i++) {
+        if (samePath(docs[i].path, path)) {
+            return strdup(docs[i].uri);     /* as the editor named it, symlinks and all */
+        }
+    }
+    if (strncmp(path, "std/", 4) == 0) {
+        char *copy = stdCopy(path);
+        if (!copy) return NULL;
+        char *u = uriOf(copy);
+        free(copy);
+        return u;
+    }
+    char full[4096];
+    return uriOf(realpath(path, full) ? full : path);
+}
+
+/* publishDiagnostics for every file with errors, and empty ones for the
+ * files that had errors before; then a record of the new list. */
+static void putDiagnostics(StrBuf *out, Program *prog, const char *mainPath) {
+    char *uris[512];
+    int nuris = 0;
+    for (int i = 0; i < ndiags; i++) {
+        if (!diags[i].src || strncmp(diags[i].src->path, "std/", 4) == 0) continue;
+        char *u = fileUri(diags[i].src->path);
+        bool seen = false;
+        for (int k = 0; k < nuris; k++) seen = seen || strcmp(uris[k], u) == 0;
+        if (seen || nuris == 512) {
+            free(u);
+            continue;
+        }
+        uris[nuris++] = u;
+    }
+    for (int k = 0; k < nuris; k++) {
+        StrBuf b = {0};
+        sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":");
+        putStr(&b, uris[k]);
+        sbPuts(&b, ",\"diagnostics\":[");
+        bool first = true;
+        for (int i = 0; i < ndiags; i++) {
+            if (!diags[i].src || strncmp(diags[i].src->path, "std/", 4) == 0) continue;
+            char *u = fileUri(diags[i].src->path);
+            bool here = strcmp(u, uris[k]) == 0;
+            free(u);
+            if (!here) continue;
+            if (!first) sbPutc(&b, ',');
+            first = false;
+            sbPuts(&b, "{\"range\":");
+            putRange(&b, diags[i].src, diags[i].line, diags[i].col, wordLen(diags[i].src, diags[i].line, diags[i].col));
+            sbPuts(&b, ",\"severity\":1,\"source\":\"iris\",\"message\":");
+            putStr(&b, diags[i].msg);
+            sbPutc(&b, '}');
+        }
+        sbPuts(&b, "]}}");
+        sbPutn(out, b.buf, b.len);
+        sbPutc(out, 0);
+        sbFree(&b);
+    }
+    /* files that had errors and have none now */
+    for (int i = 0; i < ndiagUris; i++) {
+        bool still = false;
+        for (int k = 0; k < nuris; k++) still = still || strcmp(diagUris[i], uris[k]) == 0;
+        if (still) continue;
+        StrBuf b = {0};
+        sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":");
+        putStr(&b, diagUris[i]);
+        sbPuts(&b, ",\"diagnostics\":[]}}");
+        sbPutn(out, b.buf, b.len);
+        sbPutc(out, 0);
+        sbFree(&b);
+    }
+    sbPuts(out, "@uris");
+    for (int k = 0; k < nuris; k++) {
+        sbPutc(out, '\n');
+        sbPuts(out, uris[k]);
+        free(uris[k]);
+    }
+    sbPutc(out, 0);
+    (void)prog;
+    (void)mainPath;
+}
+
+/* ---------------------------------------------------------------- finding things */
+
+typedef struct {
+    Source *src;
+    int line, col;
+    Node *best;         /* the name under the cursor */
+    Node *parent;
+} Find;
+
+static int nameLen(Node *n) {
+    const char *dot = n->name ? strrchr(n->name, '.') : NULL;
+    return n->name ? (int)strlen(dot ? dot + 1 : n->name) : 0;
+}
+
+static void walk(Find *f, Node *n, Node *parent) {
+    if (!n) return;
+    if (n->src == f->src && n->line == f->line && n->name &&
+        (n->kind == N_IDENT || n->kind == N_FIELD_ACCESS || n->kind == N_FUNC || n->kind == N_STRUCT ||
+         n->kind == N_ENUM || n->kind == N_CONST || n->kind == N_VAR || n->kind == N_PARAM || n->kind == N_FIELD ||
+         n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME)) {
+        int start = n->col, len = nameLen(n);
+        if (f->col >= start && f->col < start + len) {
+            f->best = n;
+            f->parent = parent;
+        }
+    }
+    walk(f, n->a, n);
+    walk(f, n->b, n);
+    walk(f, n->c, n);
+    walk(f, n->d, n);
+    for (int i = 0; i < n->list.len; i++) walk(f, n->list.items[i], n);
+    for (int i = 0; i < n->list2.len; i++) walk(f, n->list2.items[i], n);
+}
+
+static Node *nodeAt(Program *prog, Source *src, int line, int col, Node **parent) {
+    Find f = {src, line, col, NULL, NULL};
+    for (Module *m = prog->modules; m; m = m->next) {
+        for (int i = 0; i < m->files.len; i++) {
+            Node *file = m->files.items[i];
+            if (file->src == src) walk(&f, file, NULL);
+        }
+    }
+    for (int i = 0; i < prog->instances.len; i++) walk(&f, prog->instances.items[i], NULL);
+    if (parent) *parent = f.parent;
+    return f.best;
+}
+
+/* What a name under the cursor stands for: its declaration. */
+static Node *declOf(Node *n, Node *parent) {
+    switch (n->kind) {
+    case N_IDENT: case N_FIELD_ACCESS:
+        if (n->ref) return n->ref;
+        if (parent && parent->kind == N_CALL && parent->a == n && parent->ref) return parent->ref;
+        if (parent && parent->kind == N_STRUCT_LIT && parent->a == n && parent->type && parent->type->decl) {
+            return parent->type->decl;      /* Point{...} */
+        }
+        if (parent && parent->kind == N_DEFINE && n->type) return n;    /* p := ... */
+        return NULL;
+    case N_T_NAME:
+        return n->type && n->type->decl ? n->type->decl : NULL;
+    default:
+        return n;       /* the declaration itself */
+    }
+}
+
+static void putTypeName(StrBuf *b, Type *t) {
+    sbPuts(b, t && t->name ? t->name : "?");
+}
+
+/* How a declaration reads in a hover. */
+static void signature(StrBuf *b, Node *d) {
+    switch (d->kind) {
+    case N_FUNC: {
+        putTypeName(b, d->type);
+        sbPutc(b, ' ');
+        int first = 0;
+        if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
+            Type *rt = d->list.items[0]->type;
+            putTypeName(b, rt && rt->kind == TY_PTR ? rt->elem : rt);
+            sbPutc(b, '.');
+            first = 1;
+        }
+        sbPuts(b, d->flags & F_TESTFN ? "test" : d->name);
+        sbPutc(b, '(');
+        for (int i = first; i < d->list.len; i++) {
+            Node *p = d->list.items[i];
+            if (i > first) sbPuts(b, ", ");
+            putTypeName(b, p->type);
+            sbPrintf(b, " %s", p->name);
+        }
+        sbPutc(b, ')');
+        break;
+    }
+    case N_STRUCT: {
+        sbPrintf(b, "struct %s {\n", d->name);
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            if (f->kind == N_EMBED) {
+                sbPrintf(b, "    %s\n", f->name);
+            } else {
+                sbPuts(b, "    ");
+                putTypeName(b, f->type);
+                sbPrintf(b, " %s\n", f->name);
+            }
+        }
+        sbPutc(b, '}');
+        break;
+    }
+    case N_ENUM: {
+        sbPrintf(b, "enum %s { ", d->name);
+        for (int i = 0; i < d->list.len; i++) {
+            sbPrintf(b, "%s%s", i ? ", " : "", d->list.items[i]->name);
+        }
+        sbPuts(b, " }");
+        break;
+    }
+    case N_ENUM_MEMBER:
+        putTypeName(b, d->type);
+        sbPrintf(b, ".%s", d->name);
+        break;
+    case N_CONST:
+        sbPuts(b, "const ");
+        putTypeName(b, d->type);
+        sbPrintf(b, " %s", d->name);
+        break;
+    default:
+        putTypeName(b, d->type);
+        sbPrintf(b, " %s", d->name ? d->name : "");
+        break;
+    }
+}
+
+/* The comment lines right above a declaration. */
+static void docComment(StrBuf *b, Node *d) {
+    if (!d->src || d->line < 2) return;
+    const char *text = d->src->text;
+    size_t len = d->src->len;
+    int first = d->line, l = d->line - 1;
+    while (l >= 1) {
+        const char *s = lineStartOf(text, len, l), *e = s;
+        while (e < text + len && *e != '\n') e++;
+        while (s < e && (*s == ' ' || *s == '\t')) s++;
+        if (e - s >= 2 && s[0] == '/' && s[1] == '/') {
+            first = l--;
+        } else {
+            break;
+        }
+    }
+    for (l = first; l < d->line; l++) {
+        const char *s = lineStartOf(text, len, l), *e = s;
+        while (e < text + len && *e != '\n') e++;
+        while (s < e && (*s == ' ' || *s == '\t')) s++;
+        s += 2;
+        if (s < e && *s == ' ') s++;
+        sbPutn(b, s, (size_t)(e - s));
+        sbPutc(b, '\n');
+    }
+}
+
+/* ---------------------------------------------------------------- requests (in the child) */
+
+static void reply(StrBuf *out, J *id, const char *result) {
+    StrBuf b = {0};
+    sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    putId(&b, id);
+    sbPuts(&b, ",\"result\":");
+    sbPuts(&b, result ? result : "null");
+    sbPutc(&b, '}');
+    sbPutn(out, b.buf, b.len);
+    sbPutc(out, 0);
+    sbFree(&b);
+}
+
+static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    Node *parent = NULL;
+    Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
+    Node *d = n ? declOf(n, parent) : NULL;
+    if (!d) {
+        reply(out, id, NULL);
+        return;
+    }
+    StrBuf v = {0};
+    sbPuts(&v, "```iris\n");
+    signature(&v, d);
+    sbPuts(&v, "\n```");
+    StrBuf doc = {0};
+    docComment(&doc, d);
+    if (doc.len) {
+        sbPuts(&v, "\n\n");
+        sbPutn(&v, doc.buf, doc.len);
+    }
+    StrBuf r = {0};
+    sbPuts(&r, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
+    putJsonString(&r, v.buf, v.len);
+    sbPuts(&r, "}}");
+    reply(out, id, r.buf);
+    sbFree(&v);
+    sbFree(&doc);
+    sbFree(&r);
+}
+
+static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    Node *parent = NULL;
+    Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
+    Node *d = n ? declOf(n, parent) : NULL;
+    char *u = d && d->src ? fileUri(d->src->path) : NULL;
+    if (!u) {
+        reply(out, id, NULL);
+        return;
+    }
+    Source shown = *d->src;
+    if (strncmp(d->src->path, "std/", 4) == 0) {
+        shown.text = stdSource(d->src->path);
+        shown.len = shown.text ? strlen(shown.text) : 0;
+    }
+    StrBuf r = {0};
+    sbPuts(&r, "{\"uri\":");
+    putStr(&r, u);
+    sbPuts(&r, ",\"range\":");
+    putRange(&r, shown.text ? &shown : NULL, d->line, d->col, d->name ? (int)strlen(d->name) : 1);
+    sbPutc(&r, '}');
+    reply(out, id, r.buf);
+    free(u);
+    sbFree(&r);
+}
+
+static int symbolKind(Node *d) {
+    switch (d->kind) {
+    case N_FUNC: return d->list.len && (d->list.items[0]->flags & F_SELF) ? 6 : 12;
+    case N_STRUCT: return 23;
+    case N_ENUM: return 10;
+    case N_INTERFACE: return 11;
+    case N_CONST: return 14;
+    case N_TYPEDEF: return 26;
+    default: return 13;
+    }
+}
+
+static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
+    StrBuf r = {0};
+    sbPutc(&r, '[');
+    bool first = true;
+    for (Module *m = prog ? prog->modules : NULL; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            Node *file = m->files.items[f];
+            if (file->src != src) continue;
+            for (int i = 0; i < file->list.len; i++) {
+                Node *d = file->list.items[i];
+                Node *named = d->kind == N_DEFINE && d->list.len == 1 ? d->list.items[0] : d;
+                if (!named->name || d->kind == N_IMPORT) continue;
+                StrBuf name = {0};
+                if (d->kind == N_FUNC && (d->flags & F_TESTFN)) {
+                    sbPrintf(&name, "test \"%s\"", d->text);
+                } else if (d->kind == N_FUNC && d->list.len && (d->list.items[0]->flags & F_SELF)) {
+                    Type *rt = d->list.items[0]->type;
+                    putTypeName(&name, rt && rt->kind == TY_PTR ? rt->elem : rt);
+                    sbPrintf(&name, ".%s", d->name);
+                } else {
+                    sbPuts(&name, named->name);
+                }
+                if (!first) sbPutc(&r, ',');
+                first = false;
+                sbPuts(&r, "{\"name\":");
+                putJsonString(&r, name.buf, name.len);
+                sbPrintf(&r, ",\"kind\":%d,\"range\":", symbolKind(d));
+                putRange(&r, src, named->line, 1, 1);
+                sbPuts(&r, ",\"selectionRange\":");
+                putRange(&r, src, named->line, named->col, (int)strlen(named->name));
+                sbPutc(&r, '}');
+                sbFree(&name);
+            }
+        }
+    }
+    sbPutc(&r, ']');
+    reply(out, id, r.buf);
+    sbFree(&r);
+}
+
+static void putItem(StrBuf *r, bool *first, const char *label, int kind, const char *detail) {
+    if (!*first) sbPutc(r, ',');
+    *first = false;
+    sbPuts(r, "{\"label\":");
+    putStr(r, label);
+    sbPrintf(r, ",\"kind\":%d", kind);
+    if (detail) {
+        sbPuts(r, ",\"detail\":");
+        putStr(r, detail);
+    }
+    sbPutc(r, '}');
+}
+
+/* After "name.": a module's pub names, or a value's fields and methods. */
+static void completion(StrBuf *out, J *id, Program *prog, Source *src, const char *word, int line) {
+    StrBuf r = {0};
+    sbPutc(&r, '[');
+    bool first = true;
+    Type *t = NULL;
+    /* the nearest use of the name above the cursor, in this file */
+    Node *best = NULL;
+    for (int l = line; prog && src && l >= 1 && !best; l--) {
+        const char *ls = lineStartOf(src->text, src->len, l), *le = ls;
+        while (le < src->text + src->len && *le != '\n') le++;
+        size_t wl = strlen(word);
+        for (const char *p = ls; p + wl <= le && !best; p++) {
+            if (memcmp(p, word, wl) != 0) continue;
+            if (p > ls && (isalnum((unsigned char)p[-1]) || p[-1] == '_' || p[-1] == '.')) continue;
+            if (p + wl < le && (isalnum((unsigned char)p[wl]) || p[wl] == '_')) continue;
+            Node *parent;
+            Node *n = nodeAt(prog, src, l, (int)(p - ls) + 1, &parent);
+            if (n && n->type && n->type->kind != TY_ERROR) best = n;
+        }
+    }
+    if (best) t = best->type;
+    if (t && t->kind == TY_PTR) t = t->elem;
+    if (t && t->kind == TY_STRUCT && t->decl) {
+        for (int i = 0; i < t->decl->list.len; i++) {
+            Node *f = t->decl->list.items[i];
+            if (f->name) putItem(&r, &first, f->name, 5, f->type ? f->type->name : NULL);
+        }
+        for (int i = 0; i < t->methods.len; i++) {
+            Node *m = t->methods.items[i];
+            StrBuf sig = {0};
+            signature(&sig, m);
+            putItem(&r, &first, m->name, 2, sig.buf);
+            sbFree(&sig);
+        }
+    } else if (t && t->kind == TY_STRING) {
+        putItem(&r, &first, "len", 5, "i64");
+        putItem(&r, &first, "append", 2, "void String.append(str text)");
+        putItem(&r, &first, "free", 2, "void String.free()");
+        putItem(&r, &first, "copy", 2, "String String.copy()");
+    } else if (t && t->kind == TY_SLICE) {
+        putItem(&r, &first, "len", 5, "i64");
+        putItem(&r, &first, "ptr", 5, NULL);
+    } else {
+        /* a module: the names in its scope */
+        for (Module *m = prog ? prog->modules : NULL; m; m = m->next) {
+            const char *base = strrchr(m->path, '/');
+            base = base ? base + 1 : m->path;
+            if (strcmp(base, word) != 0 || m == prog->main) continue;
+            for (int f = 0; f < m->files.len; f++) {
+                Node *file = m->files.items[f];
+                for (int i = 0; i < file->list.len; i++) {
+                    Node *d = file->list.items[i];
+                    if (!(d->flags & F_PUB) || !d->name) continue;
+                    StrBuf sig = {0};
+                    signature(&sig, d);
+                    putItem(&r, &first, d->name, d->kind == N_FUNC ? 3 : d->kind == N_STRUCT ? 22 : 21, sig.buf);
+                    sbFree(&sig);
+                }
+            }
+        }
+    }
+    sbPutc(&r, ']');
+    reply(out, id, r.buf);
+    sbFree(&r);
+}
+
+static void formatting(StrBuf *out, J *id, Doc *doc) {
+    if (!doc) {
+        reply(out, id, NULL);
+        return;
+    }
+    Source src = {doc->path, doc->text, doc->len};
+    char *text = formatSource(&gA, &src);
+    if (!text || strcmp(text, doc->text) == 0) {
+        reply(out, id, "[]");
+        return;
+    }
+    int lines = 1;
+    for (size_t i = 0; i < doc->len; i++) lines += doc->text[i] == '\n';
+    StrBuf r = {0};
+    sbPrintf(&r, "[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":%d,\"character\":0}},"
+                 "\"newText\":", lines);
+    putStr(&r, text);
+    sbPuts(&r, "}]");
+    reply(out, id, r.buf);
+    sbFree(&r);
+}
+
+/* Handles one message in the child; the output is messages separated by
+ * NUL bytes. */
+static void handleInChild(J *msg, StrBuf *out) {
+    const char *method = jstr(msg, "method");
+    J *id = jget(msg, "id");
+    J *params = jget(msg, "params");
+    J *td = jget(params, "textDocument");
+    const char *uri = jstr(td, "uri");
+    Doc *doc = uri ? findDoc(uri) : NULL;
+    char *path = uri ? pathOf(uri) : NULL;
+    if (strcmp(method, "textDocument/formatting") == 0) {
+        formatting(out, id, doc);
+        free(path);
+        return;
+    }
+    J *pos = jget(params, "position");
+    int line = 0, character = 0;
+    if (pos) {
+        J *l = jget(pos, "line"), *c = jget(pos, "character");
+        line = l ? (int)l->num + 1 : 1;
+        character = c ? (int)c->num : 0;
+    }
+    char word[256] = "";
+    if (strcmp(method, "textDocument/completion") == 0 && doc) {
+        /* the name before the dot; the dot itself would not parse, so it goes */
+        int col = byteCol(doc->text, doc->len, line, character);
+        char *ls = (char *)lineStartOf(doc->text, doc->len, line);
+        char *dot = ls + col - 2;
+        if (dot >= ls && *dot == '.') {
+            char *s = dot;
+            while (s > ls && (isalnum((unsigned char)s[-1]) || s[-1] == '_')) s--;
+            size_t n = (size_t)(dot - s);
+            if (n < sizeof word) {
+                memcpy(word, s, n);
+                word[n] = 0;
+            }
+            *dot = ' ';
+        }
+    }
+    Program *prog = path ? analyze(path) : NULL;
+    Source *src = path ? sourceOf(prog, path) : NULL;
+    int col = doc ? byteCol(doc->text, doc->len, line, character) : character + 1;
+    if (strcmp(method, "textDocument/hover") == 0) {
+        hover(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/definition") == 0) {
+        definition(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
+        symbols(out, id, prog, src);
+    } else if (strcmp(method, "textDocument/completion") == 0) {
+        if (word[0]) {
+            completion(out, id, prog, src, word, line);
+        } else {
+            reply(out, id, "[]");
+        }
+    } else {
+        putDiagnostics(out, prog, path);
+    }
+    free(path);
+}
+
+/* Runs a message in a child; sends what it wrote. */
+static void runInChild(J *msg) {
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(fds[0]);
+        StrBuf out = {0};
+        handleInChild(msg, &out);
+        size_t off = 0;
+        while (off < out.len) {
+            ssize_t w = write(fds[1], out.buf + off, out.len - off);
+            if (w <= 0) break;
+            off += (size_t)w;
+        }
+        _exit(0);
+    }
+    close(fds[1]);
+    if (pid < 0) {
+        close(fds[0]);
+        return;
+    }
+    StrBuf in = {0};
+    char buf[65536];
+    struct pollfd pfd = {fds[0], POLLIN, 0};
+    for (;;) {
+        int r = poll(&pfd, 1, 10000);
+        if (r <= 0) {
+            kill(pid, SIGKILL);     /* the compiler hung: no reply */
+            break;
+        }
+        ssize_t n = read(fds[0], buf, sizeof buf);
+        if (n <= 0) break;
+        sbPutn(&in, buf, (size_t)n);
+    }
+    close(fds[0]);
+    waitpid(pid, NULL, 0);
+    bool answered = false;
+    size_t i = 0;
+    while (i < in.len) {
+        size_t j = i;
+        while (j < in.len && in.buf[j]) j++;
+        if (j - i >= 5 && memcmp(in.buf + i, "@uris", 5) == 0) {
+            for (int k = 0; k < ndiagUris; k++) free(diagUris[k]);
+            ndiagUris = 0;
+            char *p = in.buf + i + 5;
+            while (p < in.buf + j && ndiagUris < 512) {
+                if (*p == '\n') p++;
+                char *e = p;
+                while (e < in.buf + j && *e != '\n') e++;
+                if (e > p) diagUris[ndiagUris++] = strndup(p, (size_t)(e - p));
+                p = e;
+            }
+        } else if (j > i) {
+            sendMsg(in.buf + i, j - i);
+            answered = true;
+        }
+        i = j + 1;
+    }
+    sbFree(&in);
+    J *id = jget(msg, "id");
+    if (!answered && id) {
+        /* the child died before replying: answer with nothing */
+        StrBuf b = {0};
+        reply(&b, id, NULL);
+        sendMsg(b.buf, strlen(b.buf));
+        sbFree(&b);
+    }
+}
+
+int cmdLsp(void) {
+    signal(SIGPIPE, SIG_IGN);
+    bool shutdown = false;
+    for (;;) {
+        char *body = readMessage();
+        if (!body) return shutdown ? 0 : 1;
+        const char *p = body;
+        J *msg = jparse(&p);
+        const char *method = jstr(msg, "method");
+        J *id = jget(msg, "id");
+        J *params = jget(msg, "params");
+        if (!method) {
+            /* a reply to something the server never asks */
+        } else if (strcmp(method, "initialize") == 0) {
+            StrBuf b = {0};
+            sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+            putId(&b, id);
+            sbPrintf(&b, ",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"hoverProvider\":true,"
+                         "\"definitionProvider\":true,\"documentSymbolProvider\":true,"
+                         "\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]}},"
+                         "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
+            sendMsg(b.buf, b.len);
+            sbFree(&b);
+        } else if (strcmp(method, "shutdown") == 0) {
+            shutdown = true;
+            StrBuf b = {0};
+            reply(&b, id, NULL);
+            sendMsg(b.buf, strlen(b.buf));
+            sbFree(&b);
+        } else if (strcmp(method, "exit") == 0) {
+            jfree(msg);
+            free(body);
+            return shutdown ? 0 : 1;
+        } else if (strcmp(method, "textDocument/didOpen") == 0 || strcmp(method, "textDocument/didChange") == 0) {
+            J *td = jget(params, "textDocument");
+            const char *uri = jstr(td, "uri");
+            const char *text = jstr(td, "text");
+            if (!text) {
+                J *changes = jget(params, "contentChanges");
+                J *last = changes ? changes->child : NULL;
+                while (last && last->next) last = last->next;
+                text = jstr(last, "text");
+            }
+            if (uri && text) {
+                setDoc(uri, text);
+                runInChild(msg);        /* diagnostics */
+            }
+        } else if (strcmp(method, "textDocument/didSave") == 0) {
+            runInChild(msg);
+        } else if (strcmp(method, "textDocument/didClose") == 0) {
+            const char *uri = jstr(jget(params, "textDocument"), "uri");
+            if (uri) closeDoc(uri);
+        } else if (strcmp(method, "textDocument/hover") == 0 || strcmp(method, "textDocument/definition") == 0 ||
+                   strcmp(method, "textDocument/documentSymbol") == 0 ||
+                   strcmp(method, "textDocument/completion") == 0 ||
+                   strcmp(method, "textDocument/formatting") == 0) {
+            runInChild(msg);
+        } else if (id) {
+            StrBuf b = {0};
+            sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+            putId(&b, id);
+            sbPuts(&b, ",\"error\":{\"code\":-32601,\"message\":\"not supported\"}}");
+            sendMsg(b.buf, b.len);
+            sbFree(&b);
+        }
+        jfree(msg);
+        free(body);
+    }
+}

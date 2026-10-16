@@ -20,6 +20,7 @@
                            stay as it is when formatted again
   fmt-std                  the standard library is in the standard layout
   get                      iris get with a local git repository (needs git)
+  lsp                      tools/lsp_check.py: an editor session with iris lsp
   docs                     every ```iris block in docs-src/ must parse
                            (```iris error blocks are skipped); an ```iris run
                            block must also run and print the ```output block
@@ -312,6 +313,12 @@ def main():
     total += project_tests(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
+    if not args.only or any(o in "lsp" for o in args.only):
+        total += 1
+        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],
+                           capture_output=True, text=True, timeout=120)
+        if p.returncode != 0:
+            failures.append(("lsp", p.stdout + p.stderr))
 
     for name, why in failures:
         print("FAIL %s\n  %s" % (name, why.rstrip().replace("\n", "\n  ")))
