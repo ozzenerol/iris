@@ -44,6 +44,22 @@ s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
 <p>The compiler checks each value. Numbers, <code>bool</code>, <code>str</code>, <code>String</code> and enums can be printed. A struct can be printed if it has a <code>format</code> method. <code>{{</code> and <code>}}</code> write a single brace.</p>
 <p><code>format</code> builds a <code>String</code> the same way:</p>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> msg = format(<span class="s">&quot;{n} bytes&quot;</span>)</code></pre>
+<p>A complete program:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()
+    s.append(<span class="s">&quot;, world&quot;</span>)
+    print(s)
+    print(<span class="s">&quot;{s.len} bytes&quot;</span>)
+    s.free()
+
+    host := <span class="s">&quot;localhost&quot;</span>
+    msg := format(<span class="s">&quot;connecting to {host}&quot;</span>)
+    print(msg)
+    msg.free()
+}</code></pre>
+<pre class="out"><code>hello, world
+12 bytes
+connecting to localhost</code></pre>
 <h2 id="escapes"><a href="#escapes">Escapes</a></h2>
 <div class="table"><table><thead><tr><th>Escape</th><th>Meaning</th></tr></thead><tbody><tr><td><code>\n</code></td><td>newline</td></tr><tr><td><code>\t</code></td><td>tab</td></tr><tr><td><code>\r</code></td><td>carriage return</td></tr><tr><td><code>\\</code></td><td>backslash</td></tr><tr><td><code>\&quot;</code></td><td>double quote</td></tr><tr><td><code>\x41</code></td><td>a byte in hex</td></tr></tbody></table></div>
 <h2 id="multi-line-text"><a href="#multi-line-text">Multi-line text</a></h2>

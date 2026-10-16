@@ -28,6 +28,8 @@ T[]  =  { T *ptr, i64 len }
 String  =  { u8 *ptr, i64 len, i64 cap, Allocator *alloc }
 ```
 
+Until allocators arrive, `String` is `{ u8 *ptr, i64 len, i64 cap }` and its memory comes from `malloc`.
+
 ## Arrays
 
 `u8[512]` is 512 bytes in a row, with no length stored. When an array is passed to a function, it becomes a slice.

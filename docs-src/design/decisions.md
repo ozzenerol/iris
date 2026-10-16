@@ -35,6 +35,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Operators bind in this order, tightest first: `* / % << >> &`, then `+ - | ^`, then comparisons, then `&&`, then `||`, then `..`. `x & 1 == 1` means `(x & 1) == 1`. | Bit tests read the way they are written. |
 | `else` can go on the line after the closing brace. | Both styles work, so neither is a trap. |
 | Arithmetic happens in the operands' type, with no promotion to a wider type. | The type of every result is visible, and overflow checks catch what C would silently widen. |
+| A struct field's default value must be known when compiling. | The default is copied into every literal that leaves the field out. |
+| `str` and `u8[]` are one type. | Text is bytes; one type needs one set of rules. |
+| A `String` can be used where a `str` is expected. | Printing, comparing and slicing an owned string need no conversion. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 
