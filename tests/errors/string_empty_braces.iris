@@ -1,0 +1,5 @@
+// error: 4: empty {} in a string; write {{}} for braces
+
+void main() {
+    print("a{}b")
+}

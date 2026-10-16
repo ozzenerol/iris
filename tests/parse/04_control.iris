@@ -1,0 +1,39 @@
+// if, match, for, labels.
+
+void flow() {
+    if n > 100 {
+        print("big")
+    } else if n > 10 {
+        print("medium")
+    } else {
+        print("small")
+    }
+    port := if arg.len > 0 { parsePort(arg) } else { 80 }
+
+    match cmd {
+        "" => {}
+        "exit", "quit" => quit = true
+        "help" => {
+            printHelp()
+        }
+        _ => print("unknown")
+    }
+    kind := match status { 200..299 => "ok", 404 => "missing", _ => "error" }
+
+    for {
+        break
+    }
+    for n > 0 {
+        n = n / 2
+    }
+    for i in 0..10 {
+        continue
+    }
+    for i, line in lines { }
+    for key, value in table { }
+    outer: for row in rows {
+        for cell in row {
+            if cell == 0 { break outer }
+        }
+    }
+}

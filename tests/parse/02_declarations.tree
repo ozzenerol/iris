@@ -1,0 +1,50 @@
+file
+  const MAX_CONN
+    value: int 1024
+  const LIMIT i64
+    value: int 10
+  type Port = u16
+  type Handler = void(Request *, Response *)
+  var counter i64
+  var greeting str
+    value: str "hi"
+  define started
+    value: false
+  func literals
+    ret: void
+    body: block
+      var total i64
+      define a
+        value: int 1000000
+      define b
+        value: int 255
+      define c
+        value: int 10
+      define d
+        value: int 15
+      define e
+        value: float 0.5
+      define f
+        value: float 1e+09
+      define g
+        value: float 0.0025
+      define h
+        value: int 200 ms
+      define i
+        value: int 30 s
+      define j
+        value: int 64 KiB
+      define k
+        value: char 97
+      define l
+        value: char 10
+      define m
+        value: char 65
+      define n
+        value: true
+      define o
+        value: null
+      var small u8
+        value: call
+          callee: name u8
+          name total

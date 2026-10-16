@@ -1,0 +1,65 @@
+file
+  enum Level
+    member debug
+    member info
+    member warn
+    member error
+  enum Status
+    member ok
+      value: int 200
+    member notFound
+      value: int 404
+  enum Packet
+    member Ping
+    member Data
+      param bytes u8[]
+    member Close
+      param code u16
+      param reason str
+  enum Perm flags
+    member read
+    member write
+    member exec
+  func use
+    ret: void
+    body: block
+      var l Level
+        value: dot .warn
+      var m Level
+        value: field .error
+          name Level
+      var q Packet
+        value: call
+          callee: dot .Close
+          int 1000
+          str "bye"
+      var p Perm
+        value: binary |
+          dot .read
+          dot .write
+      match
+        subject: name q
+        arm
+          pattern: name Ping
+          body: call
+            callee: name send
+            dot .Pong
+        arm
+          pattern: call
+            callee: name Data
+            name bytes
+          body: call
+            callee: name handle
+            name bytes
+        arm
+          pattern: call
+            callee: name Close
+            name code
+            name reason
+          body: call
+            callee: name print
+            interp
+              str "closed "
+              name code
+              str ": "
+              name reason

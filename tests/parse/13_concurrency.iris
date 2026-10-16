@@ -1,0 +1,25 @@
+// Tasks, channels, select, threads, atomics.
+
+threadlocal i64 requests
+atomic i64 hits
+
+!void serve(u16 port) {
+    ln := try net.listen(port)
+    for {
+        conn := try ln.accept()
+        spawn handle(conn)
+    }
+}
+
+void worker(chan[Job] jobs) {
+    jobs2 := chan[Job](64)
+    jobs <- Job{id: 1}
+    j := <-jobs
+    select {
+        k := <-jobs => run(k)
+        after(5s) => print("idle")
+    }
+    hits.add(1, .relaxed)
+    sync.Mutex lock
+    counts[key] += 1
+}

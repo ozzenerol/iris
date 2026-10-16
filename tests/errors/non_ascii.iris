@@ -1,0 +1,5 @@
+// error: 4: characters outside ASCII can only appear in strings and comments
+
+void main() {
+    π := 3
+}

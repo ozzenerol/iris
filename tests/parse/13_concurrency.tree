@@ -1,0 +1,65 @@
+file
+  var requests i64 threadlocal
+  var hits i64 atomic
+  func serve
+    param port u16
+    ret: !void
+    body: block
+      define ln
+        value: try
+          call
+            callee: field .listen
+              name net
+            name port
+      for
+        body: block
+          define conn
+            value: try
+              call
+                callee: field .accept
+                  name ln
+          spawn
+            call
+              callee: name handle
+              name conn
+  func worker
+    param jobs chan[Job]
+    ret: void
+    body: block
+      define jobs2
+        value: chan Job
+          size: int 64
+      binary <-
+        name jobs
+        struct-lit
+          type: name Job
+          init id
+            int 1
+      define j
+        value: unary <-
+          name jobs
+      select
+        arm k :=
+          recv: unary <-
+            name jobs
+          body: call
+            callee: name run
+            name k
+        arm
+          recv: call
+            callee: name after
+            int 5 s
+          body: call
+            callee: name print
+            str "idle"
+      call
+        callee: field .add
+          name hits
+        int 1
+        dot .relaxed
+      var lock sync.Mutex
+      assign +=
+        target: index
+          of: name counts
+          name key
+        value: int 1

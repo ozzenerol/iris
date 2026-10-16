@@ -1,0 +1,5 @@
+// error: 4: this string has no closing quote
+
+void main() {
+    path := r"C:\tools
+}

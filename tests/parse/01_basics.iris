@@ -1,0 +1,21 @@
+// The smallest program, comments and statement endings.
+
+void main() {
+    print("hello")
+}
+
+i32 exitCode() {
+    return 0
+}
+
+/* A block comment
+   over two lines. */
+void lines() {
+    n := 2
+    total := price * count +
+        shipping -
+        discount
+    connect("example.com",
+            port: 443)
+    if n > 10 { print("big") }
+}

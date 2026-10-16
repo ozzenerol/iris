@@ -1,0 +1,17 @@
+// Strings: escapes, values in braces, three quotes, raw.
+
+void text() {
+    a := "plain"
+    b := "tab\there\n\"quoted\" \\ \x41"
+    c := "got {n} bytes from {addr}"
+    d := "{n * 2} and {f("x")}"
+    e := "{{not a value}}"
+    q := """
+        SELECT name
+          FROM users
+        WHERE id = {id}
+        """
+    one := """single line"""
+    path := r"C:\tools\iris"
+    pattern := r"\d+{2}"
+}

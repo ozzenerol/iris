@@ -1,0 +1,30 @@
+// Variables, constants, aliases and literals.
+
+const MAX_CONN = 1024
+const i64 LIMIT = 10
+type Port = u16
+type Handler = void(Request *, Response *)
+
+i64 counter
+str greeting = "hi"
+started := false
+
+void literals() {
+    i64 total
+    a := 1_000_000
+    b := 0xff
+    c := 0b1010
+    d := 0o17
+    e := 0.5
+    f := 1e9
+    g := 2.5e-3
+    h := 200ms
+    i := 30s
+    j := 64KiB
+    k := 'a'
+    l := '\n'
+    m := '\x41'
+    n := true
+    o := null
+    u8 small = u8(total)
+}

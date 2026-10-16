@@ -1,0 +1,81 @@
+file
+  func memory
+    ret: void
+    body: block
+      var x i64
+        value: int 5
+      var p i64 *
+        value: unary &
+          name x
+      assign =
+        target: unary *
+          name p
+        value: int 6
+      var argv u8 **
+        value: null
+      var end u8 *
+        value: binary +
+          name start
+          name len
+      var pp Point *
+        value: unary &
+          name pt
+      assign =
+        target: field .x
+          name pp
+        value: int 10
+      var buf u8[512]
+      var counts i64[3]
+        value: array
+          int 1
+          int 2
+          int 3
+      var all u8[]
+        value: slice
+          of: name buf
+      var head u8[]
+        value: slice
+          of: name buf
+          from: int 0
+          to: int 4
+      var rest u8[]
+        value: slice
+          of: name buf
+          from: int 4
+      var mem u8[]
+        value: call
+          callee: name alloc
+          name u8
+          int 4 KiB
+      defer
+        call
+          callee: name free
+          name mem
+      var s String scoped
+        value: call
+          callee: field .copy
+            str "hello"
+  func listen
+    param port u16
+    ret: !Server
+    body: block
+      define fd
+        value: try
+          call
+            callee: field .socket
+              name net
+      errdefer
+        call
+          callee: field .close
+            name net
+          name fd
+      defer
+        block
+          call
+            callee: name log
+            str "done"
+      return
+        struct-lit
+          type: name Server
+          init fd
+            name fd

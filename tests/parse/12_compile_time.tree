@@ -1,0 +1,53 @@
+file
+  const KiB
+    value: int 1024
+  const BUF_SIZE
+    value: binary *
+      int 64
+      name KiB
+  const CRC_TABLE
+    value: comptime
+      call
+        callee: name makeCrcTable
+  when
+    cond: binary ==
+      name os
+      dot .linux
+    then: block
+      const POLLER
+        value: str "epoll"
+    else: when
+      cond: binary ==
+        name os
+        dot .macos
+      then: block
+        const POLLER
+          value: str "kqueue"
+      else: block
+        const POLLER
+          value: str "poll"
+  struct Settings
+    attr @env
+    field port u16
+      attr @env
+        str "PORT"
+      default: int 8080
+    field db String
+      attr @env
+        str "DATABASE_URL"
+        name required
+  func checksum
+    attr @unchecked
+    param data u8[]
+    ret: u32
+    body: block
+      when
+        cond: binary ==
+          name mode
+          dot .debug
+        then: block
+          call
+            callee: name print
+            str "checking"
+      return
+        int 0

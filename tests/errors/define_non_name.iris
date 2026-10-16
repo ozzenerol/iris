@@ -1,0 +1,5 @@
+// error: 4: only names can be declared with ':='
+
+void main() {
+    a.b := 1
+}

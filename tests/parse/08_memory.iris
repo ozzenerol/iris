@@ -1,0 +1,28 @@
+// Pointers, arrays, slices, allocation, defer, errdefer, scoped.
+
+void memory() {
+    i64 x = 5
+    i64 *p = &x
+    *p = 6
+    u8 **argv = null
+    u8 *end = start + len
+    Point *pp = &pt
+    pp.x = 10
+    u8[512] buf
+    i64[3] counts = [1, 2, 3]
+    u8[] all = buf[:]
+    u8[] head = buf[0:4]
+    u8[] rest = buf[4:]
+    u8[] mem = alloc(u8, 4KiB)
+    defer free(mem)
+    scoped String s = "hello".copy()
+}
+
+!Server listen(u16 port) {
+    fd := try net.socket()
+    errdefer net.close(fd)
+    defer {
+        log("done")
+    }
+    return Server{fd: fd}
+}

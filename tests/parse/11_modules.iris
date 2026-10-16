@@ -1,0 +1,15 @@
+// Imports and pub.
+
+import fs, net
+import "github.com/someone/pg", "net/http"
+
+pub struct Server {
+    pub u16 port
+    i32 fd
+}
+
+pub !Server listen(u16 port) {
+    return Server{port: port}
+}
+
+void setOptions(i32 fd) { }

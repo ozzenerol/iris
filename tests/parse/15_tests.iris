@@ -1,0 +1,7 @@
+// Test blocks.
+
+i64 add(i64 a, b) => a + b
+
+test "add" {
+    expect(add(2, 3) == 5)
+}

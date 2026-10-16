@@ -1,0 +1,38 @@
+// Generic structs and functions, interfaces, dyn.
+
+struct List[T] {
+    T *items
+    i64 len
+}
+
+struct Pair[A, B] {
+    A first
+    B second
+}
+
+void List[T].push(T value) {
+}
+
+T first[T](T[] items) => items[0]
+
+interface Ordered {
+    i64 compare(Self other)
+}
+
+interface Writer {
+    !i64 write(u8[] data)
+}
+
+T max[T: Ordered](T a, b) => if a.compare(b) >= 0 { a } else { b }
+
+!void log(dyn Writer w, str msg) {
+    try w.write(msg)
+}
+
+void use() {
+    List[i64] numbers
+    numbers.push(4)
+    p := Pair[str, i64]{first: "age", second: 30}
+    names := List[str].new()
+    m := max(3, 7)
+}

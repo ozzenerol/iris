@@ -1,0 +1,84 @@
+file
+  struct List
+    typeparam T
+    field items T *
+    field len i64
+  struct Pair
+    typeparam A
+    typeparam B
+    field first A
+    field second B
+  method List[T].push
+    param value T
+    ret: void
+    body: block
+  func first
+    typeparam T
+    param items T[]
+    ret: T
+    body: index
+      of: name items
+      int 0
+  interface Ordered
+    func compare
+      param other Self
+      ret: i64
+  interface Writer
+    func write
+      param data u8[]
+      ret: !i64
+  func max
+    typeparam T: Ordered
+    param a T
+    param b T
+    ret: T
+    body: if
+      cond: binary >=
+        call
+          callee: field .compare
+            name a
+          name b
+        int 0
+      then: block
+        name a
+      else: block
+        name b
+  func log
+    param w dyn Writer
+    param msg str
+    ret: !void
+    body: block
+      try
+        call
+          callee: field .write
+            name w
+          name msg
+  func use
+    ret: void
+    body: block
+      var numbers List[i64]
+      call
+        callee: field .push
+          name numbers
+        int 4
+      define p
+        value: struct-lit
+          type: index
+            of: name Pair
+            name str
+            name i64
+          init first
+            str "age"
+          init second
+            int 30
+      define names
+        value: call
+          callee: field .new
+            index
+              of: name List
+              name str
+      define m
+        value: call
+          callee: name max
+          int 3
+          int 7

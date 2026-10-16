@@ -1,0 +1,74 @@
+file
+  func add3
+    param a i64
+    param b i64
+    param c i64
+    ret: i64
+    body: block
+      return
+        binary +
+          binary +
+            name a
+            name b
+          name c
+  func square
+    param x i64
+    ret: i64
+    body: binary *
+      name x
+      name x
+  func connect
+    param host str
+    param port u16
+      default: int 80
+    param timeout Duration
+      default: int 30 s
+    ret: void
+    body: block
+  func divmod
+    param a i64
+    param b i64
+    ret: (i64, i64)
+    body: tuple
+      binary /
+        name a
+        name b
+      binary %
+        name a
+        name b
+  func apply
+    param f i64(i64)
+    param x i64
+    ret: i64
+    body: call
+      callee: name f
+      name x
+  func calls
+    ret: void
+    body: block
+      call
+        callee: name connect
+        str "example.com"
+        arg timeout
+          int 5 s
+        arg port
+          int 443
+      define q, r
+        value: call
+          callee: name divmod
+          int 17
+          int 5
+      define _, r2
+        value: call
+          callee: name divmod
+          int 17
+          int 5
+      define n
+        value: call
+          callee: name apply
+          name square
+          int 4
+      call
+        callee: name reset
+        unary &
+          name count

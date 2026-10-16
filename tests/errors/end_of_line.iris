@@ -1,0 +1,5 @@
+// error: 4: expected the end of the line, found 'y'
+
+void main() {
+    x := 1 y
+}

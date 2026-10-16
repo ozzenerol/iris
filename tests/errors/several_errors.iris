@@ -1,0 +1,11 @@
+// error: 7: expected the end of the line, found ':='
+// error: 8: expected an expression, found ']'
+// error: 11: expected a parameter type, found '1'
+
+void main() {
+    x := 1 +
+    y := 2
+    z := a[]
+}
+
+void f(1 a) { }

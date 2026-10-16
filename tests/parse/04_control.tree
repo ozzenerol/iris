@@ -1,0 +1,109 @@
+file
+  func flow
+    ret: void
+    body: block
+      if
+        cond: binary >
+          name n
+          int 100
+        then: block
+          call
+            callee: name print
+            str "big"
+        else: if
+          cond: binary >
+            name n
+            int 10
+          then: block
+            call
+              callee: name print
+              str "medium"
+          else: block
+            call
+              callee: name print
+              str "small"
+      define port
+        value: if
+          cond: binary >
+            field .len
+              name arg
+            int 0
+          then: block
+            call
+              callee: name parsePort
+              name arg
+          else: block
+            int 80
+      match
+        subject: name cmd
+        arm
+          pattern: str ""
+          body: block
+        arm
+          pattern: str "exit"
+          pattern: str "quit"
+          body: assign =
+            target: name quit
+            value: true
+        arm
+          pattern: str "help"
+          body: block
+            call
+              callee: name printHelp
+        arm
+          pattern: name _
+          body: call
+            callee: name print
+            str "unknown"
+      define kind
+        value: match
+          subject: name status
+          arm
+            pattern: binary ..
+              int 200
+              int 299
+            body: str "ok"
+          arm
+            pattern: int 404
+            body: str "missing"
+          arm
+            pattern: name _
+            body: str "error"
+      for
+        body: block
+          break
+      for
+        cond: binary >
+          name n
+          int 0
+        body: block
+          assign =
+            target: name n
+            value: binary /
+              name n
+              int 2
+      for i in
+        iter: binary ..
+          int 0
+          int 10
+        body: block
+          continue
+      for i, line in
+        iter: name lines
+        body: block
+      for key, value in
+        iter: name table
+        body: block
+      label outer
+        for row in
+          iter: name rows
+          body: block
+            for cell in
+              iter: name row
+              body: block
+                if
+                  cond: binary ==
+                    name cell
+                    int 0
+                  then: block
+                    break outer

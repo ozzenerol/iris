@@ -1,0 +1,27 @@
+// const, comptime, when, attributes.
+
+const KiB = 1024
+const BUF_SIZE = 64 * KiB
+const CRC_TABLE = comptime makeCrcTable()
+
+when os == .linux {
+    const POLLER = "epoll"
+} else when os == .macos {
+    const POLLER = "kqueue"
+} else {
+    const POLLER = "poll"
+}
+
+@env
+struct Settings {
+    @env("PORT") u16 port = 8080
+    @env("DATABASE_URL", required) String db
+}
+
+@unchecked
+u32 checksum(u8[] data) {
+    when mode == .debug {
+        print("checking")
+    }
+    return 0
+}
