@@ -69,6 +69,28 @@ f64 avg = f64(total) / f64(count)
 
 In a debug build, a conversion that loses a value stops the program with an error.
 
+## Operators
+
+| Operators | Meaning |
+|---|---|
+| `+ - * / %` | arithmetic |
+| `& \| ^ ~ << >>` | bits: and, or, xor, not, shifts |
+| `== != < <= > >=` | comparison |
+| `&& \|\| !` | and, or, not, on `bool` |
+| `= += -= *= /= %= &= \|= ^= <<= >>=` | assignment |
+| `a..b` | the range from `a` to `b`, for `for` and `match` |
+
+They bind in this order, tightest first:
+
+1. `* / % << >> &`
+2. `+ - | ^`
+3. `== != < <= > >=`
+4. `&&`
+5. `||`
+6. `..`
+
+So `a + b * c` is `a + (b * c)`, and `x & 1 == 1` is `(x & 1) == 1`. Assignment is a statement, so it can't appear inside an expression.
+
 ## Durations and sizes
 
 Numbers can carry a unit. Durations are `ns`, `us`, `ms`, `s`, `m` and `h`, and their type is `Duration`. Sizes are `KiB`, `MiB` and `GiB`, and they are plain integers.

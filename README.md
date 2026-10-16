@@ -2,7 +2,17 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-The language is being designed. No compiler code exists yet.
+The language is being designed. Version 0.1 has the lexer and the parser: `iris parse` reads a file and prints its syntax tree.
+
+## Building
+
+```
+make
+make test
+./iris parse file.iris
+```
+
+It needs a C11 compiler and Python 3 (for the tests and the docs).
 
 ## Docs
 

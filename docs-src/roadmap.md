@@ -4,8 +4,8 @@ Each step is a release. A release is made when everything in it works and the te
 
 | Version | Contents | Status |
 |---|---|---|
-| 0.1 | Lexer and parser for the whole syntax. `iris parse` prints the syntax tree. | next |
-| 0.2 | Integers, `bool`, functions, `if`, `for`, `match`, `const`, string literals and `print`. The first programs that run. | planned |
+| 0.1 | Lexer and parser for the whole syntax. `iris parse` prints the syntax tree. | released |
+| 0.2 | Integers, `bool`, functions, `if`, `for`, `match`, `const`, string literals and `print`. The first programs that run. | next |
 | 0.3 | Pointers, structs, methods, arrays, slices, `str`, `String`, `alloc` and `free`. | planned |
 | 0.4 | `!T`, `try`, `catch`, `defer`, `errdefer`, `scoped` and error traces. | planned |
 | 0.5 | Enums with data, the rest of `match`, several return values and named arguments. | planned |

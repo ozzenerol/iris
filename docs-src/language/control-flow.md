@@ -14,6 +14,8 @@ if n > 100 {
 }
 ```
 
+`else` can go on the same line as the closing brace or on the next line.
+
 `if` can also give a value. Each branch ends with the value it gives, and `else` is required:
 
 ```iris

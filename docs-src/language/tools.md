@@ -13,6 +13,7 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | `iris get <package>` | adds a package to `iris.mod` |
 | `iris doc` | shows the documentation from the comments |
 | `iris parse file.iris` | prints the syntax tree |
+| `iris lex file.iris` | prints the tokens |
 
 ## Tests
 
