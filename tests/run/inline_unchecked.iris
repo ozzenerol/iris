@@ -1,0 +1,25 @@
+// expect: 49 10 3
+// panic: index 9 is out of range for length 4
+
+@inline
+i64 square(i64 x) => x * x
+
+@unchecked
+i64 sumFast(i64[] xs) {
+    i64 total
+    for i in 0..xs.len {
+        total += xs[i]
+    }
+    return total
+}
+
+@unchecked
+i64 peek(i64[] xs, i64 i) => xs[i]
+
+i64 checkedPeek(i64[] xs, i64 i) => xs[i]
+
+void main() {
+    i64[4] xs = [1, 2, 3, 4]
+    print("{square(7)} {sumFast(xs)} {peek(xs, 2)}")
+    print("{checkedPeek(xs, 9)}")
+}

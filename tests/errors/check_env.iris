@@ -1,0 +1,25 @@
+// error: 14: an @env field can be a number, a Duration, bool, str, String or an enum, not i64[]
+// error: 15: @env on a field takes the variable's name in quotes, required, or both: @env("PORT", required)
+// error: 19: @env on a field needs @env on the struct Plain too
+// error: 24: Plain needs @env to be read from the environment
+
+import env
+
+struct Inner {
+    i64 x
+}
+
+@env
+struct Bad {
+    i64[] list
+    @env(5) i64 n
+}
+
+struct Plain {
+    @env("X") i64 x
+}
+
+!void main() {
+    b := try env.load(Bad)
+    p := try env.load(Plain)
+}

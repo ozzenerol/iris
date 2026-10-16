@@ -1037,6 +1037,22 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
 
 /* @json("key"), @json(required) or both, on a field of a @json struct. */
 static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
+    if (strcmp(at->name, "env") == 0) {
+        /* @env("NAME"), @env(required) or both; read again when the table is written */
+        if (!(d->flags & F_ENV)) {
+            error(c, at, "@env on a field needs @env on the struct %s too", d->name);
+            return;
+        }
+        for (int i = 0; i < at->list.len; i++) {
+            Node *a = at->list.items[i];
+            bool ok = (a->kind == N_STRING && i == 0 && a->textLen > 0) ||
+                      (a->kind == N_IDENT && strcmp(a->name, "required") == 0);
+            if (!ok) {
+                error(c, a, "@env on a field takes the variable's name in quotes, required, or both: @env(\"PORT\", required)");
+            }
+        }
+        return;
+    }
     if (strcmp(at->name, "json") != 0) {
         notYet(c, at, "attributes", "a later version");
         return;
@@ -1141,6 +1157,11 @@ static void resolveStruct(Checker *c, Type *t) {
             d->flags |= F_JSON;
         } else if (strcmp(at->name, "json") == 0) {
             error(c, at, "@json on a struct takes nothing; field names go on the fields: @json(\"name\")");
+        } else if (strcmp(at->name, "env") == 0) {
+            d->flags |= F_ENV;
+            if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
+                error(c, at, "@env on a struct takes nothing, or a prefix for the names in quotes: @env(\"APP\")");
+            }
         } else {
             notYet(c, at, "attributes", "a later version");
         }
@@ -1187,6 +1208,18 @@ static void resolveStruct(Checker *c, Type *t) {
     t->state = 2;
     if (d->flags & F_JSON) {
         checkJsonFields(c, t, d);
+    }
+    if (d->flags & F_ENV) {
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            Type *ft = f->type;
+            if (!ft || isErr(ft)) continue;
+            bool ok = ft->kind == TY_INT || ft->kind == TY_FLOAT || ft->kind == TY_BOOL || isStr(ft) ||
+                      ft->kind == TY_STRING || (ft->kind == TY_ENUM && !ft->hasData);
+            if (!ok || f->kind == N_EMBED) {
+                error(c, f, "an @env field can be a number, a Duration, bool, str, String or an enum, not %s", ft->name);
+            }
+        }
     }
 }
 
@@ -3139,7 +3172,8 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD) {
             return checkSyncMethod(c, e, t, name);
         }
-        if (isJsonStruct(base) && strcmp(name, "free") == 0 && !findMethodIn(base, "free")) {
+        bool generatedFree = isJsonStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & F_ENV));
+        if (generatedFree && strcmp(name, "free") == 0 && !findMethodIn(base, "free")) {
             /* the free @json gives a struct: its Strings and slices */
             if (t->kind != TY_PTR && !addressable(recv)) {
                 error(c, recv, "free changes the value, so it must be called on a variable");
@@ -3493,6 +3527,33 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         if (!jsonType(c, t, e->list.items[0], "this value")) return setType(e, &tyError);
         e->builtin = BI_JSON_ENCODE;
         return setType(e, &tyString);
+    }
+    if (strcmp(d->name, "load") == 0 && d->module && strcmp(d->module, "env") == 0) {
+        /* env.load(Settings) */
+        if (e->list.len != 1) {
+            error(c, e, "env.load takes the struct's type: env.load(Settings)");
+            return setType(e, &tyError);
+        }
+        Type *t = typeArgument(c, e->list.items[0]);
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        if (t->kind != TY_STRUCT || !(t->decl->flags & F_ENV)) {
+            error(c, e->list.items[0], "%s needs @env to be read from the environment", t->name);
+            return setType(e, &tyError);
+        }
+        Node *into = lookup(c, "env.loadInto");
+        if (!into) {
+            error(c, e, "env.load needs the env module's loadInto");
+            return setType(e, &tyError);
+        }
+        e->ref = into;
+        Node *lit = like(c, N_STRUCT_LIT, e);
+        checkExpr(c, &lit, t);
+        e->b = lit;
+        e->c = like(c, N_T_NAME, e);
+        e->c->type = t;
+        e->builtin = BI_ENV_LOAD;
+        return setType(e, resultOf(t));
     }
     if (strcmp(d->name, "decode") == 0) {
         if (e->list.len != 2) {
@@ -4198,7 +4259,7 @@ static void checkLocalVar(Checker *c, Node *s) {
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
         Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
-        if (t->kind == TY_STRING || (!m && isJsonStruct(t))) {
+        if (t->kind == TY_STRING || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & F_ENV))))) {
             s->ref = NULL;              /* freed by the runtime */
         } else if (!m) {
             error(c, s, "scoped needs a type with a free method; %s has none", t->name);
@@ -4850,6 +4911,11 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
                     listPush(c->arena, &c->exports, f);
                 }
             }
+        } else if (strcmp(at->name, "inline") == 0 || strcmp(at->name, "unchecked") == 0) {
+            if (at->list.len) {
+                error(c, at, "@%s takes nothing", at->name);
+            }
+            f->flags |= at->name[0] == 'i' ? F_INLINE : F_UNCHECKED;
         } else if (strcmp(at->name, "builtin") == 0 && f->module && f->src &&
                    strncmp(f->src->path, "std/", 4) == 0) {
             f->flags |= F_INTRINSIC;    /* the compiler makes calls to it */

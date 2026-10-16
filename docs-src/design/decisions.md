@@ -94,6 +94,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | `sqlite.scan` fills `@json` structs, by the names JSON uses. | One struct serves the API and the database. |
 | `[]` where a slice is expected is an empty slice. | `exec(sql, [])` and defaults like `args = []` need no special case. |
 | `comptime` builds a helper program from the same code, runs it, and reads the values back as JSON. | Comptime code is ordinary Iris with all of the library, with no interpreter to keep in step with the compiler. |
+| An `@env` field reads the variable named after it in capitals with `_`, unless `@env("NAME")` says otherwise. | Most settings need no attribute at all. |
+| `iris doc` shows declarations as they are written in the source. | Defaults and attributes read exactly as in the code, and nothing has to be checked first. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

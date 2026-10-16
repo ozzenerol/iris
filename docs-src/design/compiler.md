@@ -101,6 +101,7 @@ Writing a text file needs no LLVM headers or libraries. Any machine with `clang`
 | `src/fmt.c` | `iris fmt`. |
 | `src/lsp.c` | `iris lsp`, the language server. |
 | `src/comptime.c` | `comptime`: the helper program and its values. |
+| `src/doc.c` | `iris doc`. |
 | `runtime/rt.c` | The part written in C: printing, panics, error traces, the task scheduler, threads, the network, JSON and tests. |
 | `editors/vim/` | Syntax files for Vim and Neovim. |
 | `tests/` | Test programs. `tools/run_tests.py` runs them. |

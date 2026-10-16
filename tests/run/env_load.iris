@@ -1,0 +1,26 @@
+// env: DATABASE_URL=db
+// env: APP_PORT=9000
+// env: APP_VERBOSE=yes
+// env: APP_TIMEOUT=1m30s
+// env: APP_LOG_LEVEL=warn
+// expect: 9000 db true 1m30s warn iris 0.5
+
+import env
+
+enum Level { debug, info, warn }
+
+@env("APP")
+struct Settings {
+    u16 port = 8080
+    @env("DATABASE_URL", required) String db
+    bool verbose
+    Duration timeout = 30s
+    Level logLevel = .info
+    str name = "iris"
+    f64 ratio = 0.5
+}
+
+!void main() {
+    scoped Settings s = try env.load(Settings)
+    print("{s.port} {s.db} {s.verbose} {s.timeout} {s.logLevel} {s.name} {s.ratio}")
+}
