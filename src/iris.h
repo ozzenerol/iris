@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.2.0"
+#define IRIS_VERSION "0.3.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -120,7 +120,8 @@ typedef enum {
     N_ENUM_DOT, N_STRUCT_LIT, N_FIELD_INIT, N_ARRAY_LIT, N_TUPLE, N_TRY,
     N_CATCH, N_COMPTIME, N_CHAN_MAKE,
     /* added by the checker */
-    N_CONVERT               /* a: the value; type: the target; flags F_EXPLICIT */
+    N_CONVERT,              /* a: the value; type: the target; flags F_EXPLICIT */
+    N_SELF_PARAM            /* the implicit self parameter of a method */
 } NodeKind;
 
 enum {
@@ -133,6 +134,7 @@ enum {
     F_C_IMPORT = 1 << 6,
     F_FOR_IN = 1 << 7,
     F_EXPLICIT = 1 << 8,
+    F_SELF = 1 << 9,
 };
 
 typedef struct Node Node;
@@ -164,6 +166,7 @@ struct Node {
     bool isConst;           /* the expression's value is known: cval */
     int64_t cval;
     int state;              /* checker bookkeeping (constants: 0 new, 1 busy, 2 done) */
+    int builtin;            /* calls: BI_... */
     const char *ir;         /* the IR writer's name for a variable or function */
 };
 
@@ -186,18 +189,35 @@ typedef enum {
     TY_NORETURN,            /* a block that always leaves: return, break, panic */
     TY_BOOL,
     TY_INT,
-    TY_STR,
+    TY_NULL,                /* the type of null: becomes any pointer */
+    TY_PTR,
+    TY_SLICE,               /* str is the slice of u8 */
+    TY_ARRAY,
+    TY_STRUCT,
+    TY_STRING,              /* the built-in String */
 } TypeKind;
 
 struct Type {
     TypeKind kind;
     int bits;               /* integers */
     bool isSigned;
-    const char *name;
+    const char *name;       /* as written in messages: u8[], Point *, str */
+    Type *elem;             /* pointers, slices, arrays */
+    int64_t count;          /* arrays */
+    Node *decl;             /* structs: the N_STRUCT node */
+    NodeList methods;       /* structs: N_FUNC nodes with a receiver */
+    int state;              /* structs: 0 new, 1 resolving fields, 2 done */
+    const char *ir;         /* structs: the LLVM type name */
 };
 
-extern Type tyError, tyVoid, tyNoreturn, tyBool, tyStr;
+extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString;
 extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64;
+
+/* What a call does when it isn't a call to a user function. */
+enum {
+    BI_NONE, BI_PRINT, BI_PANIC, BI_FORMAT, BI_ALLOC, BI_FREE,
+    BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE,
+};
 
 /* Checks the program and fills in types. Returns false after errors. */
 bool checkProgram(Arena *a, Source *src, Node *file);

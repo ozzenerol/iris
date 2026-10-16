@@ -1,0 +1,20 @@
+// expect: localhost 8080
+// expect: 2 3
+// expect: 443
+
+struct Config {
+    str host
+    u16 port
+}
+
+type Port = u16
+
+Config defaults = Config{host: "localhost", port: 8080}
+i64[2] pair = [2, 3]
+
+void main() {
+    print("{defaults.host} {defaults.port}")
+    print("{pair[0]} {pair[1]}")
+    Port p = 443
+    print("{p}")
+}

@@ -3,7 +3,7 @@
 // error: 14: a match that gives a value needs a '_' arm for the values not listed
 // error: 15: an 'if' that gives a value needs an 'else'
 // error: 16: this value is not used
-// error: 17: a range can only be used in 'for' and 'match'
+// error: 17: a range can only be used in 'for', 'match' and slicing
 // error: 18: this arm can never run: '_' above it matches everything
 void main() {
     break

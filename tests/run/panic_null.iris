@@ -1,0 +1,10 @@
+// panic: null pointer used
+
+struct Point {
+    i64 x
+}
+
+void main() {
+    Point *p = null
+    print("{p.x}")
+}

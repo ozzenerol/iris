@@ -1,0 +1,15 @@
+// expect: 0 0 9
+// expect: 3
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+void main() {
+    Point[] pts = alloc(Point, 3)
+    pts[2].y = 9
+    print("{pts[0].x} {pts[1].y} {pts[2].y}")
+    print("{pts.len}")
+    free(pts)
+}

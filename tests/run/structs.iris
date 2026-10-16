@@ -1,0 +1,39 @@
+// expect: 1 2
+// expect: localhost 9000 false
+// expect: true false
+// expect: 1 100
+// expect: 3 4 5
+// expect: 0 0
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+struct Config {
+    str host = "localhost"
+    u16 port = 8080
+    bool verbose
+}
+
+struct Line {
+    Point from
+    Point to
+    i64 width = 5
+}
+
+void main() {
+    p := Point{x: 1, y: 2}
+    print("{p.x} {p.y}")
+    c := Config{port: 9000}
+    print("{c.host} {c.port} {c.verbose}")
+    Point q = .{x: 1, y: 2}
+    print("{p == q} {p != q}")
+    b := p
+    b.x = 100
+    print("{p.x} {b.x}")
+    Line l = .{from: .{x: 3, y: 0}, to: Point{x: 4, y: 0}}
+    print("{l.from.x} {l.to.x} {l.width}")
+    Point z
+    print("{z.x} {z.y}")
+}

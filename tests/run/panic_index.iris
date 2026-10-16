@@ -1,0 +1,7 @@
+// panic: index 3 is out of range for length 3
+
+void main() {
+    i64[3] a = [1, 2, 3]
+    i64 i = 3
+    print("{a[i]}")
+}

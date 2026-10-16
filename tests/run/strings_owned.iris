@@ -1,0 +1,32 @@
+// expect: hello, world
+// expect: 12 true
+// expect: 7 bytes from localhost
+// expect: copy
+// expect: a-b-c
+
+void main() {
+    String s = "hello".copy()
+    s.append(", world")
+    print(s)
+    print("{s.len} {s == "hello, world"}")
+    s.free()
+    n := 7
+    host := "localhost"
+    msg := format("{n} bytes from {host}")
+    print(msg)
+    msg.free()
+    String c = "copy".copy()
+    String d = c.copy()
+    c.free()
+    print(d)
+    d.free()
+    String joined
+    for i in 0..3 {
+        if i > 0 {
+            joined.append("-")
+        }
+        joined.append(match i { 0 => "a", 1 => "b", _ => "c" })
+    }
+    print("{joined}")
+    joined.free()
+}

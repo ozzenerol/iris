@@ -1,0 +1,7 @@
+// panic: slice [1:5] is out of range for length 3
+
+void main() {
+    str s = "abc"
+    i64 n = 5
+    print("{s[1:n]}")
+}
