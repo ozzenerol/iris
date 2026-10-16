@@ -1,0 +1,42 @@
+// JSON for @json structs. json.encode and json.decode are built into the
+// compiler, which writes a table for each type they see.
+
+// What went wrong reading JSON: the text isn't JSON (syntax), a value has
+// the wrong type, a required field is missing, or a number doesn't fit.
+pub enum JsonError { syntax, wrongType, missing, range }
+
+// Turns a value into JSON text: json.encode(user).
+@builtin
+pub void encode()
+
+// Reads a value of a type from JSON text: json.decode(User, text).
+@builtin
+pub void decode()
+
+@extern("iris_json_decode")
+i32 rawDecode(u8 *table, u8 *text, i64 len, u8 *out)
+
+@extern("iris_json_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_json_message_len")
+i64 messageLen()
+
+// What json.decode calls.
+pub !void decodeInto(u8 *table, str text, u8 *out) {
+    code := rawDecode(table, text.ptr, text.len, out)
+    if code == 0 {
+        return
+    }
+    msg := messagePtr()[0:messageLen()]
+    if code == 1 {
+        return error(JsonError.syntax, "{msg}")
+    }
+    if code == 2 {
+        return error(JsonError.wrongType, "{msg}")
+    }
+    if code == 3 {
+        return error(JsonError.missing, "{msg}")
+    }
+    return error(JsonError.range, "{msg}")
+}

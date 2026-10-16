@@ -113,6 +113,7 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; `NetError` |
+| `json` | `encode(v) String` and `decode(T, text) !T` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
 | `http` | `serve(port, handler, threads)` and `serveOn(listener, handler, threads)`: an HTTP/1.1 server on every CPU core (or on `threads` of them) where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`) and fills in a `Response` (`status`, `text`, `json`) |
 
 A small web server:

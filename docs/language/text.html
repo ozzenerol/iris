@@ -47,7 +47,10 @@ s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
 <p>Text with values can also be passed straight to a function that takes a <code>str</code>. It is built in a temporary <code>String</code>, which is freed when the statement ends:</p>
 <pre class="code"><code>res.text(<span class="s">&quot;hello {name}&quot;</span>)
 log.write(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)</code></pre>
-<p>Anywhere else, text with values needs <code>format</code>.</p>
+<p>A <code>String</code> that a call gives, passed straight to a function that takes a <code>str</code>, is freed when the statement ends too:</p>
+<pre class="code"><code>res.json(json.encode(user))
+print(json.encode(user))</code></pre>
+<p>Anywhere else, text with values needs <code>format</code>, and a <code>String</code> from a call needs a variable that frees it.</p>
 <p>A complete program:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
     <span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()
@@ -77,6 +80,10 @@ connecting to localhost</code></pre>
 <p>In a raw string, <code>r&quot;...&quot;</code>, backslashes and braces are plain characters:</p>
 <pre class="code"><code>path := r<span class="s">&quot;C:\tools\iris&quot;</span>
 pattern := r<span class="s">&quot;\d+{2}&quot;</span></code></pre>
+<p><code>r&quot;&quot;&quot;...&quot;&quot;&quot;</code> is raw text that can also hold quotes and span several lines. The indentation all lines share is removed, as with <code>&quot;&quot;&quot;</code>. It suits JSON and other text full of quotes and braces:</p>
+<pre class="code"><code>body := r<span class="s">&quot;&quot;</span>&quot;
+    {<span class="s">&quot;name&quot;</span>: <span class="s">&quot;Ada&quot;</span>, <span class="s">&quot;tags&quot;</span>: [<span class="s">&quot;admin&quot;</span>]}
+    <span class="s">&quot;&quot;</span>&quot;</code></pre>
 <h2 id="characters"><a href="#characters">Characters</a></h2>
 <p>A character in single quotes is its byte value, a <code>u8</code>:</p>
 <pre class="code"><code><span class="t">u8</span> c = <span class="s">&#x27;a&#x27;</span>

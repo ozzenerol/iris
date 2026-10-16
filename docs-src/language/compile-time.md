@@ -50,21 +50,42 @@ The names that `when` can test are `os`, `arch` and `mode` (debug, release-safe 
 
 An attribute starts with `@` and goes before a declaration. Some attributes make the compiler generate code.
 
-`@json` generates the code that turns a struct into JSON and back:
+`@json` lets a struct be turned into JSON and read back, with the `json` module:
 
 ```iris
+import json
+
 @json
 struct User {
     i64 id
     String name
+    @json(required) String email
     @json("created_at") i64 created
+    bool active = true
+    String[] tags
 }
 
-User u = try json.decode(User, body)
+scoped User u = try json.decode(User, body)
 scoped String out = json.encode(u)
 ```
 
-`@env` reads a struct's fields from environment variables:
+`json.encode(v)` gives the JSON text as a `String`. `json.decode(T, text)` reads a `T` from JSON text and gives a `!T`.
+
+A field's JSON key is its name as written. `@json("created_at")` gives it another key, and `@json(required)` makes `json.decode` fail when the key is missing. Both can go together: `@json("id", required)`. Any other missing field keeps its default value, and keys the struct doesn't have are skipped. `null` leaves a field as it is.
+
+A `@json` struct can hold integers, floats, `bool`, `String`, plain enums (written as their value's name), other `@json` structs, and slices and arrays of those. Fields of an embedded struct appear as fields of the outer one. A `str` field can be encoded but not decoded, since a `str` can't own its text.
+
+A `@json` struct that has no `free` method gets one, which frees its Strings and slices, so `scoped` works on decoded values. When `json.decode` fails, what it had read is freed already.
+
+The errors are values of `json.JsonError`: `syntax` (the text isn't JSON), `wrongType` (a value has the wrong type), `missing` (a required field) and `range` (a number doesn't fit). The message says where:
+
+```output
+tags[0]: expected a string, found a number
+home.zip: 70000 doesn't fit in u16
+line 1, column 15: expected a key in quotes
+```
+
+`@env` will read a struct's fields from environment variables (planned):
 
 ```iris
 @env
@@ -80,7 +101,7 @@ Other attributes:
 
 | Attribute | Effect |
 |---|---|
-| `@yaml` | like `@json`, for YAML |
-| `@unchecked` | no bounds or overflow checks in this function |
+| `@yaml` | like `@json`, for YAML (planned) |
+| `@unchecked` | no bounds or overflow checks in this function (planned) |
 | `@export` | the function can be called from C |
-| `@inline` | always inline this function |
+| `@inline` | always inline this function (planned) |

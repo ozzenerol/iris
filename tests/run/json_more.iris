@@ -1,0 +1,43 @@
+// expect: [{"id":1,"created":10,"name":"a"},{"id":2,"created":20,"name":"b"}]
+// expect: 42 true
+// expect: {"id":3,"created":30,"name":"c\"q\u0001"}
+// expect: 3 c"q
+// expect: [1,2.5,-0.125]
+
+import json
+
+@json
+struct Meta {
+    i64 id
+    i64 created
+}
+
+@json
+struct Item {
+    Meta
+    String name
+}
+
+!void main() {
+    Item[] items = alloc(Item, 2)
+    items[0] = Item{Meta: Meta{id: 1, created: 10}, name: "a".copy()}
+    items[1] = Item{Meta: Meta{id: 2, created: 20}, name: "b".copy()}
+    print(json.encode(items))
+    for i in 0..items.len {
+        items[i].free()
+    }
+    free(items)
+
+    n := try json.decode(i64, " 42 ")
+    b := try json.decode(bool, "true")
+    print("{n} {b}")
+
+    it := Item{Meta: Meta{id: 3, created: 30}, name: "c\"q\x01".copy()}
+    defer it.free()
+    print(json.encode(it))
+    scoped Item back = try json.decode(Item, json.encode(it))
+    print("{back.id} {back.name[0:3]}")
+
+    f64[3] xs = [1.0, 2.5, -0.125]
+    print(json.encode(xs))
+}

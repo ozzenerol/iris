@@ -290,9 +290,13 @@ static Node *parseExprIn(Parser *p, const char *start, const char *end, int line
 
 /* A string literal: plain, triple-quoted or raw. Text in braces is an
  * expression; the result is N_STRING without any, N_INTERP with. */
+static bool rawTriple(Token *t) {
+    return t->kind == T_RSTRING && t->len >= 4 && !memcmp(t->s, "r\"\"\"", 4);
+}
+
 static bool closedString(Token *t) {
-    int q = t->kind == T_STRING3 ? 3 : 1;
-    int open = t->kind == T_RSTRING ? 2 : q;
+    int q = t->kind == T_STRING3 || rawTriple(t) ? 3 : 1;
+    int open = t->kind == T_RSTRING ? q + 1 : q;
     if (t->len < open + q) {
         return false;
     }
@@ -311,16 +315,17 @@ static Node *parseString(Parser *p, Token *t) {
         n->text = "";
         return n;
     }
-    if (t->kind == T_RSTRING) {
+    if (t->kind == T_RSTRING && !rawTriple(t)) {
         Node *n = node(p, N_STRING, t);
         n->text = arenaStrndup(p->arena, t->s + 2, (size_t)t->len - 3);
         n->textLen = (size_t)t->len - 3;
         return n;
     }
-    bool triple = t->kind == T_STRING3;
+    bool raw = t->kind == T_RSTRING;     /* r"""...""" */
+    bool triple = t->kind == T_STRING3 || raw;
     int q = triple ? 3 : 1;
-    const char *s = t->s + q, *e = t->s + t->len - q;
-    int line = t->line, col = t->col + q;
+    const char *s = t->s + q + (raw ? 1 : 0), *e = t->s + t->len - q;
+    int line = t->line, col = t->col + q + (raw ? 1 : 0);
 
     /* triple-quoted: drop the first line break and a last line of only
      * spaces, and the indentation all lines share */
@@ -400,7 +405,7 @@ static Node *parseString(Parser *p, Token *t) {
             lineStart = triple;
             continue;
         }
-        if (*c == '\\') {
+        if (*c == '\\' && !raw) {
             char out;
             int used = decodeEscape(c + 1, e, &out);
             if (!used) {
@@ -411,6 +416,12 @@ static Node *parseString(Parser *p, Token *t) {
             sbPutc(&lit, out);
             c += 1 + used;
             col += 1 + used;
+            continue;
+        }
+        if ((*c == '{' || *c == '}') && raw) {
+            sbPutc(&lit, *c);
+            c++;
+            col++;
             continue;
         }
         if ((*c == '{' || *c == '}') && c + 1 < e && c[1] == *c) {

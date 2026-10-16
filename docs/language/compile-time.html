@@ -41,17 +41,30 @@
 <p>The names that <code>when</code> can test are <code>os</code>, <code>arch</code> and <code>mode</code> (debug, release-safe or release-fast).</p>
 <h2 id="attributes"><a href="#attributes">Attributes</a></h2>
 <p>An attribute starts with <code>@</code> and goes before a declaration. Some attributes make the compiler generate code.</p>
-<p><code>@json</code> generates the code that turns a struct into JSON and back:</p>
-<pre class="code"><code><span class="a">@json</span>
+<p><code>@json</code> lets a struct be turned into JSON and read back, with the <code>json</code> module:</p>
+<pre class="code"><code><span class="k">import</span> json
+
+<span class="a">@json</span>
 <span class="k">struct</span> User {
     <span class="t">i64</span> id
     <span class="t">String</span> name
+    <span class="a">@json</span>(required) <span class="t">String</span> email
     <span class="a">@json</span>(<span class="s">&quot;created_at&quot;</span>) <span class="t">i64</span> created
+    <span class="t">bool</span> active = <span class="k">true</span>
+    <span class="t">String</span>[] tags
 }
 
-User u = <span class="k">try</span> json.decode(User, body)
+<span class="k">scoped</span> User u = <span class="k">try</span> json.decode(User, body)
 <span class="k">scoped</span> <span class="t">String</span> out = json.encode(u)</code></pre>
-<p><code>@env</code> reads a struct's fields from environment variables:</p>
+<p><code>json.encode(v)</code> gives the JSON text as a <code>String</code>. <code>json.decode(T, text)</code> reads a <code>T</code> from JSON text and gives a <code>!T</code>.</p>
+<p>A field's JSON key is its name as written. <code>@json(&quot;created_at&quot;)</code> gives it another key, and <code>@json(required)</code> makes <code>json.decode</code> fail when the key is missing. Both can go together: <code>@json(&quot;id&quot;, required)</code>. Any other missing field keeps its default value, and keys the struct doesn't have are skipped. <code>null</code> leaves a field as it is.</p>
+<p>A <code>@json</code> struct can hold integers, floats, <code>bool</code>, <code>String</code>, plain enums (written as their value's name), other <code>@json</code> structs, and slices and arrays of those. Fields of an embedded struct appear as fields of the outer one. A <code>str</code> field can be encoded but not decoded, since a <code>str</code> can't own its text.</p>
+<p>A <code>@json</code> struct that has no <code>free</code> method gets one, which frees its Strings and slices, so <code>scoped</code> works on decoded values. When <code>json.decode</code> fails, what it had read is freed already.</p>
+<p>The errors are values of <code>json.JsonError</code>: <code>syntax</code> (the text isn't JSON), <code>wrongType</code> (a value has the wrong type), <code>missing</code> (a required field) and <code>range</code> (a number doesn't fit). The message says where:</p>
+<pre class="out"><code>tags[0]: expected a string, found a number
+home.zip: 70000 doesn&#x27;t fit in u16
+line 1, column 15: expected a key in quotes</code></pre>
+<p><code>@env</code> will read a struct's fields from environment variables (planned):</p>
 <pre class="code"><code><span class="a">@env</span>
 <span class="k">struct</span> Settings {
     <span class="a">@env</span>(<span class="s">&quot;PORT&quot;</span>) <span class="t">u16</span> port = <span class="n">8080</span>
@@ -60,7 +73,7 @@ User u = <span class="k">try</span> json.decode(User, body)
 
 cfg := <span class="k">try</span> env.load(Settings)</code></pre>
 <p>Other attributes:</p>
-<div class="table"><table><thead><tr><th>Attribute</th><th>Effect</th></tr></thead><tbody><tr><td><code>@yaml</code></td><td>like <code>@json</code>, for YAML</td></tr><tr><td><code>@unchecked</code></td><td>no bounds or overflow checks in this function</td></tr><tr><td><code>@export</code></td><td>the function can be called from C</td></tr><tr><td><code>@inline</code></td><td>always inline this function</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Attribute</th><th>Effect</th></tr></thead><tbody><tr><td><code>@yaml</code></td><td>like <code>@json</code>, for YAML (planned)</td></tr><tr><td><code>@unchecked</code></td><td>no bounds or overflow checks in this function (planned)</td></tr><tr><td><code>@export</code></td><td>the function can be called from C</td></tr><tr><td><code>@inline</code></td><td>always inline this function (planned)</td></tr></tbody></table></div>
 <div class="pager"><a href="modules.html">&larr; Modules</a><a href="concurrency.html">Concurrency &rarr;</a></div>
 </main></div>
 </body>

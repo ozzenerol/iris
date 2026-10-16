@@ -61,6 +61,9 @@ typedef struct {
     int spawns;
     const char **temps;     /* the slots of temporary Strings of the statements being written */
     int ntemps, capTemps;
+    Type **jsonTypes;       /* the types whose JSON tables are written, and their names */
+    const char **jsonNames;
+    int njson, capJson;
 } IR;
 
 static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
@@ -284,6 +287,7 @@ static Val emitIf(IR *ir, Node *n, bool wantValue);
 static Val emitMatch(IR *ir, Node *m, bool wantValue);
 static bool irAddressable(Node *e);
 static Val load(IR *ir, const char *addr, Type *t);
+static const char *jsonType(IR *ir, Type *t);
 static const char *enumTag(IR *ir, Val v);
 
 /* Every value of from fits in to, so no check is needed. */
@@ -763,6 +767,170 @@ static const char *enumTag(IR *ir, Val v) {
     return t;
 }
 
+/* A temporary String, freed when the statement ends. */
+static void addTemp(IR *ir, const char *slot) {
+    if (ir->ntemps == ir->capTemps) {
+        int cap = ir->capTemps ? ir->capTemps * 2 : 16;
+        const char **t = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        if (ir->ntemps) memcpy(t, ir->temps, sizeof(char *) * (size_t)ir->ntemps);
+        ir->temps = t;
+        ir->capTemps = cap;
+    }
+    ir->temps[ir->ntemps++] = slot;
+}
+
+/* ---------------------------------------------------------------- JSON
+ *
+ * Each type that is turned into JSON or read from it gets a table the
+ * runtime works from (rt.c, JsonType):
+ *   { i32 kind, i32 size, i64 count, ptr items }
+ * A struct's items are its fields, { ptr name, i64 nameLen, i64 offset,
+ * ptr type, i64 required }, with embedded structs' fields in line. A slice
+ * or array points at its element's table; an enum at its values' names,
+ * { ptr name, i64 len, i64 value }. */
+
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM };
+
+static void jsonFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n) {
+    NodeList *fields = &t->decl->list;
+    for (int i = 0; i < fields->len; i++) {
+        Node *f = fields->items[i];
+        int64_t off = base + fieldOffset(t, i);
+        if (f->kind == N_EMBED) {
+            jsonFields(ir, f->type, off, out, n);
+            continue;
+        }
+        const char *key = f->text ? f->text : f->name;
+        size_t keyLen = f->text ? f->textLen : strlen(f->name);
+        const char *name = stringConst(ir, key, keyLen);
+        const char *ft = jsonType(ir, f->type);
+        sbPrintf(out, "%s{ ptr, i64, i64, ptr, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 %d }", *n ? ", " : "",
+                 name, keyLen, (long long)off, ft, (f->flags & F_REQUIRED) ? 1 : 0);
+        (*n)++;
+    }
+}
+
+static const char *jsonType(IR *ir, Type *t) {
+    for (int i = 0; i < ir->njson; i++) {
+        if (ir->jsonTypes[i] == t) return ir->jsonNames[i];
+    }
+    if (ir->njson == ir->capJson) {
+        int cap = ir->capJson ? ir->capJson * 2 : 16;
+        Type **ts = arenaAlloc(ir->arena, sizeof(Type *) * (size_t)cap);
+        const char **ns = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        if (ir->njson) {
+            memcpy(ts, ir->jsonTypes, sizeof(Type *) * (size_t)ir->njson);
+            memcpy(ns, ir->jsonNames, sizeof(char *) * (size_t)ir->njson);
+        }
+        ir->jsonTypes = ts;
+        ir->jsonNames = ns;
+        ir->capJson = cap;
+    }
+    int id = ir->njson;
+    const char *name = fmt(ir, "@json.%d", id);
+    ir->jsonTypes[id] = t;
+    ir->jsonNames[id] = name;
+    ir->njson++;
+    int kind = 0;
+    int64_t size = typeSizeOf(t), count = 0;
+    const char *items = "null";
+    switch (t->kind) {
+    case TY_INT: kind = t->isSigned ? J_INT : J_UINT; break;
+    case TY_FLOAT: kind = J_FLOAT; break;
+    case TY_BOOL: kind = J_BOOL; break;
+    case TY_STRING: kind = J_STRING; break;
+    case TY_SLICE:
+        if (t->elem->kind == TY_INT && t->elem->bits == 8 && !t->elem->isSigned) {
+            kind = J_STR;
+        } else {
+            kind = J_SLICE;
+            items = jsonType(ir, t->elem);
+        }
+        break;
+    case TY_ARRAY:
+        kind = J_ARRAY;
+        count = t->count;
+        items = jsonType(ir, t->elem);
+        break;
+    case TY_ENUM: {
+        kind = J_ENUM;
+        NodeList *ms = &t->decl->list;
+        StrBuf b = {0};
+        for (int i = 0; i < ms->len; i++) {
+            Node *m = ms->items[i];
+            const char *s = stringConst(ir, m->name, strlen(m->name));
+            sbPrintf(&b, "%s{ ptr, i64, i64 } { ptr %s, i64 %zu, i64 %lld }", i ? ", " : "", s, strlen(m->name),
+                     (long long)m->cval);
+        }
+        count = ms->len;
+        items = fmt(ir, "@json.%d.items", id);
+        sbPrintf(&ir->head, "%s = private constant [%lld x { ptr, i64, i64 }] [%s]\n", items, (long long)count,
+                 b.buf ? b.buf : "");
+        sbFree(&b);
+        break;
+    }
+    case TY_STRUCT: {
+        kind = J_STRUCT;
+        StrBuf b = {0};
+        int n = 0;
+        jsonFields(ir, t, 0, &b, &n);
+        count = n;
+        items = fmt(ir, "@json.%d.items", id);
+        sbPrintf(&ir->head, "%s = private constant [%d x { ptr, i64, i64, ptr, i64 }] [%s]\n", items, n,
+                 b.buf ? b.buf : "");
+        sbFree(&b);
+        break;
+    }
+    default:
+        break;
+    }
+    sbPrintf(&ir->head, "%s = private constant { i32, i32, i64, ptr } { i32 %d, i32 %lld, i64 %lld, ptr %s }\n", name,
+             kind, (long long)size, (long long)count, items);
+    return name;
+}
+
+static Val emitJson(IR *ir, Node *e) {
+    switch (e->builtin) {
+    case BI_JSON_ENCODE: {
+        Node *arg = e->list.items[0];
+        Val v = emitExpr(ir, arg);
+        const char *vs = allocaFor(ir, arg->type, "value");
+        ins(ir, "store %s %s, ptr %s", llType(ir, arg->type), v.s, vs);
+        const char *out = allocaFor(ir, &tyString, "json");
+        ins(ir, "store %%String zeroinitializer, ptr %s", out);
+        ins(ir, "call void @iris_json_encode(ptr %s, ptr %s, ptr %s)", jsonType(ir, arg->type), vs, out);
+        return load(ir, out, &tyString);
+    }
+    case BI_JSON_FREE: {
+        Node *recv = e->a->a;
+        Type *t = recv->type->kind == TY_PTR ? recv->type->elem : recv->type;
+        const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+        ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, t), addr);
+        return val("", &tyVoid);
+    }
+    default: {
+        /* decode: the defaults, then decodeInto fills in what the text has */
+        Type *t = e->c->type;
+        const char *slot = allocaFor(ir, t, "decoded");
+        if (e->b) {
+            Val init = emitExpr(ir, e->b);
+            ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
+        } else {
+            ins(ir, "store %s zeroinitializer, ptr %s", llType(ir, t), slot);
+        }
+        Val text = emitExpr(ir, e->list.items[1]);
+        const char *err = tmp(ir);
+        ins(ir, "%s = call i64 %s(ptr %s, { ptr, i64 } %s, ptr %s)", err, e->ref->ir, jsonType(ir, t), text.s, slot);
+        Val v = load(ir, slot, t);
+        const char *rt = llType(ir, e->type);
+        const char *r1 = tmp(ir), *r2 = tmp(ir);
+        ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), v.s);
+        ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+        return val(r2, e->type);
+    }
+    }
+}
+
 /* Methods of Atomic[T], Mutex and Thread. Atomics are LLVM's, all
  * sequentially consistent; an Atomic[bool] is kept in a byte. */
 static Val emitSync(IR *ir, Node *e) {
@@ -981,6 +1149,8 @@ static Val emitBuiltin(IR *ir, Node *e) {
     case BI_MUTEX_LOCK: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK:
     case BI_THREAD_JOIN:
         return emitSync(ir, e);
+    case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
+        return emitJson(ir, e);
     case BI_STRING_APPEND:
     case BI_STRING_FREE: {
         Node *recv = e->a->a;
@@ -1153,6 +1323,8 @@ static void runFrame(IR *ir, DeferFrame *f, bool isError) {
             /* a scoped variable: call its free */
             if (d->type->kind == TY_STRING) {
                 ins(ir, "call void @iris_string_free(ptr %s)", d->ir);
+            } else if (!d->ref) {
+                ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, d->type), d->ir);
             } else {
                 ins(ir, "call void %s(ptr %s)", d->ref->ir, d->ir);
             }
@@ -1391,18 +1563,24 @@ static Val emitExpr(IR *ir, Node *e) {
         e->type->hasData && e->ref && e->ref->kind == N_ENUM_MEMBER) {
         return emitEnumValue(ir, e->type, e->ref, NULL);
     }
+    if (e->flags & F_TEMPSTR) {
+        /* a String only this statement holds: freed when it ends */
+        e->flags &= ~F_TEMPSTR;
+        Val v = emitExpr(ir, e);
+        e->flags |= F_TEMPSTR;
+        if (ir->terminated) {
+            return v;
+        }
+        const char *slot = allocaFor(ir, &tyString, "temp");
+        ins(ir, "store %%String %s, ptr %s", v.s, slot);
+        addTemp(ir, slot);
+        return v;
+    }
     if (e->kind == N_INTERP && (e->flags & F_TEMPTEXT)) {
         const char *slot = allocaFor(ir, &tyString, "text");
         ins(ir, "store %%String zeroinitializer, ptr %s", slot);
         emitText(ir, e, 3, slot);
-        if (ir->ntemps == ir->capTemps) {
-            int cap = ir->capTemps ? ir->capTemps * 2 : 16;
-            const char **t = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
-            if (ir->ntemps) memcpy(t, ir->temps, sizeof(char *) * (size_t)ir->ntemps);
-            ir->temps = t;
-            ir->capTemps = cap;
-        }
-        ir->temps[ir->ntemps++] = slot;
+        addTemp(ir, slot);
         Val str = load(ir, slot, &tyString);
         const char *p = tmp(ir), *n = tmp(ir);
         ins(ir, "%s = extractvalue %%String %s, 0", p, str.s);
@@ -2413,7 +2591,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     }
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
-        if (d->kind == N_FUNC && !(d->flags & F_EXTERN)) {
+        if (d->kind == N_FUNC && !(d->flags & (F_EXTERN | F_INTRINSIC))) {
             emitFunction(&ir, d, &funcs);
         }
     }
@@ -2527,6 +2705,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare ptr @iris_thread_new(ptr, ptr)\n"
            "declare void @iris_thread_join(ptr)\n"
            "declare void @iris_thread_detach(ptr)\n"
+           "declare void @iris_json_encode(ptr, ptr, ptr)\n"
+           "declare void @iris_json_free(ptr, ptr)\n"
            "declare void @iris_mutex_lock(ptr)\n"
            "declare zeroext i1 @iris_mutex_try_lock(ptr)\n"
            "declare void @iris_mutex_unlock(ptr, ptr, i32, i32, ptr)\n"
