@@ -22,7 +22,7 @@ SECTIONS = {
     "design": ["index", "decisions", "compiler", "values", "workflow"],
     "language": ["index", "first-program", "variables-and-types", "functions", "control-flow",
                  "text", "structs", "enums", "pointers-and-memory", "errors", "generics",
-                 "modules", "compile-time", "concurrency", "calling-c", "tools"],
+                 "collections", "modules", "compile-time", "concurrency", "calling-c", "tools"],
 }
 TOP = [("Design", "design/index.html"), ("Language", "language/index.html"),
        ("Roadmap", "roadmap.html")]

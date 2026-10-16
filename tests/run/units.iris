@@ -1,10 +1,15 @@
 // expect: 65536 2097152 3221225472
+// expect: 1ns 1us 1ms 1s 1m0s 1h0m0s
 // expect: 1 1000 1000000 1000000000 60000000000 3600000000000
+// expect: 1.5s 2h3m0s -250ms 1.000001ms
 // expect: 4096
 
 void main() {
     print("{64KiB} {2MiB} {3GiB}")
     print("{1ns} {1us} {1ms} {1s} {1m} {1h}")
+    print("{i64(1ns)} {i64(1us)} {i64(1ms)} {i64(1s)} {i64(1m)} {i64(1h)}")
+    d := 1500ms
+    print("{d} {2h + 3m} {-250ms} {1ms + 1ns}")
     u8[] buf = alloc(u8, 4KiB)
     print("{buf.len}")
     free(buf)

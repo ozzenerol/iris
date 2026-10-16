@@ -1,0 +1,12 @@
+// expect: true true true
+
+import time
+
+void main() {
+    start := time.clock()
+    sleep(2ms)
+    elapsed := time.clock() - start
+    now := time.now()
+    local := now.local()
+    print("{elapsed >= 2ms} {now.year() >= 2026} {local.ns == now.ns}")
+}

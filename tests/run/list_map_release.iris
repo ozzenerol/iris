@@ -1,0 +1,90 @@
+// mode: release-fast
+// expect: 20 0 19 5
+// expect: 0 -1 19
+// expect: total 170
+// expect: 18
+// expect: 2 ada
+// expect: 1 zoe
+// expect: 5 the=3 true and=2 cow=false
+// expect: true false 4
+// expect: seen 7
+// expect: 500 odd ?
+// expect: 5 0
+
+import str
+
+struct User {
+    i64 id
+    str name
+}
+
+enum Color { red, green, blue }
+
+bool byName(User a, User b) => str.compare(a.name, b.name) < 0
+
+bool less(i64 a, i64 b) => a < b
+
+void main() {
+    List[i64] xs
+    defer xs.free()
+    for i in 0..20 {
+        xs.push((i * 7) % 20)
+    }
+    xs.sort(less)
+    print("{xs.len} {xs.at(0)} {xs.last()} {xs.items()[5]}")
+    xs.insert(0, -1)
+    print("{xs.remove(1)} {xs.at(0)} {xs.pop()}")
+    i64 total
+    for x in xs {
+        total += x
+    }
+    print("total {total}")
+    xs.reverse()
+    print("{xs.at(0)}")
+
+    List[User] users
+    defer users.free()
+    users.push(User{id: 1, name: "zoe"})
+    users.push(User{id: 2, name: "ada"})
+    users.sort(byName)
+    for u in users {
+        print("{u.id} {u.name}")
+    }
+
+    Map[str, i64] counts
+    defer counts.free()
+    text := "the cat and the dog and the bird"
+    rest := text
+    for {
+        word, after, found := str.cut(rest, " ")
+        scoped String w = word.copy()
+        counts.set(w, counts.getOr(w, 0) + 1)
+        if !found {
+            break
+        }
+        rest = after
+    }
+    v, ok := counts.get("the")
+    print("{counts.len} the={v} {ok} and={counts.getOr("and", 0)} cow={counts.has("cow")}")
+    print("{counts.remove("cat")} {counts.remove("cat")} {counts.len}")
+    i64 seen
+    for k, n in counts {
+        seen += n
+    }
+    print("seen {seen}")
+
+    Map[i64, str] names
+    defer names.free()
+    for i in 0..1000 {
+        names.set(i, if i % 2 == 0 { "even" } else { "odd" })
+    }
+    for i in 0..500 {
+        _ = names.remove(i)
+    }
+    print("{names.len} {names.getOr(999, "?")} {names.getOr(3, "?")}")
+
+    Map[Color, i64] byColor
+    defer byColor.free()
+    byColor.set(.green, 5)
+    print("{byColor.getOr(.green, 0)} {byColor.getOr(.red, 0)}")
+}

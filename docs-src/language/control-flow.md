@@ -93,7 +93,7 @@ for i, line in lines {
 }
 ```
 
-Over a map, with its keys and values:
+Over a `List`, or a `Map` with its keys and values, or any struct with a `next` method (see [Collections](collections.html)):
 
 ```iris
 for name, age in ages {

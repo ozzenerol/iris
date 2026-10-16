@@ -1,0 +1,166 @@
+// A list of values that grows as values are added. A new List is empty;
+// free gives its memory back.
+pub struct List[T] {
+    T[] buf
+    pub i64 len
+}
+
+// Makes room for at least n values without growing again.
+pub void List[T].reserve(i64 n) {
+    if n <= self.buf.len {
+        return
+    }
+    T[] bigger = alloc(T, n)
+    for i in 0..self.len {
+        bigger[i] = self.buf[i]
+    }
+    free(self.buf)
+    self.buf = bigger
+}
+
+// Adds a value at the end.
+pub void List[T].push(T value) {
+    if self.len == self.buf.len {
+        self.reserve(if self.buf.len == 0 { 8 } else { self.buf.len * 2 })
+    }
+    self.buf[self.len] = value
+    self.len += 1
+}
+
+void List[T].check(i64 i) {
+    if i < 0 || i >= self.len {
+        panic("index {i} is out of range for a List of {self.len}")
+    }
+}
+
+// The value at i, from 0.
+pub T List[T].at(i64 i) {
+    self.check(i)
+    return self.buf[i]
+}
+
+// Replaces the value at i.
+pub void List[T].set(i64 i, T value) {
+    self.check(i)
+    self.buf[i] = value
+}
+
+// The last value.
+pub T List[T].last() {
+    self.check(self.len - 1)
+    return self.buf[self.len - 1]
+}
+
+// Takes the last value off.
+pub T List[T].pop() {
+    self.check(self.len - 1)
+    self.len -= 1
+    return self.buf[self.len]
+}
+
+// Puts a value at i, moving the ones after it up.
+pub void List[T].insert(i64 i, T value) {
+    if i < 0 || i > self.len {
+        panic("index {i} is out of range for inserting into a List of {self.len}")
+    }
+    self.push(value)
+    k := self.len - 1
+    for k > i {
+        self.buf[k] = self.buf[k - 1]
+        k -= 1
+    }
+    self.buf[i] = value
+}
+
+// Takes the value at i out, moving the ones after it down.
+pub T List[T].remove(i64 i) {
+    self.check(i)
+    v := self.buf[i]
+    for k in i..self.len - 1 {
+        self.buf[k] = self.buf[k + 1]
+    }
+    self.len -= 1
+    return v
+}
+
+// The values as a slice. It is valid until the list changes size.
+pub T[] List[T].items() => self.buf[0:self.len]
+
+// Sorts the values: less says whether a goes before b. Values that are
+// equal keep their order.
+pub void List[T].sort(bool(T, T) less) {
+    if self.len < 2 {
+        return
+    }
+    T[] tmp = alloc(T, self.len)
+    defer free(tmp)
+    sortRange(self.buf, tmp, 0, self.len, less)
+}
+
+void sortRange[T](T[] xs, T[] tmp, i64 lo, i64 hi, bool(T, T) less) {
+    if hi - lo <= 16 {
+        for i in lo + 1..hi {
+            v := xs[i]
+            k := i
+            for k > lo && less(v, xs[k - 1]) {
+                xs[k] = xs[k - 1]
+                k -= 1
+            }
+            xs[k] = v
+        }
+        return
+    }
+    mid := lo + (hi - lo) / 2
+    sortRange(xs, tmp, lo, mid, less)
+    sortRange(xs, tmp, mid, hi, less)
+    a := lo
+    b := mid
+    for k in lo..hi {
+        if a < mid && (b >= hi || !less(xs[b], xs[a])) {
+            tmp[k] = xs[a]
+            a += 1
+        } else {
+            tmp[k] = xs[b]
+            b += 1
+        }
+    }
+    for k in lo..hi {
+        xs[k] = tmp[k]
+    }
+}
+
+// Turns the order around.
+pub void List[T].reverse() {
+    i := 0
+    j := self.len - 1
+    for i < j {
+        v := self.buf[i]
+        self.buf[i] = self.buf[j]
+        self.buf[j] = v
+        i += 1
+        j -= 1
+    }
+}
+
+// Empties the list and keeps its memory for new values.
+pub void List[T].clear() {
+    self.len = 0
+}
+
+// Gives the list's memory back; the list is empty after.
+pub void List[T].free() {
+    free(self.buf)
+    self.buf = alloc(T, 0)
+    self.len = 0
+}
+
+// for v in list
+pub (T, bool) List[T].next(i64 *at) {
+    if *at >= self.len {
+        T none
+        return (none, false)
+    }
+    v := self.buf[*at]
+    *at += 1
+    return (v, true)
+}

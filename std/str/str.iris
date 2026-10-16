@@ -31,6 +31,18 @@ pub bool startsWith(str s, str prefix) => s.len >= prefix.len && s[0:prefix.len]
 // Whether s ends with suffix.
 pub bool endsWith(str s, str suffix) => s.len >= suffix.len && s[s.len - suffix.len:] == suffix
 
+// Compares a and b byte by byte: below 0 when a comes first, 0 when they
+// are equal, above 0 when b comes first.
+pub i64 compare(str a, str b) {
+    n := if a.len < b.len { a.len } else { b.len }
+    for i in 0..n {
+        if a[i] != b[i] {
+            return i64(a[i]) - i64(b[i])
+        }
+    }
+    return a.len - b.len
+}
+
 // How many times sub appears in s, not overlapping.
 pub i64 count(str s, str sub) {
     if sub.len == 0 {

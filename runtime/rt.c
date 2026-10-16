@@ -133,6 +133,49 @@ void iris_write_u64(int sink, IrisString *dst, int64_t v) {
     put(sink, dst, buf, (size_t)n);
 }
 
+/* A Duration as people write it: 1.5s, 2h3m0s, 250ms, 12us, 7ns. */
+void iris_write_duration(int sink, IrisString *dst, int64_t d) {
+    char buf[64];
+    int n = 0;
+    uint64_t u = d < 0 ? (uint64_t)0 - (uint64_t)d : (uint64_t)d;
+    if (d < 0) buf[n++] = '-';
+    if (u == 0) {
+        put(sink, dst, "0s", 2);
+        return;
+    }
+    /* a number of units with up to 9 decimals, without zeros at the end */
+    #define FRAC(whole, part, digits, unit)                                                     \
+        do {                                                                                    \
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "%llu", (unsigned long long)(whole)); \
+            if (part) {                                                                         \
+                char f[16];                                                                     \
+                snprintf(f, sizeof f, "%0*llu", digits, (unsigned long long)(part));            \
+                int fl = digits;                                                                \
+                while (fl > 0 && f[fl - 1] == '0') fl--;                                        \
+                n += snprintf(buf + n, sizeof buf - (size_t)n, ".%.*s", fl, f);                 \
+            }                                                                                   \
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "%s", unit);                         \
+        } while (0)
+    if (u < 1000ULL) {
+        FRAC(u, 0, 1, "ns");
+    } else if (u < 1000000ULL) {
+        FRAC(u / 1000, u % 1000, 3, "us");
+    } else if (u < 1000000000ULL) {
+        FRAC(u / 1000000, u % 1000000, 6, "ms");
+    } else {
+        uint64_t s = u / 1000000000ULL, frac = u % 1000000000ULL;
+        if (s >= 3600) {
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "%lluh", (unsigned long long)(s / 3600));
+        }
+        if (s >= 60) {
+            n += snprintf(buf + n, sizeof buf - (size_t)n, "%llum", (unsigned long long)(s % 3600 / 60));
+        }
+        FRAC(s % 60, frac, 9, "s");
+    }
+    #undef FRAC
+    put(sink, dst, buf, (size_t)n);
+}
+
 /* A float in the fewest digits that read back as the same value, written
  * as a plain decimal unless it is very large or very small: 100, 0.25,
  * 1e+21, 1e-07. */
@@ -2705,4 +2748,50 @@ int iris_test_summary(void) {
     printf("%d test%s, %d passed, %d failed\n", testsRun, testsRun == 1 ? "" : "s", testsRun - testsFailed,
            testsFailed);
     return testsFailed ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------- hashing (Map) */
+
+int64_t iris_hash_u64(int64_t v) {
+    uint64_t x = (uint64_t)v + 0x9e3779b97f4a7c15ULL;     /* splitmix64 */
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return (int64_t)(x ^ (x >> 31));
+}
+
+int64_t iris_hash_bytes(const char *p, int64_t n) {
+    uint64_t h = 0xcbf29ce484222325ULL;                     /* FNV-1a, then mixed */
+    for (int64_t i = 0; i < n; i++) {
+        h = (h ^ (unsigned char)p[i]) * 0x100000001b3ULL;
+    }
+    return iris_hash_u64((int64_t)h);
+}
+
+char *iris_bytes_dup(const char *p, int64_t n) {
+    char *c = malloc(n ? (size_t)n : 1);
+    if (!c) outOfMemory();
+    if (n) memcpy(c, p, (size_t)n);
+    return c;
+}
+
+/* ---------------------------------------------------------------- time */
+
+int64_t iris_time_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+int64_t iris_time_clock(void) {
+    return nowNs();
+}
+
+/* The computer's time zone offset, in seconds east of UTC, at a moment. */
+int32_t iris_time_offset(int64_t unixSeconds) {
+    time_t t = (time_t)unixSeconds;
+    struct tm tm;
+    if (!localtime_r(&t, &tm)) {
+        return 0;
+    }
+    return (int32_t)tm.tm_gmtoff;
 }

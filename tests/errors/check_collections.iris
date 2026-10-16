@@ -1,0 +1,14 @@
+// error: 9: a Map's keys can be integers, bool, enums, pointers or str, not String (use str: the map keeps its own copy)
+// error: 10: a Map's keys can be integers, bool, enums, pointers or str, not f64
+// error: 12: for ... in goes over a Plain when it has a method next(i64 *at) that gives the next value and a bool
+struct Plain {
+    i64 x
+}
+
+void main() {
+    Map[String, i64] m
+    Map[f64, i64] f
+    p := Plain{x: 1}
+    for v in p {
+    }
+}
