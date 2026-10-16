@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.23.0"
+#define IRIS_VERSION "0.24.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -330,6 +330,7 @@ enum {
     BI_JSON_ENCODE, BI_JSON_DECODE, BI_JSON_FREE,
     BI_EXPECT,
     BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
+    BI_TABLE_OF,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

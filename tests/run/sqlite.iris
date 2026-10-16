@@ -1,0 +1,66 @@
+// expect: id 1
+// expect: SqlError.constraint: running the SQL: UNIQUE constraint failed: users.name
+// expect: SqlError.failed: the SQL has 1 ? but 0 values were given
+// expect: SqlError.failed: in the SQL: near "SELEKT": syntax error
+// expect: 1 ada age name 3
+// expect: 2 zoe ? name 3
+// expect: 1 ada 36 admin 9.5 true
+// expect: 2 zoe 0 member 0 false
+// expect: deleted 2
+// expect: after rollback 2
+
+import sqlite
+
+enum Role { admin, member }
+
+@json
+struct User {
+    i64 id
+    String name
+    i64 age
+    Role role
+    f64 score
+    bool active
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("""
+        CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, role TEXT, score REAL, active INTEGER);
+        CREATE UNIQUE INDEX users_name ON users(name);
+        """)
+    try db.exec("INSERT INTO users (name, age, role, score, active) VALUES (?, ?, ?, ?, ?)",
+                [.text("ada"), .int(36), .text("admin"), .float(9.5), .int(1)])
+    print("id {db.lastId()}")
+    try db.exec("INSERT INTO users (name, age, role) VALUES (?, ?, ?)", [.text("zoe"), .none, .text("member")])
+    db.exec("INSERT INTO users (name) VALUES (?)", [.text("ada")]) catch e {
+        print("{e.code}: {e.message}")
+    }
+    db.exec("INSERT INTO users (name) VALUES (?)", []) catch e {
+        print("{e.code}: {e.message}")
+    }
+    db.exec("SELEKT 1") catch e {
+        print("{e.code}: {e.message}")
+    }
+    rows := try db.query("SELECT id, name, age FROM users WHERE id >= ? ORDER BY id", [.int(1)])
+    for try rows.next() {
+        print("{rows.int(0)} {rows.text(1)} {if rows.isNull(2) { "?" } else { "age" }} {rows.name(1)} {rows.columns()}")
+    }
+    rows.close()
+    users := try db.query("SELECT * FROM users ORDER BY name")
+    defer users.close()
+    for try users.next() {
+        scoped User u
+        try sqlite.scan(&users, &u)
+        print("{u.id} {u.name} {u.age} {u.role} {u.score} {u.active}")
+    }
+    try db.begin()
+    try db.exec("DELETE FROM users")
+    print("deleted {db.changes()}")
+    try db.rollback()
+    count := try db.query("SELECT count(*) FROM users")
+    _ = try count.next()
+    print("after rollback {count.int(0)}")
+    count.close()
+}

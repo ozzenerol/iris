@@ -1366,6 +1366,11 @@ static Val emitBuiltin(IR *ir, Node *e) {
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
+    case BI_TABLE_OF: {
+        Type *t = e->list.items[0]->type->elem;
+        emitExpr(ir, e->list.items[0]);
+        return val(jsonType(ir, t), e->type);
+    }
     case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: {
         Node *arg = e->list.items[0];
         Type *t = arg->type;
@@ -1962,6 +1967,9 @@ static Val emitExpr(IR *ir, Node *e) {
     case N_STRUCT_LIT:
         return emitStructLit(ir, e);
     case N_ARRAY_LIT:
+        if (e->list.len == 0 && e->type->kind == TY_SLICE) {
+            return val("zeroinitializer", e->type);     /* an empty slice */
+        }
         return emitArrayLit(ir, e);
     case N_IF:
         return emitIf(ir, e, true);

@@ -2318,6 +2318,9 @@ static Type *checkArrayLit(Checker *c, Node *e, Type *expected) {
             error(c, e, "the type of [] can't be worked out here");
             return setType(e, &tyError);
         }
+        if (expected && expected->kind == TY_SLICE) {
+            return setType(e, expected);    /* [] where a slice goes: an empty one */
+        }
         error(c, e, "an array needs at least one value");
         return setType(e, &tyError);
     }
@@ -3354,7 +3357,7 @@ static Type *typeArgument(Checker *c, Node *a) {
  * it doesn't own, so text must be a String. */
 static bool jsonDecodable(Checker *c, Type *t, Node *at) {
     if (isStr(t)) {
-        error(c, at, "json.decode can't fill a str, which can't own its text; use a String");
+        error(c, at, "a str field can't be filled from JSON or a row, since a str can't own its text; use a String");
         return false;
     }
     if (t->kind == TY_SLICE || t->kind == TY_ARRAY) {
@@ -3433,6 +3436,28 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         e->c = like(c, N_T_NAME, e);
         e->c->type = t;
         return setType(e, rt);
+    }
+    if (strcmp(d->name, "tableOf") == 0) {
+        /* the field table of a @json struct, for the runtime to fill it */
+        if (e->list.len != 1) {
+            error(c, e, "tableOf takes a pointer to a @json struct");
+            return setType(e, &tyError);
+        }
+        Type *t = checkExpr(c, &e->list.items[0], NULL);
+        if (isErr(t)) return setType(e, &tyError);
+        Type *st = t->kind == TY_PTR ? t->elem : NULL;
+        if (!st || st->kind != TY_STRUCT) {
+            error(c, e->list.items[0], "this should be a pointer to a struct, not %s", t->name);
+            return setType(e, &tyError);
+        }
+        resolveStruct(c, st);
+        if (!isJsonStruct(st)) {
+            error(c, e->list.items[0], "%s needs @json to be filled from a row", st->name);
+            return setType(e, &tyError);
+        }
+        if (!jsonDecodable(c, st, e->list.items[0])) return setType(e, &tyError);
+        e->builtin = BI_TABLE_OF;
+        return setType(e, ptrTo(&tyU8));
     }
     if (strcmp(d->name, "hashOf") == 0 || strcmp(d->name, "keyOwn") == 0 || strcmp(d->name, "keyFree") == 0) {
         /* Map's: the hash of a key, a key the map owns, and giving it back */

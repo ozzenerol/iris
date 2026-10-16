@@ -1,0 +1,21 @@
+// error: 18: scan[Plain], made here, has the errors above
+// error: 20: scan[View], made here, has the errors above
+import sqlite
+
+struct Plain {
+    i64 id
+}
+
+@json
+struct View {
+    str name
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    rows := try db.query("SELECT 1 AS id")
+    Plain p
+    try sqlite.scan(&rows, &p)
+    View v
+    try sqlite.scan(&rows, &v)
+}

@@ -27,5 +27,6 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.21 | An HTTP `Router` and an HTTP client. | released |
 | 0.22 | TLS: `https` for the HTTP client and server, and TLS connections in `net`. | released |
 | 0.23 | `random`, `crypto` (SHA-256, HMAC), `base64`, `hex` and `url`. | released |
+| 0.24 | The `sqlite` module. `[]` for an empty slice. | released |
 
-Next: a SQLite driver (0.24), `comptime` (0.25), and `iris doc` with the remaining attributes, `@env`, `@inline` and `@unchecked` (0.26).
+Next: `comptime` (0.25), and `iris doc` with the remaining attributes, `@env`, `@inline` and `@unchecked` (0.26).

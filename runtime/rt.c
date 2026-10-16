@@ -3622,3 +3622,251 @@ uint64_t iris_rng_below(uint64_t *s, uint64_t n) {
         if (x < limit) return x % n;
     }
 }
+
+/* ---------------------------------------------------------------- SQLite
+
+   The system's SQLite, loaded with dlopen when a program first opens a
+   database. Calls wait for the database on the calling thread. */
+
+static struct {
+    int loaded;
+    int (*openV2)(const char *, void **, int, const char *);
+    int (*closeV2)(void *);
+    int (*prepareV2)(void *, const char *, int, void **, const char **);
+    int (*bindInt64)(void *, int, int64_t);
+    int (*bindDouble)(void *, int, double);
+    int (*bindText)(void *, int, const char *, int, void (*)(void *));
+    int (*bindNull)(void *, int);
+    int (*bindCount)(void *);
+    int (*step)(void *);
+    int (*columnCount)(void *);
+    int (*columnType)(void *, int);
+    int64_t (*columnInt64)(void *, int);
+    double (*columnDouble)(void *, int);
+    const unsigned char *(*columnText)(void *, int);
+    int (*columnBytes)(void *, int);
+    const char *(*columnName)(void *, int);
+    int (*finalize)(void *);
+    const char *(*errmsg)(void *);
+    int (*errcode)(void *);
+    int64_t (*lastRowid)(void *);
+    int (*changes)(void *);
+    int (*busyTimeout)(void *, int);
+    void *(*dbHandle)(void *);
+} sq;
+
+static pthread_once_t sqOnce = PTHREAD_ONCE_INIT;
+static _Thread_local char sqlMsg[512];
+static _Thread_local int64_t sqlMsgLen;
+
+const char *iris_sql_message_ptr(void) { return sqlMsg; }
+int64_t iris_sql_message_len(void) { return sqlMsgLen; }
+
+static void sqlSay(const char *what, const char *detail) {
+    sqlMsgLen = snprintf(sqlMsg, sizeof sqlMsg, "%s%s%s", what, detail ? ": " : "", detail ? detail : "");
+    if (sqlMsgLen >= (int64_t)sizeof sqlMsg) sqlMsgLen = sizeof sqlMsg - 1;
+}
+
+static void sqLoad(void) {
+#ifdef __APPLE__
+    static const char *const names[] = {"/usr/lib/libsqlite3.dylib", "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+                                        "/usr/local/opt/sqlite/lib/libsqlite3.dylib", NULL};
+#else
+    static const char *const names[] = {"libsqlite3.so.0", "libsqlite3.so", NULL};
+#endif
+    const char *env = getenv("IRIS_SQLITE");
+    void *h = env && *env ? dlopen(env, RTLD_NOW) : NULL;
+    for (int i = 0; !h && names[i]; i++) h = dlopen(names[i], RTLD_NOW);
+    if (!h) {
+        sq.loaded = -1;
+        return;
+    }
+#define SQ(field, name)                                 \
+    do {                                                \
+        *(void **)&sq.field = dlsym(h, name);           \
+        if (!sq.field) {                                \
+            sq.loaded = -1;                             \
+            return;                                     \
+        }                                               \
+    } while (0)
+    SQ(openV2, "sqlite3_open_v2");
+    SQ(closeV2, "sqlite3_close_v2");
+    SQ(prepareV2, "sqlite3_prepare_v2");
+    SQ(bindInt64, "sqlite3_bind_int64");
+    SQ(bindDouble, "sqlite3_bind_double");
+    SQ(bindText, "sqlite3_bind_text");
+    SQ(bindNull, "sqlite3_bind_null");
+    SQ(bindCount, "sqlite3_bind_parameter_count");
+    SQ(step, "sqlite3_step");
+    SQ(columnCount, "sqlite3_column_count");
+    SQ(columnType, "sqlite3_column_type");
+    SQ(columnInt64, "sqlite3_column_int64");
+    SQ(columnDouble, "sqlite3_column_double");
+    SQ(columnText, "sqlite3_column_text");
+    SQ(columnBytes, "sqlite3_column_bytes");
+    SQ(columnName, "sqlite3_column_name");
+    SQ(finalize, "sqlite3_finalize");
+    SQ(errmsg, "sqlite3_errmsg");
+    SQ(errcode, "sqlite3_extended_errcode");
+    SQ(lastRowid, "sqlite3_last_insert_rowid");
+    SQ(changes, "sqlite3_changes");
+    SQ(busyTimeout, "sqlite3_busy_timeout");
+    SQ(dbHandle, "sqlite3_db_handle");
+#undef SQ
+    sq.loaded = 1;
+}
+
+/* The error kinds of sqlite's error module: 1 failed, 2 busy, 3 constraint. */
+static int sqlKind(int code) {
+    switch (code & 0xff) {
+    case 5: case 6: return 2;       /* SQLITE_BUSY, SQLITE_LOCKED */
+    case 19: return 3;              /* SQLITE_CONSTRAINT */
+    default: return 1;
+    }
+}
+
+int iris_sql_open(const char *path, int64_t n, void **db) {
+    pthread_once(&sqOnce, sqLoad);
+    if (sq.loaded != 1) {
+        sqlSay("SQLite isn't installed (libsqlite3); install it, or set IRIS_SQLITE to its library", NULL);
+        return 1;
+    }
+    char *p = cpath(path, n);
+    void *h = NULL;
+    /* read, write and create; serialized, so threads can share a Db */
+    int rc = sq.openV2(p, &h, 0x2 | 0x4 | 0x10000 | 0x40, NULL);
+    if (rc != 0) {
+        char what[300];
+        snprintf(what, sizeof what, "opening %s", p);
+        sqlSay(what, h ? sq.errmsg(h) : "out of memory");
+        if (h) sq.closeV2(h);
+        free(p);
+        return sqlKind(rc);
+    }
+    free(p);
+    sq.busyTimeout(h, 5000);        /* wait up to 5 s for a lock held elsewhere */
+    *db = h;
+    return 0;
+}
+
+void iris_sql_close(void *db) {
+    if (db && sq.loaded == 1) sq.closeV2(db);
+}
+
+/* One statement of sql, from *at; *at moves past it. NULL stmt with 0 when
+   nothing is left. */
+int iris_sql_prepare(void *db, const char *sql, int64_t n, int64_t *at, void **stmt) {
+    const char *start = sql + *at, *tail = NULL;
+    *stmt = NULL;
+    int rc = sq.prepareV2(db, start, (int)(n - *at), stmt, &tail);
+    if (rc != 0) {
+        sqlSay("in the SQL", sq.errmsg(db));
+        return sqlKind(rc);
+    }
+    *at = tail ? tail - sql : n;
+    return 0;
+}
+
+int iris_sql_bind(void *stmt, int64_t i, int kind, int64_t iv, double fv, const char *text, int64_t len) {
+    int rc;
+    switch (kind) {
+    case 0: rc = sq.bindInt64(stmt, (int)i, iv); break;
+    case 1: rc = sq.bindDouble(stmt, (int)i, fv); break;
+    case 2: rc = sq.bindText(stmt, (int)i, text ? text : "", (int)len, (void (*)(void *))-1); break;
+    default: rc = sq.bindNull(stmt, (int)i); break;
+    }
+    if (rc != 0) {
+        sqlSay("binding a value", sq.errmsg(sq.dbHandle(stmt)));
+        return sqlKind(rc);
+    }
+    return 0;
+}
+
+int64_t iris_sql_params(void *stmt) { return sq.bindCount(stmt); }
+
+/* 1 a row, 0 done, or minus the error kind. */
+int iris_sql_step(void *stmt) {
+    int rc = sq.step(stmt);
+    if (rc == 100) return 1;
+    if (rc == 101) return 0;
+    void *db = sq.dbHandle(stmt);
+    sqlSay("running the SQL", sq.errmsg(db));
+    return -sqlKind(sq.errcode(db));
+}
+
+void iris_sql_finalize(void *stmt) {
+    if (stmt) sq.finalize(stmt);
+}
+
+int64_t iris_sql_columns(void *stmt) { return sq.columnCount(stmt); }
+int64_t iris_sql_type(void *stmt, int64_t i) { return sq.columnType(stmt, (int)i); }
+int64_t iris_sql_int(void *stmt, int64_t i) { return sq.columnInt64(stmt, (int)i); }
+double iris_sql_float(void *stmt, int64_t i) { return sq.columnDouble(stmt, (int)i); }
+const char *iris_sql_text(void *stmt, int64_t i, int64_t *len) {
+    const char *t = (const char *)sq.columnText(stmt, (int)i);
+    *len = t ? sq.columnBytes(stmt, (int)i) : 0;
+    return t ? t : "";
+}
+const char *iris_sql_name(void *stmt, int64_t i, int64_t *len) {
+    const char *t = sq.columnName(stmt, (int)i);
+    *len = t ? (int64_t)strlen(t) : 0;
+    return t ? t : "";
+}
+int64_t iris_sql_last_id(void *db) { return sq.lastRowid(db); }
+int64_t iris_sql_changes(void *db) { return sq.changes(db); }
+
+/* Fills the fields of a @json struct from the row's columns of the same
+   names. NULL leaves a field as it is; other columns are skipped. */
+int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
+    const JsonField *fs = t->items;
+    int cols = sq.columnCount(stmt);
+    for (int c = 0; c < cols; c++) {
+        const char *name = sq.columnName(stmt, c);
+        size_t nl = name ? strlen(name) : 0;
+        const JsonField *f = NULL;
+        for (int64_t i = 0; i < t->count && !f; i++) {
+            if ((size_t)fs[i].nameLen == nl && !memcmp(fs[i].name, name, nl)) f = &fs[i];
+        }
+        if (!f || sq.columnType(stmt, c) == 5) continue;
+        char *p = out + f->offset;
+        const JsonType *ft = f->type;
+        switch (ft->kind) {
+        case J_INT: case J_UINT: writeInt(p, ft->size, sq.columnInt64(stmt, c)); break;
+        case J_FLOAT:
+            if (ft->size == 4) *(float *)p = (float)sq.columnDouble(stmt, c);
+            else *(double *)p = sq.columnDouble(stmt, c);
+            break;
+        case J_BOOL: *(uint8_t *)p = sq.columnInt64(stmt, c) != 0; break;
+        case J_STRING: {
+            IrisString *s = (IrisString *)p;
+            iris_string_free(s);
+            const char *text = (const char *)sq.columnText(stmt, c);
+            iris_string_append(s, text ? text : "", sq.columnBytes(stmt, c));
+            break;
+        }
+        case J_ENUM: {
+            const JsonName *names = ft->items;
+            const char *text = (const char *)sq.columnText(stmt, c);
+            int64_t len = sq.columnBytes(stmt, c);
+            int64_t k = 0;
+            while (k < ft->count && !(names[k].len == len && !memcmp(names[k].name, text, (size_t)len))) k++;
+            if (k == ft->count) {
+                char what[200];
+                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't one of the enum's values", name,
+                         (int)(len > 60 ? 60 : len), text ? text : "");
+                sqlSay(what, NULL);
+                return 1;
+            }
+            *(int32_t *)p = (int32_t)names[k].value;
+            break;
+        }
+        default: {
+            char what[200];
+            snprintf(what, sizeof what, "the field %s can't be filled from a column", name);
+            sqlSay(what, NULL);
+            return 1;
+        }
+        }
+    }
+    return 0;
+}
