@@ -1,6 +1,6 @@
 file
   var requests i64 threadlocal
-  var hits i64 atomic
+  var hits Atomic[i64]
   func serve
     param port u16
     ret: !void

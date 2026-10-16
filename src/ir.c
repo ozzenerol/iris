@@ -88,7 +88,9 @@ static const char *llType(IR *ir, Type *t) {
         case 32: return "i32";
         default: return "i64";
         }
-    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: return "ptr";
+    case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD: return "ptr";
+    case TY_ATOMIC: return t->elem->kind == TY_BOOL ? "i8" : llType(ir, t->elem);
+    case TY_MUTEX: return "[3 x i64]";
     case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
@@ -274,6 +276,7 @@ static void indexCheck(IR *ir, const char *idx, const char *len, Node *at) {
 /* ---------------------------------------------------------------- expressions */
 
 static Val emitExpr(IR *ir, Node *e);
+static const char *emitSpawn(IR *ir, Node *call, bool thread);
 static const char *emitAddr(IR *ir, Node *e);
 static void emitStmt(IR *ir, Node *s);
 static void emitBlock(IR *ir, Node *b);
@@ -760,6 +763,91 @@ static const char *enumTag(IR *ir, Val v) {
     return t;
 }
 
+/* Methods of Atomic[T], Mutex and Thread. Atomics are LLVM's, all
+ * sequentially consistent; an Atomic[bool] is kept in a byte. */
+static Val emitSync(IR *ir, Node *e) {
+    Node *recv = e->a->a;
+    Type *rt = recv->type;
+    Type *base = rt->kind == TY_PTR ? rt->elem : rt;
+    if (e->builtin == BI_THREAD_JOIN) {
+        Val h = emitExpr(ir, recv);
+        if (rt->kind == TY_PTR) {
+            const char *l = tmp(ir);
+            ins(ir, "%s = load ptr, ptr %s", l, h.s);
+            h.s = l;
+        }
+        ins(ir, "call void @iris_thread_join(ptr %s)", h.s);
+        return val("", &tyVoid);
+    }
+    const char *addr = rt->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+    switch (e->builtin) {
+    case BI_MUTEX_LOCK:
+        ins(ir, "call void @iris_mutex_lock(ptr %s)", addr);
+        return val("", &tyVoid);
+    case BI_MUTEX_UNLOCK:
+        ins(ir, "call void @iris_mutex_unlock(ptr %s, ptr %s, i32 %d, i32 %d, ptr %s)", addr, ir->fileStr, e->line,
+            e->col, fnName(ir));
+        return val("", &tyVoid);
+    case BI_MUTEX_TRY_LOCK: {
+        const char *r = tmp(ir);
+        ins(ir, "%s = call i1 @iris_mutex_try_lock(ptr %s)", r, addr);
+        return val(r, &tyBool);
+    }
+    default:
+        break;
+    }
+    Type *et = base->elem;
+    bool isBool = et->kind == TY_BOOL;
+    const char *lt = llType(ir, base);
+    int64_t align = isBool ? 1 : et->bits / 8;
+    const char *args[2];
+    for (int i = 0; i < e->list.len && i < 2; i++) {
+        Val v = emitExpr(ir, e->list.items[i]);
+        if (isBool) {
+            const char *z = tmp(ir);
+            ins(ir, "%s = zext i1 %s to i8", z, v.s);
+            args[i] = z;
+        } else {
+            args[i] = v.s;
+        }
+    }
+    const char *r = tmp(ir);
+    switch (e->builtin) {
+    case BI_ATOMIC_LOAD:
+        ins(ir, "%s = load atomic %s, ptr %s seq_cst, align %lld", r, lt, addr, (long long)align);
+        break;
+    case BI_ATOMIC_STORE:
+        ins(ir, "store atomic %s %s, ptr %s seq_cst, align %lld", lt, args[0], addr, (long long)align);
+        return val("", &tyVoid);
+    case BI_ATOMIC_ADD: case BI_ATOMIC_SUB: {
+        /* gives the new value */
+        const char *old = tmp(ir);
+        const char *op = e->builtin == BI_ATOMIC_ADD ? "add" : "sub";
+        ins(ir, "%s = atomicrmw %s ptr %s, %s %s seq_cst, align %lld", old, op, addr, lt, args[0], (long long)align);
+        ins(ir, "%s = %s %s %s, %s", r, op, lt, old, args[0]);
+        return val(r, et);
+    }
+    case BI_ATOMIC_SWAP:
+        ins(ir, "%s = atomicrmw xchg ptr %s, %s %s seq_cst, align %lld", r, addr, lt, args[0], (long long)align);
+        break;
+    case BI_ATOMIC_CAS: {
+        const char *pair = tmp(ir);
+        ins(ir, "%s = cmpxchg ptr %s, %s %s, %s %s seq_cst seq_cst, align %lld", pair, addr, lt, args[0], lt, args[1],
+            (long long)align);
+        ins(ir, "%s = extractvalue { %s, i1 } %s, 1", r, lt, pair);
+        return val(r, &tyBool);
+    }
+    default:
+        break;
+    }
+    if (isBool) {
+        const char *b = tmp(ir);
+        ins(ir, "%s = icmp ne i8 %s, 0", b, r);
+        return val(b, &tyBool);
+    }
+    return val(r, et);
+}
+
 static Val emitBuiltin(IR *ir, Node *e) {
     switch (e->builtin) {
     case BI_PRINT:
@@ -888,6 +976,11 @@ static Val emitBuiltin(IR *ir, Node *e) {
         ins(ir, "%s = load %%String, ptr %s", r, slot);
         return val(r, &tyString);
     }
+    case BI_ATOMIC_LOAD: case BI_ATOMIC_STORE: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB:
+    case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS:
+    case BI_MUTEX_LOCK: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK:
+    case BI_THREAD_JOIN:
+        return emitSync(ir, e);
     case BI_STRING_APPEND:
     case BI_STRING_FREE: {
         Node *recv = e->a->a;
@@ -1430,6 +1523,13 @@ static Val emitExpr(IR *ir, Node *e) {
         return emitTry(ir, e);
     case N_CATCH:
         return emitCatch(ir, e);
+    case N_THREAD: {
+        const char *h = emitSpawn(ir, e->a, true);
+        if (e->ival) {
+            ins(ir, "call void @iris_thread_detach(ptr %s)", h);
+        }
+        return val(h, &tyThread);
+    }
     case N_CHAN_MAKE: {
         Val n = emitExpr(ir, e->b);
         const char *size = sizeOf(ir, e->type->elem);
@@ -1772,7 +1872,7 @@ static void emitAssign(IR *ir, Node *s) {
 /* spawn f(a, b): the arguments are worked out now and kept on the heap; a
  * small function (the thunk) the new task runs makes the call and frees
  * them. */
-static void emitSpawn(IR *ir, Node *call) {
+static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     bool indirect = call->builtin == BI_INDIRECT;
     Node *d = call->ref;
     int n = call->list.len;
@@ -1814,7 +1914,13 @@ static void emitSpawn(IR *ir, Node *call) {
     }
     int id = ++ir->spawns;
     const char *thunk = fmt(ir, "@\"spawn.%d\"", id);
-    ins(ir, "call void @iris_spawn(ptr %s, ptr %s)", thunk, mem);
+    const char *handle = NULL;
+    if (thread) {
+        handle = tmp(ir);
+        ins(ir, "%s = call ptr @iris_thread_new(ptr %s, ptr %s)", handle, thunk, mem);
+    } else {
+        ins(ir, "call void @iris_spawn(ptr %s, ptr %s)", thunk, mem);
+    }
 
     /* the thunk */
     StrBuf *x = &ir->extra;
@@ -1852,6 +1958,7 @@ static void emitSpawn(IR *ir, Node *call) {
     sbPuts(x, "  call void @free(ptr %env)\n  ret void\n}\n\n");
     sbFree(&args);
     sbFree(&fty);
+    return handle;
 }
 
 /* select: the channels and where each value goes, then a jump to the arm
@@ -2057,7 +2164,7 @@ static void emitStmtInner(IR *ir, Node *s) {
         emitFor(ir, s);
         return;
     case N_SPAWN:
-        emitSpawn(ir, s->a);
+        emitSpawn(ir, s->a, false);
         return;
     case N_SELECT:
         emitSelect(ir, s);
@@ -2294,7 +2401,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
             }
         } else if (d->kind == N_VAR) {
             d->ir = fmt(&ir, "@\"g.%s.%s\"", mod, d->name);
-            sbPrintf(&ir.head, "%s = internal global %s %s\n", d->ir, llType(&ir, d->type),
+            sbPrintf(&ir.head, "%s = internal %sglobal %s %s\n", d->ir,
+                     d->flags & F_THREADLOCAL ? "thread_local " : "", llType(&ir, d->type),
                      constValue(&ir, d->b, d->type));
         } else if (d->kind == N_DEFINE) {
             Node *id = d->list.items[0];
@@ -2416,6 +2524,12 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_flags(i32, ptr, i64, i32)\n"
            "declare void @iris_write_float(i32, ptr, double, i32)\n"
            "declare void @iris_spawn(ptr, ptr)\n"
+           "declare ptr @iris_thread_new(ptr, ptr)\n"
+           "declare void @iris_thread_join(ptr)\n"
+           "declare void @iris_thread_detach(ptr)\n"
+           "declare void @iris_mutex_lock(ptr)\n"
+           "declare zeroext i1 @iris_mutex_try_lock(ptr)\n"
+           "declare void @iris_mutex_unlock(ptr, ptr, i32, i32, ptr)\n"
            "declare void @iris_sleep(i64)\n"
            "declare ptr @iris_chan_new(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_chan_send(ptr, ptr)\n"

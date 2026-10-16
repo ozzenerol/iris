@@ -742,6 +742,8 @@ static Node *parseCallArgs(Parser *p, Node *callee, Token *t) {
     return call;
 }
 
+static Node *parseUnary(Parser *p);
+
 static Node *parsePrimary(Parser *p) {
     Token *t = peek(p);
     switch (t->kind) {
@@ -812,6 +814,12 @@ static Node *parsePrimary(Parser *p) {
         return parseIf(p);
     case K_MATCH:
         return parseMatch(p);
+    case K_THREAD: {
+        next(p);
+        Node *n = node(p, N_THREAD, t);
+        n->a = parseUnary(p);
+        return n;
+    }
     case K_CHAN: {
         next(p);
         Node *n = node(p, N_CHAN_MAKE, t);
@@ -1285,9 +1293,9 @@ static Node *parseStmt(Parser *p) {
         a->textLen = (size_t)body->len;
         return a;
     }
-    case K_SCOPED: case K_THREADLOCAL: case K_ATOMIC: {
+    case K_SCOPED: case K_THREADLOCAL: {
         next(p);
-        unsigned flag = t->kind == K_SCOPED ? F_SCOPED : t->kind == K_THREADLOCAL ? F_THREADLOCAL : F_ATOMIC;
+        unsigned flag = t->kind == K_SCOPED ? F_SCOPED : F_THREADLOCAL;
         Node *type = parseType(p);
         return parseVarRest(p, type, flag);
     }
@@ -1695,10 +1703,10 @@ static Node *parseTopLevel(Parser *p) {
     }
     case K_WHEN:
         return parseWhen(p, true);
-    case K_THREADLOCAL: case K_ATOMIC: {
+    case K_THREADLOCAL: {
         next(p);
         Node *type = parseType(p);
-        Node *v = parseVarRest(p, type, flags | (t->kind == K_THREADLOCAL ? F_THREADLOCAL : F_ATOMIC));
+        Node *v = parseVarRest(p, type, flags | F_THREADLOCAL);
         v->attrs = attrs;
         return v;
     }

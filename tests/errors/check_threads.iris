@@ -1,0 +1,36 @@
+// error: 12: Atomic holds an integer or a bool, not str
+// error: 25: threadlocal is for global variables; a local variable belongs to its task already
+// error: 26: an Atomic's value is read with .load()
+// error: 27: add is for numbers; an Atomic[bool] has load, store, swap and cas
+// error: 28: add takes one argument, the i64 value
+// error: 29: cas takes two arguments: the value expected and the new one
+// error: 30: Atomic[i64] has no method inc
+// error: 31: lock must be called on a variable, a field or through a pointer
+// error: 32: a thread can't return an error, since nothing waits for it; handle the error inside
+// error: 33: thread starts a function of the program, not a built-in
+// error: 35: join takes no arguments
+Atomic[str] names
+Atomic[i64] hits
+Atomic[bool] flag
+
+!void fails() { }
+void work(i64 n) { }
+
+Mutex makeMutex() {
+    Mutex m
+    return m
+}
+
+void main() {
+    threadlocal i64 n
+    i64 x = hits + 1
+    flag.add(1)
+    hits.add()
+    hits.cas(1)
+    hits.inc()
+    makeMutex().lock()
+    t := thread fails()
+    u := thread print("hi")
+    v := thread work(1)
+    v.join(2)
+}

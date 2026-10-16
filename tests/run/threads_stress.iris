@@ -1,0 +1,68 @@
+// expect: got 40000
+// expect: max inside 1
+
+Mutex mu
+i64 inside
+i64 maxInside
+
+void producer(chan[i64] out, i64 n) {
+    for i in 0..n {
+        out <- i
+    }
+}
+
+void holder(chan[bool] done) {
+    for i in 0..50 {
+        mu.lock()
+        inside += 1
+        if inside > maxInside {
+            maxInside = inside
+        }
+        sleep(10us)
+        inside -= 1
+        mu.unlock()
+    }
+    done <- true
+}
+
+void worker(chan[bool] done) {
+    for i in 0..4 {
+        spawn holder(done)
+    }
+}
+
+void main() {
+    a := chan[i64](8)
+    b := chan[i64](1)
+    t1 := thread producer(a, 20000)
+    t2 := thread producer(b, 20000)
+    i64 got
+    i64 idle
+    for got < 40000 {
+        select {
+            v := <-a => got += 1
+            v := <-b => got += 1
+            after(1ms) => idle += 1
+        }
+    }
+    t1.join()
+    t2.join()
+    print("got {got}")
+
+    done := chan[bool](16)
+    Thread[] ts = alloc(Thread, 3)
+    for i in 0..3 {
+        ts[i] = thread worker(done)
+    }
+    for i in 0..4 {
+        spawn holder(done)
+    }
+    for _ in 0..16 {
+        _ = <-done
+    }
+    for i in 0..3 {
+        ts[i].join()
+    }
+    free(ts)
+    print("max inside {maxInside}")
+}

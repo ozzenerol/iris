@@ -571,12 +571,15 @@ int iris_str_parse_float(const char *p, int64_t n, double *out) {
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <pthread.h>
+#include <sched.h>
 #ifdef __APPLE__
 #include <sys/event.h>
 #else
 #include <sys/epoll.h>
 #include <poll.h>
 #include <sys/syscall.h>
+#include <sys/eventfd.h>
 #endif
 
 #if defined(__has_feature)
@@ -673,6 +676,9 @@ struct Task {
     int64_t wakeAt;             /* sleeping until (ns, monotonic); 0 if not */
     int ioResult;               /* what the io_uring operation it waited for returned */
     Task *nextSleeper;
+    int *sleepClaim;            /* select's claim, which a timeout must win to wake it */
+    struct Sched *sched;        /* the thread it belongs to */
+    Task *inboxNext;            /* in its thread's inbox */
     void *asanFake;             /* AddressSanitizer's bookkeeping while switched out */
     const void *asanBottom;     /* the main task's stack, learned on the first switch */
     size_t asanSize;
@@ -687,6 +693,8 @@ static _Thread_local Task *deadTask;    /* to free once off its stack */
 static _Thread_local int waitingIo;     /* tasks waiting for a file descriptor */
 static _Thread_local int poller = -1;
 static _Thread_local Task *switchedFrom;    /* the task the last switch left */
+static _Thread_local int liveTasks;         /* spawned and not finished */
+static _Thread_local bool waitingForTasks;  /* a thread's first task waits for the others */
 
 /* The tasks waiting on each file descriptor. A descriptor is added to the
    poller once, edge-triggered, and stays there until it is closed. */
@@ -697,7 +705,120 @@ typedef struct {
 static _Thread_local FdWait *fdWaits;
 static _Thread_local int fdWaitsCap;
 
-#define current (currentTask ? currentTask : (currentTask = &mainTask))
+/* What other threads see of a thread's scheduler: the tasks they woke,
+   and a descriptor that wakes the thread's event loop. */
+typedef struct Sched {
+    int lock;
+    Task *inboxHead, *inboxTail;
+    int wakeR, wakeW;           /* an eventfd on Linux (both the same), a pipe elsewhere */
+    int wakeSent;               /* the descriptor has been written since the loop last read it */
+} Sched;
+
+static _Thread_local Sched *mySched;
+static int liveThreads = 1;
+
+static void spinLock(int *l) {
+    while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
+            sched_yield();
+        }
+    }
+}
+
+static void spinUnlock(int *l) {
+    __atomic_store_n(l, 0, __ATOMIC_RELEASE);
+}
+
+static void outOfMemory(void);
+
+static Task *startThread(void) {
+    Sched *s = calloc(1, sizeof(Sched));
+    if (!s) {
+        outOfMemory();
+    }
+#ifdef __linux__
+    s->wakeR = s->wakeW = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (s->wakeR < 0) {
+        outOfMemory();
+    }
+#else
+    int fds[2];
+    if (pipe(fds) != 0) {
+        outOfMemory();
+    }
+    for (int i = 0; i < 2; i++) {
+        fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL, 0) | O_NONBLOCK);
+        fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+    }
+    s->wakeR = fds[0];
+    s->wakeW = fds[1];
+#endif
+    mySched = s;
+    mainTask.sched = s;
+    currentTask = &mainTask;
+    return currentTask;
+}
+
+#define current (currentTask ? currentTask : startThread())
+
+static void makeReady(Task *t);
+
+/* Makes t ready, also when it belongs to another thread. */
+static void wakeTask(Task *t) {
+    (void)current;
+    if (t->sched == mySched) {
+        makeReady(t);
+        return;
+    }
+    Sched *s = t->sched;
+    spinLock(&s->lock);
+    t->inboxNext = NULL;
+    if (s->inboxTail) {
+        s->inboxTail->inboxNext = t;
+    } else {
+        s->inboxHead = t;
+    }
+    s->inboxTail = t;
+    int send = !s->wakeSent;
+    s->wakeSent = 1;
+    spinUnlock(&s->lock);
+    if (send) {
+        uint64_t one = 1;
+        ssize_t r = write(s->wakeW, &one, s->wakeW == s->wakeR ? 8 : 1);
+        (void)r;
+    }
+}
+
+/* Makes the tasks other threads woke ready. */
+static void drainInbox(void) {
+    Sched *s = mySched;
+    if (!s || !__atomic_load_n(&s->inboxHead, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    spinLock(&s->lock);
+    Task *t = s->inboxHead;
+    s->inboxHead = s->inboxTail = NULL;
+    spinUnlock(&s->lock);
+    while (t) {
+        Task *n = t->inboxNext;
+        makeReady(t);
+        t = n;
+    }
+}
+
+/* The wake descriptor was written: empty it, so the next write is seen. */
+static void wakeArrived(void) {
+    Sched *s = mySched;
+    char buf[64];
+    while (read(s->wakeR, buf, sizeof buf) > 0) {
+    }
+    /* only now: a waker that saw the flag still set has put its task in
+       the inbox, which is drained next */
+    spinLock(&s->lock);
+    s->wakeSent = 0;
+    spinUnlock(&s->lock);
+    drainInbox();
+}
 
 static int64_t nowNs(void) {
     struct timespec ts;
@@ -881,9 +1002,8 @@ static void ringEnter(bool wait, int64_t timeout) {
     }
 }
 
-/* Hands an operation to the kernel and waits for its result: a count,
-   or -errno. */
-static int ringOp(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags) {
+/* Writes an operation for the next submit. */
+static void ringPush(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, uint64_t userData) {
     uint32_t tail = *ring.sqTail;
     while (tail - __atomic_load_n(ring.sqHead, __ATOMIC_ACQUIRE) >= ring.sqCount) {
         ringEnter(false, 0);    /* full: submit what is there */
@@ -896,10 +1016,16 @@ static int ringOp(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFl
     e->addr = (uint64_t)(uintptr_t)buf;
     e->len = len;
     e->opFlags = opFlags;
-    e->userData = (uint64_t)(uintptr_t)current;
+    e->userData = userData;
     ring.sqArray[i] = i;
     __atomic_store_n(ring.sqTail, tail + 1, __ATOMIC_RELEASE);
     ring.pending++;
+}
+
+/* Hands an operation to the kernel and waits for its result: a count,
+   or -errno. */
+static int ringOp(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags) {
+    ringPush(opcode, fd, buf, len, opFlags, (uint64_t)(uintptr_t)current);
     waitingIo++;
     schedule();
     return current->ioResult;
@@ -911,6 +1037,14 @@ static void ringReap(void) {
     uint32_t tail = __atomic_load_n(ring.cqTail, __ATOMIC_ACQUIRE);
     while (head != tail) {
         RingCqe *c = &ring.cqes[head & ring.cqMask];
+        if (c->userData == 0) {         /* the wake descriptor */
+            head++;
+            __atomic_store_n(ring.cqHead, head, __ATOMIC_RELEASE);
+            wakeArrived();
+            ringPush(RING_OP_POLL_ADD, mySched->wakeR, NULL, 0, POLLIN, 0);
+            tail = __atomic_load_n(ring.cqTail, __ATOMIC_ACQUIRE);
+            continue;
+        }
         Task *t = (Task *)(uintptr_t)c->userData;
         t->ioResult = c->res;
         waitingIo--;
@@ -930,14 +1064,27 @@ static void ensurePoller(void) {
     if (poller >= 0) {
         return;
     }
+    Sched *s = current->sched;
 #ifdef __APPLE__
     poller = kqueue();
+    if (poller >= 0) {
+        struct kevent ev;
+        EV_SET(&ev, s->wakeR, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+        kevent(poller, &ev, 1, NULL, 0, NULL);
+    }
 #else
     if (ringSetup()) {
         poller = ring.fd;
+        ringPush(RING_OP_POLL_ADD, s->wakeR, NULL, 0, POLLIN, 0);
         return;
     }
     poller = epoll_create1(0);
+    if (poller >= 0) {
+        struct epoll_event ev;
+        ev.events = EPOLLIN | EPOLLET;
+        ev.data.fd = s->wakeR;
+        epoll_ctl(poller, EPOLL_CTL_ADD, s->wakeR, &ev);
+    }
 #endif
     if (poller < 0) {
         fflush(stdout);
@@ -948,6 +1095,10 @@ static void ensurePoller(void) {
 
 /* Wakes the tasks waiting to read or write fd. */
 static void fdArrived(int fd, int readable, int writable) {
+    if (fd == mySched->wakeR) {
+        wakeArrived();
+        return;
+    }
     if (fd < 0 || fd >= fdWaitsCap) {
         return;
     }
@@ -979,18 +1130,25 @@ static void pollEvents(void) {
         int64_t d = sleepers->wakeAt - nowNs();
         timeout = d < 0 ? 0 : d;
     }
-    if (waitingIo == 0 && timeout < 0) {
+    /* another thread may still wake a task here: then wait for it */
+    int threads = __atomic_load_n(&liveThreads, __ATOMIC_SEQ_CST);
+    drainInbox();
+    if (readyHead) {
+        return;
+    }
+    if (waitingIo == 0 && timeout < 0 && threads == 1) {
         fflush(stdout);
         fputs("panic: every task is waiting and nothing can wake them: a deadlock\n", stderr);
         exit(2);
     }
+    bool block = waitingIo > 0 || threads > 1;
 #ifdef __linux__
-    if (waitingIo > 0 && useRing()) {
+    if (block && useRing()) {
         ringEnter(true, timeout);
         ringReap();
     } else
 #endif
-    if (waitingIo > 0) {
+    if (block) {
         ensurePoller();
 #ifdef __APPLE__
         struct kevent evs[64];
@@ -1025,7 +1183,9 @@ static void pollEvents(void) {
         Task *t = sleepers;
         sleepers = t->nextSleeper;
         t->wakeAt = 0;
-        makeReady(t);
+        if (!t->sleepClaim || !__atomic_exchange_n(t->sleepClaim, 1, __ATOMIC_ACQ_REL)) {
+            makeReady(t);
+        }
     }
 }
 
@@ -1086,6 +1246,7 @@ static void switchTo(Task *next) {
  * woken (or be ready already). */
 static void schedule(void) {
     Task *next;
+    drainInbox();
     while (!(next = takeReady())) {
         pollEvents();
     }
@@ -1101,6 +1262,10 @@ static void taskEntry(void) {
     current->fn(current->arg);
     current->dead = 1;
     deadTask = current;
+    if (--liveTasks == 0 && waitingForTasks) {
+        waitingForTasks = false;
+        makeReady(&mainTask);
+    }
     schedule();
     abort();                    /* never comes back */
 }
@@ -1126,6 +1291,8 @@ void iris_spawn(void (*fn)(void *), void *arg) {
         t->stack = mem + 4096;
     }
     t->stackSize = STACK_SIZE;
+    t->sched = current->sched;
+    liveTasks++;
     t->fn = fn;
     t->arg = arg;
     char *top = t->stack + t->stackSize;
@@ -1205,13 +1372,23 @@ static void waitFd(int fd, int write) {
 
 /* ---------------------------------------------------------------- channels */
 
+/* A task waiting on a channel or a lock. Whoever wakes it must first win
+   its claim, so a task waiting in select on several channels is woken
+   once. */
 typedef struct Waiter Waiter;
 struct Waiter {
     Task *task;
+    int *claimed;
     Waiter *next;
 };
 
+static bool claim(Waiter *w) {
+    return !__atomic_exchange_n(w->claimed, 1, __ATOMIC_ACQ_REL);
+}
+
+/* Channels work between threads: each has a lock, held only briefly. */
 typedef struct {
+    int lock;
     int64_t elemSize, cap, len, head;
     char *buf;
     Waiter *recvWaiters, *sendWaiters;
@@ -1222,8 +1399,11 @@ void *iris_chan_new(int64_t elemSize, int64_t cap, const char *file, int line, i
         stop("a channel needs room for at least one value", 43, file, line, col, fn);
     }
     Chan *c = calloc(1, sizeof(Chan));
+    if (!c) {
+        outOfMemory();
+    }
     c->buf = calloc((size_t)cap, (size_t)(elemSize ? elemSize : 1));
-    if (!c || !c->buf) {
+    if (!c->buf) {
         outOfMemory();
     }
     c->elemSize = elemSize;
@@ -1231,11 +1411,15 @@ void *iris_chan_new(int64_t elemSize, int64_t cap, const char *file, int line, i
     return c;
 }
 
+/* Wakes the first waiter in list that can still be claimed. */
 static void wakeOne(Waiter **list) {
-    Waiter *w = *list;
-    if (w) {
+    while (*list) {
+        Waiter *w = *list;
         *list = w->next;
-        makeReady(w->task);
+        if (claim(w)) {
+            wakeTask(w->task);
+            return;
+        }
     }
 }
 
@@ -1249,17 +1433,23 @@ static void unlinkWaiter(Waiter **list, Waiter *w) {
 }
 
 void iris_chan_send(Chan *c, const void *value) {
+    spinLock(&c->lock);
     while (c->len == c->cap) {
-        Waiter w = {current, c->sendWaiters};
+        int claimed = 0;
+        Waiter w = {current, &claimed, c->sendWaiters};
         c->sendWaiters = &w;
+        spinUnlock(&c->lock);
         schedule();
+        spinLock(&c->lock);
         unlinkWaiter(&c->sendWaiters, &w);
     }
     memcpy(c->buf + ((c->head + c->len) % c->cap) * c->elemSize, value, (size_t)c->elemSize);
     c->len++;
     wakeOne(&c->recvWaiters);
+    spinUnlock(&c->lock);
 }
 
+/* Takes the next value; the lock is held. */
 static void chanTake(Chan *c, void *out) {
     memcpy(out, c->buf + c->head * c->elemSize, (size_t)c->elemSize);
     c->head = (c->head + 1) % c->cap;
@@ -1268,13 +1458,18 @@ static void chanTake(Chan *c, void *out) {
 }
 
 void iris_chan_recv(Chan *c, void *out) {
+    spinLock(&c->lock);
     while (c->len == 0) {
-        Waiter w = {current, c->recvWaiters};
+        int claimed = 0;
+        Waiter w = {current, &claimed, c->recvWaiters};
         c->recvWaiters = &w;
+        spinUnlock(&c->lock);
         schedule();
+        spinLock(&c->lock);
         unlinkWaiter(&c->recvWaiters, &w);
     }
     chanTake(c, out);
+    spinUnlock(&c->lock);
 }
 
 /* select: takes a value from the first of chans that has one, or returns
@@ -1287,30 +1482,107 @@ int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
     }
     for (;;) {
         for (int64_t i = 0; i < n; i++) {
+            spinLock(&chans[i]->lock);
             if (chans[i]->len > 0) {
                 chanTake(chans[i], outs[i]);
+                spinUnlock(&chans[i]->lock);
                 return i;
             }
+            spinUnlock(&chans[i]->lock);
         }
         if (deadline >= 0 && nowNs() >= deadline) {
             return n;
         }
-        for (int64_t i = 0; i < n; i++) {
-            ws[i].task = current;
-            ws[i].next = chans[i]->recvWaiters;
-            chans[i]->recvWaiters = &ws[i];
+        /* wait on every channel; one that got a value meanwhile means
+           trying again, unless a waker already claimed this task */
+        int claimed = 0;
+        int64_t added = 0;
+        bool arrived = false;
+        for (; added < n && !arrived; added++) {
+            Chan *c = chans[added];
+            spinLock(&c->lock);
+            ws[added] = (Waiter){current, &claimed, c->recvWaiters};
+            c->recvWaiters = &ws[added];
+            arrived = c->len > 0;
+            spinUnlock(&c->lock);
         }
-        if (deadline >= 0) {
-            addSleeper(current, deadline);
+        bool mine = arrived && !__atomic_exchange_n(&claimed, 1, __ATOMIC_ACQ_REL);
+        if (!mine) {
+            if (deadline >= 0) {
+                current->sleepClaim = &claimed;
+                addSleeper(current, deadline);
+            }
+            schedule();
+            current->sleepClaim = NULL;
+            if (current->wakeAt) {
+                removeSleeper(current);
+            }
         }
-        schedule();
-        for (int64_t i = 0; i < n; i++) {
+        for (int64_t i = 0; i < added; i++) {
+            spinLock(&chans[i]->lock);
             unlinkWaiter(&chans[i]->recvWaiters, &ws[i]);
-        }
-        if (current->wakeAt) {
-            removeSleeper(current);
+            spinUnlock(&chans[i]->lock);
         }
     }
+}
+
+/* ---------------------------------------------------------------- locks */
+
+/* Mutex: a zeroed one is unlocked. A task that has to wait lets the other
+   tasks of its thread run; unlock hands the lock to the first waiter. */
+typedef struct {
+    int lock;
+    int locked;
+    Waiter *head, *tail;
+} Mutex;
+
+void iris_mutex_lock(Mutex *m) {
+    spinLock(&m->lock);
+    if (!m->locked) {
+        m->locked = 1;
+        spinUnlock(&m->lock);
+        return;
+    }
+    int claimed = 0;
+    Waiter w = {current, &claimed, NULL};
+    if (m->tail) {
+        m->tail->next = &w;
+    } else {
+        m->head = &w;
+    }
+    m->tail = &w;
+    spinUnlock(&m->lock);
+    schedule();                 /* unlock gave it the lock */
+}
+
+bool iris_mutex_try_lock(Mutex *m) {
+    spinLock(&m->lock);
+    bool got = !m->locked;
+    m->locked = 1;
+    spinUnlock(&m->lock);
+    return got;
+}
+
+void iris_mutex_unlock(Mutex *m, const char *file, int line, int col, const char *fn) {
+    spinLock(&m->lock);
+    if (!m->locked) {
+        spinUnlock(&m->lock);
+        stop("unlock of a Mutex that isn't locked", 35, file, line, col, fn);
+    }
+    Waiter *w = m->head;
+    if (w) {
+        m->head = w->next;
+        if (!m->head) {
+            m->tail = NULL;
+        }
+        claim(w);
+        Task *t = w->task;
+        spinUnlock(&m->lock);
+        wakeTask(t);
+        return;
+    }
+    m->locked = 0;
+    spinUnlock(&m->lock);
 }
 
 /* ---------------------------------------------------------------- net */
@@ -1527,39 +1799,85 @@ void iris_net_close(int fd) {
 
 /* ---------------------------------------------------------------- threads */
 
-#include <pthread.h>
-#include <sched.h>
-
+/* A thread the program started: it runs fn(arg) on a scheduler of its
+   own and ends when fn returns. */
 typedef struct {
+    int lock;
+    int done;
+    int detached;               /* nobody will join it */
+    Task *joiner;
     void (*fn)(void *);
     void *arg;
-} ThreadStart;
+} Thread;
 
 static void *threadMain(void *p) {
-    ThreadStart ts = *(ThreadStart *)p;
-    free(p);
-    ts.fn(ts.arg);
+    Thread *th = p;
+    (void)current;
+    th->fn(th->arg);
+    if (liveTasks > 0) {          /* the thread's tasks finish first */
+        waitingForTasks = true;
+        schedule();
+    }
+    spinLock(&th->lock);
+    th->done = 1;
+    Task *j = th->joiner;
+    int detached = th->detached;
+    spinUnlock(&th->lock);
+    if (j) {
+        wakeTask(j);
+    }
+    if (detached) {
+        free(th);
+    }
+    __atomic_sub_fetch(&liveThreads, 1, __ATOMIC_SEQ_CST);
     return NULL;
 }
 
-/* A new thread, with a scheduler of its own, running fn(arg). */
-void iris_thread_start(void (*fn)(void *), void *arg) {
-    ThreadStart *ts = malloc(sizeof(ThreadStart));
-    if (!ts) {
+/* thread f(args): starts the thunk fn(arg) on a new thread. */
+void *iris_thread_new(void (*fn)(void *), void *arg) {
+    Thread *th = calloc(1, sizeof(Thread));
+    if (!th) {
         outOfMemory();
     }
-    ts->fn = fn;
-    ts->arg = arg;
+    th->fn = fn;
+    th->arg = arg;
+    (void)current;
+    __atomic_add_fetch(&liveThreads, 1, __ATOMIC_SEQ_CST);
     pthread_t t;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, threadMain, ts) != 0) {
+    if (pthread_create(&t, &attr, threadMain, th) != 0) {
         fflush(stdout);
         fputs("panic: can't start a thread\n", stderr);
         exit(2);
     }
     pthread_attr_destroy(&attr);
+    return th;
+}
+
+/* Waits for the thread to finish; other tasks of this thread run meanwhile. */
+void iris_thread_join(Thread *th) {
+    spinLock(&th->lock);
+    if (!th->done) {
+        th->joiner = current;
+        spinUnlock(&th->lock);
+        schedule();
+    } else {
+        spinUnlock(&th->lock);
+    }
+    free(th);
+}
+
+/* thread f() as a statement: nobody joins it, so it frees itself. */
+void iris_thread_detach(Thread *th) {
+    spinLock(&th->lock);
+    bool done = th->done;
+    th->detached = 1;
+    spinUnlock(&th->lock);
+    if (done) {
+        free(th);
+    }
 }
 
 /* Linux spreads connections over listeners that share a port, so each

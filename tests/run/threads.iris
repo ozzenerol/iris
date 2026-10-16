@@ -1,0 +1,41 @@
+// expect: hits 400000 total 400000 sum 400000 main 0
+// expect: true true false 400000 5
+// expect: true false
+
+Atomic[i64] hits
+Atomic[bool] ready
+Mutex mu
+i64 total
+threadlocal i64 perThread
+
+void count(i64 n, chan[i64] done) {
+    for i in 0..n {
+        hits.add(1)
+        mu.lock()
+        total += 1
+        mu.unlock()
+        perThread += 1
+    }
+    done <- perThread
+}
+
+void main() {
+    done := chan[i64](4)
+    Thread[] ts = alloc(Thread, 4)
+    for i in 0..4 {
+        ts[i] = thread count(100000, done)
+    }
+    i64 sum
+    for _ in 0..4 {
+        sum += <-done
+    }
+    for i in 0..4 {
+        ts[i].join()
+    }
+    free(ts)
+    print("hits {hits.load()} total {total} sum {sum} main {perThread}")
+    ready.store(true)
+    print("{ready.load()} {ready.cas(true, false)} {ready.load()} {hits.swap(5)} {hits.load()}")
+    print("{mu.tryLock()} {mu.tryLock()}")
+    mu.unlock()
+}

@@ -124,7 +124,6 @@ static void flagWords(StrBuf *b, unsigned f) {
     if (f & F_PUB) sbPuts(b, " pub");
     if (f & F_SCOPED) sbPuts(b, " scoped");
     if (f & F_THREADLOCAL) sbPuts(b, " threadlocal");
-    if (f & F_ATOMIC) sbPuts(b, " atomic");
     if (f & F_PACKED) sbPuts(b, " packed");
     if (f & F_FLAGS) sbPuts(b, " flags");
 }
@@ -346,7 +345,9 @@ static void printNode(Node *n, int depth, const char *label) {
     case N_DEFER:
     case N_ERRDEFER:
     case N_SPAWN:
-        line(depth, label, n->kind == N_DEFER ? "defer" : n->kind == N_ERRDEFER ? "errdefer" : "spawn");
+    case N_THREAD:
+        line(depth, label, n->kind == N_DEFER ? "defer" : n->kind == N_ERRDEFER ? "errdefer" :
+                           n->kind == N_THREAD ? "thread" : "spawn");
         child(n->a, d, NULL);
         break;
     case N_SELECT:

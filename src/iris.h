@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.12.0"
+#define IRIS_VERSION "0.13.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -62,7 +62,7 @@ void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
     X(K_COMPTIME, "comptime") X(K_WHEN, "when") X(K_IMPORT, "import")      \
     X(K_TRY, "try") X(K_CATCH, "catch") X(K_DEFER, "defer")                \
     X(K_ERRDEFER, "errdefer") X(K_SCOPED, "scoped") X(K_SPAWN, "spawn")    \
-    X(K_SELECT, "select") X(K_CHAN, "chan") X(K_ATOMIC, "atomic")          \
+    X(K_SELECT, "select") X(K_CHAN, "chan") X(K_THREAD, "thread")          \
     X(K_THREADLOCAL, "threadlocal") X(K_ASM, "asm") X(K_TEST, "test")      \
     X(K_TRUE, "true") X(K_FALSE, "false") X(K_NULL, "null")                \
     X(P_LPAREN, "(") X(P_RPAREN, ")") X(P_LBRACK, "[") X(P_RBRACK, "]")    \
@@ -118,7 +118,7 @@ typedef enum {
     N_IDENT, N_INT, N_FLOAT, N_STRING, N_INTERP, N_CHAR, N_BOOL, N_NULL,
     N_UNARY, N_BINARY, N_CALL, N_NAMED_ARG, N_INDEX, N_SLICE, N_FIELD_ACCESS,
     N_ENUM_DOT, N_STRUCT_LIT, N_FIELD_INIT, N_ARRAY_LIT, N_TUPLE, N_TRY,
-    N_CATCH, N_COMPTIME, N_CHAN_MAKE,
+    N_CATCH, N_COMPTIME, N_CHAN_MAKE, N_THREAD,
     /* added by the checker */
     N_CONVERT,              /* a: the value; type: the target; flags F_EXPLICIT */
     N_SELF_PARAM            /* the implicit self parameter of a method */
@@ -128,7 +128,6 @@ enum {
     F_PUB = 1 << 0,
     F_SCOPED = 1 << 1,
     F_THREADLOCAL = 1 << 2,
-    F_ATOMIC = 1 << 3,
     F_PACKED = 1 << 4,
     F_FLAGS = 1 << 5,
     F_C_IMPORT = 1 << 6,
@@ -258,6 +257,9 @@ typedef enum {
     TY_DYN,                 /* dyn Interface: decl is the N_INTERFACE */
     TY_FUNC,                /* a function: elem is what it returns, elems its parameters */
     TY_CHAN,                /* chan[T]: elem */
+    TY_ATOMIC,              /* Atomic[T]: elem */
+    TY_MUTEX,               /* Mutex */
+    TY_THREAD,              /* Thread: what thread f() gives */
 } TypeKind;
 
 struct Type {
@@ -283,7 +285,7 @@ struct Type {
 };
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
-extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64, tyDuration;
+extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64, tyDuration, tyMutex, tyThread;
 
 /* What a call does when it isn't a call to a user function. */
 enum {
@@ -295,6 +297,9 @@ enum {
     BI_INDIRECT,            /* a call through a function value: a is the value */
     BI_SLEEP,
     BI_AFTER,               /* after(d), in a select */
+    BI_ATOMIC_LOAD, BI_ATOMIC_STORE, BI_ATOMIC_ADD, BI_ATOMIC_SUB, BI_ATOMIC_SWAP, BI_ATOMIC_CAS,
+    BI_MUTEX_LOCK, BI_MUTEX_UNLOCK, BI_MUTEX_TRY_LOCK,
+    BI_THREAD_JOIN,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */
