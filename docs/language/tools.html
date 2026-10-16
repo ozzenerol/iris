@@ -12,7 +12,7 @@
 <h1>Tools</h1>
 <p class="lede">The <code>iris</code> command builds, runs and tests programs, and manages packages.</p>
 <h2 id="commands"><a href="#commands">Commands</a></h2>
-<div class="table"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>iris run main.iris</code></td><td>compiles and runs a program</td></tr><tr><td><code>iris build main.iris</code></td><td>compiles a program, or a project when given its folder; <code>-o name</code> names the output</td></tr><tr><td><code>iris check main.iris</code></td><td>checks a program without compiling it</td></tr><tr><td><code>iris ir main.iris</code></td><td>prints the LLVM IR the compiler writes</td></tr><tr><td><code>iris test</code></td><td>runs the test blocks</td></tr><tr><td><code>iris fmt</code></td><td>puts source files in the standard layout</td></tr><tr><td><code>iris get &lt;package&gt;@&lt;version&gt;</code></td><td>downloads a package and adds it to <code>iris.mod</code></td></tr><tr><td><code>iris doc</code></td><td>shows the documentation from the comments (planned)</td></tr><tr><td><code>iris lsp</code></td><td>the language server, for editors</td></tr><tr><td><code>iris parse file.iris</code></td><td>prints the syntax tree</td></tr><tr><td><code>iris lex file.iris</code></td><td>prints the tokens</td></tr><tr><td><code>iris c header.h</code></td><td>shows what <code>import c</code> makes of a C header</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>iris run main.iris</code></td><td>compiles and runs a program</td></tr><tr><td><code>iris build main.iris</code></td><td>compiles a program, or a project when given its folder; <code>-o name</code> names the output</td></tr><tr><td><code>iris check main.iris</code></td><td>checks a program without compiling it</td></tr><tr><td><code>iris ir main.iris</code></td><td>prints the LLVM IR the compiler writes</td></tr><tr><td><code>iris test</code></td><td>runs the test blocks</td></tr><tr><td><code>iris fmt</code></td><td>puts source files in the standard layout</td></tr><tr><td><code>iris get &lt;package&gt;@&lt;version&gt;</code></td><td>downloads a package and adds it to <code>iris.mod</code></td></tr><tr><td><code>iris doc http</code></td><td>shows the documentation of a module, a file or a name</td></tr><tr><td><code>iris lsp</code></td><td>the language server, for editors</td></tr><tr><td><code>iris parse file.iris</code></td><td>prints the syntax tree</td></tr><tr><td><code>iris lex file.iris</code></td><td>prints the tokens</td></tr><tr><td><code>iris c header.h</code></td><td>shows what <code>import c</code> makes of a C header</td></tr></tbody></table></div>
 <h2 id="tests"><a href="#tests">Tests</a></h2>
 <p>A <code>test</code> block can sit in any source file, next to the code it tests:</p>
 <pre class="code"><code><span class="t">i64</span> add(<span class="t">i64</span> a, b) =&gt; a + b
@@ -29,6 +29,15 @@ ok   add
 FAIL parse
 2 tests, 1 passed, 1 failed</code></pre>
 <p>The exit status is 1 when a test failed. <code>iris test main.iris parse</code> runs only the tests whose name contains <code>parse</code>. <code>iris check</code> checks test blocks too; <code>iris run</code> and <code>iris build</code> leave them out.</p>
+<h2 id="documentation"><a href="#documentation">Documentation</a></h2>
+<p><code>iris doc</code> shows what the comments say, in the terminal. Each declaration is shown as it is written, with the comment lines right above it:</p>
+<pre class="code"><code>iris doc http              # a module of the standard library
+iris doc http.Router       # a struct and its methods
+iris doc str.cut           # a function
+iris doc List              # names every module has, without a module
+iris doc main.iris         # a file, or a project&#x27;s folder
+iris doc main.iris User    # one name in it</code></pre>
+<p>For a module of the standard library only <code>pub</code> names are shown; for the program's own files, everything. A comment at the top of a module's first file describes the module.</p>
 <h2 id="formatting"><a href="#formatting">Formatting</a></h2>
 <p><code>iris fmt</code> puts code in the standard layout: four spaces per level, spaces around operators and after commas, none inside brackets, at most one blank line in a row, and comments at the ends of lines next to each other in one column. Comments and the text in strings stay as they are.</p>
 <pre class="code"><code>iris fmt main.iris       # rewrites the file

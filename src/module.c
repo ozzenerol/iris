@@ -485,3 +485,12 @@ const char *stdSource(const char *path) {
     }
     return NULL;
 }
+
+/* Whether the standard library has a module of this name. */
+bool stdModuleExists(const char *name) {
+    size_t n = strlen(name);
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0]; i++) {
+        if (strncmp(stdFiles[i].path, name, n) == 0 && stdFiles[i].path[n] == '/') return true;
+    }
+    return false;
+}

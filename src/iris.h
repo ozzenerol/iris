@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.25.0"
+#define IRIS_VERSION "0.26.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -48,6 +48,7 @@ extern void (*gDiagHook)(Source *src, int line, int col, const char *msg);
 /* when set, source files are read through it first (the language server's open documents) */
 extern const char *(*gReadHook)(const char *path, size_t *len);
 const char *stdSource(const char *path);
+bool stdModuleExists(const char *name);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);
 void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
@@ -152,6 +153,9 @@ enum {
     F_INSTANCE = 1 << 20,   /* a copy of a generic function or method for one set of types */
     F_READONLY = 1 << 21,   /* a global made by comptime: it can't change */
     F_COMPTIMED = 1 << 22,  /* a const whose value comptime worked out; type is its type */
+    F_INLINE = 1 << 23,     /* @inline: always put the function's code where it is called */
+    F_UNCHECKED = 1 << 24,  /* @unchecked: no checks in the function's code */
+    F_ENV = 1 << 25,        /* a struct with @env */
 };
 
 typedef struct Node Node;
@@ -217,6 +221,9 @@ char *formatSource(Arena *a, Source *src);
 
 /* lsp.c: the language server on standard input and output */
 int cmdLsp(void);
+
+/* doc.c: iris doc */
+int cmdDoc(int argc, char **argv);
 
 /* ---------------------------------------------------------------- cimport.c */
 
@@ -349,6 +356,7 @@ enum {
     BI_EXPECT,
     BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
     BI_TABLE_OF,
+    BI_ENV_LOAD,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

@@ -13,7 +13,7 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | `iris test` | runs the test blocks |
 | `iris fmt` | puts source files in the standard layout |
 | `iris get <package>@<version>` | downloads a package and adds it to `iris.mod` |
-| `iris doc` | shows the documentation from the comments (planned) |
+| `iris doc http` | shows the documentation of a module, a file or a name |
 | `iris lsp` | the language server, for editors |
 | `iris parse file.iris` | prints the syntax tree |
 | `iris lex file.iris` | prints the tokens |
@@ -45,6 +45,21 @@ FAIL parse
 ```
 
 The exit status is 1 when a test failed. `iris test main.iris parse` runs only the tests whose name contains `parse`. `iris check` checks test blocks too; `iris run` and `iris build` leave them out.
+
+## Documentation
+
+`iris doc` shows what the comments say, in the terminal. Each declaration is shown as it is written, with the comment lines right above it:
+
+```shell
+iris doc http              # a module of the standard library
+iris doc http.Router       # a struct and its methods
+iris doc str.cut           # a function
+iris doc List              # names every module has, without a module
+iris doc main.iris         # a file, or a project's folder
+iris doc main.iris User    # one name in it
+```
+
+For a module of the standard library only `pub` names are shown; for the program's own files, everything. A comment at the top of a module's first file describes the module.
 
 ## Formatting
 

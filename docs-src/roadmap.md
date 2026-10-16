@@ -29,5 +29,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.23 | `random`, `crypto` (SHA-256, HMAC), `base64`, `hex` and `url`. | released |
 | 0.24 | The `sqlite` module. `[]` for an empty slice. | released |
 | 0.25 | `comptime`. | released |
-
-Next: `iris doc` with the remaining attributes, `@env`, `@inline` and `@unchecked` (0.26).
+| 0.26 | `iris doc`, `@env` with the `env` module, `@inline` and `@unchecked`. | released |

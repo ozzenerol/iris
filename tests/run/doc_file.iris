@@ -1,0 +1,21 @@
+// command: doc
+// args: Point
+// expect: pub struct Point {
+// expect:     pub i64 x
+// expect:     pub i64 y
+// expect: }
+// expect:     A point on a grid.
+// expect:
+// expect: pub i64 Point.sum()
+// expect:     x plus y.
+
+// A point on a grid.
+pub struct Point {
+    pub i64 x
+    pub i64 y
+}
+
+// x plus y.
+pub i64 Point.sum() => self.x + self.y
+
+void main() { }

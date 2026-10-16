@@ -116,23 +116,30 @@ home.zip: 70000 doesn't fit in u16
 line 1, column 15: expected a key in quotes
 ```
 
-`@env` will read a struct's fields from environment variables (planned):
+`@env` lets a struct be filled from environment variables, with the `env` module:
 
 ```iris
-@env
+import env
+
+@env("APP")
 struct Settings {
-    @env("PORT") u16 port = 8080
+    u16 port = 8080
     @env("DATABASE_URL", required) String db
+    Duration timeout = 30s
+    bool verbose
 }
 
-cfg := try env.load(Settings)
+scoped Settings cfg = try env.load(Settings)
 ```
+
+Each field reads the variable named after it in capitals, with `_` between its words: `port` reads `PORT`, `logLevel` reads `LOG_LEVEL`. A prefix on the struct goes in front of those names, so here `port` reads `APP_PORT`. `@env("NAME")` names the variable itself, without the prefix. A variable that isn't set leaves the field's default; `@env(required)` makes that an error.
+
+Fields can be numbers, `bool` (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`), `str`, `String`, enums written by value name, and `Duration` (`30s`, `1500ms`, `1m30s`). The errors are `env.EnvError.missing` and `invalid`, and the message names the variable. An `@env` struct gets a `free` method, as a `@json` struct does.
 
 Other attributes:
 
 | Attribute | Effect |
 |---|---|
-| `@yaml` | like `@json`, for YAML (planned) |
-| `@unchecked` | no bounds or overflow checks in this function (planned) |
+| `@unchecked` | no index, overflow or null checks in this function, in any build |
+| `@inline` | the function's code always goes where it is called |
 | `@export` | the function can be called from C |
-| `@inline` | always inline this function (planned) |

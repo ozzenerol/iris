@@ -77,8 +77,10 @@ typedef struct {
     int njson, capJson;
 } IR;
 
-static bool checks(IR *ir) { return ir->mode == MODE_DEBUG; }
-static bool boundsChecks(IR *ir) { return ir->mode != MODE_RELEASE_FAST; }
+/* @unchecked turns the checks off in one function */
+static bool unchecked(IR *ir) { return ir->func && (ir->func->flags & F_UNCHECKED); }
+static bool checks(IR *ir) { return ir->mode == MODE_DEBUG && !unchecked(ir); }
+static bool boundsChecks(IR *ir) { return ir->mode != MODE_RELEASE_FAST && !unchecked(ir); }
 
 static const char *fmt(IR *ir, const char *f, ...) {
     va_list ap;
@@ -1104,6 +1106,68 @@ static const char *jsonType(IR *ir, Type *t) {
     return name;
 }
 
+/* An @env struct's table: for each field, the variable's name, where the
+ * field is, its JSON table (for its kind and an enum's names), whether it
+ * is required, and whether it is a Duration. */
+static const char *envTable(IR *ir, Type *t) {
+    Node *d = t->decl;
+    const char *prefix = NULL;
+    size_t prefixLen = 0;
+    for (int i = 0; i < d->attrs.len; i++) {
+        Node *at = d->attrs.items[i];
+        if (strcmp(at->name, "env") == 0 && at->list.len == 1) {
+            prefix = at->list.items[0]->text;
+            prefixLen = at->list.items[0]->textLen;
+        }
+    }
+    StrBuf b = {0};
+    int n = 0;
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (f->kind == N_EMBED) continue;
+        StrBuf name = {0};
+        if (prefix) {
+            sbPutn(&name, prefix, prefixLen);
+            sbPutc(&name, '_');
+        }
+        bool named = false, required = false;
+        for (int k = 0; k < f->attrs.len; k++) {
+            Node *at = f->attrs.items[k];
+            if (strcmp(at->name, "env") != 0) continue;
+            for (int j = 0; j < at->list.len; j++) {
+                Node *a = at->list.items[j];
+                if (a->kind == N_STRING) {
+                    name.len = 0;
+                    sbPutn(&name, a->text, a->textLen);
+                    named = true;
+                } else {
+                    required = true;
+                }
+            }
+        }
+        if (!named) {
+            /* dbUrl reads DB_URL */
+            for (const char *p = f->name; *p; p++) {
+                if (*p >= 'A' && *p <= 'Z' && p != f->name) sbPutc(&name, '_');
+                sbPutc(&name, (char)(*p >= 'a' && *p <= 'z' ? *p - 32 : *p));
+            }
+        }
+        const char *s = stringConst(ir, name.buf, name.len);
+        sbPrintf(&b, "%s{ ptr, i64, i64, ptr, i64, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 %d, i64 %d }",
+                 n ? ", " : "", s, name.len, (long long)fieldOffset(t, i), jsonType(ir, f->type), required ? 1 : 0,
+                 f->type == &tyDuration ? 1 : 0);
+        sbFree(&name);
+        n++;
+    }
+    int id = ++ir->strings;
+    const char *items = fmt(ir, "@env.%d.items", id), *table = fmt(ir, "@env.%d", id);
+    sbPrintf(&ir->head, "%s = private constant [%d x { ptr, i64, i64, ptr, i64, i64 }] [%s]\n", items, n,
+             b.buf ? b.buf : "");
+    sbPrintf(&ir->head, "%s = private constant { i64, ptr } { i64 %d, ptr %s }\n", table, n, items);
+    sbFree(&b);
+    return table;
+}
+
 static Val emitJson(IR *ir, Node *e) {
     switch (e->builtin) {
     case BI_JSON_ENCODE: {
@@ -1366,6 +1430,20 @@ static Val emitBuiltin(IR *ir, Node *e) {
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
+    case BI_ENV_LOAD: {
+        Type *t = e->c->type;
+        const char *slot = allocaFor(ir, t, "settings");
+        Val init = emitExpr(ir, e->b);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
+        const char *err = tmp(ir);
+        ins(ir, "%s = call i64 %s(ptr %s, ptr %s)", err, e->ref->ir, envTable(ir, t), slot);
+        Val v = load(ir, slot, t);
+        const char *rt = llType(ir, e->type);
+        const char *r1 = tmp(ir), *r2 = tmp(ir);
+        ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), v.s);
+        ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+        return val(r2, e->type);
+    }
     case BI_TABLE_OF: {
         Type *t = e->list.items[0]->type->elem;
         emitExpr(ir, e->list.items[0]);
@@ -2709,7 +2787,13 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
         p->ir = varSlot(ir, p->type, p, i + 1);
         sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(ir, p->type), p->name, p->ir);
     }
-    sbPuts(out, ir->mode == MODE_DEBUG ? ") #0" : ")");
+    sbPuts(out, ")");
+    if (f->flags & F_INLINE) {
+        sbPuts(out, " alwaysinline");
+    }
+    if (ir->mode == MODE_DEBUG && !(f->flags & F_UNCHECKED)) {
+        sbPuts(out, " #0");
+    }
     if (ir->dbgScope) {
         sbPrintf(out, " !dbg !%d", ir->dbgScope);
     }

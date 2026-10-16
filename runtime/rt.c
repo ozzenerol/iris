@@ -3870,3 +3870,142 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
     }
     return 0;
 }
+
+/* ---------------------------------------------------------------- env.load */
+
+typedef struct {
+    const char *name;
+    int64_t nameLen, offset;
+    const JsonType *type;
+    int64_t required, duration;
+} EnvField;
+
+typedef struct {
+    int64_t count;
+    const EnvField *fields;
+} EnvTable;
+
+static _Thread_local char envMsg[400];
+static _Thread_local int64_t envMsgLen;
+
+const char *iris_env_message_ptr(void) { return envMsg; }
+int64_t iris_env_message_len(void) { return envMsgLen; }
+
+static int envFail(int code, const char *name, const char *value, const char *why) {
+    if (value) {
+        envMsgLen = snprintf(envMsg, sizeof envMsg, "%s: '%.80s' %s", name, value, why);
+    } else {
+        envMsgLen = snprintf(envMsg, sizeof envMsg, "%s %s", name, why);
+    }
+    if (envMsgLen >= (int64_t)sizeof envMsg) envMsgLen = sizeof envMsg - 1;
+    return code;
+}
+
+/* 1500ms, 2s, 1.5h, 1h30m; a plain number is seconds. -1 when it isn't one. */
+static bool parseDuration(const char *s, int64_t *out) {
+    double total = 0;
+    bool any = false;
+    while (*s) {
+        char *end;
+        double v = strtod(s, &end);
+        if (end == s) return false;
+        s = end;
+        double unit = 1e9;
+        if (!strncmp(s, "ns", 2)) { unit = 1; s += 2; }
+        else if (!strncmp(s, "us", 2)) { unit = 1e3; s += 2; }
+        else if (!strncmp(s, "ms", 2)) { unit = 1e6; s += 2; }
+        else if (*s == 's') { unit = 1e9; s++; }
+        else if (*s == 'm') { unit = 60e9; s++; }
+        else if (*s == 'h') { unit = 3600e9; s++; }
+        else if (*s && any) return false;
+        total += v * unit;
+        any = true;
+    }
+    if (!any) return false;
+    *out = (int64_t)total;
+    return true;
+}
+
+static bool sameWord(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        if ((*a | 32) != (*b | 32)) return false;
+    }
+    return !*a && !*b;
+}
+
+/* Fills an @env struct from the environment. 0, 1 a required variable is
+   missing, 2 a value doesn't fit its field. */
+int iris_env_load(const EnvTable *t, char *out) {
+    for (int64_t i = 0; i < t->count; i++) {
+        const EnvField *f = &t->fields[i];
+        char name[256];
+        snprintf(name, sizeof name, "%.*s", (int)f->nameLen, f->name);
+        const char *v = getenv(name);
+        if (!v || !*v) {
+            if (f->required) return envFail(1, name, NULL, "is needed but isn't set");
+            continue;
+        }
+        char *p = out + f->offset;
+        const JsonType *ft = f->type;
+        switch (ft->kind) {
+        case J_INT: case J_UINT: {
+            if (f->duration) {
+                int64_t d;
+                if (!parseDuration(v, &d)) return envFail(2, name, v, "isn't a duration like 30s or 1m30s");
+                *(int64_t *)p = d;
+                break;
+            }
+            char *end;
+            errno = 0;
+            long long n = strtoll(v, &end, 10);
+            int bits = ft->size * 8;
+            bool fits = ft->kind == J_INT ? (bits == 64 || (n >= -(1LL << (bits - 1)) && n < (1LL << (bits - 1))))
+                                          : (n >= 0 && (bits == 64 || n < (1LL << bits)));
+            if (*end || end == v || errno) return envFail(2, name, v, "isn't a whole number");
+            if (!fits) return envFail(2, name, v, "doesn't fit");
+            writeInt(p, ft->size, n);
+            break;
+        }
+        case J_FLOAT: {
+            char *end;
+            double d = strtod(v, &end);
+            if (*end || end == v) return envFail(2, name, v, "isn't a number");
+            if (ft->size == 4) *(float *)p = (float)d;
+            else *(double *)p = d;
+            break;
+        }
+        case J_BOOL:
+            if (sameWord(v, "true") || sameWord(v, "1") || sameWord(v, "yes") || sameWord(v, "on")) {
+                *(uint8_t *)p = 1;
+            } else if (sameWord(v, "false") || sameWord(v, "0") || sameWord(v, "no") || sameWord(v, "off")) {
+                *(uint8_t *)p = 0;
+            } else {
+                return envFail(2, name, v, "isn't true or false");
+            }
+            break;
+        case J_STR: {
+            Slice *s = (Slice *)p;
+            s->ptr = (char *)v;         /* the environment stays for the program's life */
+            s->len = (int64_t)strlen(v);
+            break;
+        }
+        case J_STRING: {
+            IrisString *s = (IrisString *)p;
+            iris_string_free(s);
+            iris_string_append(s, v, (int64_t)strlen(v));
+            break;
+        }
+        case J_ENUM: {
+            const JsonName *names = ft->items;
+            int64_t k = 0;
+            while (k < ft->count && !((size_t)names[k].len == strlen(v) && !memcmp(names[k].name, v, strlen(v)))) k++;
+            if (k == ft->count) return envFail(2, name, v, "isn't one of the enum's values");
+            *(int32_t *)p = (int32_t)names[k].value;
+            break;
+        }
+        default:
+            return envFail(2, name, NULL, "can't be read from the environment");
+        }
+    }
+    return 0;
+}

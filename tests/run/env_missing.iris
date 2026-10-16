@@ -1,0 +1,14 @@
+// exit: 1
+// stderr: EnvError.missing: SECRET_TOKEN_FOR_IRIS_TEST is needed but isn't set
+
+import env
+
+@env
+struct Config {
+    @env(required) str secretTokenForIrisTest
+}
+
+!void main() {
+    c := try env.load(Config)
+    print(c.secretTokenForIrisTest)
+}
