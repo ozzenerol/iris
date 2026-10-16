@@ -1,7 +1,7 @@
-// TCP: listening for connections, connecting, reading and writing. A
-// task that waits for the network lets the other tasks run.
+// TCP: listening for connections, connecting, reading and writing, also
+// over TLS. A task that waits for the network lets the other tasks run.
 
-pub enum NetError { refused, closed, timeout, notFound, inUse, other }
+pub enum NetError { refused, closed, timeout, notFound, inUse, other, tls }
 
 @extern("iris_net_listen")
 i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 shared, i32 *err)
@@ -24,12 +24,42 @@ i32 rawWrite(i32 fd, u8 *buf, i64 len)
 @extern("iris_net_close")
 void rawClose(i32 fd)
 
+@extern("iris_tls_connect")
+u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen)
+
+@extern("iris_tls_server_ctx")
+u8 *rawTlsServerCtx(u8 *cert, i64 certLen, u8 *key, i64 keyLen)
+
+@extern("iris_tls_ctx_free")
+void rawTlsCtxFree(u8 *ctx)
+
+@extern("iris_tls_accept")
+u8 *rawTlsAccept(u8 *ctx, i32 fd)
+
+@extern("iris_tls_read")
+i64 rawTlsRead(u8 *ssl, u8 *buf, i64 len)
+
+@extern("iris_tls_write")
+i32 rawTlsWrite(u8 *ssl, u8 *data, i64 len)
+
+@extern("iris_tls_close")
+void rawTlsClose(u8 *ssl)
+
+@extern("iris_tls_message_ptr")
+u8 *tlsMessagePtr()
+
+@extern("iris_tls_message_len")
+i64 tlsMessageLen()
+
+str tlsMessage() => tlsMessagePtr()[0:tlsMessageLen()]
+
 NetError netCode(i32 code) => match code {
     1 => NetError.refused
     2 => NetError.closed
     3 => NetError.timeout
     4 => NetError.notFound
     5 => NetError.inUse
+    7 => NetError.tls
     _ => NetError.other
 }
 
@@ -39,6 +69,7 @@ str reason(i32 code) => match code {
     3 => "timed out"
     4 => "no such host"
     5 => "address in use"
+    7 => tlsMessage()
     _ => "network error"
 }
 
@@ -54,6 +85,14 @@ pub struct Conn {
     u8[] buf
     i64 start
     i64 end
+    u8 *tls
+}
+
+i64 Conn.rawRead(u8[] buf) {
+    if self.tls != null {
+        return rawTlsRead(self.tls, buf.ptr, buf.len)
+    }
+    return rawRead(self.fd, buf.ptr, buf.len)
 }
 
 // Listens on port (0 picks a free one; see .port) on host ("" for all
@@ -99,7 +138,7 @@ pub !i64 Conn.read(u8[] buf) {
         self.start += n
         return n
     }
-    n := rawRead(self.fd, buf.ptr, buf.len)
+    n := self.rawRead(buf)
     if n < 0 {
         return error(netCode(i32(-n)), "reading: {reason(i32(-n))}")
     }
@@ -111,7 +150,7 @@ pub !i64 Conn.read(u8[] buf) {
     if self.start < self.end {
         return true
     }
-    n := rawRead(self.fd, self.buf.ptr, self.buf.len)
+    n := self.rawRead(self.buf)
     if n < 0 {
         return error(netCode(i32(-n)), "reading: {reason(i32(-n))}")
     }
@@ -167,7 +206,7 @@ pub !String Conn.readExactly(i64 n) {
 
 // Writes all of data.
 pub !void Conn.write(str data) {
-    code := rawWrite(self.fd, data.ptr, data.len)
+    code := if self.tls != null { rawTlsWrite(self.tls, data.ptr, data.len) } else { rawWrite(self.fd, data.ptr, data.len) }
     if code != 0 {
         return error(netCode(code), "writing: {reason(code)}")
     }
@@ -175,11 +214,65 @@ pub !void Conn.write(str data) {
 
 // Closes the connection.
 pub void Conn.close() {
+    if self.tls != null {
+        rawTlsClose(self.tls)
+        self.tls = null
+    }
     rawClose(self.fd)
     if self.buf.len > 0 {
         free(self.buf)
         self.buf = alloc(u8, 0)
     }
+}
+
+// Connects to host:port over TLS. The server's certificate must be valid
+// for host and signed by a certificate the system trusts, or one in the
+// file ca (PEM) when ca is given.
+pub !Conn dialTls(str host, u16 port, str ca = "") {
+    c := try dial(host, port)
+    c.startTls(host, ca) catch e {
+        c.close()
+        return e
+    }
+    return c
+}
+
+// Starts TLS as the client on a connection that is open, as dialTls does.
+pub !void Conn.startTls(str host, str ca = "") {
+    ssl := rawTlsConnect(self.fd, host.ptr, host.len, ca.ptr, ca.len)
+    if ssl == null {
+        return error(NetError.tls, "{host}: {tlsMessage()}")
+    }
+    self.tls = ssl
+}
+
+// A server's certificate and key, for accepting TLS connections. It can be
+// shared by every thread.
+pub struct TlsConfig {
+    u8 *ctx
+}
+
+// Reads a certificate chain and its private key from PEM files.
+pub !TlsConfig tlsConfig(str certFile, str keyFile) {
+    ctx := rawTlsServerCtx(certFile.ptr, certFile.len, keyFile.ptr, keyFile.len)
+    if ctx == null {
+        return error(NetError.tls, tlsMessage())
+    }
+    return TlsConfig{ctx: ctx}
+}
+
+pub void TlsConfig.free() {
+    rawTlsCtxFree(self.ctx)
+    self.ctx = null
+}
+
+// Starts TLS as the server on an accepted connection.
+pub !void Conn.acceptTls(TlsConfig *config) {
+    ssl := rawTlsAccept(config.ctx, self.fd)
+    if ssl == null {
+        return error(NetError.tls, tlsMessage())
+    }
+    self.tls = ssl
 }
 
 // Lets the other tasks run.

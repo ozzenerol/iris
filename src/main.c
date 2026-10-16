@@ -173,6 +173,9 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     }
     args[n++] = "-lm";              /* the math module's functions */
     args[n++] = "-pthread";         /* http.serve's threads */
+    if (strcmp(gTarget.os, "linux") == 0) {
+        args[n++] = "-ldl";         /* TLS loads OpenSSL when it is first used */
+    }
     args[n] = NULL;
     int rc;
     if (mode == MODE_DEBUG) {

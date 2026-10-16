@@ -115,9 +115,9 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
-| `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; `NetError` |
+| `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
 | `json` | `encode(v) String` and `decode(T, text) !T` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
-| `http` | a server: `serve(port, handler, threads)` and `serveOn(listener, handler, threads)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `serve`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
+| `http` | a server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `serve`, `serveTls`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
 
 A small web server. A `Router` sends each request to the handler for its method and path; `:id` matches one part of the path and `*path` the rest:
 
@@ -143,12 +143,16 @@ void createUser(http.Request *req, http.Response *res) {
 
 When several patterns match, the one with the most fixed parts wins, so `/users/me` goes before `/users/:id`. A path no pattern has gets 404, and a path that is there only for other methods gets 405 with an `Allow` header.
 
-The client asks other servers. Only `http://` addresses work for now; `https://` gives `HttpError.tls`:
+The client asks other servers, over `http://` or `https://`:
 
 ```iris
-scoped http.Reply r = try http.get("http://localhost:8080/users/7")
-print("{r.status} {r.body}")
+scoped http.Reply r = try http.get("https://example.com/")
+print("{r.status} {r.body.len}")
 ```
+
+`http.serveTls(port, handler, certFile, keyFile)` and `r.serveTls(port, certFile, keyFile)` answer HTTPS, with a certificate chain and its key in PEM files.
+
+TLS uses OpenSSL 3 (or 1.1), which the program loads the first time it needs it: building needs nothing extra, and programs without TLS don't need OpenSSL at all. On Linux it comes with the system (`libssl3`); on macOS, `brew install openssl@3`. `IRIS_OPENSSL` can name the `libssl` file to use. A client checks the server's certificate against the ones the system trusts, and the host name against the certificate; `SSL_CERT_FILE` names a different file of trusted certificates. The oldest version allowed is TLS 1.2.
 
 A complete program:
 

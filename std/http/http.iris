@@ -1,11 +1,11 @@
 // HTTP/1.1: a server, where each connection gets a task and requests on it
 // are answered one after the other while the client keeps it open; a
 // Router that sends each request to the handler for its method and path;
-// and a client for plain http:// addresses.
+// and a client. https works on both sides, with TLS from OpenSSL.
 
 import net, str
 
-pub enum HttpError { badUrl, tls, badReply }
+pub enum HttpError { badUrl, badReply }
 
 // A request, as the handler sees it.
 pub struct Request {
@@ -187,6 +187,11 @@ str statusText(i32 code) => match code {
 
 void serveConn(net.Conn conn, Target target) {
     defer conn.close()
+    if target.tls != null {
+        conn.acceptTls(target.tls) catch e {
+            return
+        }
+    }
     for {
         Request req
         more := readRequest(&conn, &req) catch e {
@@ -228,6 +233,7 @@ i32 listenPerThread()
 struct Target {
     void(Request *, Response *) handler
     Router *router
+    net.TlsConfig *tls
 }
 
 void serveThread(net.Listener shared, bool own, u16 port, str host, Target target) {
@@ -438,6 +444,21 @@ void Router.dispatch(Request *req, Response *res) {
     best.handler(req, res)
 }
 
+// Answers HTTPS requests on port with handler, as serve does, with the
+// certificate chain and key in PEM files.
+pub !void serveTls(u16 port, void(Request *, Response *) handler, str certFile, str keyFile, str host = "",
+    i64 threads = 0) {
+        config := try net.tlsConfig(certFile, keyFile)
+        defer config.free()
+        try serveTarget(port, Target{handler: handler, tls: &config}, host, threads)
+    }
+
+// Answers HTTPS requests on a listener that is already open.
+pub !void serveTlsOn(net.Listener ln, void(Request *, Response *) handler, net.TlsConfig *config,
+    i64 threads = 1) {
+        try serveTargetOn(ln, Target{handler: handler, tls: config}, threads)
+    }
+
 // Answers HTTP requests on port with the router, as serve does.
 pub !void Router.serve(u16 port, str host = "", i64 threads = 0) {
     try serveTarget(port, Target{router: self}, host, threads)
@@ -446,6 +467,18 @@ pub !void Router.serve(u16 port, str host = "", i64 threads = 0) {
 // Like serve, on a listener that is already open.
 pub !void Router.serveOn(net.Listener ln, i64 threads = 1) {
     try serveTargetOn(ln, Target{router: self}, threads)
+}
+
+// Answers HTTPS requests on port with the router, as serveTls does.
+pub !void Router.serveTls(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0) {
+    config := try net.tlsConfig(certFile, keyFile)
+    defer config.free()
+    try serveTarget(port, Target{router: self, tls: &config}, host, threads)
+}
+
+// Answers HTTPS requests on a listener that is already open.
+pub !void Router.serveTlsOn(net.Listener ln, net.TlsConfig *config, i64 threads = 1) {
+    try serveTargetOn(ln, Target{router: self, tls: config}, threads)
 }
 
 pub void Router.free() {
@@ -495,22 +528,21 @@ pub !Reply get(str url) => try send("GET", url)
 // Sends body to url with POST.
 pub !Reply post(str url, str contentType, str body) => try send("POST", url, body, contentType)
 
-// Sends a request and reads the reply. Only http:// addresses work for now.
+// Sends a request and reads the reply. https:// addresses check the
+// server's certificate against the ones the system trusts.
 pub !Reply send(str method, str url, str body = "", str contentType = "") {
-    if str.startsWith(url, "https://") {
-        return error(HttpError.tls, "{url}: https needs TLS, which Iris doesn't have yet")
+    secure := str.startsWith(url, "https://")
+    if !secure && !str.startsWith(url, "http://") {
+        return error(HttpError.badUrl, "{url}: the address should start with http:// or https://")
     }
-    if !str.startsWith(url, "http://") {
-        return error(HttpError.badUrl, "{url}: the address should start with http://")
-    }
-    rest := url[7:]
+    rest := url[if secure { 8 } else { 7 }:]
     hostPort, _, _ := str.cut(rest, "/")
     path := rest[hostPort.len:]
     if path.len == 0 {
         path = "/"
     }
     host, portText, hasPort := str.cut(hostPort, ":")
-    i64 port = 80
+    i64 port = if secure { 443 } else { 80 }
     if hasPort {
         port = str.parseInt(portText) catch e {
             return error(HttpError.badUrl, "{url}: the port isn't a number")
@@ -519,7 +551,7 @@ pub !Reply send(str method, str url, str body = "", str contentType = "") {
     if host.len == 0 || port < 1 || port > 65535 {
         return error(HttpError.badUrl, "{url}: no host")
     }
-    c := try net.dial(host, u16(port))
+    c := if secure { try net.dialTls(host, u16(port)) } else { try net.dial(host, u16(port)) }
     defer c.close()
     String req = format("{method} {path} HTTP/1.1\r\nHost: {hostPort}\r\nUser-Agent: iris\r\nConnection: close\r\n")
     defer req.free()

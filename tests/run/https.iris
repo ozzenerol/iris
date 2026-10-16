@@ -1,0 +1,42 @@
+// env: SSL_CERT_FILE=tests/data/tls/ca.pem
+// expect: 200 [hello over https] [GET]
+// expect: 201 [made ada]
+// expect: NetError.closed
+
+import http, net, str
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello over https")
+    res.header("X-Method", req.method)
+}
+
+void create(http.Request *req, http.Response *res) {
+    res.status = 201
+    res.text("made {req.body}")
+}
+
+void server(http.Router *r, net.Listener ln, net.TlsConfig *config) {
+    r.serveTlsOn(ln, config) catch e { }
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    r.post("/users", create)
+    ln := try net.listen(0, "localhost")
+    spawn server(&r, ln, &config)
+    scoped String base = format("https://localhost:{ln.port}")
+    scoped http.Reply a = try http.get(base)
+    print("{a.status} [{a.body}] [{a.header("X-Method")}]")
+    scoped String url = format("{base}/users")
+    scoped http.Reply b = try http.post(url, "text/plain", "ada")
+    print("{b.status} [{b.body}]")
+    scoped String plain = format("http://localhost:{ln.port}/")
+    _ = http.get(plain) catch e {
+        print("{e.code}")
+        http.Reply{}
+    }
+}

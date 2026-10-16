@@ -6,7 +6,7 @@
 // expect: 404 [not found] []
 // expect: 405 [method not allowed] [POST]
 // expect: 201 made ada /users/9
-// expect: HttpError.tls
+// expect: HttpError.badUrl
 
 import http, net, str
 
@@ -58,7 +58,7 @@ void server(http.Router *r, net.Listener ln) {
     scoped String post = format("{base}/users")
     scoped http.Reply made = try http.post(post, "text/plain", "ada")
     print("{made.status} {made.body} {made.header("Location")}")
-    _ = http.get("https://example.com") catch e {
+    _ = http.get("ftp://example.com") catch e {
         print("{e.code}")
         http.Reply{}
     }
