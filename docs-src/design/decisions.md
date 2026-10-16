@@ -50,6 +50,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | A package's version is a tag in its repository, and `iris get` downloads it with git. | No package server to run. |
 | Until `import c`, the standard library reaches C through `@extern("name")` on functions without a body, which only the standard library may use. | Keeps C out of user code until there is a proper way in. |
 | `.ptr` gives a slice's pointer, and `p[0:n]` slices a pointer without checks. | Needed to hand memory to and from C. |
+| `import c` turns `void *` and function pointers into `u8 *`, and `char` into `u8`. | Text and memory are bytes in Iris; callbacks come later. |
+| A C name that is an Iris keyword or built-in name gets a `_`: `c.free_`. A struct named like a function becomes `c.struct_NAME`. | C keeps struct names apart from other names; Iris doesn't. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
 
