@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html" class="here">Design</a><a href="../language/index.html">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html" class="here">Overview</a></li><li><a href="decisions.html">Decisions</a></li><li><a href="compiler.html">The compiler</a></li><li><a href="values.html">How values are stored</a></li><li><a href="workflow.html">Working on Iris</a></li></ol></aside><main>
+<h1>Overview</h1>
+<p class="lede">What Iris is for, who uses it, and the ideas behind its design.</p>
+<h2 id="what-iris-is-for"><a href="#what-iris-is-for">What Iris is for</a></h2>
+<p>Iris is for programs that run close to the operating system: servers, proxies, databases, command-line tools and daemons. Programs should be short to write and run about as fast as the same program in C.</p>
+<h2 id="who-uses-it"><a href="#who-uses-it">Who uses it</a></h2>
+<ul><li>Programmers writing servers, proxies, databases and other network services.</li><li>C programmers who want slices, strings, generics and checked errors.</li><li>Go programmers who need control over memory.</li><li>People writing command-line tools and daemons.</li></ul>
+<p>Iris is not designed for GUI applications, web front ends or data science.</p>
+<h2 id="ideas-behind-the-design"><a href="#ideas-behind-the-design">Ideas behind the design</a></h2>
+<h3 id="keep-the-language-small"><a href="#keep-the-language-small">Keep the language small</a></h3>
+<p>There are few rules to learn. A feature is added only if it removes a lot of code and is easy to explain. A feature that saves a little typing but adds a new idea stays out. This is why Iris has one loop keyword and no lambdas.</p>
+<h3 id="make-costs-visible"><a href="#make-costs-visible">Make costs visible</a></h3>
+<p>Reading a function should tell you what it costs. A function that can fail says so in its return type (<code>!T</code>). A function that allocates memory takes an allocator. Nothing runs behind the program's back: there is no garbage collector, no hidden copies and no exceptions.</p>
+<h3 id="stay-close-to-c"><a href="#stay-close-to-c">Stay close to C</a></h3>
+<p>Iris uses the C calling convention and lays out structs the way C does. C headers can be imported directly. Any C library can be used, and C code can call Iris functions.</p>
+<h3 id="check-in-debug-builds"><a href="#check-in-debug-builds">Check in debug builds</a></h3>
+<p>Debug builds check array bounds, integer overflow, null pointers and use after free. Release builds keep the bounds checks. A function marked <code>@unchecked</code> drops them.</p>
+<h2 id="how-the-compiler-works"><a href="#how-the-compiler-works">How the compiler works</a></h2>
+<p>The compiler is a C program. It reads Iris source, checks it, and writes LLVM IR, which <code>clang</code> turns into a native program. The <a href="compiler.html">compiler</a> page has the details, and <a href="values.html">How values are stored</a> shows what each Iris type looks like in memory.</p>
+<div class="pager"><span></span><a href="decisions.html">Decisions &rarr;</a></div>
+</main></div>
+</body>
+</html>

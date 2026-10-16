@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enums - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html" class="here">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Enums</h1>
+<p class="lede">A type with a fixed list of values. Each value can carry data of its own.</p>
+<h2 id="plain-enums"><a href="#plain-enums">Plain enums</a></h2>
+<pre class="code"><code><span class="k">enum</span> Level { debug, info, warn, error }
+
+Level l = Level.warn</code></pre>
+<p>When the type is already known, the value can be written with a dot and no type name:</p>
+<pre class="code"><code>Level l = .warn
+log(.error, <span class="s">&quot;disk full&quot;</span>)</code></pre>
+<p>Each value is a number, starting at 0. A value can be given its number:</p>
+<pre class="code"><code><span class="k">enum</span> Status { ok = <span class="n">200</span>, notFound = <span class="n">404</span>, error = <span class="n">500</span> }</code></pre>
+<p><code>.name</code> gives the value's name as a <code>str</code>, and enums can be printed:</p>
+<pre class="code"><code>print(<span class="s">&quot;level is {l}&quot;</span>)       <span class="c">// level is warn</span></code></pre>
+<h2 id="enums-that-carry-data"><a href="#enums-that-carry-data">Enums that carry data</a></h2>
+<p>A value can carry data, written like a function's parameters:</p>
+<pre class="code"><code><span class="k">enum</span> Packet {
+    Ping
+    Data(<span class="t">u8</span>[] bytes)
+    Close(<span class="t">u16</span> code, <span class="t">str</span> reason)
+}
+
+Packet p = Packet.Data(payload)
+Packet q = .Close(<span class="n">1000</span>, <span class="s">&quot;bye&quot;</span>)</code></pre>
+<p>The data is read with <code>match</code>. Each arm names the value and gives names to its data:</p>
+<pre class="code"><code><span class="k">match</span> p {
+    Ping =&gt; send(.Pong)
+    Data(bytes) =&gt; handle(bytes)
+    Close(code, reason) =&gt; print(<span class="s">&quot;closed {code}: {reason}&quot;</span>)
+}</code></pre>
+<p>Every value must have an arm, or there must be a <code>_</code>.</p>
+<h2 id="flags"><a href="#flags">Flags</a></h2>
+<p>An enum marked <code>flags</code> gives its values powers of two, so they can be combined with <code>|</code>. <code>has</code> checks for a value:</p>
+<pre class="code"><code><span class="k">enum</span> Perm flags { read, write, exec }
+
+Perm p = .read | .write
+<span class="k">if</span> p.has(.write) { }</code></pre>
+<div class="pager"><a href="structs.html">&larr; Structs</a><a href="pointers-and-memory.html">Pointers and memory &rarr;</a></div>
+</main></div>
+</body>
+</html>

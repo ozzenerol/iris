@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variables and types - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html" class="here">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Variables and types</h1>
+<p class="lede">How to declare values, and the types Iris has built in.</p>
+<h2 id="declaring-a-variable"><a href="#declaring-a-variable">Declaring a variable</a></h2>
+<p>A declaration gives the type, then the name, then the value:</p>
+<pre class="code"><code><span class="t">i64</span> count = <span class="n">10</span>
+<span class="t">str</span> name = <span class="s">&quot;iris&quot;</span></code></pre>
+<p><code>:=</code> declares a variable and takes its type from the value:</p>
+<pre class="code"><code>count := <span class="n">10</span>        <span class="c">// i64</span>
+ratio := <span class="n">0.5</span>       <span class="c">// f64</span>
+ok := <span class="k">true</span>         <span class="c">// bool</span>
+name := <span class="s">&quot;iris&quot;</span>     <span class="c">// str</span></code></pre>
+<p>A variable declared without a value starts at zero: <code>0</code>, <code>false</code>, an empty <code>str</code> or a <code>null</code> pointer.</p>
+<pre class="code"><code><span class="t">i64</span> total
+<span class="t">bool</span> done</code></pre>
+<h2 id="constants"><a href="#constants">Constants</a></h2>
+<p><code>const</code> gives a name to a value that never changes. The value is worked out when the program is compiled.</p>
+<pre class="code"><code><span class="k">const</span> MAX_CONN = <span class="n">1024</span>
+<span class="k">const</span> VERSION = <span class="s">&quot;0.1.0&quot;</span></code></pre>
+<h2 id="numbers"><a href="#numbers">Numbers</a></h2>
+<div class="table"><table><thead><tr><th>Type</th><th>Size</th><th>Range</th></tr></thead><tbody><tr><td><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code></td><td>1, 2, 4, 8 bytes</td><td>signed integers</td></tr><tr><td><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code></td><td>1, 2, 4, 8 bytes</td><td>integers from 0 up</td></tr><tr><td><code>f32</code>, <code>f64</code></td><td>4, 8 bytes</td><td>floating point</td></tr></tbody></table></div>
+<p>An integer literal is an <code>i64</code> and a literal with a point is an <code>f64</code>. Long numbers can use <code>_</code> between digits:</p>
+<pre class="code"><code>limit := <span class="n">1_000_000</span>
+mask := <span class="n">0xff</span>
+flags := <span class="n">0b1010</span></code></pre>
+<h2 id="bool"><a href="#bool">bool</a></h2>
+<p><code>bool</code> is <code>true</code> or <code>false</code>. Conditions must be <code>bool</code>: <code>if n</code> is an error, <code>if n != 0</code> is correct.</p>
+<h2 id="converting"><a href="#converting">Converting</a></h2>
+<p>A number converts on its own to a type that holds every value it can have, such as <code>u8</code> to <code>i64</code>. Every other conversion is written as the type's name used like a function:</p>
+<pre class="code"><code><span class="t">u8</span> b = <span class="n">200</span>
+<span class="t">i64</span> n = b              <span class="c">// automatic: no value can be lost</span>
+<span class="t">u8</span> small = <span class="t">u8</span>(n)       <span class="c">// written out: n might not fit</span>
+<span class="t">f64</span> avg = <span class="t">f64</span>(total) / <span class="t">f64</span>(count)</code></pre>
+<p>In a debug build, a conversion that loses a value stops the program with an error.</p>
+<h2 id="durations-and-sizes"><a href="#durations-and-sizes">Durations and sizes</a></h2>
+<p>Numbers can carry a unit. Durations are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>, and their type is <code>Duration</code>. Sizes are <code>KiB</code>, <code>MiB</code> and <code>GiB</code>, and they are plain integers.</p>
+<pre class="code"><code>sleep(200ms)
+timeout := 30s
+buf := alloc(<span class="t">u8</span>, 64KiB)</code></pre>
+<h2 id="type-aliases"><a href="#type-aliases">Type aliases</a></h2>
+<p><code>type</code> gives another name to a type. The two names mean the same type.</p>
+<pre class="code"><code><span class="k">type</span> Port = <span class="t">u16</span>
+<span class="k">type</span> Handler = <span class="t">void</span>(Request *, Response *)</code></pre>
+<h2 id="scope"><a href="#scope">Scope</a></h2>
+<p>A variable exists from its declaration to the end of its block. A variable in an inner block can't have the same name as one in an outer block of the same function.</p>
+<div class="pager"><a href="first-program.html">&larr; A first program</a><a href="functions.html">Functions &rarr;</a></div>
+</main></div>
+</body>
+</html>

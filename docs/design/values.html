@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How values are stored - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html" class="here">Design</a><a href="../language/index.html">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Overview</a></li><li><a href="decisions.html">Decisions</a></li><li><a href="compiler.html">The compiler</a></li><li><a href="values.html" class="here">How values are stored</a></li><li><a href="workflow.html">Working on Iris</a></li></ol></aside><main>
+<h1>How values are stored</h1>
+<p class="lede">What each Iris type looks like in memory, and what the compiler turns each feature into.</p>
+<h2 id="numbers-and-bool"><a href="#numbers-and-bool">Numbers and bool</a></h2>
+<p>Integers and floats are stored as the machine stores them: <code>i32</code> is 4 bytes, <code>u64</code> is 8 bytes, <code>f64</code> is 8 bytes. <code>bool</code> is one byte, 0 or 1.</p>
+<h2 id="pointers"><a href="#pointers">Pointers</a></h2>
+<p>A pointer is a memory address, 8 bytes on 64-bit machines. It can be <code>null</code> (0).</p>
+<h2 id="slices-and-str"><a href="#slices-and-str">Slices and str</a></h2>
+<p>A slice <code>T[]</code> is two values: a pointer to the first item and the number of items.</p>
+<pre class="out"><code>T[]  =  { T *ptr, i64 len }</code></pre>
+<p><code>str</code> is <code>u8[]</code>. A string literal is a <code>str</code> that points into read-only memory. Slicing (<code>s[2:5]</code>) makes a new pointer and length and copies nothing.</p>
+<h2 id="string"><a href="#string">String</a></h2>
+<p><code>String</code> is text the program owns. It remembers which allocator its memory came from, so <code>free</code> can give it back.</p>
+<pre class="out"><code>String  =  { u8 *ptr, i64 len, i64 cap, Allocator *alloc }</code></pre>
+<h2 id="arrays"><a href="#arrays">Arrays</a></h2>
+<p><code>u8[512]</code> is 512 bytes in a row, with no length stored. When an array is passed to a function, it becomes a slice.</p>
+<h2 id="structs"><a href="#structs">Structs</a></h2>
+<p>Fields are stored in the order they are written, with the same padding as C. A struct can be passed to and from C as it is. <code>packed</code> removes the padding and <code>align(n)</code> sets the alignment.</p>
+<h2 id="enums"><a href="#enums">Enums</a></h2>
+<p>A plain enum is a 32-bit integer, like a C enum.</p>
+<p>An enum whose values carry data is a tag followed by room for the largest value's data:</p>
+<pre class="out"><code>Packet  =  { i32 tag, union { u8[] bytes, u16 code } }</code></pre>
+<h2 id="several-return-values"><a href="#several-return-values">Several return values</a></h2>
+<p><code>(i64, i64)</code> is a struct with two fields. A function that returns one returns that struct.</p>
+<h2 id="errors-and-t"><a href="#errors-and-t">Errors and !T</a></h2>
+<p><code>Error</code> holds what went wrong:</p>
+<pre class="out"><code>Error  =  { u32 kind, u32 code }</code></pre>
+<p><code>kind</code> says which error enum the code belongs to, and <code>code</code> is the value in that enum. An <code>Error</code> of zero means no error. The message and the trace are kept in a per-thread buffer, so an <code>Error</code> needs no memory of its own.</p>
+<p><code>!T</code> is a <code>T</code> and an <code>Error</code> side by side:</p>
+<pre class="out"><code>!i64  =  { i64 value, Error err }</code></pre>
+<p><code>try f()</code> becomes a call followed by a check. If <code>err</code> is not zero, the current function adds its name and line to the trace and returns the error. When nothing fails, the cost is that one comparison.</p>
+<h2 id="defer-errdefer-and-scoped"><a href="#defer-errdefer-and-scoped">defer, errdefer and scoped</a></h2>
+<p>The compiler copies the code of a <code>defer</code> to every place where its block can end: the end of the block, each <code>return</code>, <code>break</code> and <code>continue</code>, and each <code>try</code> that can leave. Several defers run in reverse order. An <code>errdefer</code> is copied only to the places where the function returns an error.</p>
+<p><code>scoped String s = ...</code> is the same as declaring <code>s</code> and adding <code>defer s.free()</code>.</p>
+<h2 id="generics"><a href="#generics">Generics</a></h2>
+<p>Each generic function and struct is compiled once for each set of types it is used with. <code>max(i64, i64)</code> and <code>max(f64, f64)</code> are two separate functions in the program. Calls are direct, with no lookup at run time.</p>
+<h2 id="interfaces-and-dyn"><a href="#interfaces-and-dyn">Interfaces and dyn</a></h2>
+<p>An interface used as a constraint (<code>T: Ordered</code>) is only checked by the compiler. It leaves nothing in the program.</p>
+<p>A <code>dyn Writer</code> value is two pointers: one to the data, and one to a table with the type's functions for that interface. A call through <code>dyn</code> reads the function from the table.</p>
+<pre class="out"><code>dyn Writer  =  { void *data, WriterTable *table }</code></pre>
+<h2 id="string-interpolation"><a href="#string-interpolation">String interpolation</a></h2>
+<p><code>print(&quot;got {n} bytes&quot;)</code> becomes a write of <code>&quot;got &quot;</code>, a write of <code>n</code>, and a write of <code>&quot; bytes&quot;</code>, into the output buffer. Nothing is allocated.</p>
+<h2 id="tasks"><a href="#tasks">Tasks</a></h2>
+<p>Each task has its own stack. A scheduler runs the tasks on top of an event loop (epoll on Linux, kqueue on macOS, io_uring later). When a task waits for I/O, the scheduler saves its registers and switches to another task. When the I/O is ready, the task continues where it stopped.</p>
+<div class="pager"><a href="compiler.html">&larr; The compiler</a><a href="workflow.html">Working on Iris &rarr;</a></div>
+</main></div>
+</body>
+</html>

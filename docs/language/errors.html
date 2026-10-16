@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Errors - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html" class="here">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Errors</h1>
+<p class="lede">A function that can fail returns its result or an error. The caller has to deal with the error, either by passing it up with <code>try</code> or by handling it with <code>catch</code>.</p>
+<h2 id="returning-an-error"><a href="#returning-an-error">Returning an error</a></h2>
+<p>A return type written <code>!T</code> means the function returns a <code>T</code> or an error. <code>return error(...)</code> returns an error, and a plain <code>return</code> returns the value:</p>
+<pre class="code"><code><span class="k">enum</span> ParseError { empty, notNumber, tooBig }
+
+!<span class="t">i64</span> parsePort(<span class="t">str</span> s) {
+    <span class="k">if</span> s.len == <span class="n">0</span> {
+        <span class="k">return</span> error(ParseError.empty, <span class="s">&quot;port is empty&quot;</span>)
+    }
+    <span class="t">i64</span> n
+    <span class="k">for</span> c <span class="k">in</span> s {
+        <span class="k">if</span> !isDigit(c) {
+            <span class="k">return</span> error(ParseError.notNumber, <span class="s">&quot;&#x27;{s}&#x27; is not a number&quot;</span>)
+        }
+        n = n * <span class="n">10</span> + (c - <span class="s">&#x27;0&#x27;</span>)
+    }
+    <span class="k">if</span> n &gt; <span class="n">65535</span> {
+        <span class="k">return</span> error(ParseError.tooBig, <span class="s">&quot;{n} is above 65535&quot;</span>)
+    }
+    <span class="k">return</span> n
+}</code></pre>
+<p>An error has a code and a message. The code is a value from an enum and tells the program what went wrong. The message is for people.</p>
+<p><code>!void</code> is a function that returns nothing but can fail.</p>
+<h2 id="try"><a href="#try">try</a></h2>
+<p><code>try</code> calls the function and, if it returns an error, returns that error from the current function. The current function must also return <code>!</code>:</p>
+<pre class="code"><code>!Config loadConfig(<span class="t">str</span> path) {
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
+    Config c
+    c.port = <span class="k">try</span> parsePort(text.get(<span class="s">&quot;port&quot;</span>))
+    <span class="k">return</span> c
+}</code></pre>
+<p>If <code>fs.readAll</code> fails, <code>loadConfig</code> returns the same error right away. <code>text</code> is still freed, because <code>scoped</code> and <code>defer</code> run on every way out.</p>
+<h2 id="catch"><a href="#catch">catch</a></h2>
+<p><code>catch</code> handles the error where the call is. With a value after it, that value is used when the call fails:</p>
+<pre class="code"><code>port := parsePort(arg) <span class="k">catch</span> <span class="n">8080</span></code></pre>
+<p>With a name and a block, the block runs when the call fails, with the error in that name. The block either gives a value to use or leaves the function:</p>
+<pre class="code"><code>port := parsePort(arg) <span class="k">catch</span> e {
+    print(<span class="s">&quot;bad port: {e.message}, using 8080&quot;</span>)
+    <span class="n">8080</span>
+}
+
+conf := loadConfig(path) <span class="k">catch</span> e {
+    print(<span class="s">&quot;can&#x27;t start: {e.message}&quot;</span>)
+    <span class="k">return</span>
+}</code></pre>
+<h2 id="deciding-by-the-code"><a href="#deciding-by-the-code">Deciding by the code</a></h2>
+<p><code>e.code</code> can be checked with <code>match</code>:</p>
+<pre class="code"><code>conn := net.dial(host, <span class="n">443</span>) <span class="k">catch</span> e <span class="k">match</span> e.code {
+    NetError.timeout =&gt; <span class="k">try</span> net.dial(backup, <span class="n">443</span>)
+    _ =&gt; <span class="k">return</span> e
+}</code></pre>
+<p>Here a timeout tries a second host, and any other error is returned to the caller.</p>
+<h2 id="adding-context"><a href="#adding-context">Adding context</a></h2>
+<p>An error can be returned again with a longer message:</p>
+<pre class="code"><code>user := db.findUser(id) <span class="k">catch</span> e {
+    <span class="k">return</span> error(e.code, <span class="s">&quot;loading user {id}: {e.message}&quot;</span>)
+}</code></pre>
+<h2 id="errors-can-t-be-ignored"><a href="#errors-can-t-be-ignored">Errors can't be ignored</a></h2>
+<p>The result of a function that returns <code>!</code> must go through <code>try</code> or <code>catch</code>. Calling it and doing nothing is a compile error. To drop an error on purpose, assign it to <code>_</code>:</p>
+<pre class="code"><code>save(<span class="s">&quot;out.txt&quot;</span>, data)          <span class="c">// compile error: the error is not handled</span>
+_ = save(<span class="s">&quot;out.txt&quot;</span>, data)      <span class="c">// the error is dropped</span></code></pre>
+<h2 id="errors-in-main"><a href="#errors-in-main">Errors in main</a></h2>
+<p>When <code>main</code> returns <code>!void</code>, an error that reaches the end of <code>main</code> is printed with the functions it passed through, and the program exits with status 1:</p>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    cfg := <span class="k">try</span> loadConfig(<span class="s">&quot;app.conf&quot;</span>)
+    <span class="k">try</span> serve(cfg)
+}</code></pre>
+<pre class="out"><code>error: fs.notFound: app.conf: no such file
+  at fs.readAll    std/fs.iris:88
+  at loadConfig    main.iris:12
+  at main          main.iris:31</code></pre>
+<h2 id="bugs-and-panic"><a href="#bugs-and-panic">Bugs and panic</a></h2>
+<p><code>!T</code> is for things that can go wrong while the program is correct: a missing file, a closed connection, bad input. A bug, like an index past the end, stops the program right away with a trace. <code>panic(&quot;message&quot;)</code> does the same for a state the program should never reach.</p>
+<div class="pager"><a href="pointers-and-memory.html">&larr; Pointers and memory</a><a href="generics.html">Generics &rarr;</a></div>
+</main></div>
+</body>
+</html>

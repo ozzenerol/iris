@@ -1,0 +1,98 @@
+# Functions
+
+Declaring functions, passing arguments and returning values.
+
+## Declaring a function
+
+A function gives its return type, its name and its parameters. `void` means it returns nothing.
+
+```iris
+i64 add(i64 a, i64 b) {
+    return a + b
+}
+
+void greet(str name) {
+    print("hello {name}")
+}
+```
+
+Parameters next to each other with the same type can share it:
+
+```iris
+i64 add3(i64 a, b, c) {
+    return a + b + c
+}
+```
+
+A function that is a single expression can use `=>` and leave out the braces and `return`:
+
+```iris
+i64 square(i64 x) => x * x
+bool isDigit(u8 c) => c >= '0' && c <= '9'
+```
+
+Functions can be declared in any order. A function can call one declared further down the file.
+
+## Arguments are copies
+
+Arguments are copied into the function. Changing a parameter does not change the caller's value. To let a function change a value, pass a pointer to it:
+
+```iris
+void reset(i64 *n) {
+    *n = 0
+}
+
+i64 count = 5
+reset(&count)      // count is now 0
+```
+
+## Default values
+
+A parameter can have a default value. A call can leave it out.
+
+```iris
+void connect(str host, u16 port = 80, Duration timeout = 30s) {
+}
+
+connect("example.com")
+connect("example.com", 8080)
+```
+
+Parameters with a default come after the ones without.
+
+## Named arguments
+
+Any argument can be passed by name. Named arguments come after the others, in any order. This makes calls with several defaults easy to read:
+
+```iris
+connect("example.com", timeout: 5s)
+connect("example.com", timeout: 5s, port: 443)
+```
+
+## Several return values
+
+A function can return several values in parentheses. The caller can unpack them into new variables:
+
+```iris
+(i64, i64) divmod(i64 a, b) => (a / b, a % b)
+
+q, r := divmod(17, 5)      // q is 3, r is 2
+```
+
+`_` skips a value:
+
+```iris
+_, r := divmod(17, 5)
+```
+
+## Functions as values
+
+A function's name can be passed to another function. The parameter's type is written as the return type followed by the parameter types:
+
+```iris
+i64 apply(i64(i64) f, i64 x) => f(x)
+
+n := apply(square, 4)      // 16
+```
+
+Iris has no lambdas, so the function passed must have a name.

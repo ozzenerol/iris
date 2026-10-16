@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generics - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html" class="here">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Generics</h1>
+<p class="lede">Writing a struct or function once and using it with many types.</p>
+<h2 id="generic-structs"><a href="#generic-structs">Generic structs</a></h2>
+<p>Type parameters are written in square brackets after the name:</p>
+<pre class="code"><code><span class="k">struct</span> List[T] {
+    T *items
+    <span class="t">i64</span> len
+    <span class="t">i64</span> cap
+}
+
+<span class="k">struct</span> Pair[A, B] {
+    A first
+    B second
+}</code></pre>
+<p>Methods of a generic struct repeat the parameters:</p>
+<pre class="code"><code><span class="t">void</span> List[T].push(T value) {
+    <span class="k">if</span> self.len == self.cap {
+        self.grow()
+    }
+    self.items[self.len] = value
+    self.len += <span class="n">1</span>
+}</code></pre>
+<p>A generic type is used with its types filled in:</p>
+<pre class="code"><code>List[<span class="t">i64</span>] numbers
+numbers.push(<span class="n">4</span>)
+
+p := Pair[<span class="t">str</span>, <span class="t">i64</span>]{first: <span class="s">&quot;age&quot;</span>, second: <span class="n">30</span>}</code></pre>
+<h2 id="generic-functions"><a href="#generic-functions">Generic functions</a></h2>
+<pre class="code"><code>T first[T](T[] items) =&gt; items[<span class="n">0</span>]</code></pre>
+<p>The types are worked out from the arguments, so they rarely need to be written:</p>
+<pre class="code"><code>n := first(counts)           <span class="c">// T is i64</span>
+s := first(names)            <span class="c">// T is str</span>
+l := List.of(<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>)        <span class="c">// List[i64]</span></code></pre>
+<p>When there is nothing to work them out from, they are written in brackets:</p>
+<pre class="code"><code>names := List[<span class="t">str</span>].new()</code></pre>
+<h2 id="interfaces"><a href="#interfaces">Interfaces</a></h2>
+<p>An interface lists methods. A type has an interface when it has those methods. Nothing else needs to be declared.</p>
+<pre class="code"><code><span class="k">interface</span> Ordered {
+    <span class="t">i64</span> compare(Self other)
+}</code></pre>
+<p><code>Self</code> is the type that has the interface.</p>
+<p>An interface can limit what a type parameter accepts. Inside the function, those methods can be called:</p>
+<pre class="code"><code>T max[T: Ordered](T a, b) =&gt; <span class="k">if</span> a.compare(b) &gt;= <span class="n">0</span> { a } <span class="k">else</span> { b }</code></pre>
+<p>Calling <code>max</code> with a type that has no <code>compare</code> method is a compile error that names the missing method.</p>
+<h2 id="dyn"><a href="#dyn">dyn</a></h2>
+<p>Normally every call is worked out when compiling. A <code>dyn</code> parameter accepts any type with the interface and picks the method when the program runs. Use it when the type is not known until then, like a list of handlers of different types:</p>
+<pre class="code"><code><span class="k">interface</span> Writer {
+    !<span class="t">i64</span> write(<span class="t">u8</span>[] data)
+}
+
+!<span class="t">void</span> log(<span class="k">dyn</span> Writer w, <span class="t">str</span> msg) {
+    <span class="k">try</span> w.write(msg)
+}
+
+<span class="k">try</span> log(&amp;file, <span class="s">&quot;started&quot;</span>)
+<span class="k">try</span> log(&amp;conn, <span class="s">&quot;started&quot;</span>)</code></pre>
+<h2 id="how-it-is-compiled"><a href="#how-it-is-compiled">How it is compiled</a></h2>
+<p>Each generic function or struct is compiled once for each set of types it is used with. The result is as fast as writing a separate copy for each type by hand.</p>
+<div class="pager"><a href="errors.html">&larr; Errors</a><a href="modules.html">Modules &rarr;</a></div>
+</main></div>
+</body>
+</html>

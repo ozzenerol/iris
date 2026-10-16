@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concurrency - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html" class="here">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Concurrency</h1>
+<p class="lede">Running several things at once: tasks for I/O, threads for CPU work, and channels to pass data between them.</p>
+<h2 id="tasks"><a href="#tasks">Tasks</a></h2>
+<p><code>spawn</code> starts a function as a task and returns right away. Tasks are cheap, so a server can start one for each connection:</p>
+<pre class="code"><code>!<span class="t">void</span> serve(<span class="t">u16</span> port) {
+    ln := <span class="k">try</span> net.listen(port)
+    <span class="k">for</span> {
+        conn := <span class="k">try</span> ln.accept()
+        <span class="k">spawn</span> handle(conn)
+    }
+}
+
+<span class="t">void</span> handle(Conn c) {
+    <span class="k">defer</span> c.close()
+    <span class="k">for</span> {
+        line := c.readLine() <span class="k">catch</span> e { <span class="k">return</span> }
+        _ = c.write(line)
+    }
+}</code></pre>
+<p>Tasks run on an event loop. When a task waits for the network, a file or a timer, another task runs. Code in a task is written as if it blocks, with no callbacks.</p>
+<h2 id="channels"><a href="#channels">Channels</a></h2>
+<p>A channel passes values from one task to another. It has a type and a size:</p>
+<pre class="code"><code>jobs := <span class="k">chan</span>[Job](<span class="n">64</span>)
+
+<span class="k">spawn</span> worker(jobs)
+jobs &lt;- Job{id: <span class="n">1</span>}</code></pre>
+<p><code>&lt;-c</code> takes the next value, waiting if there is none:</p>
+<pre class="code"><code><span class="t">void</span> worker(<span class="k">chan</span>[Job] jobs) {
+    <span class="k">for</span> {
+        j := &lt;-jobs
+        run(j)
+    }
+}</code></pre>
+<p><code>select</code> waits on several channels at once and runs the arm of the first one ready. <code>after</code> gives a channel that receives once after a duration:</p>
+<pre class="code"><code><span class="k">select</span> {
+    j := &lt;-jobs =&gt; run(j)
+    msg := &lt;-control =&gt; handle(msg)
+    after(5s) =&gt; print(<span class="s">&quot;idle&quot;</span>)
+}</code></pre>
+<h2 id="threads"><a href="#threads">Threads</a></h2>
+<p>Tasks share threads. For work that keeps a CPU busy, start a thread:</p>
+<pre class="code"><code>t := thread.start(compress, data)
+result := t.join()</code></pre>
+<p><code>threadlocal</code> gives each thread its own copy of a global variable:</p>
+<pre class="code"><code><span class="k">threadlocal</span> <span class="t">i64</span> requests</code></pre>
+<h2 id="atomics"><a href="#atomics">Atomics</a></h2>
+<p>An <code>atomic</code> variable can be changed safely by several threads at once. Each operation says how much ordering it needs:</p>
+<pre class="code"><code><span class="k">atomic</span> <span class="t">i64</span> hits
+
+hits.add(<span class="n">1</span>, .relaxed)
+n := hits.load(.acquire)</code></pre>
+<h2 id="locks"><a href="#locks">Locks</a></h2>
+<p><code>sync.Mutex</code> protects data that several threads change:</p>
+<pre class="code"><code>sync.Mutex lock
+
+lock.lock()
+<span class="k">defer</span> lock.unlock()
+counts[key] += <span class="n">1</span></code></pre>
+<div class="pager"><a href="compile-time.html">&larr; Compile time</a><a href="calling-c.html">Calling C &rarr;</a></div>
+</main></div>
+</body>
+</html>

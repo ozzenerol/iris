@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Functions - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html" class="here">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Functions</h1>
+<p class="lede">Declaring functions, passing arguments and returning values.</p>
+<h2 id="declaring-a-function"><a href="#declaring-a-function">Declaring a function</a></h2>
+<p>A function gives its return type, its name and its parameters. <code>void</code> means it returns nothing.</p>
+<pre class="code"><code><span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) {
+    <span class="k">return</span> a + b
+}
+
+<span class="t">void</span> greet(<span class="t">str</span> name) {
+    print(<span class="s">&quot;hello {name}&quot;</span>)
+}</code></pre>
+<p>Parameters next to each other with the same type can share it:</p>
+<pre class="code"><code><span class="t">i64</span> add3(<span class="t">i64</span> a, b, c) {
+    <span class="k">return</span> a + b + c
+}</code></pre>
+<p>A function that is a single expression can use <code>=&gt;</code> and leave out the braces and <code>return</code>:</p>
+<pre class="code"><code><span class="t">i64</span> square(<span class="t">i64</span> x) =&gt; x * x
+<span class="t">bool</span> isDigit(<span class="t">u8</span> c) =&gt; c &gt;= <span class="s">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="s">&#x27;9&#x27;</span></code></pre>
+<p>Functions can be declared in any order. A function can call one declared further down the file.</p>
+<h2 id="arguments-are-copies"><a href="#arguments-are-copies">Arguments are copies</a></h2>
+<p>Arguments are copied into the function. Changing a parameter does not change the caller's value. To let a function change a value, pass a pointer to it:</p>
+<pre class="code"><code><span class="t">void</span> reset(<span class="t">i64</span> *n) {
+    *n = <span class="n">0</span>
+}
+
+<span class="t">i64</span> count = <span class="n">5</span>
+reset(&amp;count)      <span class="c">// count is now 0</span></code></pre>
+<h2 id="default-values"><a href="#default-values">Default values</a></h2>
+<p>A parameter can have a default value. A call can leave it out.</p>
+<pre class="code"><code><span class="t">void</span> connect(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = 30s) {
+}
+
+connect(<span class="s">&quot;example.com&quot;</span>)
+connect(<span class="s">&quot;example.com&quot;</span>, <span class="n">8080</span>)</code></pre>
+<p>Parameters with a default come after the ones without.</p>
+<h2 id="named-arguments"><a href="#named-arguments">Named arguments</a></h2>
+<p>Any argument can be passed by name. Named arguments come after the others, in any order. This makes calls with several defaults easy to read:</p>
+<pre class="code"><code>connect(<span class="s">&quot;example.com&quot;</span>, timeout: 5s)
+connect(<span class="s">&quot;example.com&quot;</span>, timeout: 5s, port: <span class="n">443</span>)</code></pre>
+<h2 id="several-return-values"><a href="#several-return-values">Several return values</a></h2>
+<p>A function can return several values in parentheses. The caller can unpack them into new variables:</p>
+<pre class="code"><code>(<span class="t">i64</span>, <span class="t">i64</span>) divmod(<span class="t">i64</span> a, b) =&gt; (a / b, a % b)
+
+q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)      <span class="c">// q is 3, r is 2</span></code></pre>
+<p><code>_</code> skips a value:</p>
+<pre class="code"><code>_, r := divmod(<span class="n">17</span>, <span class="n">5</span>)</code></pre>
+<h2 id="functions-as-values"><a href="#functions-as-values">Functions as values</a></h2>
+<p>A function's name can be passed to another function. The parameter's type is written as the return type followed by the parameter types:</p>
+<pre class="code"><code><span class="t">i64</span> apply(<span class="t">i64</span>(<span class="t">i64</span>) f, <span class="t">i64</span> x) =&gt; f(x)
+
+n := apply(square, <span class="n">4</span>)      <span class="c">// 16</span></code></pre>
+<p>Iris has no lambdas, so the function passed must have a name.</p>
+<div class="pager"><a href="variables-and-types.html">&larr; Variables and types</a><a href="control-flow.html">Control flow &rarr;</a></div>
+</main></div>
+</body>
+</html>

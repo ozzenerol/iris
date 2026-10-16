@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compile time - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html" class="here">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Compile time</h1>
+<p class="lede">Work that the compiler does while building the program: constants, code for one platform, and code generated from attributes. Iris has no preprocessor and no macros.</p>
+<h2 id="const"><a href="#const">const</a></h2>
+<p>A <code>const</code> is worked out when compiling. It can use other constants and simple expressions:</p>
+<pre class="code"><code><span class="k">const</span> KiB = <span class="n">1024</span>
+<span class="k">const</span> BUF_SIZE = <span class="n">64</span> * KiB
+<span class="k">const</span> NAME = <span class="s">&quot;iris&quot;</span></code></pre>
+<h2 id="comptime"><a href="#comptime">comptime</a></h2>
+<p><code>comptime</code> runs a function while compiling and puts the result in the program. The function is ordinary Iris code:</p>
+<pre class="code"><code><span class="t">u32</span>[<span class="n">256</span>] makeCrcTable() {
+    <span class="t">u32</span>[<span class="n">256</span>] table
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">256</span> {
+        <span class="t">u32</span> c = <span class="t">u32</span>(i)
+        <span class="k">for</span> _ <span class="k">in</span> <span class="n">0</span>..<span class="n">8</span> {
+            c = <span class="k">if</span> (c &amp; <span class="n">1</span>) == <span class="n">1</span> { <span class="n">0xedb88320</span> ^ (c &gt;&gt; <span class="n">1</span>) } <span class="k">else</span> { c &gt;&gt; <span class="n">1</span> }
+        }
+        table[i] = c
+    }
+    <span class="k">return</span> table
+}
+
+<span class="k">const</span> CRC_TABLE = <span class="k">comptime</span> makeCrcTable()</code></pre>
+<h2 id="when"><a href="#when">when</a></h2>
+<p><code>when</code> includes code only when a condition known at compile time is true. The other branches are not compiled:</p>
+<pre class="code"><code><span class="k">when</span> os == .linux {
+    poller := epoll()
+} <span class="k">else</span> <span class="k">when</span> os == .macos {
+    poller := kqueue()
+}</code></pre>
+<p>The names that <code>when</code> can test are <code>os</code>, <code>arch</code> and <code>mode</code> (debug, release-safe or release-fast).</p>
+<h2 id="attributes"><a href="#attributes">Attributes</a></h2>
+<p>An attribute starts with <code>@</code> and goes before a declaration. Some attributes make the compiler generate code.</p>
+<p><code>@json</code> generates the code that turns a struct into JSON and back:</p>
+<pre class="code"><code><span class="a">@json</span>
+<span class="k">struct</span> User {
+    <span class="t">i64</span> id
+    <span class="t">String</span> name
+    <span class="a">@json</span>(<span class="s">&quot;created_at&quot;</span>) <span class="t">i64</span> created
+}
+
+User u = <span class="k">try</span> json.decode(User, body)
+<span class="k">scoped</span> <span class="t">String</span> out = json.encode(u)</code></pre>
+<p><code>@env</code> reads a struct's fields from environment variables:</p>
+<pre class="code"><code><span class="a">@env</span>
+<span class="k">struct</span> Settings {
+    <span class="a">@env</span>(<span class="s">&quot;PORT&quot;</span>) <span class="t">u16</span> port = <span class="n">8080</span>
+    <span class="a">@env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>, required) <span class="t">String</span> db
+}
+
+cfg := <span class="k">try</span> env.load(Settings)</code></pre>
+<p>Other attributes:</p>
+<div class="table"><table><thead><tr><th>Attribute</th><th>Effect</th></tr></thead><tbody><tr><td><code>@yaml</code></td><td>like <code>@json</code>, for YAML</td></tr><tr><td><code>@unchecked</code></td><td>no bounds or overflow checks in this function</td></tr><tr><td><code>@export</code></td><td>the function can be called from C</td></tr><tr><td><code>@inline</code></td><td>always inline this function</td></tr></tbody></table></div>
+<div class="pager"><a href="modules.html">&larr; Modules</a><a href="concurrency.html">Concurrency &rarr;</a></div>
+</main></div>
+</body>
+</html>

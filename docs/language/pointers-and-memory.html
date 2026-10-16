@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pointers and memory - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html" class="here">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Pointers and memory</h1>
+<p class="lede">Iris has no garbage collector. The program allocates memory and frees it. This page covers pointers, slices, allocation, and the tools that make freeing hard to forget.</p>
+<h2 id="pointers"><a href="#pointers">Pointers</a></h2>
+<p><code>&amp;</code> takes the address of a value and <code>*</code> reads or writes through a pointer:</p>
+<pre class="code"><code><span class="t">i64</span> x = <span class="n">5</span>
+<span class="t">i64</span> *p = &amp;x
+*p = <span class="n">6</span>             <span class="c">// x is now 6</span></code></pre>
+<p>A pointer to a struct reaches its fields with a dot:</p>
+<pre class="code"><code>Point *pp = &amp;p
+pp.x = <span class="n">10</span></code></pre>
+<p>A pointer can be <code>null</code>. In a debug build, using a <code>null</code> pointer stops the program with an error that says where.</p>
+<p>Pointer arithmetic works as in C:</p>
+<pre class="code"><code><span class="t">u8</span> *end = start + len</code></pre>
+<h2 id="arrays"><a href="#arrays">Arrays</a></h2>
+<p>An array has a fixed size, written in the type:</p>
+<pre class="code"><code><span class="t">u8</span>[<span class="n">512</span>] buf
+<span class="t">i64</span>[<span class="n">3</span>] counts = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]</code></pre>
+<h2 id="slices"><a href="#slices">Slices</a></h2>
+<p>A slice, <code>T[]</code>, is a pointer to some items plus their count. It is the usual way to pass a list of things to a function:</p>
+<pre class="code"><code><span class="t">i64</span> sum(<span class="t">i64</span>[] xs) {
+    <span class="t">i64</span> total
+    <span class="k">for</span> x <span class="k">in</span> xs {
+        total += x
+    }
+    <span class="k">return</span> total
+}
+
+<span class="t">i64</span>[<span class="n">3</span>] counts = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+s := sum(counts)           <span class="c">// an array is passed as a slice</span></code></pre>
+<p><code>a[i:j]</code> takes items <code>i</code> to <code>j - 1</code>. Either end can be left out. A slice shares memory with what it was taken from:</p>
+<pre class="code"><code>n := <span class="k">try</span> conn.read(buf)
+handle(buf[<span class="n">0</span>:n])</code></pre>
+<p>Every index is checked. Reading past the end stops the program with an error that says where.</p>
+<h2 id="locals-start-at-zero"><a href="#locals-start-at-zero">Locals start at zero</a></h2>
+<p>Every local variable starts at zero, whether it is a number, a pointer, an array or a struct.</p>
+<h2 id="allocating-and-freeing"><a href="#allocating-and-freeing">Allocating and freeing</a></h2>
+<p><code>alloc</code> returns a slice of new memory, set to zero. <code>free</code> gives it back.</p>
+<pre class="code"><code><span class="t">u8</span>[] buf = alloc(<span class="t">u8</span>, 4KiB)
+<span class="c">// use buf</span>
+free(buf)</code></pre>
+<p><code>alloc</code> uses the default allocator. See <a href="#allocators">Allocators</a> for others.</p>
+<h2 id="defer"><a href="#defer">defer</a></h2>
+<p><code>defer</code> runs a statement when the block ends, however it ends: at the closing brace, at a <code>return</code>, or when <code>try</code> passes an error up. It keeps the cleanup next to the code that needs it:</p>
+<pre class="code"><code>!<span class="t">void</span> copy(<span class="t">str</span> from, to) {
+    src := <span class="k">try</span> fs.open(from)
+    <span class="k">defer</span> src.close()
+    dst := <span class="k">try</span> fs.create(to)
+    <span class="k">defer</span> dst.close()
+    <span class="k">try</span> io.copy(dst, src)
+}</code></pre>
+<p>Several defers run in reverse order: <code>dst</code> is closed first, then <code>src</code>.</p>
+<h2 id="errdefer"><a href="#errdefer">errdefer</a></h2>
+<p><code>errdefer</code> runs only when the function returns an error. It undoes work that should be kept only if everything succeeds:</p>
+<pre class="code"><code>!Server listen(<span class="t">u16</span> port) {
+    fd := <span class="k">try</span> net.socket()
+    <span class="k">errdefer</span> net.close(fd)
+    <span class="k">try</span> net.bind(fd, port)
+    <span class="k">try</span> net.listen(fd, <span class="n">128</span>)
+    <span class="k">return</span> Server{fd: fd}
+}</code></pre>
+<p>If <code>bind</code> or <code>listen</code> fails, the socket is closed. If they succeed, it stays open.</p>
+<h2 id="scoped"><a href="#scoped">scoped</a></h2>
+<p><code>scoped</code> on a declaration calls the value's <code>free</code> method at the end of the block:</p>
+<pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> body = <span class="k">try</span> fs.readAll(<span class="s">&quot;index.html&quot;</span>)
+<span class="k">scoped</span> Buffer b = buffer(4KiB)</code></pre>
+<p>It is the same as writing the declaration followed by <code>defer body.free()</code>.</p>
+<h2 id="allocators"><a href="#allocators">Allocators</a></h2>
+<p>An allocator is a value that hands out memory. Functions in the standard library that allocate take an allocator as their last parameter, which defaults to the general one. Passing another allocator changes where the memory comes from.</p>
+<p>An arena hands out memory from one big block and frees all of it at once. It suits work with a clear end, like handling one request:</p>
+<pre class="code"><code><span class="t">void</span> handle(Request *r) {
+    <span class="k">scoped</span> Arena a = arena(1MiB)
+    page := render(r, &amp;a)
+    r.reply(page)
+}</code></pre>
+<p>Everything <code>render</code> allocated from <code>a</code> is freed when <code>handle</code> returns.</p>
+<h2 id="checks-in-debug-builds"><a href="#checks-in-debug-builds">Checks in debug builds</a></h2>
+<p>A debug build stops the program with an error and a trace when it finds:</p>
+<ul><li>an index past the end of an array or slice</li><li>an integer that overflows</li><li>a <code>null</code> pointer being used</li><li>memory used after it was freed, or freed twice</li></ul>
+<p>A release build keeps the index checks. A function marked <code>@unchecked</code> has none:</p>
+<pre class="code"><code><span class="a">@unchecked</span>
+<span class="t">u32</span> checksum(<span class="t">u8</span>[] data) {
+}</code></pre>
+<div class="pager"><a href="enums.html">&larr; Enums</a><a href="errors.html">Errors &rarr;</a></div>
+</main></div>
+</body>
+</html>

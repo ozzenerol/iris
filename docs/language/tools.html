@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html" class="here">Tools</a></li></ol></aside><main>
+<h1>Tools</h1>
+<p class="lede">The <code>iris</code> command builds, runs and tests programs, and manages packages.</p>
+<h2 id="commands"><a href="#commands">Commands</a></h2>
+<div class="table"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>iris run main.iris</code></td><td>compiles and runs a program</td></tr><tr><td><code>iris build</code></td><td>builds the project in the current folder</td></tr><tr><td><code>iris test</code></td><td>runs the tests</td></tr><tr><td><code>iris fmt</code></td><td>formats the source files</td></tr><tr><td><code>iris get &lt;package&gt;</code></td><td>adds a package to <code>iris.mod</code></td></tr><tr><td><code>iris doc</code></td><td>shows the documentation from the comments</td></tr><tr><td><code>iris parse file.iris</code></td><td>prints the syntax tree</td></tr></tbody></table></div>
+<h2 id="tests"><a href="#tests">Tests</a></h2>
+<p>A <code>test</code> block can sit in any source file, next to the code it tests:</p>
+<pre class="code"><code><span class="t">i64</span> add(<span class="t">i64</span> a, b) =&gt; a + b
+
+<span class="k">test</span> <span class="s">&quot;add&quot;</span> {
+    expect(add(<span class="n">2</span>, <span class="n">3</span>) == <span class="n">5</span>)
+    expect(add(-<span class="n">1</span>, <span class="n">1</span>) == <span class="n">0</span>)
+}</code></pre>
+<p><code>iris test</code> runs every test block. Tests are left out of normal builds.</p>
+<h2 id="build-modes"><a href="#build-modes">Build modes</a></h2>
+<div class="table"><table><thead><tr><th>Mode</th><th>Checks</th><th>Optimised</th></tr></thead><tbody><tr><td><code>debug</code></td><td>all</td><td>no</td></tr><tr><td><code>release-safe</code></td><td>index checks</td><td>yes</td></tr><tr><td><code>release-fast</code></td><td>none</td><td>yes</td></tr></tbody></table></div>
+<pre class="code"><code>iris build --mode=release-safe</code></pre>
+<h2 id="other-platforms"><a href="#other-platforms">Other platforms</a></h2>
+<p><code>--target</code> builds for another platform:</p>
+<pre class="code"><code>iris build --target=aarch64-linux
+iris build --target=x86_64-linux
+iris build --target=aarch64-macos</code></pre>
+<h2 id="debugging"><a href="#debugging">Debugging</a></h2>
+<p>Every build includes debug information, so <code>gdb</code> and <code>lldb</code> show Iris source lines and variable names.</p>
+<div class="pager"><a href="calling-c.html">&larr; Calling C</a><span></span></div>
+</main></div>
+</body>
+</html>

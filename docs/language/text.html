@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html" class="here">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Text</h1>
+<p class="lede">Iris has two types for text: <code>str</code> for text you look at and <code>String</code> for text you own.</p>
+<h2 id="str"><a href="#str">str</a></h2>
+<p><code>str</code> is a slice of bytes (<code>u8[]</code>). It points at text stored somewhere else and knows its length. A string literal is a <code>str</code>.</p>
+<pre class="code"><code><span class="t">str</span> greeting = <span class="s">&quot;hello, world&quot;</span>
+print(<span class="s">&quot;{greeting.len}&quot;</span>)        <span class="c">// 12</span></code></pre>
+<p>Slicing a <code>str</code> gives another <code>str</code> that points into the same text. Nothing is copied.</p>
+<pre class="code"><code><span class="t">str</span> word = greeting[<span class="n">0</span>:<span class="n">5</span>]       <span class="c">// &quot;hello&quot;</span>
+<span class="t">str</span> rest = greeting[<span class="n">7</span>:]        <span class="c">// &quot;world&quot;</span></code></pre>
+<p><code>==</code> compares the bytes of two strings:</p>
+<pre class="code"><code><span class="k">if</span> word == <span class="s">&quot;hello&quot;</span> { }</code></pre>
+<p>Text is stored as UTF-8. <code>len</code> counts bytes, and indexing gives a byte (<code>u8</code>).</p>
+<h2 id="string"><a href="#string">String</a></h2>
+<p>A <code>String</code> owns its bytes. It can grow, and it must be freed.</p>
+<pre class="code"><code><span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()
+s.append(<span class="s">&quot;, world&quot;</span>)
+print(s)
+s.free()</code></pre>
+<p><code>scoped</code> frees it at the end of the block, so the <code>free</code> can't be forgotten:</p>
+<pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()
+s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
+<p>A <code>String</code> can be used wherever a <code>str</code> is expected. The <code>str</code> points into the <code>String</code>'s bytes, so it is only valid while the <code>String</code> is alive and unchanged.</p>
+<h2 id="putting-values-into-text"><a href="#putting-values-into-text">Putting values into text</a></h2>
+<p>A name or expression in braces inside a string literal is replaced by its value:</p>
+<pre class="code"><code>n := <span class="n">42</span>
+addr := <span class="s">&quot;10.0.0.1&quot;</span>
+print(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)
+print(<span class="s">&quot;{n * 2}&quot;</span>)</code></pre>
+<pre class="out"><code>got 42 bytes from 10.0.0.1
+84</code></pre>
+<p>The compiler checks each value. Numbers, <code>bool</code>, <code>str</code>, <code>String</code> and enums can be printed. A struct can be printed if it has a <code>format</code> method. <code>{{</code> and <code>}}</code> write a single brace.</p>
+<p><code>format</code> builds a <code>String</code> the same way:</p>
+<pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> msg = format(<span class="s">&quot;{n} bytes&quot;</span>)</code></pre>
+<h2 id="escapes"><a href="#escapes">Escapes</a></h2>
+<div class="table"><table><thead><tr><th>Escape</th><th>Meaning</th></tr></thead><tbody><tr><td><code>\n</code></td><td>newline</td></tr><tr><td><code>\t</code></td><td>tab</td></tr><tr><td><code>\r</code></td><td>carriage return</td></tr><tr><td><code>\\</code></td><td>backslash</td></tr><tr><td><code>\&quot;</code></td><td>double quote</td></tr><tr><td><code>\x41</code></td><td>a byte in hex</td></tr></tbody></table></div>
+<h2 id="multi-line-text"><a href="#multi-line-text">Multi-line text</a></h2>
+<p>Three quotes start and end text that spans several lines. The indentation that all lines share is removed, so the text can be indented with the code:</p>
+<pre class="code"><code>q := <span class="s">&quot;&quot;</span>&quot;
+    SELECT name
+    FROM users
+    WHERE id = {id}
+    <span class="s">&quot;&quot;</span>&quot;</code></pre>
+<h2 id="raw-text"><a href="#raw-text">Raw text</a></h2>
+<p>In a raw string, <code>r&quot;...&quot;</code>, backslashes and braces are plain characters:</p>
+<pre class="code"><code>path := r<span class="s">&quot;C:\tools\iris&quot;</span>
+pattern := r<span class="s">&quot;\d+{2}&quot;</span></code></pre>
+<h2 id="characters"><a href="#characters">Characters</a></h2>
+<p>A character in single quotes is its byte value, a <code>u8</code>:</p>
+<pre class="code"><code><span class="t">u8</span> c = <span class="s">&#x27;a&#x27;</span>
+<span class="k">if</span> c &gt;= <span class="s">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="s">&#x27;9&#x27;</span> { }</code></pre>
+<div class="pager"><a href="control-flow.html">&larr; Control flow</a><a href="structs.html">Structs &rarr;</a></div>
+</main></div>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calling C - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html" class="here">Language</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Language</a></li><li><a href="first-program.html">A first program</a></li><li><a href="variables-and-types.html">Variables and types</a></li><li><a href="functions.html">Functions</a></li><li><a href="control-flow.html">Control flow</a></li><li><a href="text.html">Text</a></li><li><a href="structs.html">Structs</a></li><li><a href="enums.html">Enums</a></li><li><a href="pointers-and-memory.html">Pointers and memory</a></li><li><a href="errors.html">Errors</a></li><li><a href="generics.html">Generics</a></li><li><a href="modules.html">Modules</a></li><li><a href="compile-time.html">Compile time</a></li><li><a href="concurrency.html">Concurrency</a></li><li><a href="calling-c.html" class="here">Calling C</a></li><li><a href="tools.html">Tools</a></li></ol></aside><main>
+<h1>Calling C</h1>
+<p class="lede">Iris works directly with C: it can call C functions, be called from C, and drop down to assembly.</p>
+<h2 id="importing-a-c-header"><a href="#importing-a-c-header">Importing a C header</a></h2>
+<p><code>import c</code> reads a C header and makes its functions, types and constants available under <code>c.</code>:</p>
+<pre class="code"><code><span class="k">import</span> c <span class="s">&quot;sqlite3.h&quot;</span>
+
+!<span class="t">void</span> open(<span class="t">str</span> path) {
+    c.sqlite3 *db
+    <span class="k">if</span> c.sqlite3_open(path, &amp;db) != c.SQLITE_OK {
+        <span class="k">return</span> error(DbError.open, <span class="s">&quot;can&#x27;t open {path}&quot;</span>)
+    }
+}</code></pre>
+<p>The library is linked with <code>iris build --link sqlite3</code>, or with a <code>link</code> line in <code>iris.mod</code>.</p>
+<h2 id="types"><a href="#types">Types</a></h2>
+<p>Iris types have the same size and layout as their C equivalents:</p>
+<div class="table"><table><thead><tr><th>C</th><th>Iris</th></tr></thead><tbody><tr><td><code>int8_t</code> ... <code>int64_t</code></td><td><code>i8</code> ... <code>i64</code></td></tr><tr><td><code>uint8_t</code> ... <code>uint64_t</code></td><td><code>u8</code> ... <code>u64</code></td></tr><tr><td><code>float</code>, <code>double</code></td><td><code>f32</code>, <code>f64</code></td></tr><tr><td><code>char *</code></td><td><code>u8 *</code></td></tr><tr><td><code>struct</code></td><td><code>struct</code> with the same fields</td></tr></tbody></table></div>
+<p>A <code>str</code> passed where C expects <code>char *</code> is copied to a temporary string that ends with a zero byte. <code>str.fromC(p)</code> turns a C string back into a <code>str</code>.</p>
+<h2 id="called-from-c"><a href="#called-from-c">Called from C</a></h2>
+<p><code>@export</code> makes an Iris function callable from C with its own name:</p>
+<pre class="code"><code><span class="a">@export</span>
+<span class="t">i32</span> onRow(<span class="t">void</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
+    <span class="k">return</span> <span class="n">0</span>
+}</code></pre>
+<p>An exported function can't return <code>!T</code>, since C has no way to receive it.</p>
+<h2 id="assembly"><a href="#assembly">Assembly</a></h2>
+<p><code>asm</code> holds assembly for the target machine. The last value in <code>rax</code> (or <code>x0</code> on arm64) is the result:</p>
+<pre class="code"><code><span class="t">u64</span> cycles() {
+    <span class="k">asm</span> {
+        rdtsc
+        shl rdx, <span class="n">32</span>
+        or rax, rdx
+    }
+}</code></pre>
+<h2 id="simd"><a href="#simd">SIMD</a></h2>
+<p>Vector types hold several numbers and do the same operation on all of them at once:</p>
+<pre class="code"><code>u8x16 a = load(u8x16, data)
+mask := a == u8x16.splat(<span class="s">&#x27;\n&#x27;</span>)</code></pre>
+<p>The types are <code>u8x16</code>, <code>i32x4</code>, <code>f32x4</code>, <code>f64x2</code> and their 256-bit versions.</p>
+<div class="pager"><a href="concurrency.html">&larr; Concurrency</a><a href="tools.html">Tools &rarr;</a></div>
+</main></div>
+</body>
+</html>
