@@ -14,6 +14,7 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | `iris fmt` | puts source files in the standard layout |
 | `iris get <package>@<version>` | downloads a package and adds it to `iris.mod` |
 | `iris doc` | shows the documentation from the comments (planned) |
+| `iris lsp` | the language server, for editors |
 | `iris parse file.iris` | prints the syntax tree |
 | `iris lex file.iris` | prints the tokens |
 | `iris c header.h` | shows what `import c` makes of a C header |
@@ -71,6 +72,24 @@ iris build --mode=release-safe main.iris
 ```
 
 `iris run` and `iris build` use `clang`, version 15 or newer, to compile the IR. Set `IRIS_CC` to use a different one. `-l name` links a C library and `-I folder` adds a folder for C headers.
+
+## Editors
+
+`iris lsp` is a language server: editors that speak LSP get errors as you type, the type and comments of a name on hover, go to definition (also into the standard library), the outline of a file, completion after a dot, and formatting with `iris fmt`. It reads the editor's unsaved text.
+
+In Neovim 0.11 or newer, with the syntax files from the repository's `editors/vim` folder:
+
+```output
+vim.opt.rtp:append("/path/to/iris/editors/vim")
+vim.lsp.config("iris", {
+    cmd = { "iris", "lsp" },
+    filetypes = { "iris" },
+    root_markers = { "iris.mod", ".git" },
+})
+vim.lsp.enable("iris")
+```
+
+Vim can use the same syntax files with `set rtp+=/path/to/iris/editors/vim`. Other editors start `iris lsp` as the server command for `.iris` files.
 
 ## Other platforms
 

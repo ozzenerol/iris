@@ -21,5 +21,6 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.15 | Debug information: `gdb` and `lldb` show Iris lines and values, and AddressSanitizer reports show Iris lines. | released |
 | 0.16 | `when`, `--target`, and fixes: `catch` takes one value, no copies of a `Mutex` or `Atomic`, and safer temporary text. | released |
 | 0.17 | `iris fmt`, and `test` blocks with `expect` and `iris test`. | released |
+| 0.18 | `iris lsp`, a language server, and syntax files for Vim and Neovim. | released |
 
-After 0.17, in no fixed order: the language server, `comptime`, more attributes (`@env`, `@inline`), `iris doc`, and a JIT for `iris run`.
+After 0.18, in no fixed order: `comptime`, more attributes (`@env`, `@inline`), `iris doc`, and a JIT for `iris run`.

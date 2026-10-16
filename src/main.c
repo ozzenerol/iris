@@ -27,6 +27,7 @@ static void usage(FILE *out) {
           "  ir [options] <file>          print the LLVM IR\n"
           "  fmt [--check] <file|folder>  put code in the standard layout (- for stdin)\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
+          "  lsp                          the language server, for editors\n"
           "  c <header.h>...              show what import c makes of C headers\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
           "  lex <file>                   print the tokens\n"
@@ -605,6 +606,9 @@ int main(int argc, char **argv) {
         }
         arenaFree(&a);
         return text ? 0 : 1;
+    }
+    if (strcmp(cmd, "lsp") == 0) {
+        return cmdLsp();
     }
     if (strcmp(cmd, "fmt") == 0) {
         return cmdFmt(argc, argv);

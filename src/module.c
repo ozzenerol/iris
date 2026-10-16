@@ -50,7 +50,16 @@ static void loadError(Loader *L, Node *at, const char *fmt, const char *arg) {
     L->failed = true;
 }
 
+const char *(*gReadHook)(const char *path, size_t *len);
+
 static char *readWhole(Arena *a, const char *path, size_t *len) {
+    if (gReadHook) {
+        /* the language server's open documents, with changes not saved yet */
+        const char *text = gReadHook(path, len);
+        if (text) {
+            return arenaStrndup(a, text, *len);
+        }
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         return NULL;
@@ -445,4 +454,18 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     loadImports(&L, m);
     m->state = 2;
     return L.failed ? NULL : L.prog;
+}
+
+/* The text of a standard library file by its path ("std/json/json.iris"),
+ * or NULL. */
+const char *stdSource(const char *path) {
+    if (strncmp(path, "std/", 4) != 0) {
+        return NULL;
+    }
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0]; i++) {
+        if (strcmp(stdFiles[i].path, path + 4) == 0) {
+            return stdFiles[i].data;
+        }
+    }
+    return NULL;
 }
