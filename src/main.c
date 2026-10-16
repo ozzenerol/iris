@@ -28,6 +28,7 @@ static void usage(FILE *out) {
           "  fmt [--check] <file|folder>  put code in the standard layout (- for stdin)\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
           "  lsp                          the language server, for editors\n"
+          "  doc <module>[.name]          the documentation of a module, a file or a name\n"
           "  c <header.h>...              show what import c makes of C headers\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
           "  lex <file>                   print the tokens\n"
@@ -701,6 +702,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "lsp") == 0) {
         return cmdLsp();
+    }
+    if (strcmp(cmd, "doc") == 0) {
+        return cmdDoc(argc, argv);
     }
     if (strcmp(cmd, "fmt") == 0) {
         return cmdFmt(argc, argv);

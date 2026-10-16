@@ -48,6 +48,7 @@ extern void (*gDiagHook)(Source *src, int line, int col, const char *msg);
 /* when set, source files are read through it first (the language server's open documents) */
 extern const char *(*gReadHook)(const char *path, size_t *len);
 const char *stdSource(const char *path);
+bool stdModuleExists(const char *name);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);
 void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
@@ -217,6 +218,9 @@ char *formatSource(Arena *a, Source *src);
 
 /* lsp.c: the language server on standard input and output */
 int cmdLsp(void);
+
+/* doc.c: iris doc */
+int cmdDoc(int argc, char **argv);
 
 /* ---------------------------------------------------------------- cimport.c */
 
