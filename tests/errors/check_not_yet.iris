@@ -1,14 +1,6 @@
-// error: 6: generic types are not supported yet (planned for 0.6)
-// error: 8: interfaces are not supported yet (planned for 0.6)
-// error: 12: imports are not supported yet (planned for 0.7)
-// error: 16: tasks and channels are not supported yet (planned for a later version)
-// error: 17: when is not supported yet (planned for a later version)
-List[i64] numbers
-
-interface Ordered {
-    i64 compare(i64 other)
-}
-
+// error: 4: imports are not supported yet (planned for 0.7)
+// error: 8: tasks and channels are not supported yet (planned for a later version)
+// error: 9: when is not supported yet (planned for a later version)
 import fs
 
 void main() {

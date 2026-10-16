@@ -1,0 +1,52 @@
+// error: 16: Box is generic; write Box[...].get
+// error: 41: Box is generic; give its types: Box[...]
+// error: 42: Box takes 1 type, not 2
+// error: 43: the type T of make can't be worked out from the arguments; write make[...](...)
+// error: 45: Plain doesn't satisfy Ordered: it has no method compare
+// error: 47: dyn Writer takes a pointer; write &
+// error: 48: Plain doesn't satisfy Writer: its method write has different types
+// error: 49: Ordered is an interface; use dyn Ordered, or a type parameter like [T: Ordered]
+// error: 51: the argument for w is i64 *, but dyn Writer needs a pointer to a struct
+// error: 20: '+' needs integers, not str
+// error: 44: add[str], made here, has the errors above
+struct Box[T] {
+    T value
+}
+
+void Box.get() { }
+
+T make[T]() => 0
+
+T add[T](T a, b) => a + b
+
+interface Ordered {
+    i64 compare(Self other)
+}
+
+interface Writer {
+    void write(str data)
+}
+
+struct Plain {
+    i64 x
+}
+
+void Plain.write(i64 n) { }
+
+T max[T: Ordered](T a, b) => a
+
+void use(dyn Writer w) { }
+
+void main() {
+    Box b
+    Box[i64, str] c
+    x := make()
+    y := add("a", "b")
+    z := max(Plain{}, Plain{})
+    Plain p
+    use(p)
+    use(&p)
+    Ordered o
+    i64 n = 5
+    use(&n)
+}
