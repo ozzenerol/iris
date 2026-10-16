@@ -13,6 +13,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 typedef struct {
     char *ptr;
@@ -534,6 +536,187 @@ int iris_fs_remove(const char *path, int64_t n) {
     int err = errno;
     free(p);
     return r == 0 ? 0 : fsCode(err);
+}
+
+/* size, whether it is a folder, the time it was changed (ns since 1970) */
+int iris_fs_stat(const char *path, int64_t n, int64_t *size, int *isDir, int64_t *modified) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    struct stat st;
+    int r = stat(p, &st);
+    int err = errno;
+    free(p);
+    if (r != 0) {
+        return fsCode(err);
+    }
+    *size = (int64_t)st.st_size;
+    *isDir = S_ISDIR(st.st_mode) ? 1 : 0;
+#ifdef __APPLE__
+    *modified = (int64_t)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+#else
+    *modified = (int64_t)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+#endif
+    return 0;
+}
+
+/* A folder; with parents, also the folders above it, and no error when
+   it exists already. */
+int iris_fs_mkdir(const char *path, int64_t n, int parents) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    int code = 0;
+    if (parents) {
+        for (char *s = p + 1; *s && !code; s++) {
+            if (*s == '/') {
+                *s = 0;
+                if (mkdir(p, 0777) != 0 && errno != EEXIST) code = fsCode(errno);
+                *s = '/';
+            }
+        }
+        if (!code && mkdir(p, 0777) != 0 && errno != EEXIST) code = fsCode(errno);
+    } else if (mkdir(p, 0777) != 0) {
+        code = fsCode(errno);
+    }
+    free(p);
+    return code;
+}
+
+int iris_fs_rename(const char *from, int64_t fn, const char *to, int64_t tn) {
+    char *a = cpath(from, fn), *b = cpath(to, tn);
+    int code = 1;
+    if (a && b) {
+        code = rename(a, b) == 0 ? 0 : fsCode(errno);
+    }
+    free(a);
+    free(b);
+    return code;
+}
+
+static int removeTree(const char *p) {
+    struct stat st;
+    if (lstat(p, &st) != 0) {
+        return errno == ENOENT ? 0 : fsCode(errno);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(p);
+        if (!d) return fsCode(errno);
+        struct dirent *e;
+        int code = 0;
+        while (!code && (e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            size_t len = strlen(p) + strlen(e->d_name) + 2;
+            char *sub = malloc(len);
+            if (!sub) outOfMemory();
+            snprintf(sub, len, "%s/%s", p, e->d_name);
+            code = removeTree(sub);
+            free(sub);
+        }
+        closedir(d);
+        if (code) return code;
+        return rmdir(p) == 0 ? 0 : fsCode(errno);
+    }
+    return unlink(p) == 0 ? 0 : fsCode(errno);
+}
+
+/* A file, or a folder and everything in it; nothing there is no error. */
+int iris_fs_remove_all(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) {
+        return 1;
+    }
+    int code = removeTree(p);
+    free(p);
+    return code;
+}
+
+void *iris_fs_dir_open(const char *path, int64_t n, int *err) {
+    char *p = cpath(path, n);
+    if (!p) {
+        *err = 1;
+        return NULL;
+    }
+    DIR *d = opendir(p);
+    *err = d ? 0 : fsCode(errno);
+    free(p);
+    return d;
+}
+
+/* The next name in the folder (not . or ..): 1, or 0 at the end. */
+int iris_fs_dir_next(void *dir, IrisString *name, int *isDir) {
+    struct dirent *e;
+    while ((e = readdir((DIR *)dir))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        iris_string_append(name, e->d_name, (int64_t)strlen(e->d_name));
+#ifdef DT_DIR
+        if (e->d_type != DT_UNKNOWN) {
+            *isDir = e->d_type == DT_DIR;
+            return 1;
+        }
+#endif
+        *isDir = 0;
+        int fd = dirfd((DIR *)dir);
+        struct stat st;
+        if (fstatat(fd, e->d_name, &st, 0) == 0) *isDir = S_ISDIR(st.st_mode);
+        return 1;
+    }
+    return 0;
+}
+
+void iris_fs_dir_close(void *dir) {
+    if (dir) closedir((DIR *)dir);
+}
+
+/* An open file: mode 0 reading, 1 writing (emptied or made), 2 adding to
+   the end (made if needed). The descriptor, or -1 with err set. */
+int iris_fs_open(const char *path, int64_t n, int mode, int *err) {
+    char *p = cpath(path, n);
+    if (!p) {
+        *err = 1;
+        return -1;
+    }
+    int flags = mode == 0 ? O_RDONLY : mode == 1 ? (O_WRONLY | O_CREAT | O_TRUNC) : (O_WRONLY | O_CREAT | O_APPEND);
+    int fd = open(p, flags | O_CLOEXEC, 0666);
+    *err = fd < 0 ? fsCode(errno) : 0;
+    if (fd >= 0 && mode == 0) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) {
+            close(fd);
+            fd = -1;
+            *err = 4;
+        }
+    }
+    free(p);
+    return fd;
+}
+
+/* Bytes read (0 at the end), or minus an error code. */
+int64_t iris_fs_read(int fd, char *buf, int64_t len) {
+    for (;;) {
+        ssize_t r = read(fd, buf, (size_t)len);
+        if (r >= 0) return r;
+        if (errno != EINTR) return -fsCode(errno);
+    }
+}
+
+int iris_fs_write_fd(int fd, const char *data, int64_t len) {
+    while (len > 0) {
+        ssize_t w = write(fd, data, (size_t)len);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return fsCode(errno);
+        }
+        data += w;
+        len -= w;
+    }
+    return 0;
+}
+
+void iris_fs_close(int fd) {
+    if (fd >= 0) close(fd);
 }
 
 /* 0 a line, 1 end of input, 2 an error */
@@ -2794,4 +2977,108 @@ int32_t iris_time_offset(int64_t unixSeconds) {
         return 0;
     }
     return (int32_t)tm.tm_gmtoff;
+}
+
+/* ---------------------------------------------------------------- processes */
+
+#include <sys/wait.h>
+#include <poll.h>
+
+extern char **environ;
+
+/* Runs argv[0] with argv, writing input to its standard input and taking
+   its standard output and error. The other tasks of the thread run while
+   it waits. 0 when it ran (status: its exit status, or 128 + the signal
+   that ended it), 1 when it can't be found, 2 when it can't be started. */
+int iris_process_run(const Slice *argv, int64_t argc, const char *input, int64_t inputLen, IrisString *out,
+                     IrisString *errOut, int *status) {
+    if (argc < 1) return 1;
+    char **args = calloc((size_t)argc + 1, sizeof(char *));
+    if (!args) outOfMemory();
+    for (int64_t i = 0; i < argc; i++) {
+        args[i] = cpath(argv[i].ptr, argv[i].len);
+    }
+    int inP[2], outP[2], errP[2], execP[2];
+    if (pipe(inP) || pipe(outP) || pipe(errP) || pipe(execP)) {
+        for (int64_t i = 0; i < argc; i++) free(args[i]);
+        free(args);
+        return 2;
+    }
+    fcntl(execP[1], F_SETFD, FD_CLOEXEC);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(inP[0], 0);
+        dup2(outP[1], 1);
+        dup2(errP[1], 2);
+        close(inP[0]); close(inP[1]); close(outP[0]); close(outP[1]); close(errP[0]); close(errP[1]);
+        close(execP[0]);
+        execvp(args[0], args);
+        int e = errno;
+        ssize_t w = write(execP[1], &e, sizeof e);
+        (void)w;
+        _exit(127);
+    }
+    close(inP[0]); close(outP[1]); close(errP[1]); close(execP[1]);
+    for (int64_t i = 0; i < argc; i++) free(args[i]);
+    free(args);
+    if (pid < 0) {
+        close(inP[1]); close(outP[0]); close(errP[0]); close(execP[0]);
+        return 2;
+    }
+    int execErr = 0;
+    ssize_t got = read(execP[0], &execErr, sizeof execErr);
+    close(execP[0]);
+    if (got == (ssize_t)sizeof execErr) {
+        close(inP[1]); close(outP[0]); close(errP[0]);
+        waitpid(pid, NULL, 0);
+        return execErr == ENOENT ? 1 : 2;
+    }
+    fcntl(inP[1], F_SETFL, O_NONBLOCK);
+    fcntl(outP[0], F_SETFL, O_NONBLOCK);
+    fcntl(errP[0], F_SETFL, O_NONBLOCK);
+    int fdIn = inputLen > 0 ? inP[1] : -1;
+    if (fdIn < 0) close(inP[1]);
+    int fdOut = outP[0], fdErr = errP[0];
+    int64_t sent = 0;
+    char buf[65536];
+    while (fdOut >= 0 || fdErr >= 0 || fdIn >= 0) {
+        struct pollfd p[3];
+        int np = 0;
+        if (fdOut >= 0) p[np++] = (struct pollfd){fdOut, POLLIN, 0};
+        if (fdErr >= 0) p[np++] = (struct pollfd){fdErr, POLLIN, 0};
+        if (fdIn >= 0) p[np++] = (struct pollfd){fdIn, POLLOUT, 0};
+        int r = poll(p, (nfds_t)np, 0);
+        if (r == 0) {
+            iris_sleep(1000000);        /* nothing yet: let the other tasks run */
+            continue;
+        }
+        if (r < 0 && errno != EINTR) break;
+        for (int i = 0; i < np; i++) {
+            if (!p[i].revents) continue;
+            if (p[i].fd == fdIn) {
+                ssize_t w = write(fdIn, input + sent, (size_t)(inputLen - sent));
+                if (w > 0) sent += w;
+                if (sent >= inputLen || (w < 0 && errno != EAGAIN)) {
+                    close(fdIn);
+                    fdIn = -1;
+                }
+                continue;
+            }
+            ssize_t n = read(p[i].fd, buf, sizeof buf);
+            if (n > 0) {
+                iris_string_append(p[i].fd == fdOut ? out : errOut, buf, n);
+            } else if (n == 0 || errno != EAGAIN) {
+                close(p[i].fd);
+                if (p[i].fd == fdOut) fdOut = -1;
+                else fdErr = -1;
+            }
+        }
+    }
+    int st = 0;
+    while (waitpid(pid, &st, WNOHANG) == 0) {
+        iris_sleep(1000000);
+    }
+    *status = WIFEXITED(st) ? WEXITSTATUS(st) : WIFSIGNALED(st) ? 128 + WTERMSIG(st) : 1;
+    return 0;
 }
