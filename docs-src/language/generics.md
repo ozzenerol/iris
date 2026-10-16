@@ -49,15 +49,57 @@ T first[T](T[] items) => items[0]
 The types are worked out from the arguments, so they rarely need to be written:
 
 ```iris
-n := first(counts)           // T is i64
-s := first(names)            // T is str
-l := List.of(1, 2, 3)        // List[i64]
+n := first(counts)           // counts is i64[], so T is i64
+c := first("hello")          // str is u8[], so T is u8
 ```
 
-When there is nothing to work them out from, they are written in brackets:
+When there is nothing to work them out from, or a different type is wanted, they are written in brackets after the name:
 
 ```iris
-names := List[str].new()
+x := first[u8](bytes)
+T zero[T]() {
+    T value
+    return value
+}
+z := zero[i64]()
+```
+
+A generic struct always has its types written out, and starts empty like any struct:
+
+```iris
+List[str] names
+pairs := List[Pair[str, i64]]{}
+```
+
+A complete program:
+
+```iris run
+struct Pair[A, B] {
+    A first
+    B second
+}
+
+Pair[B, A] swap[A, B](Pair[A, B] p) => Pair[B, A]{first: p.second, second: p.first}
+
+T sum[T](T[] xs) {
+    T total
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+void main() {
+    p := swap(Pair[str, i64]{first: "age", second: 30})
+    print("{p.first} {p.second}")
+    i64[3] counts = [1, 2, 3]
+    print("{sum(counts)}")
+}
+```
+
+```output
+30 age
+6
 ```
 
 ## Interfaces
@@ -78,7 +120,36 @@ An interface can limit what a type parameter accepts. Inside the function, those
 T max[T: Ordered](T a, b) => if a.compare(b) >= 0 { a } else { b }
 ```
 
-Calling `max` with a type that has no `compare` method is a compile error that names the missing method.
+Calling `max` with a type that has no `compare` method is a compile error that names the missing method. Only structs have methods, so only structs can satisfy an interface.
+
+```iris run
+interface Ordered {
+    i64 compare(Self other)
+}
+
+struct Version {
+    i64 major
+    i64 minor
+}
+
+i64 Version.compare(Version other) {
+    if self.major != other.major {
+        return self.major - other.major
+    }
+    return self.minor - other.minor
+}
+
+T max[T: Ordered](T a, b) => if a.compare(b) >= 0 { a } else { b }
+
+void main() {
+    v := max(Version{major: 1, minor: 2}, Version{major: 1, minor: 5})
+    print("{v.major}.{v.minor}")
+}
+```
+
+```output
+1.5
+```
 
 ## dyn
 
@@ -90,12 +161,14 @@ interface Writer {
 }
 
 !void log(dyn Writer w, str msg) {
-    try w.write(msg)
+    _ = try w.write(msg)
 }
 
 try log(&file, "started")
 try log(&conn, "started")
 ```
+
+A `dyn` value is made from a pointer to a struct: `&file`. Its type must have every method of the interface, with the same types. `Self` can't be used in an interface that is used with `dyn`.
 
 ## How it is compiled
 

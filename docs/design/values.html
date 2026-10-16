@@ -46,7 +46,7 @@
 <p>The compiler copies the code of a <code>defer</code> to every place where its block can end: the end of the block, each <code>return</code>, <code>break</code> and <code>continue</code>, and each <code>try</code> that can leave. Several defers run in reverse order. An <code>errdefer</code> is copied only to the places where the function returns an error.</p>
 <p><code>scoped String s = ...</code> is the same as declaring <code>s</code> and adding <code>defer s.free()</code>.</p>
 <h2 id="generics"><a href="#generics">Generics</a></h2>
-<p>Each generic function and struct is compiled once for each set of types it is used with. <code>max(i64, i64)</code> and <code>max(f64, f64)</code> are two separate functions in the program. Calls are direct, with no lookup at run time.</p>
+<p>Each generic function and struct is compiled once for each set of types it is used with. <code>max</code> called with <code>Version</code> values and with <code>Date</code> values gives two separate functions in the program, <code>max[Version]</code> and <code>max[Date]</code>. Calls are direct, with no lookup at run time.</p>
 <h2 id="interfaces-and-dyn"><a href="#interfaces-and-dyn">Interfaces and dyn</a></h2>
 <p>An interface used as a constraint (<code>T: Ordered</code>) is only checked by the compiler. It leaves nothing in the program.</p>
 <p>A <code>dyn Writer</code> value is two pointers: one to the data, and one to a table with the type's functions for that interface. A call through <code>dyn</code> reads the function from the table.</p>
