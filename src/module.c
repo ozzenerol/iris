@@ -33,6 +33,8 @@ typedef struct {
     const char *root;       /* the project's folder, or NULL */
     Requirement reqs[256];
     int nreqs;
+    const char *includes[64];   /* for C headers */
+    int nincludes;
     bool failed;
 } Loader;
 
@@ -264,6 +266,53 @@ static Module *loadModule(Loader *L, Node *item) {
     return m;
 }
 
+/* The C headers a file imports become one module, "c", made by clang. */
+static void loadCImports(Loader *L, Node *file) {
+    const char *headers[64];
+    Node *items[64];
+    int n = 0;
+    for (int j = 0; j < file->list.len; j++) {
+        Node *d = file->list.items[j];
+        if (d->kind != N_IMPORT) continue;
+        for (int k = 0; k < d->list.len && n < 64; k++) {
+            Node *item = d->list.items[k];
+            if (item->flags & F_C_IMPORT) {
+                items[n] = item;
+                headers[n++] = item->text;
+            }
+        }
+    }
+    if (n == 0) {
+        return;
+    }
+    StrBuf key = {0};
+    sbPuts(&key, "c:");
+    for (int i = 0; i < n; i++) {
+        sbPrintf(&key, "%s%s", i ? "," : "", headers[i]);
+    }
+    char *path = sbFinish(&key, L->arena);
+    Module *m = findModule(L, path);
+    if (!m) {
+        m = newModule(L, path);
+        m->name = "c";
+        m->anchor->name = "c";
+        m->isC = true;
+        m->state = 2;
+        int before = gErrors;
+        char *text = cImport(L->arena, headers, n, L->includes, L->nincludes, &m->anchor->list);
+        if (!text) {
+            if (gErrors == before) gErrors++;
+            errorAt(items[0]->src, items[0]->line, items[0]->col, "can't import these C headers");
+            L->failed = true;
+            return;
+        }
+        listPush(L->arena, &m->files, parseText(L, path, text, strlen(text)));
+    }
+    for (int i = 0; i < n; i++) {
+        items[i]->ref = m->anchor;
+    }
+}
+
 static void loadImports(Loader *L, Module *m) {
     for (int i = 0; i < m->files.len; i++) {
         Node *file = m->files.items[i];
@@ -272,12 +321,15 @@ static void loadImports(Loader *L, Module *m) {
             if (d->kind != N_IMPORT) continue;
             for (int k = 0; k < d->list.len; k++) {
                 Node *item = d->list.items[k];
-                if (item->flags & F_C_IMPORT) continue;     /* reported by the checker */
+                if (item->flags & F_C_IMPORT) continue;
                 Module *dep = loadModule(L, item);
                 if (dep) {
                     item->ref = dep->anchor;
                 }
             }
+        }
+        if (!m->isC) {
+            loadCImports(L, file);
         }
     }
 }
@@ -304,11 +356,13 @@ static void readModFile(Loader *L, const char *path) {
             } else if (strcmp(a, "require") == 0 && n == 3 && L->nreqs < 256) {
                 L->reqs[L->nreqs++] = (Requirement){arenaStrndup(L->arena, b, strlen(b)),
                                                     arenaStrndup(L->arena, d, strlen(d)), NULL};
+            } else if (strcmp(a, "link") == 0 && n == 2 && L->prog->nlinks < 64) {
+                L->prog->links[L->prog->nlinks++] = arenaStrndup(L->arena, b, strlen(b));
             } else if (strcmp(a, "replace") == 0 && n == 4 && strcmp(d, "=>") == 0 && L->nreqs < 256) {
                 L->reqs[L->nreqs++] = (Requirement){arenaStrndup(L->arena, b, strlen(b)), "",
                                                     arenaStrndup(L->arena, e, strlen(e))};
             } else {
-                fprintf(stderr, "%s:%d: error: iris.mod lines are module, require or replace\n", path, lineNo);
+                fprintf(stderr, "%s:%d: error: iris.mod lines are module, require, replace or link\n", path, lineNo);
                 gErrors++;
                 L->failed = true;
             }
@@ -337,10 +391,13 @@ static const char *findRoot(Arena *a, const char *dir) {
     }
 }
 
-Program *loadProgram(Arena *a, const char *path) {
+Program *loadProgram(Arena *a, const char *path, const char **includes, int nincludes) {
     Loader L = {0};
     L.arena = a;
     L.prog = arenaAlloc(a, sizeof(Program));
+    for (int i = 0; i < nincludes && L.nincludes < 63; i++) {
+        L.includes[L.nincludes++] = includes[i];
+    }
     bool dir = isDir(path);
     if (!dir && !isFile(path)) {
         fprintf(stderr, "iris: can't open %s\n", path);
@@ -350,6 +407,9 @@ Program *loadProgram(Arena *a, const char *path) {
     L.root = findRoot(a, folder);
     if (L.root) {
         readModFile(&L, join(a, L.root, "iris.mod"));
+        L.includes[L.nincludes++] = L.root;     /* the project's own C headers */
+    } else {
+        L.includes[L.nincludes++] = folder;
     }
     Module *m = newModule(&L, "main");
     m->name = "main";

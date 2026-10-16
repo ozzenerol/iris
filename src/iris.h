@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.7.0"
+#define IRIS_VERSION "0.8.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -137,6 +137,7 @@ enum {
     F_SELF = 1 << 9,
     F_EXTERN = 1 << 10,     /* @extern: a C function, declared without a body */
     F_REPORTED = 1 << 11,   /* an error about this name was reported already */
+    F_VARIADIC = 1 << 12,   /* a C function taking more arguments: printf */
 };
 
 typedef struct Node Node;
@@ -189,6 +190,22 @@ Node *cloneNode(Arena *a, Node *n);
 /* snippet: allow statements at the top level, for checking doc examples. */
 Node *parseSource(Arena *a, Source *src, bool snippet);
 
+/* ---------------------------------------------------------------- proc.c */
+
+/* Runs a program and waits for it; stdout and stderr go to the files given
+ * (NULL: ours). Returns its exit status, 127 if it can't run. */
+int runCommand(char **argv, const char *outPath, const char *errPath);
+bool writeText(const char *path, const char *text, size_t len);
+
+/* ---------------------------------------------------------------- cimport.c */
+
+/* Reads C headers with clang and writes them as an Iris module: @extern
+ * functions, structs, type aliases and constants. Names Iris can't use go
+ * to skipped (N_IDENT nodes: name, and text says why). Returns NULL after
+ * errors, which it reports. */
+char *cImport(Arena *a, const char **headers, int n, const char **includeDirs, int nInclude,
+              NodeList *skipped);
+
 /* ---------------------------------------------------------------- module.c */
 
 /* A module: a folder of files, or the one file of a small program. */
@@ -198,6 +215,7 @@ struct Module {
     const char *path;       /* as imported: "fs", "net/http", "github.com/x/pg"; "main" for the program */
     const char *name;       /* what code calls it: the last part of the path */
     bool isStd;             /* from the standard library inside iris */
+    bool isC;               /* made by import c from C headers */
     NodeList files;         /* N_FILE nodes */
     Node *anchor;           /* stands for the module in import lists (N_IMPORT); ref of each import item */
     int state;              /* loading: 0 new, 1 loading, 2 done */
@@ -207,11 +225,13 @@ typedef struct {
     Module *modules;        /* every module, the program's first */
     Module *main;
     NodeList instances;     /* filled by the checker: copies of generics */
+    const char *links[64];  /* C libraries to link: link lines in iris.mod */
+    int nlinks;
 } Program;
 
 /* Reads the program at path (a file or a folder) and every module it
- * imports. Returns NULL after errors. */
-Program *loadProgram(Arena *a, const char *path);
+ * imports. includes: folders for C headers (-I). Returns NULL after errors. */
+Program *loadProgram(Arena *a, const char *path, const char **includes, int nincludes);
 
 /* ---------------------------------------------------------------- check.c */
 

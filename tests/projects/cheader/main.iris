@@ -1,0 +1,16 @@
+// expect: 10 15 0 5 6
+// expect: 3 4 7
+// expect: 18446744073709551615
+
+import c "geom.h"
+
+void main() {
+    print("{c.GEOM_LIMIT} {c.GEOM_MASK} {c.SHAPE_CIRCLE} {c.SHAPE_RECT} {c.SHAPE_TRI}")
+    p := c.point{x: 3, y: 4}
+    c.segment s
+    s.to = p
+    s.kind = 7
+    print("{s.to.x} {s.to.y} {s.kind}")
+    c.big b = 18446744073709551615
+    print("{b}")
+}

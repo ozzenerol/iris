@@ -1,0 +1,20 @@
+// expect: open: true
+// expect: exec: 0
+// expect: value: 84
+
+import c "sqlite3.h"
+
+void main() {
+    c.sqlite3 *db
+    rc := c.sqlite3_open(":memory:\0".ptr, &db)
+    print("open: {rc == c.SQLITE_OK}")
+    rc2 := c.sqlite3_exec(db, "create table t(x); insert into t values (42);\0".ptr, null, null, null)
+    print("exec: {rc2}")
+    c.sqlite3_stmt *st
+    _ = c.sqlite3_prepare_v2(db, "select x * 2 from t\0".ptr, -1, &st, null)
+    if c.sqlite3_step(st) == c.SQLITE_ROW {
+        print("value: {c.sqlite3_column_int64(st, 0)}")
+    }
+    _ = c.sqlite3_finalize(st)
+    _ = c.sqlite3_close(db)
+}

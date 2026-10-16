@@ -23,6 +23,7 @@ static void usage(FILE *out) {
           "  check <file>                 check a program without compiling it\n"
           "  ir [options] <file>          print the LLVM IR\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
+          "  c <header.h>...              show what import c makes of C headers\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
           "  lex <file>                   print the tokens\n"
           "  version                      print the version\n"
@@ -30,6 +31,8 @@ static void usage(FILE *out) {
           "\n"
           "options:\n"
           "  --mode=debug|release-safe|release-fast   (default: debug)\n"
+          "  -I <folder>      where C headers are, for import c\n"
+          "  -l <library>     link a C library: -l sqlite3\n"
           "\n"
           "clang compiles the IR; set IRIS_CC to use another clang.\n",
           out);
@@ -103,8 +106,8 @@ static int cmdParse(const char *path, bool snippet) {
 
 /* Reads, parses and checks a program and its modules. Returns NULL after
  * errors. */
-static Program *frontEnd(Arena *a, const char *path) {
-    Program *prog = loadProgram(a, path);
+static Program *frontEnd(Arena *a, const char *path, const char **includes, int nincludes) {
+    Program *prog = loadProgram(a, path, includes, nincludes);
     if (!prog || gErrors) {
         return NULL;
     }
@@ -114,54 +117,13 @@ static Program *frontEnd(Arena *a, const char *path) {
     return prog;
 }
 
-/* Runs a program and waits for it. With errPath, its stderr goes to that
- * file instead of ours. */
-static int runProgramTo(char **argv, const char *errPath) {
-    fflush(stdout);
-    fflush(stderr);
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("iris: fork");
-        return 1;
-    }
-    if (pid == 0) {
-        if (errPath) {
-            FILE *f = freopen(errPath, "w", stderr);
-            (void)f;
-        }
-        execvp(argv[0], argv);
-        fprintf(stderr, "iris: can't run %s\n", argv[0]);
-        _exit(127);
-    }
-    int status;
-    if (waitpid(pid, &status, 0) < 0) {
-        perror("iris: waitpid");
-        return 1;
-    }
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-    return 1;
-}
+static int runProgramTo(char **argv, const char *errPath) { return runCommand(argv, NULL, errPath); }
 
-static int runProgram(char **argv) { return runProgramTo(argv, NULL); }
+static int runProgram(char **argv) { return runCommand(argv, NULL, NULL); }
 
-static bool writeText(const char *path, const char *text, size_t len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        fprintf(stderr, "iris: can't write %s\n", path);
-        return false;
-    }
-    bool ok = fwrite(text, 1, len, f) == len;
-    ok = fclose(f) == 0 && ok;
-    return ok;
-}
-
-/* Compiles the IR with clang into out. */
-static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir) {
+/* Compiles the IR with clang into out, linking the C libraries named. */
+static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir, const char **links,
+                      int nlinks) {
     char llPath[4200], rtPath[4200];
     snprintf(llPath, sizeof llPath, "%s/program.ll", dir);
     snprintf(rtPath, sizeof rtPath, "%s/rt.c", dir);
@@ -172,7 +134,8 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     if (!cc || !*cc) {
         cc = "clang";
     }
-    char *args[12];
+    char *args[200];
+    char linkArgs[128][300];
     int n = 0;
     args[n++] = (char *)cc;
     args[n++] = mode == MODE_DEBUG ? "-O0" : "-O2";
@@ -187,6 +150,10 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     args[n++] = rtPath;
     args[n++] = "-o";
     args[n++] = (char *)out;
+    for (int i = 0; i < nlinks && i < 128; i++) {
+        snprintf(linkArgs[i], sizeof linkArgs[i], "-l%s", links[i]);
+        args[n++] = linkArgs[i];
+    }
     args[n] = NULL;
     int rc;
     if (mode == MODE_DEBUG) {
@@ -255,9 +222,19 @@ static bool parseMode(const char *arg, BuildMode *mode) {
 static int cmdCompile(const char *cmd, int argc, char **argv) {
     BuildMode mode = MODE_DEBUG;
     const char *out = NULL, *path = NULL;
+    const char *includes[64], *links[64];
+    int nincludes = 0, nlinks = 0;
     int i = 2;
     for (; i < argc; i++) {
-        if (strncmp(argv[i], "--mode=", 7) == 0) {
+        if (strcmp(argv[i], "-I") == 0 && i + 1 < argc && nincludes < 64) {
+            includes[nincludes++] = argv[++i];
+        } else if (strncmp(argv[i], "-I", 2) == 0 && argv[i][2] && nincludes < 64) {
+            includes[nincludes++] = argv[i] + 2;
+        } else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc && nlinks < 64) {
+            links[nlinks++] = argv[++i];
+        } else if (strncmp(argv[i], "-l", 2) == 0 && argv[i][2] && nlinks < 64) {
+            links[nlinks++] = argv[i] + 2;
+        } else if (strncmp(argv[i], "--mode=", 7) == 0) {
             if (!parseMode(argv[i], &mode)) {
                 fprintf(stderr, "iris: unknown mode %s\n", argv[i] + 7);
                 return 2;
@@ -278,7 +255,7 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     }
 
     Arena a = {0};
-    Program *prog = frontEnd(&a, path);
+    Program *prog = frontEnd(&a, path, includes, nincludes);
     int rc = 1;
     if (!prog) {
         goto done;
@@ -293,6 +270,10 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         rc = 0;
         goto done;
     }
+    const char *allLinks[128];
+    int nAll = 0;
+    for (int k = 0; k < prog->nlinks; k++) allLinks[nAll++] = prog->links[k];
+    for (int k = 0; k < nlinks; k++) allLinks[nAll++] = links[k];
     char dir[4096];
     if (!makeTempDir(dir, sizeof dir)) {
         goto done;
@@ -318,13 +299,13 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             }
             out = def;
         }
-        rc = compileIR(ir, out, mode, dir) ? 0 : 1;
+        rc = compileIR(ir, out, mode, dir, allLinks, nAll) ? 0 : 1;
         removeTree(dir);
         goto done;
     }
     char exe[4200];
     snprintf(exe, sizeof exe, "%s/program", dir);
-    if (!compileIR(ir, exe, mode, dir)) {
+    if (!compileIR(ir, exe, mode, dir, allLinks, nAll)) {
         removeTree(dir);
         goto done;
     }
@@ -484,6 +465,20 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "run") == 0 || strcmp(cmd, "build") == 0 || strcmp(cmd, "check") == 0 ||
         strcmp(cmd, "ir") == 0) {
         return cmdCompile(cmd, argc, argv);
+    }
+    if (strcmp(cmd, "c") == 0 && argc >= 3) {
+        Arena a = {0};
+        NodeList skipped = {0};
+        const char *here[] = {"."};
+        char *text = cImport(&a, (const char **)argv + 2, argc - 2, here, 1, &skipped);
+        if (text) {
+            fputs(text, stdout);
+            for (int i = 0; i < skipped.len; i++) {
+                printf("// left out: %s (%s)\n", skipped.items[i]->name, skipped.items[i]->text);
+            }
+        }
+        arenaFree(&a);
+        return text ? 0 : 1;
     }
     if (strcmp(cmd, "get") == 0 && argc == 3) {
         return cmdGet(argv[2]);

@@ -1,0 +1,25 @@
+// expect: hello from puts
+// expect: iris has 4 letters, 1234567890123
+// expect: printf wrote 34 bytes
+// expect: strlen: 6
+// expect: 3
+// expect: EOF is -1, SEEK_END is 2
+// expect: true
+
+import c "stdio.h", c "string.h", c "stdlib.h"
+
+void main() {
+    c.puts("hello from puts\0".ptr)
+    n := c.printf("%s has %d letters, %ld\n\0".ptr, "iris\0".ptr, 4, 1234567890123)
+    print("printf wrote {n} bytes")
+    print("strlen: {c.strlen("abcdef\0".ptr)}")
+    u8 *p = c.malloc(16)
+    c.memset(p, 65, 3)
+    p[0:4][3] = 0
+    print("{c.strlen(p)}")
+    c.free_(p)
+    print("EOF is {c.EOF}, SEEK_END is {c.SEEK_END}")
+    c.FILE *f = c.fopen("/dev/null\0".ptr, "w\0".ptr)
+    print("{f != null}")
+    _ = c.fclose(f)
+}
