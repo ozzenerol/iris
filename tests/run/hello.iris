@@ -1,0 +1,7 @@
+// expect: hello
+// expect: hello, iris
+
+void main() {
+    print("hello")
+    print("hello, {"iris"}")
+}

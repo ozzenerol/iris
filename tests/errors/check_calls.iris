@@ -1,0 +1,19 @@
+// error: 12: f takes 1 argument, but more are given
+// error: 13: f has no parameter named y
+// error: 14: g needs a value for b
+// error: 15: an argument without a name can't follow a named one
+// error: 16: print takes text, not i64; write print("{...}") to print a value
+// error: 17: i64(...) converts integers, not str
+// error: 18: x is given twice
+void f(i64 x) { }
+void g(i64 a, b) { }
+
+void main() {
+    f(1, 2)
+    f(y: 1)
+    g(1)
+    g(a: 1, 2)
+    print(5)
+    n := i64("5")
+    f(1, x: 2)
+}

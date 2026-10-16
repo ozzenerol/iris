@@ -1,0 +1,18 @@
+// expect: tab	end "q" \ A
+// expect: 4 true false
+// expect: SELECT name
+// expect:   FROM users
+// expect: C:\tools {x}
+// expect: {braces}
+
+void main() {
+    print("tab\tend \"q\" \\ \x41")
+    str s = "iris"
+    print("{s.len} {s == "iris"} {s != "iris"}")
+    print("""
+        SELECT name
+          FROM users
+        """)
+    print(r"C:\tools {x}")
+    print("{{braces}}")
+}

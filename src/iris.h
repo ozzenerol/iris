@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.1.0"
+#define IRIS_VERSION "0.2.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -118,7 +118,9 @@ typedef enum {
     N_IDENT, N_INT, N_FLOAT, N_STRING, N_INTERP, N_CHAR, N_BOOL, N_NULL,
     N_UNARY, N_BINARY, N_CALL, N_NAMED_ARG, N_INDEX, N_SLICE, N_FIELD_ACCESS,
     N_ENUM_DOT, N_STRUCT_LIT, N_FIELD_INIT, N_ARRAY_LIT, N_TUPLE, N_TRY,
-    N_CATCH, N_COMPTIME, N_CHAN_MAKE
+    N_CATCH, N_COMPTIME, N_CHAN_MAKE,
+    /* added by the checker */
+    N_CONVERT               /* a: the value; type: the target; flags F_EXPLICIT */
 } NodeKind;
 
 enum {
@@ -130,9 +132,11 @@ enum {
     F_FLAGS = 1 << 5,
     F_C_IMPORT = 1 << 6,
     F_FOR_IN = 1 << 7,
+    F_EXPLICIT = 1 << 8,
 };
 
 typedef struct Node Node;
+typedef struct Type Type;
 
 typedef struct {
     Node **items;
@@ -153,6 +157,14 @@ struct Node {
     double fval;
     Node *a, *b, *c, *d;
     NodeList list, list2, attrs;
+
+    /* filled in by the checker */
+    Type *type;             /* the type of an expression or declaration */
+    Node *ref;              /* what a name refers to: a declaration node */
+    bool isConst;           /* the expression's value is known: cval */
+    int64_t cval;
+    int state;              /* checker bookkeeping (constants: 0 new, 1 busy, 2 done) */
+    const char *ir;         /* the IR writer's name for a variable or function */
 };
 
 Node *newNode(Arena *a, NodeKind kind, int line, int col);
@@ -165,5 +177,36 @@ char *typeString(Arena *a, Node *t);
 
 /* snippet: allow statements at the top level, for checking doc examples. */
 Node *parseSource(Arena *a, Source *src, bool snippet);
+
+/* ---------------------------------------------------------------- check.c */
+
+typedef enum {
+    TY_ERROR,               /* after an error: fits anywhere, so errors don't cascade */
+    TY_VOID,
+    TY_NORETURN,            /* a block that always leaves: return, break, panic */
+    TY_BOOL,
+    TY_INT,
+    TY_STR,
+} TypeKind;
+
+struct Type {
+    TypeKind kind;
+    int bits;               /* integers */
+    bool isSigned;
+    const char *name;
+};
+
+extern Type tyError, tyVoid, tyNoreturn, tyBool, tyStr;
+extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64;
+
+/* Checks the program and fills in types. Returns false after errors. */
+bool checkProgram(Arena *a, Source *src, Node *file);
+
+/* ---------------------------------------------------------------- ir.c */
+
+typedef enum { MODE_DEBUG, MODE_RELEASE_SAFE, MODE_RELEASE_FAST } BuildMode;
+
+/* Writes the checked program as LLVM IR. */
+char *writeIR(Arena *a, Source *src, Node *file, BuildMode mode);
 
 #endif

@@ -1,0 +1,8 @@
+// expect: 44
+// panic: the value doesn't fit in the type it is converted to
+
+void main() {
+    i64 a = 300
+    print("{u8(a - 256)}")
+    print("{u8(a)}")
+}

@@ -83,6 +83,9 @@ _ = save(<span class="s">&quot;out.txt&quot;</span>, data)      <span class="c">
   at main          main.iris:31</code></pre>
 <h2 id="bugs-and-panic"><a href="#bugs-and-panic">Bugs and panic</a></h2>
 <p><code>!T</code> is for things that can go wrong while the program is correct: a missing file, a closed connection, bad input. A bug, like an index past the end, stops the program right away with a trace. <code>panic(&quot;message&quot;)</code> does the same for a state the program should never reach.</p>
+<p>A stopped program prints <code>panic:</code>, the message and where it happened, and exits with status 2:</p>
+<pre class="out"><code>panic: integer overflow
+  at main.iris:3:23 in double</code></pre>
 <div class="pager"><a href="pointers-and-memory.html">&larr; Pointers and memory</a><a href="generics.html">Generics &rarr;</a></div>
 </main></div>
 </body>

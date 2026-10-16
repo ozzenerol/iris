@@ -1,0 +1,21 @@
+// expect: 55
+// expect: 103 6 15
+// expect: 16
+// expect: later is fine
+
+i64 fib(i64 n) => if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+
+i64 add3(i64 a, b, c = 100) => a + b + c
+
+i64 square(i64 x) {
+    return x * x
+}
+
+void main() {
+    print("{fib(10)}")
+    print("{add3(1, 2)} {add3(1, 2, c: 3)} {add3(c: 10, a: 2, b: 3)}")
+    print("{square(4)}")
+    later()
+}
+
+void later() => print("later is fine")

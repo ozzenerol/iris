@@ -1,0 +1,9 @@
+// expect: 100
+// panic: integer overflow
+
+i8 double(i8 x) => x * 2
+
+void main() {
+    print("{double(50)}")
+    print("{double(100)}")
+}

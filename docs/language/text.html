@@ -33,10 +33,12 @@ s.append(<span class="s">&quot;, world&quot;</span>)</code></pre>
 <p>A <code>String</code> can be used wherever a <code>str</code> is expected. The <code>str</code> points into the <code>String</code>'s bytes, so it is only valid while the <code>String</code> is alive and unchanged.</p>
 <h2 id="putting-values-into-text"><a href="#putting-values-into-text">Putting values into text</a></h2>
 <p>A name or expression in braces inside a string literal is replaced by its value:</p>
-<pre class="code"><code>n := <span class="n">42</span>
-addr := <span class="s">&quot;10.0.0.1&quot;</span>
-print(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)
-print(<span class="s">&quot;{n * 2}&quot;</span>)</code></pre>
+<pre class="code run"><code><span class="t">void</span> main() {
+    n := <span class="n">42</span>
+    addr := <span class="s">&quot;10.0.0.1&quot;</span>
+    print(<span class="s">&quot;got {n} bytes from {addr}&quot;</span>)
+    print(<span class="s">&quot;{n * 2}&quot;</span>)
+}</code></pre>
 <pre class="out"><code>got 42 bytes from 10.0.0.1
 84</code></pre>
 <p>The compiler checks each value. Numbers, <code>bool</code>, <code>str</code>, <code>String</code> and enums can be printed. A struct can be printed if it has a <code>format</code> method. <code>{{</code> and <code>}}</code> write a single brace.</p>

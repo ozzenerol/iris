@@ -1,0 +1,7 @@
+// panic: division by zero
+
+i64 div(i64 a, b) => a / b
+
+void main() {
+    print("{div(1, 0)}")
+}

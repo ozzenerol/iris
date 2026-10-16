@@ -1,0 +1,13 @@
+// error: 5: structs are not supported yet (planned for 0.3)
+// error: 10: pointers are not supported yet (planned for 0.3)
+// error: 11: errors (try and catch) are not supported yet (planned for 0.4)
+// error: 12: defer and errdefer are not supported yet (planned for 0.4)
+struct Point {
+    i64 x
+}
+
+void main() {
+    i64 *p = null
+    x := try f()
+    defer g()
+}

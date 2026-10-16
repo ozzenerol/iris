@@ -1,18 +1,36 @@
 /* The iris command. */
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE        /* mkdtemp on macOS */
 #include "iris.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* runtime/rt.c, turned into a C string by the Makefile */
+static const char runtimeSource[] =
+#include "runtime.inc"
+    ;
 
 static void usage(FILE *out) {
     fputs("usage: iris <command> [arguments]\n"
           "\n"
           "commands:\n"
-          "  parse [--snippet] <file>   print the syntax tree\n"
-          "  lex <file>                 print the tokens\n"
-          "  version                    print the version\n"
-          "  help                       print this message\n",
+          "  run [options] <file> [args]  compile and run a program\n"
+          "  build [options] <file>       compile a program (-o <name> for the output)\n"
+          "  check <file>                 check a program without compiling it\n"
+          "  ir [options] <file>          print the LLVM IR\n"
+          "  parse [--snippet] <file>     print the syntax tree\n"
+          "  lex <file>                   print the tokens\n"
+          "  version                      print the version\n"
+          "  help                         print this message\n"
+          "\n"
+          "options:\n"
+          "  --mode=debug|release-safe|release-fast   (default: debug)\n"
+          "\n"
+          "clang compiles the IR; set IRIS_CC to use another clang.\n",
           out);
 }
 
@@ -82,6 +100,204 @@ static int cmdParse(const char *path, bool snippet) {
     return gErrors ? 1 : 0;
 }
 
+/* Parses and checks a file. Returns the tree, or NULL after errors. */
+static Node *frontEnd(Arena *a, Source *src, const char *path) {
+    if (!readFile(path, src)) {
+        return NULL;
+    }
+    Node *file = parseSource(a, src, false);
+    if (gErrors) {
+        return NULL;
+    }
+    if (!checkProgram(a, src, file)) {
+        return NULL;
+    }
+    return file;
+}
+
+static int runProgram(char **argv) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("iris: fork");
+        return 1;
+    }
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        fprintf(stderr, "iris: can't run %s\n", argv[0]);
+        _exit(127);
+    }
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("iris: waitpid");
+        return 1;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
+static bool writeText(const char *path, const char *text, size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "iris: can't write %s\n", path);
+        return false;
+    }
+    bool ok = fwrite(text, 1, len, f) == len;
+    ok = fclose(f) == 0 && ok;
+    return ok;
+}
+
+/* Compiles the IR with clang into out. */
+static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir) {
+    char llPath[4200], rtPath[4200];
+    snprintf(llPath, sizeof llPath, "%s/program.ll", dir);
+    snprintf(rtPath, sizeof rtPath, "%s/rt.c", dir);
+    if (!writeText(llPath, ir, strlen(ir)) || !writeText(rtPath, runtimeSource, sizeof runtimeSource - 1)) {
+        return false;
+    }
+    const char *cc = getenv("IRIS_CC");
+    if (!cc || !*cc) {
+        cc = "clang";
+    }
+    char *args[] = {(char *)cc, mode == MODE_DEBUG ? "-O0" : "-O2", "-g", "-Wno-override-module", "-w",
+                    llPath, rtPath, "-o", (char *)out, NULL};
+    int rc = runProgram(args);
+    if (rc == 127) {
+        fprintf(stderr, "iris: clang is needed to build programs; install it or set IRIS_CC\n");
+    }
+    return rc == 0;
+}
+
+static void removeTree(const char *dir) {
+    const char *names[] = {"program.ll", "rt.c", "program"};
+    char path[4200];
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        unlink(path);
+    }
+    rmdir(dir);
+}
+
+static bool makeTempDir(char *buf, size_t n) {
+    const char *base = getenv("TMPDIR");
+    if (!base || !*base) {
+        base = "/tmp";
+    }
+    snprintf(buf, n, "%s/iris-XXXXXX", base);
+    if (!mkdtemp(buf)) {
+        perror("iris: mkdtemp");
+        return false;
+    }
+    return true;
+}
+
+static bool parseMode(const char *arg, BuildMode *mode) {
+    if (strcmp(arg, "--mode=debug") == 0) {
+        *mode = MODE_DEBUG;
+    } else if (strcmp(arg, "--mode=release-safe") == 0) {
+        *mode = MODE_RELEASE_SAFE;
+    } else if (strcmp(arg, "--mode=release-fast") == 0) {
+        *mode = MODE_RELEASE_FAST;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/* iris run, build, check and ir */
+static int cmdCompile(const char *cmd, int argc, char **argv) {
+    BuildMode mode = MODE_DEBUG;
+    const char *out = NULL, *path = NULL;
+    int i = 2;
+    for (; i < argc; i++) {
+        if (strncmp(argv[i], "--mode=", 7) == 0) {
+            if (!parseMode(argv[i], &mode)) {
+                fprintf(stderr, "iris: unknown mode %s\n", argv[i] + 7);
+                return 2;
+            }
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && strcmp(cmd, "build") == 0) {
+            out = argv[++i];
+        } else if (argv[i][0] == '-' && argv[i][1]) {
+            fprintf(stderr, "iris: unknown option %s\n", argv[i]);
+            return 2;
+        } else {
+            path = argv[i++];
+            break;
+        }
+    }
+    if (!path || (i < argc && strcmp(cmd, "run") != 0)) {
+        usage(stderr);
+        return 2;
+    }
+
+    Arena a = {0};
+    Source src = {0};
+    Node *file = frontEnd(&a, &src, path);
+    int rc = 1;
+    if (!file) {
+        goto done;
+    }
+    if (strcmp(cmd, "check") == 0) {
+        rc = 0;
+        goto done;
+    }
+    char *ir = writeIR(&a, &src, file, mode);
+    if (strcmp(cmd, "ir") == 0) {
+        fputs(ir, stdout);
+        rc = 0;
+        goto done;
+    }
+    char dir[4096];
+    if (!makeTempDir(dir, sizeof dir)) {
+        goto done;
+    }
+    if (strcmp(cmd, "build") == 0) {
+        char def[4096];
+        if (!out) {
+            /* hello.iris -> hello */
+            const char *base = strrchr(path, '/');
+            base = base ? base + 1 : path;
+            snprintf(def, sizeof def, "%s", base);
+            char *dot = strrchr(def, '.');
+            if (dot && dot != def) {
+                *dot = 0;
+            } else {
+                snprintf(def, sizeof def, "a.out");
+            }
+            out = def;
+        }
+        rc = compileIR(ir, out, mode, dir) ? 0 : 1;
+        removeTree(dir);
+        goto done;
+    }
+    char exe[4200];
+    snprintf(exe, sizeof exe, "%s/program", dir);
+    if (!compileIR(ir, exe, mode, dir)) {
+        removeTree(dir);
+        goto done;
+    }
+    {
+        int n = argc - i;
+        char **args = calloc((size_t)n + 2, sizeof(char *));
+        args[0] = exe;
+        for (int k = 0; k < n; k++) {
+            args[k + 1] = argv[i + k];
+        }
+        fflush(stdout);
+        rc = runProgram(args);
+        free(args);
+    }
+    removeTree(dir);
+done:
+    arenaFree(&a);
+    free((char *)src.text);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(stderr);
@@ -95,6 +311,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0) {
         usage(stdout);
         return 0;
+    }
+    if (strcmp(cmd, "run") == 0 || strcmp(cmd, "build") == 0 || strcmp(cmd, "check") == 0 ||
+        strcmp(cmd, "ir") == 0) {
+        return cmdCompile(cmd, argc, argv);
     }
     if (strcmp(cmd, "lex") == 0 && argc == 3) {
         return cmdLex(argv[2]);

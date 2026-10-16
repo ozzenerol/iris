@@ -1,0 +1,7 @@
+// panic: integer overflow
+
+void main() {
+    u8 a = 1
+    u8 b = a - 2
+    print("{b}")
+}

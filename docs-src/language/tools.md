@@ -7,7 +7,9 @@ The `iris` command builds, runs and tests programs, and manages packages.
 | Command | What it does |
 |---|---|
 | `iris run main.iris` | compiles and runs a program |
-| `iris build` | builds the project in the current folder |
+| `iris build main.iris` | compiles a program; `-o name` names the output |
+| `iris check main.iris` | checks a program without compiling it |
+| `iris ir main.iris` | prints the LLVM IR the compiler writes |
 | `iris test` | runs the tests |
 | `iris fmt` | formats the source files |
 | `iris get <package>` | adds a package to `iris.mod` |
@@ -39,8 +41,10 @@ test "add" {
 | `release-fast` | none | yes |
 
 ```shell
-iris build --mode=release-safe
+iris build --mode=release-safe main.iris
 ```
+
+`iris run` and `iris build` use `clang`, version 15 or newer, to compile the IR. Set `IRIS_CC` to use a different one.
 
 ## Other platforms
 

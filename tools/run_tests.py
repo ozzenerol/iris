@@ -2,11 +2,18 @@
 """Runs the Iris tests.
 
   tests/parse/NAME.iris    `iris parse` must succeed and print NAME.tree
-  tests/errors/NAME.iris   `iris parse` must fail with the errors listed at
+  tests/errors/NAME.iris   `iris check` must fail with the errors listed at
                            the top of the file, one per line:
                                // error: LINE: MESSAGE
+  tests/run/NAME.iris      `iris run` must print what the comments say:
+                               // expect: LINE     one per line of output
+                               // exit: N          the exit status (default 0)
+                               // panic: MESSAGE   stderr has "panic: MESSAGE", exit 2
+                               // mode: MODE       build mode (default debug)
   docs                     every ```iris block in docs-src/ must parse
-                           (```iris error blocks are skipped)
+                           (```iris error blocks are skipped); an ```iris run
+                           block must also run and print the ```output block
+                           that follows it
 
 Usage: python3 tools/run_tests.py [--iris PATH] [--update] [NAME...]
   --update   rewrite the .tree files from the current output
@@ -73,15 +80,44 @@ def error_tests(iris, only, failures):
         if not expected:
             failures.append((name, "no // error: lines at the top"))
             continue
-        code, out, err = run(iris, ["parse", path])
+        code, out, err = run(iris, ["check", path])
         if code == 0:
-            failures.append((name, "parsed, but should have failed"))
+            failures.append((name, "compiled, but should have failed"))
             continue
         for line, msg in expected:
             pat = re.compile(r":%s:\d+: error: %s$" % (line, re.escape(msg.strip())), re.M)
             if not pat.search(err):
                 failures.append((name, "missing error at line %s: %s\ngot:\n%s" % (line, msg, err)))
                 break
+    return count
+
+
+def run_tests(iris, only, failures):
+    count = 0
+    for path in sorted(glob.glob(os.path.join(ROOT, "tests/run/*.iris"))):
+        name = "run/" + os.path.basename(path)[:-5]
+        if only and not any(o in name for o in only):
+            continue
+        count += 1
+        text = open(path).read()
+        expect = re.findall(r"^// expect:(?: (.*))?$", text, re.M)
+        exits = re.findall(r"^// exit: (\d+)$", text, re.M)
+        panics = re.findall(r"^// panic: (.*)$", text, re.M)
+        modes = re.findall(r"^// mode: (\S+)$", text, re.M)
+        want_exit = int(exits[0]) if exits else (2 if panics else 0)
+        args = ["run"] + (["--mode=" + modes[0]] if modes else []) + [path]
+        code, out, err = run(iris, args)
+        want_out = "".join(line + "\n" for line in expect)
+        problems = []
+        if out != want_out:
+            problems.append(diff(want_out, out).replace("tree", "output"))
+        if code != want_exit:
+            problems.append("exit status %d, want %d" % (code, want_exit))
+        for p in panics:
+            if "panic: " + p not in err:
+                problems.append("stderr lacks 'panic: %s'" % p)
+        if problems:
+            failures.append((name, "\n".join(problems) + ("\nstderr:\n" + err if err else "")))
     return count
 
 
@@ -110,10 +146,27 @@ def doc_tests(iris, only, failures):
                     src = os.path.join(tmp, "example.iris")
                     with open(src, "w") as f:
                         f.write("\n".join(lines[start:j]) + "\n")
+                    where = "docs %s:%d" % (rel, start)
                     code, out, err = run(iris, ["parse", "--snippet", src])
                     if code != 0:
                         err = err.replace(src, "%s (block at line %d)" % (rel, start))
-                        failures.append(("docs %s:%d" % (rel, start), err))
+                        failures.append((where, err))
+                    elif mode == "run":
+                        # a whole program: it runs, and prints the ```output block after it
+                        k = j + 1
+                        while k < len(lines) and not lines[k].strip():
+                            k += 1
+                        want = None
+                        if k < len(lines) and lines[k].startswith("```output"):
+                            m2 = k + 1
+                            while m2 < len(lines) and not lines[m2].startswith("```"):
+                                m2 += 1
+                            want = "".join(l + "\n" for l in lines[k + 1:m2])
+                        code, out, err = run(iris, ["run", src])
+                        if code != 0:
+                            failures.append((where, "exit status %d\n%s" % (code, err.replace(src, rel))))
+                        elif want is not None and out != want:
+                            failures.append((where, diff(want, out).replace("tree", "output")))
                 i = j + 1
     return count
 
@@ -129,6 +182,7 @@ def main():
     total = 0
     total += parse_tests(args.iris, args.only, args.update, failures)
     total += error_tests(args.iris, args.only, failures)
+    total += run_tests(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
 
     for name, why in failures:

@@ -121,3 +121,10 @@ error: fs.notFound: app.conf: no such file
 ## Bugs and panic
 
 `!T` is for things that can go wrong while the program is correct: a missing file, a closed connection, bad input. A bug, like an index past the end, stops the program right away with a trace. `panic("message")` does the same for a state the program should never reach.
+
+A stopped program prints `panic:`, the message and where it happened, and exits with status 2:
+
+```output
+panic: integer overflow
+  at main.iris:3:23 in double
+```

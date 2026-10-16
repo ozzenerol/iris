@@ -1,0 +1,21 @@
+// error: 10: 300 doesn't fit in u8
+// error: 14: '+' can't mix i32 and u32; convert one side, for example i32(...)
+// error: 15: a condition must be bool, not i64
+// error: 16: '+' needs integers, not str
+// error: 17: '-' can't be used on u32, which has no negative values
+// error: 18: '<' can't compare str values
+// error: 19: the value is i64, which doesn't always fit in u8; convert it with u8(...)
+// error: 20: floating point numbers are not supported yet (planned for a later version)
+void main() {
+    u8 small = 300
+    i32 a = 5
+    i64 b = 7
+    u32 c = 3
+    x := a + c
+    if b { }
+    s := "a" + "b"
+    d := -c
+    e := "a" < "b"
+    u8 f = b
+    g := 0.5
+}
