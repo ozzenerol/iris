@@ -1,0 +1,31 @@
+// expect: 3 records
+// expect: [name] [note] [n]
+// expect: [ada] [likes "math", and tea] [1]
+// expect: [bob] [two
+// expect: lines] []
+// expect: line 2: a quoted field has no closing quote
+// expect: a;b;"c;d";"say ""hi"""
+// expect: [a] [b] [c;d] [say "hi"]
+
+import csv, str
+
+!void main() {
+    text := "name,note,n\r\nada,\"likes \"\"math\"\", and tea\",1\nbob,\"two\nlines\",\n"
+    rows := try csv.parse(text)
+    defer rows.freeEach()
+    print("{rows.len} records")
+    for r in rows {
+        print("[{r.at(0)}] [{r.at(1)}] [{r.at(2)}]")
+    }
+    _ = csv.parse("a,b\nc,\"d\ne\n") catch e {
+        print(e.message)
+        List[csv.Record]{}
+    }
+    scoped String line = csv.row(["a", "b", "c;d", "say \"hi\""], ";")
+    print(str.trimRight(line))
+    rd := csv.reader(line)
+    rd.sep = ";"
+    back := try rd.read()
+    defer back.free()
+    print("[{back.at(0)}] [{back.at(1)}] [{back.at(2)}] [{back.at(3)}]")
+}

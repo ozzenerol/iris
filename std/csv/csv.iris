@@ -1,0 +1,148 @@
+// Comma-separated values (RFC 4180): fields in double quotes may hold the
+// separator, quotes (written twice) and line breaks.
+
+pub enum CsvError { end, quote }
+
+// One row: its fields, owned by the record.
+pub struct Record {
+    pub List[String] fields
+}
+
+pub i64 Record.len() => self.fields.len
+
+// Field i, or "" past the end.
+pub str Record.at(i64 i) => if i >= 0 && i < self.fields.len { self.fields.at(i) } else { "" }
+
+pub void Record.free() {
+    self.fields.freeEach()
+}
+
+// Reads records from text, one at a time.
+pub struct Reader {
+    str text
+    i64 pos
+    // the separator, one byte ("": ","), and the line the next record
+    // starts on
+    pub str sep
+    pub i64 line
+}
+
+pub Reader reader(str text) => Reader{text: text, line: 1}
+
+// The next record. At the end it fails with CsvError.end.
+pub !Record Reader.read() {
+    if self.pos >= self.text.len {
+        return error(CsvError.end, "no more records")
+    }
+    sep := if self.sep.len == 0 { u8(',') } else { self.sep[0] }
+    start := self.line
+    Record r
+    errdefer r.free()
+    t := self.text
+    for {
+        String field
+        if self.pos < t.len && t[self.pos] == '"' {
+            self.pos += 1
+            for {
+                if self.pos >= t.len {
+                    field.free()
+                    return error(CsvError.quote, "line {start}: a quoted field has no closing quote")
+                }
+                c := t[self.pos]
+                if c == '"' {
+                    if self.pos + 1 < t.len && t[self.pos + 1] == '"' {
+                        field.append("\"")
+                        self.pos += 2
+                        continue
+                    }
+                    self.pos += 1
+                    break
+                }
+                if c == '\n' {
+                    self.line += 1
+                }
+                field.append(t[self.pos:self.pos + 1])
+                self.pos += 1
+            }
+            // text between the closing quote and the separator is kept
+            for self.pos < t.len && t[self.pos] != sep && t[self.pos] != '\n' && t[self.pos] != '\r' {
+                field.append(t[self.pos:self.pos + 1])
+                self.pos += 1
+            }
+        } else {
+            begin := self.pos
+            for self.pos < t.len && t[self.pos] != sep && t[self.pos] != '\n' && t[self.pos] != '\r' {
+                self.pos += 1
+            }
+            field.append(t[begin:self.pos])
+        }
+        r.fields.push(field)
+        if self.pos < t.len && t[self.pos] == sep {
+            self.pos += 1
+            continue
+        }
+        if self.pos < t.len && t[self.pos] == '\r' {
+            self.pos += 1
+        }
+        if self.pos < t.len && t[self.pos] == '\n' {
+            self.pos += 1
+        }
+        self.line += 1
+        return r
+    }
+}
+
+// Every record in text.
+pub !List[Record] parse(str text) {
+    List[Record] out
+    errdefer out.freeEach()
+    rd := reader(text)
+    for {
+        r := rd.read() catch e {
+            if e.code == CsvError.end {
+                return out
+            }
+            return e
+        }
+        out.push(r)
+    }
+}
+
+// field, quoted when it holds the separator, a quote or a line break.
+pub String quote(str field, str sep = ",") {
+    bool plain = true
+    for i in 0..field.len {
+        c := field[i]
+        if (sep.len > 0 && c == sep[0]) || c == '"' || c == '\n' || c == '\r' {
+            plain = false
+        }
+    }
+    String out
+    if plain {
+        out.append(field)
+        return out
+    }
+    out.append("\"")
+    for i in 0..field.len {
+        if field[i] == '"' {
+            out.append("\"")
+        }
+        out.append(field[i:i + 1])
+    }
+    out.append("\"")
+    return out
+}
+
+// One line of CSV for fields, ending in "\n".
+pub String row(str[] fields, str sep = ",") {
+    String out
+    for i in 0..fields.len {
+        if i > 0 {
+            out.append(sep)
+        }
+        scoped String q = quote(fields[i], sep)
+        out.append(q)
+    }
+    out.append("\n")
+    return out
+}
