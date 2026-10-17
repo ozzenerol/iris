@@ -20,6 +20,9 @@
                                                    line at a time once the output
                                                    is quiet; each // expect: line
                                                    must then be in the output
+  tests/pg/NAME.iris       as tests/run, with a PostgreSQL server that
+                           tools/pg-cluster.sh starts (IRIS_PG_URL); skipped
+                           when there is no PostgreSQL
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -213,10 +216,10 @@ def error_tests(iris, only, failures):
     return count
 
 
-def run_tests(iris, only, failures):
+def run_tests(iris, only, failures, folder="run", env=None):
     count = 0
-    for path in sorted(glob.glob(os.path.join(ROOT, "tests/run/*.iris"))):
-        name = "run/" + os.path.basename(path)[:-5]
+    for path in sorted(glob.glob(os.path.join(ROOT, "tests", folder, "*.iris"))):
+        name = folder + "/" + os.path.basename(path)[:-5]
         if only and not any(o in name for o in only):
             continue
         count += 1
@@ -231,7 +234,7 @@ def run_tests(iris, only, failures):
         extra = re.findall(r"^// args: (.*)$", text, re.M)
         args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
         args += extra[0].split() if extra else []
-        envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M)
+        envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M) + list((env or {}).items())
         stdin = re.findall(r"^// stdin:(?: (.*))?$", text, re.M)
         keys = re.findall(r"^// tty: (.*)$", text, re.M)
         problems = []
@@ -373,6 +376,22 @@ def doc_tests(iris, only, failures):
     return count
 
 
+def pg_tests(iris, only, failures, skipped):
+    paths = glob.glob(os.path.join(ROOT, "tests/pg/*.iris"))
+    if not paths or (only and not any(o in "pg/" + os.path.basename(p)[:-5] for p in paths for o in only)):
+        return 0
+    script = os.path.join(ROOT, "tools/pg-cluster.sh")
+    p = subprocess.run([script, "start"], capture_output=True, text=True)
+    if p.returncode != 0 or "IRIS_PG_URL" not in p.stdout:
+        skipped.append("pg (no PostgreSQL here)")
+        return 0
+    found = dict(re.findall(r"(IRIS_PG_\w+)='([^']*)'", p.stdout))
+    try:
+        return run_tests(iris, only, failures, "pg", {"IRIS_PG_URL": found["IRIS_PG_URL"]})
+    finally:
+        subprocess.run([script, "stop", found["IRIS_PG_DIR"]], capture_output=True)
+
+
 def std_tests(iris, only, failures):
     count = 0
     for path in sorted(glob.glob(os.path.join(ROOT, "std/**/*.iris"), recursive=True)):
@@ -397,6 +416,7 @@ def main():
     args.iris = os.path.abspath(args.iris)
 
     failures = []
+    skipped = []
     total = 0
     total += parse_tests(args.iris, args.only, args.update, failures)
     total += fmt_tests(args.iris, args.only, args.update, failures)
@@ -406,6 +426,7 @@ def main():
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
     total += std_tests(args.iris, args.only, failures)
+    total += pg_tests(args.iris, args.only, failures, skipped)
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],
@@ -415,6 +436,8 @@ def main():
 
     for name, why in failures:
         print("FAIL %s\n  %s" % (name, why.rstrip().replace("\n", "\n  ")))
+    for name in skipped:
+        print("SKIP %s" % name)
     print("%d tests, %d passed, %d failed" % (total, total - len(failures), len(failures)))
     return 1 if failures else 0
 

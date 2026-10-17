@@ -1,0 +1,147 @@
+// expect: 3 inserted, 1 with NULL age
+// expect: 1 Ada 36 true
+// expect: 2 Bob 0 false
+// expect: 3 Zoë "the 'quoted' one" 7 false
+// expect: one: Bob
+// expect: PgError.noRows
+// expect: PgError.constraint, 23505: true
+// expect: PgError.failed, 42601: true
+// expect: after the error: 3 users
+// expect: 2 updated, 1 deleted
+// expect: rolled back: 2 users
+// expect: committed: 3 users
+// expect: scoped and left: 3 users
+// expect: types: 42 3.25 true hello [-] 2026-10-17
+// expect: 40 queries from 20 tasks, 4 connections at most: 40
+// expect: md5 login: 1
+// expect: plain login: 1
+// expect: wrong password: PgError.auth
+// expect: TLS: on
+
+import os, pg, str
+
+@json
+struct User {
+    i64 id
+    String name
+    i64 age
+    bool admin
+}
+
+void freeUsers(List[User] *users) {
+    for u in users {
+        u.name.free()
+    }
+    users.free()
+}
+
+void worker(pg.Pool *db, chan[i64] done) {
+    i64 good = 0
+    for i in 0..2 {
+        scoped r := db.query("SELECT pg_sleep(0.01), count(*) FROM users") catch e {
+            continue
+        }
+        if r.next() && r.int(1) >= 2 {
+            good += 1
+        }
+    }
+    done <- good
+}
+
+!void main() {
+    address := try os.env("IRIS_PG_URL")
+    db := try pg.pool(address, 4)
+    defer db.close()
+    try db.execScript("DROP TABLE IF EXISTS users; CREATE TABLE users (id serial PRIMARY KEY, name text UNIQUE NOT NULL, age int, admin bool NOT NULL DEFAULT false)")
+    a := try db.exec("INSERT INTO users (name, age, admin) VALUES ($1, $2, $3)", [.text("Ada"), .int(36), .bool(true)])
+    b := try db.exec("INSERT INTO users (name, age) VALUES ($1, $2)", [.text("Bob"), .none])
+    c := try db.exec("INSERT INTO users (name, age) VALUES ($1, $2)", [.text("Zoë \"the 'quoted' one\""), .int(7)])
+    print("{a + b + c} inserted, 1 with NULL age")
+    users := try pg.all[User](try db.query("SELECT * FROM users ORDER BY id"))
+    for u in users {
+        print("{u.id} {u.name} {u.age} {u.admin}")
+    }
+    freeUsers(&users)
+    one := try pg.one[User](try db.query("SELECT * FROM users WHERE name = $1", [.text("Bob")]))
+    print("one: {one.name}")
+    one.name.free()
+    _ = pg.one[User](try db.query("SELECT * FROM users WHERE id = $1", [.int(99)])) catch e {
+        print("{e.code}")
+        User{}
+    }
+    _ = db.exec("INSERT INTO users (name) VALUES ($1)", [.text("Ada")]) catch e {
+        print("{e.code}, 23505: {str.contains(e.message, "(23505)")}")
+        0
+    }
+    _ = db.query("SELEC nonsense") catch e {
+        print("{e.code}, 42601: {str.contains(e.message, "42601")}")
+        pg.Rows{}
+    }
+    scoped count := try db.query("SELECT count(*) FROM users")
+    _ = count.next()
+    print("after the error: {count.int(0)} users")
+    up := try db.exec("UPDATE users SET age = age + 1 WHERE age IS NOT NULL")
+    gone := try db.exec("DELETE FROM users WHERE name = $1", [.text("Bob")])
+    print("{up} updated, {gone} deleted")
+
+    tx := try db.begin()
+    _ = try tx.exec("INSERT INTO users (name) VALUES ('Cy')")
+    try tx.rollback()
+    scoped n1 := try db.query("SELECT count(*) FROM users")
+    _ = n1.next()
+    print("rolled back: {n1.int(0)} users")
+    tx2 := try db.begin()
+    _ = try tx2.exec("INSERT INTO users (name) VALUES ('Cy')")
+    try tx2.commit()
+    scoped n2 := try db.query("SELECT count(*) FROM users")
+    _ = n2.next()
+    print("committed: {n2.int(0)} users")
+    {
+        scoped tx3 := try db.begin()
+        _ = try tx3.exec("INSERT INTO users (name) VALUES ('Dee')")
+    }
+    scoped n3 := try db.query("SELECT count(*) FROM users")
+    _ = n3.next()
+    print("scoped and left: {n3.int(0)} users")
+
+    scoped t := try db.query("SELECT 42::int8, 3.25::float8, true, 'hello'::text, NULL::text, '2026-10-17'::date")
+    _ = t.next()
+    print("types: {t.int(0)} {t.float(1)} {t.bool(2)} {t.text(3)} [{if t.isNull(4) { "-" } else { "?" }}] {t.text(5)}")
+
+    done := chan[i64](20)
+    for i in 0..20 {
+        spawn worker(&db, done)
+    }
+    i64 good = 0
+    for i in 0..20 {
+        good += <-done
+    }
+    print("40 queries from 20 tasks, 4 connections at most: {good}")
+
+    scoped String md5url = str.replace(address, "iris:secret@", "md5user:md5pass@")
+    m := try pg.connect(md5url)
+    scoped mr := try m.query("SELECT 1")
+    _ = mr.next()
+    print("md5 login: {mr.int(0)}")
+    m.close()
+    scoped String plainurl = str.replace(address, "iris:secret@", "plainuser:plainpass@")
+    p := try pg.connect(plainurl)
+    scoped pr := try p.query("SELECT 1")
+    _ = pr.next()
+    print("plain login: {pr.int(0)}")
+    p.close()
+    scoped String wrong = str.replace(address, "iris:secret@", "iris:nope@")
+    _ = pg.connect(wrong) catch e {
+        print("wrong password: {e.code}")
+        pg.Conn{}
+    }
+    scoped String host = str.replace(address, "127.0.0.1", "localhost")
+    scoped String tlsurl = format("{host}?sslmode=verify-full&ca=tests/data/tls/ca.pem")
+    s := try pg.connect(tlsurl)
+    scoped sr := try s.query("SHOW ssl")
+    _ = sr.next()
+    scoped sslOn := try s.query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+    _ = sslOn.next()
+    print("TLS: {if sslOn.bool(0) { "on" } else { "off" }}")
+    s.close()
+}
