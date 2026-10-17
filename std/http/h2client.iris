@@ -30,7 +30,8 @@ struct H2Conn {
     i64 maxStreams
     bool dead
     i64 lastGood // GOAWAY: the last stream the server will answer
-    chan[Out] jobs
+    Queue queue
+    Queue *jobs
     Writer writer
     i64 inFlight
     chan[bool] writerDone
@@ -80,9 +81,9 @@ void h2Reader(H2Conn *h) {
             pend, found := h.streams.get(f.stream)
             h.lock.unlock()
             if f.kind == F_DATA && p.len > 0 {
-                h.jobs <- Out{job: .frame, data: windowFrame(0, p.len)}
+                h.jobs.put(Out{job: .frame, data: windowFrame(0, p.len)})
                 if found && f.flags & END_STREAM == 0 {
-                    h.jobs <- Out{job: .frame, data: windowFrame(f.stream, p.len)}
+                    h.jobs.put(Out{job: .frame, data: windowFrame(f.stream, p.len)})
                 }
             }
             i64 pad = 0
@@ -180,14 +181,14 @@ void h2Reader(H2Conn *h) {
                     h.maxStreams = v
                     h.lock.unlock()
                 } else if id == 4 || id == 5 {
-                    h.jobs <- Out{job: .settings, n: id, n2: v}
+                    h.jobs.put(Out{job: .settings, n: id, n2: v})
                 }
             }
-            h.jobs <- Out{job: .frame, data: frameOf(F_SETTINGS, ACK, 0, "")}
+            h.jobs.put(Out{job: .frame, data: frameOf(F_SETTINGS, ACK, 0, "")})
         } else if f.kind == F_PING && f.flags & ACK == 0 && p.len == 8 {
-            h.jobs <- Out{job: .frame, data: frameOf(F_PING, ACK, 0, p)}
+            h.jobs.put(Out{job: .frame, data: frameOf(F_PING, ACK, 0, p)})
         } else if f.kind == F_WINDOW && p.len == 4 {
-            h.jobs <- Out{job: .window, stream: f.stream, n: get32(p, 0) & 0x7fffffff}
+            h.jobs.put(Out{job: .window, stream: f.stream, n: get32(p, 0) & 0x7fffffff})
         } else if f.kind == F_GOAWAY && p.len >= 8 {
             // requests after the last one it names never reached it
             last := get32(p, 0) & 0x7fffffff
@@ -204,7 +205,7 @@ void h2Reader(H2Conn *h) {
         }
     }
     h.failAll("the connection closed")
-    h.jobs <- Out{job: .close}
+    h.jobs.put(Out{job: .close})
     _ = <-h.writerDone
     h.readerDone <- true
 }
@@ -218,7 +219,8 @@ H2Conn *startH2(net.Conn c, Dest *d) {
     h.secure = d.secure
     h.nextId = 1
     h.maxStreams = 100
-    h.jobs = chan[Out](64)
+    h.queue.ch = chan[Out](64)
+    h.jobs = &h.queue
     h.writerDone = chan[bool](1)
     h.readerDone = chan[bool](1)
     h.writer = Writer{conn: &h.conn, jobs: h.jobs, inFlight: &h.inFlight, window: 65535, initial: 65535,
@@ -239,7 +241,7 @@ H2Conn *startH2(net.Conn c, Dest *d) {
     scoped String grow = windowFrame(0, RECV_WINDOW - 65535)
     start.append(grow)
     spawn runWriter(&h.writer, h.writerDone)
-    h.jobs <- Out{job: .frame, data: start}
+    h.jobs.put(Out{job: .frame, data: start})
     spawn h2Reader(h)
     return h
 }
@@ -291,9 +293,9 @@ H2Conn *startH2(net.Conn c, Dest *d) {
                 }
             }
             // in the writer's order, which is the order of the ids
-            self.jobs <- Out{job: .frame, data: frames}
+            self.jobs.put(Out{job: .frame, data: frames})
             if body.len > 0 {
-                self.jobs <- Out{job: .body, stream: id, data: body.copy()}
+                self.jobs.put(Out{job: .body, stream: id, data: body.copy()})
             }
             self.lock.unlock()
             break
@@ -320,7 +322,7 @@ H2Conn *startH2(net.Conn c, Dest *d) {
             self.lock.lock()
             _ = self.streams.remove(id)
             self.lock.unlock()
-            self.jobs <- Out{job: .frame, data: rstFrame(id, E_CANCEL)}
+            self.jobs.put(Out{job: .frame, data: rstFrame(id, E_CANCEL)})
             return error(net.NetError.timeout, "no reply in {timeout}")
         }
     } else {

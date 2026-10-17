@@ -137,6 +137,24 @@ struct Out {
     String headers // "Name: value\r\n" lines, as Response keeps them
 }
 
+// The writer's jobs, and how many are waiting: the writer sends what it
+// has gathered when none are.
+struct Queue {
+    chan[Out] ch
+    Atomic[i64] waiting
+}
+
+void Queue.put(Out o) {
+    self.waiting.add(1)
+    self.ch <- o
+}
+
+Out Queue.take() {
+    o := <-self.ch
+    self.waiting.sub(1)
+    return o
+}
+
 // A reply whose body is waiting for window.
 struct Sending {
     i64 stream
@@ -147,7 +165,8 @@ struct Sending {
 
 struct Writer {
     net.Conn *conn
-    chan[Out] jobs
+    Queue *jobs
+    String out    // what is gathered to be sent in one write
     i64 *inFlight // requests started and not answered yet, which the reader counts too
     i64 window    // the connection's send window
     i64 initial   // a new stream's send window
@@ -170,10 +189,23 @@ void Writer.write(str data) {
     if self.broken {
         return
     }
-    self.conn.write(data) catch e {
-        self.broken = true
-        self.conn.interrupt()
+    self.out.append(data)
+    if self.out.len >= 65536 {
+        self.flush()
     }
+}
+
+void Writer.flush() {
+    if self.out.len == 0 {
+        return
+    }
+    if !self.broken {
+        self.conn.write(self.out) catch e {
+            self.broken = true
+            self.conn.interrupt()
+        }
+    }
+    self.out.free()
 }
 
 // Response headers in HTTP/2's form: names in lower case, and none of the
@@ -384,14 +416,20 @@ void runWriter(Writer *w, chan[bool] done) {
         if w.closing && w.active <= 0 {
             break
         }
+        if w.jobs.waiting.load() > 0 {
+            w.handle(w.jobs.take())
+            continue
+        }
+        // nothing else to do now: send what was gathered
+        w.flush()
         if sent {
             // let the reader and the requests run between bursts
             net.yield()
             continue
         }
-        o := <-w.jobs
-        w.handle(o)
+        w.handle(w.jobs.take())
     }
+    w.flush()
     // whatever is left now has no one to read it
     for s in w.sending {
         s.body.free()
@@ -416,7 +454,7 @@ struct Reader {
     Target target
     Limits limits
     Watch *watch
-    chan[Out] jobs
+    Queue *jobs
     Decoder headers
     Map[i64, Incoming] open
     i64 last   // the highest stream the client opened
@@ -427,7 +465,7 @@ struct Reader {
 }
 
 void Reader.send(String frame) {
-    self.jobs <- Out{job: .frame, data: frame}
+    self.jobs.put(Out{job: .frame, data: frame})
 }
 
 void Reader.resetStream(i64 stream, i64 code) {
@@ -508,7 +546,7 @@ i64 fillRequest(Request *req, List[String] *names, List[String] *values, i64 *le
 }
 
 // Runs one request and hands its response to the writer.
-void answer(Request req, i64 stream, Target target, chan[Out] jobs) {
+void answer(Request req, i64 stream, Target target, Queue *jobs) {
     Response res
     res.status = 200
     res.contentType = "text/plain; charset=utf-8".copy()
@@ -521,8 +559,8 @@ void answer(Request req, i64 stream, Target target, chan[Out] jobs) {
     if target.router != null {
         target.router.busy.sub(1)
     }
-    jobs <- Out{job: .reply, stream: stream, status: res.status, data: res.body, contentType: res.contentType,
-        headers: res.headers}
+    jobs.put(Out{job: .reply, stream: stream, status: res.status, data: res.body, contentType: res.contentType,
+        headers: res.headers})
 }
 
 void Reader.start(i64 stream, Incoming inc) {
@@ -541,7 +579,7 @@ void Reader.start(i64 stream, Incoming inc) {
         self.target.router.busy.add(1)
     }
     *self.inFlight += 1
-    self.jobs <- Out{job: .open}
+    self.jobs.put(Out{job: .open})
     spawn answer(inc.req, stream, self.target, self.jobs)
 }
 
@@ -550,9 +588,9 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
     inc.tooBig = true
     inc.req.body.free()
     *self.inFlight += 1
-    self.jobs <- Out{job: .open}
-    self.jobs <- Out{job: .reply, stream: stream, status: 413, data: format("the body is too large\n"),
-        contentType: "text/plain; charset=utf-8".copy()}
+    self.jobs.put(Out{job: .open})
+    self.jobs.put(Out{job: .reply, stream: stream, status: 413, data: format("the body is too large\n"),
+        contentType: "text/plain; charset=utf-8".copy()})
 }
 
 // HEADERS, and the CONTINUATION frames that finish its block.
@@ -735,7 +773,7 @@ void Reader.dataFrame(Frame *f) {
             return
         }
         if id == 4 || id == 5 {
-            self.jobs <- Out{job: .settings, n: id, n2: v}
+            self.jobs.put(Out{job: .settings, n: id, n2: v})
         }
     }
     self.send(frameOf(F_SETTINGS, ACK, 0, ""))
@@ -769,7 +807,7 @@ void Reader.dataFrame(Frame *f) {
                     _ = self.open.remove(f.stream)
                     inc.req.free()
                 } else {
-                    self.jobs <- Out{job: .reset, stream: f.stream}
+                    self.jobs.put(Out{job: .reset, stream: f.stream})
                 }
             }
         },
@@ -807,7 +845,7 @@ void Reader.dataFrame(Frame *f) {
                         self.resetStream(f.stream, E_PROTOCOL)
                     }
                 } else {
-                    self.jobs <- Out{job: .window, stream: f.stream, n: n}
+                    self.jobs.put(Out{job: .window, stream: f.stream, n: n})
                 }
             }
         },
@@ -820,7 +858,9 @@ void Reader.dataFrame(Frame *f) {
 // Serves HTTP/2 on a connection whose preface was read already, until the
 // client goes away.
 void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w) {
-    jobs := chan[Out](64)
+    Queue q
+    q.ch = chan[Out](64)
+    jobs := &q
     i64 inFlight = 0
     Writer writer = Writer{conn: conn, jobs: jobs, inFlight: &inFlight, window: 65535, initial: 65535, maxFrame: 16384}
     done := chan[bool](0)
@@ -874,6 +914,6 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w) {
     }
     r.open.free()
     r.headers.free()
-    jobs <- Out{job: .close}
+    jobs.put(Out{job: .close})
     _ = <-done
 }

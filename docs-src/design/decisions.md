@@ -114,6 +114,11 @@ These are suggestions. They are used in the examples on these pages until they a
 | Names are looked up by a resolver written in Iris, over the scheduler's UDP and TCP. The system's resolver is only used for names it can't find. | A lookup no longer holds up a whole thread, and names only the system knows (mDNS, a VPN's own servers) still work. |
 | `lookup` asks for IPv4 and IPv6 at once and gives the IPv4 addresses first. | Half the time of asking in turn, and `dial` doesn't wait on IPv6 where there is none. |
 | An address keeps an IPv4 address as an IPv6 one, `::ffff:a.b.c.d`. | One type and one size for both, as the system's own calls do. |
+| HTTP/2 serves the same `Router` and handlers as HTTP/1.1, each request in a task of its own. | A program gets HTTP/2 without changes, and a slow handler holds up no other request. |
+| Each HTTP/2 connection has one writer task, which alone writes to it; the reader and the requests hand it their frames. | No locks around the connection, flow control in one place, and a TLS connection is only used from its own thread. |
+| The HPACK encoder adds nothing to the other side's table. | It needs no state and can't get out of step; the static table and literals keep responses small enough. |
+| A `Client` uses HTTP/2 for `https` when the server offers it. | One connection carries all the requests to a host at once. |
+| OpenSSL's calls hold SIGPIPE back on Linux. | A client that leaves at the wrong moment can't end the server. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
