@@ -1,0 +1,25 @@
+// args: --help
+// expect: copies files
+// expect:
+// expect: usage: flags_help [flags] files...
+// expect:
+// expect: flags:
+// expect:   -f, --force               overwrite what is there
+// expect:       --level <fast|small>  (default small)
+// expect:   -h, --help                show this help
+
+import flags
+
+enum Level { fast, small }
+
+@flags("copies files")
+struct Options {
+    @flag('f', "overwrite what is there") bool force
+    Level level = .small
+    @flag(args, required) str[] files
+}
+
+void main() {
+    o := flags.parse(Options)
+    print("not reached {o.force}")
+}

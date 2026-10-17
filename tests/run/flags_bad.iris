@@ -1,0 +1,20 @@
+// args: --level huge
+// exit: 2
+// stderr: error: --level: 'huge' isn't one of the enum's values
+// stderr: usage: flags_bad [flags] files...
+// stderr: run flags_bad --help to see the flags
+
+import flags
+
+enum Level { fast, small }
+
+@flags
+struct Options {
+    Level level = .small
+    @flag(args, required) str[] files
+}
+
+void main() {
+    o := flags.parse(Options)
+    print("not reached {o.level}")
+}

@@ -1,0 +1,41 @@
+// tty: hello\r
+// tty: wrld\x1b[D\x1b[D\x1b[Do\r
+// tty: \x1b[A\x1b[A\r
+// tty: abc def\x17x\r
+// tty: zzz\x03
+// tty: ok\x01>\r
+// tty: 日本\x7f\r
+// tty: one two\x1b[1;5D\x0b\r
+// tty: \x04
+// tty: secret\x7f\x7fET\r
+// expect: got [hello]
+// expect: got [world]
+// expect: got [hello]
+// expect: got [abc x]
+// expect: got [>ok]
+// expect: got [日]
+// expect: got [one ]
+// expect: end: IoError.eof
+// expect: password [secrET]
+// expect: history 7
+
+import term
+
+void main() {
+    for {
+        line := term.readLine("[bold]>[/] ") catch e {
+            term.print("end: {e.code}")
+            break
+        }
+        term.print("got [[{line}]")
+        line.free()
+    }
+    pw := term.readPassword("pw: ") catch e {
+        print("no password")
+        return
+    }
+    print("password [{pw}]")
+    pw.free()
+    print("history {term.historyLen()}")
+    term.historyClear()
+}

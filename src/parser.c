@@ -1315,6 +1315,16 @@ static Node *parseStmt(Parser *p) {
     case K_SCOPED: case K_THREADLOCAL: {
         next(p);
         unsigned flag = t->kind == K_SCOPED ? F_SCOPED : F_THREADLOCAL;
+        if (flag == F_SCOPED && at(p, T_IDENT) && peekAt(p, 1)->kind == P_DEFINE) {
+            /* scoped name := value: the type is the value's */
+            Token *name = next(p);
+            next(p);
+            Node *v = node(p, N_VAR, name);
+            v->name = tokText(p, name);
+            v->flags = flag;
+            v->b = parseExpr(p);
+            return v;
+        }
         Node *type = parseType(p);
         return parseVarRest(p, type, flag);
     }

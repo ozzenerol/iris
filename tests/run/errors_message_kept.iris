@@ -1,0 +1,44 @@
+// expect: outer: the first problem
+// expect: outer again: the first problem
+// expect: inner: the second problem
+// expect: after the inner one: the first problem
+// expect: passed on: the first problem
+// stderr: error: Problem.bad: loading: the first problem
+// exit: 1
+
+enum Problem { bad, worse }
+
+!void fails(str why) {
+    return error(Problem.bad, why)
+}
+
+// Makes an error and catches it itself, as library code does.
+void quiet() {
+    fails("hidden") catch e { }
+}
+
+!void passOn() {
+    fails("the first problem") catch e {
+        quiet()
+        return e
+    }
+}
+
+!void main() {
+    fails("the first problem") catch e {
+        print("outer: {e.message}")
+        quiet()
+        print("outer again: {e.message}")
+        fails("the second problem") catch inner {
+            quiet()
+            print("inner: {inner.message}")
+        }
+        print("after the inner one: {e.message}")
+    }
+    passOn() catch e {
+        print("passed on: {e.message}")
+    }
+    passOn() catch e {
+        return error(e.code, "loading: {e.message}")
+    }
+}

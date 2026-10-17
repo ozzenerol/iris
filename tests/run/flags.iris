@@ -1,18 +1,76 @@
-// expect: read|write true false
-// expect: read|write|exec
-// expect: write
-// expect: 0 read true
+// args: -v --port=9000 --mode safe a.txt -- -b.txt
+// expect: port 9000, host localhost, verbose true, mode safe, wait 30s
+// expect: files: a.txt -b.txt
+// expect: dry run true, quiet true, retries 3, name ada, wait 1m30s
+// expect: FlagError.invalid
+// expect: --retries: 'many' isn't a whole number
+// expect: usage: tool add [flags] [files...]
+// expect: run tool add --help to see the flags
+// expect: --nope isn't a flag
+// expect: --name is needed
+// expect: -r needs a value, so it can't be joined with other flags
+// expect: FlagError.help
+// expect: adds things
+// expect:
+// expect: usage: tool add [flags] [files...]
+// expect:
+// expect: flags:
+// expect:   -n, --dry-run          show what would happen (default true)
+// expect:   -q, --quiet
+// expect:   -r, --retries <n>      how many times to try (default 3)
+// expect:       --name <text>      who it is for (required)
+// expect:       --wait <duration>  (default 30s)
+// expect:   -h, --help             show this help
 
-enum Perm flags { read, write, exec }
+import flags, str
 
-void main() {
-    Perm p = .read | .write
-    print("{p} {p.has(.write)} {p.has(.exec)}")
-    p = p | Perm.exec
-    print("{p}")
-    Perm w = p & .write
-    print("{w}")
-    Perm none = p & ~p
-    Perm two = Perm.write | Perm.exec
-    print("{none} {Perm.read} {two == .write | .exec}")
+enum Mode { fast, safe }
+
+@flags("serves files")
+struct Options {
+    @flag('p', "the port to listen on") u16 port = 8080
+    str host = "localhost"
+    @flag('v') bool verbose
+    Mode mode
+    Duration wait = 30s
+    @flag(args) str[] files
+}
+
+@flags("adds things")
+struct AddOptions {
+    @flag('n', "show what would happen") bool dryRun = true
+    @flag('q') bool quiet
+    @flag('r', "how many times to try") i64 retries = 3
+    @flag(required, "who it is for") str name
+    Duration wait = 30s
+    @flag(args) str[] files
+}
+
+void tryArgs(str[] args) {
+    scoped AddOptions o = flags.parseArgs(AddOptions, args, "tool add") catch e {
+        first, _, _ := str.cut(e.message, "\n")
+        print(first)
+        AddOptions{}
+    }
+}
+
+!void main() {
+    scoped Options o = flags.parse(Options)
+    print("port {o.port}, host {o.host}, verbose {o.verbose}, mode {o.mode}, wait {o.wait}")
+    print("files: {o.files[0]} {o.files[1]}")
+    scoped AddOptions a = try flags.parseArgs(AddOptions, ["-nq", "--name", "ada", "--wait=1m30s"], "tool add")
+    print("dry run {a.dryRun}, quiet {a.quiet}, retries {a.retries}, name {a.name}, wait {a.wait}")
+    _ = flags.parseArgs(AddOptions, ["--retries", "many"], "tool add") catch e {
+        print("{e.code}")
+        print(str.trimRight(e.message))
+        AddOptions{}
+    }
+    tryArgs(["--nope"])
+    tryArgs([])
+    tryArgs(["-qr", "--name=x"])
+    _ = flags.parseArgs(AddOptions, ["x", "-h"], "tool add") catch e {
+        print("{e.code}")
+        print(str.trimRight(e.message))
+        AddOptions{}
+    }
 }

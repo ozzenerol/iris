@@ -261,7 +261,7 @@ static void printNode(Node *n, int depth, const char *label) {
         line(depth, label, b.buf);
         break;
     case N_VAR:
-        sbPrintf(&b, "var %s %s", n->name, typeString(&tmp, n->a));
+        sbPrintf(&b, "var %s %s", n->name, n->a ? typeString(&tmp, n->a) : ":=");
         flagWords(&b, n->flags);
         line(depth, label, b.buf);
         children(&n->attrs, d, NULL);

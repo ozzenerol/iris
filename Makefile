@@ -15,11 +15,11 @@ iris-debug: $(SRC) $(HDR) build/runtime.inc build/std.inc
 build/std.inc: $(STD)
 	mkdir -p build
 	{ i=0; for f in $(STD); do \
-	    echo "static const char std_$$i[] = {"; \
+	    echo "static const unsigned char std_$$i[] = {"; \
 	    od -An -v -tx1 $$f | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g'; \
 	    echo "0};"; i=$$((i+1)); done; \
 	  echo "static const struct { const char *path; const char *data; } stdFiles[] = {"; \
-	  i=0; for f in $(STD); do echo "    {\"$${f#std/}\", std_$$i},"; i=$$((i+1)); done; \
+	  i=0; for f in $(STD); do echo "    {\"$${f#std/}\", (const char *)std_$$i},"; i=$$((i+1)); done; \
 	  echo "};"; } > $@
 
 # the runtime's source, as bytes the compiler carries with it

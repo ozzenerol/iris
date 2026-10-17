@@ -1,0 +1,12 @@
+// expect: hello, world 12
+// expect: 2 items
+
+void main() {
+    scoped s := "hello".copy()
+    s.append(", world")
+    print("{s} {s.len}")
+    scoped items := List[i64]{}
+    items.push(1)
+    items.push(2)
+    print("{items.len} items")
+}

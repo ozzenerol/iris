@@ -81,6 +81,7 @@ conf := loadConfig(path) <span class="k">catch</span> e {
     print(<span class="s">&quot;can&#x27;t start: {e.message}&quot;</span>)
     <span class="k">return</span>
 }</code></pre>
+<p>The error's message stays the same for the whole block, even when the code in it makes and handles other errors.</p>
 <h2 id="deciding-by-the-code"><a href="#deciding-by-the-code">Deciding by the code</a></h2>
 <p><code>e.code</code> can be checked with <code>match</code>:</p>
 <pre class="code"><code>conn := net.dial(host, <span class="n">443</span>) <span class="k">catch</span> e <span class="k">match</span> e.code {

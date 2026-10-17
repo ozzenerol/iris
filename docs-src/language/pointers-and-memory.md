@@ -182,7 +182,11 @@ scoped String body = try fs.readAll("index.html")
 scoped Buffer b = buffer(4KiB)
 ```
 
-It is the same as writing the declaration followed by `defer body.free()`.
+It is the same as writing the declaration followed by `defer body.free()`. The type can come from the value, as with `:=`:
+
+```iris
+scoped t := term.table(["NAME", "SIZE"])
+```
 
 ## Allocators
 

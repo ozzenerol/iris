@@ -102,6 +102,8 @@ conf := loadConfig(path) catch e {
 }
 ```
 
+The error's message stays the same for the whole block, even when the code in it makes and handles other errors.
+
 ## Deciding by the code
 
 `e.code` can be checked with `match`:

@@ -1,0 +1,21 @@
+// stdin: first line
+// stdin: second
+// expect: [first line]
+// expect: [second]
+// expect: end: IoError.eof
+// expect: history 2: first line, second
+
+import io, term
+
+void main() {
+    for {
+        line := term.readLine("> ") catch e {
+            print("end: {e.code}")
+            break
+        }
+        print("[{line}]")
+        line.free()
+    }
+    print("history {term.historyLen()}: {term.historyAt(0)}, {term.historyAt(1)}")
+    term.historyClear()
+}

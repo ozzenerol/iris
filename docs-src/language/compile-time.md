@@ -136,6 +136,48 @@ Each field reads the variable named after it in capitals, with `_` between its w
 
 Fields can be numbers, `bool` (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`), `str`, `String`, enums written by value name, and `Duration` (`30s`, `1500ms`, `1m30s`). The errors are `env.EnvError.missing` and `invalid`, and the message names the variable. An `@env` struct gets a `free` method, as a `@json` struct does.
 
+`@flags` lets a struct be filled from the program's arguments, with the `flags` module:
+
+```iris
+import flags
+
+enum Format { text, json }
+
+@flags("copies files into a folder")
+struct Options {
+    @flag('f', "overwrite files that are there") bool force
+    @flag('j', "how many copies to run at once") i64 jobs = 4
+    Format format
+    Duration timeout = 30s
+    @flag(required, "where the files go") str to
+    @flag(args) str[] files
+}
+
+opts := flags.parse(Options)
+```
+
+Each field is a flag named after it, with `-` between its words: `jobs` is `--jobs`, `dryRun` is `--dry-run`. `@flag` can give a letter for the short form, the help in quotes, and `required`, in any order. A `str[]` field with `@flag(args)` gets the arguments that aren't flags.
+
+Values can be written `--jobs 8`, `--jobs=8` or `-j 8`. A `bool` flag needs no value; `--force=false` turns it off. One-letter `bool` flags can be joined: `-fv`. After `--`, every argument is taken as it is. Fields can have the same types as `@env` fields.
+
+`-h` and `--help` print the help, made from the struct, and end the program:
+
+```output
+copies files into a folder
+
+usage: copy [flags] [files...]
+
+flags:
+  -f, --force               overwrite files that are there
+  -j, --jobs <n>            how many copies to run at once (default 4)
+      --format <text|json>  (default text)
+      --timeout <duration>  (default 30s)
+      --to <text>           where the files go (required)
+  -h, --help                show this help
+```
+
+When an argument is wrong, `flags.parse` prints what is wrong to stderr and the program ends with status 2. `flags.parseArgs(Options, args, "copy")` reads the arguments given instead, for a subcommand or a test; it fails with `flags.FlagError.invalid`, or with `FlagError.help` and the help as the message.
+
 Other attributes:
 
 | Attribute | Effect |

@@ -1,0 +1,654 @@
+// Output for command-line programs: colors written as markup, status
+// lines, tables and a progress bar.
+//
+//     term.print("[green]ok[/] saved [bold]{name}[/]")
+//     term.success("deployed {n} services")     // a green ✓, then the line
+//     term.error("can't read {path}")           // a red ✗, to stderr
+//
+// A tag is a list of words in brackets: colors (black, red, green, yellow,
+// blue, magenta, cyan, white, gray), "on" and a color for the background,
+// and bold, dim, italic, underline, reverse and strike. [/] closes the last
+// tag, and [[ is a [. Brackets around anything else stay as they are.
+//
+// Colors are on when the stream is a terminal, and off for a pipe or a
+// file, when NO_COLOR is set or TERM is dumb; FORCE_COLOR turns them on.
+// With colors off the markup is removed and the text stays.
+
+import os, str, time
+
+// How a table column lines up. Without Table.align, a column of numbers
+// is on the right and any other on the left.
+pub enum Align { left, right, center }
+
+// How a table is drawn: plain columns, lines around every cell, or a
+// Markdown table.
+pub enum Border { none, box, markdown }
+
+@extern("iris_term_isatty")
+i32 rawIsatty(i32 fd)
+
+@extern("iris_term_size")
+void rawSize(i64 *cols, i64 *rows)
+
+@extern("iris_term_write")
+void rawWrite(i32 fd, u8 *p, i64 n)
+
+void put(i32 fd, str text) => rawWrite(fd, text.ptr, text.len)
+
+str[9] COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "gray"]
+
+// [1] is stdout, [2] stderr: 0 not looked at yet, 1 on, 2 off
+i64[3] colorState
+// 0 as found, 1 forced on, 2 forced off
+i64 forced
+
+bool envSet(str name) {
+    v := os.env(name) catch e { "" }
+    return v.len > 0
+}
+
+bool detect(i32 fd) {
+    if envSet("NO_COLOR") {
+        return false
+    }
+    force := os.env("FORCE_COLOR") catch e { "" }
+    if force.len > 0 && force != "0" {
+        return true
+    }
+    t := os.env("TERM") catch e { "" }
+    if t == "dumb" {
+        return false
+    }
+    return rawIsatty(fd) == 1
+}
+
+bool colorOn(i32 fd) {
+    if forced != 0 {
+        return forced == 1
+    }
+    if colorState[fd] == 0 {
+        colorState[fd] = if detect(fd) { 1 } else { 2 }
+    }
+    return colorState[fd] == 1
+}
+
+// Whether stdout gets colors.
+pub bool colors() => colorOn(1)
+
+// Colors on or off for stdout and stderr, whatever they are.
+pub void setColors(bool on) {
+    forced = if on { 1 } else { 2 }
+}
+
+// Whether stdin and stdout are a terminal a person types at.
+pub bool interactive() {
+    t := os.env("TERM") catch e { "" }
+    return rawIsatty(0) == 1 && rawIsatty(1) == 1 && t != "dumb"
+}
+
+// The terminal's size in columns and rows; 80 by 24 when it isn't one.
+pub (i64, i64) size() {
+    i64 cols
+    i64 rows
+    rawSize(&cols, &rows)
+    return (cols, rows)
+}
+
+i64 colorIndex(str w) {
+    for i in 0..COLORS.len {
+        if COLORS[i] == w {
+            return i
+        }
+    }
+    return -1
+}
+
+// The SGR codes for the words of one tag ("bold red", "white on blue"),
+// appended to codes as ";n;m". False when a word isn't markup.
+bool tagCodes(str tag, String *codes) {
+    i := 0
+    bool any = false
+    bool bg = false
+    for i < tag.len {
+        for i < tag.len && tag[i] == ' ' {
+            i += 1
+        }
+        start := i
+        for i < tag.len && tag[i] != ' ' {
+            i += 1
+        }
+        if start == i {
+            continue
+        }
+        w := tag[start:i]
+        c := colorIndex(w)
+        if c >= 0 {
+            n := c + (if bg { 40 } else { 30 })
+            if c == 8 {
+                n = if bg { 100 } else { 90 }
+            }
+            scoped String code = format(";{n}")
+            codes.append(code)
+            bg = false
+            any = true
+            continue
+        }
+        if bg {
+            return false
+        }
+        if w == "on" {
+            bg = true
+            continue
+        }
+        code := match w {
+            "bold" => ";1",
+            "dim" => ";2",
+            "italic" => ";3",
+            "underline" => ";4",
+            "reverse" => ";7",
+            "strike" => ";9",
+            _ => "",
+        }
+        if code.len == 0 {
+            return false
+        }
+        codes.append(code)
+        any = true
+    }
+    return any && !bg
+}
+
+// Appends text to out with its markup turned into escape codes (color) or
+// taken out.
+void render(String *out, str text, bool color) {
+    List[String] open
+    defer open.freeEach()
+    i := 0
+    for i < text.len {
+        if text[i] != '[' {
+            start := i
+            for i < text.len && text[i] != '[' {
+                i += 1
+            }
+            out.append(text[start:i])
+            continue
+        }
+        if i + 1 < text.len && text[i + 1] == '[' {
+            out.append("[")
+            i += 2
+            continue
+        }
+        end := -1
+        for j in i + 1..text.len {
+            if text[j] == ']' {
+                end = j
+                break
+            }
+            if text[j] == '[' {
+                break
+            }
+        }
+        if end < 0 {
+            out.append("[")
+            i += 1
+            continue
+        }
+        tag := text[i + 1:end]
+        if tag == "/" {
+            if open.len == 0 {
+                out.append(text[i:end + 1])
+                i = end + 1
+                continue
+            }
+            last := open.pop()
+            last.free()
+            if color {
+                out.append("\x1b[0m")
+                for o in open {
+                    scoped String again = format("\x1b[{o[1:]}m")
+                    out.append(again)
+                }
+            }
+            i = end + 1
+            continue
+        }
+        String codes
+        if !tagCodes(tag, &codes) {
+            codes.free()
+            out.append("[")
+            i += 1
+            continue
+        }
+        if color {
+            scoped String start = format("\x1b[{codes[1:]}m")
+            out.append(start)
+        }
+        open.push(codes)
+        i = end + 1
+    }
+    if open.len > 0 && color {
+        out.append("\x1b[0m")
+    }
+}
+
+String build(i32 fd, str prefix, str text, str suffix) {
+    String out
+    render(&out, prefix, colorOn(fd))
+    render(&out, text, colorOn(fd))
+    out.append(suffix)
+    return out
+}
+
+// The progress bar drawn on the terminal now, or null.
+Progress *bar
+
+// Writes text; a progress bar on the terminal is taken off first and drawn
+// again under it.
+void emit(i32 fd, String text) {
+    defer text.free()
+    if bar == null {
+        put(fd, text)
+        return
+    }
+    put(2, "\r\x1b[2K")
+    put(fd, text)
+    bar.draw(false)
+}
+
+// Writes text with markup and a newline to stdout. Values put into the
+// text with {} are markup too: [[ in them writes a [.
+pub void print(str text) => emit(1, build(1, "", text, "\n"))
+
+// print, without the newline.
+pub void write(str text) => emit(1, build(1, "", text, ""))
+
+// print, to stderr.
+pub void eprint(str text) => emit(2, build(2, "", text, "\n"))
+
+// The text with its markup made into escape codes when stdout has colors,
+// or taken out.
+pub String format(str text) => build(1, "", text, "")
+
+// The text without its markup.
+pub String plain(str text) {
+    String out
+    render(&out, text, false)
+    return out
+}
+
+// Text with [ written as [[, so markup shows it as it is.
+pub String escape(str text) {
+    String out
+    for i in 0..text.len {
+        out.append(if text[i] == '[' { "[[" } else { text[i:i + 1] })
+    }
+    return out
+}
+
+// One line on stdout after a green ✓.
+pub void success(str text) => emit(1, build(1, "[green]✓[/] ", text, "\n"))
+
+// One line on stdout after a blue •.
+pub void info(str text) => emit(1, build(1, "[blue]•[/] ", text, "\n"))
+
+// One line on stderr after a yellow !.
+pub void warn(str text) => emit(2, build(2, "[yellow]![/] ", text, "\n"))
+
+// One line on stderr after a red ✗.
+pub void error(str text) => emit(2, build(2, "[red]✗[/] ", text, "\n"))
+
+// A bold line on stdout, to start a part of the output.
+pub void title(str text) => emit(1, build(1, "[bold]", text, "[/]\n"))
+
+// The columns a character takes: 2 for wide ones (CJK, emoji), 0 for
+// combining marks.
+i64 runeWidth(i64 r) {
+    if r >= 0x300 && r < 0x370 || r == 0x200d || r >= 0xfe00 && r < 0xfe10 {
+        return 0
+    }
+    wide := r >= 0x1100 && r < 0x1160 || r >= 0x2e80 && r < 0xa4d0 || r >= 0xac00 && r < 0xd7a4 ||
+        r >= 0xf900 && r < 0xfb00 || r >= 0xfe30 && r < 0xfe50 || r >= 0xff00 && r < 0xff61 ||
+        r >= 0xffe0 && r < 0xffe7 || r >= 0x1f300 && r < 0x1fa00 || r >= 0x20000 && r < 0x3fffe
+    return if wide { 2 } else { 1 }
+}
+
+// The rune at text[i] and its length in bytes.
+(i64, i64) runeAt(str text, i64 i) {
+    b := i64(text[i])
+    n := if b < 0x80 { 1 } else if b >> 5 == 6 { 2 } else if b >> 4 == 14 { 3 } else if b >> 3 == 30 { 4 } else { 1 }
+    if i + n > text.len {
+        return (b, 1)
+    }
+    if n == 1 {
+        return (b, 1)
+    }
+    r := b & (0x7f >> n)
+    for k in 1..n {
+        r = r << 6 | i64(text[i + k]) & 0x3f
+    }
+    return (r, n)
+}
+
+// The columns text takes on a terminal, without escape codes.
+i64 columns(str text) {
+    i64 w = 0
+    i := 0
+    for i < text.len {
+        if text[i] == 0x1b {
+            // an escape code: ESC [ ... final byte
+            i += 1
+            if i < text.len && text[i] == '[' {
+                i += 1
+                for i < text.len && (text[i] < 0x40 || text[i] > 0x7e) {
+                    i += 1
+                }
+            }
+            i += 1
+            continue
+        }
+        r, n := runeAt(text, i)
+        w += runeWidth(r)
+        i += n
+    }
+    return w
+}
+
+// The columns text takes on a terminal: its characters without the
+// markup.
+pub i64 width(str text) {
+    scoped String p = plain(text)
+    return columns(p)
+}
+
+void repeat(String *out, str s, i64 n) {
+    for i in 0..n {
+        out.append(s)
+    }
+}
+
+// ------------------------------------------------------------ tables
+
+// A table: rows of cells under a header, in lined-up columns.
+//
+//     scoped t := term.table(["NAME", "STATUS", "CPU"])
+//     t.row(["web", "[green]running[/]", "12.5"])
+//     t.print()
+pub struct Table {
+    // none (the default), box or markdown
+    pub Border border
+    List[List[String]] rows // row 0 is the header
+    List[i64] kinds         // per column: 0 empty so far, 1 numbers, 2 text
+    List[i64] aligns        // per column: 0 not set, 1 left, 2 right, 3 center
+    i64 ncols
+}
+
+// A table with these column headers ([] for one without a header).
+pub Table table(str[] headers) {
+    Table t
+    List[String] head
+    for h in headers {
+        head.push(h.copy())
+    }
+    t.rows.push(head)
+    t.ncols = headers.len
+    return t
+}
+
+// Adds a row. Cells may hold markup. A column whose cells are all numbers
+// lines up on the right.
+pub void Table.row(str[] cells) {
+    List[String] r
+    for i in 0..cells.len {
+        r.push(cells[i].copy())
+        for self.kinds.len <= i {
+            self.kinds.push(0)
+        }
+        if self.kinds.at(i) != 2 {
+            scoped String p = plain(cells[i])
+            number := p.len > 0
+            _ = str.parseFloat(str.trim(p)) catch e {
+                number = false
+                0.0
+            }
+            self.kinds.set(i, if number { 1 } else { 2 })
+        }
+    }
+    if cells.len > self.ncols {
+        self.ncols = cells.len
+    }
+    self.rows.push(r)
+}
+
+// Lines column col (from 0) up on the left, the right or the center.
+pub void Table.align(i64 col, Align a) {
+    for self.aligns.len <= col {
+        self.aligns.push(0)
+    }
+    self.aligns.set(col, match a {
+        .left => 1,
+        .right => 2,
+        .center => 3,
+    })
+}
+
+// How many rows were added; the header isn't one.
+pub i64 Table.len() => self.rows.len - 1
+
+Align Table.alignOf(i64 col) {
+    if col < self.aligns.len && self.aligns.at(col) != 0 {
+        return match self.aligns.at(col) {
+            1 => .left,
+            2 => .right,
+            _ => .center,
+        }
+    }
+    if col < self.kinds.len && self.kinds.at(col) == 1 {
+        return .right
+    }
+    return .left
+}
+
+str Table.cell(i64 r, i64 c) {
+    row := self.rows.at(r)
+    return if c < row.len { row.at(c) } else { "" }
+}
+
+// One cell padded to w columns. The last cell of a plain row isn't padded
+// on the right.
+void putCell(String *out, str text, i64 w, Align a, bool last, bool color, bool header) {
+    pad := w - width(text)
+    before := match a {
+        .right => pad,
+        .center => pad / 2,
+        _ => 0,
+    }
+    repeat(out, " ", before)
+    if header && color {
+        out.append("\x1b[1m")
+    }
+    render(out, text, color)
+    if header && color {
+        out.append("\x1b[0m")
+    }
+    if !last {
+        repeat(out, " ", pad - before)
+    }
+}
+
+void rule(String *out, List[i64] *w, str left, str mid, str right) {
+    out.append(left)
+    for c in 0..w.len {
+        repeat(out, "─", w.at(c) + 2)
+        out.append(if c + 1 < w.len { mid } else { right })
+    }
+    out.append("\n")
+}
+
+// The table as text. With colors, the header is bold and the markup
+// becomes escape codes; without, the markup is taken out.
+pub String Table.format(bool color = false) {
+    String out
+    n := self.ncols
+    if n == 0 {
+        return out
+    }
+    header := self.rows.at(0).len > 0
+    if self.border == .markdown {
+        color = false
+    }
+    scoped List[i64] w
+    for c in 0..n {
+        i64 most = if self.border == .markdown { 3 } else { 0 }
+        for r in 0..self.rows.len {
+            cw := width(self.cell(r, c))
+            if cw > most {
+                most = cw
+            }
+        }
+        w.push(most)
+    }
+    if self.border == .box {
+        rule(&out, &w, "╭", "┬", "╮")
+    }
+    for r in (if header { 0 } else { 1 })..self.rows.len {
+        isHeader := r == 0
+        if self.border == .none {
+            String line
+            for c in 0..n {
+                if c > 0 {
+                    line.append("  ")
+                }
+                putCell(&line, self.cell(r, c), w.at(c), self.alignOf(c), c + 1 == n, color, isHeader)
+            }
+            out.append(str.trimRight(line))
+            line.free()
+        } else {
+            bar := if self.border == .box { "│" } else { "|" }
+            out.append(bar)
+            for c in 0..n {
+                out.append(" ")
+                putCell(&out, self.cell(r, c), w.at(c), self.alignOf(c), false, color, isHeader)
+                out.append(" ")
+                out.append(bar)
+            }
+        }
+        out.append("\n")
+        if isHeader && self.border == .box {
+            rule(&out, &w, "├", "┼", "┤")
+        }
+        if isHeader && self.border == .markdown {
+            out.append("|")
+            for c in 0..n {
+                a := self.alignOf(c)
+                out.append(if a == .center { " :" } else { " -" })
+                repeat(&out, "-", w.at(c) - 2)
+                out.append(if a == .left { "-" } else { ":" })
+                out.append(" |")
+            }
+            out.append("\n")
+        }
+    }
+    if self.border == .box {
+        rule(&out, &w, "╰", "┴", "╯")
+    }
+    return out
+}
+
+// Writes the table to stdout.
+pub void Table.print() => emit(1, self.format(colorOn(1)))
+
+pub void Table.free() {
+    for r in self.rows {
+        r.freeEach()
+    }
+    self.rows.free()
+    self.kinds.free()
+    self.aligns.free()
+}
+
+// ------------------------------------------------------------ progress
+
+// A progress bar on stderr, drawn again in place on a terminal. Lines
+// written with term's functions while it runs go above it. Not on a
+// terminal, only the last line is written.
+pub struct Progress {
+    str label
+    i64 total
+    i64 count
+    Duration started
+    Duration drawn
+    i64 shownPct
+    bool live
+}
+
+// A progress bar for total steps of work called label. Keep it in one
+// place, and call done at the end.
+pub Progress progress(str label, i64 total) {
+    t := os.env("TERM") catch e { "" }
+    return Progress{label: label, total: total, started: time.clock(), shownPct: -1,
+        live: rawIsatty(2) == 1 && t != "dumb"}
+}
+
+void Progress.draw(bool last) {
+    i64 pct = if self.total > 0 { self.count * 100 / self.total } else { 100 }
+    if pct > 100 {
+        pct = 100
+    }
+    color := colorOn(2)
+    String out
+    if self.live {
+        out.append("\r\x1b[2K")
+    }
+    out.append(self.label)
+    out.append("  ")
+    filled := pct * 30 / 100
+    if color {
+        out.append(if last { "\x1b[32m" } else { "\x1b[36m" })
+    }
+    repeat(&out, "█", filled)
+    if color {
+        out.append("\x1b[0m\x1b[2m")
+    }
+    repeat(&out, "░", 30 - filled)
+    if color {
+        out.append("\x1b[0m")
+    }
+    scoped String nums = format("  {if pct < 10 { "  " } else if pct < 100 { " " } else { "" }}{pct}%  {self.count}/{self.total}")
+    out.append(nums)
+    if last {
+        ms := i64((time.clock() - self.started) / 1ms)
+        scoped String took = format("  {ms / 1000}.{ms % 1000 / 100}s\n")
+        out.append(took)
+    }
+    put(2, out)
+    out.free()
+}
+
+// Sets how many steps are done, and draws the bar again when its percent
+// changed or 100 ms went by.
+pub void Progress.set(i64 n) {
+    self.count = n
+    if !self.live {
+        return
+    }
+    bar = self
+    now := time.clock()
+    pct := if self.total > 0 { n * 100 / self.total } else { 0 }
+    if pct == self.shownPct && now - self.drawn < 100ms {
+        return
+    }
+    self.shownPct = pct
+    self.drawn = now
+    self.draw(false)
+}
+
+// n more steps done.
+pub void Progress.add(i64 n = 1) => self.set(self.count + n)
+
+// Draws the last line, with the time it took.
+pub void Progress.done() {
+    if bar == self {
+        bar = null
+    }
+    self.draw(true)
+}

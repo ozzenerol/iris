@@ -1,0 +1,23 @@
+// error: 11: @flag takes a letter for the short form ('p', but not 'h' or '-'), the help in quotes, required, or args: @flag('p', "the port")
+// error: 12: a @flags field can be a number, a Duration, bool, str, String or an enum, or str[] with @flag(args); not i64[]
+// error: 13: @flag(args) gets the other arguments, so its field must be str[], not str
+// error: 17: @flag on a field needs @flags on the struct Plain too
+// error: 22: Plain needs @flags to be read from the arguments
+
+import flags
+
+@flags
+struct Options {
+    @flag('h') bool help
+    i64[] numbers
+    @flag(args) str rest
+}
+
+struct Plain {
+    @flag("x") i64 x
+}
+
+void main() {
+    o := flags.parse(Options)
+    p := flags.parse(Plain)
+}

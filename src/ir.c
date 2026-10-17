@@ -51,6 +51,8 @@ typedef struct {
     StrBuf allocas;         /* the current function's entry block */
     StrBuf body;            /* the current function's code */
     int tmp, label, strings, vars;
+    int catchDepth;         /* catch blocks the code is in */
+    unsigned msgBufs;       /* the depths whose message buffer is allocated */
     bool terminated;        /* the current block has ended */
     Node *func;
     Loop *loop;
@@ -1193,6 +1195,69 @@ static const char *envTable(IR *ir, Type *t) {
     return table;
 }
 
+/* A @flags struct's table: for each field, its long name (portCount is
+ * --port-count), where it is, its JSON table, whether it is required or a
+ * Duration, its letter, its help, and whether it gets the other arguments. */
+static const char *flagsTable(IR *ir, Type *t) {
+    Node *d = t->decl;
+    const char *about = NULL;
+    size_t aboutLen = 0;
+    for (int i = 0; i < d->attrs.len; i++) {
+        Node *at = d->attrs.items[i];
+        if (strcmp(at->name, "flags") == 0 && at->list.len == 1) {
+            about = at->list.items[0]->text;
+            aboutLen = at->list.items[0]->textLen;
+        }
+    }
+    StrBuf b = {0};
+    int n = 0;
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (f->kind == N_EMBED) continue;
+        bool required = false, args = false;
+        long long letter = 0;
+        const char *help = NULL;
+        size_t helpLen = 0;
+        for (int k = 0; k < f->attrs.len; k++) {
+            Node *at = f->attrs.items[k];
+            if (strcmp(at->name, "flag") != 0) continue;
+            for (int j = 0; j < at->list.len; j++) {
+                Node *a = at->list.items[j];
+                if (a->kind == N_STRING) {
+                    help = a->text;
+                    helpLen = a->textLen;
+                } else if (a->kind == N_CHAR) {
+                    letter = (long long)a->ival;
+                } else if (strcmp(a->name, "required") == 0) {
+                    required = true;
+                } else {
+                    args = true;
+                }
+            }
+        }
+        StrBuf name = {0};
+        for (const char *p = f->name; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z' && p != f->name) sbPutc(&name, '-');
+            sbPutc(&name, (char)(*p >= 'A' && *p <= 'Z' ? *p + 32 : *p));
+        }
+        const char *s = stringConst(ir, name.buf, name.len);
+        const char *h = help ? stringConst(ir, help, helpLen) : "null";
+        sbPrintf(&b, "%s{ ptr, i64, i64, ptr, i64, i64, i64, ptr, i64, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 %d, i64 %d, i64 %lld, ptr %s, i64 %zu, i64 %d }",
+                 n ? ", " : "", s, name.len, (long long)fieldOffset(t, i), jsonType(ir, f->type), required ? 1 : 0,
+                 f->type == &tyDuration ? 1 : 0, letter, h, helpLen, args ? 1 : 0);
+        sbFree(&name);
+        n++;
+    }
+    int id = ++ir->strings;
+    const char *items = fmt(ir, "@flags.%d.items", id), *table = fmt(ir, "@flags.%d", id);
+    sbPrintf(&ir->head, "%s = private constant [%d x { ptr, i64, i64, ptr, i64, i64, i64, ptr, i64, i64 }] [%s]\n", items, n,
+             b.buf ? b.buf : "");
+    sbPrintf(&ir->head, "%s = private constant { i64, ptr, ptr, i64 } { i64 %d, ptr %s, ptr %s, i64 %zu }\n", table, n,
+             items, about ? stringConst(ir, about, aboutLen) : "null", aboutLen);
+    sbFree(&b);
+    return table;
+}
+
 static Val emitJson(IR *ir, Node *e) {
     switch (e->builtin) {
     case BI_JSON_ENCODE: {
@@ -1462,6 +1527,30 @@ static Val emitBuiltin(IR *ir, Node *e) {
         ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
         const char *err = tmp(ir);
         ins(ir, "%s = call i64 %s(ptr %s, ptr %s)", err, e->ref->ir, envTable(ir, t), slot);
+        Val v = load(ir, slot, t);
+        const char *rt = llType(ir, e->type);
+        const char *r1 = tmp(ir), *r2 = tmp(ir);
+        ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), v.s);
+        ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+        return val(r2, e->type);
+    }
+    case BI_FLAGS_PARSE: {
+        Type *t = e->c->type;
+        const char *slot = allocaFor(ir, t, "options");
+        Val init = emitExpr(ir, e->b);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
+        if (e->type == t) {
+            /* flags.parse: on --help or a mistake it ends the program */
+            ins(ir, "call void %s(ptr %s, ptr %s)", e->ref->ir, flagsTable(ir, t), slot);
+            return load(ir, slot, t);
+        }
+        Val args = emitExpr(ir, e->list.items[1]);
+        const char *st = llType(ir, &tyStr);
+        const char *name = "zeroinitializer";
+        if (e->list.len == 3) name = emitExpr(ir, e->list.items[2]).s;
+        const char *err = tmp(ir);
+        ins(ir, "%s = call i64 %s(ptr %s, ptr %s, %s %s, %s %s)", err, e->ref->ir, flagsTable(ir, t), slot,
+            llType(ir, e->list.items[1]->type), args.s, st, name);
         Val v = load(ir, slot, t);
         const char *rt = llType(ir, e->type);
         const char *r1 = tmp(ir), *r2 = tmp(ir);
@@ -1818,6 +1907,19 @@ static Val emitCatch(IR *ir, Node *e) {
         Node *var = e->d;
         var->ir = varSlot(ir, &tyErrorValue, var, 0);
         ins(ir, "store i64 %s, ptr %s", err, var->ir);
+        /* the message is copied for the block: errors made while it runs,
+         * even ones caught further down, don't change e.message */
+        int depth = ir->catchDepth;
+        var->ival = 0;
+        if (depth < 16) {
+            if (!(ir->msgBufs & (1u << depth))) {
+                ir->msgBufs |= 1u << depth;
+                sbPrintf(&ir->allocas, "  %%errmsg.%d = alloca [1024 x i8]\n  %%errlen.%d = alloca i64\n", depth, depth);
+            }
+            ins(ir, "call void @iris_error_save(ptr %%errmsg.%d, ptr %%errlen.%d)", depth, depth);
+            var->ival = (uint64_t)depth + 1;
+        }
+        ir->catchDepth++;
         if (e->c->kind == N_MATCH) {
             Val v = emitMatch(ir, e->c, value);
             if (value && !ir->terminated) {
@@ -1828,6 +1930,7 @@ static Val emitCatch(IR *ir, Node *e) {
         } else {
             emitBlock(ir, e->c);
         }
+        ir->catchDepth--;
     }
     br(ir, end);
     placeLabel(ir, end);
@@ -1835,6 +1938,12 @@ static Val emitCatch(IR *ir, Node *e) {
         return val("", &tyVoid);
     }
     return load(ir, slot, t);
+}
+
+/* The catch variable an expression names, when its message was copied. */
+static int savedMessage(Node *e) {
+    if (e->kind != N_IDENT || !e->ref || !e->ref->ival || e->ref->type != &tyErrorValue) return 0;
+    return (int)e->ref->ival;
 }
 
 static Val emitSlice(IR *ir, Node *e) {
@@ -2042,6 +2151,12 @@ static Val emitExpr(IR *ir, Node *e) {
             Val err = emitExpr(ir, e->a);
             if (strcmp(e->name, "code") == 0) {
                 return val(err.s, &tyErrCode);
+            }
+            int saved = savedMessage(e->a);
+            if (saved) {
+                const char *n = tmp(ir);
+                ins(ir, "%s = load i64, ptr %%errlen.%d", n, saved - 1);
+                return makeSlice(ir, fmt(ir, "%%errmsg.%d", saved - 1), n, &tyStr);
             }
             const char *p = tmp(ir), *n = tmp(ir);
             ins(ir, "%s = call ptr @iris_error_message_ptr()", p);
@@ -2719,6 +2834,11 @@ static void emitStmtInner(IR *ir, Node *s) {
                 return;
             }
             if (s->a->type->kind == TY_ERRVAL) {
+                int saved = savedMessage(s->a);
+                if (saved) {
+                    /* its own message again, whatever came after it */
+                    ins(ir, "call void @iris_error_restore(ptr %%errmsg.%d, ptr %%errlen.%d)", saved - 1, saved - 1);
+                }
                 if (!(s->a->kind == N_CALL && s->a->builtin == BI_ERROR)) {
                     traceAdd(ir, s);    /* passing on an error it caught */
                 }
@@ -2785,6 +2905,8 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->tmp = 0;
     ir->label = 0;
     ir->vars = 0;
+    ir->catchDepth = 0;
+    ir->msgBufs = 0;
     ir->terminated = false;
     ir->allocas = (StrBuf){0};
     ir->body = (StrBuf){0};
@@ -3171,6 +3293,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i64 @iris_error_finish(i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_trace_add(ptr, i32, i32, ptr)\n"
            "declare ptr @iris_error_message_ptr()\n"
+           "declare void @iris_error_save(ptr, ptr)\n"
+           "declare void @iris_error_restore(ptr, ptr)\n"
            "declare i64 @iris_error_message_len()\n"
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"

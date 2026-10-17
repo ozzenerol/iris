@@ -91,6 +91,37 @@ line 1, column 15: expected a key in quotes</code></pre>
 <span class="k">scoped</span> Settings cfg = <span class="k">try</span> env.load(Settings)</code></pre>
 <p>Each field reads the variable named after it in capitals, with <code>_</code> between its words: <code>port</code> reads <code>PORT</code>, <code>logLevel</code> reads <code>LOG_LEVEL</code>. A prefix on the struct goes in front of those names, so here <code>port</code> reads <code>APP_PORT</code>. <code>@env(&quot;NAME&quot;)</code> names the variable itself, without the prefix. A variable that isn't set leaves the field's default; <code>@env(required)</code> makes that an error.</p>
 <p>Fields can be numbers, <code>bool</code> (<code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code>, <code>no</code>, <code>on</code>, <code>off</code>), <code>str</code>, <code>String</code>, enums written by value name, and <code>Duration</code> (<code>30s</code>, <code>1500ms</code>, <code>1m30s</code>). The errors are <code>env.EnvError.missing</code> and <code>invalid</code>, and the message names the variable. An <code>@env</code> struct gets a <code>free</code> method, as a <code>@json</code> struct does.</p>
+<p><code>@flags</code> lets a struct be filled from the program's arguments, with the <code>flags</code> module:</p>
+<pre class="code"><code><span class="k">import</span> flags
+
+<span class="k">enum</span> Format { text, json }
+
+<span class="a">@flags</span>(<span class="s">&quot;copies files into a folder&quot;</span>)
+<span class="k">struct</span> Options {
+    <span class="a">@flag</span>(<span class="s">&#x27;f&#x27;</span>, <span class="s">&quot;overwrite files that are there&quot;</span>) <span class="t">bool</span> force
+    <span class="a">@flag</span>(<span class="s">&#x27;j&#x27;</span>, <span class="s">&quot;how many copies to run at once&quot;</span>) <span class="t">i64</span> jobs = <span class="n">4</span>
+    Format format
+    <span class="t">Duration</span> timeout = 30s
+    <span class="a">@flag</span>(required, <span class="s">&quot;where the files go&quot;</span>) <span class="t">str</span> to
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] files
+}
+
+opts := flags.parse(Options)</code></pre>
+<p>Each field is a flag named after it, with <code>-</code> between its words: <code>jobs</code> is <code>--jobs</code>, <code>dryRun</code> is <code>--dry-run</code>. <code>@flag</code> can give a letter for the short form, the help in quotes, and <code>required</code>, in any order. A <code>str[]</code> field with <code>@flag(args)</code> gets the arguments that aren't flags.</p>
+<p>Values can be written <code>--jobs 8</code>, <code>--jobs=8</code> or <code>-j 8</code>. A <code>bool</code> flag needs no value; <code>--force=false</code> turns it off. One-letter <code>bool</code> flags can be joined: <code>-fv</code>. After <code>--</code>, every argument is taken as it is. Fields can have the same types as <code>@env</code> fields.</p>
+<p><code>-h</code> and <code>--help</code> print the help, made from the struct, and end the program:</p>
+<pre class="out"><code>copies files into a folder
+
+usage: copy [flags] [files...]
+
+flags:
+  -f, --force               overwrite files that are there
+  -j, --jobs &lt;n&gt;            how many copies to run at once (default 4)
+      --format &lt;text|json&gt;  (default text)
+      --timeout &lt;duration&gt;  (default 30s)
+      --to &lt;text&gt;           where the files go (required)
+  -h, --help                show this help</code></pre>
+<p>When an argument is wrong, <code>flags.parse</code> prints what is wrong to stderr and the program ends with status 2. <code>flags.parseArgs(Options, args, &quot;copy&quot;)</code> reads the arguments given instead, for a subcommand or a test; it fails with <code>flags.FlagError.invalid</code>, or with <code>FlagError.help</code> and the help as the message.</p>
 <p>Other attributes:</p>
 <div class="table"><table><thead><tr><th>Attribute</th><th>Effect</th></tr></thead><tbody><tr><td><code>@unchecked</code></td><td>no index, overflow or null checks in this function, in any build</td></tr><tr><td><code>@inline</code></td><td>the function's code always goes where it is called</td></tr><tr><td><code>@export</code></td><td>the function can be called from C</td></tr></tbody></table></div>
 <div class="pager"><a href="modules.html">&larr; Modules</a><a href="concurrency.html">Concurrency &rarr;</a></div>
