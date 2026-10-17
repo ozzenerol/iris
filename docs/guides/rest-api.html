@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build a REST API - Iris</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="home" href="../index.html">Iris</a><nav><a href="../design/index.html">Design</a><a href="../language/index.html">Language</a><a href="../guides/index.html" class="here">Guides</a><a href="../roadmap.html">Roadmap</a></nav></header>
+<div class="with-side"><aside class="side"><ol><li><a href="index.html">Guides</a></li><li><a href="rest-api.html" class="here">Build a REST API</a></li></ol></aside><main>
+<h1>Build a REST API</h1>
+<p class="lede">This guide builds a small service that stores notes in SQLite and serves them as JSON over HTTP. Each step shows every function and declaration it adds or changes, in full. The last section has the whole program.</p>
+<p>The service has five endpoints:</p>
+<div class="table"><table><thead><tr><th>Method and path</th><th>What it does</th></tr></thead><tbody><tr><td><code>GET /notes</code></td><td>lists every note</td></tr><tr><td><code>POST /notes</code></td><td>adds a note</td></tr><tr><td><code>GET /notes/:id</code></td><td>shows one note</td></tr><tr><td><code>PUT /notes/:id</code></td><td>changes a note</td></tr><tr><td><code>DELETE /notes/:id</code></td><td>removes a note</td></tr></tbody></table></div>
+<p>You need Iris and the SQLite library. The <code>curl</code> commands try each step out.</p>
+<h2 id="a-first-route"><a href="#a-first-route">A first route</a></h2>
+<p>A <code>Router</code> sends each request to the function for its method and path. A handler gets the request and the response, and fills in the response. <code>res.json</code> sets the body and the <code>Content-Type</code> header.</p>
+<pre class="code"><code><span class="k">import</span> http
+
+<span class="t">void</span> listNotes(http.Request *req, http.Response *res) {
+    res.json(<span class="s">&quot;[]&quot;</span>)
+}
+
+!<span class="t">void</span> main() {
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    <span class="k">try</span> r.serve(<span class="n">8080</span>)
+}</code></pre>
+<p><code>r.serve(8080)</code> answers requests on port 8080 until the program is stopped. It uses every CPU core. Run it and ask for the notes:</p>
+<pre class="code"><code>iris run main.iris
+curl localhost:8080/notes</code></pre>
+<pre class="out"><code>[]</code></pre>
+<h2 id="storing-notes"><a href="#storing-notes">Storing notes</a></h2>
+<p>The notes live in a SQLite table. <code>@json</code> lets <code>json.encode</code> and <code>json.decode</code> work with a struct. <code>Note</code> is a row of the table, and <code>NoteInput</code> is what a client sends to add a note. <code>@json(required)</code> makes <code>json.decode</code> fail when the field is missing.</p>
+<pre class="code"><code><span class="k">import</span> http, json, sqlite, time</code></pre>
+<pre class="code"><code><span class="a">@json</span>
+<span class="k">struct</span> Note {
+    <span class="t">i64</span> id
+    <span class="t">String</span> title
+    <span class="t">String</span> body
+    <span class="t">i64</span> created
+}
+
+<span class="a">@json</span>
+<span class="k">struct</span> NoteInput {
+    <span class="a">@json</span>(required) <span class="t">String</span> title
+    <span class="t">String</span> body
+}
+
+sqlite.Db db</code></pre>
+<p><code>sqlite.all[Note]</code> runs a query and makes a <code>Note</code> from each row, matching columns to fields by name. The <code>defer</code> block frees the notes when the handler returns.</p>
+<pre class="code"><code>!<span class="t">void</span> listNotes(http.Request *req, http.Response *res) {
+    notes := <span class="k">try</span> sqlite.all[Note](&amp;db, <span class="s">&quot;SELECT * FROM notes ORDER BY id&quot;</span>)
+    <span class="k">defer</span> {
+        <span class="k">for</span> n <span class="k">in</span> notes {
+            n.free()
+        }
+        notes.free()
+    }
+    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(notes.items())
+    res.json(body)
+}</code></pre>
+<p>A handler can return an error: its type is <code>!void</code>. When it fails, the router answers 500 with the error's message. When the body isn't valid JSON, <code>createNote</code> answers 400 itself, with the reason; <code>res.error</code> sends <code>{&quot;error&quot;: &quot;...&quot;}</code>.</p>
+<pre class="code"><code>!<span class="t">void</span> createNote(http.Request *req, http.Response *res) {
+    <span class="k">scoped</span> NoteInput n = json.decode(NoteInput, req.body) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, e.message)
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;INSERT INTO notes (title, body, created) VALUES (?, ?, ?)&quot;</span>,
+        [.text(n.title), .text(n.body), .int(time.now().unix())])
+    res.status = <span class="n">201</span>
+    <span class="k">scoped</span> <span class="t">String</span> location = format(<span class="s">&quot;/notes/{db.lastId()}&quot;</span>)
+    res.header(<span class="s">&quot;Location&quot;</span>, location)
+    <span class="k">scoped</span> <span class="t">String</span> body = format(<span class="s">&quot;{{\&quot;id\&quot;: {db.lastId()}}}&quot;</span>)
+    res.json(body)
+}</code></pre>
+<p><code>main</code> opens the database, makes the table if it isn't there, and adds the route for <code>POST</code>:</p>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    db = <span class="k">try</span> sqlite.open(<span class="s">&quot;notes.db&quot;</span>)
+    <span class="k">defer</span> db.close()
+    <span class="k">try</span> db.exec(<span class="s">&quot;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT, created INTEGER)&quot;</span>)
+
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    r.post(<span class="s">&quot;/notes&quot;</span>, createNote)
+    <span class="k">try</span> r.serve(<span class="n">8080</span>)
+}</code></pre>
+<pre class="code"><code>curl -i -d &#x27;{&quot;title&quot;: &quot;milk&quot;, &quot;body&quot;: &quot;2 litres&quot;}&#x27; localhost:8080/notes
+curl -d &#x27;{&quot;body&quot;: &quot;no title&quot;}&#x27; localhost:8080/notes
+curl localhost:8080/notes</code></pre>
+<pre class="out"><code>HTTP/1.1 201 Created
+Content-Type: application/json
+Content-Length: 9
+Location: /notes/1
+Connection: keep-alive
+
+{&quot;id&quot;: 1}
+{&quot;error&quot;: &quot;the required field \&quot;title\&quot; is missing&quot;}
+[{&quot;id&quot;:1,&quot;title&quot;:&quot;milk&quot;,&quot;body&quot;:&quot;2 litres&quot;,&quot;created&quot;:1792213454}]</code></pre>
+<h2 id="one-note-at-a-time"><a href="#one-note-at-a-time">One note at a time</a></h2>
+<p>A pattern part that starts with <code>:</code> matches any one part of the path, and <code>req.param</code> gives what it matched. <code>noteId</code> turns it into a number, or answers 400:</p>
+<pre class="code"><code><span class="k">import</span> http, json, sqlite, <span class="t">str</span>, time</code></pre>
+<pre class="code"><code><span class="c">// The note id in the path, or a 400 reply.</span>
+<span class="t">bool</span> noteId(http.Request *req, http.Response *res, <span class="t">i64</span> *id) {
+    *id = <span class="t">str</span>.parseInt(req.param(<span class="s">&quot;id&quot;</span>)) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, <span class="s">&quot;the id should be a number&quot;</span>)
+        <span class="k">return</span> <span class="k">false</span>
+    }
+    <span class="k">return</span> <span class="k">true</span>
+}</code></pre>
+<p><code>sqlite.one[Note]</code> gives the first row, or fails with <code>SqlError.noRows</code> when there is none:</p>
+<pre class="code"><code>!<span class="t">void</span> showNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">scoped</span> Note n = sqlite.one[Note](&amp;db, <span class="s">&quot;SELECT * FROM notes WHERE id = ?&quot;</span>, [.int(id)]) <span class="k">catch</span> e {
+        <span class="k">if</span> e.code == sqlite.SqlError.noRows {
+            res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+            <span class="k">return</span>
+        }
+        <span class="k">return</span> e
+    }
+    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(n)
+    res.json(body)
+}</code></pre>
+<p><code>db.changes()</code> says how many rows the last statement changed, so a note that isn't there gets 404. 204 means the reply has no body.</p>
+<pre class="code"><code>!<span class="t">void</span> updateNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">scoped</span> NoteInput n = json.decode(NoteInput, req.body) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, e.message)
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;UPDATE notes SET title = ?, body = ? WHERE id = ?&quot;</span>, [.text(n.title), .text(n.body), .int(id)])
+    <span class="k">if</span> db.changes() == <span class="n">0</span> {
+        res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+        <span class="k">return</span>
+    }
+    res.status = <span class="n">204</span>
+}
+
+!<span class="t">void</span> deleteNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;DELETE FROM notes WHERE id = ?&quot;</span>, [.int(id)])
+    <span class="k">if</span> db.changes() == <span class="n">0</span> {
+        res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+        <span class="k">return</span>
+    }
+    res.status = <span class="n">204</span>
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    db = <span class="k">try</span> sqlite.open(<span class="s">&quot;notes.db&quot;</span>)
+    <span class="k">defer</span> db.close()
+    <span class="k">try</span> db.exec(<span class="s">&quot;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT, created INTEGER)&quot;</span>)
+
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    r.post(<span class="s">&quot;/notes&quot;</span>, createNote)
+    r.get(<span class="s">&quot;/notes/:id&quot;</span>, showNote)
+    r.put(<span class="s">&quot;/notes/:id&quot;</span>, updateNote)
+    r.delete(<span class="s">&quot;/notes/:id&quot;</span>, deleteNote)
+    <span class="k">try</span> r.serve(<span class="n">8080</span>)
+}</code></pre>
+<pre class="code"><code>curl -X PUT -d &#x27;{&quot;title&quot;: &quot;oat milk&quot;, &quot;body&quot;: &quot;1 litre&quot;}&#x27; localhost:8080/notes/1
+curl localhost:8080/notes/1
+curl -X DELETE localhost:8080/notes/1
+curl localhost:8080/notes/1
+curl localhost:8080/notes/x</code></pre>
+<pre class="out"><code>{&quot;id&quot;:1,&quot;title&quot;:&quot;oat milk&quot;,&quot;body&quot;:&quot;1 litre&quot;,&quot;created&quot;:1792213454}
+{&quot;error&quot;: &quot;no such note&quot;}
+{&quot;error&quot;: &quot;the id should be a number&quot;}</code></pre>
+<h2 id="settings-a-token-and-a-log"><a href="#settings-a-token-and-a-log">Settings, a token and a log</a></h2>
+<p>The port, the database file and a token come from environment variables. <code>@env(&quot;NOTES&quot;)</code> lets <code>env.load</code> fill the struct from <code>NOTES_PORT</code>, <code>NOTES_DB</code> and <code>NOTES_TOKEN</code>. A field with a value keeps it when the variable isn't set; <code>@env(required)</code> makes <code>env.load</code> fail instead.</p>
+<pre class="code"><code><span class="k">import</span> crypto, env, http, json, log, sqlite, <span class="t">str</span>, time</code></pre>
+<pre class="code"><code><span class="a">@env</span>(<span class="s">&quot;NOTES&quot;</span>)
+<span class="k">struct</span> Config {
+    <span class="t">u16</span> port = <span class="n">8080</span>
+    <span class="t">str</span> db = <span class="s">&quot;notes.db&quot;</span>
+    <span class="a">@env</span>(required) <span class="t">str</span> token
+}</code></pre>
+<pre class="code"><code>Config config
+sqlite.Db db</code></pre>
+<p><code>r.use(auth)</code> runs <code>auth</code> before every handler. When it gives false, the router sends what <code>auth</code> put in the response, and the handler doesn't run. <code>crypto.equal</code> compares the token in a time that doesn't depend on where the texts differ. <code>r.after(access)</code> runs <code>access</code> after every request, so each one is logged with its status and how long it took.</p>
+<pre class="code"><code><span class="t">bool</span> auth(http.Request *req, http.Response *res) {
+    given := req.header(<span class="s">&quot;Authorization&quot;</span>)
+    <span class="k">if</span> <span class="t">str</span>.startsWith(given, <span class="s">&quot;Bearer &quot;</span>) &amp;&amp; crypto.equal(given[<span class="n">7</span>:], config.token) {
+        <span class="k">return</span> <span class="k">true</span>
+    }
+    res.error(<span class="n">401</span>, <span class="s">&quot;a valid token is needed&quot;</span>)
+    <span class="k">return</span> <span class="k">false</span>
+}
+
+<span class="t">void</span> access(http.Request *req, http.Response *res) {
+    log.info(<span class="s">&quot;{req.method} {req.path} {res.status} {time.clock() - req.received}&quot;</span>)
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    config = <span class="k">try</span> env.load(Config)
+    db = <span class="k">try</span> sqlite.open(config.db)
+    <span class="k">defer</span> db.close()
+    <span class="k">try</span> db.exec(<span class="s">&quot;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT, created INTEGER)&quot;</span>)
+
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.use(auth)
+    r.after(access)
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    r.post(<span class="s">&quot;/notes&quot;</span>, createNote)
+    r.get(<span class="s">&quot;/notes/:id&quot;</span>, showNote)
+    r.put(<span class="s">&quot;/notes/:id&quot;</span>, updateNote)
+    r.delete(<span class="s">&quot;/notes/:id&quot;</span>, deleteNote)
+
+    log.info(<span class="s">&quot;listening on {config.port}&quot;</span>)
+    <span class="k">try</span> r.serve(config.port)
+}</code></pre>
+<pre class="code"><code>NOTES_TOKEN=s3cret iris run main.iris
+curl localhost:8080/notes
+curl -H &#x27;Authorization: Bearer s3cret&#x27; localhost:8080/notes</code></pre>
+<pre class="out"><code>{&quot;error&quot;: &quot;a valid token is needed&quot;}
+[]</code></pre>
+<p>The server prints:</p>
+<pre class="out"><code>2026-10-17T05:04:21.849Z INFO listening on 8080
+2026-10-17T05:04:22.148Z INFO GET /notes 401 51.112us
+2026-10-17T05:04:22.154Z INFO GET /notes 200 137.562us</code></pre>
+<p>Without the token, the program stops before it serves anything:</p>
+<pre class="out"><code>error: EnvError.missing: NOTES_TOKEN is needed but isn&#x27;t set</code></pre>
+<h2 id="stopping-cleanly"><a href="#stopping-cleanly">Stopping cleanly</a></h2>
+<p>When the service is stopped with Ctrl-C or <code>kill</code>, requests that are being answered should still finish. <code>signal.watch</code> stops the signals from ending the program, and <code>signal.wait</code> waits for one. <code>r.shutdown</code> stops taking connections and waits for the requests in progress, up to 10 seconds; <code>r.serve</code> then returns, and the <code>defer</code> statements close the database.</p>
+<pre class="code"><code><span class="k">import</span> crypto, env, http, json, log, signal, sqlite, <span class="t">str</span>, time</code></pre>
+<pre class="code"><code><span class="t">void</span> stopOnSignal(http.Router *r) {
+    s := signal.wait()
+    log.info(<span class="s">&quot;{s}: stopping&quot;</span>)
+    r.shutdown()
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    config = <span class="k">try</span> env.load(Config)
+    db = <span class="k">try</span> sqlite.open(config.db)
+    <span class="k">defer</span> db.close()
+    <span class="k">try</span> db.exec(<span class="s">&quot;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT, created INTEGER)&quot;</span>)
+
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.use(auth)
+    r.after(access)
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    r.post(<span class="s">&quot;/notes&quot;</span>, createNote)
+    r.get(<span class="s">&quot;/notes/:id&quot;</span>, showNote)
+    r.put(<span class="s">&quot;/notes/:id&quot;</span>, updateNote)
+    r.delete(<span class="s">&quot;/notes/:id&quot;</span>, deleteNote)
+
+    signal.watch()
+    <span class="k">spawn</span> stopOnSignal(&amp;r)
+    log.info(<span class="s">&quot;listening on {config.port}&quot;</span>)
+    <span class="k">try</span> r.serve(config.port)
+    log.info(<span class="s">&quot;stopped&quot;</span>)
+}</code></pre>
+<h2 id="the-whole-program"><a href="#the-whole-program">The whole program</a></h2>
+<pre class="code"><code><span class="c">// A notes service: a REST API over SQLite.</span>
+
+<span class="k">import</span> crypto, env, http, json, log, signal, sqlite, <span class="t">str</span>, time
+
+<span class="a">@env</span>(<span class="s">&quot;NOTES&quot;</span>)
+<span class="k">struct</span> Config {
+    <span class="t">u16</span> port = <span class="n">8080</span>
+    <span class="t">str</span> db = <span class="s">&quot;notes.db&quot;</span>
+    <span class="a">@env</span>(required) <span class="t">str</span> token
+}
+
+<span class="a">@json</span>
+<span class="k">struct</span> Note {
+    <span class="t">i64</span> id
+    <span class="t">String</span> title
+    <span class="t">String</span> body
+    <span class="t">i64</span> created
+}
+
+<span class="a">@json</span>
+<span class="k">struct</span> NoteInput {
+    <span class="a">@json</span>(required) <span class="t">String</span> title
+    <span class="t">String</span> body
+}
+
+Config config
+sqlite.Db db
+
+<span class="t">bool</span> auth(http.Request *req, http.Response *res) {
+    given := req.header(<span class="s">&quot;Authorization&quot;</span>)
+    <span class="k">if</span> <span class="t">str</span>.startsWith(given, <span class="s">&quot;Bearer &quot;</span>) &amp;&amp; crypto.equal(given[<span class="n">7</span>:], config.token) {
+        <span class="k">return</span> <span class="k">true</span>
+    }
+    res.error(<span class="n">401</span>, <span class="s">&quot;a valid token is needed&quot;</span>)
+    <span class="k">return</span> <span class="k">false</span>
+}
+
+<span class="t">void</span> access(http.Request *req, http.Response *res) {
+    log.info(<span class="s">&quot;{req.method} {req.path} {res.status} {time.clock() - req.received}&quot;</span>)
+}
+
+<span class="c">// The note id in the path, or a 400 reply.</span>
+<span class="t">bool</span> noteId(http.Request *req, http.Response *res, <span class="t">i64</span> *id) {
+    *id = <span class="t">str</span>.parseInt(req.param(<span class="s">&quot;id&quot;</span>)) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, <span class="s">&quot;the id should be a number&quot;</span>)
+        <span class="k">return</span> <span class="k">false</span>
+    }
+    <span class="k">return</span> <span class="k">true</span>
+}
+
+!<span class="t">void</span> listNotes(http.Request *req, http.Response *res) {
+    notes := <span class="k">try</span> sqlite.all[Note](&amp;db, <span class="s">&quot;SELECT * FROM notes ORDER BY id&quot;</span>)
+    <span class="k">defer</span> {
+        <span class="k">for</span> n <span class="k">in</span> notes {
+            n.free()
+        }
+        notes.free()
+    }
+    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(notes.items())
+    res.json(body)
+}
+
+!<span class="t">void</span> showNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">scoped</span> Note n = sqlite.one[Note](&amp;db, <span class="s">&quot;SELECT * FROM notes WHERE id = ?&quot;</span>, [.int(id)]) <span class="k">catch</span> e {
+        <span class="k">if</span> e.code == sqlite.SqlError.noRows {
+            res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+            <span class="k">return</span>
+        }
+        <span class="k">return</span> e
+    }
+    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(n)
+    res.json(body)
+}
+
+!<span class="t">void</span> createNote(http.Request *req, http.Response *res) {
+    <span class="k">scoped</span> NoteInput n = json.decode(NoteInput, req.body) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, e.message)
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;INSERT INTO notes (title, body, created) VALUES (?, ?, ?)&quot;</span>,
+        [.text(n.title), .text(n.body), .int(time.now().unix())])
+    res.status = <span class="n">201</span>
+    <span class="k">scoped</span> <span class="t">String</span> location = format(<span class="s">&quot;/notes/{db.lastId()}&quot;</span>)
+    res.header(<span class="s">&quot;Location&quot;</span>, location)
+    <span class="k">scoped</span> <span class="t">String</span> body = format(<span class="s">&quot;{{\&quot;id\&quot;: {db.lastId()}}}&quot;</span>)
+    res.json(body)
+}
+
+!<span class="t">void</span> updateNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">scoped</span> NoteInput n = json.decode(NoteInput, req.body) <span class="k">catch</span> e {
+        res.error(<span class="n">400</span>, e.message)
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;UPDATE notes SET title = ?, body = ? WHERE id = ?&quot;</span>, [.text(n.title), .text(n.body), .int(id)])
+    <span class="k">if</span> db.changes() == <span class="n">0</span> {
+        res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+        <span class="k">return</span>
+    }
+    res.status = <span class="n">204</span>
+}
+
+!<span class="t">void</span> deleteNote(http.Request *req, http.Response *res) {
+    <span class="t">i64</span> id
+    <span class="k">if</span> !noteId(req, res, &amp;id) {
+        <span class="k">return</span>
+    }
+    <span class="k">try</span> db.exec(<span class="s">&quot;DELETE FROM notes WHERE id = ?&quot;</span>, [.int(id)])
+    <span class="k">if</span> db.changes() == <span class="n">0</span> {
+        res.error(<span class="n">404</span>, <span class="s">&quot;no such note&quot;</span>)
+        <span class="k">return</span>
+    }
+    res.status = <span class="n">204</span>
+}
+
+<span class="t">void</span> stopOnSignal(http.Router *r) {
+    s := signal.wait()
+    log.info(<span class="s">&quot;{s}: stopping&quot;</span>)
+    r.shutdown()
+}
+
+!<span class="t">void</span> main() {
+    config = <span class="k">try</span> env.load(Config)
+    db = <span class="k">try</span> sqlite.open(config.db)
+    <span class="k">defer</span> db.close()
+    <span class="k">try</span> db.exec(<span class="s">&quot;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT, created INTEGER)&quot;</span>)
+
+    http.Router r
+    <span class="k">defer</span> r.free()
+    r.use(auth)
+    r.after(access)
+    r.get(<span class="s">&quot;/notes&quot;</span>, listNotes)
+    r.post(<span class="s">&quot;/notes&quot;</span>, createNote)
+    r.get(<span class="s">&quot;/notes/:id&quot;</span>, showNote)
+    r.put(<span class="s">&quot;/notes/:id&quot;</span>, updateNote)
+    r.delete(<span class="s">&quot;/notes/:id&quot;</span>, deleteNote)
+
+    signal.watch()
+    <span class="k">spawn</span> stopOnSignal(&amp;r)
+    log.info(<span class="s">&quot;listening on {config.port}&quot;</span>)
+    <span class="k">try</span> r.serve(config.port)
+    log.info(<span class="s">&quot;stopped&quot;</span>)
+}</code></pre>
+<div class="pager"><a href="index.html">&larr; Guides</a><span></span></div>
+</main></div>
+</body>
+</html>

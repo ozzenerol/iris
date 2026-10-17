@@ -14,8 +14,8 @@ pub void Message.free() => self.data.free()
 // An open WebSocket. Pings are answered on their own while reading.
 pub struct WebSocket {
     net.Conn *conn
-    net.Conn own            // the client's connection; the server's lives in serveConn
-    bool client             // a client masks what it sends
+    net.Conn own // the client's connection; the server's lives in serveConn
+    bool client  // a client masks what it sends
     bool closed
     i64 maxMessage
 }

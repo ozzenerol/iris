@@ -33,3 +33,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.27 | HTTP handlers that can fail, `res.error`, Router middleware and after hooks, `json.quote`, `sqlite.all` and `sqlite.one`, and the `log` module. | released |
 | 0.28 | Timeouts on connections, server limits, `Router.shutdown`, and the `signal` module. | released |
 | 0.29 | Generic methods checked when used (`List.contains`, `indexOf`, `freeEach`, `Map.keys`), and channels with no buffer. | released |
+| 0.30 | WebSockets, `http.Client` with connections kept open, the `csv` module, `crypto.sha1`, and a guide to building a REST API. | released |

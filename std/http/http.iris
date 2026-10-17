@@ -224,7 +224,7 @@ void upgrade(net.Conn *conn, Request *req, Route *route, Watch *w, Limits *limit
     conn.write(reply) catch e {
         return
     }
-    unwatch(w)          // a WebSocket may stay quiet for long
+    unwatch(w) // a WebSocket may stay quiet for long
     WebSocket ws = WebSocket{conn: conn, maxMessage: limits.maxBody}
     route.socket(&ws, req) catch e { }
     ws.close()
@@ -666,7 +666,7 @@ void Router.dispatch(Request *req, Response *res) {
     for i in 0..self.routes.len {
         r := &self.routes.items()[i]
         if r.socket != null {
-            continue        // WebSocket routes only answer upgrades
+            continue // WebSocket routes only answer upgrades
         }
         sc := score(r, &parts)
         if sc < 0 {
@@ -948,7 +948,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "")
         c.write(req) catch e {
             c.close()
             if reused {
-                continue        // the server closed it while it was idle
+                continue // the server closed it while it was idle
             }
             return e
         }

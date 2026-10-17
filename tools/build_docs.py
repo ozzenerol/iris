@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Builds docs/ from docs-src/.
 
-docs-src/index.md and docs-src/roadmap.md are single pages. docs-src/design/
-and docs-src/language/ are sections: their pages are listed in SECTIONS, in
+docs-src/index.md and docs-src/roadmap.md are single pages. docs-src/design/,
+docs-src/language/ and docs-src/guides/ are sections: their pages are listed in SECTIONS, in
 order, and each section's index.md is its first page.
 
 Run from the repo root: python3 tools/build_docs.py
@@ -23,9 +23,10 @@ SECTIONS = {
     "language": ["index", "first-program", "variables-and-types", "functions", "control-flow",
                  "text", "structs", "enums", "pointers-and-memory", "errors", "generics",
                  "collections", "modules", "compile-time", "concurrency", "calling-c", "tools"],
+    "guides": ["index", "rest-api"],
 }
 TOP = [("Design", "design/index.html"), ("Language", "language/index.html"),
-       ("Roadmap", "roadmap.html")]
+       ("Guides", "guides/index.html"), ("Roadmap", "roadmap.html")]
 
 
 def read(path):
