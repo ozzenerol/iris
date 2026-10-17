@@ -2218,6 +2218,8 @@ static bool isComparable(Type *t) {
 
 static Type *checkBinary(Checker *c, Node *e, Type *expected) {
     TokKind op = e->op;
+    /* the operator as it was written: a is b is a == b */
+    const char *opName = e->ival == 1 ? "is" : e->ival == 2 ? "is not" : tokName(op);
     if (op == P_DOTDOT) {
         error(c, e, "a range can only be used in 'for', 'match' and slicing");
         return setType(e, &tyError);
@@ -2258,7 +2260,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         ta = checkExpr(c, &e->a, want);
         tb = checkExpr(c, &e->b, NULL);
         if (!isErr(ta) && !isInt(ta)) {
-            error(c, e->a, "'%s' needs an integer, not %s", tokName(op), ta->name);
+            error(c, e->a, "'%s' needs an integer, not %s", opName, ta->name);
             return setType(e, &tyError);
         }
         if (!isErr(tb) && !isInt(tb)) {
@@ -2328,10 +2330,10 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
             if (ta->kind == TY_ATOMIC || tb->kind == TY_ATOMIC) {
                 error(c, e, "an Atomic's value is read with .load()");
             } else if (isNumber(ta) && isNumber(tb)) {
-                error(c, e, "'%s' can't mix %s and %s; convert one side, for example %s(...)", tokName(op),
+                error(c, e, "'%s' can't mix %s and %s; convert one side, for example %s(...)", opName,
                       ta->name, tb->name, isFloat(tb) && !isFloat(ta) ? tb->name : ta->name);
             } else {
-                error(c, e, "'%s' can't mix %s and %s", tokName(op), ta->name, tb->name);
+                error(c, e, "'%s' can't mix %s and %s", opName, ta->name, tb->name);
             }
             return setType(e, compare ? &tyBool : &tyError);
         }
@@ -2343,10 +2345,10 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         }
         if (op == P_EQ || op == P_NE) {
             if (!isComparable(t)) {
-                error(c, e, "'%s' can't compare %s values", tokName(op), t->name);
+                error(c, e, "'%s' can't compare %s values", opName, t->name);
             }
         } else if (!isNumber(t)) {
-            error(c, e, "'%s' can't compare %s values", tokName(op), t->name);
+            error(c, e, "'%s' can't compare %s values", opName, t->name);
         }
         return setType(e, &tyBool);
     }
@@ -2357,7 +2359,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         return setType(e, t);
     }
     if (!isInt(t)) {
-        error(c, e, "'%s' needs integers, not %s", tokName(op), t->name);
+        error(c, e, "'%s' needs integers, not %s", opName, t->name);
         return setType(e, &tyError);
     }
     if (op == P_SLASH && ta == &tyDuration && tb == &tyDuration && (!e->b->isConst || hasDuration(e->b))) {

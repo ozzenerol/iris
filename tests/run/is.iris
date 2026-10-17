@@ -1,0 +1,26 @@
+// expect: true false true true
+// expect: true true true
+// expect: true true
+// expect: true
+// expect: guard passed
+
+enum Color { red, green }
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+void main() {
+    n := 3
+    c := Color.red
+    p := Point{x: 1, y: 2}
+    name := "iris"
+    print("{n is 3} {n is not 3} {c is .red} {c is not Color.green}")
+    print("{p is Point{x: 1, y: 2}} {name is "iris"} {name is not "go"}")
+    print("{n is 3 and not c is .green} {n + 1 is 4}")
+    i64 *q = null
+    print("{q is null}")
+    return if n is not 3
+    print("guard passed") if name is "iris"
+}

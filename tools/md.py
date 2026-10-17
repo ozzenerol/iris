@@ -14,7 +14,7 @@ import re
 KEYWORDS = set("""
 if else for in match break continue return struct union enum interface type dyn
 pub const comptime when import module try catch defer errdefer scoped spawn select
-chan atomic threadlocal asm test not and or true false null packed align volatile
+chan atomic threadlocal asm test not and or is true false null packed align volatile
 """.split())
 TYPES = set("""
 i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void str String Error

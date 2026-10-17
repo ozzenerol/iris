@@ -108,6 +108,24 @@ true true true
 false true
 ```
 
+`is` can be written for `==`, and `is not` for `!=`. They compare the same way, and the comparison is by value: `a is b` on two structs compares their fields, as `==` does, not whether they are the same variable.
+
+```iris run
+enum Color { red, green }
+
+void main() {
+    n := 3
+    c := Color.red
+    print("{n is 3} {c is not .green} {"iris" is "iris"}")
+    print("small") if n is not 10
+}
+```
+
+```output
+true true true
+small
+```
+
 ## All the operators
 
 | Operators | What they do |
@@ -115,7 +133,7 @@ false true
 | `+ - * / %` | arithmetic |
 | `& \| ^ ~` | bits: and, or, exclusive or, each bit flipped |
 | `<< >>` | shifts |
-| `== != < <= > >=` | comparison |
+| `== != < <= > >=`, `is`, `is not` | comparison |
 | `&& \|\| !`, `and or not` | and, or, not, on `bool` |
 | `-x` | the negative of x |
 | `&x`, `*p` | the address of x, and the value p points to (see [Pointers](17-pointers.html)) |
@@ -130,7 +148,7 @@ In a longer expression, some operators bind more tightly than others. From tight
 1. `-x`, `!x`, `~x`, `&x`, `*p` (the ones written before a value)
 2. `* / % << >> &`
 3. `+ - | ^`
-4. `== != < <= > >=`
+4. `== != < <= > >=`, `is`, `is not`
 5. `not`
 6. `&&`, `and`
 7. `||`, `or`

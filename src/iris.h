@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.39.0"
+#define IRIS_VERSION "0.40.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -71,7 +71,7 @@ void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
     X(K_ERRDEFER, "errdefer") X(K_SCOPED, "scoped") X(K_SPAWN, "spawn")    \
     X(K_SELECT, "select") X(K_CHAN, "chan") X(K_THREAD, "thread")          \
     X(K_THREADLOCAL, "threadlocal") X(K_ASM, "asm") X(K_TEST, "test")      \
-    X(K_NOT, "not") X(K_AND, "and") X(K_OR, "or")                          \
+    X(K_NOT, "not") X(K_AND, "and") X(K_OR, "or") X(K_IS, "is")            \
     X(K_TRUE, "true") X(K_FALSE, "false") X(K_NULL, "null")                \
     X(P_LPAREN, "(") X(P_RPAREN, ")") X(P_LBRACK, "[") X(P_RBRACK, "]")    \
     X(P_LBRACE, "{") X(P_RBRACE, "}") X(P_COMMA, ",") X(P_DOT, ".")        \

@@ -970,7 +970,7 @@ static int precedence(TokKind k) {
     case P_DOTDOT: return 2;
     case P_OROR: case K_OR: return 3;
     case P_ANDAND: case K_AND: return 4;
-    case P_EQ: case P_NE: case P_LT: case P_LE: case P_GT: case P_GE: return 5;
+    case P_EQ: case P_NE: case P_LT: case P_LE: case P_GT: case P_GE: case K_IS: return 5;
     case P_PLUS: case P_MINUS: case P_PIPE: case P_CARET: return 6;
     case P_STAR: case P_SLASH: case P_PERCENT: case P_SHL: case P_SHR: case P_AMP: return 7;
     default: return 0;
@@ -1024,6 +1024,12 @@ static Node *parseBinary(Parser *p, int minPrec) {
         next(p);
         Node *n = node(p, N_BINARY, t);
         n->op = t->kind == K_AND ? P_ANDAND : t->kind == K_OR ? P_OROR : t->kind;
+        if (t->kind == K_IS) {
+            /* a is b is a == b, and a is not b is a != b */
+            bool negated = accept(p, K_NOT);
+            n->op = negated ? P_NE : P_EQ;
+            n->ival = negated ? 2 : 1;      /* written as words, for messages */
+        }
         n->a = left;
         n->b = parseBinary(p, prec + 1);
         left = n;

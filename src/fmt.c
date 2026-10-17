@@ -57,7 +57,7 @@ static bool isBinary(TokKind k) {
     case P_MINUS: case P_MINUS_ASSIGN: case P_STAR: case P_STAR_ASSIGN: case P_SLASH: case P_SLASH_ASSIGN:
     case P_PERCENT: case P_PERCENT_ASSIGN: case P_AMP: case P_AMP_ASSIGN: case P_ANDAND: case P_PIPE:
     case P_PIPE_ASSIGN: case P_OROR: case P_CARET: case P_CARET_ASSIGN: case P_ARROW: case P_LARROW: case K_AND:
-    case K_OR:
+    case K_OR: case K_IS:
         return true;
     default:
         return false;

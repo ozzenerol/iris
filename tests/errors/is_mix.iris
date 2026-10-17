@@ -1,0 +1,8 @@
+// error: 6: 'is' can't mix i64 and str
+// error: 7: 'is not' can't mix i64 and f64; convert one side, for example f64(...)
+
+void main() {
+    a := 1
+    _ = a is "x"
+    _ = a is not 2.5
+}
