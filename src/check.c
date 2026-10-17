@@ -4810,8 +4810,12 @@ static void checkStmt(Checker *c, Node *s) {
                 return;
             }
         }
-        if (s->op != P_ASSIGN && !isInt(tt)) {
-            error(c, s, "'%s' needs an integer variable, not %s", tokName(s->op), tt->name);
+        bool arith = s->op == P_PLUS_ASSIGN || s->op == P_MINUS_ASSIGN || s->op == P_STAR_ASSIGN ||
+                     s->op == P_SLASH_ASSIGN || s->op == P_PERCENT_ASSIGN;
+        bool bits = s->op == P_AMP_ASSIGN || s->op == P_PIPE_ASSIGN || s->op == P_CARET_ASSIGN;
+        bool ok = isInt(tt) || (arith && isFloat(tt)) || (bits && tt->kind == TY_ENUM && tt->isFlags);
+        if (s->op != P_ASSIGN && !ok) {
+            error(c, s, "'%s' needs a number variable, not %s", tokName(s->op), tt->name);
         }
         if (s->op == P_SHL_ASSIGN || s->op == P_SHR_ASSIGN) {
             Type *ta = checkExpr(c, &s->b, NULL);
