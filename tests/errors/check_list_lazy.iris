@@ -1,0 +1,11 @@
+// error: 10: List[Box].indexOf, made here, has the errors above
+
+struct Box {
+    String name
+}
+
+void main() {
+    List[Box] boxes
+    b := Box{}
+    _ = boxes.contains(b)
+}

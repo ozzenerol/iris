@@ -101,8 +101,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Router middleware is a function that gives false to stop the request. | No closures needed, and the order is the order of `use`. |
 | A server closes idle connections with one sweeper task per thread, which shuts down connections that did nothing for the timeout. | A timer for each read and write cost 15% of the throughput; the sweeper costs under 2%. |
 | `Conn.setTimeout` gives each read and write its own deadline. | For clients, where one call waiting too long is what matters. |
+| A generic struct's method is checked and compiled for a set of types when it is first used. | Methods like `contains` can need `==` without ruling out types that don't have it, and unused methods cost nothing. |
+| `chan[T](0)` is a channel with no buffer, where a send waits for a receiver. | A hand-over that both tasks wait for, with no new syntax. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
-| A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
 | Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |

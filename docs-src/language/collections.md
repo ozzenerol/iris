@@ -25,13 +25,15 @@ print("{names.len} {names.at(0)} {names.last()}")
 | `items()` | the values as a slice, valid until the list changes size |
 | `sort(less)` | sorts with a function that says whether a goes before b; equal values keep their order |
 | `reverse()` | turns the order around |
+| `contains(v)`, `indexOf(v)` | whether a value equal to v is there, and where (-1 if not); the values need `==` |
+| `freeEach()` | frees each value, then the list: for a list of Strings or of structs with `free` |
 | `reserve(n)` | makes room for n values at once |
 | `clear()` | empties the list and keeps its memory |
 | `free()` | gives the memory back |
 
 `len` is the number of values. An index outside the list stops the program, as with slices.
 
-The list holds the values themselves. A list of `String` holds Strings that something still has to free.
+The list holds the values themselves. A list of `String` holds Strings that something still has to free: `freeEach` does that.
 
 ## Map
 
@@ -52,6 +54,7 @@ n := ages.getOr("zoe", 0)
 | `get(k)` | the value of k and whether k is there |
 | `getOr(k, fallback)` | the value of k, or fallback |
 | `has(k)` | whether k is there |
+| `keys()` | the keys as a `List`, in no particular order |
 | `remove(k)` | takes k out; false when it wasn't there |
 | `clear()` | takes every key out and keeps the memory |
 | `free()` | gives the memory back |

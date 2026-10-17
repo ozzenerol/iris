@@ -1,0 +1,41 @@
+// expect: true false 1
+// expect: 1
+// expect: true
+// expect: 2 true
+
+struct Point {
+    i64 x
+}
+
+@json
+struct Note {
+    String title
+}
+
+void main() {
+    List[i64] xs
+    xs.push(3)
+    xs.push(7)
+    print("{xs.contains(7)} {xs.contains(9)} {xs.indexOf(7)}")
+    xs.free()
+    List[Point] ps
+    ps.push(Point{x: 1})
+    print("{ps.len}")
+    ps.free()
+    List[str] words
+    words.push("a")
+    print("{words.contains("a")}")
+    words.free()
+    List[Note] notes
+    notes.push(Note{title: "x".copy()})
+    notes.freeEach()
+    List[String] ss
+    ss.push("y".copy())
+    ss.freeEach()
+    Map[str, i64] m
+    m.set("a", 1)
+    m.set("b", 2)
+    scoped List[str] ks = m.keys()
+    print("{ks.len} {ks.contains("b")}")
+    m.free()
+}

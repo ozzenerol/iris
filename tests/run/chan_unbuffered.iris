@@ -1,0 +1,60 @@
+// expect: sum 499500
+// expect: send waited true
+// expect: f hello
+// expect: nothing on e
+// expect: threads 4999950000
+
+import time
+
+void producer(chan[i64] c, i64 n) {
+    for i in 0..n {
+        c <- i
+    }
+}
+
+void slowReader(chan[i64] c, chan[bool] done) {
+    sleep(50ms)
+    _ = <-c
+    done <- true
+}
+
+void main() {
+    c := chan[i64](0)
+    spawn producer(c, 1000)
+    i64 sum
+    for i in 0..1000 {
+        sum += <-c
+    }
+    print("sum {sum}")
+
+    d := chan[i64](0)
+    done := chan[bool](1)
+    spawn slowReader(d, done)
+    start := time.clock()
+    d <- 1
+    print("send waited {time.clock() - start >= 40ms}")
+    _ = <-done
+
+    e := chan[str](0)
+    f := chan[str](0)
+    thread sendFrom(f)
+    select {
+        v := <-e => print("e {v}")
+        v := <-f => print("f {v}")
+    }
+    select {
+        v := <-e => print("e {v}")
+        after(20ms) => print("nothing on e")
+    }
+    t := thread producer(c, 100000)
+    sum = 0
+    for i in 0..100000 {
+        sum += <-c
+    }
+    t.join()
+    print("threads {sum}")
+}
+
+void sendFrom(chan[str] f) {
+    f <- "hello"
+}

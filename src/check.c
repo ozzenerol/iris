@@ -1266,10 +1266,32 @@ static int findField(Type *t, const char *name, Node **path, int max) {
     return 0;
 }
 
+static Checker *gChecker;           /* for methods checked when first used */
+static Node *gUseSite;              /* the method call being checked, for its errors */
+static Node *gBodySite;             /* the site of the generic body being checked */
+static void queueBody(Checker *c, Node *fn, Scope *scope, Node *site);
+
+/* A method of a generic struct's instance is checked, and compiled, only
+ * once something uses it: List[T].contains needs T to have ==, and a List
+ * of structs that never calls it still works. */
+static Node *usedMethod(Node *m) {
+    if (m && (m->flags & F_LAZY) && gChecker) {
+        m->flags &= ~F_LAZY;
+        Type *rt = m->list.len ? m->list.items[0]->type : NULL;
+        Node *site = gUseSite ? gUseSite : rt && rt->kind == TY_PTR && rt->elem->decl ? rt->elem->decl : m;
+        if (gBodySite && site && site->src && strncmp(site->src->path, "std/", 4) == 0) {
+            site = gBodySite;   /* used inside the library: the program's own call is the one to show */
+        }
+        queueBody(gChecker, m, m->scope, site);
+        listPush(gChecker->arena, gChecker->instOut, m);
+    }
+    return m;
+}
+
 static Node *findMethodIn(Type *t, const char *name) {
     for (int i = 0; i < t->methods.len; i++) {
         if (strcmp(t->methods.items[i]->name, name) == 0) {
-            return t->methods.items[i];
+            return usedMethod(t->methods.items[i]);
         }
     }
     return NULL;
@@ -1522,8 +1544,7 @@ static void instantiateMethods(Checker *c, Type *t) {
         checkSignature(c, copy, t);
         c->scope = saved;
         c->module = savedModule;
-        queueBody(c, copy, s, t->decl);
-        listPush(c->arena, c->instOut, copy);
+        copy->flags |= F_LAZY;      /* the body waits until the method is used */
     }
 }
 
@@ -2710,8 +2731,8 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
                 error(c, e->b, "a channel's size is an integer, not %s", n->name);
             } else {
                 coerce(c, &e->b, &tyI64, "the size");
-                if (e->b->isConst && e->b->cval < 1) {
-                    error(c, e->b, "a channel needs room for at least one value");
+                if (e->b->isConst && e->b->cval < 0) {
+                    error(c, e->b, "a channel's room can't be below 0; 0 is a channel with no buffer");
                 }
             }
         }
@@ -3241,7 +3262,10 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     resolveStruct(c, st);
     Node *path[16];
     int n;
+    Node *savedSite = gUseSite;
+    gUseSite = e;
     Node *m = findMethod(st, name, path, &n, 16);
+    gUseSite = savedSite;
     if (!m) {
         Node *fpath[16];
         if (findField(st, name, fpath, 16)) {
@@ -5314,6 +5338,7 @@ bool checkProgram(Arena *a, Program *prog) {
     Checker c = {0};
     c.arena = a;
     gArena = a;
+    gChecker = &c;     /* cleared before it returns */
     gTypes = NULL;
     c.instOut = &prog->instances;
     int before = gErrors;
@@ -5516,10 +5541,17 @@ bool checkProgram(Arena *a, Program *prog) {
         int errs = gErrors;
         c.instGen = (int)fn->cval;
         fn->scope = c.pendScopes[i];
-        checkFunctionBody(&c, fn);
         Node *site = c.pendSites.items[i];
+        gBodySite = site && site->kind == N_CALL ? site : NULL;
+        checkFunctionBody(&c, fn);
+        gBodySite = NULL;
         if (gErrors != errs && site && site->kind == N_CALL) {
-            error(&c, site, "%s, made here, has the errors above", fn->name);
+            Type *self = fn->list.len && (fn->list.items[0]->flags & F_SELF) ? fn->list.items[0]->type : NULL;
+            if (self && self->kind == TY_PTR) {
+                error(&c, site, "%s.%s, made here, has the errors above", self->elem->name, fn->name);
+            } else {
+                error(&c, site, "%s, made here, has the errors above", fn->name);
+            }
         }
     }
 
@@ -5557,5 +5589,6 @@ bool checkProgram(Arena *a, Program *prog) {
             error(&c, mainFn, "main must return void, i32 or !void");
         }
     }
+    gChecker = NULL;
     return gErrors == before;
 }

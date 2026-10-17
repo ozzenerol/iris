@@ -4,7 +4,7 @@
 // error: 17: <- sends to a channel, not to i64
 // error: 18: <- takes from a channel, not from i64
 // error: 19: after is an arm of a select: select { after(5s) => ... }
-// error: 20: a channel needs room for at least one value
+// error: 20: a channel's room can't be below 0; 0 is a channel with no buffer
 // error: 22: a select arm takes from a channel (<-ch) or waits with after(...)
 !void fails() { }
 void ok(i64 n) { }
@@ -17,7 +17,7 @@ void main() {
     n <- 1
     y := <-n
     after(1s)
-    ch := chan[i64](0)
+    ch := chan[i64](-1)
     select {
         z := ok(1) => {}
     }
