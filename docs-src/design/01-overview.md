@@ -23,7 +23,7 @@ There are few rules to learn. A feature is added only if it removes a lot of cod
 
 ### Make costs visible
 
-Reading a function should tell you what it costs. A function that can fail says so in its return type (`!T`). A function that allocates memory takes an allocator. Nothing runs behind the program's back: there is no garbage collector, no hidden copies and no exceptions.
+Reading a function should tell you what it costs. A function that can fail says so in its return type (`!T`), and one that gives back memory to free returns a type with a `free` method. Nothing runs behind the program's back: there is no garbage collector, no hidden copies and no exceptions.
 
 ### Stay close to C
 

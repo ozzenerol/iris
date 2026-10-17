@@ -1,28 +1,46 @@
 # Iris
 
-Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
+Iris is a compiled language for servers, network tools and command-line programs. It has no garbage collector: memory is freed by the program, with `defer` and `scoped` to make that hard to forget. Errors are values that must be handled, every index is checked, and tasks and channels let one thread do many things at once. The compiler is written in C and produces native code through LLVM.
 
-The language is still being designed. These pages describe it as planned.
+```iris run
+import http
 
-- [Design](design/index.html) covers how the language works underneath and why. It is the reference for anyone working on the compiler.
-- [Language](language/index.html) explains each part of the language, with examples.
-- [Guides](guides/index.html) build whole programs, step by step.
-- [Roadmap](roadmap.html) lists what gets built, in order.
-
-```iris
-import net
-
-!(str, u16) splitHost(str addr) {
-    i := addr.find(":")
-    if i < 0 { return (addr, 80) }
-    port := try parsePort(addr[i + 1:])
-    return (addr[0:i], port)
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello, {req.param("name")}\n")
 }
 
 !void main() {
-    host, port := try splitHost("example.com:443")
-    conn := try net.dial(host, port, timeout: 5s)
-    defer conn.close()
-    print("connected to {host}:{port}")
+    http.Router r
+    defer r.free()
+    r.get("/hello/:name", hello)
+    print("routes ready")
 }
 ```
+
+```output
+routes ready
+```
+
+With `try r.serve(8080)` at the end, that is a web server on every CPU core, with HTTP/1.1 and HTTP/2.
+
+## Where to start
+
+- The [Language Tour](tour/index.html) covers every part of the language, one topic per chapter, with programs you can run and their output.
+- The [Library](std/index.html) has every module of the standard library, with each type and function and what it does.
+- The [Guides](guides/index.html) build whole programs step by step: a REST API, and a command-line tool.
+- [Design](design/index.html) explains how Iris works underneath and why, for people working on the compiler.
+- The [Roadmap](roadmap.html) lists each release and what it brought.
+
+## A first program
+
+```iris run
+void main() {
+    print("hello, world")
+}
+```
+
+```output
+hello, world
+```
+
+Save it as `hello.iris`, and run it with `iris run hello.iris`. The [first chapter](tour/01-hello.html) of the tour goes on from there.

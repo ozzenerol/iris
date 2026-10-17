@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variables - Iris</title>
+<meta name="description" content="Declaring variables, giving them values, and where each one can be used.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html" class="on"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Variables</h1>
+<p class="lede">Declaring variables, giving them values, and where each one can be used.</p>
+<h2 id="declaring-with"><a href="#declaring-with">Declaring with :=</a></h2>
+<p><code>:=</code> declares a new variable and gives it a value. The variable's type is the value's type:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    count := <span class="n">10</span>       <span class="c">// i64</span>
+    ratio := <span class="n">0.25</span>     <span class="c">// f64</span>
+    ready := <span class="k">true</span>     <span class="c">// bool</span>
+    name := <span class="s">&quot;iris&quot;</span>    <span class="c">// str</span>
+    timeout := 1500ms <span class="c">// Duration</span>
+    print(<span class="s">&quot;{count} {ratio} {ready} {name} {timeout}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>10 0.25 true iris 1.5s</code></pre>
+<p>A whole number with no other type to go by is an <code>i64</code>, and a number with a point or an exponent is an <code>f64</code>.</p>
+<h2 id="declaring-with-a-type"><a href="#declaring-with-a-type">Declaring with a type</a></h2>
+<p>A declaration can also name the type, followed by the variable and its value. This is the way to get a type other than the one the value would give:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u8</span> small = <span class="n">200</span>
+    <span class="t">i32</span> code = -<span class="n">1</span>
+    <span class="t">f32</span> scale = <span class="n">1.5</span>
+    <span class="t">str</span> label = <span class="s">&quot;ready&quot;</span>
+    print(<span class="s">&quot;{small} {code} {scale} {label}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>200 -1 1.5 ready</code></pre>
+<p>A number given to a typed variable must fit in it. The compiler checks this:</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">u8</span> b = <span class="n">300</span> <span class="c">// error: 300 doesn&#x27;t fit in u8</span></code></pre>
+<h2 id="zero-values"><a href="#zero-values">Zero values</a></h2>
+<p>A variable declared without a value starts at zero: <code>0</code> for numbers, <code>false</code> for <code>bool</code>, <code>&quot;&quot;</code> for <code>str</code>, <code>null</code> for pointers, and every field and item at zero for structs and arrays.</p>
+<pre class="code run"><code><span class="k">struct</span> Point {
+    <span class="t">i64</span> x
+    <span class="t">i64</span> y
+}
+
+<span class="t">void</span> main() {
+    <span class="t">i64</span> n
+    <span class="t">bool</span> done
+    <span class="t">str</span> s
+    <span class="t">f64</span> f
+    <span class="t">i64</span>[<span class="n">3</span>] counts
+    Point p
+    print(<span class="s">&quot;[{n}] [{done}] [{s}] [{f}] [{counts[0]} {counts[2]}] [{p.x} {p.y}]&quot;</span>)
+}</code></pre>
+<pre class="out"><code>[0] [false] [] [0] [0 0] [0 0]</code></pre>
+<p>A struct whose fields have defaults starts with those defaults instead (see <a href="13-structs.html">Structs</a>). Every variable starts with a known value, so reading one before giving it a value is never undefined.</p>
+<h2 id="assignment"><a href="#assignment">Assignment</a></h2>
+<p><code>=</code> gives a variable a new value of the same type. The operators that change a variable in place are written with <code>=</code> after them:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    n := <span class="n">5</span>
+    n = <span class="n">7</span>
+    n += <span class="n">3</span>  <span class="c">// 10</span>
+    n -= <span class="n">1</span>  <span class="c">// 9</span>
+    n *= <span class="n">4</span>  <span class="c">// 36</span>
+    n /= <span class="n">5</span>  <span class="c">// 7</span>
+    n %= <span class="n">4</span>  <span class="c">// 3</span>
+    n &lt;&lt;= <span class="n">2</span> <span class="c">// 12</span>
+    n |= <span class="n">1</span>  <span class="c">// 13</span>
+    print(<span class="s">&quot;{n}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>13</code></pre>
+<p>Assignment is a statement: it gives no value, so it can't sit inside an expression or a condition.</p>
+<h2 id="several-at-once"><a href="#several-at-once">Several at once</a></h2>
+<p>Several variables can be declared or assigned in one statement, with the names on the left and the values on the right. Every value is worked out before any variable changes, so two variables can swap without a third:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    x, y := <span class="n">1</span>, <span class="n">2</span>
+    print(<span class="s">&quot;{x} {y}&quot;</span>)
+    x, y = y, x
+    print(<span class="s">&quot;{x} {y}&quot;</span>)
+    first, rest := <span class="s">&quot;a&quot;</span>, <span class="s">&quot;bcd&quot;</span>
+    print(<span class="s">&quot;{first} then {rest}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1 2
+2 1
+a then bcd</code></pre>
+<p>The same form takes the several values a function returns (see <a href="10-functions.html">Functions</a>). <code>_</code> stands for a value that isn't wanted:</p>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">void</span> main() {
+    name, _, found := <span class="t">str</span>.cut(<span class="s">&quot;ada@example.com&quot;</span>, <span class="s">&quot;@&quot;</span>)
+    print(<span class="s">&quot;{name} {found}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>ada true</code></pre>
+<h2 id="scope"><a href="#scope">Scope</a></h2>
+<p>A variable can be used from its declaration to the end of the block it is declared in. A block inside it can use it too:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    total := <span class="n">0</span>
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
+        square := i * i <span class="c">// only inside the loop&#x27;s block</span>
+        total += square
+    }
+    print(<span class="s">&quot;{total}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>14</code></pre>
+<p>A name can't be declared again while it is still visible, in the same block or in a block inside it. This keeps every name meaning one thing within a function:</p>
+<pre class="code bad"><span class="tag">does not compile</span><code>x := <span class="n">1</span>
+<span class="k">if</span> ready {
+    x := <span class="n">2</span> <span class="c">// error: x is already declared on line 1</span>
+}</code></pre>
+<p>Two blocks side by side can each have their own variable with the same name, since neither sees the other:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
+        step := i * <span class="n">10</span>
+        print(<span class="s">&quot;{step}&quot;</span>)
+    }
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">1</span> {
+        step := <span class="n">99</span>
+        print(<span class="s">&quot;{step}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>0
+10
+99</code></pre>
+<h2 id="globals"><a href="#globals">Globals</a></h2>
+<p>A variable declared outside any function is a global. Every function of the module can use it, and it lives as long as the program:</p>
+<pre class="code run"><code><span class="t">i64</span> calls
+<span class="t">str</span> prefix = <span class="s">&quot;call&quot;</span>
+
+<span class="t">void</span> count() {
+    calls += <span class="n">1</span>
+    print(<span class="s">&quot;{prefix} {calls}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    count()
+    count()
+}</code></pre>
+<pre class="out"><code>call 1
+call 2</code></pre>
+<p>A global's value must be known when the program is compiled: a number, text, a constant, or an array or struct made of those. Work that has to run first goes at the start of <code>main</code>, or into a <code>comptime</code> constant (see <a href="26-compile-time.html">Compile time</a>). A global with no value starts at zero.</p>
+<p>Functions can use a global declared further down the file: declarations at the top level can come in any order.</p>
+<p>Globals are shared by every task of the program. A global that several threads change at the same time needs an <code>Atomic</code> or a <code>Mutex</code>, and <code>threadlocal</code> gives each thread its own copy (see <a href="25-threads.html">Threads</a>).</p>
+<h2 id="constants"><a href="#constants">Constants</a></h2>
+<p><code>const</code> gives a name to a value that never changes. The value is worked out when compiling, from numbers, text and other constants:</p>
+<pre class="code run"><code><span class="k">const</span> KiB = <span class="n">1024</span>
+<span class="k">const</span> BUFFER = <span class="n">64</span> * KiB
+<span class="k">const</span> NAME = <span class="s">&quot;iris&quot;</span>
+<span class="k">const</span> RATE = <span class="n">0.5</span>
+
+<span class="t">void</span> main() {
+    print(<span class="s">&quot;{NAME}: {BUFFER} bytes at {RATE}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>iris: 65536 bytes at 0.5</code></pre>
+<p>A constant has no address and takes no memory: each use is the value itself. An integer constant takes the type the place it is used needs, as long as the value fits, so <code>const LIMIT = 200</code> can be given to a <code>u8</code> and to an <code>i64</code>.</p>
+    <nav class="pager"><a class="prev" href="01-hello.html"><span>Previous</span>A first program</a><a class="next" href="03-integers.html"><span>Next</span>Integers</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-with">Declaring with :=</a></li><li><a href="#declaring-with-a-type">Declaring with a type</a></li><li><a href="#zero-values">Zero values</a></li><li><a href="#assignment">Assignment</a></li><li><a href="#several-at-once">Several at once</a></li><li><a href="#scope">Scope</a></li><li><a href="#globals">Globals</a></li><li><a href="#constants">Constants</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

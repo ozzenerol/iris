@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Functions - Iris</title>
+<meta name="description" content="Declaring functions, passing them arguments, giving defaults and names to those arguments, and returning one value or several.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html" class="on"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Functions</h1>
+<p class="lede">Declaring functions, passing them arguments, giving defaults and names to those arguments, and returning one value or several.</p>
+<h2 id="declaring-a-function"><a href="#declaring-a-function">Declaring a function</a></h2>
+<p>A function is written as its return type, its name, its parameters in parentheses, and a block. <code>void</code> means it gives nothing back:</p>
+<pre class="code run"><code><span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) {
+    <span class="k">return</span> a + b
+}
+
+<span class="t">void</span> greet(<span class="t">str</span> name) {
+    print(<span class="s">&quot;hello, {name}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    greet(<span class="s">&quot;Ada&quot;</span>)
+    print(<span class="s">&quot;{add(2, 3)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>hello, Ada
+5</code></pre>
+<p>Parameters next to each other with the same type can share it: <code>i64 add(i64 a, b)</code> is the same as <code>i64 add(i64 a, i64 b)</code>.</p>
+<p>A function that gives a value must give it on every way out of its block. One that can reach its closing brace without a <code>return</code> doesn't compile.</p>
+<h2 id="one-expression"><a href="#one-expression">One expression</a></h2>
+<p>A function whose body is one expression can be written with <code>=&gt;</code>, leaving out the braces and the <code>return</code>:</p>
+<pre class="code run"><code><span class="t">i64</span> square(<span class="t">i64</span> x) =&gt; x * x
+<span class="t">bool</span> isDigit(<span class="t">u8</span> c) =&gt; c &gt;= <span class="s">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="s">&#x27;9&#x27;</span>
+<span class="t">str</span> sign(<span class="t">i64</span> n) =&gt; <span class="k">if</span> n &lt; <span class="n">0</span> { <span class="s">&quot;negative&quot;</span> } <span class="k">else</span> <span class="k">if</span> n == <span class="n">0</span> { <span class="s">&quot;zero&quot;</span> } <span class="k">else</span> { <span class="s">&quot;positive&quot;</span> }
+<span class="t">void</span> show(<span class="t">i64</span> n) =&gt; print(<span class="s">&quot;{n} is {sign(n)}&quot;</span>)
+
+<span class="t">void</span> main() {
+    show(square(-<span class="n">3</span>))
+    show(<span class="n">0</span>)
+    print(<span class="s">&quot;{isDigit(&#x27;7&#x27;)} {isDigit(&#x27;x&#x27;)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>9 is positive
+0 is zero
+true false</code></pre>
+<p>For a <code>void</code> function, the expression after <code>=&gt;</code> is a call.</p>
+<h2 id="order"><a href="#order">Order</a></h2>
+<p>Functions can be declared in any order: a function can call one declared further down the file, or in another file of the same module. A function can call itself:</p>
+<pre class="code run"><code><span class="t">i64</span> fib(<span class="t">i64</span> n) =&gt; <span class="k">if</span> n &lt; <span class="n">2</span> { n } <span class="k">else</span> { fib(n - <span class="n">1</span>) + fib(n - <span class="n">2</span>) }
+
+<span class="t">void</span> main() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">10</span> {
+        print(<span class="s">&quot;{fib(i)}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>0
+1
+1
+2
+3
+5
+8
+13
+21
+34</code></pre>
+<p>Each name means one function: two functions can't share a name, even with different parameters. A function's name can't be a built-in one (<code>print</code>, <code>format</code>, <code>free</code>...) or a type's.</p>
+<h2 id="arguments-are-copies"><a href="#arguments-are-copies">Arguments are copies</a></h2>
+<p>Each argument is copied into its parameter. A function that changes a parameter changes its copy, not the caller's variable:</p>
+<pre class="code run"><code><span class="t">void</span> bump(<span class="t">i64</span> n) {
+    n += <span class="n">1</span>
+    print(<span class="s">&quot;inside: {n}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    count := <span class="n">5</span>
+    bump(count)
+    print(<span class="s">&quot;outside: {count}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>inside: 6
+outside: 5</code></pre>
+<p>To let a function change the caller's value, pass a pointer to it, with <code>&amp;</code>. The function reads and writes through it with <code>*</code> (the <a href="17-pointers.html">Pointers</a> chapter has more):</p>
+<pre class="code run"><code><span class="t">void</span> bump(<span class="t">i64</span> *n) {
+    *n += <span class="n">1</span>
+}
+
+<span class="t">void</span> main() {
+    count := <span class="n">5</span>
+    bump(&amp;count)
+    print(<span class="s">&quot;{count}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>6</code></pre>
+<p>A struct is copied too, field by field. A large struct, or one the function should change, is passed as a pointer: a pointer to a struct reaches the fields with a dot, as the value does.</p>
+<h2 id="defaults"><a href="#defaults">Defaults</a></h2>
+<p>A parameter can have a default value, which is used when the call leaves it out. Parameters with defaults come after the ones without:</p>
+<pre class="code run"><code><span class="t">void</span> connect(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = 30s) {
+    print(<span class="s">&quot;{host}:{port}, waiting at most {timeout}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    connect(<span class="s">&quot;example.com&quot;</span>)
+    connect(<span class="s">&quot;example.com&quot;</span>, <span class="n">8080</span>)
+    connect(<span class="s">&quot;example.com&quot;</span>, <span class="n">443</span>, 5s)
+}</code></pre>
+<pre class="out"><code>example.com:80, waiting at most 30s
+example.com:8080, waiting at most 30s
+example.com:443, waiting at most 5s</code></pre>
+<p>A default is a value known when compiling: a number, text, a constant, or an empty slice <code>[]</code>.</p>
+<h2 id="named-arguments"><a href="#named-arguments">Named arguments</a></h2>
+<p>Any argument can be given by its parameter's name. This lets a call skip some defaults and give a later one, and makes calls with several values of the same type easier to read:</p>
+<pre class="code run"><code><span class="t">void</span> connect(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = 30s, <span class="t">bool</span> tls = <span class="k">false</span>) {
+    print(<span class="s">&quot;{host}:{port} timeout {timeout} tls {tls}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    connect(<span class="s">&quot;example.com&quot;</span>, tls: <span class="k">true</span>)
+    connect(<span class="s">&quot;example.com&quot;</span>, timeout: 5s, port: <span class="n">8443</span>)
+    connect(host: <span class="s">&quot;localhost&quot;</span>)
+}</code></pre>
+<pre class="out"><code>example.com:80 timeout 30s tls true
+example.com:8443 timeout 5s tls false
+localhost:80 timeout 30s tls false</code></pre>
+<p>Named arguments come after the ones given by position, in any order among themselves. A parameter is given once, by position or by name.</p>
+<h2 id="several-values"><a href="#several-values">Several values</a></h2>
+<p>A function can give several values. Its return type lists their types in parentheses, and <code>return</code> gives them separated by commas, also in parentheses:</p>
+<pre class="code run"><code>(<span class="t">i64</span>, <span class="t">i64</span>) divmod(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; (a / b, a % b)
+
+(<span class="t">str</span>, <span class="t">bool</span>) firstWord(<span class="t">str</span> text) {
+    <span class="k">for</span> i, c <span class="k">in</span> text {
+        <span class="k">if</span> c == <span class="s">&#x27; &#x27;</span> {
+            <span class="k">return</span> (text[<span class="n">0</span>:i], <span class="k">true</span>)
+        }
+    }
+    <span class="k">return</span> (text, <span class="k">false</span>)
+}
+
+<span class="t">void</span> main() {
+    q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)
+    print(<span class="s">&quot;{q} remainder {r}&quot;</span>)
+    word, more := firstWord(<span class="s">&quot;hello world&quot;</span>)
+    print(<span class="s">&quot;{word} {more}&quot;</span>)
+    _, last := divmod(<span class="n">20</span>, <span class="n">6</span>)
+    print(<span class="s">&quot;{last}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 remainder 2
+hello true
+2</code></pre>
+<p>The caller unpacks the values into names, one for each; <code>_</code> leaves one out. A function's several values can't be kept together in one variable: they are unpacked where the call is.</p>
+<h2 id="functions-that-can-fail"><a href="#functions-that-can-fail">Functions that can fail</a></h2>
+<p>A function whose return type starts with <code>!</code> can fail: it gives its value or an error. The caller must deal with the error, with <code>try</code> or <code>catch</code>:</p>
+<pre class="code run"><code><span class="k">enum</span> ParseError { empty, notDigit }
+
+!<span class="t">i64</span> digit(<span class="t">str</span> s) {
+    <span class="k">if</span> s.len == <span class="n">0</span> {
+        <span class="k">return</span> error(ParseError.empty, <span class="s">&quot;nothing to read&quot;</span>)
+    }
+    <span class="k">if</span> s[<span class="n">0</span>] &lt; <span class="s">&#x27;0&#x27;</span> || s[<span class="n">0</span>] &gt; <span class="s">&#x27;9&#x27;</span> {
+        <span class="k">return</span> error(ParseError.notDigit, <span class="s">&quot;&#x27;{s}&#x27; isn&#x27;t a digit&quot;</span>)
+    }
+    <span class="k">return</span> <span class="t">i64</span>(s[<span class="n">0</span>] - <span class="s">&#x27;0&#x27;</span>)
+}
+
+<span class="t">void</span> main() {
+    print(<span class="s">&quot;{digit(&quot;</span><span class="n">7</span><span class="s">&quot;) catch -1}&quot;</span>)
+    print(<span class="s">&quot;{digit(&quot;</span>x<span class="s">&quot;) catch -1}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>7
+-1</code></pre>
+<p>The <a href="18-errors.html">Errors</a> chapter covers them in full. The result of any other function can be left unused, as with a <code>print</code> of nothing:</p>
+<pre class="code run"><code><span class="t">i64</span> log(<span class="t">str</span> s) {
+    print(s)
+    <span class="k">return</span> s.len
+}
+
+<span class="t">void</span> main() {
+    log(<span class="s">&quot;the length isn&#x27;t needed here&quot;</span>)
+}</code></pre>
+<pre class="out"><code>the length isn&#x27;t needed here</code></pre>
+    <nav class="pager"><a class="prev" href="09-loops.html"><span>Previous</span>Loops</a><a class="next" href="11-function-values.html"><span>Next</span>Functions as values</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-a-function">Declaring a function</a></li><li><a href="#one-expression">One expression</a></li><li><a href="#order">Order</a></li><li><a href="#arguments-are-copies">Arguments are copies</a></li><li><a href="#defaults">Defaults</a></li><li><a href="#named-arguments">Named arguments</a></li><li><a href="#several-values">Several values</a></li><li><a href="#functions-that-can-fail">Functions that can fail</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

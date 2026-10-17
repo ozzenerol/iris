@@ -72,10 +72,9 @@
   }
 
   function modByName(name) { for (var i = 0; i < mods.length; i++) if (mods[i].name === name) return mods[i]; return null; }
+  /* a declaration's name in its module: Router.get for a method */
   function shortName(m, d) {
-    if (m.name === "core") return d.name;
-    var i = d.name.indexOf(".");
-    return i >= 0 ? d.name.slice(i + 1) : d.name;
+    return d.name;
   }
   function href(m, d) { return "#" + m.name + (d ? "/" + d.name : ""); }
 
@@ -100,7 +99,7 @@
   var ALL = [];
   mods.forEach(function (m) {
     ALL.push({ m: m, d: null, t: m.name, k: "module" });
-    m.decls.forEach(function (d) { ALL.push({ m: m, d: d, t: m.name === "core" ? d.name : m.name.replace(/[^.]*$/, "") + d.name.replace(/^[^.]*\./, m.name.split(".").pop() + "."), k: d.kind }); });
+    m.decls.forEach(function (d) { ALL.push({ m: m, d: d, t: m.name === "core" ? d.name : m.name + "." + d.name, k: d.kind }); });
   });
   function find(q) {
     q = q.trim().toLowerCase();

@@ -132,7 +132,7 @@ These are suggestions. They are used in the examples on these pages until they a
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
-| Standard library functions that allocate take an allocator as their last parameter, defaulting to the general one. | Most calls stay short, and an arena can be passed when needed. |
+| Memory comes from one general allocator, the C library's. Allocators that a call can be given, like an arena, are planned. | One way to free everything keeps the first versions simple. |
 
 ## Not in Iris
 

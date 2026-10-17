@@ -22,13 +22,11 @@ T[]  =  { T *ptr, i64 len }
 
 ## String
 
-`String` is text the program owns. It remembers which allocator its memory came from, so `free` can give it back.
+`String` is text the program owns: a pointer to its bytes, how many there are, and how many fit before it must grow. Its memory comes from `malloc`, and `free` gives it back.
 
 ```output
-String  =  { u8 *ptr, i64 len, i64 cap, Allocator *alloc }
+String  =  { u8 *ptr, i64 len, i64 cap }
 ```
-
-Until allocators arrive, `String` is `{ u8 *ptr, i64 len, i64 cap }` and its memory comes from `malloc`.
 
 ## Arrays
 

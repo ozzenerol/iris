@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integers - Iris</title>
+<meta name="description" content="The integer types, how integer literals are written, how arithmetic works on them, and how values move from one type to another.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html" class="on"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Integers</h1>
+<p class="lede">The integer types, how integer literals are written, how arithmetic works on them, and how values move from one type to another.</p>
+<h2 id="the-types"><a href="#the-types">The types</a></h2>
+<div class="table"><table><thead><tr><th>Type</th><th>Bytes</th><th>Smallest</th><th>Largest</th></tr></thead><tbody><tr><td><code>i8</code></td><td>1</td><td>-128</td><td>127</td></tr><tr><td><code>i16</code></td><td>2</td><td>-32768</td><td>32767</td></tr><tr><td><code>i32</code></td><td>4</td><td>-2147483648</td><td>2147483647</td></tr><tr><td><code>i64</code></td><td>8</td><td>-9223372036854775808</td><td>9223372036854775807</td></tr><tr><td><code>u8</code></td><td>1</td><td>0</td><td>255</td></tr><tr><td><code>u16</code></td><td>2</td><td>0</td><td>65535</td></tr><tr><td><code>u32</code></td><td>4</td><td>0</td><td>4294967295</td></tr><tr><td><code>u64</code></td><td>8</td><td>0</td><td>18446744073709551615</td></tr></tbody></table></div>
+<p><code>i64</code> is the integer to use unless there is a reason for another: it is the type a number gets by default, and the type of lengths and indexes. <code>u8</code> is a byte; text is made of them. The others suit data with a fixed layout, like a file format or a network protocol, and C functions that take them.</p>
+<p>Each type knows its limits as <code>min</code> and <code>max</code>:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    print(<span class="s">&quot;{i8.min} {i8.max}&quot;</span>)
+    print(<span class="s">&quot;{u16.max} {i32.max}&quot;</span>)
+    print(<span class="s">&quot;{i64.max} {u64.max}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>-128 127
+65535 2147483647
+9223372036854775807 18446744073709551615</code></pre>
+<h2 id="literals"><a href="#literals">Literals</a></h2>
+<p>A number can be written in decimal, hexadecimal (<code>0x</code>), binary (<code>0b</code>) or octal (<code>0o</code>). <code>_</code> can go between digits to make long numbers easier to read; it has no meaning of its own:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    print(<span class="s">&quot;{1_000_000} {0xff} {0xFF_FF} {0b1010} {0o755}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1000000 255 65535 10 493</code></pre>
+<p>A character in single quotes is the number of its byte, a <code>u8</code>:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u8</span> a = <span class="s">&#x27;a&#x27;</span>
+    digit := <span class="s">&#x27;7&#x27;</span> - <span class="s">&#x27;0&#x27;</span>
+    print(<span class="s">&quot;{a} {digit} {&#x27;\n&#x27;}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>97 7 10</code></pre>
+<p>The escapes inside quotes are <code>\n</code> (newline), <code>\t</code> (tab), <code>\r</code> (carriage return), <code>\0</code> (zero), <code>\\</code>, <code>\&#x27;</code>, <code>\&quot;</code> and <code>\x41</code> (the byte written in two hex digits).</p>
+<p>A literal has no type of its own until it is used. With nothing to go by, it is an <code>i64</code>. Given to a typed variable, a parameter or an operator with a typed value on the other side, it takes that type, as long as it fits:</p>
+<pre class="code run"><code><span class="t">void</span> takeByte(<span class="t">u8</span> b) {
+    print(<span class="s">&quot;got {b}&quot;</span>)
+}
+
+<span class="t">void</span> main() {
+    <span class="t">u16</span> port = <span class="n">8080</span>
+    takeByte(<span class="n">255</span>)
+    <span class="t">i32</span> small = -<span class="n">40</span>
+    print(<span class="s">&quot;{port + 1} {small * 2}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>got 255
+8081 -80</code></pre>
+<p>A literal that doesn't fit is a compile error, so <code>u8 b = 256</code> doesn't compile.</p>
+<h2 id="units"><a href="#units">Units</a></h2>
+<p>A number can carry a unit. A duration is a number of nanoseconds, with the type <code>Duration</code>: <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>. A size is a plain integer: <code>KiB</code>, <code>MiB</code> and <code>GiB</code> multiply by 1024, 1024 squared and 1024 cubed:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    timeout := 90s
+    poll := 250ms
+    print(<span class="s">&quot;{timeout} {poll} {i64(poll)}&quot;</span>)
+    buf := 64KiB
+    print(<span class="s">&quot;{buf} bytes&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1m30s 250ms 250000000
+65536 bytes</code></pre>
+<p>A literal has one unit; <code>90s</code> or <code>1m + 30s</code> both make a minute and a half. A <code>Duration</code> prints in its units, and <code>i64(d)</code> gives its nanoseconds. Durations add and subtract, and multiply and divide by plain numbers. Dividing one duration by another gives a plain number, how many times the second fits in the first:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    timeout := 1m + 30s
+    print(<span class="s">&quot;{timeout} {timeout * 2} {timeout / 4}&quot;</span>)
+    print(<span class="s">&quot;{timeout / 1s} seconds, {timeout / 250ms} polls&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1m30s 3m0s 22.5s
+90 seconds, 360 polls</code></pre>
+<p>The <a href="../std/index.html#time">time</a> module has the time of day, dates and a clock.</p>
+<h2 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h2>
+<p><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>%</code> work on two values of the same integer type and give that type. Division drops the fraction, toward zero, and <code>%</code> gives what is left, with the sign of the left side:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    print(<span class="s">&quot;{7 / 2} {-7 / 2} {7 % 3} {-7 % 3}&quot;</span>)
+    a := <span class="n">17</span>
+    b := <span class="n">5</span>
+    print(<span class="s">&quot;{a / b} remainder {a % b}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 -3 1 -1
+3 remainder 2</code></pre>
+<p>The bit operators are <code>&amp;</code> (and), <code>|</code> (or), <code>^</code> (exclusive or), <code>~</code> (each bit flipped), and the shifts <code>&lt;&lt;</code> and <code>&gt;&gt;</code>. Shifting a signed value right keeps its sign:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    n := <span class="n">0b1100</span>
+    print(<span class="s">&quot;{n &amp; 0b1010} {n | 1} {n ^ 0b0110} {~n}&quot;</span>)
+    print(<span class="s">&quot;{1 &lt;&lt; 10} {n &gt;&gt; 2} {-16 &gt;&gt; 2}&quot;</span>)
+    <span class="t">u8</span> b = <span class="n">0xf0</span>
+    print(<span class="s">&quot;{~b} {b &gt;&gt; 4}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>8 13 10 -13
+1024 3 -4
+15 15</code></pre>
+<h2 id="overflow-and-division-by-zero"><a href="#overflow-and-division-by-zero">Overflow and division by zero</a></h2>
+<p>A result that doesn't fit in its type is an overflow. In a debug build, which is what <code>iris run</code> makes, it stops the program with a message that says where:</p>
+<pre class="code"><code><span class="t">u8</span> a = <span class="n">250</span>
+<span class="t">u8</span> b = <span class="n">10</span>
+c := a + b <span class="c">// panic: integer overflow</span></code></pre>
+<p>The release builds don't check overflow, and the value wraps around: <code>250 + 10</code> in a <code>u8</code> gives <code>4</code>. Dividing by zero stops a debug and a <code>release-safe</code> build; in <code>release-fast</code> it is not checked, and the result can't be relied on.</p>
+<p>Arithmetic happens in the type of the values. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so the sum of two big bytes overflows. Convert first when the result needs more room:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u8</span> a = <span class="n">250</span>
+    <span class="t">u8</span> b = <span class="n">10</span>
+    <span class="t">i64</span> sum = <span class="t">i64</span>(a) + <span class="t">i64</span>(b)
+    print(<span class="s">&quot;{sum}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>260</code></pre>
+<h2 id="converting"><a href="#converting">Converting</a></h2>
+<p>A value converts to another integer type on its own when that type holds every value it could have: <code>u8</code> to <code>u16</code>, <code>i32</code> to <code>i64</code>, <code>u32</code> to <code>i64</code>. Every other conversion is written out, with the type's name used like a function:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u8</span> small = <span class="n">200</span>
+    <span class="t">i64</span> wide = small <span class="c">// on its own: every u8 fits in an i64</span>
+    <span class="t">i64</span> n = <span class="n">65</span>
+    <span class="t">u8</span> letter = <span class="t">u8</span>(n) <span class="c">// written out: an i64 may not fit</span>
+    <span class="t">u64</span> big = <span class="t">u64</span>(wide) * <span class="n">3</span>
+    print(<span class="s">&quot;{wide} {letter} {big}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>200 65 600</code></pre>
+<p>A conversion that can lose the value is checked: in a debug build, <code>u8(300)</code> with a value known only when the program runs stops it with a message. A signed value never converts on its own to an unsigned type, since a negative number has no unsigned value.</p>
+<p>The two sides of an operator must have the same type, or one must convert on its own to the other. <code>i32 + u32</code> doesn't compile: neither holds all the values of the other, so the program says which one it means.</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i32</span> a = <span class="n">5</span>
+<span class="t">u32</span> b = <span class="n">6</span>
+c := a + b <span class="c">// error: &#x27;+&#x27; can&#x27;t mix i32 and u32; convert one side</span></code></pre>
+<h2 id="comparing"><a href="#comparing">Comparing</a></h2>
+<p><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> compare two integers and give a <code>bool</code>. They follow the same rule as arithmetic: both sides of one type, or one that converts to the other.</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u8</span> b = <span class="n">200</span>
+    <span class="t">i64</span> limit = <span class="n">100</span>
+    print(<span class="s">&quot;{b &gt; limit} {b == 200} {limit != 100}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>true true false</code></pre>
+    <nav class="pager"><a class="prev" href="02-variables.html"><span>Previous</span>Variables</a><a class="next" href="04-floating-point.html"><span>Next</span>Floating point</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#the-types">The types</a></li><li><a href="#literals">Literals</a></li><li><a href="#units">Units</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#overflow-and-division-by-zero">Overflow and division by zero</a></li><li><a href="#converting">Converting</a></li><li><a href="#comparing">Comparing</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

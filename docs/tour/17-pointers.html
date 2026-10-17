@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pointers - Iris</title>
+<meta name="description" content="A pointer holds the address of a value, so code can read and change the value where it is instead of a copy of it. This chapter covers taking addresses, reading and writing through pointers, null, and the rules that keep pointers valid.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html" class="on"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Pointers</h1>
+<p class="lede">A pointer holds the address of a value, so code can read and change the value where it is instead of a copy of it. This chapter covers taking addresses, reading and writing through pointers, <code>null</code>, and the rules that keep pointers valid.</p>
+<h2 id="taking-an-address"><a href="#taking-an-address">Taking an address</a></h2>
+<p><code>&amp;</code> gives the address of a variable, a field or an item. The pointer's type is the value's type with a <code>*</code> after it. <code>*p</code> is the value the pointer points to, for reading and for writing:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">i64</span> x = <span class="n">5</span>
+    <span class="t">i64</span> *p = &amp;x
+    print(<span class="s">&quot;{*p}&quot;</span>)
+    *p = <span class="n">6</span>
+    print(<span class="s">&quot;{x}&quot;</span>)
+    *p += <span class="n">10</span>
+    print(<span class="s">&quot;{x}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>5
+6
+16</code></pre>
+<p>A pointer can point to a field or an item, as well as to a whole variable:</p>
+<pre class="code run"><code><span class="k">struct</span> Point {
+    <span class="t">i64</span> x
+    <span class="t">i64</span> y
+}
+
+<span class="t">void</span> main() {
+    p := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
+    <span class="t">i64</span> *py = &amp;p.y
+    *py = <span class="n">20</span>
+    <span class="t">i64</span>[<span class="n">3</span>] xs = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+    <span class="t">i64</span> *last = &amp;xs[<span class="n">2</span>]
+    *last = <span class="n">30</span>
+    print(<span class="s">&quot;{p.y} {xs[2]}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>20 30</code></pre>
+<h2 id="pointers-to-structs"><a href="#pointers-to-structs">Pointers to structs</a></h2>
+<p>A pointer to a struct reaches the struct's fields and methods with a dot, as the struct itself does: there is no separate operator for it.</p>
+<pre class="code run"><code><span class="k">struct</span> Account {
+    <span class="t">str</span> owner
+    <span class="t">i64</span> balance
+}
+
+<span class="t">void</span> deposit(Account *a, <span class="t">i64</span> amount) {
+    a.balance += amount
+}
+
+<span class="t">void</span> main() {
+    acct := Account{owner: <span class="s">&quot;ada&quot;</span>, balance: <span class="n">100</span>}
+    deposit(&amp;acct, <span class="n">50</span>)
+    Account *p = &amp;acct
+    p.balance -= <span class="n">20</span>
+    print(<span class="s">&quot;{acct.owner}: {acct.balance}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>ada: 130</code></pre>
+<p>This is the usual reason for a pointer parameter: the function changes the caller's value. Methods get <code>self</code> as a pointer for the same reason.</p>
+<h2 id="null"><a href="#null">null</a></h2>
+<p>A pointer can be <code>null</code>: it points to nothing. A pointer variable declared without a value starts as <code>null</code>, and <code>==</code> and <code>!=</code> compare pointers with each other and with <code>null</code>:</p>
+<pre class="code run"><code><span class="k">struct</span> Node {
+    <span class="t">i64</span> value
+    Node *next
+}
+
+<span class="t">i64</span> total(Node *n) {
+    <span class="t">i64</span> sum = <span class="n">0</span>
+    <span class="k">for</span> n != <span class="k">null</span> {
+        sum += n.value
+        n = n.next
+    }
+    <span class="k">return</span> sum
+}
+
+<span class="t">void</span> main() {
+    c := Node{value: <span class="n">3</span>}
+    b := Node{value: <span class="n">2</span>, next: &amp;c}
+    a := Node{value: <span class="n">1</span>, next: &amp;b}
+    print(<span class="s">&quot;{total(&amp;a)} {total(null)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>6 0</code></pre>
+<p>Reading or writing through a <code>null</code> pointer is a bug. A debug build stops the program with a message that says where:</p>
+<pre class="out"><code>panic: null pointer used
+  at main.iris:6:15 in main</code></pre>
+<h2 id="pointers-stay-valid-only-while-their-value-lives"><a href="#pointers-stay-valid-only-while-their-value-lives">Pointers stay valid only while their value lives</a></h2>
+<p>A pointer to a variable is valid while the variable exists: until the end of its block for a local, for the whole program for a global. A pointer into memory from <code>alloc</code> is valid until it is freed. Using a pointer after that is a bug that a debug build finds and reports (see <a href="19-memory.html">Memory</a>).</p>
+<p>The compiler stops the plain case, a function giving back a pointer or a slice into its own variables:</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> *counter() {
+    <span class="t">i64</span> n = <span class="n">0</span>
+    <span class="k">return</span> &amp;n <span class="c">// error: this points into n, which is gone when counter returns; return a copy, or memory from alloc</span>
+}</code></pre>
+<p>A function that needs to give back something that outlives it returns the value itself, or memory from <code>alloc</code> that the caller frees.</p>
+<h2 id="pointers-and-memory"><a href="#pointers-and-memory">Pointers and memory</a></h2>
+<p><code>u8 *</code> is a pointer to bytes, and stands for "a pointer to anything", as C's <code>void *</code> does: any pointer converts to <code>u8 *</code> on its own, and a <code>u8 *</code> converts back to any pointer type. This is how memory is passed to and from C code:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">i64</span> n = <span class="n">42</span>
+    <span class="t">u8</span> *any = &amp;n
+    <span class="t">i64</span> *back = any
+    print(<span class="s">&quot;{*back}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>42</code></pre>
+<p>Adding a number to a pointer moves it by that many items, not bytes, as in C:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">i64</span>[<span class="n">4</span>] xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>, <span class="n">40</span>]
+    <span class="t">i64</span> *p = &amp;xs[<span class="n">0</span>]
+    <span class="t">i64</span> *third = p + <span class="n">2</span>
+    print(<span class="s">&quot;{*third}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>30</code></pre>
+<p>A pointer has no length, so the program can't check that <code>p + 2</code> is still inside the array. A slice knows its length and is checked on every index, which is why slices are the usual way to pass a run of items. A pointer can be turned into a slice when the length is known, with <code>p[0:n]</code>, for memory that came from C:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">i64</span>[<span class="n">4</span>] xs = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>, <span class="n">40</span>]
+    <span class="t">i64</span> *p = &amp;xs[<span class="n">1</span>]
+    s := p[<span class="n">0</span>:<span class="n">3</span>]
+    print(<span class="s">&quot;{s.len} {s[0]} {s[2]}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 20 40</code></pre>
+<p>A pointer to a pointer is written with two stars, <code>T **</code>, and is mostly found in C functions that hand back a pointer through an argument.</p>
+    <nav class="pager"><a class="prev" href="16-tuples-and-aliases.html"><span>Previous</span>Tuples and type aliases</a><a class="next" href="18-errors.html"><span>Next</span>Errors</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#taking-an-address">Taking an address</a></li><li><a href="#pointers-to-structs">Pointers to structs</a></li><li><a href="#null">null</a></li><li><a href="#pointers-stay-valid-only-while-their-value-lives">Pointers stay valid only while their value lives</a></li><li><a href="#pointers-and-memory">Pointers and memory</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

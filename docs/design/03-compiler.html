@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The compiler - Iris</title>
+<meta name="description" content="How source code becomes a program, step by step.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html" class="on">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-decisions.html"><span class="num">2</span>Decisions</a></li><li><a href="03-compiler.html" class="on"><span class="num">3</span>The compiler</a></li><li><a href="04-values.html"><span class="num">4</span>How values are stored</a></li><li><a href="05-workflow.html"><span class="num">5</span>Working on Iris</a></li></ol></aside>
+  <article class="prose">
+<h1>The compiler</h1>
+<p class="lede">How source code becomes a program, step by step.</p>
+<h2 id="the-steps"><a href="#the-steps">The steps</a></h2>
+<pre class="out"><code>files -&gt; loader -&gt; lexer -&gt; parser -&gt; checker -&gt; IR writer -&gt; clang -&gt; program</code></pre>
+<h3 id="loader"><a href="#loader">Loader</a></h3>
+<p>The loader (<code>src/module.c</code>) finds the files to compile. It looks for <code>iris.mod</code> from the program's folder upward. With one, the program is every <code>.iris</code> file in its folder; without, the program is the one file. Then it follows the imports: the standard library's files are carried inside the <code>iris</code> binary, project modules are folders from the root, and packages come from <code>replace</code> folders or the package cache. Each module's files are parsed once; a circle of imports is an error.</p>
+<p><code>import c</code> (<code>src/cimport.c</code>) runs <code>clang</code> twice on the headers a file imports: once for their declarations, as JSON (<code>-Xclang -ast-dump=json</code>), and once for their macros (<code>-dM -E</code>). It writes what it finds as an Iris module, with <code>@extern</code> functions, structs, <code>type</code> aliases and constants, which the loader parses like any other. A function with C's <code>...</code> gets <code>@extern(&quot;printf&quot;, variadic)</code>, and the IR writer calls it as variadic.</p>
+<p>Each step reads the result of the one before it. No step looks back.</p>
+<p>The checker gives each module its own scope for names and each file one for its imports. Before checking, it rewrites <code>fs.readAll</code> into one qualified name, checking that <code>readAll</code> exists in <code>fs</code> and is <code>pub</code>. The IR writer puts the module in every name it writes (<code>@&quot;f.fs.readAll&quot;</code>), so modules can use the same names.</p>
+<h3 id="lexer"><a href="#lexer">Lexer</a></h3>
+<p>The lexer reads the source file and splits it into tokens: names, numbers, strings, operators and keywords. It also decides where statements end. A newline ends a statement when the last token on the line is a name, a literal, a closing <code>)</code>, <code>]</code> or <code>}</code>, or one of <code>return</code>, <code>break</code>, <code>continue</code>, <code>true</code>, <code>false</code> and <code>null</code>. Inside <code>( )</code> and <code>[ ]</code> newlines are ignored. <code>iris lex file.iris</code> prints the tokens.</p>
+<h3 id="parser"><a href="#parser">Parser</a></h3>
+<p>The parser reads the tokens and builds a syntax tree. Each function, statement and expression becomes a node. The parser only checks the shape of the code. It does not know about types. <code>iris parse file.iris</code> prints the tree.</p>
+<p>Some code can't be sorted out by its shape alone. <code>List[i64] numbers</code> declares a variable, while <code>counts[key] = 1</code> assigns to an element. The parser first tries to read a type followed by a name. If that fails, it goes back and reads an expression. A name followed by <code>{</code> starts a struct literal, except in the head of <code>if</code>, <code>for</code>, <code>match</code> and <code>when</code>, where the <code>{</code> opens the block.</p>
+<p>When the parser finds an error, it reports it, skips to the end of the statement and continues. One run shows every syntax error in the file.</p>
+<h3 id="checker"><a href="#checker">Checker</a></h3>
+<p>The checker walks the tree and works out the type of every expression. This is where names are looked up, function calls are matched with their functions, and generic functions get their types. Most compile errors come from here: an unknown name, a wrong type, an error that is not handled, an enum case missing from a <code>match</code>.</p>
+<p>Type checking is a separate pass on purpose. When a compiler checks types while it parses, it often only knows half of a declaration when it needs all of it, which causes bugs that are hard to find.</p>
+<h3 id="lowering"><a href="#lowering">Lowering</a></h3>
+<p>Lowering rewrites the checked tree into a smaller language with only simple pieces: variables, assignments, branches, loops, calls and returns. The bigger features become these pieces here:</p>
+<ul><li><code>defer</code> and <code>errdefer</code> become copies of their code at every exit of the block.</li><li><code>try</code> becomes a check and an early return.</li><li><code>match</code> becomes comparisons and jumps.</li><li>String interpolation becomes a series of writes.</li><li>Each generic function becomes one plain function per set of types it is used with.</li></ul>
+<p>After lowering, the rest of the compiler never sees these features.</p>
+<p>There is no separate lowering pass. The IR writer does this work itself: it handles <code>match</code>, <code>if</code> values and loops directly, and for <code>defer</code> it keeps a list of deferred statements for each block and writes them out at every way out of the block: the end, <code>return</code>, <code>break</code>, <code>continue</code> and a <code>try</code> that fails.</p>
+<p>Generics are handled by the checker. A generic function or struct is never checked by itself. When the checker meets a use with new types, like <code>max(v1, v2)</code> with <code>Version</code> values, it copies the generic declaration's tree (<code>src/generic.c</code>), puts the types in place of the type parameters, and checks the copy like ordinary code. The copy is named after its types, <code>max[Version]</code>, and the IR writer compiles it like any other function. An error inside a copy is reported in the generic code, followed by a line that points at the use that made the copy.</p>
+<h3 id="ir-writer"><a href="#ir-writer">IR writer</a></h3>
+<p>The IR writer turns the lowered code into LLVM IR, as a text file (<code>.ll</code>). LLVM IR is the input language of LLVM. It describes the program as simple instructions on typed values.</p>
+<h3 id="clang"><a href="#clang">clang</a></h3>
+<p><code>clang</code> optimises the IR, turns it into machine code for the target, and links the program with the runtime and any C libraries.</p>
+<p>The runtime is <code>runtime/rt.c</code>. The build turns it into a C string inside the <code>iris</code> binary, so <code>iris</code> needs no other files. For each build, <code>iris</code> writes the IR and the runtime to a temporary folder, runs <code>clang</code> on both, and removes the folder.</p>
+<h2 id="checks-in-the-generated-code"><a href="#checks-in-the-generated-code">Checks in the generated code</a></h2>
+<p>In debug builds the IR writer adds a check before every operation that can go wrong: <code>+</code>, <code>-</code> and <code>*</code> that overflow (using LLVM's <code>with.overflow</code> intrinsics), division by zero, shifts by at least the width of the type, conversions that lose a value, and <code>null</code> pointers. Index and slice bounds are checked in debug and release-safe builds. A failed check calls the runtime, which prints <code>panic:</code>, the message and the place, and exits with status 2. Release-safe builds also keep the division checks. Release-fast builds have none, and arithmetic wraps around.</p>
+<p>Debug builds also compile with AddressSanitizer: every function gets LLVM's <code>sanitize_address</code> attribute and <code>clang</code> links with <code>-fsanitize=address</code>. That catches use after free and other bad memory accesses. Leak reports are turned off for now.</p>
+<h2 id="comptime"><a href="#comptime">comptime</a></h2>
+<p>When a program has <code>const X = comptime expr</code>, the front end runs twice. First it adds a file to the program's module with a function, <code>irisComptimeMain</code>, that prints each comptime expression as JSON (<code>json.encode</code>) on a line of its own, checks that program with the comptime constants as zero-valued stand-ins, builds it for the machine it runs on and runs it. Then it loads the program again, and the checker replaces each comptime expression with the literal that the JSON describes: a constant for numbers, <code>bool</code>, text and enums, and a read-only global (an LLVM <code>constant</code>) for arrays and structs. <code>src/comptime.c</code> writes the helper's file and turns JSON into literals.</p>
+<h2 id="debug-information"><a href="#debug-information">Debug information</a></h2>
+<p>The IR writer adds DWARF metadata as it goes. The program gets a compile unit, each source file a <code>DIFile</code>, each function a <code>DISubprogram</code>, and every instruction a <code>!DILocation</code> with the line and column of the statement or expression it comes from. Each named variable and parameter gets a <code>DILocalVariable</code> and an <code>llvm.dbg.declare</code> on its stack slot, with a debug type made from its Iris type: basic types, pointers, structs with their fields, slices and <code>String</code> as structs, arrays and plain enums. All variables share the function's scope, which works because Iris doesn't allow a name to hide another in the same function. clang turns it into DWARF with <code>-g</code>, which every build passes.</p>
+<h2 id="why-the-ir-is-written-as-text"><a href="#why-the-ir-is-written-as-text">Why the IR is written as text</a></h2>
+<p>Writing a text file needs no LLVM headers or libraries. Any machine with <code>clang</code> can build Iris programs, and when the output is wrong you can read the <code>.ll</code> file.</p>
+<h2 id="source-layout"><a href="#source-layout">Source layout</a></h2>
+<div class="table"><table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody><tr><td><code>src/iris.h</code></td><td>Declarations shared by all the files.</td></tr><tr><td><code>src/main.c</code></td><td>The <code>iris</code> command: reads arguments and runs the steps.</td></tr><tr><td><code>src/arena.c</code></td><td>Arenas and growing strings.</td></tr><tr><td><code>src/diag.c</code></td><td>Error messages.</td></tr><tr><td><code>src/lexer.c</code></td><td>The lexer.</td></tr><tr><td><code>src/parser.c</code></td><td>The parser.</td></tr><tr><td><code>src/ast.c</code></td><td>Syntax tree nodes and the printer for <code>iris parse</code>.</td></tr><tr><td><code>src/check.c</code></td><td>The checker.</td></tr><tr><td><code>src/generic.c</code></td><td>Copies of trees, for generic instances.</td></tr><tr><td><code>src/module.c</code></td><td>The loader: projects, imports, packages.</td></tr><tr><td><code>src/cimport.c</code></td><td><code>import c</code>: C headers to an Iris module.</td></tr><tr><td><code>src/proc.c</code></td><td>Running clang and git.</td></tr><tr><td><code>std/</code></td><td>The standard library, in Iris. The build carries it inside <code>iris</code>, like the runtime.</td></tr><tr><td><code>src/ir.c</code></td><td>The IR writer, with the debug information and the JSON tables.</td></tr><tr><td><code>src/fmt.c</code></td><td><code>iris fmt</code>.</td></tr><tr><td><code>src/lsp.c</code></td><td><code>iris lsp</code>, the language server.</td></tr><tr><td><code>src/comptime.c</code></td><td><code>comptime</code>: the helper program and its values.</td></tr><tr><td><code>src/doc.c</code></td><td><code>iris doc</code>.</td></tr><tr><td><code>runtime/rt.c</code></td><td>The part written in C: printing, panics, error traces, the task scheduler, threads, the network, JSON and tests.</td></tr><tr><td><code>editors/vim/</code></td><td>Syntax files for Vim and Neovim.</td></tr><tr><td><code>tests/</code></td><td>Test programs. <code>tools/run_tests.py</code> runs them.</td></tr></tbody></table></div>
+<h2 id="memory-inside-the-compiler"><a href="#memory-inside-the-compiler">Memory inside the compiler</a></h2>
+<p>The compiler allocates from arenas. Everything for one compile lives in one arena and is freed at the end in one step. Nodes, types and strings are never freed one by one.</p>
+<h2 id="compile-errors"><a href="#compile-errors">Compile errors</a></h2>
+<p>Every error gives the file, line and column, the source line, and a mark under the problem:</p>
+<pre class="out"><code>main.iris:3:11: error: x is not declared
+    print(&quot;{x}&quot;)
+            ^</code></pre>
+<p>The compiler reports every error it can find in one run, then stops before writing any IR.</p>
+    <nav class="pager"><a class="prev" href="02-decisions.html"><span>Previous</span>Decisions</a><a class="next" href="04-values.html"><span>Next</span>How values are stored</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#the-steps">The steps</a></li><li><a href="#checks-in-the-generated-code">Checks in the generated code</a></li><li><a href="#comptime">comptime</a></li><li><a href="#debug-information">Debug information</a></li><li><a href="#why-the-ir-is-written-as-text">Why the IR is written as text</a></li><li><a href="#source-layout">Source layout</a></li><li><a href="#memory-inside-the-compiler">Memory inside the compiler</a></li><li><a href="#compile-errors">Compile errors</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

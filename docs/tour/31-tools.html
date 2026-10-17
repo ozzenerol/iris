@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools - Iris</title>
+<meta name="description" content="The iris command builds, runs, tests, formats and documents programs, gets packages, and serves editors. This chapter covers each command, the build modes, building for other platforms, editors and debuggers.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.37.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html" class="on"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Tools</h1>
+<p class="lede">The <code>iris</code> command builds, runs, tests, formats and documents programs, gets packages, and serves editors. This chapter covers each command, the build modes, building for other platforms, editors and debuggers.</p>
+<h2 id="commands"><a href="#commands">Commands</a></h2>
+<div class="table"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td><code>iris run main.iris [args]</code></td><td>compiles and runs a program; what follows the file goes to the program</td></tr><tr><td><code>iris build main.iris</code></td><td>compiles a program, or a project when given its folder; <code>-o name</code> names the output</td></tr><tr><td><code>iris check main.iris</code></td><td>checks a program and its tests without compiling it</td></tr><tr><td><code>iris test [file] [name]</code></td><td>runs the test blocks, or those whose name has <code>name</code> in it</td></tr><tr><td><code>iris fmt file-or-folder</code></td><td>puts code in the standard layout</td></tr><tr><td><code>iris doc http</code></td><td>shows the documentation of a module, a name, a file or a project</td></tr><tr><td><code>iris get pkg@version</code></td><td>downloads a package and adds it to <code>iris.mod</code></td></tr><tr><td><code>iris lsp</code></td><td>the language server, for editors</td></tr><tr><td><code>iris c header.h</code></td><td>shows what <code>import c</code> makes of C headers</td></tr><tr><td><code>iris ir main.iris</code></td><td>prints the LLVM IR the compiler writes</td></tr><tr><td><code>iris parse file.iris</code></td><td>prints the syntax tree</td></tr><tr><td><code>iris lex file.iris</code></td><td>prints the tokens</td></tr><tr><td><code>iris version</code></td><td>prints the version</td></tr></tbody></table></div>
+<p><code>iris run</code>, <code>build</code>, <code>check</code>, <code>test</code> and <code>ir</code> take these options:</p>
+<div class="table"><table><thead><tr><th>Option</th><th>What it does</th></tr></thead><tbody><tr><td><code>--mode=debug</code>, <code>release-safe</code>, <code>release-fast</code></td><td>the build mode; <code>debug</code> is the one used without it</td></tr><tr><td><code>--target=x86_64-linux</code> and the others</td><td>builds for another platform</td></tr><tr><td><code>-l name</code></td><td>links a C library</td></tr><tr><td><code>-I folder</code></td><td>a folder where <code>import c</code> looks for headers</td></tr></tbody></table></div>
+<p>For <code>run</code> and <code>test</code>, options go before the file. <code>build</code>, <code>check</code> and <code>ir</code> take them before or after it.</p>
+<h2 id="build-modes"><a href="#build-modes">Build modes</a></h2>
+<div class="table"><table><thead><tr><th>Mode</th><th>Checks</th><th>Optimised</th><th>For</th></tr></thead><tbody><tr><td><code>debug</code></td><td>every one, and AddressSanitizer for memory</td><td>no</td><td>writing and testing the program</td></tr><tr><td><code>release-safe</code></td><td>indexes and slices, and division by zero</td><td>yes</td><td>most programs that run for real</td></tr><tr><td><code>release-fast</code></td><td>none</td><td>yes</td><td>code that has been measured and needs every bit of speed</td></tr></tbody></table></div>
+<pre class="code"><code>iris build --mode=release-safe main.iris
+iris build main.iris -o server --mode=release-fast</code></pre>
+<p>A debug build is many times slower than a release build, so speed is measured with a release one.</p>
+<p><code>iris</code> uses <code>clang</code>, version 15 or newer, to turn the IR into a program. <code>IRIS_CC</code> names another <code>clang</code> to use.</p>
+<h2 id="formatting"><a href="#formatting">Formatting</a></h2>
+<p><code>iris fmt</code> puts code in the standard layout: four spaces for each level, a space around operators and after commas, none inside brackets, at most one blank line in a row, and comments at the ends of lines that are next to each other lined up in one column. It changes only spaces and line breaks: comments and text in strings stay as they are, and a file whose tokens would change is left alone.</p>
+<pre class="code"><code>iris fmt main.iris       # rewrites the file
+iris fmt .               # every .iris file in this folder and the folders inside it
+iris fmt --check .       # lists the files that aren&#x27;t in the layout; exit status 1 if any
+iris fmt - &lt; main.iris   # reads standard input and prints the result, for editors</code></pre>
+<h2 id="documentation"><a href="#documentation">Documentation</a></h2>
+<p><code>iris doc</code> shows what the comments say, in the terminal. Each declaration is shown as it is written, with the comment lines right above it:</p>
+<pre class="code"><code>iris doc http              # a module of the standard library
+iris doc http.Router       # a struct and its methods
+iris doc str.cut           # one function
+iris doc List              # names every module has
+iris doc main.iris         # a file, or a project&#x27;s folder
+iris doc main.iris User    # one name in it</code></pre>
+<p>A comment at the top of a module's file, with a blank line after it, describes the module. For the standard library and packages, only <code>pub</code> names are shown; for a program's own files, everything. The <a href="../std/index.html">Library</a> pages are made from the same comments.</p>
+<h2 id="editors"><a href="#editors">Editors</a></h2>
+<p><code>iris lsp</code> is a language server. An editor that speaks LSP gets the errors as the code is typed, the type and comment of a name when the pointer rests on it, going to a name's declaration (also into the standard library), a file's outline, completion after a dot, and formatting with <code>iris fmt</code>. It reads the editor's unsaved text.</p>
+<p>In Neovim 0.11 or newer, with the syntax files from the repository's <code>editors/vim</code> folder:</p>
+<pre class="out"><code>vim.opt.rtp:append(&quot;/path/to/iris/editors/vim&quot;)
+vim.lsp.config(&quot;iris&quot;, {
+    cmd = { &quot;iris&quot;, &quot;lsp&quot; },
+    filetypes = { &quot;iris&quot; },
+    root_markers = { &quot;iris.mod&quot;, &quot;.git&quot; },
+})
+vim.lsp.enable(&quot;iris&quot;)</code></pre>
+<p>Vim uses the same syntax files with <code>set rtp+=/path/to/iris/editors/vim</code>. Other editors start <code>iris lsp</code> as the language server for <code>.iris</code> files.</p>
+<h2 id="other-platforms"><a href="#other-platforms">Other platforms</a></h2>
+<p><code>--target</code> builds for another platform:</p>
+<pre class="code"><code>iris build --target=aarch64-linux main.iris
+iris build --target=x86_64-macos main.iris</code></pre>
+<p>The targets are <code>x86_64-linux</code>, <code>aarch64-linux</code>, <code>x86_64-macos</code> and <code>aarch64-macos</code>. <code>when</code> sees the target's <code>os</code> and <code>arch</code>, and <code>comptime</code> code still runs on the machine that builds.</p>
+<p>On a Mac, both macOS targets work as they are. For another Linux, <code>clang</code> needs that platform's C library and a linker for it: <code>IRIS_SYSROOT</code> names a folder with the target's files, or they are installed where <code>clang</code> looks, such as Debian's <code>gcc-aarch64-linux-gnu</code> for <code>aarch64-linux</code>.</p>
+<h2 id="debugging"><a href="#debugging">Debugging</a></h2>
+<p>Every build has debug information, so <code>gdb</code> and <code>lldb</code> show Iris files, lines and names. A breakpoint is set by file and line, and arguments, variables, structs, slices and enums show by name:</p>
+<pre class="out"><code>$ gdb ./server
+(gdb) break main.iris:42
+(gdb) run
+Breakpoint 1, f.main.handle (req=..., res=...) at main.iris:42
+(gdb) info locals
+user = {id = 7, name = {ptr = &quot;Ada&quot;, len = 3, cap = 16}}</code></pre>
+<p>A function's name in the debugger is its module and name, <code>f.main.handle</code>, or <code>m.main.Server.close</code> for a method. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.</p>
+<h2 id="the-libraries-iris-loads"><a href="#the-libraries-iris-loads">The libraries Iris loads</a></h2>
+<p>Some modules use a C library that is loaded the first time a program uses it, so a program that doesn't use it needs nothing installed:</p>
+<div class="table"><table><thead><tr><th>Module</th><th>Library</th><th>Set to use another</th></tr></thead><tbody><tr><td>TLS in <code>net</code> and <code>http</code></td><td>OpenSSL 3 (<code>libssl</code>)</td><td><code>IRIS_OPENSSL</code></td></tr><tr><td><code>sqlite</code></td><td>SQLite 3</td><td><code>IRIS_SQLITE</code></td></tr><tr><td><code>compress</code>, and gzip in <code>http</code></td><td>zlib</td><td><code>IRIS_ZLIB</code></td></tr></tbody></table></div>
+<p>On macOS, OpenSSL comes from Homebrew (<code>brew install openssl@3</code>); SQLite and zlib come with the system.</p>
+    <nav class="pager"><a class="prev" href="30-testing.html"><span>Previous</span>Testing</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#commands">Commands</a></li><li><a href="#build-modes">Build modes</a></li><li><a href="#formatting">Formatting</a></li><li><a href="#documentation">Documentation</a></li><li><a href="#editors">Editors</a></li><li><a href="#other-platforms">Other platforms</a></li><li><a href="#debugging">Debugging</a></li><li><a href="#the-libraries-iris-loads">The libraries Iris loads</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.37.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>
