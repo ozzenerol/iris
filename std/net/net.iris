@@ -10,16 +10,16 @@ i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 shared, i32 *err)
 i64 rawPort(i32 fd)
 
 @extern("iris_net_accept")
-i32 rawAccept(i32 fd, i32 *err)
+i32 rawAccept(i32 fd, i32 *err, i64 timeout)
 
 @extern("iris_net_dial")
-i32 rawDial(u8 *host, i64 hostLen, i64 port, i32 *err)
+i32 rawDial(u8 *host, i64 hostLen, i64 port, i32 *err, i64 timeout)
 
 @extern("iris_net_read")
-i64 rawRead(i32 fd, u8 *buf, i64 len)
+i64 rawRead(i32 fd, u8 *buf, i64 len, i64 timeout)
 
 @extern("iris_net_write")
-i32 rawWrite(i32 fd, u8 *buf, i64 len)
+i32 rawWrite(i32 fd, u8 *buf, i64 len, i64 timeout)
 
 @extern("iris_net_close")
 void rawClose(i32 fd)
@@ -34,13 +34,13 @@ u8 *rawTlsServerCtx(u8 *cert, i64 certLen, u8 *key, i64 keyLen)
 void rawTlsCtxFree(u8 *ctx)
 
 @extern("iris_tls_accept")
-u8 *rawTlsAccept(u8 *ctx, i32 fd)
+u8 *rawTlsAccept(u8 *ctx, i32 fd, i64 timeout)
 
 @extern("iris_tls_read")
-i64 rawTlsRead(u8 *ssl, u8 *buf, i64 len)
+i64 rawTlsRead(u8 *ssl, u8 *buf, i64 len, i64 timeout)
 
 @extern("iris_tls_write")
-i32 rawTlsWrite(u8 *ssl, u8 *data, i64 len)
+i32 rawTlsWrite(u8 *ssl, u8 *data, i64 len, i64 timeout)
 
 @extern("iris_tls_close")
 void rawTlsClose(u8 *ssl)
@@ -86,13 +86,20 @@ pub struct Conn {
     i64 start
     i64 end
     u8 *tls
+    Duration timeout
+}
+
+// Each read and write after this fails with NetError.timeout when it waits
+// longer than d; 0 is the start, no limit.
+pub void Conn.setTimeout(Duration d) {
+    self.timeout = d
 }
 
 i64 Conn.rawRead(u8[] buf) {
     if self.tls != null {
-        return rawTlsRead(self.tls, buf.ptr, buf.len)
+        return rawTlsRead(self.tls, buf.ptr, buf.len, self.timeout)
     }
-    return rawRead(self.fd, buf.ptr, buf.len)
+    return rawRead(self.fd, buf.ptr, buf.len, self.timeout)
 }
 
 // Listens on port (0 picks a free one; see .port) on host ("" for all
@@ -106,10 +113,10 @@ pub !Listener listen(u16 port, str host = "", bool shared = false) {
     return Listener{fd: fd, port: u16(rawPort(fd))}
 }
 
-// Waits for the next connection.
-pub !Conn Listener.accept() {
+// Waits for the next connection, for at most timeout when it isn't 0.
+pub !Conn Listener.accept(Duration timeout = 0s) {
     i32 err
-    fd := rawAccept(self.fd, &err)
+    fd := rawAccept(self.fd, &err, timeout)
     if fd < 0 {
         return error(netCode(err), "accepting a connection: {reason(err)}")
     }
@@ -118,10 +125,10 @@ pub !Conn Listener.accept() {
 
 pub void Listener.close() => rawClose(self.fd)
 
-// Connects to host:port.
-pub !Conn dial(str host, u16 port) {
+// Connects to host:port, waiting at most timeout when it isn't 0.
+pub !Conn dial(str host, u16 port, Duration timeout = 0s) {
     i32 err
-    fd := rawDial(host.ptr, host.len, i64(port), &err)
+    fd := rawDial(host.ptr, host.len, i64(port), &err, timeout)
     if fd < 0 {
         return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
     }
@@ -206,7 +213,11 @@ pub !String Conn.readExactly(i64 n) {
 
 // Writes all of data.
 pub !void Conn.write(str data) {
-    code := if self.tls != null { rawTlsWrite(self.tls, data.ptr, data.len) } else { rawWrite(self.fd, data.ptr, data.len) }
+    code := if self.tls != null {
+        rawTlsWrite(self.tls, data.ptr, data.len, self.timeout)
+    } else {
+        rawWrite(self.fd, data.ptr, data.len, self.timeout)
+    }
     if code != 0 {
         return error(netCode(code), "writing: {reason(code)}")
     }
@@ -268,7 +279,7 @@ pub void TlsConfig.free() {
 
 // Starts TLS as the server on an accepted connection.
 pub !void Conn.acceptTls(TlsConfig *config) {
-    ssl := rawTlsAccept(config.ctx, self.fd)
+    ssl := rawTlsAccept(config.ctx, self.fd, self.timeout)
     if ssl == null {
         return error(NetError.tls, tlsMessage())
     }
