@@ -167,7 +167,7 @@ u8 b = 10
 c := a + b // panic: integer overflow
 ```
 
-A `release-fast` build doesn't check, and the value wraps around: `250 + 10` in a `u8` gives `4`. `release-safe` keeps the check. Dividing by zero stops the program in every build.
+The release builds don't check overflow, and the value wraps around: `250 + 10` in a `u8` gives `4`. Dividing by zero stops a debug and a `release-safe` build; in `release-fast` it is not checked, and the result can't be relied on.
 
 Arithmetic happens in the type of the values. Two `u8` values add up as a `u8`, even when the result goes into an `i64`, so the sum of two big bytes overflows. Convert first when the result needs more room:
 
