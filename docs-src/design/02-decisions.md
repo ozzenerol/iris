@@ -16,6 +16,7 @@ The choices made so far, the ones proposed and waiting for an answer, and the fe
 | `match` replaces `switch`. `if` and `match` give values. | No fall-through bugs, and no need for a separate `?:` operator. |
 | `and`, `or` and `not` can be written for `&&`, `\|\|` and `!`. `not` takes a whole comparison. | Conditions read as words, as in Ruby and Python; the symbols stay for those used to C. |
 | A short statement can end with `if cond`: `return if n < 0`. No `else`, and not after a declaration or `defer`. | Guards at the top of a function take one line instead of three. |
+| A last parameter `T... name` takes any number of arguments as a `T[]`; a slice is passed by name, `sum(xs: nums)`. | Typed, and no new idea: the function sees a slice, and the array for it is on the caller's stack. |
 | No garbage collector. | Predictable memory use and latency. |
 
 ## Proposed
