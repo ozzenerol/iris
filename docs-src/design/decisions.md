@@ -106,6 +106,11 @@ These are suggestions. They are used in the examples on these pages until they a
 | A WebSocket handler gets the connection and keeps it until it returns. | A chat or a feed is one function with a loop, and the router owns nothing after it. |
 | `http.Client` sends a request again, on a new connection, when a kept connection turns out to be closed before any reply. | Servers close idle connections whenever they like; the caller shouldn't see it. |
 | A CSV `Record` owns copies of its fields. | A quoted field with `""` in it has to be copied anyway, and records can outlive the text. |
+| Command-line flags come from a `@flags` struct, as settings come from an `@env` struct. | The struct is the documentation: names, types, defaults and the help are in one place, and `--help` is made from it. |
+| `flags.parse` ends the program on `--help` and on a wrong flag; `flags.parseArgs` gives errors instead. | A tool's `main` needs no code for either, and subcommands and tests can still decide. |
+| Inside a module, a bare `error`, `format` or `print` is always the builtin, even when the module has a function of that name. | `log.error` and `term.error` keep their names, and the module's own code can still make errors. |
+| A catch block keeps its own copy of the error's message. | Code in the block, like logging, can make and handle errors without changing `e.message`. |
+| `term` writes colors as markup in the text: `[green]ok[/]`. | Colored output reads like the text it prints, and the same text works without colors. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

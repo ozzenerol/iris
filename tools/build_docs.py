@@ -23,7 +23,7 @@ SECTIONS = {
     "language": ["index", "first-program", "variables-and-types", "functions", "control-flow",
                  "text", "structs", "enums", "pointers-and-memory", "errors", "generics",
                  "collections", "modules", "compile-time", "concurrency", "calling-c", "tools"],
-    "guides": ["index", "rest-api"],
+    "guides": ["index", "rest-api", "cli"],
 }
 TOP = [("Design", "design/index.html"), ("Language", "language/index.html"),
        ("Guides", "guides/index.html"), ("Roadmap", "roadmap.html")]

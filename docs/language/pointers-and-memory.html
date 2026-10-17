@@ -118,7 +118,8 @@ cleanup 1</code></pre>
 <p><code>scoped</code> on a declaration calls the value's <code>free</code> method at the end of the block:</p>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> body = <span class="k">try</span> fs.readAll(<span class="s">&quot;index.html&quot;</span>)
 <span class="k">scoped</span> Buffer b = buffer(4KiB)</code></pre>
-<p>It is the same as writing the declaration followed by <code>defer body.free()</code>.</p>
+<p>It is the same as writing the declaration followed by <code>defer body.free()</code>. The type can come from the value, as with <code>:=</code>:</p>
+<pre class="code"><code><span class="k">scoped</span> t := term.table([<span class="s">&quot;NAME&quot;</span>, <span class="s">&quot;SIZE&quot;</span>])</code></pre>
 <h2 id="allocators"><a href="#allocators">Allocators</a></h2>
 <p>An allocator is a value that hands out memory. Functions in the standard library that allocate take an allocator as their last parameter, which defaults to the general one. Passing another allocator changes where the memory comes from.</p>
 <p>An arena hands out memory from one big block and frees all of it at once. It suits work with a clear end, like handling one request:</p>
