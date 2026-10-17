@@ -132,6 +132,10 @@ These are suggestions. They are used in the examples on these pages until they a
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |
+| A struct's field defaults apply wherever a value of it is made without one: variables, globals, arrays and literals. | A default that holds in some places and not others would be a trap. |
+| Returning a pointer or slice into a function's own variables is an error. | The memory is gone once the function returns. |
+| A global can't be set from another global. | Globals are set before `main` in no fixed order across modules. |
+| A library page shows the module's comment, then its intro page with examples. | The comment says what the module is; the intro shows it in use. |
 | Memory comes from one general allocator, the C library's. Allocators that a call can be given, like an arena, are planned. | One way to free everything keeps the first versions simple. |
 
 ## Not in Iris
