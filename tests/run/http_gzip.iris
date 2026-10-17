@@ -1,0 +1,79 @@
+// expect: HTTP/1.1 200 50000 bytes, encoding '' true
+// expect: HTTP/2 200 50000 bytes, encoding '' true
+// expect: small: 200 [short] encoding ''
+// expect: own encoding: br
+// expect: raw: Content-Encoding: gzip, Vary: Accept-Encoding, smaller true
+// expect: raw without gzip: no Content-Encoding, larger true
+
+import http, net, str
+
+void page(http.Request *req, http.Response *res) {
+    scoped String s = str.repeat("<p>hello</p>\n", 3847)
+    res.header("Content-Type", "x")
+    res.text(s[0:50000])
+}
+
+void short(http.Request *req, http.Response *res) {
+    res.text("short")
+}
+
+void own(http.Request *req, http.Response *res) {
+    res.header("Content-Encoding", "br")
+    scoped String s = str.repeat("y", 5000)
+    res.text(s)
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!String raw(u16 port, bool gzip) {
+    c := try net.dial("127.0.0.1", port)
+    defer c.close()
+    scoped String req = format("GET /page HTTP/1.1\r\nHost: x\r\n{if gzip { "Accept-Encoding: gzip, br\r\n" } else { "" }}Connection: close\r\n\r\n")
+    try c.write(req)
+    String all
+    for {
+        scoped String line = c.readLine() catch e {
+            break
+        }
+        all.append(line)
+        all.append("\n")
+    }
+    return all
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.gzip = true
+    r.get("/page", page)
+    r.get("/short", short)
+    r.get("/own", own)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+    scoped String pageUrl = format("{base}/page")
+    scoped String want = str.repeat("<p>hello</p>\n", 3847)
+
+    http.Client one
+    defer one.close()
+    scoped http.Reply a = try one.get(pageUrl)
+    print("{a.protocol} {a.status} {a.body.len} bytes, encoding '{a.header("Content-Encoding")}' {a.body == want[0:50000]}")
+    http.Client two
+    two.priorKnowledge = true
+    defer two.close()
+    scoped http.Reply b = try two.get(pageUrl)
+    print("{b.protocol} {b.status} {b.body.len} bytes, encoding '{b.header("Content-Encoding")}' {b.body == want[0:50000]}")
+    scoped String shortUrl = format("{base}/short")
+    scoped http.Reply s = try one.get(shortUrl)
+    print("small: {s.status} [{s.body}] encoding '{s.header("Content-Encoding")}'")
+    scoped String ownUrl = format("{base}/own")
+    scoped http.Reply o = try http.get(ownUrl)
+    print("own encoding: {o.header("Content-Encoding")}")
+
+    scoped String zipped = try raw(ln.port, true)
+    print("raw: {if str.contains(zipped, "Content-Encoding: gzip") { "Content-Encoding: gzip" } else { "none" }}, {if str.contains(zipped, "Vary: Accept-Encoding") { "Vary: Accept-Encoding" } else { "no Vary" }}, smaller {zipped.len < 5000}")
+    scoped String plain = try raw(ln.port, false)
+    print("raw without gzip: {if str.contains(plain, "Content-Encoding") { "Content-Encoding" } else { "no Content-Encoding" }}, larger {plain.len > 50000}")
+}

@@ -1,0 +1,164 @@
+// Compression: deflate in the gzip, zlib and raw formats, with zlib, which
+// is loaded the first time it is needed.
+//
+//     scoped String packed = try compress.gzip(text)
+//     scoped String back = try compress.gunzip(packed)
+
+pub enum CompressError { broken, tooLarge, missing }
+
+// The wrapping around deflate data: gzip (files, HTTP), zlib (PNG, some
+// protocols), or none.
+pub enum Format { gzip, zlib, raw }
+
+@extern("iris_z_new")
+u8 *rawNew(i32 compress, i32 format, i32 level)
+
+@extern("iris_z_push")
+i32 rawPush(u8 *z, u8 *p, i64 n, i32 finish, String *out, i64 limit)
+
+@extern("iris_z_free")
+void rawFree(u8 *z)
+
+@extern("iris_z_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_z_message_len")
+i64 messageLen()
+
+@extern("iris_crc32")
+i64 rawCrc32(i64 crc, u8 *p, i64 n)
+
+@extern("iris_adler32")
+i64 rawAdler32(i64 a, u8 *p, i64 n)
+
+str message() => messagePtr()[0:messageLen()]
+
+i32 formatCode(Format f) => match f {
+    .gzip => 0,
+    .zlib => 1,
+    .raw => 2,
+}
+
+// Compresses data, at a level from 1 (fastest) to 9 (smallest).
+pub !String compress(str data, Format format = .gzip, i64 level = 6) {
+    scoped w := try writer(format, level)
+    try w.write(data)
+    try w.finish()
+    out := w.out
+    String none
+    w.out = none // out is the caller's now
+    return out
+}
+
+// Decompresses data. It fails when what comes out would be larger than
+// limit bytes (0: 1 GiB), so a small file can't fill the memory.
+pub !String decompress(str data, Format format = .gzip, i64 limit = 0) {
+    scoped r := try reader(format, limit)
+    end := try r.write(data)
+    if !end {
+        return error(CompressError.broken, "the compressed data ends too soon")
+    }
+    out := r.out
+    String none
+    r.out = none
+    return out
+}
+
+pub !String gzip(str data, i64 level = 6) => try compress(data, .gzip, level)
+
+// Decompresses gzip data; zlib data works too.
+pub !String gunzip(str data, i64 limit = 0) => try decompress(data, .gzip, limit)
+
+// The CRC-32 of data, as gzip and zip use it; give the one before to go on
+// from it.
+pub u32 crc32(str data, u32 before = 0) => u32(rawCrc32(i64(before), data.ptr, data.len))
+
+// The Adler-32 checksum of data, as zlib uses it.
+pub u32 adler32(str data, u32 before = 1) => u32(rawAdler32(i64(before), data.ptr, data.len))
+
+// Compresses a part at a time: what comes out is added to out.
+pub struct Writer {
+    u8 *z
+    pub String out
+}
+
+pub !Writer writer(Format format = .gzip, i64 level = 6) {
+    z := rawNew(1, formatCode(format), i32(level))
+    if z == null {
+        return error(CompressError.missing, "{message()}")
+    }
+    return Writer{z: z}
+}
+
+!void Writer.push(str data, bool finish) {
+    i64 at = 0
+    for {
+        n := if data.len - at > 1MiB { 1MiB } else { data.len - at }
+        last := at + n == data.len
+        code := rawPush(self.z, data[at:].ptr, n, if finish && last { 1 } else { 0 }, &self.out, 0)
+        if code < 0 {
+            return error(CompressError.broken, "{message()}")
+        }
+        at += n
+        if last {
+            return
+        }
+    }
+}
+
+pub !void Writer.write(str data) => try self.push(data, false)
+
+// Ends the stream: out is then complete.
+pub !void Writer.finish() => try self.push("", true)
+
+pub void Writer.free() {
+    rawFree(self.z)
+    self.z = null
+    self.out.free()
+}
+
+// Decompresses a part at a time: what comes out is added to out.
+pub struct Reader {
+    u8 *z
+    i64 limit
+    pub String out
+    bool ended
+}
+
+pub !Reader reader(Format format = .gzip, i64 limit = 0) {
+    z := rawNew(0, formatCode(format), 0)
+    if z == null {
+        return error(CompressError.missing, "{message()}")
+    }
+    return Reader{z: z, limit: if limit > 0 { limit } else { 1GiB }}
+}
+
+// Feeds compressed data: true when the stream has ended.
+pub !bool Reader.write(str data) {
+    i64 at = 0
+    for at < data.len || at == 0 {
+        n := if data.len - at > 1MiB { 1MiB } else { data.len - at }
+        code := rawPush(self.z, data[at:].ptr, n, 0, &self.out, self.limit)
+        if code == -2 {
+            return error(CompressError.tooLarge, "{message()}")
+        }
+        if code < 0 {
+            return error(CompressError.broken, "{message()}")
+        }
+        at += n
+        if code == 1 {
+            self.ended = true
+            return true
+        }
+        if n == 0 {
+            break
+        }
+    }
+    return false
+}
+
+pub void Reader.free() {
+    rawFree(self.z)
+    self.z = null
+    self.out.free()
+}

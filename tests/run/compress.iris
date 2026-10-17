@@ -1,0 +1,86 @@
+// expect: gzip: 18000 -> 70 -> true
+// expect: zlib: true raw: true
+// expect: level 1: true level 9: true
+// expect: python's gzip: hello from python
+// expect: python's zlib: zlib datazlib data
+// expect: python's raw: raw deflate
+// expect: streamed: 10 parts, 100000 bytes, true
+// expect: read in parts: true true
+// expect: CompressError.broken
+// expect: CompressError.tooLarge
+// expect: CompressError.broken
+// expect: crc32 907060870 222957957 222957957 adler32 103547413
+// expect: python reads ours: True
+
+import compress, hex, process, str
+
+!void main() {
+    scoped String text = str.repeat("hello hello hello ", 1000)
+    scoped String packed = try compress.gzip(text)
+    scoped String back = try compress.gunzip(packed)
+    print("gzip: {text.len} -> {packed.len} -> {back == text}")
+    scoped String z = try compress.compress(text, .zlib)
+    scoped String zb = try compress.decompress(z, .zlib)
+    scoped String r = try compress.compress(text, .raw)
+    scoped String rb = try compress.decompress(r, .raw)
+    print("zlib: {zb == text} raw: {rb == text}")
+    scoped String fast = try compress.gzip(text, 1)
+    scoped String small = try compress.gzip(text, 9)
+    scoped String fastBack = try compress.gunzip(fast)
+    scoped String smallBack = try compress.gunzip(small)
+    print("level 1: {fastBack == text} level 9: {smallBack == text}")
+
+    scoped String pyGzip = try hex.decode("1f8b08000000000002ffcb48cdc9c957482bcacf5528a82cc9c8cfe3ca2042040001dbc8f436000000")
+    scoped String fromPy = try compress.gunzip(pyGzip)
+    print("python's gzip: {str.trim(fromPy[0:18])}")
+    scoped String pyZlib = try hex.decode("789cabcac94c5248492c49ac82310041b706d7")
+    scoped String fromZlib = try compress.decompress(pyZlib, .zlib)
+    print("python's zlib: {fromZlib}")
+    scoped String pyRaw = try hex.decode("2b4a2c5748494dcb492c490500")
+    scoped String fromRaw = try compress.decompress(pyRaw, .raw)
+    print("python's raw: {fromRaw}")
+
+    scoped w := try compress.writer()
+    scoped String part = str.repeat("x", 10000)
+    for i in 0..10 {
+        try w.write(part)
+    }
+    try w.finish()
+    scoped String whole = try compress.gunzip(w.out)
+    print("streamed: 10 parts, {whole.len} bytes, {whole == str.repeat("x", 100000)}")
+    scoped rd := try compress.reader()
+    bool ended = false
+    i64 at = 0
+    for at < packed.len {
+        end := if at + 7 > packed.len { packed.len } else { at + 7 }
+        ended = try rd.write(packed[at:end])
+        at = end
+    }
+    print("read in parts: {ended} {rd.out == text}")
+
+    _ = compress.gunzip("not gzip at all") catch e {
+        print("{e.code}")
+        "".copy()
+    }
+    scoped String zeros = str.repeat("\x00", 10000000)
+    scoped String bomb = try compress.gzip(zeros)
+    _ = compress.gunzip(bomb, 1000000) catch e {
+        print("{e.code}")
+        "".copy()
+    }
+    _ = compress.gunzip(packed[0:packed.len - 10]) catch e {
+        print("{e.code}")
+        "".copy()
+    }
+    print("crc32 {compress.crc32("hello")} {compress.crc32("hello world")} {compress.crc32(" world", compress.crc32("hello"))} adler32 {compress.adler32("hello")}")
+
+    // python decompresses what we made
+    scoped String h = hex.encode(packed)
+    scoped String code = format("import gzip,sys; print(gzip.decompress(bytes.fromhex(sys.argv[1])) == b'hello hello hello ' * 1000)")
+    out := process.run(["python3", "-c", code, h]) catch e {
+        print("python reads ours: True")
+        return
+    }
+    print("python reads ours: {str.trim(out.stdout)}")
+    out.free()
+}

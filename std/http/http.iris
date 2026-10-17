@@ -3,7 +3,7 @@
 // Router that sends each request to the handler for its method and path;
 // and a client. https works on both sides, with TLS from OpenSSL.
 
-import json, net, str, time
+import compress, json, net, str, time
 
 pub enum HttpError { badUrl, badReply, tooBig, badRequest }
 
@@ -214,6 +214,33 @@ str statusText(i32 code) => match code {
     return true
 }
 
+// Whether text of this type gets smaller with gzip.
+bool compressible(str contentType) {
+    return str.startsWith(contentType, "text/") || str.contains(contentType, "json") ||
+        str.contains(contentType, "javascript") || str.contains(contentType, "xml") ||
+        str.contains(contentType, "svg")
+}
+
+// Compresses the answer when the router does gzip and the client takes it.
+void maybeGzip(Router *router, Request *req, Response *res) {
+    if router == null || !router.gzip || res.body.len < 1024 || !compressible(res.contentType) {
+        return
+    }
+    if !str.contains(req.header("Accept-Encoding"), "gzip") {
+        return
+    }
+    scoped String lower = str.lower(res.headers)
+    if str.contains(lower, "content-encoding:") {
+        return // the handler encoded it itself
+    }
+    packed := compress.gzip(res.body, 5) catch e {
+        return
+    }
+    res.body.free()
+    res.body = packed
+    res.headers.append("Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n")
+}
+
 !void writeResponse(net.Conn *c, Response *res, bool keepAlive) {
     scoped String head = format("HTTP/1.1 {res.status} {statusText(res.status)}\r\nContent-Type: {res.contentType}\r\nContent-Length: {res.body.len}\r\n{res.headers}Connection: {if keepAlive { "keep-alive" } else { "close" }}\r\n\r\n")
     head.append(res.body)
@@ -364,6 +391,7 @@ void serveConn(net.Conn conn, Target target) {
         } else {
             run(target.handler, &req, &res)
         }
+        maybeGzip(target.router, &req, &res)
         keepAlive := !sameName(req.header("Connection"), "close")
         bool failed = false
         writeResponse(&conn, &res, keepAlive) catch e {
@@ -534,6 +562,8 @@ pub struct Router {
     pub Duration timeout
     pub i64 maxBody
     pub i64 maxHeader
+    // gzip text answers of 1 KiB or more for clients that accept it
+    pub bool gzip
     Atomic[i64] stopping
     Atomic[i64] busy
     Mutex lock
@@ -821,6 +851,28 @@ pub struct Reply {
     List[String] values
 }
 
+// A gzip body is decompressed, and its Content-Encoding header taken out,
+// so the caller gets what the server meant to send.
+!void Reply.decode() {
+    for i in 0..self.names.len {
+        if sameName(self.names.at(i), "Content-Encoding") {
+            if !sameName(self.values.at(i), "gzip") {
+                return
+            }
+            plain := compress.gunzip(self.body) catch e {
+                return error(HttpError.badReply, "the gzip body is broken: {e.message}")
+            }
+            self.body.free()
+            self.body = plain
+            n := self.names.remove(i)
+            v := self.values.remove(i)
+            n.free()
+            v.free()
+            return
+        }
+    }
+}
+
 // The value of a header of the reply, "" when it has none.
 pub str Reply.header(str name) {
     for i in 0..self.names.len {
@@ -883,7 +935,7 @@ struct Dest {
 }
 
 String requestText(str method, Dest *d, str body, str contentType, bool keepAlive) {
-    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\nUser-Agent: iris\r\n")
+    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\nUser-Agent: iris\r\nAccept-Encoding: gzip\r\n")
     if !keepAlive {
         req.append("Connection: close\r\n")
     }
@@ -1119,6 +1171,15 @@ pub void Client.close() {
 // Reads a reply. reusable says whether the connection can take another
 // request: the reply's end was known and the server didn't close it.
 !Reply readReply(net.Conn *c, bool *reusable) {
+    r := try readRawReply(c, reusable)
+    r.decode() catch e {
+        r.free()
+        return e
+    }
+    return r
+}
+
+!Reply readRawReply(net.Conn *c, bool *reusable) {
     *reusable = false
     Reply r
     r.protocol = "HTTP/1.1"

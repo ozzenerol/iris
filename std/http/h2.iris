@@ -555,6 +555,7 @@ void answer(Request req, i64 stream, Target target, Queue *jobs) {
     } else {
         run(target.handler, &req, &res)
     }
+    maybeGzip(target.router, &req, &res)
     req.free()
     if target.router != null {
         target.router.busy.sub(1)
