@@ -315,6 +315,9 @@ void serveConn(net.Conn conn, Target target) {
             return
         }
         w.last = time.clock()
+        if !more {
+            return
+        }
         if target.router != null {
             route := target.router.socketRoute(&req)
             if route != null {
@@ -323,9 +326,6 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             target.router.busy.add(1)
-        }
-        if !more {
-            return
         }
         Response res
         res.status = 200

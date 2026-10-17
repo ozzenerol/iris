@@ -1,0 +1,34 @@
+// expect: 200
+// expect: the server stopped quickly
+
+import http, net, time
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hi")
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[bool](1)
+    spawn stopAfter(&r, ln, done)
+    scoped String url = format("http://127.0.0.1:{ln.port}/")
+    // a keep-alive client that then closes its connection: the server must
+    // not count that connection as busy any more
+    http.Client client
+    scoped http.Reply rep = try client.get(url)
+    print("{rep.status}")
+    client.close()
+    sleep(50ms)
+    start := time.clock()
+    r.shutdown(5s)
+    _ = <-done
+    print(if time.clock() - start < 2s { "the server stopped quickly" } else { "the server waited" })
+}
+
+void stopAfter(http.Router *r, net.Listener ln, chan[bool] done) {
+    r.serveOn(ln) catch e { }
+    done <- true
+}
