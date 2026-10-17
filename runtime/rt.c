@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4136,6 +4137,70 @@ static bool sameWord(const char *a, const char *b) {
 
 /* Fills an @env struct from the environment. 0, 1 a required variable is
    missing, 2 a value doesn't fit its field. */
+/* Puts the text v into the field at p, as env.load and flags.parse read
+ * it. NULL when it worked, otherwise why it didn't. */
+static const char *setFromText(const JsonType *ft, bool duration, char *p, const char *v) {
+    switch (ft->kind) {
+    case J_INT: case J_UINT: {
+        if (duration) {
+            int64_t d;
+            if (!parseDuration(v, &d)) return "isn't a duration like 30s or 1m30s";
+            *(int64_t *)p = d;
+            return NULL;
+        }
+        char *end;
+        errno = 0;
+        long long n = strtoll(v, &end, 10);
+        int bits = ft->size * 8;
+        bool fits = ft->kind == J_INT ? (bits == 64 || (n >= -(1LL << (bits - 1)) && n < (1LL << (bits - 1))))
+                                      : (n >= 0 && (bits == 64 || n < (1LL << bits)));
+        if (*end || end == v || errno) return "isn't a whole number";
+        if (!fits) return "doesn't fit";
+        writeInt(p, ft->size, n);
+        return NULL;
+    }
+    case J_FLOAT: {
+        char *end;
+        double d = strtod(v, &end);
+        if (*end || end == v) return "isn't a number";
+        if (ft->size == 4) *(float *)p = (float)d;
+        else *(double *)p = d;
+        return NULL;
+    }
+    case J_BOOL:
+        if (sameWord(v, "true") || sameWord(v, "1") || sameWord(v, "yes") || sameWord(v, "on")) {
+            *(uint8_t *)p = 1;
+        } else if (sameWord(v, "false") || sameWord(v, "0") || sameWord(v, "no") || sameWord(v, "off")) {
+            *(uint8_t *)p = 0;
+        } else {
+            return "isn't true or false";
+        }
+        return NULL;
+    case J_STR: {
+        Slice *s = (Slice *)p;
+        s->ptr = (char *)v;         /* the environment and the arguments stay for the program's life */
+        s->len = (int64_t)strlen(v);
+        return NULL;
+    }
+    case J_STRING: {
+        IrisString *s = (IrisString *)p;
+        iris_string_free(s);
+        iris_string_append(s, v, (int64_t)strlen(v));
+        return NULL;
+    }
+    case J_ENUM: {
+        const JsonName *names = ft->items;
+        int64_t k = 0;
+        while (k < ft->count && !((size_t)names[k].len == strlen(v) && !memcmp(names[k].name, v, strlen(v)))) k++;
+        if (k == ft->count) return "isn't one of the enum's values";
+        *(int32_t *)p = (int32_t)names[k].value;
+        return NULL;
+    }
+    default:
+        return "can't be read from text";
+    }
+}
+
 int iris_env_load(const EnvTable *t, char *out) {
     for (int64_t i = 0; i < t->count; i++) {
         const EnvField *f = &t->fields[i];
@@ -4146,69 +4211,342 @@ int iris_env_load(const EnvTable *t, char *out) {
             if (f->required) return envFail(1, name, NULL, "is needed but isn't set");
             continue;
         }
-        char *p = out + f->offset;
-        const JsonType *ft = f->type;
-        switch (ft->kind) {
-        case J_INT: case J_UINT: {
-            if (f->duration) {
-                int64_t d;
-                if (!parseDuration(v, &d)) return envFail(2, name, v, "isn't a duration like 30s or 1m30s");
-                *(int64_t *)p = d;
-                break;
-            }
-            char *end;
-            errno = 0;
-            long long n = strtoll(v, &end, 10);
-            int bits = ft->size * 8;
-            bool fits = ft->kind == J_INT ? (bits == 64 || (n >= -(1LL << (bits - 1)) && n < (1LL << (bits - 1))))
-                                          : (n >= 0 && (bits == 64 || n < (1LL << bits)));
-            if (*end || end == v || errno) return envFail(2, name, v, "isn't a whole number");
-            if (!fits) return envFail(2, name, v, "doesn't fit");
-            writeInt(p, ft->size, n);
-            break;
-        }
-        case J_FLOAT: {
-            char *end;
-            double d = strtod(v, &end);
-            if (*end || end == v) return envFail(2, name, v, "isn't a number");
-            if (ft->size == 4) *(float *)p = (float)d;
-            else *(double *)p = d;
-            break;
-        }
-        case J_BOOL:
-            if (sameWord(v, "true") || sameWord(v, "1") || sameWord(v, "yes") || sameWord(v, "on")) {
-                *(uint8_t *)p = 1;
-            } else if (sameWord(v, "false") || sameWord(v, "0") || sameWord(v, "no") || sameWord(v, "off")) {
-                *(uint8_t *)p = 0;
-            } else {
-                return envFail(2, name, v, "isn't true or false");
-            }
-            break;
-        case J_STR: {
-            Slice *s = (Slice *)p;
-            s->ptr = (char *)v;         /* the environment stays for the program's life */
-            s->len = (int64_t)strlen(v);
-            break;
-        }
-        case J_STRING: {
-            IrisString *s = (IrisString *)p;
-            iris_string_free(s);
-            iris_string_append(s, v, (int64_t)strlen(v));
-            break;
-        }
-        case J_ENUM: {
-            const JsonName *names = ft->items;
-            int64_t k = 0;
-            while (k < ft->count && !((size_t)names[k].len == strlen(v) && !memcmp(names[k].name, v, strlen(v)))) k++;
-            if (k == ft->count) return envFail(2, name, v, "isn't one of the enum's values");
-            *(int32_t *)p = (int32_t)names[k].value;
-            break;
-        }
-        default:
-            return envFail(2, name, NULL, "can't be read from the environment");
-        }
+        const char *why = setFromText(f->type, f->duration, out + f->offset, v);
+        if (why) return envFail(2, name, v, why);
     }
     return 0;
+}
+
+/* ---------------------------------------------------------------- flags.parse */
+
+typedef struct {
+    const char *name;           /* the long name, without the -- */
+    int64_t nameLen, offset;
+    const JsonType *type;
+    int64_t required, duration, letter;
+    const char *help;
+    int64_t helpLen, args;      /* args: the str[] that gets the other arguments */
+} FlagField;
+
+typedef struct {
+    int64_t count;
+    const FlagField *fields;
+    const char *about;
+    int64_t aboutLen;
+} FlagTable;
+
+/* the help text, or what was wrong */
+static _Thread_local IrisString flagMsg;
+
+const char *iris_flags_message_ptr(void) { return flagMsg.ptr; }
+int64_t iris_flags_message_len(void) { return flagMsg.len; }
+
+static void msgf(const char *f, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, f);
+    int n = vsnprintf(buf, sizeof buf, f, ap);
+    va_end(ap);
+    if (n > (int)sizeof buf - 1) n = sizeof buf - 1;
+    iris_string_append(&flagMsg, buf, n);
+}
+
+/* What a flag's value looks like in the help: <n>, <text>, <a|b|c>. */
+static void flagValueHint(const FlagField *f, IrisString *s) {
+    const JsonType *t = f->type;
+    const char *hint = NULL;
+    switch (t->kind) {
+    case J_INT: case J_UINT: hint = f->duration ? "<duration>" : "<n>"; break;
+    case J_FLOAT: hint = "<number>"; break;
+    case J_STR: case J_STRING: hint = "<text>"; break;
+    case J_ENUM: {
+        const JsonName *names = t->items;
+        iris_string_append(s, "<", 1);
+        for (int64_t k = 0; k < t->count; k++) {
+            if (k) iris_string_append(s, "|", 1);
+            iris_string_append(s, names[k].name, names[k].len);
+        }
+        iris_string_append(s, ">", 1);
+        return;
+    }
+    default: return;
+    }
+    iris_string_append(s, hint, (int64_t)strlen(hint));
+}
+
+/* The field's value as the help shows a default; nothing for zero values. */
+static void flagDefault(const FlagField *f, const char *p, IrisString *s) {
+    const JsonType *t = f->type;
+    char buf[64];
+    int n = 0;
+    switch (t->kind) {
+    case J_INT: case J_UINT: {
+        int64_t v = t->size == 1 ? (t->kind == J_INT ? *(int8_t *)p : *(uint8_t *)p)
+                  : t->size == 2 ? (t->kind == J_INT ? *(int16_t *)p : *(uint16_t *)p)
+                  : t->size == 4 ? (t->kind == J_INT ? *(int32_t *)p : (int64_t)*(uint32_t *)p)
+                  : *(int64_t *)p;
+        if (v == 0) return;
+        if (f->duration) {
+            iris_string_append(s, " (default ", 10);
+            iris_write_duration(3, s, v);
+            iris_string_append(s, ")", 1);
+            return;
+        }
+        n = snprintf(buf, sizeof buf, " (default %lld)", (long long)v);
+        break;
+    }
+    case J_BOOL:
+        if (!*(const uint8_t *)p) return;
+        n = snprintf(buf, sizeof buf, " (default true)");
+        break;
+    case J_FLOAT: {
+        double v = t->size == 4 ? *(float *)p : *(double *)p;
+        if (v == 0) return;
+        n = snprintf(buf, sizeof buf, " (default %g)", v);
+        break;
+    }
+    case J_STR: case J_STRING: {
+        const Slice *v = (const Slice *)p;
+        if (v->len == 0) return;
+        iris_string_append(s, " (default \"", 11);
+        iris_string_append(s, v->ptr, v->len);
+        iris_string_append(s, "\")", 2);
+        return;
+    }
+    case J_ENUM: {
+        const JsonName *names = t->items;
+        int32_t v = *(const int32_t *)p;
+        for (int64_t k = 0; k < t->count; k++) {
+            if (names[k].value == v) {
+                iris_string_append(s, " (default ", 10);
+                iris_string_append(s, names[k].name, names[k].len);
+                iris_string_append(s, ")", 1);
+            }
+        }
+        return;
+    }
+    default: return;
+    }
+    iris_string_append(s, buf, n);
+}
+
+static void flagUsageLine(const FlagTable *t, const char *prog, int64_t progLen) {
+    msgf("usage: %.*s", (int)progLen, prog);
+    msgf(" [flags]");
+    for (int64_t i = 0; i < t->count; i++) {
+        const FlagField *f = &t->fields[i];
+        if (f->args) msgf(f->required ? " %.*s..." : " [%.*s...]", (int)f->nameLen, f->name);
+    }
+    msgf("\n");
+}
+
+static void flagHelp(const FlagTable *t, const char *out, const char *prog, int64_t progLen) {
+    if (t->aboutLen) msgf("%.*s\n\n", (int)t->aboutLen, t->about);
+    flagUsageLine(t, prog, progLen);
+    msgf("\nflags:\n");
+    /* the left column: "  -p, --port <n>" */
+    IrisString left[256] = {0};
+    int64_t rows = 0, width = 0;
+    const FlagField *shown[256];
+    for (int64_t i = 0; i < t->count && rows < 255; i++) {
+        const FlagField *f = &t->fields[i];
+        if (f->args) continue;
+        IrisString *l = &left[rows];
+        char head[16];
+        int n = f->letter ? snprintf(head, sizeof head, "  -%c, --", (char)f->letter) : snprintf(head, sizeof head, "      --");
+        iris_string_append(l, head, n);
+        iris_string_append(l, f->name, f->nameLen);
+        if (f->type->kind != J_BOOL) {
+            iris_string_append(l, " ", 1);
+            flagValueHint(f, l);
+        }
+        if (l->len > width) width = l->len;
+        shown[rows++] = f;
+    }
+    if (width < 16) width = 16;
+    for (int64_t r = 0; r < rows; r++) {
+        const FlagField *f = shown[r];
+        iris_string_append(&flagMsg, left[r].ptr, left[r].len);
+        int64_t bare = flagMsg.len;
+        for (int64_t k = left[r].len; k < width + 2; k++) iris_string_append(&flagMsg, " ", 1);
+        int64_t padded = flagMsg.len;
+        iris_string_append(&flagMsg, f->help, f->helpLen);
+        if (f->required) {
+            iris_string_append(&flagMsg, f->helpLen ? " (required)" : "(required)", f->helpLen ? 11 : 10);
+        } else {
+            flagDefault(f, out + f->offset, &flagMsg);
+        }
+        if (flagMsg.len == padded) {
+            flagMsg.len = bare;         /* no spaces at the end */
+        } else if (!f->helpLen && flagMsg.ptr[padded] == ' ') {
+            memmove(flagMsg.ptr + padded, flagMsg.ptr + padded + 1, (size_t)(flagMsg.len - padded - 1));
+            flagMsg.len--;              /* "(default 30s)" right after the padding */
+        }
+        iris_string_append(&flagMsg, "\n", 1);
+        iris_string_free(&left[r]);
+    }
+    msgf("  -h, --help");
+    for (int64_t k = 12; k < width + 2; k++) msgf(" ");
+    msgf("show this help\n");
+}
+
+/* Fills out from the arguments. 0 when it worked, 1 for --help (the
+ * message is the help), 2 when something is wrong (the message says what).
+ * n < 0 reads the program's own arguments. */
+int iris_flags_parse(const FlagTable *t, char *out, const Slice *args, int64_t n, const char *prog,
+                     int64_t progLen) {
+    iris_string_free(&flagMsg);
+    const char *argv0 = NULL;
+    if (n < 0) {
+        argv0 = gArgc > 0 ? gArgv[0] : "program";
+        const char *slash = strrchr(argv0, '/');
+        if (slash) argv0 = slash + 1;
+    }
+    if (progLen == 0) {
+        prog = argv0 ? argv0 : "program";
+        progLen = (int64_t)strlen(prog);
+    }
+    int64_t count = n < 0 ? (gArgc > 0 ? gArgc - 1 : 0) : n;
+    /* C strings for each argument */
+    char **av = calloc((size_t)count + 1, sizeof *av);
+    for (int64_t i = 0; i < count; i++) {
+        if (n < 0) {
+            av[i] = gArgv[i + 1];
+        } else {
+            av[i] = malloc((size_t)args[i].len + 1);
+            memcpy(av[i], args[i].ptr, (size_t)args[i].len);
+            av[i][args[i].len] = 0;
+        }
+    }
+    const FlagField *rest = NULL;
+    for (int64_t i = 0; i < t->count; i++) {
+        if (t->fields[i].args) rest = &t->fields[i];
+    }
+    bool *seen = calloc((size_t)t->count + 1, 1);
+    Slice *positional = calloc((size_t)count + 1, sizeof *positional);
+    int64_t npos = 0;
+    int code = 0;
+    bool flagsDone = false;
+    for (int64_t i = 0; i < count && code == 0; i++) {
+        char *a = av[i];
+        if (flagsDone || a[0] != '-' || a[1] == 0) {
+            /* the caller's own text, or the program's argument */
+            positional[npos].ptr = n < 0 ? a : args[i].ptr;
+            positional[npos].len = (int64_t)strlen(a);
+            npos++;
+            continue;
+        }
+        if (strcmp(a, "--") == 0) {
+            flagsDone = true;
+            continue;
+        }
+        if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
+            flagHelp(t, out, prog, progLen);
+            code = 1;
+            break;
+        }
+        bool isLong = a[1] == '-';
+        const char *name = a + (isLong ? 2 : 1);
+        const char *eq = strchr(name, '=');
+        size_t nameLen = eq ? (size_t)(eq - name) : strlen(name);
+        /* -abc: several one-letter bool flags at once */
+        if (!isLong && nameLen > 1) {
+            for (size_t k = 0; k < nameLen && code == 0; k++) {
+                const FlagField *f = NULL;
+                for (int64_t j = 0; j < t->count; j++) {
+                    if (t->fields[j].letter == name[k] && !t->fields[j].args) f = &t->fields[j];
+                }
+                if (!f) {
+                    msgf("-%c isn't a flag", name[k]);
+                    code = 2;
+                } else if (f->type->kind != J_BOOL) {
+                    msgf("-%c needs a value, so it can't be joined with other flags", name[k]);
+                    code = 2;
+                } else {
+                    *(uint8_t *)(out + f->offset) = 1;
+                    seen[f - t->fields] = true;
+                }
+            }
+            continue;
+        }
+        const FlagField *f = NULL;
+        for (int64_t j = 0; j < t->count; j++) {
+            const FlagField *g = &t->fields[j];
+            if (g->args) continue;
+            if (isLong ? ((size_t)g->nameLen == nameLen && !memcmp(g->name, name, nameLen))
+                       : (nameLen == 1 && g->letter == name[0])) {
+                f = g;
+            }
+        }
+        if (!f) {
+            msgf("%.*s isn't a flag", (int)(nameLen + (isLong ? 2 : 1)), a);
+            code = 2;
+            break;
+        }
+        char shownName[300];
+        snprintf(shownName, sizeof shownName, "%.*s", (int)(nameLen + (isLong ? 2 : 1)), a);
+        const char *value = eq ? eq + 1 : NULL;
+        int64_t from = i;
+        if (!value) {
+            if (f->type->kind == J_BOOL) {
+                value = "true";
+            } else if (i + 1 < count) {
+                from = ++i;
+                value = av[i];
+            } else {
+                msgf("%s needs a value", shownName);
+                code = 2;
+                break;
+            }
+        }
+        const char *why = setFromText(f->type, f->duration, out + f->offset, value);
+        if (why) {
+            msgf("%s: '%.80s' %s", shownName, value, why);
+            code = 2;
+            break;
+        }
+        if (n >= 0 && f->type->kind == J_STR) {
+            /* a str points into the caller's text, not the copy */
+            Slice *v = (Slice *)(out + f->offset);
+            v->ptr = args[from].ptr + (value - av[from]);
+        }
+        seen[f - t->fields] = true;
+    }
+    for (int64_t j = 0; j < t->count && code == 0; j++) {
+        const FlagField *f = &t->fields[j];
+        if (f->args) {
+            if (f->required && npos == 0) {
+                msgf("%.*s are needed", (int)f->nameLen, f->name);
+                code = 2;
+            }
+        } else if (f->required && !seen[j]) {
+            msgf("--%.*s is needed", (int)f->nameLen, f->name);
+            code = 2;
+        }
+    }
+    if (code == 0 && npos > 0 && !rest) {
+        msgf("'%.80s' isn't a flag, and %.*s takes no other arguments", (char *)positional[0].ptr, (int)progLen, prog);
+        code = 2;
+    }
+    if (code == 2) {
+        iris_string_append(&flagMsg, "\n", 1);
+        flagUsageLine(t, prog, progLen);
+        msgf("run %.*s --help to see the flags\n", (int)progLen, prog);
+    }
+    if (code == 0 && rest && npos > 0) {
+        /* the slice belongs to the struct, and its free gives it back */
+        Slice *dst = (Slice *)(out + rest->offset);
+        dst->ptr = malloc((size_t)npos * sizeof(Slice));
+        dst->len = npos;
+        memcpy(dst->ptr, positional, (size_t)npos * sizeof(Slice));
+    }
+    if (n >= 0) {
+        for (int64_t i = 0; i < count; i++) free(av[i]);
+    }
+    free(seen);
+    free(positional);
+    free(av);
+    return code;
 }
 
 void iris_json_quote(const char *text, int64_t len, IrisString *out) {

@@ -1069,6 +1069,23 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
         }
         return;
     }
+    if (strcmp(at->name, "flag") == 0) {
+        /* @flag('p', "help", required) in any order; @flag(args) on a str[] */
+        if (!(d->flags & F_CLI)) {
+            error(c, at, "@flag on a field needs @flags on the struct %s too", d->name);
+            return;
+        }
+        for (int i = 0; i < at->list.len; i++) {
+            Node *a = at->list.items[i];
+            bool ok = a->kind == N_STRING ||
+                      (a->kind == N_CHAR && a->ival > ' ' && a->ival < 127 && a->ival != '-' && a->ival != 'h') ||
+                      (a->kind == N_IDENT && (strcmp(a->name, "required") == 0 || strcmp(a->name, "args") == 0));
+            if (!ok) {
+                error(c, a, "@flag takes a letter for the short form ('p', but not 'h' or '-'), the help in quotes, required, or args: @flag('p', \"the port\")");
+            }
+        }
+        return;
+    }
     if (strcmp(at->name, "json") != 0) {
         notYet(c, at, "attributes", "a later version");
         return;
@@ -1173,6 +1190,11 @@ static void resolveStruct(Checker *c, Type *t) {
             d->flags |= F_JSON;
         } else if (strcmp(at->name, "json") == 0) {
             error(c, at, "@json on a struct takes nothing; field names go on the fields: @json(\"name\")");
+        } else if (strcmp(at->name, "flags") == 0) {
+            d->flags |= F_CLI;
+            if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
+                error(c, at, "@flags on a struct takes nothing, or what the program does in quotes: @flags(\"copies files\")");
+            }
         } else if (strcmp(at->name, "env") == 0) {
             d->flags |= F_ENV;
             if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
@@ -1224,6 +1246,37 @@ static void resolveStruct(Checker *c, Type *t) {
     t->state = 2;
     if (d->flags & F_JSON) {
         checkJsonFields(c, t, d);
+    }
+    if (d->flags & F_CLI) {
+        bool haveArgs = false;
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            Type *ft = f->type;
+            if (!ft || isErr(ft)) continue;
+            bool args = false;
+            for (int k = 0; k < f->attrs.len; k++) {
+                Node *at = f->attrs.items[k];
+                if (strcmp(at->name, "flag") != 0) continue;
+                for (int j = 0; j < at->list.len; j++) {
+                    Node *a = at->list.items[j];
+                    if (a->kind == N_IDENT && strcmp(a->name, "args") == 0) args = true;
+                }
+            }
+            if (args) {
+                if (ft->kind != TY_SLICE || !isStr(ft->elem)) {
+                    error(c, f, "@flag(args) gets the other arguments, so its field must be str[], not %s", ft->name);
+                } else if (haveArgs) {
+                    error(c, f, "only one field can have @flag(args)");
+                }
+                haveArgs = true;
+                continue;
+            }
+            bool ok = ft->kind == TY_INT || ft->kind == TY_FLOAT || ft->kind == TY_BOOL || isStr(ft) ||
+                      ft->kind == TY_STRING || (ft->kind == TY_ENUM && !ft->hasData);
+            if (!ok || f->kind == N_EMBED) {
+                error(c, f, "a @flags field can be a number, a Duration, bool, str, String or an enum, or str[] with @flag(args); not %s", ft->name);
+            }
+        }
     }
     if (d->flags & F_ENV) {
         for (int i = 0; i < d->list.len; i++) {
@@ -3209,7 +3262,7 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD) {
             return checkSyncMethod(c, e, t, name);
         }
-        bool generatedFree = isJsonStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & F_ENV));
+        bool generatedFree = isJsonStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & (F_ENV | F_CLI)));
         if (generatedFree && strcmp(name, "free") == 0 && !findMethodIn(base, "free")) {
             /* the free @json gives a struct: its Strings and slices */
             if (t->kind != TY_PTR && !addressable(recv)) {
@@ -3570,6 +3623,44 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         if (!jsonType(c, t, e->list.items[0], "this value")) return setType(e, &tyError);
         e->builtin = BI_JSON_ENCODE;
         return setType(e, &tyString);
+    }
+    if ((strcmp(d->name, "parse") == 0 || strcmp(d->name, "parseArgs") == 0) && d->module &&
+        strcmp(d->module, "flags") == 0) {
+        /* flags.parse(Options), flags.parseArgs(Options, args, name) */
+        bool own = strcmp(d->name, "parse") == 0;
+        if (own ? e->list.len != 1 : (e->list.len < 2 || e->list.len > 3)) {
+            error(c, e, own ? "flags.parse takes the struct's type: flags.parse(Options)"
+                            : "flags.parseArgs takes the struct's type, the arguments and the program's name: flags.parseArgs(Options, args, \"tool add\")");
+            return setType(e, &tyError);
+        }
+        Type *t = typeArgument(c, e->list.items[0]);
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        if (t->kind != TY_STRUCT || !(t->decl->flags & F_CLI)) {
+            error(c, e->list.items[0], "%s needs @flags to be read from the arguments", t->name);
+            return setType(e, &tyError);
+        }
+        Node *into = lookup(c, own ? "flags.parseMain" : "flags.parseInto");
+        if (!into) {
+            error(c, e, "flags.%s needs the flags module's %s", d->name, own ? "parseMain" : "parseInto");
+            return setType(e, &tyError);
+        }
+        if (!own) {
+            checkExpr(c, &e->list.items[1], sliceOf(&tyStr));
+            coerce(c, &e->list.items[1], sliceOf(&tyStr), "the arguments");
+            if (e->list.len == 3) {
+                checkExpr(c, &e->list.items[2], &tyStr);
+                coerce(c, &e->list.items[2], &tyStr, "the program's name");
+            }
+        }
+        e->ref = into;
+        Node *lit = like(c, N_STRUCT_LIT, e);
+        checkExpr(c, &lit, t);
+        e->b = lit;
+        e->c = like(c, N_T_NAME, e);
+        e->c->type = t;
+        e->builtin = BI_FLAGS_PARSE;
+        return setType(e, own ? t : resultOf(t));
     }
     if (strcmp(d->name, "load") == 0 && d->module && strcmp(d->module, "env") == 0) {
         /* env.load(Settings) */
@@ -4302,7 +4393,7 @@ static void checkLocalVar(Checker *c, Node *s) {
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
         Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
-        if (t->kind == TY_STRING || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & F_ENV))))) {
+        if (t->kind == TY_STRING || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & (F_ENV | F_CLI)))))) {
             s->ref = NULL;              /* freed by the runtime */
         } else if (!m) {
             error(c, s, "scoped needs a type with a free method; %s has none", t->name);

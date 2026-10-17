@@ -157,6 +157,7 @@ enum {
     F_UNCHECKED = 1 << 24,  /* @unchecked: no checks in the function's code */
     F_ENV = 1 << 25,        /* a struct with @env */
     F_LAZY = 1 << 26,       /* a generic struct's method for one instance, not checked until it is used */
+    F_CLI = 1 << 27,        /* a struct with @flags */
 };
 
 typedef struct Node Node;
@@ -358,6 +359,7 @@ enum {
     BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
     BI_TABLE_OF,
     BI_ENV_LOAD,
+    BI_FLAGS_PARSE,
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

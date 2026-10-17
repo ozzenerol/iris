@@ -1,0 +1,66 @@
+// Command-line flags, into a @flags struct.
+
+import io, os
+
+pub enum FlagError { help, invalid }
+
+// Fills a @flags struct from the program's arguments: flags.parse(Options).
+// Each field is a flag named after it, with - between the words (dryRun is
+// --dry-run). @flag on a field gives a letter for the short form, the help
+// and required: @flag('p', "the port to listen on"). A str[] field with
+// @flag(args) gets the arguments that aren't flags. A flag that isn't given
+// keeps the field's default.
+//
+// Values come as --port 8080, --port=8080 or -p 8080. A bool flag needs no
+// value (--verbose, or --verbose=false), and one-letter bool flags can be
+// joined: -vq. After --, every argument is an argument.
+//
+// -h and --help print the help made from the struct and end the program.
+// When something is wrong, it prints what and how to get the help, and the
+// program ends with status 2.
+@builtin
+pub void parse()
+
+// Like parse, from the arguments given, and without ending the program:
+// flags.parseArgs(AddOptions, args, "tool add"). name is shown in the help;
+// "" uses the program's name. str values point into args. With -h or
+// --help it fails with FlagError.help and the help as the message.
+@builtin
+pub void parseArgs()
+
+@extern("iris_flags_parse")
+i32 rawParse(u8 *table, u8 *out, str *args, i64 n, u8 *name, i64 nameLen)
+
+@extern("iris_flags_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_flags_message_len")
+i64 messageLen()
+
+// What flags.parse calls.
+pub void parseMain(u8 *table, u8 *out) {
+    code := rawParse(table, out, null, -1, null, 0)
+    if code == 0 {
+        return
+    }
+    msg := messagePtr()[0:messageLen()]
+    if code == 1 {
+        print(msg[0:msg.len - 1])
+        os.exit(0)
+    }
+    io.ewrite("error: {msg}")
+    os.exit(2)
+}
+
+// What flags.parseArgs calls.
+pub !void parseInto(u8 *table, u8 *out, str[] args, str name) {
+    code := rawParse(table, out, args.ptr, args.len, name.ptr, name.len)
+    if code == 0 {
+        return
+    }
+    msg := messagePtr()[0:messageLen()]
+    if code == 1 {
+        return error(FlagError.help, "{msg}")
+    }
+    return error(FlagError.invalid, "{msg}")
+}

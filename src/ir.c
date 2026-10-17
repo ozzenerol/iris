@@ -1193,6 +1193,69 @@ static const char *envTable(IR *ir, Type *t) {
     return table;
 }
 
+/* A @flags struct's table: for each field, its long name (portCount is
+ * --port-count), where it is, its JSON table, whether it is required or a
+ * Duration, its letter, its help, and whether it gets the other arguments. */
+static const char *flagsTable(IR *ir, Type *t) {
+    Node *d = t->decl;
+    const char *about = NULL;
+    size_t aboutLen = 0;
+    for (int i = 0; i < d->attrs.len; i++) {
+        Node *at = d->attrs.items[i];
+        if (strcmp(at->name, "flags") == 0 && at->list.len == 1) {
+            about = at->list.items[0]->text;
+            aboutLen = at->list.items[0]->textLen;
+        }
+    }
+    StrBuf b = {0};
+    int n = 0;
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (f->kind == N_EMBED) continue;
+        bool required = false, args = false;
+        long long letter = 0;
+        const char *help = NULL;
+        size_t helpLen = 0;
+        for (int k = 0; k < f->attrs.len; k++) {
+            Node *at = f->attrs.items[k];
+            if (strcmp(at->name, "flag") != 0) continue;
+            for (int j = 0; j < at->list.len; j++) {
+                Node *a = at->list.items[j];
+                if (a->kind == N_STRING) {
+                    help = a->text;
+                    helpLen = a->textLen;
+                } else if (a->kind == N_CHAR) {
+                    letter = (long long)a->ival;
+                } else if (strcmp(a->name, "required") == 0) {
+                    required = true;
+                } else {
+                    args = true;
+                }
+            }
+        }
+        StrBuf name = {0};
+        for (const char *p = f->name; *p; p++) {
+            if (*p >= 'A' && *p <= 'Z' && p != f->name) sbPutc(&name, '-');
+            sbPutc(&name, (char)(*p >= 'A' && *p <= 'Z' ? *p + 32 : *p));
+        }
+        const char *s = stringConst(ir, name.buf, name.len);
+        const char *h = help ? stringConst(ir, help, helpLen) : "null";
+        sbPrintf(&b, "%s{ ptr, i64, i64, ptr, i64, i64, i64, ptr, i64, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 %d, i64 %d, i64 %lld, ptr %s, i64 %zu, i64 %d }",
+                 n ? ", " : "", s, name.len, (long long)fieldOffset(t, i), jsonType(ir, f->type), required ? 1 : 0,
+                 f->type == &tyDuration ? 1 : 0, letter, h, helpLen, args ? 1 : 0);
+        sbFree(&name);
+        n++;
+    }
+    int id = ++ir->strings;
+    const char *items = fmt(ir, "@flags.%d.items", id), *table = fmt(ir, "@flags.%d", id);
+    sbPrintf(&ir->head, "%s = private constant [%d x { ptr, i64, i64, ptr, i64, i64, i64, ptr, i64, i64 }] [%s]\n", items, n,
+             b.buf ? b.buf : "");
+    sbPrintf(&ir->head, "%s = private constant { i64, ptr, ptr, i64 } { i64 %d, ptr %s, ptr %s, i64 %zu }\n", table, n,
+             items, about ? stringConst(ir, about, aboutLen) : "null", aboutLen);
+    sbFree(&b);
+    return table;
+}
+
 static Val emitJson(IR *ir, Node *e) {
     switch (e->builtin) {
     case BI_JSON_ENCODE: {
@@ -1462,6 +1525,30 @@ static Val emitBuiltin(IR *ir, Node *e) {
         ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
         const char *err = tmp(ir);
         ins(ir, "%s = call i64 %s(ptr %s, ptr %s)", err, e->ref->ir, envTable(ir, t), slot);
+        Val v = load(ir, slot, t);
+        const char *rt = llType(ir, e->type);
+        const char *r1 = tmp(ir), *r2 = tmp(ir);
+        ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), v.s);
+        ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+        return val(r2, e->type);
+    }
+    case BI_FLAGS_PARSE: {
+        Type *t = e->c->type;
+        const char *slot = allocaFor(ir, t, "options");
+        Val init = emitExpr(ir, e->b);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
+        if (e->type == t) {
+            /* flags.parse: on --help or a mistake it ends the program */
+            ins(ir, "call void %s(ptr %s, ptr %s)", e->ref->ir, flagsTable(ir, t), slot);
+            return load(ir, slot, t);
+        }
+        Val args = emitExpr(ir, e->list.items[1]);
+        const char *st = llType(ir, &tyStr);
+        const char *name = "zeroinitializer";
+        if (e->list.len == 3) name = emitExpr(ir, e->list.items[2]).s;
+        const char *err = tmp(ir);
+        ins(ir, "%s = call i64 %s(ptr %s, ptr %s, %s %s, %s %s)", err, e->ref->ir, flagsTable(ir, t), slot,
+            llType(ir, e->list.items[1]->type), args.s, st, name);
         Val v = load(ir, slot, t);
         const char *rt = llType(ir, e->type);
         const char *r1 = tmp(ir), *r2 = tmp(ir);

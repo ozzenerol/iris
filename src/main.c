@@ -409,34 +409,38 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     if (!makeTempDir(dir, sizeof dir)) {
         goto done;
     }
+    /* hello.iris -> hello; a folder -> its name */
+    char def[4096];
+    {
+        char trimmed[4096];
+        snprintf(trimmed, sizeof trimmed, "%s", path);
+        size_t tl = strlen(trimmed);
+        while (tl > 1 && trimmed[tl - 1] == '/') {
+            trimmed[--tl] = 0;
+        }
+        const char *base = strrchr(trimmed, '/');
+        base = base ? base + 1 : trimmed;
+        snprintf(def, sizeof def, "%s", base);
+        char *dot = strrchr(def, '.');
+        if (dot && dot != def && strcmp(dot, ".iris") == 0) {
+            *dot = 0;
+        } else if (strcmp(def, ".") == 0 || strcmp(def, "..") == 0) {
+            snprintf(def, sizeof def, "a.out");
+        }
+    }
     if (strcmp(cmd, "build") == 0) {
-        char def[4096];
         if (!out) {
-            /* hello.iris -> hello; a folder -> its name */
-            char trimmed[4096];
-            snprintf(trimmed, sizeof trimmed, "%s", path);
-            size_t tl = strlen(trimmed);
-            while (tl > 1 && trimmed[tl - 1] == '/') {
-                trimmed[--tl] = 0;
-            }
-            const char *base = strrchr(trimmed, '/');
-            base = base ? base + 1 : trimmed;
-            snprintf(def, sizeof def, "%s", base);
-            char *dot = strrchr(def, '.');
-            if (dot && dot != def && strcmp(dot, ".iris") == 0) {
-                *dot = 0;
-            } else if (strcmp(def, ".") == 0 || strcmp(def, "..") == 0) {
-                snprintf(def, sizeof def, "a.out");
-            }
             out = def;
         }
         rc = compileIR(ir, out, mode, dir, allLinks, nAll) ? 0 : 1;
         removeTree(dir);
         goto done;
     }
-    char exe[4200];
-    snprintf(exe, sizeof exe, "%s/program", dir);
+    /* named after the program, which then sees its own name in argv[0] */
+    char exe[8400];
+    snprintf(exe, sizeof exe, "%s/%s", dir, def);
     if (!compileIR(ir, exe, mode, dir, allLinks, nAll)) {
+        unlink(exe);
         removeTree(dir);
         goto done;
     }
@@ -451,6 +455,7 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         rc = runProgram(args);
         free(args);
     }
+    unlink(exe);
     removeTree(dir);
 done:
     arenaFree(&a);
