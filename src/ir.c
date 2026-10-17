@@ -497,6 +497,8 @@ static void indexCheck(IR *ir, const char *idx, const char *len, Node *at) {
 /* ---------------------------------------------------------------- expressions */
 
 static Val emitExpr(IR *ir, Node *e);
+static bool hasDefaults(Type *t);
+static const char *constValue(IR *ir, Node *v, Type *t);
 static const char *emitSpawn(IR *ir, Node *call, bool thread);
 static const char *emitAddr(IR *ir, Node *e);
 static void emitStmt(IR *ir, Node *s);
@@ -2002,6 +2004,13 @@ static Val emitStructLit(IR *ir, Node *e) {
             value = f->b;
         }
         if (!value) {
+            if (f->type && hasDefaults(f->type)) {
+                /* a struct inside, left out: with its own defaults */
+                const char *r = tmp(ir);
+                ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, t->ir, acc, llType(ir, f->type),
+                    constValue(ir, NULL, f->type), i);
+                acc = r;
+            }
             continue;
         }
         Val v = emitExpr(ir, value);
@@ -2763,7 +2772,8 @@ static void emitStmtInner(IR *ir, Node *s) {
                 ins(ir, "store %s %s, ptr %s", llType(ir, s->type), v.s, s->ir);
             }
         } else {
-            ins(ir, "store %s zeroinitializer, ptr %s", llType(ir, s->type), s->ir);
+            /* zeros, or the defaults of the structs in it */
+            ins(ir, "store %s %s, ptr %s", llType(ir, s->type), constValue(ir, NULL, s->type), s->ir);
         }
         if ((s->flags & F_SCOPED) && ir->defers) {
             listPush(ir->arena, &ir->defers->items, s);
@@ -2990,13 +3000,53 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->func = NULL;
 }
 
-/* A global's starting value, as an LLVM constant. */
+/* Whether a value of t made without one has more than zeros: a struct
+ * with field defaults, inside it too, or an array of such structs. */
+static bool hasDefaults(Type *t) {
+    if (t->kind == TY_ARRAY) return hasDefaults(t->elem);
+    if (t->kind != TY_STRUCT || !t->decl) return false;
+    NodeList *fields = &t->decl->list;
+    for (int i = 0; i < fields->len; i++) {
+        Node *f = fields->items[i];
+        if (f->kind == N_FIELD && f->b) return true;
+        if (f->type && f->type != t && hasDefaults(f->type)) return true;
+    }
+    return false;
+}
+
+/* A global's starting value, as an LLVM constant; with no value, the
+ * type's defaults. */
 static const char *constValue(IR *ir, Node *v, Type *t) {
-    if (!v) {
+    if (!v && !hasDefaults(t)) {
         return "zeroinitializer";
     }
-    if (v->kind == N_IDENT && v->ref && v->ref->kind == N_CONST && !v->isConst) {
+    if (!v && t->kind == TY_ARRAY) {
+        const char *one = constValue(ir, NULL, t->elem);
+        StrBuf b = {0};
+        sbPuts(&b, "[ ");
+        for (int64_t i = 0; i < t->count; i++) {
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, t->elem), one);
+        }
+        sbPuts(&b, " ]");
+        return sbFinish(&b, ir->arena);
+    }
+    if (!v && t->kind != TY_STRUCT) {
+        return "zeroinitializer";
+    }
+    if (v && v->kind == N_IDENT && v->ref && v->ref->kind == N_CONST && !v->isConst) {
         v = v->ref->b;
+    }
+    if (!v) {
+        StrBuf b = {0};
+        sbPuts(&b, "{ ");
+        NodeList *fields = &t->decl->list;
+        for (int i = 0; i < fields->len; i++) {
+            Node *f = fields->items[i];
+            Node *fv = f->kind == N_FIELD ? f->b : NULL;
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, f->type), constValue(ir, fv, f->type));
+        }
+        sbPuts(&b, " }");
+        return sbFinish(&b, ir->arena);
     }
     switch (t->kind) {
     case TY_SLICE: {
