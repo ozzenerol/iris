@@ -1,0 +1,29 @@
+// expect: SELECT 1 FROM books WHERE isbn = ?
+// expect: SELECT * FROM books LIMIT 42
+// expect: rate 0.25 tiny 1.5e-7 on true lit {x}
+// expect: books plain [] 28
+// expect: SELECT 1 FROM books WHERE isbn = ? 34
+// expect: id=7 ok
+
+import str
+
+const BookTable = "books"
+const RATE = 0.25
+const MAX = 10 * 4
+const isbnExistsQuery = str.format("SELECT 1 FROM {BookTable} WHERE isbn = ?")
+const LIST = "SELECT * FROM {BookTable} LIMIT {MAX + 2}"
+const MIXED = format("rate {RATE} tiny {1.5e-7} on {MAX > 3} {"lit"} {{x}}")
+const TABLE = BookTable
+const PLAIN = str.format("plain")
+const EMPTY = "{""}"
+
+void main() {
+    print(isbnExistsQuery)
+    print(LIST)
+    print(MIXED)
+    print("{TABLE} {PLAIN} [{EMPTY}] {LIST.len}")
+    print("{isbnExistsQuery} {isbnExistsQuery.len}")
+    id := 7
+    scoped String s = str.format("id={id} {if id > 3 { "ok" } else { "no" }}")
+    print(s)
+}

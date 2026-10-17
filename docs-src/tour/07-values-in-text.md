@@ -107,6 +107,8 @@ listening on localhost:8080
 14 bytes
 ```
 
+`str.format` is the same as `format`, by the `str` module's name.
+
 `panic` takes the same text, and `io.eprint` writes it to standard error with a newline. `io.write` writes to standard output without one.
 
 ## Text passed straight to a function

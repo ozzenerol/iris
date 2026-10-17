@@ -13,7 +13,9 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 Type tyError = {.kind = TY_ERROR, .name = "error"};
@@ -2083,6 +2085,141 @@ static bool checkComptime(Checker *c, Node *d) {
     return true;
 }
 
+/* A float as the program writes it into text: the fewest digits that read
+ * back as the same value, as iris_write_float does. */
+static void constFloatText(StrBuf *out, double v, int bits) {
+    if (v != v) {
+        sbPuts(out, "nan");
+        return;
+    }
+    if (v == 1.0 / 0.0 || v == -1.0 / 0.0) {
+        sbPuts(out, v > 0 ? "inf" : "-inf");
+        return;
+    }
+    if (v == 0) {
+        sbPuts(out, signbit(v) ? "-0" : "0");
+        return;
+    }
+    char buf[64];
+    for (int prec = 0; prec < 17; prec++) {
+        snprintf(buf, sizeof buf, "%.*e", prec, v);
+        double back = strtod(buf, NULL);
+        if (bits == 32 ? (float)back == (float)v : back == v) {
+            break;
+        }
+    }
+    char *ep = strchr(buf, 'e');
+    int exp10 = atoi(ep + 1);
+    if (exp10 < -6 || exp10 >= 21) {
+        sbPutn(out, buf, (size_t)(ep - buf));
+        sbPrintf(out, "e%c%d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+        return;
+    }
+    char digits[32];
+    int nd = 0;
+    bool neg = buf[0] == '-';
+    for (char *q = buf + (neg ? 1 : 0); q < ep; q++) {
+        if (*q != '.') digits[nd++] = *q;
+    }
+    if (neg) sbPutc(out, '-');
+    if (exp10 < 0) {
+        sbPuts(out, "0.");
+        for (int i = 0; i < -exp10 - 1; i++) sbPutc(out, '0');
+        sbPutn(out, digits, (size_t)nd);
+    } else {
+        for (int i = 0; i <= exp10; i++) sbPutc(out, i < nd ? digits[i] : '0');
+        if (nd > exp10 + 1) {
+            sbPutc(out, '.');
+            sbPutn(out, digits + exp10 + 1, (size_t)(nd - exp10 - 1));
+        }
+    }
+}
+
+/* A constant made of text with {} values, bare or given to format or
+ * str.format: the text is put together now, from the constants in the
+ * braces, and the constant becomes a str. */
+static void foldConstText(Checker *c, Node *d) {
+    Node *v = d->b;
+    if (v->kind == N_CALL && v->list.len == 1 && v->list.items[0]->kind != N_NAMED_ARG) {
+        Node *f = v->a;
+        Node *strFormat = f->kind == N_IDENT && strcmp(f->name, "str.format") == 0 ? lookup(c, f->name) : NULL;
+        if ((f->kind == N_IDENT && strcmp(f->name, "format") == 0) ||
+            (strFormat && strFormat->module && strcmp(strFormat->module, "str") == 0)) {
+            v = v->list.items[0];
+            if (v->kind == N_STRING) {
+                d->b = v;
+                return;
+            }
+        }
+    }
+    if (v->kind == N_IDENT) {
+        /* another str constant, by name */
+        Node *k = lookup(c, v->name);
+        if (k && k->kind == N_CONST) {
+            checkConstDecl(c, k);
+            if (k->type && isStr(k->type) && k->b && k->b->kind == N_STRING) {
+                v->ref = k;
+                d->b = k->b;
+            }
+        }
+        return;
+    }
+    if (v->kind != N_INTERP) {
+        return;
+    }
+    StrBuf out = {0};
+    bool ok = true;
+    for (int i = 0; i < v->list.len; i++) {
+        Node **part = &v->list.items[i];
+        if ((*part)->kind == N_STRING) {
+            sbPutn(&out, (*part)->text, (*part)->textLen);
+            continue;
+        }
+        Type *t = checkExpr(c, part, NULL);
+        if (isErr(t)) {
+            ok = false;
+            continue;
+        }
+        Node *p = *part;
+        int64_t n;
+        bool b;
+        if (isStr(t) && p->kind == N_STRING) {
+            sbPutn(&out, p->text, p->textLen);
+        } else if (isStr(t) && p->kind == N_IDENT && p->ref && p->ref->kind == N_CONST && p->ref->b &&
+                   p->ref->b->kind == N_STRING) {
+            sbPutn(&out, p->ref->b->text, p->ref->b->textLen);
+        } else if (isFloat(t) && p->isConst) {
+            constFloatText(&out, p->fval, t->bits);
+        } else if ((isInt(t) || t == &tyBool) && t != &tyDuration && evalConst(c, p, &n, &b)) {
+            if (b) {
+                sbPuts(&out, n ? "true" : "false");
+            } else {
+                sbPrintf(&out, "%lld", (long long)n);
+            }
+        } else if (t == &tyDuration || t->kind == TY_ENUM || t->kind == TY_ERRCODE || t->kind == TY_STRUCT) {
+            error(c, p, "a constant's text can have numbers, bool and text in its braces, not %s", t->name);
+            ok = false;
+        } else {
+            error(c, p, "the values in a constant's text must be known when compiling");
+            ok = false;
+        }
+    }
+    if (!ok) {
+        sbFree(&out);
+        d->type = &tyError;
+        return;
+    }
+    Node *s = like(c, N_STRING, v);
+    s->textLen = out.len;
+    if (out.len) {
+        s->text = sbFinish(&out, c->arena);
+    } else {
+        sbFree(&out);
+        s->text = "";
+    }
+    d->b = s;
+}
+
 static void checkConstDecl(Checker *c, Node *d) {
     if (d->state == 2) {
         return;
@@ -2108,6 +2245,13 @@ static void checkConstDecl(Checker *c, Node *d) {
         d->state = 1;
         c->scope = d->scope;
         c->module = d->module;
+    }
+    foldConstText(c, d);
+    if (d->type == &tyError) {
+        c->scope = saved;
+        c->module = savedModule;
+        d->state = 2;
+        return;
     }
     Type *declared = d->a ? resolveType(c, d->a) : (d->flags & F_COMPTIMED) ? d->type : NULL;
     int64_t v;
@@ -3867,6 +4011,12 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
             return setType(e, &tyError);
         }
     }
+    if (strcmp(d->name, "format") == 0 && d->module && strcmp(d->module, "str") == 0) {
+        /* str.format: the builtin format, by the module's name */
+        checkTextArg(c, e, "str.format");
+        e->builtin = BI_FORMAT;
+        return setType(e, &tyString);
+    }
     if (strcmp(d->name, "encode") == 0) {
         if (e->list.len != 1) {
             error(c, e, "json.encode takes one value");
@@ -4050,7 +4200,9 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         return checkEnumNew(c, e, expected, callee->name);
     }
     if (callee->kind == N_FIELD_ACCESS) {
-        if (callee->a->kind == N_IDENT && !lookup(c, callee->a->name) && !typeFromName(c, callee->a->name, callee, false)) {
+        /* str.upper(...) without import str: str is also a type */
+        if (callee->a->kind == N_IDENT && !lookup(c, callee->a->name) &&
+            (strcmp(callee->a->name, "str") == 0 || !typeFromName(c, callee->a->name, callee, false))) {
             notDeclared(c, callee->a, callee->a->name);
             return setType(e, &tyError);
         }

@@ -1,0 +1,14 @@
+// error: 8: the values in a constant's text must be known when compiling
+// error: 9: a constant's text can have numbers, bool and text in its braces, not Duration
+// error: 10: a constant's text can have numbers, bool and text in its braces, not Level
+// error: 11: str is a standard library module that isn't imported; add import str
+
+enum Level { debug, info }
+i64 counter = 3
+const A = "{counter}"
+const B = "{5s}"
+const C = "{Level.info}"
+const D = str.format("x {1}")
+
+void main() {
+}

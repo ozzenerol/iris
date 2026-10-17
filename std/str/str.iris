@@ -147,6 +147,12 @@ pub List[str] fields(str s) {
     return out
 }
 
+// The text with its {} values put in, as a new String, like format. In a
+// const, with constants in the braces, it is worked out when compiling and
+// gives a str: const QUERY = str.format("SELECT 1 FROM {TABLE}").
+@builtin
+pub String format(str text)
+
 // The parts one after the other, with sep between them.
 pub String join(str[] parts, str sep) {
     String out

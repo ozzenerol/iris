@@ -22,6 +22,29 @@ void main() {
 iris v3: 65536 bytes, width 32
 ```
 
+Text with values in braces can be a constant too, when every value is a constant number, `bool` or text. The text is put together when compiling, and the constant is a `str`. The text can be written as it is, or given to `format` or `str.format`:
+
+```iris run
+import str
+
+const TABLE = "books"
+const LIMIT = 50
+const FIND = str.format("SELECT 1 FROM {TABLE} WHERE isbn = ?")
+const PAGE = "SELECT * FROM {TABLE} LIMIT {LIMIT}"
+
+void main() {
+    print(FIND)
+    print(PAGE)
+}
+```
+
+```output
+SELECT 1 FROM books WHERE isbn = ?
+SELECT * FROM books LIMIT 50
+```
+
+A `Duration`, an enum or a struct can't go into a constant's text; a `comptime` constant can build that text (see below).
+
 A constant has no address and takes no memory: each use is the value itself. It can be used where a value must be known when compiling: an array's size, a parameter's default, a field's default, a global's first value, a `match` arm.
 
 ```iris run
