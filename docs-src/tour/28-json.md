@@ -77,7 +77,39 @@ struct User {
 
 `null` leaves a field as it is. A decoded struct owns its `String`s and slices: the `free` method that `@json` gives the struct frees them, so `scoped` works on it, and when `decode` fails, what it had read is freed already.
 
-The type given to `json.decode` is a `@json` struct. A JSON array at the top of the text goes into a struct field: `{"items": [...]}`.
+A JSON array is read into a slice, written as the type: `json.decode(User[], text)`. The slice is new memory, which the caller frees, after freeing each item that owns memory:
+
+```iris run
+import json
+
+@json
+struct Item {
+    String name
+    i64 count
+}
+
+!void main() {
+    items := try json.decode(Item[], r"""[{"name": "pear", "count": 4}, {"name": "fig", "count": 9}]""")
+    defer free(items)
+    defer {
+        for it in items {
+            it.free()
+        }
+    }
+    for it in items {
+        print("{it.name}: {it.count}")
+    }
+    ids := try json.decode(i64[], "[3, 1, 4]")
+    print("{ids.len} ids, the last {ids[2]}")
+    free(ids)
+}
+```
+
+```output
+pear: 4
+fig: 9
+3 ids, the last 4
+```
 
 ## Keys and required fields
 

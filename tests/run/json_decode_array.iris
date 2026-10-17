@@ -1,0 +1,29 @@
+// expect: 3 3
+// expect: 2 2 b
+// expect: zoe
+
+import json
+
+@json
+struct P {
+    i64 x
+    String name
+}
+
+!void main() {
+    nums := try json.decode(i64[], "[1, 2, 3]")
+    print("{nums.len} {nums[2]}")
+    free(nums)
+    ps := try json.decode(P[], r"""[{"x": 1, "name": "a"}, {"x": 2, "name": "b"}]""")
+    print("{ps.len} {ps[1].x} {ps[1].name}")
+    for p in ps {
+        p.free()
+    }
+    free(ps)
+    names := try json.decode(String[], r"""["ada", "zoe"]""")
+    print("{names[1]}")
+    for n in names {
+        n.free()
+    }
+    free(names)
+}

@@ -3013,6 +3013,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         return setType(e, tupleOf(elems, e->list.len));
     }
     default:
+        if (e->kind == N_T_SLICE || e->kind == N_T_ARRAY || e->kind == N_T_NAME || e->kind == N_T_GENERIC) {
+            error(c, e, "this is a type, not a value");
+            return setType(e, &tyError);
+        }
         notYet(c, e, "this expression", "a later version");
         return setType(e, &tyError);
     }
@@ -3734,6 +3738,9 @@ static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
 static Type *typeArgument(Checker *c, Node *a) {
     if (a->kind == N_IDENT) {
         return typeFromName(c, a->name, a, true);
+    }
+    if (a->kind == N_T_SLICE) {
+        return resolveType(c, a);
     }
     error(c, a, "this should be a type's name: json.decode(User, text)");
     return &tyError;

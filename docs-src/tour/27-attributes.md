@@ -20,10 +20,10 @@ import env
 
 @env("SHOP")
 struct Settings {
-    u16 port = 8080         // SHOP_PORT
-    str db = "shop.db"      // SHOP_DB
-    Duration timeout = 30s  // SHOP_TIMEOUT
-    bool debug              // SHOP_DEBUG
+    u16 port = 8080        // SHOP_PORT
+    str db = "shop.db"     // SHOP_DB
+    Duration timeout = 30s // SHOP_TIMEOUT
+    bool debug             // SHOP_DEBUG
 }
 
 !void main() {

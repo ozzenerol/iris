@@ -754,6 +754,9 @@ static Node *parseCallArgs(Parser *p, Node *callee, Token *t) {
             arg->name = tokText(p, name);
             arg->a = parseExpr(p);
             push(p, &call->list, arg);
+        } else if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_LBRACK && peekAt(p, 2)->kind == P_RBRACK) {
+            /* a slice type given to a call that takes a type: json.decode(User[], text) */
+            push(p, &call->list, parseType(p));
         } else {
             push(p, &call->list, parseExpr(p));
         }
