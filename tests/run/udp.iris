@@ -1,0 +1,66 @@
+// expect: ping from 127.0.0.1 (a)
+// expect: second from 127.0.0.1 (b)
+// expect: pong
+// expect: one datagram per read: 3 2
+// expect: NetError.timeout
+// expect: [2001:db8::1]:53 false
+// expect: 192.0.2.1:8080 true
+// expect: 192.0.2.1:53
+// expect: '300.1.1.1' isn't an IP address
+// expect: 'x:99999' has a port that isn't a number up to 65535
+// expect: true false
+
+import net
+
+!void main() {
+    server := try net.listenUdp(0, "127.0.0.1")
+    defer server.close()
+    to := try net.parseAddr("127.0.0.1", server.localAddr().port)
+    a := try net.dialUdp(to)
+    defer a.close()
+    b := try net.dialUdp(to)
+    defer b.close()
+    try a.send("ping")
+    try b.send("second")
+    u8[64] buf
+    n, fromA := try server.readFrom(buf)
+    scoped String who = fromA.ipText()
+    print("{buf[0:n]} from {who} (a)")
+    m, fromB := try server.readFrom(buf)
+    scoped String who2 = fromB.ipText()
+    print("{buf[0:m]} from {who2} (b)")
+    try server.sendTo("pong", fromA)
+    k := try a.read(buf)
+    print("{buf[0:k]}")
+
+    try a.send("abc")
+    try a.send("de")
+    first := try server.read(buf)
+    second := try server.read(buf)
+    print("one datagram per read: {first} {second}")
+
+    a.setTimeout(50ms)
+    _ = a.read(buf) catch e {
+        print("{e.code}")
+        0
+    }
+
+    v6 := try net.parseAddr("[2001:db8::1]:53")
+    scoped String t6 = v6.format()
+    print("{t6} {v6.isV4()}")
+    v4 := try net.parseAddr("192.0.2.1:8080")
+    scoped String t4 = v4.format()
+    print("{t4} {v4.isV4()}")
+    d := try net.parseAddr("192.0.2.1", 53)
+    scoped String td = d.format()
+    print(td)
+    _ = net.parseAddr("300.1.1.1") catch e {
+        print(e.message)
+        net.Addr{}
+    }
+    _ = net.parseAddr("x:99999") catch e {
+        print(e.message)
+        net.Addr{}
+    }
+    print("{d.equal(d)} {d.equal(v4)}")
+}

@@ -2308,6 +2308,16 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         error(c, e, "%s is a type; methods are called on values", e->a->name);
         return setType(e, &tyError);
     }
+    if (t->kind == TY_PTR && (t->elem->kind == TY_SLICE || t->elem->kind == TY_STRING) &&
+        (strcmp(e->name, "len") == 0 || strcmp(e->name, "ptr") == 0)) {
+        /* s.len through a String * or a slice pointer: (*s).len */
+        Node *d = like(c, N_UNARY, e->a);
+        d->op = P_STAR;
+        d->a = e->a;
+        d->type = t->elem;
+        e->a = d;
+        t = t->elem;
+    }
     if (strcmp(e->name, "ptr") == 0 && (t->kind == TY_SLICE || t->kind == TY_STRING)) {
         e->builtin = 2;                 /* the pointer to the first item */
         return setType(e, ptrTo(t->kind == TY_STRING ? &tyU8 : t->elem));

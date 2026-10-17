@@ -1,0 +1,248 @@
+// expect: web.test: 192.0.2.10 192.0.2.11 2001:db8::10
+// expect: alias.test: 192.0.2.10
+// expect: cname alias.test -> web.test
+// expect: a alias.test 192.0.2.10 5m0s
+// expect: mx 10 mx1.test
+// expect: mx 20 mx2.test
+// expect: txt v=spf1 -all
+// expect: srv 1 5 5060 sip.test
+// expect: big.test over TCP: 192.0.2.30
+// expect: short: 192.0.2.20
+// expect: missing.test: NetError.notFound missing.test: no such host
+// expect: printer: 192.0.2.99
+// expect: PRINTER.lan.: 192.0.2.99 2001:db8::99
+// expect: localhost: 127.0.0.1 ::1
+// expect: 203.0.113.5: 203.0.113.5
+// expect: no server: NetError.timeout
+
+import net, str
+
+// ------------------------------------------------------------ a small DNS server
+
+void put16(String *out, i64 v) {
+    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:2])
+}
+
+void put32(String *out, i64 v) {
+    put16(out, v >> 16)
+    put16(out, v & 0xffff)
+}
+
+void name(String *out, str n) {
+    str rest = n
+    for rest.len > 0 {
+        label, after, _ := str.cut(rest, ".")
+        u8[1] len = [u8(label.len)]
+        out.append(len[0:1])
+        out.append(label)
+        rest = after
+    }
+    out.append("\x00")
+}
+
+// One answer: the question's name (a pointer to it), type, TTL 300, data.
+void answer(String *out, i64 kind, str data) {
+    put16(out, 0xc00c)
+    put16(out, kind)
+    put16(out, 1)
+    put32(out, 300)
+    put16(out, data.len)
+    out.append(data)
+}
+
+// The question's name, as text, and where the question ends.
+(String, i64) questionOf(str q) {
+    String n
+    i := 12
+    for i < q.len && q[i] != 0 {
+        size := i64(q[i])
+        if n.len > 0 {
+            n.append(".")
+        }
+        n.append(q[i + 1:i + 1 + size])
+        i += 1 + size
+    }
+    return (n, i + 5)
+}
+
+String reply(str q, bool tcp) {
+    qname, end := questionOf(q)
+    defer qname.free()
+    kind := i64(q[end - 4]) << 8 | i64(q[end - 3])
+    String body
+    defer body.free()
+    i64 count = 0
+    i64 flags = 0x8180
+    if qname == "web.test" && kind == 1 {
+        answer(&body, 1, "\xc0\x00\x02\x0a")
+        answer(&body, 1, "\xc0\x00\x02\x0b")
+        count = 2
+    } else if qname == "web.test" && kind == 28 {
+        answer(&body, 28, "\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10")
+        count = 1
+    } else if qname == "alias.test" && kind == 1 {
+        scoped String target = format("")
+        name(&target, "web.test")
+        answer(&body, 5, target)
+        answer(&body, 1, "\xc0\x00\x02\x0a")
+        count = 2
+    } else if qname == "mail.test" && kind == 15 {
+        scoped String one = format("\x00\x0a")
+        name(&one, "mx1.test")
+        scoped String two = format("\x00\x14")
+        name(&two, "mx2.test")
+        answer(&body, 15, one)
+        answer(&body, 15, two)
+        count = 2
+    } else if qname == "txt.test" && kind == 16 {
+        answer(&body, 16, "\x06v=spf1\x05 -all")
+        count = 1
+    } else if qname == "srv.test" && kind == 33 {
+        scoped String s = format("\x00\x01\x00\x05\x13\xc4")
+        name(&s, "sip.test")
+        answer(&body, 33, s)
+        count = 1
+    } else if qname == "big.test" && kind == 1 {
+        if !tcp {
+            flags = 0x8380          // truncated: ask again over TCP
+        } else {
+            answer(&body, 1, "\xc0\x00\x02\x1e")
+            count = 1
+        }
+    } else if qname == "short.test" && kind == 1 {
+        answer(&body, 1, "\xc0\x00\x02\x14")
+        count = 1
+    } else if kind == 1 || kind == 28 {
+        if !str.endsWith(qname, ".test") || qname == "missing.test" || qname == "short" {
+            flags = 0x8183          // no such name
+        }
+    }
+    String out
+    out.append(q[0:2])
+    put16(&out, flags)
+    put16(&out, 1)
+    put16(&out, count)
+    put16(&out, 0)
+    put16(&out, 0)
+    out.append(q[12:end])
+    out.append(body)
+    return out
+}
+
+void serveUdp(net.Udp *u) {
+    u8[] buf = alloc(u8, 2048)
+    defer free(buf)
+    for {
+        n, from := u.readFrom(buf) catch e {
+            return
+        }
+        q := buf[0:n]
+        // first a reply with the wrong id, which the resolver drops
+        scoped String wrong = format("\xff\xff{q[2:]}")
+        u.sendTo(wrong, from) catch e { }
+        scoped String r = reply(q, false)
+        u.sendTo(r, from) catch e { }
+    }
+}
+
+void serveTcp(net.Listener ln) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        size := c.readExactly(2) catch e {
+            c.close()
+            continue
+        }
+        q := c.readExactly(i64(size[0]) << 8 | i64(size[1])) catch e {
+            size.free()
+            c.close()
+            continue
+        }
+        scoped String r = reply(q, true)
+        scoped String framed = format("")
+        put16(&framed, r.len)
+        framed.append(r)
+        c.write(framed) catch e { }
+        q.free()
+        size.free()
+        c.close()
+    }
+}
+
+// ------------------------------------------------------------ the test
+
+void show(net.Resolver *r, str host) {
+    addrs := r.lookup(host) catch e {
+        print("{host}: {e.code} {e.message}")
+        return
+    }
+    String line = format("{host}:")
+    for a in addrs {
+        scoped String t = a.ipText()
+        line.append(" ")
+        line.append(t)
+    }
+    print(line)
+    line.free()
+    addrs.free()
+}
+
+!void main() {
+    udp := try net.listenUdp(0, "127.0.0.1")
+    port := udp.localAddr().port
+    ln := try net.listen(port, "127.0.0.1")
+    spawn serveUdp(&udp)
+    spawn serveTcp(ln)
+    scoped String server = format("127.0.0.1:{port}")
+    scoped r := try net.resolver([server], "tests/data/hosts")
+    r.search.push("test".copy())
+    r.timeout = 2s
+
+    show(&r, "web.test")
+    show(&r, "alias.test")
+    scoped List[net.Record] chain = try r.query("alias.test", .a)
+    defer chain.freeEach()
+    for rec in chain {
+        if rec.kind == .cname {
+            print("cname {rec.name} -> {rec.target}")
+        } else {
+            scoped String ip = rec.ip.ipText()
+            print("a {rec.name} {ip} {rec.ttl}")
+        }
+    }
+    scoped List[net.Record] mx = try r.query("mail.test", .mx)
+    defer mx.freeEach()
+    for rec in mx {
+        print("mx {rec.priority} {rec.target}")
+    }
+    scoped List[net.Record] txt = try r.query("txt.test", .txt)
+    defer txt.freeEach()
+    print("txt {txt.at(0).target}")
+    scoped List[net.Record] srv = try r.query("srv.test", .srv)
+    defer srv.freeEach()
+    s := srv.at(0)
+    print("srv {s.priority} {s.weight} {s.port} {s.target}")
+    big := try r.lookup("big.test")
+    scoped String bigIp = big.at(0).ipText()
+    print("big.test over TCP: {bigIp}")
+    big.free()
+    show(&r, "short")
+    show(&r, "missing.test")
+    show(&r, "printer")
+    show(&r, "PRINTER.lan.")
+    show(&r, "localhost")
+    show(&r, "203.0.113.5")
+
+    scoped String nowhere = format("127.0.0.1:{port + 1}")
+    scoped quiet := try net.resolver([nowhere], "tests/data/hosts")
+    quiet.timeout = 100ms
+    quiet.attempts = 1
+    _ = quiet.lookup("web.test") catch e {
+        print("no server: {e.code}")
+        List[net.Addr]{}
+    }
+    udp.close()
+    ln.close()
+}

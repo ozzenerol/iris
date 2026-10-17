@@ -127,9 +127,29 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `env` | `load(T)` fills an `@env` struct from environment variables (see [Compile time](compile-time.html)); `EnvError` |
 | `flags` | `parse(T)` fills a `@flags` struct from the program's arguments, with `-h` and `--help` made from it (see [Compile time](compile-time.html)); `parseArgs(T, args, name)`; `FlagError` |
 | `term` | for command-line programs: `print`, `write`, `eprint` and `format` with color markup (`"[green]ok[/] [bold]{name}[/]"`), `plain`, `escape`, `width`; status lines `success`, `info`, `warn`, `error` and `title`; `colors()` and `setColors(on)`; `table(headers)` gives a `Table` (`row(cells)`, `align(col, a)`, `border`, `format()`, `print()`); `progress(label, total)` gives a `Progress` (`add`, `set`, `done`); `readLine(prompt)` with line editing and `historyFile`, `historyAdd`, `historyMax`; `readPassword(prompt)`; `size()`, `interactive()` and `clear()` |
-| `net` | TCP: `listen(port, host, shared)` and `Listener.accept(timeout)`, `dial(host, port, timeout)`, and on a `Conn`: `read`, `readLine(limit)`, `readExactly`, `write`, `setTimeout(d)`, `interrupt` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
+| `net` | TCP: `listen(port, host, shared)` and `Listener.accept(timeout)`, `dial(host, port, timeout)`, and on a `Conn`: `read`, `readLine(limit)`, `readExactly`, `write`, `setTimeout(d)`, `interrupt` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; UDP: `listenUdp(port, host)` and `dialUdp(addr)` give a `Udp` with `sendTo`, `send`, `readFrom`, `read`, `setTimeout`, `localAddr` and `close`; addresses: `Addr` (`ip`, `port`, `ipText()`, `format()`, `isV4()`), `ip(text, port)`, `parseAddr(text, port)` and `dialAddr(addr, timeout)`; names: `lookup(host)` gives the addresses, `query(name, type)` the `Record`s of a `RecordType` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`, `srv`, `ptr`, `soa`), and `resolver(servers, hostsFile)` a `Resolver` with its own servers, `timeout`, `attempts` and `search`; `NetError` |
 | `json` | `encode(v) String`, `decode(T, text) !T` and `quote(text) String` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
 | `http` | a server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `error(status, message)`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `use`, `after`, `serve`, `serveTls`); a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`); a `Client` with the same methods that keeps connections open between requests (`timeout`, `maxIdle`, `close()`); and WebSockets: `Router.websocket(path, handler)` on the server, `dialWebSocket(url)` on the client, a `WebSocket` with `send`, `sendBinary`, `read() Message` and `close()` |
+
+Looking up a name and sending a datagram. A lookup waits like any other network call, so the program's other tasks keep running meanwhile:
+
+```iris
+import net
+
+!void main() {
+    addrs := try net.lookup("example.com")
+    defer addrs.free()
+    for a in addrs {
+        scoped String ip = a.ipText()
+        print(ip)
+    }
+
+    to := try net.parseAddr("192.0.2.1:9999")
+    u := try net.dialUdp(to)
+    defer u.close()
+    try u.send("hello")
+}
+```
 
 A small web server. A `Router` sends each request to the handler for its method and path; `:id` matches one part of the path and `*path` the rest. A handler can fail: an error that leaves it is answered with 500 and the error's message:
 

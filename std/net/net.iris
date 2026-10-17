@@ -1,5 +1,8 @@
-// TCP: listening for connections, connecting, reading and writing, also
-// over TLS. A task that waits for the network lets the other tasks run.
+// TCP and UDP: listening, connecting, reading and writing, also over TLS,
+// and looking up names. A task that waits for the network lets the other
+// tasks run.
+
+import time
 
 pub enum NetError { refused, closed, timeout, notFound, inUse, other, tls, tooLong }
 
@@ -132,12 +135,47 @@ pub void Listener.close() => rawClose(self.fd)
 // server.
 pub void Listener.interrupt() => rawShutdown(self.fd)
 
-// Connects to host:port, waiting at most timeout when it isn't 0.
+// Connects to host:port, waiting at most timeout when it isn't 0. host is
+// a name or an IP. Each of the name's addresses is tried in turn until one
+// answers.
 pub !Conn dial(str host, u16 port, Duration timeout = 0s) {
+    start := time.clock()
+    addrs := lookup(host) catch e {
+        // a name only the system knows (mDNS, a VPN's own servers): its
+        // resolver, which keeps the thread waiting
+        i32 err
+        fd := rawDial(host.ptr, host.len, i64(port), &err, timeout)
+        if fd < 0 {
+            return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
+        }
+        return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+    }
+    defer addrs.free()
+    i32 err = 4
+    for a in addrs {
+        left := timeout
+        if timeout > 0s {
+            left = timeout - (time.clock() - start)
+            if left <= 0s {
+                err = 3
+                break
+            }
+        }
+        fd := rawDialIp(&a.ip[0], i64(port), &err, left)
+        if fd >= 0 {
+            return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+        }
+    }
+    return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
+}
+
+// Connects to an address, waiting at most timeout when it isn't 0.
+pub !Conn dialAddr(Addr addr, Duration timeout = 0s) {
     i32 err
-    fd := rawDial(host.ptr, host.len, i64(port), &err, timeout)
+    fd := rawDialIp(&addr.ip[0], i64(addr.port), &err, timeout)
     if fd < 0 {
-        return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
+        scoped String where = addr.format()
+        return error(netCode(err), "connecting to {where}: {reason(err)}")
     }
     return Conn{fd: fd, buf: alloc(u8, 16KiB)}
 }

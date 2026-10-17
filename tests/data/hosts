@@ -1,0 +1,3 @@
+# names for the dns test
+192.0.2.99   printer.lan printer
+2001:db8::99 printer.lan

@@ -2221,6 +2221,190 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err, int
     return fd;
 }
 
+/* ---------------------------------------------------------------- addresses and UDP
+
+   An address is 16 bytes, IPv4 as ::ffff:a.b.c.d, and a port. */
+
+static bool isMapped(const uint8_t *ip) {
+    static const uint8_t prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    return memcmp(ip, prefix, 12) == 0;
+}
+
+static socklen_t toSockaddr(const uint8_t *ip, int64_t port, int family, struct sockaddr_storage *ss) {
+    memset(ss, 0, sizeof *ss);
+    if (family == AF_INET) {
+        struct sockaddr_in *a = (struct sockaddr_in *)ss;
+        a->sin_family = AF_INET;
+        a->sin_port = htons((uint16_t)port);
+        memcpy(&a->sin_addr, ip + 12, 4);
+        return sizeof *a;
+    }
+    struct sockaddr_in6 *a = (struct sockaddr_in6 *)ss;
+    a->sin6_family = AF_INET6;
+    a->sin6_port = htons((uint16_t)port);
+    memcpy(&a->sin6_addr, ip, 16);
+    return sizeof *a;
+}
+
+static void fromSockaddr(const struct sockaddr_storage *ss, uint8_t *ip, int64_t *port) {
+    if (ss->ss_family == AF_INET) {
+        const struct sockaddr_in *a = (const struct sockaddr_in *)ss;
+        memset(ip, 0, 10);
+        ip[10] = ip[11] = 0xff;
+        memcpy(ip + 12, &a->sin_addr, 4);
+        *port = ntohs(a->sin_port);
+        return;
+    }
+    const struct sockaddr_in6 *a = (const struct sockaddr_in6 *)ss;
+    memcpy(ip, &a->sin6_addr, 16);
+    *port = ntohs(a->sin6_port);
+}
+
+/* A UDP socket: bound to ip and port (connect 0; ip NULL for any), or
+ * connected to them (connect 1). family gets AF_INET or AF_INET6. */
+int iris_udp_open(const uint8_t *ip, int64_t port, int connectTo, int *family, int *err) {
+    int fam = ip && isMapped(ip) ? AF_INET : AF_INET6;
+    int fd = socket(fam, SOCK_DGRAM, 0);
+    if (fd < 0 && !ip) {
+        fam = AF_INET;              /* no IPv6 here */
+        fd = socket(fam, SOCK_DGRAM, 0);
+    }
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    if (fam == AF_INET6 && !ip) {
+        int off = 0;                /* IPv4 too */
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);
+    }
+    static const uint8_t any[16] = {0};
+    struct sockaddr_storage ss;
+    socklen_t len = toSockaddr(ip ? ip : any, port, fam, &ss);
+    int rc = connectTo ? connect(fd, (struct sockaddr *)&ss, len) : bind(fd, (struct sockaddr *)&ss, len);
+    if (rc != 0) {
+        *err = netCode(errno);
+        close(fd);
+        return -1;
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    *family = fam;
+    *err = 0;
+    return fd;
+}
+
+/* Sends one datagram, to ip and port, or where the socket is connected
+ * (ip NULL). 0, or a code. */
+int iris_udp_send(int fd, int family, const char *buf, int64_t len, const uint8_t *ip, int64_t port,
+                  int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    struct sockaddr_storage ss;
+    socklen_t sl = 0;
+    if (ip) {
+        if (family == AF_INET && !isMapped(ip)) return 6;      /* an IPv6 address on an IPv4 socket */
+        sl = toSockaddr(ip, port, family, &ss);
+    }
+    for (;;) {
+        ssize_t n = ip ? sendto(fd, buf, (size_t)len, 0, (struct sockaddr *)&ss, sl) : send(fd, buf, (size_t)len, 0);
+        if (n >= 0) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 1, deadline)) return 3;
+            continue;
+        }
+        if (errno == EMSGSIZE) return 9;
+        return netCode(errno);
+    }
+}
+
+/* Reads one datagram: its length, or -code. ip and port get the sender. */
+int64_t iris_udp_recv(int fd, char *buf, int64_t len, uint8_t *ip, int64_t *port, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof ss;
+        ssize_t n = recvfrom(fd, buf, (size_t)len, 0, (struct sockaddr *)&ss, &sl);
+        if (n >= 0) {
+            fromSockaddr(&ss, ip, port);
+            return n;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 0, deadline)) return -3;
+            continue;
+        }
+        return -netCode(errno);
+    }
+}
+
+/* Where a socket is bound. */
+void iris_sock_local(int fd, uint8_t *ip, int64_t *port) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    memset(ip, 0, 16);
+    *port = 0;
+    if (getsockname(fd, (struct sockaddr *)&ss, &sl) == 0) fromSockaddr(&ss, ip, port);
+}
+
+/* A TCP connection to an address. */
+int iris_net_dial_ip(const uint8_t *ip, int64_t port, int *err, int64_t timeout) {
+    int fam = isMapped(ip) ? AF_INET : AF_INET6;
+    int fd = socket(fam, SOCK_STREAM, 0);
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    struct sockaddr_storage ss;
+    socklen_t sl = toSockaddr(ip, port, fam, &ss);
+    if (connect(fd, (struct sockaddr *)&ss, sl) != 0) {
+        if (errno != EINPROGRESS) {
+            *err = netCode(errno);
+            close(fd);
+            return -1;
+        }
+        if (!waitFdUntil(fd, 1, deadlineOf(timeout))) {
+            *err = 3;
+            close(fd);
+            return -1;
+        }
+        int soerr = 0;
+        socklen_t el = sizeof soerr;
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &el);
+        if (soerr != 0) {
+            *err = netCode(soerr);
+            close(fd);
+            return -1;
+        }
+    }
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    *err = 0;
+    return fd;
+}
+
+/* The text of an address's IP, and parsing one: 1 when text is an IP. */
+void iris_ip_format(const uint8_t *ip, IrisString *out) {
+    char buf[64];
+    if (isMapped(ip)) inet_ntop(AF_INET, ip + 12, buf, sizeof buf);
+    else inet_ntop(AF_INET6, ip, buf, sizeof buf);
+    iris_string_append(out, buf, (int64_t)strlen(buf));
+}
+
+int iris_ip_parse(const char *text, int64_t len, uint8_t *ip) {
+    char buf[64];
+    if (len <= 0 || len >= (int64_t)sizeof buf) return 0;
+    memcpy(buf, text, (size_t)len);
+    buf[len] = 0;
+    uint8_t v4[4];
+    if (inet_pton(AF_INET, buf, v4) == 1) {
+        memset(ip, 0, 10);
+        ip[10] = ip[11] = 0xff;
+        memcpy(ip + 12, v4, 4);
+        return 1;
+    }
+    return inet_pton(AF_INET6, buf, ip) == 1;
+}
+
 /* bytes read, 0 at the end, -code on an error */
 int64_t iris_net_read(int fd, char *buf, int64_t len, int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
