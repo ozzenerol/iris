@@ -1,0 +1,58 @@
+// expect: 30 clients left after the handshake
+// expect: the client hung up
+// expect: next request: 200 5000000
+
+import http, net, str
+
+void big(http.Request *req, http.Response *res) {
+    if req.header("X-Wait") == "yes" {
+        sleep(100ms)            // the client is gone by now
+    }
+    scoped String s = str.repeat("x", 5000000)
+    res.text(s)
+}
+
+void server(http.Router *r, net.Listener ln, net.TlsConfig *config) {
+    r.serveTlsOn(ln, config) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", big)
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln, &config)
+    // clients that leave right after the handshake: the server still
+    // writes to them (TLS 1.3 session tickets)
+    for i in 0..30 {
+        quick := try net.dial("127.0.0.1", ln.port)
+        quick.startTls("localhost", "tests/data/tls/ca.pem") catch e { }
+        quick.close()
+    }
+    print("30 clients left after the handshake")
+    sleep(100ms)
+    // a client that asks for a large reply and leaves before it comes:
+    // the server writes to a connection the other side has closed
+    c := try net.dial("127.0.0.1", ln.port)
+    try c.startTls("localhost", "tests/data/tls/ca.pem")
+    try c.write("GET / HTTP/1.1\r\nHost: localhost\r\nX-Wait: yes\r\n\r\n")
+    sleep(30ms)
+    c.close()
+    print("the client hung up")
+    sleep(300ms)
+    c2 := try net.dial("127.0.0.1", ln.port)
+    try c2.startTls("localhost", "tests/data/tls/ca.pem")
+    try c2.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    scoped String status = try c2.readLine()
+    for {
+        scoped String h = try c2.readLine()
+        if h.len == 0 {
+            break
+        }
+    }
+    scoped String body = try c2.readExactly(5000000)
+    print("next request: {status[9:12]} {body.len}")
+    c2.close()
+}

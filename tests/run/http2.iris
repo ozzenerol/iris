@@ -1,0 +1,106 @@
+// expect: HTTP/2 200 [user 7, full yes] x-user=7 type=application/json
+// expect: HTTP/2 201 made ada
+// expect: HTTP/2 404 not found
+// expect: HTTP/2 405 POST
+// expect: HTTP/2 200 1000000 bytes
+// expect: HTTP/2 200 got 3000000 bytes
+// expect: HTTP/2 413
+// expect: 40 of 40 at once
+// expect: HTTP/1.1 200 [user 8, full ]
+// expect: the server stopped
+
+import http, net, str
+
+void getUser(http.Request *req, http.Response *res) {
+    res.header("X-User", req.param("id"))
+    res.json("[user {req.param("id")}, full {req.query("full")}]")
+}
+
+void createUser(http.Request *req, http.Response *res) {
+    res.status = 201
+    res.text("made {req.body}")
+}
+
+void big(http.Request *req, http.Response *res) {
+    scoped String s = str.repeat("0123456789", 100000)
+    res.text(s)
+}
+
+void count(http.Request *req, http.Response *res) {
+    res.text("got {req.body.len} bytes")
+}
+
+void server(http.Router *r, net.Listener ln, chan[String] out) {
+    r.serveOn(ln) catch e {
+        out <- e.message.copy()
+        return
+    }
+    out <- "the server stopped".copy()
+}
+
+void fetch(http.Client *c, str url, chan[bool] out) {
+    scoped http.Reply r = c.get(url) catch e {
+        out <- false
+        return
+    }
+    out <- r.status == 200 && r.body.len == 1000000 && r.protocol == "HTTP/2"
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.maxBody = 4000000
+    r.get("/users/:id", getUser)
+    r.post("/users", createUser)
+    r.get("/big", big)
+    r.post("/count", count)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[String](1)
+    spawn server(&r, ln, done)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+
+    http.Client c
+    c.priorKnowledge = true
+    defer c.close()
+    scoped String userUrl = format("{base}/users/7?full=yes")
+    scoped http.Reply u = try c.get(userUrl)
+    print("{u.protocol} {u.status} {u.body} x-user={u.header("x-user")} type={u.header("Content-Type")}")
+    scoped String usersUrl = format("{base}/users")
+    scoped http.Reply made = try c.post(usersUrl, "text/plain", "ada")
+    print("{made.protocol} {made.status} {made.body}")
+    scoped String nopeUrl = format("{base}/nope")
+    scoped http.Reply nope = try c.get(nopeUrl)
+    print("{nope.protocol} {nope.status} {str.trim(nope.body)}")
+    scoped http.Reply wrong = try c.get(usersUrl)
+    print("{wrong.protocol} {wrong.status} {wrong.header("allow")}")
+    scoped String bigUrl = format("{base}/big")
+    scoped http.Reply b = try c.get(bigUrl)
+    print("{b.protocol} {b.status} {b.body.len} bytes")
+    scoped String countUrl = format("{base}/count")
+    scoped String upload = str.repeat("u", 3000000)
+    scoped http.Reply up = try c.post(countUrl, "text/plain", upload)
+    print("{up.protocol} {up.status} {up.body}")
+    scoped String tooBig = str.repeat("t", 5000000)
+    scoped http.Reply refused = try c.post(countUrl, "text/plain", tooBig)
+    print("{refused.protocol} {refused.status}")
+
+    results := chan[bool](40)
+    for i in 0..40 {
+        spawn fetch(&c, bigUrl, results)
+    }
+    i64 good = 0
+    for i in 0..40 {
+        if <-results {
+            good += 1
+        }
+    }
+    print("{good} of 40 at once")
+
+    // the same port still speaks HTTP/1.1
+    scoped String oneUrl = format("{base}/users/8")
+    scoped http.Reply one = try http.get(oneUrl)
+    print("{one.protocol} {one.status} {one.body}")
+    r.shutdown(2s)
+    scoped String end = <-done
+    print(end)
+}

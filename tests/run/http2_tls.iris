@@ -1,0 +1,39 @@
+// expect: HTTP/2 200 hello over HTTP/2
+// expect: HTTP/2 200 hello over HTTP/2
+// expect: HTTP/1.1 200 hello over HTTP/1.1
+
+import http, net
+
+void proto(http.Request *req, http.Response *res) {
+    res.text("hello over {req.protocol}")
+}
+
+void server(http.Router *r, net.Listener ln, net.TlsConfig *config) {
+    r.serveTlsOn(ln, config) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", proto)
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    config.offerHttp2()
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln, &config)
+    scoped String url = format("https://localhost:{ln.port}/")
+
+    http.Client c
+    c.ca = "tests/data/tls/ca.pem"
+    defer c.close()
+    for i in 0..2 {
+        scoped http.Reply a = try c.get(url)
+        print("{a.protocol} {a.status} {a.body}")
+    }
+    http.Client old
+    old.ca = "tests/data/tls/ca.pem"
+    old.noHttp2 = true
+    defer old.close()
+    scoped http.Reply b = try old.get(url)
+    print("{b.protocol} {b.status} {b.body}")
+}

@@ -28,6 +28,9 @@
   fmt-std                  the standard library is in the standard layout
   get                      iris get with a local git repository (needs git)
   lsp                      tools/lsp_check.py: an editor session with iris lsp
+  std/FILE                 a standard library file with test blocks: `iris test`
+                           on it alone must pass, so such a file needs nothing
+                           else from its module
   docs                     every ```iris block in docs-src/ must parse
                            (```iris error blocks are skipped); an ```iris run
                            block must also run and print the ```output block
@@ -370,6 +373,21 @@ def doc_tests(iris, only, failures):
     return count
 
 
+def std_tests(iris, only, failures):
+    count = 0
+    for path in sorted(glob.glob(os.path.join(ROOT, "std/**/*.iris"), recursive=True)):
+        name = os.path.relpath(path, ROOT)
+        if only and not any(o in name for o in only):
+            continue
+        if not re.search(r'^test "', open(path).read(), re.M):
+            continue
+        count += 1
+        code, out, err = run(iris, ["test", path])
+        if code != 0:
+            failures.append((name, out + err))
+    return count
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--iris", default=os.path.join(ROOT, "iris"))
@@ -387,6 +405,7 @@ def main():
     total += project_tests(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
+    total += std_tests(args.iris, args.only, failures)
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],
