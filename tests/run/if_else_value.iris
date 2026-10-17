@@ -1,0 +1,24 @@
+// expect: 10 neg zero pos
+// expect: guard
+// expect: a true
+// expect: 3 7
+
+str sign(i64 n) => "neg" if n < 0 else "zero" if n == 0 else "pos"
+
+bool isOne(i64 rows) {
+    return true if rows == 1 else false
+}
+
+i64 pick(i64 a, i64 b) {
+    return a if a < b
+    return b
+}
+
+void main() {
+    n := 5
+    x := n * 2 if n > 3 else 0
+    print("{x} {sign(-1)} {sign(0)} {sign(9)}")
+    print("guard") if n > 3
+    print("{"a" if n == 5 else "b"} {isOne(1)}")
+    print("{pick(3, 9)} {pick(8, 7)}")
+}

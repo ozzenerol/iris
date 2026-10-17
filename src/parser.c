@@ -1036,8 +1036,59 @@ static Node *parseBinary(Parser *p, int minPrec) {
     }
 }
 
+/* Whether the `if` at the parser's position has an `else` after its
+ * condition, on the same line: `a if c else b` is a value, where `a if c`
+ * alone is a guard on the statement. */
+static bool elseFollows(Parser *p) {
+    int depth = 0;
+    for (int i = p->pos + 1; i < p->ntoks; i++) {
+        switch (p->toks[i].kind) {
+        case P_LPAREN: case P_LBRACK: case P_LBRACE:
+            depth++;
+            break;
+        case P_RPAREN: case P_RBRACK: case P_RBRACE:
+            if (--depth < 0) return false;
+            break;
+        case K_ELSE:
+            if (depth == 0) return true;
+            break;
+        case P_COMMA:
+            if (depth == 0) return false;
+            break;
+        case T_NEWLINE: case T_EOF:
+            if (depth == 0) return false;
+            break;
+        default:
+            break;
+        }
+    }
+    return false;
+}
+
+/* A block holding one expression, the value of an if. */
+static Node *valueBlock(Parser *p, Node *e) {
+    Node *b = newNode(p->arena, N_BLOCK, e->line, e->col);
+    b->src = p->src;
+    Node *s = newNode(p->arena, N_EXPR_STMT, e->line, e->col);
+    s->src = p->src;
+    s->a = e;
+    push(p, &b->list, s);
+    return b;
+}
+
 static Node *parseExpr(Parser *p) {
-    return parseBinary(p, 1);
+    Node *e = parseBinary(p, 1);
+    if (at(p, K_IF) && elseFollows(p)) {
+        /* a if c else b: if c { a } else { b } */
+        Token *t = next(p);
+        Node *n = node(p, N_IF, t);
+        n->a = parseBinary(p, 1);
+        expect(p, K_ELSE);
+        n->c = valueBlock(p, e);
+        n->d = valueBlock(p, parseExpr(p));
+        return n;
+    }
+    return e;
 }
 
 /* An expression where a struct literal can't start, like an if condition:

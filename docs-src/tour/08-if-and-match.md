@@ -66,7 +66,7 @@ odd 3
 odd 5
 ```
 
-`stmt if cond` is the same as `if cond { stmt }`. It works after `return`, `break`, `continue`, an assignment, a call or `spawn`, and takes only a condition: there is no `else`. A declaration can't have one, since the name would only exist when the condition held, and neither can `defer`.
+`stmt if cond` is the same as `if cond { stmt }`. It works after `return`, `break`, `continue`, an assignment, a call or `spawn`, and takes only a condition. With an `else` after the condition it is a value instead (see below). A declaration can't have one, since the name would only exist when the condition held, and neither can `defer`.
 
 `return if` followed by a block is still an if that gives a value: `return if ok { 1 } else { 2 }`.
 
@@ -107,6 +107,28 @@ void main() {
 ```
 
 All the branches must give values of the same type.
+
+A short choice of a value can be written on one line as `a if cond else b`: `a` when the condition is true, `b` when it isn't. It is the same as `if cond { a } else { b }`, and can be chained:
+
+```iris run
+str size(i64 n) => "small" if n < 10 else "medium" if n < 100 else "large"
+
+bool even(i64 n) {
+    return true if n % 2 == 0 else false
+}
+
+void main() {
+    n := 42
+    half := n / 2 if even(n) else n
+    print("{size(n)} {half} {"even" if even(n) else "odd"}")
+}
+```
+
+```output
+medium 21 even
+```
+
+Without the `else`, `return x if cond` is a condition on the statement: it returns only when the condition holds.
 
 ## match
 

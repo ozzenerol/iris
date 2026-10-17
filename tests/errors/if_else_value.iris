@@ -1,0 +1,10 @@
+// error: 5: the branches give different types: i64 and str
+// error: 9: this value is not used
+
+void main() {
+    x := 1 if true else "a"
+}
+
+void other() {
+    print("a") if true else false
+}
