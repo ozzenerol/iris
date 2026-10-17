@@ -1,0 +1,7 @@
+// error: 4: an array's size must be an integer constant
+
+const NAME = "x"
+i64[NAME] a
+
+void main() {
+}

@@ -626,6 +626,7 @@ static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node 
 static void resolveSignatureType(Checker *c, Type *t);
 static Type *intTypeNamed(const char *name);
 static void checkEscape(Checker *c, Node *e);
+static void checkConstDecl(Checker *c, Node *decl);
 static bool hasDuration(Node *e);
 static Type *dynType(Checker *c, Node *iface);
 
@@ -797,6 +798,24 @@ static Type *resolveType(Checker *c, Node *t) {
                 return &tyError;
             }
             return compound(TY_ATOMIC, e, 0);
+        }
+        if ((!d || d->kind != N_STRUCT || !d->list2.len) && t->list.len == 1 && t->list.items[0]->kind == N_T_NAME) {
+            /* i64[SLOTS]: an array whose size is a constant */
+            Node *k = lookup(c, t->list.items[0]->name);
+            if (k && k->kind == N_CONST) {
+                checkConstDecl(c, k);
+                Type *e = resolveType(c, base);
+                if (isErr(e)) return e;
+                if (!k->isConst || !k->type || !isInt(k->type)) {
+                    error(c, t->list.items[0], "an array's size must be an integer constant");
+                    return &tyError;
+                }
+                if (k->cval < 1 || k->cval > (1 << 30)) {
+                    error(c, t->list.items[0], "an array's size must be between 1 and %u", 1u << 30);
+                    return &tyError;
+                }
+                return arrayOf(e, k->cval);
+            }
         }
         if (!d || d->kind != N_STRUCT || !d->list2.len) {
             if (d && d->kind == N_STRUCT) {
