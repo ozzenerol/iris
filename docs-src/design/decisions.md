@@ -119,6 +119,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | The HPACK encoder adds nothing to the other side's table. | It needs no state and can't get out of step; the static table and literals keep responses small enough. |
 | A `Client` uses HTTP/2 for `https` when the server offers it. | One connection carries all the requests to a host at once. |
 | OpenSSL's calls hold SIGPIPE back on Linux. | A client that leaves at the wrong moment can't end the server. |
+| Regular expressions run on a Pike VM, without backtracking, and follow RE2 and Go: their syntax, leftmost-first matches, and how empty matches count. | No pattern can take exponential time, and patterns and results carry over from Go and RE2. |
+| `regex` leaves out backreferences and lookaround. | They can't be matched in linear time. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

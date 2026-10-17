@@ -6,6 +6,9 @@ pub enum ParseError { empty, notNumber, tooBig }
 @extern("iris_str_parse_float")
 i32 rawParseFloat(u8 *p, i64 n, f64 *out)
 
+@extern("iris_str_find")
+i64 rawFind(u8 *s, i64 n, u8 *sub, i64 m)
+
 // Where sub first appears in s, or -1.
 pub i64 find(str s, str sub) {
     if sub.len == 0 {
@@ -14,12 +17,7 @@ pub i64 find(str s, str sub) {
     if sub.len > s.len {
         return -1
     }
-    for i in 0..s.len - sub.len + 1 {
-        if s[i:i + sub.len] == sub {
-            return i
-        }
-    }
-    return -1
+    return rawFind(s.ptr, s.len, sub.ptr, sub.len)
 }
 
 // Whether sub appears in s.

@@ -118,6 +118,7 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `crypto` | `sha256(data)` and `hmacSha256(key, data)`, 32 bytes each, `sha1(data)`, 20 bytes, and `equal(a, b)`, which compares in the same time wherever they differ |
 | `base64` | `encode`, `decode`, and the URL-safe `encodeUrl` and `decodeUrl`; `Base64Error` |
 | `hex` | `encode` and `decode`; `HexError` |
+| `regex` | regular expressions in the syntax of RE2 and Go, matched in time linear in the text: `compile(pattern)` (`RegexError`) and `must(pattern)` give a `Regex` with `matches(text)`, `find(text)` (a `Match` with `start`, `end`, `str()`, `group(i)` and `span(i)`), `findAll(text, limit)`, `replace(text, with)` (`$1`, `${name}`, `$$`), `split(text, limit)`, `groups()` and `index(name)` |
 | `csv` | `parse(text)` gives a `List[Record]`; `reader(text)` reads one `Record` at a time with `read()` (`sep` for another separator); a `Record` has `len()` and `at(i)`; `row(fields, sep)` and `quote(field, sep)` write CSV; `CsvError` (`end`, `quote`) |
 | `url` | `parse(text) Url` (`scheme`, `user`, `host`, `port`, `path`, `query`, `fragment`), `encode` and `decode` for `%XX`; `UrlError` |
 | `sqlite` | `open(path)` gives a `Db` with `exec(sql, args)`, `query(sql, args)`, `lastId()`, `changes()`, `begin`, `commit`, `rollback` and `close`; `Rows` have `next()`, `int(i)`, `float(i)`, `text(i)`, `isNull(i)`, `name(i)`, `columns()` and `close`; `scan(&rows, &value)` fills a `@json` struct, `all[T](&db, sql, args)` gives every row as a `List[T]` and `one[T](&db, sql, args)` the first; `Value` and `SqlError` |
@@ -130,6 +131,24 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept(timeout)`, `dial(host, port, timeout)`, and on a `Conn`: `read`, `readLine(limit)`, `readExactly`, `write`, `setTimeout(d)`, `interrupt` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; UDP: `listenUdp(port, host)` and `dialUdp(addr)` give a `Udp` with `sendTo`, `send`, `readFrom`, `read`, `setTimeout`, `localAddr` and `close`; addresses: `Addr` (`ip`, `port`, `ipText()`, `format()`, `isV4()`), `ip(text, port)`, `parseAddr(text, port)` and `dialAddr(addr, timeout)`; names: `lookup(host)` gives the addresses, `query(name, type)` the `Record`s of a `RecordType` (`a`, `aaaa`, `cname`, `mx`, `txt`, `ns`, `srv`, `ptr`, `soa`), and `resolver(servers, hostsFile)` a `Resolver` with its own servers, `timeout`, `attempts` and `search`; `NetError` |
 | `json` | `encode(v) String`, `decode(T, text) !T` and `quote(text) String` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
 | `http` | HTTP/1.1 and HTTP/2. A server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `error(status, message)`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `use`, `after`, `serve`, `serveTls`); a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`); a `Client` with the same methods that keeps connections open between requests (`timeout`, `maxIdle`, `close()`); and WebSockets: `Router.websocket(path, handler)` on the server, `dialWebSocket(url)` on the client, a `WebSocket` with `send`, `sendBinary`, `read() Message` and `close()`; HTTP/2 is used over TLS when the client asks for it, and on a plain port when a client starts with HTTP/2's preface; a `Client` uses it for `https` when the server offers it (`noHttp2` turns that off, `priorKnowledge` uses it for `http://`), many requests at once on one connection, and `ca` names the certificates to trust; `Request.protocol` and `Reply.protocol` say which one was used |
+
+Finding text with a regular expression. Patterns are easiest to write as raw strings, where `\` and braces are plain characters:
+
+```iris
+import regex
+
+!void main() {
+    re := try regex.compile(r"(?P<user>\w+)@(?P<host>[\w.]+)")
+    defer re.free()
+    found := re.findAll("ada@example.com, bob@test.org")
+    defer found.freeEach()
+    for m in found {
+        print("{m.group(re.index("user"))} at {m.group(2)}")
+    }
+    scoped String hidden = re.replace("write to ada@example.com", r"${user}@...")
+    print(hidden)
+}
+```
 
 Looking up a name and sending a datagram. A lookup waits like any other network call, so the program's other tasks keep running meanwhile:
 

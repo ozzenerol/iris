@@ -1,0 +1,1273 @@
+// Regular expressions, in the syntax of RE2 and Go. Matching takes time in
+// proportion to the length of the text, whatever the pattern: there is no
+// backtracking, so a pattern from a user can't make a search take forever.
+//
+//     re := try regex.compile(r"(\w+)@(\w+)\.com")
+//     defer re.free()
+//     m, found := re.find("mail ada@example.com")
+//     if found {
+//         print(m.group(1))       // ada
+//     }
+//     m.free()
+//
+// The syntax:
+//
+//     x        a character; \. \* \\ and so on for the special ones
+//     .        any character but a newline ((?s) lets it match one too)
+//     [abc]    one of the characters; [a-z] a range; [^abc] any other
+//     \d \w \s a digit, a word character [0-9A-Za-z_], a space; \D \W \S
+//              anything else
+//     ^ $      the start and the end of the text ((?m): of a line too)
+//     \A \z    the start and the end of the text only
+//     \b \B    a word boundary, and not one
+//     xy x|y   x then y; x or y
+//     x* x+ x? none or more, one or more, none or one
+//     x{n} x{n,} x{n,m}   n times, n or more, from n to m
+//     x*? x+? x?? x{n,m}? the same, taking as few as it can
+//     (x)      a group, which is kept: group(1)
+//     (?P<name>x) (?<name>x)  a group with a name: group(re.index("name"))
+//     (?:x)    a group that isn't kept
+//     (?i) (?m) (?s)  for the rest of the group: letters match in either
+//              case, ^ and $ at lines, . matches a newline; (?i:x) for x only
+//
+// Characters are UTF-8; positions are byte offsets. Ignoring case works for
+// ASCII letters.
+
+import str
+
+pub enum RegexError { syntax, tooLarge }
+
+// ------------------------------------------------------------ the program
+
+// what an instruction does
+const OP_CHAR = 0  // a: the character
+const OP_FOLD = 1  // a: the character, in lower case; matches either case
+const OP_ANY = 2   // any character but \n
+const OP_ANYNL = 3 // any character
+const OP_CLASS = 4 // a: the class
+const OP_SPLIT = 5 // go to a and b, a first
+const OP_JMP = 6   // go to a
+const OP_SAVE = 7  // keep the position in slot a
+const OP_MATCH = 8
+const OP_ASSERT = 9 // a: which (below)
+
+const AT_BOL = 0  // the start of the text
+const AT_EOL = 1  // the end of the text
+const AT_BOLM = 2 // the start of a line
+const AT_EOLM = 3 // the end of a line
+const AT_WORD = 4 // a word boundary
+const AT_NOTWORD = 5
+
+const MAX_PROGRAM = 20000
+
+struct Inst {
+    i64 op
+    i64 a
+    i64 b
+}
+
+struct Class {
+    i64 first // its ranges in Regex.ranges, as lo, hi pairs
+    i64 count
+    bool negated
+}
+
+// A compiled pattern.
+pub struct Regex {
+    List[Inst] prog
+    List[Class] classes
+    List[i64] ranges
+    List[String] names // the groups' names, "" for one without; 0 is the whole match
+    i64 ncap
+    String prefix // what every match starts with, for skipping ahead
+    bool anchored // the pattern starts with \A or ^ (without (?m))
+}
+
+pub void Regex.free() {
+    self.prog.free()
+    self.classes.free()
+    self.ranges.free()
+    self.names.freeEach()
+    self.prefix.free()
+}
+
+// How many groups the pattern has, not counting the whole match.
+pub i64 Regex.groups() => self.names.len - 1
+
+// The number of the group called name, or -1.
+pub i64 Regex.index(str name) {
+    for i in 1..self.names.len {
+        if self.names.at(i) == name {
+            return i
+        }
+    }
+    return -1
+}
+
+// ------------------------------------------------------------ parsing
+
+// what a part of the pattern is
+const N_LIT = 0 // r: the character
+const N_ANY = 1
+const N_CLASS = 2  // r: the class
+const N_CAT = 3    // kids
+const N_ALT = 4    // kids
+const N_REPEAT = 5 // kid, min, max (-1: no limit), greedy
+const N_GROUP = 6  // kid, cap (-1: not kept)
+const N_ASSERT = 7 // r: which
+const N_EMPTY = 8
+
+struct Part {
+    i64 kind
+    i64 r
+    bool fold
+    bool dotNl
+    i64 min
+    i64 max
+    bool greedy
+    i64 cap
+    List[i64] kids
+}
+
+struct Flags {
+    bool fold
+    bool multi
+    bool dotNl
+}
+
+struct Parser {
+    str p
+    i64 at
+    List[Part] parts
+    Regex *re
+    String why
+}
+
+void Parser.free() {
+    for part in self.parts {
+        part.kids.free()
+    }
+    self.parts.free()
+    self.why.free()
+}
+
+i64 Parser.add(Part part) {
+    self.parts.push(part)
+    return self.parts.len - 1
+}
+
+bool Parser.fail(str why) {
+    if self.why.len == 0 {
+        self.why = format("{why} at {self.at}")
+    }
+    return false
+}
+
+bool Parser.more() => self.at < self.p.len
+
+u8 Parser.peek() => if self.at < self.p.len { self.p[self.at] } else { 0 }
+
+// The next character of the pattern, a whole UTF-8 rune.
+i64 Parser.rune() {
+    r, n := runeAt(self.p, self.at)
+    self.at += n
+    return r
+}
+
+// x|y|z
+i64 Parser.alternation(Flags *f) {
+    first := self.concat(f)
+    if first < 0 || self.peek() != '|' {
+        return first
+    }
+    Part alt = Part{kind: N_ALT}
+    alt.kids.push(first)
+    for self.peek() == '|' {
+        self.at += 1
+        next := self.concat(f)
+        if next < 0 {
+            alt.kids.free()
+            return -1
+        }
+        alt.kids.push(next)
+    }
+    return self.add(alt)
+}
+
+// xyz, up to a | or a )
+i64 Parser.concat(Flags *f) {
+    Part cat = Part{kind: N_CAT}
+    for self.more() && self.peek() != '|' && self.peek() != ')' {
+        // (?i) and the like change the flags for the rest of the group
+        if self.p[self.at:].len >= 3 && self.p[self.at] == '(' && self.p[self.at + 1] == '?' {
+            j := self.at + 2
+            for j < self.p.len && (self.p[j] == 'i' || self.p[j] == 'm' || self.p[j] == 's' || self.p[j] == '-') {
+                j += 1
+            }
+            if j < self.p.len && self.p[j] == ')' && j > self.at + 2 {
+                if !self.setFlags(self.p[self.at + 2:j], f) {
+                    cat.kids.free()
+                    return -1
+                }
+                self.at = j + 1
+                continue
+            }
+        }
+        atom := self.repeat(f)
+        if atom < 0 {
+            cat.kids.free()
+            return -1
+        }
+        cat.kids.push(atom)
+    }
+    if cat.kids.len == 1 {
+        only := cat.kids.at(0)
+        cat.kids.free()
+        return only
+    }
+    if cat.kids.len == 0 {
+        cat.kids.free()
+        return self.add(Part{kind: N_EMPTY})
+    }
+    return self.add(cat)
+}
+
+bool Parser.setFlags(str letters, Flags *f) {
+    bool on = true
+    for i in 0..letters.len {
+        c := letters[i]
+        if c == '-' {
+            on = false
+        } else if c == 'i' {
+            f.fold = on
+        } else if c == 'm' {
+            f.multi = on
+        } else if c == 's' {
+            f.dotNl = on
+        } else {
+            return self.fail("an unknown flag")
+        }
+    }
+    return true
+}
+
+// A number in {n,m}, or -1.
+i64 Parser.number() {
+    i64 n = -1
+    for self.more() && self.peek() >= '0' && self.peek() <= '9' {
+        if n < 0 {
+            n = 0
+        }
+        n = n * 10 + i64(self.peek() - '0')
+        self.at += 1
+        if n > 1000 {
+            return 1001
+        }
+    }
+    return n
+}
+
+// An atom and the quantifier after it.
+i64 Parser.repeat(Flags *f) {
+    atom := self.atom(f)
+    if atom < 0 {
+        return -1
+    }
+    for self.more() {
+        c := self.peek()
+        i64 min = 0
+        i64 max = 0
+        if c == '*' {
+            min = 0
+            max = -1
+            self.at += 1
+        } else if c == '+' {
+            min = 1
+            max = -1
+            self.at += 1
+        } else if c == '?' {
+            min = 0
+            max = 1
+            self.at += 1
+        } else if c == '{' {
+            save := self.at
+            self.at += 1
+            n := self.number()
+            if n < 0 {
+                // not a repeat: a { as it is
+                self.at = save
+                return atom
+            }
+            min = n
+            max = n
+            if self.peek() == ',' {
+                self.at += 1
+                max = self.number()
+            }
+            if self.peek() != '}' {
+                self.at = save
+                return atom
+            }
+            self.at += 1
+            if min > 1000 || max > 1000 || max >= 0 && max < min {
+                self.fail("a repeat count over 1000, or the larger first")
+                return -1
+            }
+        } else {
+            return atom
+        }
+        kind := self.parts.at(atom).kind
+        if kind == N_REPEAT || kind == N_EMPTY || kind == N_ASSERT {
+            self.fail("nothing to repeat")
+            return -1
+        }
+        bool greedy = true
+        if self.peek() == '?' {
+            greedy = false
+            self.at += 1
+        }
+        Part rep = Part{kind: N_REPEAT, min: min, max: max, greedy: greedy}
+        rep.kids.push(atom)
+        atom = self.add(rep)
+    }
+    return atom
+}
+
+i64 Parser.atom(Flags *f) {
+    c := self.peek()
+    if c == '(' {
+        self.at += 1
+        i64 cap = -1
+        Flags inner = *f
+        if self.peek() == '?' {
+            self.at += 1
+            rest := self.p[self.at:]
+            if str.startsWith(rest, "P<") || str.startsWith(rest, "<") {
+                self.at += if rest[0] == 'P' { 2 } else { 1 }
+                start := self.at
+                for self.more() && self.peek() != '>' {
+                    w := self.peek()
+                    if !(w >= 'a' && w <= 'z' || w >= 'A' && w <= 'Z' || w >= '0' && w <= '9' || w == '_') {
+                        self.fail("a group name can have letters, digits and _")
+                        return -1
+                    }
+                    self.at += 1
+                }
+                if !self.more() || self.at == start {
+                    self.fail("a group name with no >")
+                    return -1
+                }
+                name := self.p[start:self.at]
+                if self.re.index(name) >= 0 {
+                    self.fail("two groups called {name}")
+                    return -1
+                }
+                self.at += 1
+                cap = self.re.names.len
+                self.re.names.push(name.copy())
+            } else {
+                // (?:x) or (?i:x)
+                start := self.at
+                for self.more() && self.peek() != ':' && self.peek() != ')' {
+                    self.at += 1
+                }
+                if self.peek() != ':' {
+                    self.fail("a group that starts with (? but isn't (?:, (?P< or flags")
+                    return -1
+                }
+                if !self.setFlags(self.p[start:self.at], &inner) {
+                    return -1
+                }
+                self.at += 1
+            }
+        } else {
+            cap = self.re.names.len
+            self.re.names.push("".copy())
+        }
+        kid := self.alternation(&inner)
+        if kid < 0 {
+            return -1
+        }
+        if self.peek() != ')' {
+            self.fail("a ( with no )")
+            return -1
+        }
+        self.at += 1
+        Part g = Part{kind: N_GROUP, cap: cap}
+        g.kids.push(kid)
+        return self.add(g)
+    }
+    if c == ')' {
+        self.fail("a ) with no (")
+        return -1
+    }
+    if c == '*' || c == '+' || c == '?' {
+        self.fail("nothing to repeat")
+        return -1
+    }
+    if c == '.' {
+        self.at += 1
+        return self.add(Part{kind: N_ANY, dotNl: f.dotNl})
+    }
+    if c == '^' {
+        self.at += 1
+        return self.add(Part{kind: N_ASSERT, r: if f.multi { AT_BOLM } else { AT_BOL }})
+    }
+    if c == '$' {
+        self.at += 1
+        return self.add(Part{kind: N_ASSERT, r: if f.multi { AT_EOLM } else { AT_EOL }})
+    }
+    if c == '[' {
+        return self.classPart(f)
+    }
+    if c == '\\' {
+        self.at += 1
+        if !self.more() {
+            self.fail("a \\ at the end")
+            return -1
+        }
+        e := self.peek()
+        if e == 'A' || e == 'z' || e == 'b' || e == 'B' {
+            self.at += 1
+            which := match e {
+                'A' => AT_BOL,
+                'z' => AT_EOL,
+                'b' => AT_WORD,
+                _ => AT_NOTWORD,
+            }
+            return self.add(Part{kind: N_ASSERT, r: which})
+        }
+        if e == 'd' || e == 'D' || e == 'w' || e == 'W' || e == 's' || e == 'S' {
+            self.at += 1
+            cls := self.shorthand(e, f.fold)
+            return self.add(Part{kind: N_CLASS, r: cls})
+        }
+        r := self.escape()
+        if r < 0 {
+            return -1
+        }
+        return self.lit(r, f.fold)
+    }
+    return self.lit(self.rune(), f.fold)
+}
+
+i64 Parser.lit(i64 r, bool fold) {
+    isLetter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+    return self.add(Part{kind: N_LIT, r: if fold && isLetter { lower(r) } else { r }, fold: fold && isLetter})
+}
+
+i64 lower(i64 r) => if r >= 'A' && r <= 'Z' { r + 32 } else { r }
+
+// The character after a \ that stands for itself or a control character;
+// -1 after an error.
+i64 Parser.escape() {
+    e := self.peek()
+    self.at += 1
+    if e == 'n' {
+        return 10
+    }
+    if e == 't' {
+        return 9
+    }
+    if e == 'r' {
+        return 13
+    }
+    if e == 'f' {
+        return 12
+    }
+    if e == 'v' {
+        return 11
+    }
+    if e == '0' {
+        return 0
+    }
+    if e == 'x' {
+        // \x41 or \x{263a}
+        i64 v = 0
+        if self.peek() == '{' {
+            self.at += 1
+            digits := 0
+            for self.more() && self.peek() != '}' {
+                d := hexDigit(self.peek())
+                if d < 0 || digits > 6 {
+                    self.fail("a bad \\x{{...}}")
+                    return -1
+                }
+                v = v * 16 + d
+                digits += 1
+                self.at += 1
+            }
+            if !self.more() || digits == 0 {
+                self.fail("a \\x{{ with no }}")
+                return -1
+            }
+            self.at += 1
+            return v
+        }
+        for k in 0..2 {
+            d := hexDigit(self.peek())
+            if d < 0 {
+                self.fail("\\x needs two hex digits")
+                return -1
+            }
+            v = v * 16 + d
+            self.at += 1
+        }
+        return v
+    }
+    if e >= 'a' && e <= 'z' || e >= 'A' && e <= 'Z' || e >= '0' && e <= '9' {
+        self.at -= 1
+        self.fail("an escape that isn't known")
+        return -1
+    }
+    // punctuation stands for itself: \. \* \\ \[ ...
+    self.at -= 1
+    return self.rune()
+}
+
+i64 hexDigit(u8 c) {
+    if c >= '0' && c <= '9' {
+        return i64(c - '0')
+    }
+    if c >= 'a' && c <= 'f' {
+        return i64(c - 'a') + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return i64(c - 'A') + 10
+    }
+    return -1
+}
+
+// Adds the ranges of \d, \w or \s to the regex's list.
+void addShorthand(Regex *re, u8 e) {
+    if e == 'd' || e == 'D' {
+        re.ranges.push('0')
+        re.ranges.push('9')
+    } else if e == 'w' || e == 'W' {
+        for pair in [['0', '9'], ['A', 'Z'], ['a', 'z'], ['_', '_']] {
+            re.ranges.push(i64(pair[0]))
+            re.ranges.push(i64(pair[1]))
+        }
+    } else {
+        for pair in [[9, 10], [12, 13], [32, 32]] {
+            re.ranges.push(pair[0])
+            re.ranges.push(pair[1])
+        }
+    }
+}
+
+i64 Parser.shorthand(u8 e, bool fold) {
+    first := self.re.ranges.len
+    addShorthand(self.re, e)
+    self.re.classes.push(Class{first: first, count: (self.re.ranges.len - first) / 2,
+        negated: e == 'D' || e == 'W' || e == 'S'})
+    return self.re.classes.len - 1
+}
+
+// [...]: a list of characters and ranges.
+i64 Parser.classPart(Flags *f) {
+    self.at += 1
+    bool negated = false
+    if self.peek() == '^' {
+        negated = true
+        self.at += 1
+    }
+    re := self.re
+    first := re.ranges.len
+    bool any = false
+    for self.more() && (self.peek() != ']' || !any) {
+        any = true
+        c := self.peek()
+        if c == '[' && str.startsWith(self.p[self.at:], "[:") {
+            // [:alpha:] and the like
+            end := str.find(self.p[self.at + 2:], ":]")
+            if end < 0 {
+                self.fail("a [: with no :]")
+                return -1
+            }
+            name := self.p[self.at + 2:self.at + 2 + end]
+            self.at += end + 4
+            if !posixClass(re, name) {
+                self.fail("an unknown class [:{name}:]")
+                return -1
+            }
+            continue
+        }
+        i64 lo = 0
+        if c == '\\' {
+            self.at += 1
+            e := self.peek()
+            if e == 'd' || e == 'w' || e == 's' {
+                self.at += 1
+                addShorthand(re, e)
+                continue
+            }
+            if e == 'D' || e == 'W' || e == 'S' {
+                self.fail("\\D, \\W and \\S can't be inside [...]")
+                return -1
+            }
+            lo = self.escape()
+            if lo < 0 {
+                return -1
+            }
+        } else {
+            lo = self.rune()
+        }
+        i64 hi = lo
+        if self.peek() == '-' && self.at + 1 < self.p.len && self.p[self.at + 1] != ']' {
+            self.at += 1
+            if self.peek() == '\\' {
+                self.at += 1
+                hi = self.escape()
+                if hi < 0 {
+                    return -1
+                }
+            } else {
+                hi = self.rune()
+            }
+            if hi < lo {
+                self.fail("a range that ends before it starts")
+                return -1
+            }
+        }
+        re.ranges.push(lo)
+        re.ranges.push(hi)
+    }
+    if !self.more() {
+        self.fail("a [ with no ]")
+        return -1
+    }
+    self.at += 1
+    if f.fold {
+        // each letter's other case too
+        end := re.ranges.len
+        i := first
+        for i < end {
+            lo := re.ranges.at(i)
+            hi := re.ranges.at(i + 1)
+            for pair in [['a', 'z'], ['A', 'Z']] {
+                a := if lo > i64(pair[0]) { lo } else { i64(pair[0]) }
+                b := if hi < i64(pair[1]) { hi } else { i64(pair[1]) }
+                if a <= b {
+                    flip := if pair[0] == 'a' { -32 } else { 32 }
+                    re.ranges.push(a + flip)
+                    re.ranges.push(b + flip)
+                }
+            }
+            i += 2
+        }
+    }
+    re.classes.push(Class{first: first, count: (re.ranges.len - first) / 2, negated: negated})
+    return self.add(Part{kind: N_CLASS, r: re.classes.len - 1})
+}
+
+bool posixClass(Regex *re, str name) {
+    pairs := match name {
+        "alpha" => "AZaz",
+        "digit" => "09",
+        "alnum" => "09AZaz",
+        "upper" => "AZ",
+        "lower" => "az",
+        "space" => "\t\r  ",
+        "xdigit" => "09AFaf",
+        "punct" => "!/:@[`{{~",
+        "word" => "09AZ__az",
+        _ => "",
+    }
+    if pairs.len == 0 {
+        return false
+    }
+    for i in 0..pairs.len / 2 {
+        re.ranges.push(i64(pairs[i * 2]))
+        re.ranges.push(i64(pairs[i * 2 + 1]))
+    }
+    return true
+}
+
+// ------------------------------------------------------------ compiling
+
+struct Compiler {
+    Parser *ps
+    Regex *re
+    bool tooLarge
+}
+
+i64 Compiler.emit(i64 op, i64 a, i64 b) {
+    if self.re.prog.len >= MAX_PROGRAM {
+        self.tooLarge = true
+        return self.re.prog.len - 1
+    }
+    self.re.prog.push(Inst{op: op, a: a, b: b})
+    return self.re.prog.len - 1
+}
+
+void Compiler.patch(i64 at, i64 a, i64 b) {
+    if at < self.re.prog.len {
+        self.re.prog.set(at, Inst{op: self.re.prog.at(at).op, a: a, b: b})
+    }
+}
+
+void Compiler.part(i64 i) {
+    if self.tooLarge {
+        return
+    }
+    p := self.ps.parts.at(i)
+    if p.kind == N_LIT {
+        self.emit(if p.fold { OP_FOLD } else { OP_CHAR }, p.r, 0)
+    } else if p.kind == N_ANY {
+        self.emit(if p.dotNl { OP_ANYNL } else { OP_ANY }, 0, 0)
+    } else if p.kind == N_CLASS {
+        self.emit(OP_CLASS, p.r, 0)
+    } else if p.kind == N_ASSERT {
+        self.emit(OP_ASSERT, p.r, 0)
+    } else if p.kind == N_CAT {
+        for k in p.kids {
+            self.part(k)
+        }
+    } else if p.kind == N_ALT {
+        // split L1, next; L1: x; jmp end; next: split ...
+        List[i64] jumps
+        defer jumps.free()
+        for n in 0..p.kids.len {
+            if n + 1 < p.kids.len {
+                split := self.emit(OP_SPLIT, 0, 0)
+                self.part(p.kids.at(n))
+                jumps.push(self.emit(OP_JMP, 0, 0))
+                self.patch(split, split + 1, self.re.prog.len)
+            } else {
+                self.part(p.kids.at(n))
+            }
+        }
+        for j in jumps {
+            self.patch(j, self.re.prog.len, 0)
+        }
+    } else if p.kind == N_GROUP {
+        if p.cap >= 0 {
+            self.emit(OP_SAVE, p.cap * 2, 0)
+        }
+        self.part(p.kids.at(0))
+        if p.cap >= 0 {
+            self.emit(OP_SAVE, p.cap * 2 + 1, 0)
+        }
+    } else if p.kind == N_REPEAT {
+        kid := p.kids.at(0)
+        for n in 0..p.min {
+            self.part(kid)
+        }
+        if p.max < 0 {
+            // x* as (x+)?: split body, end; body: x; split body, end. A
+            // pass through x that matches nothing still reaches the second
+            // split, so its groups are kept.
+            first := self.emit(OP_SPLIT, 0, 0)
+            body := first + 1
+            self.part(kid)
+            again := self.emit(OP_SPLIT, 0, 0)
+            end := self.re.prog.len
+            for s in [first, again] {
+                if p.greedy {
+                    self.patch(s, body, end)
+                } else {
+                    self.patch(s, end, body)
+                }
+            }
+        } else {
+            // x{0,k}: k nested optional copies
+            List[i64] splits
+            defer splits.free()
+            for n in p.min..p.max {
+                splits.push(self.emit(OP_SPLIT, 0, 0))
+                self.part(kid)
+            }
+            end := self.re.prog.len
+            for s in splits {
+                if p.greedy {
+                    self.patch(s, s + 1, end)
+                } else {
+                    self.patch(s, end, s + 1)
+                }
+            }
+        }
+    }
+}
+
+// The literal text every match starts with: characters from the start of
+// the program with no choice before them.
+void Regex.findPrefix() {
+    i := 0
+    for i < self.prog.len {
+        ins := self.prog.at(i)
+        if ins.op == OP_SAVE {
+            i += 1
+            continue
+        }
+        if ins.op != OP_CHAR {
+            break
+        }
+        u8[4] buf
+        n := encodeRune(ins.a, buf[0:4])
+        self.prefix.append(buf[0:n])
+        i += 1
+    }
+}
+
+i64 encodeRune(i64 r, u8[] out) {
+    if r < 0x80 {
+        out[0] = u8(r)
+        return 1
+    }
+    if r < 0x800 {
+        out[0] = u8(0xc0 | r >> 6)
+        out[1] = u8(0x80 | r & 0x3f)
+        return 2
+    }
+    if r < 0x10000 {
+        out[0] = u8(0xe0 | r >> 12)
+        out[1] = u8(0x80 | r >> 6 & 0x3f)
+        out[2] = u8(0x80 | r & 0x3f)
+        return 3
+    }
+    out[0] = u8(0xf0 | r >> 18)
+    out[1] = u8(0x80 | r >> 12 & 0x3f)
+    out[2] = u8(0x80 | r >> 6 & 0x3f)
+    out[3] = u8(0x80 | r & 0x3f)
+    return 4
+}
+
+// Compiles a pattern. A pattern that isn't valid fails with
+// RegexError.syntax, and the message says what and where.
+pub !Regex compile(str pattern) {
+    Regex re
+    errdefer re.free()
+    re.names.push("".copy())
+    Parser ps = Parser{p: pattern, re: &re}
+    defer ps.free()
+    Flags f
+    root := ps.alternation(&f)
+    if root >= 0 && ps.more() {
+        ps.fail("a ) with no (")
+        root = -1
+    }
+    if root < 0 {
+        return error(RegexError.syntax, "{pattern}: {ps.why}")
+    }
+    Compiler c = Compiler{ps: &ps, re: &re}
+    c.emit(OP_SAVE, 0, 0)
+    c.part(root)
+    c.emit(OP_SAVE, 1, 0)
+    c.emit(OP_MATCH, 0, 0)
+    if c.tooLarge {
+        return error(RegexError.tooLarge, "{pattern}: the pattern makes a program over {MAX_PROGRAM} steps")
+    }
+    re.ncap = re.names.len * 2
+    re.findPrefix()
+    first := re.prog.at(1)
+    re.anchored = first.op == OP_ASSERT && first.a == AT_BOL
+    return re
+}
+
+// compile, for a pattern known to be valid: a bad one stops the program.
+pub Regex must(str pattern) {
+    re := compile(pattern) catch e {
+        panic("regex.must: {e.message}")
+    }
+    return re
+}
+
+// ------------------------------------------------------------ matching
+
+// The rune at text[i] and its length; a byte that isn't valid UTF-8 is one
+// rune of its own.
+(i64, i64) runeAt(str text, i64 i) {
+    b := i64(text[i])
+    if b < 0x80 {
+        return (b, 1)
+    }
+    n := if b >> 5 == 6 { 2 } else if b >> 4 == 14 { 3 } else if b >> 3 == 30 { 4 } else { 1 }
+    if n == 1 || i + n > text.len {
+        return (b, 1)
+    }
+    r := b & (0x7f >> n)
+    for k in 1..n {
+        c := i64(text[i + k])
+        if c & 0xc0 != 0x80 {
+            return (b, 1)
+        }
+        r = r << 6 | c & 0x3f
+    }
+    return (r, n)
+}
+
+bool isWord(i64 r) => r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r == '_'
+
+bool Regex.inClass(i64 c, i64 r) {
+    cls := self.classes.at(c)
+    bool found = false
+    for k in 0..cls.count {
+        lo := self.ranges.at(cls.first + k * 2)
+        hi := self.ranges.at(cls.first + k * 2 + 1)
+        if r >= lo && r <= hi {
+            found = true
+            break
+        }
+    }
+    return found != cls.negated
+}
+
+// The threads of the machine at one position: their instructions, in
+// order of priority, each with its own capture slots.
+struct Threads {
+    List[i64] pcs
+    List[i64] caps // ncap slots for each thread
+    List[i64] seen // seen[pc] == gen: pc is in the list already
+    i64 gen
+}
+
+void Threads.free() {
+    self.pcs.free()
+    self.caps.free()
+    self.seen.free()
+}
+
+void Threads.clear() {
+    self.pcs.clear()
+    self.caps.clear()
+    self.gen += 1
+}
+
+struct Machine {
+    Regex *re
+    str text
+    List[i64] work // the capture slots being followed
+}
+
+bool Machine.assert(i64 which, i64 pos) {
+    t := self.text
+    if which == AT_BOL {
+        return pos == 0
+    }
+    if which == AT_EOL {
+        return pos == t.len
+    }
+    if which == AT_BOLM {
+        return pos == 0 || t[pos - 1] == '\n'
+    }
+    if which == AT_EOLM {
+        return pos == t.len || t[pos] == '\n'
+    }
+    before := pos > 0 && isWord(i64(t[pos - 1]))
+    after := pos < t.len && isWord(i64(t[pos]))
+    return (before != after) == (which == AT_WORD)
+}
+
+// Adds the thread at pc to l, following jumps, splits, saves and
+// assertions at once.
+void Machine.add(Threads *l, i64 pc, i64 pos) {
+    re := self.re
+    if l.seen.at(pc) == l.gen {
+        return
+    }
+    l.seen.set(pc, l.gen)
+    ins := re.prog.at(pc)
+    if ins.op == OP_JMP {
+        self.add(l, ins.a, pos)
+    } else if ins.op == OP_SPLIT {
+        self.add(l, ins.a, pos)
+        self.add(l, ins.b, pos)
+    } else if ins.op == OP_SAVE {
+        old := self.work.at(ins.a)
+        self.work.set(ins.a, pos)
+        self.add(l, pc + 1, pos)
+        self.work.set(ins.a, old)
+    } else if ins.op == OP_ASSERT {
+        if self.assert(ins.a, pos) {
+            self.add(l, pc + 1, pos)
+        }
+    } else {
+        l.pcs.push(pc)
+        for k in 0..re.ncap {
+            l.caps.push(self.work.at(k))
+        }
+    }
+}
+
+// The first match at or after from: the capture slots in caps.
+bool Regex.run(str text, i64 from, List[i64] *caps) {
+    Threads a
+    Threads b
+    defer a.free()
+    defer b.free()
+    for i in 0..self.prog.len {
+        a.seen.push(-1)
+        b.seen.push(-1)
+    }
+    Machine m = Machine{re: self, text: text}
+    defer m.work.free()
+    for k in 0..self.ncap {
+        m.work.push(-1)
+    }
+    Threads *cur = &a
+    Threads *next = &b
+    bool matched = false
+    pos := from
+    for {
+        if !matched {
+            if cur.pcs.len == 0 {
+                // no thread left: skip to where a match could start
+                if self.anchored && pos > 0 {
+                    break
+                }
+                if self.prefix.len > 0 {
+                    at := str.find(text[pos:], self.prefix)
+                    if at < 0 {
+                        break
+                    }
+                    pos += at
+                }
+            }
+            for k in 0..self.ncap {
+                m.work.set(k, -1)
+            }
+            if !self.anchored || pos == 0 {
+                m.add(cur, 0, pos)
+            }
+        }
+        if cur.pcs.len == 0 {
+            if matched || pos >= text.len {
+                break
+            }
+            // nothing can start here: try the next character
+            _, skip := runeAt(text, pos)
+            pos += skip
+            cur.clear()
+            continue
+        }
+        i64 r = -1
+        i64 size = 0
+        if pos < text.len {
+            r, size = runeAt(text, pos)
+        }
+        next.clear()
+        for t in 0..cur.pcs.len {
+            pc := cur.pcs.at(t)
+            ins := self.prog.at(pc)
+            base := t * self.ncap
+            bool ok = false
+            if ins.op == OP_MATCH {
+                // the best match so far; threads after it have less priority
+                caps.clear()
+                for k in 0..self.ncap {
+                    caps.push(cur.caps.at(base + k))
+                }
+                matched = true
+                break
+            }
+            if r < 0 {
+                continue
+            }
+            if ins.op == OP_CHAR {
+                ok = r == ins.a
+            } else if ins.op == OP_FOLD {
+                ok = lower(r) == ins.a
+            } else if ins.op == OP_ANY {
+                ok = r != '\n'
+            } else if ins.op == OP_ANYNL {
+                ok = true
+            } else if ins.op == OP_CLASS {
+                ok = self.inClass(ins.a, r)
+            }
+            if ok {
+                for k in 0..self.ncap {
+                    m.work.set(k, cur.caps.at(base + k))
+                }
+                m.add(next, pc + 1, pos + size)
+            }
+        }
+        if r < 0 {
+            break
+        }
+        pos += size
+        tmp := cur
+        cur = next
+        next = tmp
+        if matched && cur.pcs.len == 0 {
+            break
+        }
+    }
+    return matched
+}
+
+// A match: where it is, and where its groups are.
+pub struct Match {
+    pub i64 start
+    pub i64 end
+    str text
+    List[i64] caps
+}
+
+pub void Match.free() {
+    self.caps.free()
+}
+
+// The text of the whole match.
+pub str Match.str() => self.text[self.start:self.end]
+
+// The text of group i (0 is the whole match); "" when it didn't take part.
+pub str Match.group(i64 i) {
+    if i < 0 || i * 2 + 1 >= self.caps.len {
+        return ""
+    }
+    s := self.caps.at(i * 2)
+    e := self.caps.at(i * 2 + 1)
+    return if s >= 0 && e >= s { self.text[s:e] } else { "" }
+}
+
+// Where group i is: its start and end, or -1, -1.
+pub (i64, i64) Match.span(i64 i) {
+    if i < 0 || i * 2 + 1 >= self.caps.len {
+        return (-1, -1)
+    }
+    return (self.caps.at(i * 2), self.caps.at(i * 2 + 1))
+}
+
+// Whether the pattern matches somewhere in text.
+pub bool Regex.matches(str text) {
+    scoped List[i64] caps
+    return self.run(text, 0, &caps)
+}
+
+// The first match in text, with its groups.
+pub (Match, bool) Regex.find(str text) => self.findFrom(text, 0)
+
+(Match, bool) Regex.findFrom(str text, i64 from) {
+    Match m = Match{text: text}
+    if !self.run(text, from, &m.caps) {
+        m.caps.free()
+        return (Match{text: text}, false)
+    }
+    m.start = m.caps.at(0)
+    m.end = m.caps.at(1)
+    return (m, true)
+}
+
+// Every match in text, one after the other without overlapping; at most
+// limit of them when limit isn't below 0. As in Go, an empty match right
+// after another match doesn't count.
+pub List[Match] Regex.findAll(str text, i64 limit = -1) {
+    List[Match] out
+    i64 from = 0
+    i64 lastEnd = -1
+    for from <= text.len && (limit < 0 || out.len < limit) {
+        m, found := self.findFrom(text, from)
+        if !found {
+            m.free()
+            break
+        }
+        if m.end == m.start && m.start == lastEnd {
+            // an empty match right after the one before isn't one, as in Go
+            m.free()
+            if m.end >= text.len {
+                break
+            }
+            _, size := runeAt(text, m.end)
+            from = m.end + size
+            continue
+        }
+        lastEnd = m.end
+        if m.end == m.start {
+            // an empty match: the next search starts a character later
+            if m.end >= text.len {
+                out.push(m)
+                break
+            }
+            _, size := runeAt(text, m.end)
+            from = m.end + size
+        } else {
+            from = m.end
+        }
+        out.push(m)
+    }
+    return out
+}
+
+// text with every match replaced by with, where $1 or ${1} is group 1,
+// ${name} a named group, and $$ a $.
+pub String Regex.replace(str text, str with, i64 limit = -1) {
+    String out
+    all := self.findAll(text, limit)
+    defer all.freeEach()
+    i64 last = 0
+    for m in all {
+        out.append(text[last:m.start])
+        self.expand(&m, with, &out)
+        last = m.end
+    }
+    out.append(text[last:])
+    return out
+}
+
+void Regex.expand(Match *m, str with, String *out) {
+    i := 0
+    for i < with.len {
+        c := with[i]
+        if c != '$' || i + 1 >= with.len {
+            out.append(with[i:i + 1])
+            i += 1
+            continue
+        }
+        n := with[i + 1]
+        if n == '$' {
+            out.append("$")
+            i += 2
+            continue
+        }
+        str name = ""
+        if n == '{' {
+            end := str.find(with[i + 2:], "}}")
+            if end < 0 {
+                out.append("$")
+                i += 1
+                continue
+            }
+            name = with[i + 2:i + 2 + end]
+            i += end + 3
+        } else {
+            j := i + 1
+            for j < with.len && (with[j] >= '0' && with[j] <= '9' || with[j] >= 'a' && with[j] <= 'z' ||
+                    with[j] >= 'A' && with[j] <= 'Z' || with[j] == '_') {
+                        j += 1
+                    }
+            if j == i + 1 {
+                out.append("$")
+                i += 1
+                continue
+            }
+            name = with[i + 1:j]
+            i = j
+        }
+        group := str.parseInt(name) catch e {
+            self.index(name)
+        }
+        out.append(m.group(group))
+    }
+}
+
+// The parts of text between the matches; at most limit parts when limit
+// isn't below 0.
+pub List[str] Regex.split(str text, i64 limit = -1) {
+    List[str] out
+    if limit == 0 {
+        return out
+    }
+    all := self.findAll(text, if limit > 0 { limit - 1 } else { -1 })
+    defer all.freeEach()
+    i64 last = 0
+    for m in all {
+        if m.end == 0 && m.start == 0 {
+            continue
+        }
+        out.push(text[last:m.start])
+        last = m.end
+    }
+    out.push(text[last:])
+    return out
+}

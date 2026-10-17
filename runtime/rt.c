@@ -834,6 +834,12 @@ void iris_term_write(int fd, const char *p, int64_t n) {
     fflush(f);
 }
 
+/* str.find: the C library's memmem, which scans many bytes at a time. */
+int64_t iris_str_find(const char *s, int64_t n, const char *sub, int64_t m) {
+    const char *at = memmem(s, (size_t)n, sub, (size_t)m);
+    return at ? (int64_t)(at - s) : -1;
+}
+
 /* str.parseFloat: 0 ok, 1 empty, 2 not a number */
 int iris_str_parse_float(const char *p, int64_t n, double *out) {
     if (n == 0) {

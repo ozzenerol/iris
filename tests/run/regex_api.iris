@@ -1,0 +1,125 @@
+// expect: 3: [10-20] [30-40] [50-60]
+// expect: from 10 to 20
+// expect: 2026/10/17 and 2025/01/02
+// expect: Ada Lovelace -> Lovelace, Ada
+// expect: cost: $5
+// expect: [a] [b] [c] [] [d]
+// expect: [a] [b,c, d]
+// expect: [one] [two] [three]
+// expect: year 2026 month 10, groups 2, index 1 2 -1
+// expect: XaXcX
+// expect: X-aX-bX-
+// expect: true false true true
+// expect: true false
+// expect: no b after 40 a's: false, quickly: true
+// expect: RegexError.syntax: a(b: a ( with no ) at 3
+// expect: RegexError.syntax: a)b: a ) with no ( at 1
+// expect: RegexError.syntax: *a: nothing to repeat at 0
+// expect: RegexError.syntax: [z-a]: a range that ends before it starts at 4
+// expect: RegexError.syntax: \q: an escape that isn't known at 1
+// expect: RegexError.syntax: (?P<x>a)(?P<x>b): two groups called x at 13
+// expect: RegexError.syntax: a{2,1}: a repeat count over 1000, or the larger first at 6
+// expect: RegexError.tooLarge
+// expect: 1000 matches in a 100000 byte text
+
+import regex, str, time
+
+void err(str p) {
+    re := regex.compile(p) catch e {
+        if e.code == regex.RegexError.tooLarge {
+            print("{e.code}")
+        } else {
+            print("{e.code}: {e.message}")
+        }
+        return
+    }
+    re.free()
+}
+
+!void main() {
+    nums := regex.must(r"(\d+)-(\d+)")
+    defer nums.free()
+    all := nums.findAll("10-20, 30-40 and 50-60")
+    String line = format("{all.len}:")
+    for m in all {
+        scoped String part = format(" [{m.str()}]")
+        line.append(part)
+    }
+    print(line)
+    line.free()
+    all.freeEach()
+    scoped String spans = nums.replace("10-20", r"from $1 to ${2}")
+    print(spans)
+
+    dates := regex.must(r"(?P<y>\d{4})-(?P<m>\d\d)-(?P<d>\d\d)")
+    defer dates.free()
+    scoped String slashed = dates.replace("2026-10-17 and 2025-01-02", r"${y}/${m}/${d}")
+    print(slashed)
+    names := regex.must(r"(\w+) (\w+)")
+    defer names.free()
+    scoped String swapped = names.replace("Ada Lovelace", "$0 -> $2, $1")
+    print(swapped)
+    dollars := regex.must(r"\d+")
+    defer dollars.free()
+    scoped String cost = dollars.replace("cost: 5", "$$$0")
+    print(cost)
+
+    comma := regex.must(r",")
+    defer comma.free()
+    scoped List[str] parts = comma.split("a,b,c,,d")
+    scoped String shown = format("")
+    for i in 0..parts.len {
+        scoped String p = format("{if i > 0 { " " } else { "" }}[{parts.at(i)}]")
+        shown.append(p)
+    }
+    print(shown)
+    scoped List[str] two = comma.split("a,b,c, d", 2)
+    print("[{two.at(0)}] [{two.at(1)}]")
+    spaces := regex.must(r"\s+")
+    defer spaces.free()
+    scoped List[str] words = spaces.split("one  two\tthree")
+    print("[{words.at(0)}] [{words.at(1)}] [{words.at(2)}]")
+
+    m, found := dates.find("today is 2026-10-17")
+    defer m.free()
+    if found {
+        print("year {m.group(dates.index("y"))} month {m.group(2)}, groups {dates.groups() - 1}, index {dates.index("y")} {dates.index("m")} {dates.index("nope")}")
+    }
+
+    empty := regex.must(r"b*")
+    defer empty.free()
+    scoped String xs = empty.replace("abc", "X")
+    print(xs)
+    dashes := regex.must(r"")
+    defer dashes.free()
+    scoped String around = dashes.replace("ab", "X-")
+    print(around)
+
+    posix := regex.must(r"^[[:alpha:]]+[[:digit:]]*\z")
+    defer posix.free()
+    tail := regex.must(r"end\z")
+    defer tail.free()
+    print("{posix.matches("abc123")} {posix.matches("12abc")} {tail.matches("the end")} {regex.must(r"\Astart").matches("start here")}")
+    multi := regex.must(r"(?m)^\d+$")
+    defer multi.free()
+    print("{multi.matches("a\n42\nb")} {regex.must(r"^\d+$").matches("a\n42\nb")}")
+
+    // a pattern that takes a backtracking engine 2^40 steps
+    slow := regex.must(r"(a*)*b")
+    defer slow.free()
+    scoped String as = str.repeat("a", 40)
+    start := time.clock()
+    hit := slow.matches(as)
+    print("no b after 40 a's: {hit}, quickly: {time.clock() - start < 1s}")
+
+    for p in ["a(b", "a)b", "*a", "[z-a]", r"\q", "(?P<x>a)(?P<x>b)", r"a{2,1}", r"((a{1000}){1000}){1000}"] {
+        err(p)
+    }
+
+    word := regex.must(r"\bw\d+\b")
+    defer word.free()
+    scoped String text = str.repeat("xx w12 yy ", 10000)
+    found2 := word.findAll(text)
+    print("{found2.len / 10} matches in a {text.len} byte text")
+    found2.freeEach()
+}
