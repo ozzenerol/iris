@@ -2906,6 +2906,7 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->tmp = 0;
     ir->label = 0;
     ir->vars = 0;
+    ir->ntemps = 0;             /* temporary Strings belong to one function */
     ir->catchDepth = 0;
     ir->msgBufs = 0;
     ir->terminated = false;

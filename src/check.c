@@ -3074,8 +3074,29 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
                 continue;
             }
             Type *t = checkExpr(c, part, NULL);
-            if (!isErr(t) && !printable(t)) {
-                error(c, *part, "a %s value can't be put into text", t->name);
+            Type *st = t->kind == TY_PTR ? t->elem : t;
+            Node *fm = st->kind == TY_STRUCT ? findMethodIn(st, "format") : NULL;
+            if (!isErr(t) && !printable(t) && fm) {
+                /* a struct with String format(): its text, freed after the statement */
+                if (!fm->type) checkSignature(c, fm, st);
+                if (fm->type != &tyString || fm->list.len != 1) {
+                    error(c, *part, "%s.format must take nothing and give a String to put a %s into text",
+                          st->name, st->name);
+                    continue;
+                }
+                Node *recv = *part;
+                Node *access = like(c, N_FIELD_ACCESS, recv);
+                access->a = recv;
+                access->name = "format";
+                Node *call = like(c, N_CALL, recv);
+                call->a = access;
+                *part = call;
+                checkExpr(c, part, NULL);
+                coerce(c, part, &tyStr, "the value");
+                markTempString(part, &tyStr);
+            } else if (!isErr(t) && !printable(t)) {
+                error(c, *part, "a %s value can't be put into text; give %s a method String format()", t->name,
+                      st->kind == TY_STRUCT ? st->name : t->name);
             } else if (t->kind == TY_STRING) {
                 coerce(c, part, &tyStr, "the value");
             }

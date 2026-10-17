@@ -1,0 +1,33 @@
+// expect: P(3)
+// expect: at P(1) and P(2) [Line(P(1) to P(2))]
+// expect: through a pointer: P(3)
+// expect: 3 points
+
+struct P {
+    i64 x
+}
+
+String P.format() => format("P({self.x})")
+
+struct Line {
+    P a
+    P b
+}
+
+String Line.format() => format("Line({self.a} to {self.b})")
+
+void main() {
+    p := P{x: 3}
+    print("{p}")
+    l := Line{a: P{x: 1}, b: P{x: 2}}
+    scoped String s = format("at {l.a} and {l.b} [{l}]")
+    print(s)
+    P *pp = &p
+    print("through a pointer: {pp}")
+    List[P] points
+    points.push(p)
+    points.push(l.a)
+    points.push(l.b)
+    print("{points.len} points")
+    points.free()
+}
