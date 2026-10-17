@@ -1,0 +1,25 @@
+// expect: blob 6 bytes: 6 137 0 255
+// expect: a.png 6 137 0 255
+
+import sqlite
+
+@json
+struct File {
+    String name
+    String data
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE files (name TEXT, data BLOB)")
+    u8[6] png = [0x89, 'P', 'N', 'G', 0, 0xff]
+    try db.exec("INSERT INTO files VALUES (?, ?)", [.text("a.png"), .blob(png[:])])
+    rows := try db.query("SELECT data, typeof(data), length(data) FROM files")
+    defer rows.close()
+    _ = try rows.next()
+    b := rows.bytes(0)
+    print("{rows.text(1)} {rows.int(2)} bytes: {b.len} {b[0]} {b[4]} {b[5]}")
+    scoped File f = try sqlite.one[File](&db, "SELECT * FROM files")
+    print("{f.name} {f.data.len} {f.data[0]} {f.data[4]} {f.data[5]}")
+}

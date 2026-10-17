@@ -1,0 +1,25 @@
+// expect: 2026-10-17T09:30:00Z 2026-10-17T09:30:00Z 17.10.2026
+// expect: 2027-03-01T00:00:00Z 2025-12-01T00:00:00Z 2025-01-01T00:00:00Z 2027-12-31T00:00:00Z 2026-02-01T00:00:00Z
+// expect: 2026-02-30: '2026-02-30' has no such month or day
+// expect: 2024-02-29: 2024-02-29T00:00:00Z
+// expect: 2026-02-29: '2026-02-29' has no such month or day
+// expect: 2026-04-31: '2026-04-31' has no such month or day
+// expect: 2000-02-29: 2000-02-29T00:00:00Z
+// expect: 1900-02-29: '1900-02-29' has no such month or day
+
+import time
+
+// A Time goes into text as ISO 8601; date carries months past 12 into the
+// next years; parse checks the month has the day.
+void main() {
+    t := time.date(2026, 10, 17, 9, 30)
+    print("{t} {t.format()} {t.format("DD.MM.YYYY")}")
+    print("{time.date(2026, 15, 1)} {time.date(2026, 0, 1)} {time.date(2026, -11, 1)} {time.date(2026, 24, 31)} {time.date(2026, 1, 32)}")
+    for s in ["2026-02-30", "2024-02-29", "2026-02-29", "2026-04-31", "2000-02-29", "1900-02-29"] {
+        p := time.parse(s) catch e {
+            print("{s}: {e.message}")
+            continue
+        }
+        print("{s}: {p}")
+    }
+}

@@ -52,7 +52,8 @@ header.top {
   background: var(--bg); border-bottom: 1px solid var(--line);
 }
 header.top .bar { min-height: var(--bar-h); padding-block: 8px; }
-.brand { font-family: var(--mono); font-weight: 600; font-size: 18px; color: var(--fg); }
+.brand { font-family: var(--mono); font-weight: 600; font-size: 18px; color: var(--fg); display: flex; align-items: center; gap: 8px; }
+.brand img { width: 26px; height: 26px; image-rendering: pixelated; }
 .brand:hover { text-decoration: none; }
 nav.main { display: flex; gap: 20px; flex-wrap: wrap; }
 nav.main a { color: var(--fg); }

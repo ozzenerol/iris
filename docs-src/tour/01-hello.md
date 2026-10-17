@@ -70,7 +70,7 @@ n is 42
 
 The [Errors](18-errors.html) chapter covers errors in full.
 
-The arguments a program was started with come from the `os` module, and the `flags` module reads them into a struct (see [Attributes](27-attributes.html)):
+The arguments a program was started with come from the `os` module, and the `flags` module reads them into a struct (see [Command-line flags](30-flags.html)):
 
 ```iris
 import os
@@ -191,4 +191,4 @@ Neither can the names of built-in types (`i64`, `str`, `String`...) and built-in
 iris fmt main.iris
 ```
 
-The [Tools](31-tools.html) chapter covers it and the other commands.
+The [Tools](38-tools.html) chapter covers it and the other commands.

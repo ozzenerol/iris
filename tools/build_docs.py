@@ -47,7 +47,8 @@ VERSION = version()
 SECTIONS = [
     # (folder, name in the top bar, what its index page says)
     ("tour", "Language Tour",
-     "Every part of the language, one topic per chapter, explained fully and with many small programs and "
+     "Every part of the language, and the library modules almost every program uses, one topic per chapter, "
+     "explained fully and with many small programs and "
      "their output. Read it in order the first time; later, use it as the reference."),
     ("guides", "Guides",
      "Whole programs, built one step at a time, with every changed function shown in full."),
@@ -73,6 +74,7 @@ def shell(title, body, root, section="", wide=False, desc=""):
 {meta}
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="{root}assets/style.css">
+<link rel="icon" href="{root}assets/logo.svg" type="image/svg+xml">
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
    the one remembered. Pages opened as files can't share storage in every
@@ -90,7 +92,7 @@ try {{
 <body{' class="wide"' if wide else ''}>
 <header class="top">
   <div class="bar">
-    <a class="brand" href="{root}index.html">Iris</a>
+    <a class="brand" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">Iris</a>
     <nav class="main">
       {nav("tour/index.html", "Language Tour", "tour")}
       {nav("std/index.html", "Library", "std")}

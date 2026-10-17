@@ -1,0 +1,34 @@
+// expect: '1m30s' 1m30s
+// expect: '250ms' 250ms
+// expect: '1.5h' 1h30m0s
+// expect: '30' 30s
+// expect: '-1.5s' -1.5s
+// expect: '': '' isn't a duration like 30s or 1m30s
+// expect: '5x': '5x' isn't a duration like 30s or 1m30s
+// expect: '1m30': '1m30' isn't a duration like 30s or 1m30s
+// expect: 2026-02-28T09:30:00Z 2027-02-28T09:30:00Z 2025-11-30T09:30:00Z 2026-03-02T09:30:00Z 2025-12-31T09:30:00Z
+// expect: 2025-02-28T12:00:00Z 2028-02-29T12:00:00Z 2023-02-28T12:00:00Z
+// expect: 2026-04-30T23:30:00+02:00 2026-04-01T23:30:00+02:00
+// expect: 1s 2ms 1m30s
+
+import time
+
+// parseDuration, the calendar helpers, and Duration staying Duration
+// through !Duration and Duration[].
+!void main() {
+    for s in ["1m30s", "250ms", "1.5h", "30", "-1.5s", "", "5x", "1m30"] {
+        d := time.parseDuration(s) catch e {
+            print("'{s}': {e.message}")
+            continue
+        }
+        print("'{s}' {d}")
+    }
+    t := time.date(2026, 1, 31, 9, 30)
+    print("{t.addMonths(1)} {t.addMonths(13)} {t.addMonths(-2)} {t.addDays(30)} {t.addDays(-31)}")
+    leap := time.date(2024, 2, 29, 12)
+    print("{leap.addYears(1)} {leap.addYears(4)} {leap.addMonths(-12)}")
+    z := try time.parse("2026-03-31T23:30:00+02:00")
+    print("{z.addMonths(1)} {z.addDays(1)}")
+    Duration[3] ds = [1s, 2ms, 90s]
+    print("{ds[0]} {ds[1]} {ds[2]}")
+}

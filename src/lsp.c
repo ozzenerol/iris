@@ -850,7 +850,13 @@ static void completion(StrBuf *out, J *id, Program *prog, Source *src, const cha
     }
     if (best) t = best->type;
     if (t && t->kind == TY_PTR) t = t->elem;
-    if (t && t->kind == TY_STRUCT && t->decl) {
+    if (best && best->ref && best->ref->kind == N_ENUM) {
+        /* Kind. gives the enum's values */
+        for (int i = 0; i < best->ref->list.len; i++) {
+            Node *v = best->ref->list.items[i];
+            if (v->kind == N_ENUM_MEMBER && v->name) putItem(&r, &first, v->name, 20, best->ref->name);
+        }
+    } else if (t && t->kind == TY_STRUCT && t->decl) {
         for (int i = 0; i < t->decl->list.len; i++) {
             Node *f = t->decl->list.items[i];
             if (f->name) putItem(&r, &first, f->name, 5, f->type ? f->type->name : NULL);
@@ -894,6 +900,211 @@ static void completion(StrBuf *out, J *id, Program *prog, Source *src, const cha
     sbFree(&r);
 }
 
+/* ---------------------------------------------------------------- completion of names */
+
+typedef struct {
+    StrBuf r;
+    bool first;
+    const char **seen;
+    int nSeen, capSeen;
+} Items;
+
+/* Adds an item once: an inner name hides an outer one of the same name. */
+static void addItem(Items *it, const char *label, int kind, const char *detail) {
+    if (!label || !*label) return;
+    for (int i = 0; i < it->nSeen; i++) {
+        if (strcmp(it->seen[i], label) == 0) return;
+    }
+    if (it->nSeen == it->capSeen) {
+        it->capSeen = it->capSeen ? it->capSeen * 2 : 64;
+        it->seen = realloc(it->seen, sizeof *it->seen * (size_t)it->capSeen);
+        if (!it->seen) return;
+    }
+    it->seen[it->nSeen++] = label;
+    putItem(&it->r, &it->first, label, kind, detail);
+}
+
+static size_t offsetOf(Source *src, int line, int col) {
+    const char *ls = lineStartOf(src->text, src->len, line);
+    size_t off = (size_t)(ls - src->text) + (size_t)(col > 0 ? col - 1 : 0);
+    return off < src->len ? off : src->len;
+}
+
+/* Where the '}' that closes the '{' at off is, skipping strings, characters
+ * and comments; the end of the text when it is missing, as while typing. */
+static size_t closeOf(Source *src, size_t off) {
+    const char *t = src->text;
+    int depth = 0;
+    for (size_t i = off; i < src->len; i++) {
+        char ch = t[i];
+        if (ch == '/' && i + 1 < src->len && t[i + 1] == '/') {
+            while (i < src->len && t[i] != '\n') i++;
+        } else if (ch == '"' || ch == '\'') {
+            bool triple = ch == '"' && i + 2 < src->len && t[i + 1] == '"' && t[i + 2] == '"';
+            i += triple ? 3 : 1;
+            while (i < src->len) {
+                if (t[i] == '\\' && !triple) i++;
+                else if (triple && t[i] == '"' && i + 2 < src->len && t[i + 1] == '"' && t[i + 2] == '"') { i += 2; break; }
+                else if (!triple && (t[i] == ch || t[i] == '\n')) break;
+                i++;
+            }
+        } else if (ch == '{') {
+            depth++;
+        } else if (ch == '}' && --depth == 0) {
+            return i;
+        }
+    }
+    return src->len;
+}
+
+/* Whether the cursor is inside the block: after its '{', up to its '}'. */
+static bool inBlock(Source *src, Node *block, size_t cursor) {
+    if (!block || block->kind != N_BLOCK || block->src != src) return false;
+    size_t open = offsetOf(src, block->line, block->col);
+    return cursor > open && cursor <= closeOf(src, open);
+}
+
+static const char *typeName(Node *n) { return n->type && n->type->kind != TY_ERROR ? n->type->name : NULL; }
+
+/* The names a function's code can see at the cursor: what was declared above
+ * it, in the blocks around it. */
+static void localNames(Items *it, Source *src, Node *n, size_t cursor) {
+    if (!n || n->src != src) return;
+    if (offsetOf(src, n->line, n->col) >= cursor && n->kind != N_BLOCK) return;     /* below the cursor */
+    switch (n->kind) {
+    case N_BLOCK:
+        if (!inBlock(src, n, cursor)) return;
+        break;
+    case N_VAR: case N_PARAM:
+        addItem(it, n->name, 6, typeName(n));
+        break;
+    case N_DEFINE:
+        for (int i = 0; i < n->list.len; i++) addItem(it, n->list.items[i]->name, 6, typeName(n->list.items[i]));
+        break;
+    case N_FOR:
+        if (inBlock(src, n->c, cursor)) {
+            for (int i = 0; i < n->list.len; i++) addItem(it, n->list.items[i]->name, 6, typeName(n->list.items[i]));
+        }
+        break;
+    case N_CATCH:
+        if (n->name && inBlock(src, n->c, cursor)) addItem(it, n->name, 6, "Error");
+        break;
+    default:
+        break;
+    }
+    localNames(it, src, n->a, cursor);
+    localNames(it, src, n->b, cursor);
+    localNames(it, src, n->c, cursor);
+    localNames(it, src, n->d, cursor);
+    for (int i = 0; i < n->list.len; i++) localNames(it, src, n->list.items[i], cursor);
+    for (int i = 0; i < n->list2.len; i++) localNames(it, src, n->list2.items[i], cursor);
+}
+
+static int declKind(Node *d) {
+    switch (d->kind) {
+    case N_FUNC: return 3;
+    case N_STRUCT: return 22;
+    case N_ENUM: return 13;
+    case N_INTERFACE: return 8;
+    case N_CONST: return 21;
+    case N_TYPEDEF: return 7;
+    default: return 6;
+    }
+}
+
+/* A module's top-level names: all of them in its own files, else the pub ones. */
+static void moduleNames(Items *it, Module *m, bool own) {
+    for (int f = 0; f < m->files.len; f++) {
+        Node *file = m->files.items[f];
+        for (int i = 0; i < file->list.len; i++) {
+            Node *d = file->list.items[i];
+            Node *named = d->kind == N_DEFINE && d->list.len == 1 ? d->list.items[0] : d;
+            if (!named->name || d->kind == N_IMPORT || d->kind == N_TEST || (d->kind == N_FUNC && d->b)) continue;
+            if (d->kind == N_FUNC && (d->flags & F_TESTFN)) continue;
+            if (!own && !(d->flags & F_PUB)) continue;
+            StrBuf sig = {0};
+            signature(&sig, d);
+            addItem(it, named->name, declKind(d), sig.buf);
+            sbFree(&sig);
+        }
+    }
+}
+
+/* Any name: locals, the module's names, imports, built-ins and keywords. */
+static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    Items it = {.first = true};
+    sbPutc(&it.r, '[');
+    Module *own = NULL;
+    Node *ownFile = NULL;
+    for (Module *m = prog ? prog->modules : NULL; m && !own; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            if (m->files.items[f]->src == src) {
+                own = m;
+                ownFile = m->files.items[f];
+            }
+        }
+    }
+    if (own && src) {
+        size_t cursor = offsetOf(src, line, col);
+        for (int i = 0; i < ownFile->list.len; i++) {
+            Node *d = ownFile->list.items[i];
+            Node *body = d->kind == N_FUNC || d->kind == N_TEST ? d->c : NULL;
+            if (inBlock(src, body, cursor)) {
+                localNames(&it, src, body, cursor);
+                for (int k = 0; k < d->list.len; k++) {
+                    if (d->list.items[k]->kind == N_PARAM) addItem(&it, d->list.items[k]->name, 6, typeName(d->list.items[k]));
+                }
+            }
+        }
+        moduleNames(&it, own, true);
+        /* the modules this file imports, by the name code calls them */
+        for (int i = 0; i < ownFile->list.len; i++) {
+            Node *imp = ownFile->list.items[i];
+            if (imp->kind != N_IMPORT) continue;
+            for (int k = 0; k < imp->list.len; k++) {
+                Node *item = imp->list.items[k];
+                if (item->flags & F_C_IMPORT) continue;
+                const char *name = item->name;
+                if (item->text) {
+                    const char *slash = strrchr(item->text, '/');
+                    name = slash ? slash + 1 : item->text;
+                }
+                addItem(&it, name, 9, "module");
+            }
+        }
+        for (Module *m = prog->modules; m; m = m->next) {
+            if (m->isStd && m->name && strcmp(m->name, "core") == 0) moduleNames(&it, m, false);
+        }
+    }
+    static const char *builtins[] = {"print", "format", "panic", "error", "alloc", "free", "sleep", "after", "expect"};
+    for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) addItem(&it, builtins[i], 3, "built-in");
+    static const char *types[] = {"void", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
+                                  "str", "String", "Error", "Duration", "Mutex", "Thread", "Atomic"};
+    for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) addItem(&it, types[i], 7, "type");
+    static const char *words[] = {"if", "else", "for", "in", "match", "break", "continue", "return", "struct",
+                                  "union", "enum", "interface", "type", "dyn", "pub", "const", "comptime", "when",
+                                  "import", "try", "catch", "defer", "errdefer", "scoped", "spawn", "select", "chan",
+                                  "thread", "threadlocal", "asm", "test", "true", "false", "null"};
+    for (size_t i = 0; i < sizeof words / sizeof words[0]; i++) addItem(&it, words[i], 14, NULL);
+    sbPutc(&it.r, ']');
+    reply(out, id, it.r.buf);
+    sbFree(&it.r);
+    free(it.seen);
+}
+
+/* In an import line: the standard library's modules. */
+static void importCompletion(StrBuf *out, J *id) {
+    Items it = {.first = true};
+    sbPutc(&it.r, '[');
+    const char *names[128];
+    int n = stdModuleNames(names, 128);
+    for (int i = 0; i < n; i++) addItem(&it, names[i], 9, "standard library");
+    sbPutc(&it.r, ']');
+    reply(out, id, it.r.buf);
+    sbFree(&it.r);
+    free(it.seen);
+}
+
 static void formatting(StrBuf *out, J *id, Doc *doc) {
     if (!doc) {
         reply(out, id, NULL);
@@ -914,6 +1125,50 @@ static void formatting(StrBuf *out, J *id, Doc *doc) {
     sbPuts(&r, "}]");
     reply(out, id, r.buf);
     sbFree(&r);
+}
+
+/* Closes what the text leaves open, as while typing: the ( [ { that have no
+ * partner get one at the end, so the function being written still parses.
+ * Only in the child, whose copy of the document this changes. */
+static void closeOpen(Doc *doc) {
+    char stack[256];
+    int depth = 0;
+    const char *t = doc->text;
+    size_t n = doc->len;
+    for (size_t i = 0; i < n; i++) {
+        char ch = t[i];
+        if (ch == '/' && i + 1 < n && t[i + 1] == '/') {
+            while (i < n && t[i] != '\n') i++;
+        } else if (ch == '"' || ch == '\'') {
+            bool triple = ch == '"' && i + 2 < n && t[i + 1] == '"' && t[i + 2] == '"';
+            i += triple ? 3 : 1;
+            while (i < n) {
+                if (t[i] == '\\' && !triple) i++;
+                else if (triple && t[i] == '"' && i + 2 < n && t[i + 1] == '"' && t[i + 2] == '"') { i += 2; break; }
+                else if (!triple && (t[i] == ch || t[i] == '\n')) break;
+                i++;
+            }
+        } else if (ch == '(' || ch == '[' || ch == '{') {
+            if (depth < (int)sizeof stack) stack[depth] = ch;
+            depth++;
+        } else if ((ch == ')' || ch == ']' || ch == '}') && depth > 0) {
+            depth--;
+        }
+    }
+    if (depth <= 0) return;
+    if (depth > (int)sizeof stack) depth = sizeof stack;
+    char *text = malloc(n + (size_t)depth * 2 + 2);
+    if (!text) return;
+    memcpy(text, t, n);
+    size_t len = n;
+    text[len++] = '\n';
+    for (int k = depth - 1; k >= 0; k--) {
+        text[len++] = stack[k] == '(' ? ')' : stack[k] == '[' ? ']' : '}';
+        text[len++] = '\n';
+    }
+    text[len] = 0;
+    doc->text = text;
+    doc->len = len;
 }
 
 /* Handles one message in the child; the output is messages separated by
@@ -939,12 +1194,20 @@ static void handleInChild(J *msg, StrBuf *out) {
         character = c ? (int)c->num : 0;
     }
     char word[256] = "";
+    bool inImport = false;
     if (strcmp(method, "textDocument/completion") == 0 && doc) {
-        /* the name before the dot; the dot itself would not parse, so it goes */
+        /* the name before the dot; the dot itself would not parse, so it goes,
+         * and so does what was typed after it */
         int col = byteCol(doc->text, doc->len, line, character);
         char *ls = (char *)lineStartOf(doc->text, doc->len, line);
-        char *dot = ls + col - 2;
+        char *typed = ls + col - 1;
+        while (typed > ls && (isalnum((unsigned char)typed[-1]) || typed[-1] == '_')) typed--;
+        const char *t = ls;
+        while (t < typed && (*t == ' ' || *t == '\t')) t++;
+        inImport = !strncmp(t, "import", 6) && (t[6] == ' ' || t[6] == '\t') && !memchr(t, '"', (size_t)(typed - t));
+        char *dot = typed - 1;
         if (dot >= ls && *dot == '.') {
+            for (char *q = typed; q < ls + col - 1; q++) *q = ' ';
             char *s = dot;
             while (s > ls && (isalnum((unsigned char)s[-1]) || s[-1] == '_')) s--;
             size_t n = (size_t)(dot - s);
@@ -955,6 +1218,10 @@ static void handleInChild(J *msg, StrBuf *out) {
             *dot = ' ';
         }
     }
+    /* a line being typed seldom parses: answer from what the parser could read */
+    gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/hover") == 0 ||
+               strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
+    if (gLenient && doc) closeOpen(doc);
     Program *prog = path ? analyze(path) : NULL;
     Source *src = path ? sourceOf(prog, path) : NULL;
     int col = doc ? byteCol(doc->text, doc->len, line, character) : character + 1;
@@ -965,10 +1232,12 @@ static void handleInChild(J *msg, StrBuf *out) {
     } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
         symbols(out, id, prog, src);
     } else if (strcmp(method, "textDocument/completion") == 0) {
-        if (word[0]) {
+        if (inImport) {
+            importCompletion(out, id);
+        } else if (word[0]) {
             completion(out, id, prog, src, word, line);
         } else {
-            reply(out, id, "[]");
+            nameCompletion(out, id, prog, src, line, col);
         }
     } else {
         putDiagnostics(out, prog, path);

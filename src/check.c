@@ -286,7 +286,9 @@ static Type *compound(TypeKind kind, Type *elem, int64_t count) {
         return &tyStr;
     }
     for (TypeCache *tc = gTypes; tc; tc = tc->next) {
-        if (tc->t->kind == kind && tc->t->count == count && sameType(tc->t->elem, elem)) {
+        /* Duration is an i64 that prints as 1m30s: !Duration isn't !i64 */
+        if (tc->t->kind == kind && tc->t->count == count && sameType(tc->t->elem, elem) &&
+            (tc->t->elem == &tyDuration) == (elem == &tyDuration)) {
             return tc->t;
         }
     }
@@ -1103,7 +1105,9 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
             bool ok = a->kind == N_STRING ||
                       (a->kind == N_CHAR && a->ival > ' ' && a->ival < 127 && a->ival != '-' && a->ival != 'h') ||
                       (a->kind == N_IDENT && (strcmp(a->name, "required") == 0 || strcmp(a->name, "args") == 0));
-            if (!ok) {
+            if (!ok && a->kind == N_CHAR && a->ival == 'h') {
+                error(c, a, "-h is taken: -h and --help show the help made from the struct, so pick another letter");
+            } else if (!ok) {
                 error(c, a, "@flag takes a letter for the short form ('p', but not 'h' or '-'), the help in quotes, required, or args: @flag('p', \"the port\")");
             }
         }
@@ -1355,6 +1359,10 @@ static void resolveStruct(Checker *c, Type *t) {
                     error(c, f, "only one field can have @flag(args)");
                 }
                 haveArgs = true;
+                continue;
+            }
+            if (f->name && strcmp(f->name, "help") == 0) {
+                error(c, f, "a field named help would be --help, which every @flags struct has already: it shows the help made from the struct; give the field another name");
                 continue;
             }
             bool ok = ft->kind == TY_INT || ft->kind == TY_FLOAT || ft->kind == TY_BOOL || isStr(ft) ||
@@ -1813,6 +1821,7 @@ static Type *typeFromExpr(Checker *c, Node *e, bool report) {
 
 static Type *checkExpr(Checker *c, Node **slot, Type *expected);
 static bool checkStarted(Checker *c, Node **callp, const char *word, const char *what);
+static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first, NodeList *out, bool checked);
 static Node *whenBranch(Checker *c, Node *w);
 static void checkTempResult(Checker *c, Node *e);
 static void checkConstDecl(Checker *c, Node *decl);
@@ -3151,19 +3160,42 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
             if (!isErr(t) && !printable(t) && fm) {
                 /* a struct with String format(): its text, freed after the statement */
                 if (!fm->type) checkSignature(c, fm, st);
-                if (fm->type != &tyString || fm->list.len != 1) {
+                /* format() with no arguments: parameters after self need defaults */
+                bool noArgs = fm->list.len >= 1;
+                for (int k = 1; k < fm->list.len; k++) {
+                    if (!fm->list.items[k]->b) noArgs = false;
+                }
+                if (fm->type != &tyString || !noArgs) {
                     error(c, *part, "%s.format must take nothing and give a String to put a %s into text",
                           st->name, st->name);
                     continue;
                 }
+                /* built as checkMethodCall leaves a call, since the value is
+                 * checked already: checking a method call twice breaks it */
                 Node *recv = *part;
                 Node *access = like(c, N_FIELD_ACCESS, recv);
                 access->a = recv;
                 access->name = "format";
+                access->ref = fm;
+                Node *self = recv;
+                if (t->kind != TY_PTR) {
+                    if (!addressable(recv)) {
+                        recv->flags |= F_EXPLICIT;
+                    }
+                    self = like(c, N_UNARY, recv);
+                    self->op = P_AMP;
+                    self->a = recv;
+                    self->type = ptrTo(recv->type);
+                }
                 Node *call = like(c, N_CALL, recv);
                 call->a = access;
+                NodeList args = {0};
+                listPush(c->arena, &args, self);
+                checkArgs(c, call, fm, &call->list, 1, &args, false);
+                call->list = args;
+                call->ref = fm;
+                setType(call, fm->type);
                 *part = call;
-                checkExpr(c, part, NULL);
                 coerce(c, part, &tyStr, "the value");
                 markTempString(part, &tyStr);
             } else if (!isErr(t) && !printable(t)) {

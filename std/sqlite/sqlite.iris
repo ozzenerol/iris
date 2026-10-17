@@ -7,9 +7,9 @@
 // nothing).
 pub enum SqlError { failed, busy, constraint, noRows }
 
-// A value for a ? in SQL: .int(36), .float(1.5), .text("ada") or .none for
-// NULL.
-pub enum Value { int(i64 v), float(f64 v), text(str v), none }
+// A value for a ? in SQL: .int(36), .float(1.5), .text("ada"), .blob(bytes)
+// for bytes kept as they are, or .none for NULL.
+pub enum Value { int(i64 v), float(f64 v), text(str v), blob(u8[] v), none }
 
 @extern("iris_sql_open")
 i32 rawOpen(u8 *path, i64 len, u8 **db)
@@ -46,6 +46,9 @@ f64 rawFloat(u8 *stmt, i64 i)
 
 @extern("iris_sql_text")
 u8 *rawText(u8 *stmt, i64 i, i64 *len)
+
+@extern("iris_sql_blob")
+u8 *rawBlob(u8 *stmt, i64 i, i64 *len)
 
 @extern("iris_sql_name")
 u8 *rawName(u8 *stmt, i64 i, i64 *len)
@@ -117,6 +120,7 @@ pub void Db.close() {
             .int(v) => rawBind(stmt, i + 1, 0, v, 0.0, null, 0)
             .float(v) => rawBind(stmt, i + 1, 1, 0, v, null, 0)
             .text(v) => rawBind(stmt, i + 1, 2, 0, 0.0, v.ptr, v.len)
+            .blob(v) => rawBind(stmt, i + 1, 4, 0, 0.0, v.ptr, v.len)
             .none => rawBind(stmt, i + 1, 3, 0, 0.0, null, 0)
         }
         if k != 0 {
@@ -128,13 +132,27 @@ pub void Db.close() {
 }
 
 // Runs SQL that gives no rows: CREATE, INSERT, UPDATE, DELETE. Each ? takes
-// the next of args. Without args, sql can hold several statements.
+// the next of args. Without args, sql can hold several statements; with
+// args, only one, and more after it is an error.
 pub !void Db.exec(str sql, Value[] args = []) {
     i64 at
     for {
         stmt := try self.prepare(sql, &at, args)
         if stmt == null {
             return
+        }
+        if args.len > 0 {
+            // nothing but spaces and comments may follow: SQLite prepares no statement from them
+            rest := at
+            u8 *next
+            kind := rawPrepare(self.handle, sql.ptr, sql.len, &rest, &next)
+            if kind != 0 || next != null {
+                rawFinalize(stmt)
+                if next != null {
+                    rawFinalize(next)
+                }
+                return error(SqlError.failed, "exec with values runs one statement, and the SQL has more after it")
+            }
         }
         for {
             r := rawStep(stmt)
@@ -223,6 +241,14 @@ pub str Rows.text(i64 col) {
     return p[0:n]
 }
 
+// A column's bytes as they are, for a BLOB; valid until the next call to
+// next. A String field of a @json struct gets them too.
+pub u8[] Rows.bytes(i64 col) {
+    i64 n
+    p := rawBlob(self.stmt, col, &n)
+    return p[0:n]
+}
+
 // Whether a column is NULL.
 pub bool Rows.isNull(i64 col) => rawType(self.stmt, col) == 5
 
@@ -240,7 +266,7 @@ pub !void scan[T](Rows *rows, T *out) {
     }
 }
 
-// Every row of a query, as @json structs: sqlite.all(User, &db, "SELECT ...").
+// Every row of a query, as @json structs: sqlite.all[User](&db, "SELECT ...").
 // The values' Strings are the caller's to free.
 pub !List[T] all[T](Db *db, str sql, Value[] args = []) {
     rows := try db.query(sql, args)
@@ -248,7 +274,7 @@ pub !List[T] all[T](Db *db, str sql, Value[] args = []) {
     List[T] out
     for {
         more := rows.next() catch e {
-            out.free()
+            out.freeEach()
             return e
         }
         if !more {
@@ -256,7 +282,8 @@ pub !List[T] all[T](Db *db, str sql, Value[] args = []) {
         }
         T v
         scan(&rows, &v) catch e {
-            out.free()
+            v.free()
+            out.freeEach()
             return e
         }
         out.push(v)
@@ -272,6 +299,9 @@ pub !T one[T](Db *db, str sql, Value[] args = []) {
         return error(SqlError.noRows, "the query has no rows")
     }
     T v
-    try scan(&rows, &v)
+    scan(&rows, &v) catch e {
+        v.free()
+        return e
+    }
     return v
 }

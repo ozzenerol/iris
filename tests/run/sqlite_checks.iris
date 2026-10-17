@@ -1,0 +1,60 @@
+// expect: SqlError.failed: exec with values runs one statement, and the SQL has more after it
+// expect: 1 rows
+// expect: SqlError.failed: the column age has 300, which doesn't fit in u8
+// expect: SqlError.failed: the column age has -1, which doesn't fit in u8
+// expect: 0 1 2147483647
+// expect: SqlError.failed: the column small has 2147483648, which doesn't fit in i32
+// expect: SqlError.failed: the column kind has 'fish', which isn't one of the enum's values
+
+import sqlite
+
+enum Kind { cat, dog }
+
+@json
+struct Pet {
+    String name
+    Kind kind
+    u8 age
+}
+
+@json
+struct Num {
+    i32 small
+}
+
+// exec with values takes one statement; scan checks that integers fit and
+// all frees what it read when a row fails.
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE pets (name TEXT, kind TEXT, age INTEGER)")
+    try db.exec("INSERT INTO pets VALUES (?, 'cat', 3);  -- a comment after is fine", [.text("tom")])
+    db.exec("INSERT INTO pets VALUES (?, 'dog', 4); DELETE FROM pets", [.text("rex")]) catch e {
+        print("{e.code}: {e.message}")
+    }
+    rows := try db.query("SELECT count(*) FROM pets")
+    _ = try rows.next()
+    print("{rows.int(0)} rows")
+    rows.close()
+    try db.exec("INSERT INTO pets VALUES ('old', 'dog', 300), ('neg', 'dog', -1)")
+    for sql in ["SELECT * FROM pets WHERE age > 200", "SELECT * FROM pets WHERE age < 0"] {
+        _ = sqlite.all[Pet](&db, sql) catch e {
+            print("{e.code}: {e.message}")
+            continue
+        }
+    }
+    try db.exec("CREATE TABLE nums (small INTEGER); INSERT INTO nums VALUES (0), (1), (2147483647)")
+    nums := try sqlite.all[Num](&db, "SELECT * FROM nums")
+    print("{nums.at(0).small} {nums.at(1).small} {nums.at(2).small}")
+    nums.free()
+    try db.exec("INSERT INTO nums VALUES (2147483648)")
+    _ = sqlite.all[Num](&db, "SELECT * FROM nums") catch e {
+        print("{e.code}: {e.message}")
+        List[Num]{}
+    }
+    try db.exec("DELETE FROM pets; INSERT INTO pets VALUES ('a name long enough to be on the heap', 'cat', 1), ('zz', 'fish', 2)")
+    _ = sqlite.all[Pet](&db, "SELECT * FROM pets ORDER BY name") catch e {
+        print("{e.code}: {e.message}")
+        List[Pet]{}
+    }
+}

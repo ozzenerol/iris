@@ -2,13 +2,19 @@
 // 2026-10-17T09:30:00.250Z INFO listening on 8080
 // Each line is written at once, so lines from several threads don't mix.
 
-import io, json, time
+import fs, io, json, time
 
 // How much a line matters. setLevel hides the lines below a level.
 pub enum Level { debug, info, warn, error }
 
+// The value of a field: log.info("signed in", [("user", .text(name)), ("id", .int(7))]).
+pub enum Value { int(i64 v), float(f64 v), text(str v), bool(bool v) }
+
 Level minimum = .info
 bool asJson
+bool noTime
+bool toFileOn
+fs.File out
 
 // Lines below level are left out. The start is info.
 pub void setLevel(Level level) {
@@ -16,9 +22,34 @@ pub void setLevel(Level level) {
 }
 
 // Writes each line as a JSON object instead:
-// {"time": "...", "level": "info", "message": "..."}.
+// {"time": "...", "level": "info", "message": "...", "user": "ada"}.
 pub void useJson(bool on = true) {
     asJson = on
+}
+
+// Whether lines start with the time. Off suits a program run by systemd or
+// Docker, which add the time themselves.
+pub void showTime(bool on = true) {
+    noTime = !on
+}
+
+// Writes the lines at the end of the file at path, making it if needed,
+// instead of on standard error.
+pub !void toFile(str path) {
+    f := try fs.openAppend(path)
+    if toFileOn {
+        out.close()
+    }
+    out = f
+    toFileOn = true
+}
+
+// Writes the lines on standard error again, closing the file of toFile.
+pub void toStderr() {
+    if toFileOn {
+        out.close()
+        toFileOn = false
+    }
 }
 
 i64 rank(Level l) => match l {
@@ -42,31 +73,87 @@ str lower(Level l) => match l {
     .error => "error"
 }
 
-// Writes a line at level, if the level isn't left out.
-pub void write(Level level, str message) {
+// Whether text can go after key= as it is: no spaces, quotes or =.
+bool plain(str s) {
+    if s.len == 0 {
+        return false
+    }
+    for c in s {
+        if c <= ' ' || c == '"' || c == '=' || c == 127 {
+            return false
+        }
+    }
+    return true
+}
+
+void addValue(String *line, Value v, bool quoted) {
+    match v {
+        .int(n) => line.append("{n}")
+        .float(x) => line.append("{x}")
+        .bool(b) => line.append("{b}")
+        .text(s) => {
+            if quoted || !plain(s) {
+                scoped String q = json.quote(s)
+                line.append(q)
+            } else {
+                line.append(s)
+            }
+        }
+    }
+}
+
+// Writes a line at level, if the level isn't left out. Each field goes after
+// the message as key=value, text in quotes when it has spaces.
+pub void write(Level level, str message, (str, Value)[] fields = []) {
     if rank(level) < rank(minimum) {
         return
     }
     scoped String stamp = time.now().format("YYYY-MM-DDThh:mm:ss.SSSZ")
+    scoped String line
     if asJson {
+        line.append("{{")
+        if !noTime {
+            line.append("\"time\": \"{stamp}\", ")
+        }
         scoped String m = json.quote(message)
-        scoped String line = format("{{\"time\": \"{stamp}\", \"level\": \"{lower(level)}\", \"message\": {m}}}\n")
-        io.ewrite(line)
+        line.append("\"level\": \"{lower(level)}\", \"message\": {m}")
+        for f in fields {
+            k, v := f
+            scoped String key = json.quote(k)
+            line.append(", {key}: ")
+            addValue(&line, v, true)
+        }
+        line.append("}}\n")
+    } else {
+        if !noTime {
+            line.append("{stamp} ")
+        }
+        line.append("{name(level)} {message}")
+        for f in fields {
+            k, v := f
+            line.append(" {k}=")
+            addValue(&line, v, false)
+        }
+        line.append("\n")
+    }
+    if toFileOn {
+        out.write(line) catch e {
+            io.ewrite(line)
+        }
         return
     }
-    scoped String line = format("{stamp} {name(level)} {message}\n")
     io.ewrite(line)
 }
 
 // Writes message at the debug level: details for finding a problem.
-pub void debug(str message) => write(.debug, message)
+pub void debug(str message, (str, Value)[] fields = []) => write(.debug, message, fields)
 
 // Writes message at the info level: what the program is doing.
-pub void info(str message) => write(.info, message)
+pub void info(str message, (str, Value)[] fields = []) => write(.info, message, fields)
 
 // Writes message at the warn level: something went wrong, and the program goes
 // on.
-pub void warn(str message) => write(.warn, message)
+pub void warn(str message, (str, Value)[] fields = []) => write(.warn, message, fields)
 
 // Writes message at the error level: something failed.
-pub void error(str message) => write(.error, message)
+pub void error(str message, (str, Value)[] fields = []) => write(.error, message, fields)

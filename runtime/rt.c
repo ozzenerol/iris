@@ -459,6 +459,32 @@ static char *cpath(const char *p, int64_t n) {
     return s;
 }
 
+/* Sets (value non-NULL) or removes an environment variable. 0 when it
+ * worked, 1 for a name that can't be one (empty, with = or a NUL). */
+int iris_os_setenv(const char *name, int64_t n, const char *value, int64_t vn, int set) {
+    if (n == 0 || memchr(name, '=', (size_t)n)) {
+        return 1;
+    }
+    char *k = cpath(name, n);
+    if (!k) {
+        return 1;
+    }
+    int rc;
+    if (set) {
+        char *v = cpath(value, vn);
+        if (!v) {
+            free(k);
+            return 1;
+        }
+        rc = setenv(k, v, 1);
+        free(v);
+    } else {
+        rc = unsetenv(k);
+    }
+    free(k);
+    return rc == 0 ? 0 : 1;
+}
+
 int iris_os_getenv(const char *name, int64_t n, const char **p, int64_t *len) {
     char *k = cpath(name, n);
     if (!k) {
@@ -4204,6 +4230,7 @@ static struct {
     int (*bindInt64)(void *, int, int64_t);
     int (*bindDouble)(void *, int, double);
     int (*bindText)(void *, int, const char *, int, void (*)(void *));
+    int (*bindBlob)(void *, int, const void *, int, void (*)(void *));
     int (*bindNull)(void *, int);
     int (*bindCount)(void *);
     int (*step)(void *);
@@ -4212,6 +4239,7 @@ static struct {
     int64_t (*columnInt64)(void *, int);
     double (*columnDouble)(void *, int);
     const unsigned char *(*columnText)(void *, int);
+    const void *(*columnBlob)(void *, int);
     int (*columnBytes)(void *, int);
     const char *(*columnName)(void *, int);
     int (*finalize)(void *);
@@ -4263,6 +4291,7 @@ static void sqLoad(void) {
     SQ(bindInt64, "sqlite3_bind_int64");
     SQ(bindDouble, "sqlite3_bind_double");
     SQ(bindText, "sqlite3_bind_text");
+    SQ(bindBlob, "sqlite3_bind_blob");
     SQ(bindNull, "sqlite3_bind_null");
     SQ(bindCount, "sqlite3_bind_parameter_count");
     SQ(step, "sqlite3_step");
@@ -4271,6 +4300,7 @@ static void sqLoad(void) {
     SQ(columnInt64, "sqlite3_column_int64");
     SQ(columnDouble, "sqlite3_column_double");
     SQ(columnText, "sqlite3_column_text");
+    SQ(columnBlob, "sqlite3_column_blob");
     SQ(columnBytes, "sqlite3_column_bytes");
     SQ(columnName, "sqlite3_column_name");
     SQ(finalize, "sqlite3_finalize");
@@ -4341,6 +4371,7 @@ int iris_sql_bind(void *stmt, int64_t i, int kind, int64_t iv, double fv, const 
     case 0: rc = sq.bindInt64(stmt, (int)i, iv); break;
     case 1: rc = sq.bindDouble(stmt, (int)i, fv); break;
     case 2: rc = sq.bindText(stmt, (int)i, text ? text : "", (int)len, (void (*)(void *))-1); break;
+    case 4: rc = sq.bindBlob(stmt, (int)i, text ? text : "", (int)len, (void (*)(void *))-1); break;
     default: rc = sq.bindNull(stmt, (int)i); break;
     }
     if (rc != 0) {
@@ -4375,6 +4406,12 @@ const char *iris_sql_text(void *stmt, int64_t i, int64_t *len) {
     *len = t ? sq.columnBytes(stmt, (int)i) : 0;
     return t ? t : "";
 }
+/* A column's bytes as they are, for a BLOB. */
+const char *iris_sql_blob(void *stmt, int64_t i, int64_t *len) {
+    const char *t = (const char *)sq.columnBlob(stmt, (int)i);
+    *len = t ? sq.columnBytes(stmt, (int)i) : 0;
+    return t ? t : "";
+}
 const char *iris_sql_name(void *stmt, int64_t i, int64_t *len) {
     const char *t = sq.columnName(stmt, (int)i);
     *len = t ? (int64_t)strlen(t) : 0;
@@ -4399,7 +4436,21 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
         char *p = out + f->offset;
         const JsonType *ft = f->type;
         switch (ft->kind) {
-        case J_INT: case J_UINT: writeInt(p, ft->size, sq.columnInt64(stmt, c)); break;
+        case J_INT: case J_UINT: {
+            int64_t v = sq.columnInt64(stmt, c);
+            int bits = (int)ft->size * 8;
+            bool fits = ft->kind == J_INT ? bits == 64 || (v >= -(1LL << (bits - 1)) && v < (1LL << (bits - 1)))
+                                          : v >= 0 && (bits == 64 || (uint64_t)v < (1ULL << bits));
+            if (!fits) {
+                char what[200];
+                snprintf(what, sizeof what, "the column %s has %lld, which doesn't fit in %c%d", name, (long long)v,
+                         ft->kind == J_INT ? 'i' : 'u', bits);
+                sqlSay(what, NULL);
+                return 1;
+            }
+            writeInt(p, ft->size, v);
+            break;
+        }
         case J_FLOAT:
             if (ft->size == 4) *(float *)p = (float)sq.columnDouble(stmt, c);
             else *(double *)p = sq.columnDouble(stmt, c);
@@ -4485,13 +4536,24 @@ static bool parseDuration(const char *s, int64_t *out) {
         else if (*s == 's') { unit = 1e9; s++; }
         else if (*s == 'm') { unit = 60e9; s++; }
         else if (*s == 'h') { unit = 3600e9; s++; }
-        else if (*s && any) return false;
+        else if (*s || any) return false; /* a number alone is seconds, but only on its own: not 1m30 */
         total += v * unit;
         any = true;
     }
     if (!any) return false;
     *out = (int64_t)total;
     return true;
+}
+
+/* time.parseDuration: 1 when the text is a duration like 1m30s. */
+int iris_time_parse_duration(const char *p, int64_t n, int64_t *out) {
+    char *s = cpath(p, n);
+    if (!s) {
+        return 0;
+    }
+    bool ok = n > 0 && parseDuration(s, out);
+    free(s);
+    return ok;
 }
 
 static bool sameWord(const char *a, const char *b) {

@@ -413,6 +413,8 @@ static const char *findRoot(Arena *a, const char *dir) {
     }
 }
 
+bool gLenient;
+
 Program *loadProgram(Arena *a, const char *path, const char **includes, int nincludes) {
     Loader L = {0};
     L.arena = a;
@@ -448,7 +450,7 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
         }
         listPush(a, &m->files, parseText(&L, path, text, len));
     }
-    if (L.failed) {
+    if (L.failed && !gLenient) {
         return NULL;
     }
     if (gExtraText) {
@@ -469,7 +471,7 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     }
     loadImports(&L, m);
     m->state = 2;
-    return L.failed ? NULL : L.prog;
+    return L.failed && !gLenient ? NULL : L.prog;
 }
 
 /* The text of a standard library file by its path ("std/json/json.iris"),
@@ -484,6 +486,26 @@ const char *stdSource(const char *path) {
         }
     }
     return NULL;
+}
+
+/* The names of the standard library's modules, each once, in order; how
+ * many there are. */
+int stdModuleNames(const char **out, int max) {
+    int n = 0;
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0]; i++) {
+        const char *path = stdFiles[i].path, *slash = strchr(path, '/');
+        if (!slash) continue;
+        size_t len = (size_t)(slash - path);
+        bool seen = false;
+        for (int k = 0; k < n && !seen; k++) seen = strlen(out[k]) == len && !strncmp(out[k], path, len);
+        if (seen || n >= max) continue;
+        char *name = malloc(len + 1);
+        if (!name) continue;
+        memcpy(name, path, len);
+        name[len] = 0;
+        out[n++] = name;
+    }
+    return n;
 }
 
 /* Whether the standard library has a module of this name. */

@@ -3,7 +3,7 @@
 
 import str
 
-// What parse fails with: invalid for text that isn't an ISO 8601 time.
+// What parse and parseDuration fail with: invalid for text they can't read.
 pub enum TimeError { invalid }
 
 // The days of the week, Monday first.
@@ -25,6 +25,9 @@ i64 rawClock()
 @extern("iris_time_offset")
 i32 rawOffset(i64 unixSeconds)
 
+@extern("iris_time_parse_duration")
+i32 rawParseDuration(u8 *p, i64 n, i64 *out)
+
 const NS = 1000000000
 
 // Now, in UTC.
@@ -37,9 +40,12 @@ pub Duration clock() => rawClock()
 // The moment a number of seconds after 1970-01-01 00:00 UTC.
 pub Time unix(i64 seconds) => Time{ns: seconds * NS}
 
-// A date and time in UTC. month is 1 to 12.
+// A date and time in UTC. month is 1 to 12; a month or day past the end
+// goes on into the next year or month: date(2026, 14, 1) is 2027-02-01,
+// date(2026, 1, 32) is 2026-02-01.
 pub Time date(i64 year, i64 month, i64 day, i64 hour = 0, i64 minute = 0, i64 second = 0) {
-    days := daysFromCivil(year, month, day)
+    years := floorDiv(month - 1, 12)
+    days := daysFromCivil(year + years, month - years * 12, day)
     return Time{ns: ((days * 24 + hour) * 60 + minute) * 60 * NS + second * NS}
 }
 
@@ -89,6 +95,34 @@ pub Time Time.withOffset(i32 seconds) => Time{ns: self.ns, offset: seconds}
 
 // The moment d after this one; a negative d goes back.
 pub Time Time.add(Duration d) => Time{ns: self.ns + d, offset: self.offset}
+
+// The same time of day, days later on the calendar, in the time zone the
+// moment is shown in; a negative n goes back.
+pub Time Time.addDays(i64 n) => self.moved(0, n)
+
+// The same day and time, months later on the calendar. A day the month
+// doesn't have becomes its last: January 31 and a month is February 28.
+pub Time Time.addMonths(i64 n) => self.moved(n, 0)
+
+// The same day and time, years later. February 29 becomes February 28 in a
+// year that isn't a leap year.
+pub Time Time.addYears(i64 n) => self.moved(n * 12, 0)
+
+Time Time.moved(i64 months, i64 days) {
+    secs, ns := self.shown()
+    day := floorDiv(secs, 86400)
+    rest := secs - day * 86400
+    y, m, d := civilFromDays(day)
+    total := y * 12 + (m - 1) + months
+    y = floorDiv(total, 12)
+    m = total - y * 12 + 1
+    last := daysInMonth(y, m)
+    if d > last {
+        d = last
+    }
+    shown := (daysFromCivil(y, m, d) + days) * 86400 + rest
+    return Time{ns: (shown - i64(self.offset)) * NS + ns, offset: self.offset}
+}
 
 // The time from other to this moment.
 pub Duration Time.sub(Time other) => self.ns - other.ns
@@ -169,8 +203,12 @@ void pad(String *out, i64 v, i64 width) {
 
 // The moment written with a layout: YYYY year, MM month, DD day, hh hour,
 // mm minute, ss second, SSS milliseconds, Z the offset (Z for UTC, else
-// +02:00). Other characters are copied.
-pub String Time.format(str layout) {
+// +02:00). Other characters are copied. Without a layout it is iso(), which
+// is also how a Time is put into text: "{t}".
+pub String Time.format(str layout = "") {
+    if layout.len == 0 {
+        return self.iso()
+    }
     secs, ns := self.shown()
     y, mo, d := civilFromDays(floorDiv(secs, 86400))
     rest := secs - floorDiv(secs, 86400) * 86400
@@ -244,6 +282,15 @@ pub String Time.iso() {
 // The date, as in 2026-10-17.
 pub String Time.dateText() => self.format("YYYY-MM-DD")
 
+// How many days a month has: 28 to 31.
+i64 daysInMonth(i64 year, i64 month) {
+    if month == 2 {
+        leap := year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+        return if leap { 29 } else { 28 }
+    }
+    return if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 }
+}
+
 !i64 digits(str s, i64 at, i64 n) {
     if at + n > s.len {
         return error(TimeError.invalid, "'{s}' is too short for ISO 8601")
@@ -259,6 +306,16 @@ pub String Time.dateText() => self.format("YYYY-MM-DD")
     return v
 }
 
+// Reads a duration as it is written: 1m30s, 250ms, 1.5h, 2h3m0s. The
+// units are ns, us, ms, s, m and h; a number alone is seconds.
+pub !Duration parseDuration(str s) {
+    i64 d
+    if rawParseDuration(s.ptr, s.len, &d) == 0 {
+        return error(TimeError.invalid, "'{s}' isn't a duration like 30s or 1m30s")
+    }
+    return d
+}
+
 // Reads ISO 8601: 2026-10-17, 2026-10-17T09:30, 2026-10-17T09:30:00Z,
 // 2026-10-17 09:30:00.250+02:00. Without an offset it is UTC.
 pub !Time parse(str s) {
@@ -268,7 +325,7 @@ pub !Time parse(str s) {
     }
     mo := try digits(s, 5, 2)
     d := try digits(s, 8, 2)
-    if mo < 1 || mo > 12 || d < 1 || d > 31 {
+    if mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo) {
         return error(TimeError.invalid, "'{s}' has no such month or day")
     }
     i64 h

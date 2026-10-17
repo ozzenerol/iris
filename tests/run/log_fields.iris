@@ -1,0 +1,29 @@
+// expect: file: ERROR to the file n=1
+// expect: INFO signed in user=ada id=7 admin=true score=9.5 note="two words" empty=""
+// expect: {"level": "warn", "message": "slow", "ms": 250, "path": "/a \"b\""}
+
+import fs, log
+
+// Fields in text and JSON, without the time, written to a file.
+!void main() {
+    path := "/tmp/iris-test-log-fields.txt"
+    try fs.writeAll(path, "")
+    log.showTime(false)
+    try log.toFile(path)
+    log.error("to the file", [("n", .int(1))])
+    log.toStderr()
+    scoped String first = try fs.readAll(path)
+    printLine("file: {first}")
+    try log.toFile(path)
+    log.info("signed in", [("user", .text("ada")), ("id", .int(7)), ("admin", .bool(true)), ("score", .float(9.5)), ("note", .text("two words")), ("empty", .text(""))])
+    log.useJson()
+    log.warn("slow", [("ms", .int(250)), ("path", .text("/a \"b\""))])
+    log.toStderr()
+    scoped String all = try fs.readAll(path)
+    printLine(all[first.len:])
+    try fs.remove(path)
+}
+
+void printLine(str s) {
+    print(s[0:s.len - 1])
+}

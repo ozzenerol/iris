@@ -1,0 +1,26 @@
+// expect: hello world
+// expect: child: hello world
+// expect: OsError.notSet
+// expect: OsError.invalid: 'A=B' can't be the name of an environment variable
+// expect: OsError.invalid: '' can't be the name of an environment variable
+
+import os, process, str
+
+!void main() {
+    try os.setenv("IRIS_TEST_X", "hello world")
+    print(try os.env("IRIS_TEST_X"))
+    scoped out := try process.run(["sh", "-c", "echo $IRIS_TEST_X"])
+    print("child: {str.trim(out.stdout)}")
+    try os.unsetenv("IRIS_TEST_X")
+    try os.unsetenv("IRIS_TEST_X")
+    _ = os.env("IRIS_TEST_X") catch e {
+        print("{e.code}")
+        ""
+    }
+    os.setenv("A=B", "x") catch e {
+        print("{e.code}: {e.message}")
+    }
+    os.setenv("", "x") catch e {
+        print("{e.code}: {e.message}")
+    }
+}

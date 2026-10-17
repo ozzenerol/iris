@@ -1,5 +1,7 @@
 # Iris
 
+<img src="docs/assets/logo.svg" alt="" width="96">
+
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
 Servers, clients, databases (SQLite, PostgreSQL, Redis), JSON, regular expressions, compression, and command-line tools are in the standard library. The docs in `docs/` have a Language Tour, the library, and guides.

@@ -303,6 +303,29 @@ def project_tests(iris, only, failures):
     return count
 
 
+def mod_init_test(iris, only, failures):
+    """iris mod init makes iris.mod, from the folder's name or a path, once"""
+    if only and not any(o in "mod-init" for o in only):
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        app = os.path.join(tmp, "shelf")
+        os.makedirs(app)
+        steps = []
+        for args in (["mod", "init"], ["mod", "init"]):
+            p = subprocess.run([iris] + args, cwd=app, capture_output=True, text=True)
+            steps.append((p.returncode, open(os.path.join(app, "iris.mod")).read()))
+        os.remove(os.path.join(app, "iris.mod"))
+        p = subprocess.run([iris, "mod", "init", "github.com/me/shelf"], cwd=app, capture_output=True, text=True)
+        steps.append((p.returncode, open(os.path.join(app, "iris.mod")).read()))
+        os.remove(os.path.join(app, "iris.mod"))
+        p = subprocess.run([iris, "mod", "init", "bad path"], cwd=app, capture_output=True, text=True)
+        steps.append((p.returncode, os.path.exists(os.path.join(app, "iris.mod"))))
+        want = [(0, "module shelf\n"), (1, "module shelf\n"), (0, "module github.com/me/shelf\n"), (1, False)]
+        if steps != want:
+            failures.append(("mod-init", "want %r\ngot  %r" % (want, steps)))
+    return 1
+
+
 def get_test(iris, only, failures):
     if only and not any(o in "get" for o in only):
         return 0
@@ -542,6 +565,7 @@ def main():
     total += error_tests(args.iris, args.only, failures)
     total += run_tests(args.iris, args.only, failures)
     total += project_tests(args.iris, args.only, failures)
+    total += mod_init_test(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
     total += guide_tests(args.iris, args.only, failures)

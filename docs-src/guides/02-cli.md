@@ -30,7 +30,7 @@ head -c 2048 /dev/zero > demo/.cache
 
 ## Flags
 
-Create `main.iris`. A struct with `@flags` describes the flags, and `flags.parse` fills it from the program's arguments. Each field is a flag named after it: `top` is `--top`. `@flag` gives a letter for the short form and the help text. The `str[]` field with `@flag(args)` gets the arguments that aren't flags, here the folders to measure. A field with a value, like `top = 10`, keeps it when the flag isn't given.
+Create `main.iris`. A struct with `@flags` describes the flags, and `flags.parse` fills it from the program's arguments. Each field is a flag named after it: `top` is `--top`. `@flag` gives a letter for the short form and the help text. The `str[]` field with `@flag(args)` gets the arguments that aren't flags, here the folders to measure. A field with a value, like `top = 10`, keeps it when the flag isn't given. The [Command-line flags](../tour/30-flags.html) chapter has the rest.
 
 ```iris
 // sizes: what takes the space in a folder.

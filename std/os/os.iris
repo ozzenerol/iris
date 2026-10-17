@@ -1,7 +1,8 @@
 // The program's arguments and environment, and leaving the program.
 
-// What env fails with: notSet for a variable that isn't set.
-pub enum OsError { notSet }
+// What env fails with: notSet for a variable that isn't set; setenv fails
+// with invalid for a name that can't be one.
+pub enum OsError { notSet, invalid }
 
 @extern("iris_os_argc")
 i64 argCount()
@@ -11,6 +12,9 @@ void rawArg(i64 i, u8 **p, i64 *n)
 
 @extern("iris_os_getenv")
 i32 rawGetenv(u8 *name, i64 nameLen, u8 **p, i64 *n)
+
+@extern("iris_os_setenv")
+i32 rawSetenv(u8 *name, i64 n, u8 *value, i64 vn, i32 set)
 
 @extern("iris_os_exit")
 void rawExit(i32 code)
@@ -37,6 +41,22 @@ pub !str env(str name) {
         return error(OsError.notSet, "{name} is not set")
     }
     return p[0:n]
+}
+
+// Sets an environment variable, for this program and the programs it runs.
+// Set variables before starting threads: the environment isn't safe to
+// change while another thread reads it.
+pub !void setenv(str name, str value) {
+    if rawSetenv(name.ptr, name.len, value.ptr, value.len, 1) != 0 {
+        return error(OsError.invalid, "'{name}' can't be the name of an environment variable")
+    }
+}
+
+// Removes an environment variable; one that isn't set is no error.
+pub !void unsetenv(str name) {
+    if rawSetenv(name.ptr, name.len, null, 0, 0) != 0 {
+        return error(OsError.invalid, "'{name}' can't be the name of an environment variable")
+    }
 }
 
 // Ends the program with an exit status.

@@ -115,9 +115,44 @@ def main():
     labels = [x["label"] for x in (comp and comp["result"]) or []]
     check("completion after json.: %r" % labels, {"encode", "decode", "JsonError"} <= set(labels))
 
+    # completion of any name while a line is half typed: locals in scope, the
+    # module's names, imports, built-ins; and module names in an import line
+    version = [3]
+
+    def complete(text):
+        """the labels offered at the | in text"""
+        at = text.index("|")
+        body = text.replace("|", "")
+        version[0] += 1
+        c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]},
+                                            "contentChanges": [{"text": body}]})
+        c.read()
+        before = body[:at]
+        pos = {"line": before.count("\n"), "character": len(before.split("\n")[-1])}
+        comp = c.request("textDocument/completion", {"textDocument": td, "position": pos})
+        return set(x["label"] for x in (comp and comp["result"]) or [])
+
+    got = complete("import json\n\nenum Kind { cat, dog }\n\ni64 add(i64 a, i64 b) => a + b\n\n!void main() {\n"
+                   "    count := 3\n    for i in 0..count {\n        inner := i\n    }\n    if co|\n")
+    check("names while typing: %r" % sorted(got), {"count", "add", "main", "Kind", "json", "print", "List"} <= got)
+    check("names out of scope: %r" % sorted(got), not ({"inner", "i", "a"} & got))
+    got = complete("struct P {\n    i64 x\n}\n\ni64 P.twice(i64 by) {\n    return se|\n}\n")
+    check("self and parameters: %r" % sorted(got), {"self", "by", "P"} <= got)
+    got = complete("enum Kind { cat, dog }\n\nvoid main() {\n    k := Kind.|\n}\n")
+    check("enum values: %r" % sorted(got), got == {"cat", "dog"})
+    got = complete("import fs\n\n!void main() {\n    x := 3.\n    t := fs.rea|\n")
+    check("after a dot, with an error above: %r" % sorted(got), {"readAll", "readDir"} <= got)
+    got = complete("import json, ti|\n")
+    check("import line: %r" % sorted(got), {"time", "json", "http", "sqlite", "core"} <= got)
+    got = complete("import co|\n\nvoid main() {\n    print(\"{1}\")\n}\n")
+    check("import co: %r" % sorted(got), {"core", "compress"} <= got)
+    got = complete("import core\n\nvoid main() {\n    core.|\n}\n")
+    check("after core.: %r" % sorted(got), {"List", "Map"} <= got)
+
     # fixing the error clears the diagnostics; formatting
     fixed = SOURCE.replace("    n := missing + 1\n", "    n:=1+2\n")
-    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": 4}, "contentChanges": [{"text": fixed}]})
+    version[0] += 1
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": fixed}]})
     diag = c.read()
     check("diagnostics cleared: %r" % diag, diag and diag["params"]["diagnostics"] == [])
     fm = c.request("textDocument/formatting", {"textDocument": td, "options": {"tabSize": 4, "insertSpaces": True}})

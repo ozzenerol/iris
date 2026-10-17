@@ -26,6 +26,7 @@ static void usage(FILE *out) {
           "  test [options] [file] [name] run the test blocks (those whose name has <name>)\n"
           "  ir [options] <file>          print the LLVM IR\n"
           "  fmt [--check] <file|folder>  put code in the standard layout (- for stdin)\n"
+          "  mod init [path]              make iris.mod: this folder becomes a project\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
           "  lsp                          the language server, for editors\n"
           "  doc <module>[.name]          the documentation of a module, a file or a name\n"
@@ -491,6 +492,65 @@ static bool findProject(char *out, size_t n) {
     }
 }
 
+/* Whether a module path can be one: letters, digits, . _ ~ - and / between
+ * parts, as in github.com/you/app. */
+static bool validModulePath(const char *p) {
+    if (!*p || *p == '/' || p[strlen(p) - 1] == '/') return false;
+    for (const char *c = p; *c; c++) {
+        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+                  *c == '.' || *c == '_' || *c == '~' || *c == '-' || *c == '/';
+        if (!ok || (*c == '/' && c[1] == '/')) return false;
+    }
+    return !strstr(p, "..") && strcmp(p, ".") != 0;
+}
+
+/* iris mod init [path]: an iris.mod in this folder, which makes it a project.
+ * The path names it, and is where iris get will find it; it is the folder's
+ * name when left out. */
+static int cmdModInit(int argc, char **argv) {
+    if (argc > 4) {
+        fprintf(stderr, "usage: iris mod init [path]\n");
+        return 2;
+    }
+    struct stat st;
+    if (stat("iris.mod", &st) == 0) {
+        fprintf(stderr, "iris: iris.mod is here already\n");
+        return 1;
+    }
+    char cwd[4096];
+    const char *path = argc == 4 ? argv[3] : NULL;
+    if (!path) {
+        if (!getcwd(cwd, sizeof cwd)) {
+            fprintf(stderr, "iris: can't read the current folder\n");
+            return 1;
+        }
+        const char *base = strrchr(cwd, '/');
+        path = base && base[1] ? base + 1 : cwd;
+    }
+    if (!validModulePath(path)) {
+        fprintf(stderr, "iris: '%s' can't be a module path: use letters, digits, . _ ~ - and / (as in github.com/you/app)\n", path);
+        return 1;
+    }
+    FILE *f = fopen("iris.mod", "w");
+    if (!f) {
+        fprintf(stderr, "iris: can't write iris.mod\n");
+        return 1;
+    }
+    fprintf(f, "module %s\n", path);
+    fclose(f);
+    fprintf(stderr, "iris: made iris.mod for %s\n", path);
+    return 0;
+}
+
+static int cmdMod(int argc, char **argv) {
+    if (argc >= 3 && strcmp(argv[2], "init") == 0) {
+        return cmdModInit(argc, argv);
+    }
+    fprintf(stderr, "usage: iris mod <command>\n"
+                    "  init [path]   make iris.mod for a new project in this folder\n");
+    return 2;
+}
+
 /* iris get github.com/someone/pg@v1.2.0: clone the tag into the package
  * cache and put a require line in iris.mod. */
 static int cmdGet(const char *spec) {
@@ -719,6 +779,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "fmt") == 0) {
         return cmdFmt(argc, argv);
+    }
+    if (strcmp(cmd, "mod") == 0) {
+        return cmdMod(argc, argv);
     }
     if (strcmp(cmd, "get") == 0 && argc == 3) {
         return cmdGet(argv[2]);

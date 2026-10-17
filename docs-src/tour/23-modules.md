@@ -8,7 +8,15 @@ A file that isn't in a project is a program on its own. `iris run hello.iris` co
 
 ## Projects
 
-A project is a folder with an `iris.mod` file in it. Its first line names the project, usually by the address of its repository:
+A project is a folder with an `iris.mod` file in it. `iris mod init` makes one, naming the project by its path, usually the address of its repository; without a path, the folder's name is used:
+
+```shell
+mkdir inventory
+cd inventory
+iris mod init github.com/me/inventory
+```
+
+The file's first line is that name:
 
 ```output
 module github.com/me/inventory
@@ -135,7 +143,7 @@ A package is a project like any other: its `iris.mod` names it by its address, a
 
 ## C libraries
 
-A project can also use C code: `import c "header.h"` reads a C header, and a `link` line in `iris.mod` links the library (see [Calling C](29-calling-c.html)):
+A project can also use C code: `import c "header.h"` reads a C header, and a `link` line in `iris.mod` links the library (see [Calling C](36-calling-c.html)):
 
 ```output
 module github.com/me/app

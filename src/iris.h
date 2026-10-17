@@ -48,6 +48,7 @@ extern void (*gDiagHook)(Source *src, int line, int col, const char *msg);
 /* when set, source files are read through it first (the language server's open documents) */
 extern const char *(*gReadHook)(const char *path, size_t *len);
 const char *stdSource(const char *path);
+int stdModuleNames(const char **out, int max);
 bool stdModuleExists(const char *name);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);
@@ -284,6 +285,9 @@ extern bool gWithTests;
 /* Reads the program at path (a file or a folder) and every module it
  * imports. includes: folders for C headers (-I). Returns NULL after errors. */
 Program *loadProgram(Arena *a, const char *path, const char **includes, int nincludes);
+/* The language server's loading: a file with syntax errors still loads, from
+ * what the parser could read, so names around the error stay known. */
+extern bool gLenient;
 
 /* ---------------------------------------------------------------- check.c */
 

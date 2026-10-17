@@ -1,6 +1,6 @@
 # Attributes
 
-An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except `@json`, which has the next chapter.
+An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except `@json` and `@flags`, which have their own chapters: [JSON](28-json.html) and [Command-line flags](30-flags.html).
 
 | Attribute | On | What it does |
 |---|---|---|
@@ -58,52 +58,7 @@ An `@env` struct gets a `free` method, which frees its `String`s, so `scoped` wo
 
 ## @flags
 
-`@flags` lets `flags.parse` fill a struct from the program's arguments. Each field is a flag named after it, with `-` between its words: `dryRun` is `--dry-run`. `@flag` on a field gives a letter for the short form, the help text, and `required`, in any order; a `str[]` field with `@flag(args)` gets the arguments that aren't flags:
-
-```iris run
-import flags
-
-enum Format { text, json }
-
-@flags("copies files into a folder")
-struct Options {
-    @flag('f', "overwrite files that are there") bool force
-    @flag('j', "how many copies to run at once") i64 jobs = 4
-    Format format
-    @flag(required, "where the files go") str to
-    @flag(args) str[] files
-}
-
-!void main() {
-    scoped o := try flags.parseArgs(Options, ["-f", "--jobs=8", "--to", "/backup", "a.txt", "b.txt"], "copy")
-    print("{o.force} {o.jobs} {o.format} {o.to} {o.files.len} files, the last {o.files[1]}")
-}
-```
-
-```output
-true 8 text /backup 2 files, the last b.txt
-```
-
-A program reads its own arguments with `flags.parse(Options)`, which ends the program when something is wrong, after saying what. `flags.parseArgs` takes the arguments to read and gives errors instead, for subcommands and tests.
-
-Values can be written `--jobs 8`, `--jobs=8` or `-j 8`. A `bool` flag needs no value, and `--force=false` turns it off; one-letter `bool` flags can be joined, `-fv`. After `--`, every argument is taken as it is. Fields can have the same types as `@env` fields.
-
-`-h` and `--help` print the help, made from the struct, and end the program:
-
-```output
-copies files into a folder
-
-usage: copy [flags] [files...]
-
-flags:
-  -f, --force               overwrite files that are there
-  -j, --jobs <n>            how many copies to run at once (default 4)
-      --format <text|json>  (default text)
-      --to <text>           where the files go (required)
-  -h, --help                show this help
-```
-
-A wrong flag prints what is wrong and how to get the help, and the program ends with status 2. The [command-line guide](../guides/02-cli.html) builds a whole tool with `@flags`.
+`@flags` lets `flags.parse` fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The [Command-line flags](30-flags.html) chapter covers it.
 
 ## @inline
 
@@ -151,7 +106,7 @@ A mistake in such a function isn't caught: it reads or writes the wrong memory.
 
 ## @export
 
-`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](29-calling-c.html)):
+`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](36-calling-c.html)):
 
 ```iris
 @export

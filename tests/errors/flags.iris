@@ -1,8 +1,9 @@
-// error: 11: @flag takes a letter for the short form ('p', but not 'h' or '-'), the help in quotes, required, or args: @flag('p', "the port")
-// error: 12: a @flags field can be a number, a Duration, bool, str, String or an enum, or str[] with @flag(args); not i64[]
-// error: 13: @flag(args) gets the other arguments, so its field must be str[], not str
-// error: 17: @flag on a field needs @flags on the struct Plain too
-// error: 22: Plain needs @flags to be read from the arguments
+// error: 12: -h is taken: -h and --help show the help made from the struct, so pick another letter
+// error: 12: a field named help would be --help, which every @flags struct has already: it shows the help made from the struct; give the field another name
+// error: 13: a @flags field can be a number, a Duration, bool, str, String or an enum, or str[] with @flag(args); not i64[]
+// error: 14: @flag(args) gets the other arguments, so its field must be str[], not str
+// error: 18: @flag on a field needs @flags on the struct Plain too
+// error: 23: Plain needs @flags to be read from the arguments
 
 import flags
 

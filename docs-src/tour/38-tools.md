@@ -12,6 +12,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris test [file] [name]` | runs the test blocks, or those whose name has `name` in it |
 | `iris fmt file-or-folder` | puts code in the standard layout |
 | `iris doc http` | shows the documentation of a module, a name, a file or a project |
+| `iris mod init [path]` | makes `iris.mod`, which turns the folder into a project |
 | `iris get pkg@version` | downloads a package and adds it to `iris.mod` |
 | `iris lsp` | the language server, for editors |
 | `iris c header.h` | shows what `import c` makes of C headers |
@@ -76,9 +77,9 @@ A comment at the top of a module's file, with a blank line after it, describes t
 
 ## Editors
 
-`iris lsp` is a language server. An editor that speaks LSP gets the errors as the code is typed, the type and comment of a name when the pointer rests on it, going to a name's declaration (also into the standard library), a file's outline, completion after a dot, and formatting with `iris fmt`. It reads the editor's unsaved text.
+`iris lsp` is a language server. An editor that speaks LSP gets the errors as the code is typed, the type and comment of a name when the pointer rests on it, going to a name's declaration (also into the standard library), a file's outline, completion, and formatting with `iris fmt`. Completion offers the variables in scope where the cursor is, the file's functions and types, the imported modules and the built-ins; after a dot, a module's names or a value's fields and methods; and in an `import` line, the standard library's modules. It reads the editor's unsaved text, and keeps answering while the line being typed doesn't parse yet.
 
-In Neovim 0.11 or newer, with the syntax files from the repository's `editors/vim` folder:
+In Neovim 0.11 or newer, with the syntax files from the repository's `editors/vim` folder, which `build-and-install.sh` also copies to `/usr/local/share/iris/editors/vim`:
 
 ```output
 vim.opt.rtp:append("/path/to/iris/editors/vim")

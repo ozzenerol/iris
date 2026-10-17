@@ -3,7 +3,7 @@
 #
 # The iris program carries its standard library and runtime inside it, so
 # installing it is copying one file to $PREFIX/bin. The Vim syntax files
-# go to $PREFIX/share/iris/editors/vim.
+# go to $PREFIX/share/iris/editors/vim (ftdetect, syntax, ftplugin).
 #
 # Usage: ./build-and-install.sh [--test] [--no-install] [--clean] [--prefix DIR]
 #   --test        run the test suite before installing; stop if it fails
