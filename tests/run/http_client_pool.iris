@@ -1,0 +1,92 @@
+// expect: 200 one 1
+// expect: 200 two 1
+// expect: 200 three 1
+// expect: 201 posted ada 1
+// expect: 200 after close 1
+// expect: 200 stale 3
+// expect: 3 connections
+
+import http, net, str
+
+Atomic[i64] accepted
+
+// Answers each request on a connection, numbering the connections. A request
+// for /close answers with Connection: close, /drop closes the connection
+// right after the reply without saying so.
+void answer(net.Conn c, i64 n) {
+    defer c.close()
+    for {
+        scoped String first = c.readLine() catch e {
+            return
+        }
+        String body = format("")
+        i64 length = 0
+        for {
+            scoped String line = c.readLine() catch e {
+                return
+            }
+            if line.len == 0 {
+                break
+            }
+            name, value, _ := str.cut(line, ": ")
+            if name == "Content-Length" {
+                length = str.parseInt(value) catch e { 0 }
+            }
+        }
+        if length > 0 {
+            scoped String got = c.readExactly(length) catch e {
+                return
+            }
+            body = format(" {got}")
+        }
+        _, rest, _ := str.cut(first, " /")
+        path, _, _ := str.cut(rest, " ")
+        status := if str.startsWith(first, "POST") { 201 } else { 200 }
+        closing := path == "close"
+        scoped String text = format("{if path == "close" { "after close" } else { path }}{body} {n}")
+        scoped String reply = format("HTTP/1.1 {status} OK\r\nContent-Length: {text.len}\r\n{if closing { "Connection: close\r\n" } else { "" }}\r\n{text}")
+        body.free()
+        c.write(reply) catch e {
+            return
+        }
+        if closing || path == "drop" {
+            return
+        }
+    }
+}
+
+void server(net.Listener ln) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        spawn answer(c, accepted.add(1))
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    http.Client client
+    defer client.close()
+    for p in ["one", "two", "three"] {
+        scoped String url = format("http://127.0.0.1:{ln.port}/{p}")
+        scoped http.Reply r = try client.get(url)
+        print("{r.status} {r.body}")
+    }
+    scoped String post = format("http://127.0.0.1:{ln.port}/posted")
+    scoped http.Reply made = try client.post(post, "text/plain", "ada")
+    print("{made.status} {made.body}")
+    // the server closes after this reply, so the client dials again
+    scoped String close = format("http://127.0.0.1:{ln.port}/close")
+    scoped http.Reply closed = try client.get(close)
+    print("{closed.status} {closed.body}")
+    // the server drops the connection after /drop without saying so; the
+    // next request finds it closed and retries on a new one
+    scoped String drop = format("http://127.0.0.1:{ln.port}/drop")
+    scoped http.Reply dropped = try client.get(drop)
+    scoped String stale = format("http://127.0.0.1:{ln.port}/stale")
+    scoped http.Reply again = try client.get(stale)
+    print("{again.status} {again.body}")
+    print("{accepted.load()} connections")
+}

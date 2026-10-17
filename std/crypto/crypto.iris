@@ -6,6 +6,9 @@ void rawSha256(u8 *data, i64 len, u8 *out)
 @extern("iris_hmac_sha256")
 void rawHmac(u8 *key, i64 keyLen, u8 *data, i64 len, u8 *out)
 
+@extern("iris_sha1")
+void rawSha1(u8 *data, i64 len, u8 *out)
+
 @extern("iris_const_equal")
 i32 rawEqual(u8 *a, i64 na, u8 *b, i64 nb)
 
@@ -27,3 +30,11 @@ pub u8[32] hmacSha256(str key, str data) {
 // Whether a and b are the same, taking the same time wherever they differ.
 // Use it to compare hashes and tokens.
 pub bool equal(str a, str b) => rawEqual(a.ptr, a.len, b.ptr, b.len) != 0
+
+// The SHA-1 hash of data: 20 bytes. Old and broken for signatures; it is
+// here for protocols that still use it, like the WebSocket handshake.
+pub u8[20] sha1(str data) {
+    u8[20] out
+    rawSha1(data.ptr, data.len, &out[0])
+    return out
+}

@@ -217,6 +217,19 @@ str statusText(i32 code) => match code {
     try c.write(head)
 }
 
+// Opens a WebSocket on the connection and hands it to the route's handler.
+void upgrade(net.Conn *conn, Request *req, Route *route, Watch *w, Limits *limits) {
+    scoped String accept = acceptKey(req.header("Sec-WebSocket-Key"))
+    scoped String reply = format("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n")
+    conn.write(reply) catch e {
+        return
+    }
+    unwatch(w) // a WebSocket may stay quiet for long
+    WebSocket ws = WebSocket{conn: conn, maxMessage: limits.maxBody}
+    route.socket(&ws, req) catch e { }
+    ws.close()
+}
+
 // Answers a request that can't be read with status, then closes.
 void refuse(net.Conn *c, i32 status, str message) {
     Response res
@@ -302,11 +315,17 @@ void serveConn(net.Conn conn, Target target) {
             return
         }
         w.last = time.clock()
-        if target.router != null {
-            target.router.busy.add(1)
-        }
         if !more {
             return
+        }
+        if target.router != null {
+            route := target.router.socketRoute(&req)
+            if route != null {
+                upgrade(&conn, &req, route, &w, &limits)
+                req.free()
+                return
+            }
+            target.router.busy.add(1)
         }
         Response res
         res.status = 200
@@ -468,6 +487,7 @@ struct Route {
     List[str] parts // the pattern's path, split at /
     String pattern
     Handler handler
+    SocketHandler socket // a WebSocket route
 }
 
 // Sends each request to the handler for its method and path. Patterns are
@@ -569,6 +589,32 @@ pub void Router.delete(str path, Handler handler) => self.add("DELETE", path, ha
 
 pub void Router.patch(str path, Handler handler) => self.add("PATCH", path, handler)
 
+// Answers WebSockets at path with handler, which gets the open WebSocket.
+// The connection is closed when handler returns.
+pub void Router.websocket(str path, SocketHandler handler) {
+    Route r
+    r.pattern = path.copy()
+    r.method = "GET".copy()
+    r.socket = handler
+    r.parts = splitPath(r.pattern)
+    self.routes.push(r)
+}
+
+// The WebSocket route for a request that asks for one, or null.
+Route *Router.socketRoute(Request *req) {
+    if !sameName(req.header("Upgrade"), "websocket") {
+        return null
+    }
+    scoped List[str] parts = splitPath(req.route())
+    for i in 0..self.routes.len {
+        r := &self.routes.items()[i]
+        if r.socket != null && score(r, &parts) >= 0 {
+            return r
+        }
+    }
+    return null
+}
+
 void Router.add(str method, str path, Handler handler) {
     scoped String pattern = format("{method} {path}")
     self.handle(pattern, handler)
@@ -619,6 +665,9 @@ void Router.dispatch(Request *req, Response *res) {
     defer allow.free()
     for i in 0..self.routes.len {
         r := &self.routes.items()[i]
+        if r.socket != null {
+            continue // WebSocket routes only answer upgrades
+        }
         sc := score(r, &parts)
         if sc < 0 {
             continue
@@ -767,9 +816,16 @@ pub !Reply get(str url) => try send("GET", url)
 // Sends body to url with POST.
 pub !Reply post(str url, str contentType, str body) => try send("POST", url, body, contentType)
 
-// Sends a request and reads the reply. https:// addresses check the
-// server's certificate against the ones the system trusts.
-pub !Reply send(str method, str url, str body = "", str contentType = "") {
+// Where a request goes, from its URL.
+struct Dest {
+    bool secure
+    str host
+    str hostPort
+    str path
+    u16 port
+}
+
+!Dest destOf(str url) {
     secure := str.startsWith(url, "https://")
     if !secure && !str.startsWith(url, "http://") {
         return error(HttpError.badUrl, "{url}: the address should start with http:// or https://")
@@ -790,10 +846,14 @@ pub !Reply send(str method, str url, str body = "", str contentType = "") {
     if host.len == 0 || port < 1 || port > 65535 {
         return error(HttpError.badUrl, "{url}: no host")
     }
-    c := if secure { try net.dialTls(host, u16(port)) } else { try net.dial(host, u16(port)) }
-    defer c.close()
-    String req = format("{method} {path} HTTP/1.1\r\nHost: {hostPort}\r\nUser-Agent: iris\r\nConnection: close\r\n")
-    defer req.free()
+    return Dest{secure: secure, host: host, hostPort: hostPort, path: path, port: u16(port)}
+}
+
+String requestText(str method, Dest *d, str body, str contentType, bool keepAlive) {
+    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\nUser-Agent: iris\r\n")
+    if !keepAlive {
+        req.append("Connection: close\r\n")
+    }
     if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
         scoped String length = format("Content-Length: {body.len}\r\n")
         req.append(length)
@@ -804,11 +864,133 @@ pub !Reply send(str method, str url, str body = "", str contentType = "") {
     }
     req.append("\r\n")
     req.append(body)
-    try c.write(req)
-    return try readReply(&c)
+    return req
 }
 
-!Reply readReply(net.Conn *c) {
+!net.Conn dialDest(Dest *d, Duration timeout) {
+    c := try net.dial(d.host, d.port, timeout)
+    c.setTimeout(timeout)
+    if d.secure {
+        c.startTls(d.host) catch e {
+            c.close()
+            return e
+        }
+    }
+    return c
+}
+
+// Sends a request and reads the reply, on a connection of its own, waiting
+// at most 30 seconds for each step. https:// addresses check the server's
+// certificate against the ones the system trusts. A Client keeps
+// connections open between requests.
+pub !Reply send(str method, str url, str body = "", str contentType = "") {
+    d := try destOf(url)
+    c := try dialDest(&d, 30s)
+    defer c.close()
+    scoped String req = requestText(method, &d, body, contentType, false)
+    try c.write(req)
+    bool reusable
+    return try readReply(&c, &reusable)
+}
+
+// A client that keeps connections to each host open between requests, and
+// can be shared by tasks and threads.
+pub struct Client {
+    // how long dialing and each read and write may wait (0: 30s, below 0:
+    // no limit), and how many idle connections it keeps for each host (0: 4)
+    pub Duration timeout
+    pub i64 maxIdle
+    Mutex lock
+    Map[str, List[net.Conn]] idle
+}
+
+Duration Client.wait() => if self.timeout == 0 { 30s } else if self.timeout < 0 { 0s } else { self.timeout }
+
+String destKey(Dest *d) => format("{if d.secure { "s" } else { "p" }}{d.hostPort}")
+
+// An idle connection to d's host, if the client has one.
+bool Client.take(Dest *d, net.Conn *out) {
+    scoped String key = destKey(d)
+    self.lock.lock()
+    defer self.lock.unlock()
+    conns, found := self.idle.get(key)
+    if !found || conns.len == 0 {
+        return false
+    }
+    *out = conns.pop()
+    self.idle.set(key, conns)
+    return true
+}
+
+void Client.keep(Dest *d, net.Conn c) {
+    scoped String key = destKey(d)
+    self.lock.lock()
+    defer self.lock.unlock()
+    conns, _ := self.idle.get(key)
+    if conns.len >= (if self.maxIdle > 0 { self.maxIdle } else { 4 }) {
+        c.close()
+        return
+    }
+    conns.push(c)
+    self.idle.set(key, conns)
+}
+
+// Sends a request on a connection the client keeps, or a new one.
+pub !Reply Client.send(str method, str url, str body = "", str contentType = "") {
+    d := try destOf(url)
+    scoped String req = requestText(method, &d, body, contentType, true)
+    for attempt in 0..2 {
+        net.Conn c
+        reused := attempt == 0 && self.take(&d, &c)
+        if !reused {
+            c = try dialDest(&d, self.wait())
+        }
+        c.write(req) catch e {
+            c.close()
+            if reused {
+                continue // the server closed it while it was idle
+            }
+            return e
+        }
+        bool reusable
+        r := readReply(&c, &reusable) catch e {
+            c.close()
+            if reused && e.code == net.NetError.closed {
+                continue
+            }
+            return e
+        }
+        if reusable {
+            self.keep(&d, c)
+        } else {
+            c.close()
+        }
+        return r
+    }
+    return error(net.NetError.closed, "{url}: the connection closed")
+}
+
+pub !Reply Client.get(str url) => try self.send("GET", url)
+
+pub !Reply Client.post(str url, str contentType, str body) => try self.send("POST", url, body, contentType)
+
+// Closes the connections the client keeps.
+pub void Client.close() {
+    self.lock.lock()
+    for _, conns in self.idle {
+        for c in conns {
+            c.close()
+        }
+        conns.free()
+    }
+    self.idle.free()
+    self.lock.unlock()
+}
+
+// Reads a reply. reusable says whether the connection can take another
+// request: the reply's end was known and the server didn't close it.
+!Reply readReply(net.Conn *c, bool *reusable) {
+    *reusable = false
     Reply r
     errdefer r.free()
     scoped String status = try c.readLine()
@@ -843,6 +1025,7 @@ pub !Reply send(str method, str url, str body = "", str contentType = "") {
             r.body.append(chunk)
             scoped String end = try c.readLine()
         }
+        *reusable = !sameName(r.header("Connection"), "close")
         return r
     }
     lengthText := r.header("Content-Length")
@@ -853,6 +1036,7 @@ pub !Reply send(str method, str url, str body = "", str contentType = "") {
         if length > 0 {
             r.body = try c.readExactly(length)
         }
+        *reusable = !sameName(r.header("Connection"), "close")
         return r
     }
     u8[4096] buf

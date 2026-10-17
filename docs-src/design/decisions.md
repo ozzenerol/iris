@@ -103,6 +103,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | `Conn.setTimeout` gives each read and write its own deadline. | For clients, where one call waiting too long is what matters. |
 | A generic struct's method is checked and compiled for a set of types when it is first used. | Methods like `contains` can need `==` without ruling out types that don't have it, and unused methods cost nothing. |
 | `chan[T](0)` is a channel with no buffer, where a send waits for a receiver. | A hand-over that both tasks wait for, with no new syntax. |
+| A WebSocket handler gets the connection and keeps it until it returns. | A chat or a feed is one function with a loop, and the router owns nothing after it. |
+| `http.Client` sends a request again, on a new connection, when a kept connection turns out to be closed before any reply. | Servers close idle connections whenever they like; the caller shouldn't see it. |
+| A CSV `Record` owns copies of its fields. | A quoted field with `""` in it has to be copied anyway, and records can outlive the text. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

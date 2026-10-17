@@ -6,6 +6,7 @@ The language is still being designed. These pages describe it as planned.
 
 - [Design](design/index.html) covers how the language works underneath and why. It is the reference for anyone working on the compiler.
 - [Language](language/index.html) explains each part of the language, with examples.
+- [Guides](guides/index.html) build whole programs, step by step.
 - [Roadmap](roadmap.html) lists what gets built, in order.
 
 ```iris
