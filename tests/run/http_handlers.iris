@@ -1,0 +1,72 @@
+// expect: 200 [{"id": 7}]
+// expect: 500 [{"error": "'x' is not a number"}]
+// expect: 401 [{"error": "say \"please\""}]
+// expect: 200 [admin area]
+// expect: 404 [not found]
+// expect: 5 requests seen
+// expect: "a\"b\\c\n"
+
+import http, json, net, str
+
+i64 seen
+
+!void getUser(http.Request *req, http.Response *res) {
+    id := try str.parseInt(req.param("id"))
+    res.json("{{\"id\": {id}}}")
+}
+
+void admin(http.Request *req, http.Response *res) {
+    res.text("admin area")
+}
+
+bool auth(http.Request *req, http.Response *res) {
+    if req.header("Authorization") == "yes" {
+        return true
+    }
+    res.error(401, "say \"please\"")
+    return false
+}
+
+void count(http.Request *req, http.Response *res) {
+    seen += 1
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/users/:id", getUser)
+    r.get("/admin", admin)
+    r.use(auth, prefix: "/admin")
+    r.after(count)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+    for u in ["/users/7", "/users/x", "/admin"] {
+        scoped String url = format("{base}{u}")
+        scoped http.Reply rep = try http.get(url)
+        print("{rep.status} [{str.trim(rep.body)}]")
+    }
+    c := try net.dial("127.0.0.1", ln.port)
+    try c.write("GET /admin HTTP/1.1\r\nAuthorization: yes\r\nConnection: close\r\n\r\n")
+    scoped String all = try c.readExactly(0)
+    for {
+        scoped String line = c.readLine() catch e {
+            break
+        }
+        if str.startsWith(line, "admin") {
+            print("200 [{line}]")
+        }
+    }
+    c.close()
+    scoped String nope = format("{base}/nope")
+    scoped http.Reply missing = try http.get(nope)
+    print("{missing.status} [{str.trim(missing.body)}]")
+    sleep(10ms)
+    print("{seen} requests seen")
+    scoped String q = json.quote("a\"b\\c\n")
+    print(q)
+}

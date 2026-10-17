@@ -118,21 +118,26 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `base64` | `encode`, `decode`, and the URL-safe `encodeUrl` and `decodeUrl`; `Base64Error` |
 | `hex` | `encode` and `decode`; `HexError` |
 | `url` | `parse(text) Url` (`scheme`, `user`, `host`, `port`, `path`, `query`, `fragment`), `encode` and `decode` for `%XX`; `UrlError` |
-| `sqlite` | `open(path)` gives a `Db` with `exec(sql, args)`, `query(sql, args)`, `lastId()`, `changes()`, `begin`, `commit`, `rollback` and `close`; `Rows` have `next()`, `int(i)`, `float(i)`, `text(i)`, `isNull(i)`, `name(i)`, `columns()` and `close`; `scan(&rows, &value)` fills a `@json` struct; `Value` and `SqlError` |
+| `sqlite` | `open(path)` gives a `Db` with `exec(sql, args)`, `query(sql, args)`, `lastId()`, `changes()`, `begin`, `commit`, `rollback` and `close`; `Rows` have `next()`, `int(i)`, `float(i)`, `text(i)`, `isNull(i)`, `name(i)`, `columns()` and `close`; `scan(&rows, &value)` fills a `@json` struct, `all[T](&db, sql, args)` gives every row as a `List[T]` and `one[T](&db, sql, args)` the first; `Value` and `SqlError` |
 | `io` | `readLine() !String` and `readAll() !String` from standard input, `ewrite` and `eprint` to standard error, and `IoError` |
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
+| `log` | `debug`, `info`, `warn` and `error` write a line with the time and the level to standard error; `setLevel(level)`, and `useJson()` for JSON lines |
 | `env` | `load(T)` fills an `@env` struct from environment variables (see [Compile time](compile-time.html)); `EnvError` |
 | `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
-| `json` | `encode(v) String` and `decode(T, text) !T` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
-| `http` | a server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `serve`, `serveTls`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
+| `json` | `encode(v) String`, `decode(T, text) !T` and `quote(text) String` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
+| `http` | a server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `error(status, message)`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `use`, `after`, `serve`, `serveTls`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
 
-A small web server. A `Router` sends each request to the handler for its method and path; `:id` matches one part of the path and `*path` the rest:
+A small web server. A `Router` sends each request to the handler for its method and path; `:id` matches one part of the path and `*path` the rest. A handler can fail: an error that leaves it is answered with 500 and the error's message:
 
 ```iris
-import http
+import http, str
 
-void getUser(http.Request *req, http.Response *res) {
-    res.json("{{\"id\": \"{req.param("id")}\"}}")
+!void getUser(http.Request *req, http.Response *res) {
+    id := str.parseInt(req.param("id")) catch e {
+        res.error(400, "the id should be a number")
+        return
+    }
+    res.json("{{\"id\": {id}}}")
 }
 
 void createUser(http.Request *req, http.Response *res) {
@@ -140,8 +145,17 @@ void createUser(http.Request *req, http.Response *res) {
     res.text("made {req.body}\n")
 }
 
+bool auth(http.Request *req, http.Response *res) {
+    if req.header("Authorization") == "Bearer secret" {
+        return true
+    }
+    res.error(401, "a token is needed")
+    return false
+}
+
 !void main() {
     http.Router r
+    r.use(auth, prefix: "/users")
     r.get("/users/:id", getUser)
     r.post("/users", createUser)
     try r.serve(8080)
@@ -149,6 +163,8 @@ void createUser(http.Request *req, http.Response *res) {
 ```
 
 When several patterns match, the one with the most fixed parts wins, so `/users/me` goes before `/users/:id`. A path no pattern has gets 404, and a path that is there only for other methods gets 405 with an `Allow` header.
+
+`r.use(check, prefix)` runs `check` before the handler of every request whose path starts with `prefix`; when it gives false, the request is answered with what `check` wrote. `r.after(done)` runs `done` after every request, for an access log. `req.received` is when the request came in, by `time.clock()`. `res.error(status, message)` answers with `{"error": "..."}`, with the message escaped as JSON needs.
 
 The client asks other servers, over `http://` or `https://`:
 

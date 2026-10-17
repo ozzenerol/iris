@@ -750,6 +750,11 @@ static Type *resolveType(Checker *c, Node *t) {
     case N_T_ERR: {
         Type *e = resolveType(c, t->a);
         if (isErr(e)) return e;
+        if (e->kind == TY_FUNC && t->a->kind != N_T_TUPLE) {
+            /* !void(i64) is a function that returns !void */
+            if (e->elem->kind == TY_RESULT) return e;
+            return funcOf(resultOf(e->elem), e->elems, e->nelems);
+        }
         if (e->kind == TY_RESULT) {
             error(c, t, "!!T is the same as !T; write one !");
             return e;
@@ -976,6 +981,17 @@ static bool coerce(Checker *c, Node **slot, Type *to, const char *what) {
     if (from->kind == TY_NULL && (to->kind == TY_PTR || to->kind == TY_FUNC)) {
         e->type = to;
         return true;
+    }
+    if (from->kind == TY_FUNC && to->kind == TY_FUNC && from->elem == &tyVoid && to->elem->kind == TY_RESULT &&
+        to->elem->elem == &tyVoid && from->nelems == to->nelems && e->kind == N_IDENT && e->ref &&
+        e->ref->kind == N_FUNC) {
+        /* a function that can't fail, where one that can is wanted: it never does */
+        bool same = true;
+        for (int i = 0; i < from->nelems; i++) same = same && sameType(from->elems[i], to->elems[i]);
+        if (same) {
+            *slot = convertNode(c, e, to, false);
+            return true;
+        }
     }
     if (from->kind == TY_PTR && to->kind == TY_PTR && (from->elem == &tyU8 || to->elem == &tyU8)) {
         /* u8 * is also C's void *: any pointer converts to and from it */
@@ -3383,7 +3399,8 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
         }
     }
     bool bad = false;
-    for (int i = 0; i < e->list.len; i++) {
+    for (int i = 0; !typeArgs && i < e->list.len; i++) {
+        /* the types come from the arguments: look at them first */
         Node *arg = e->list.items[i];
         Node **slot = arg->kind == N_NAMED_ARG ? &arg->a : &e->list.items[i];
         if (checkTempText(c, slot, &tyStr)) {
@@ -3423,7 +3440,9 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
     }
     e->a->ref = inst;
     NodeList out = {0};
-    checkArgs(c, e, inst, &e->list, 0, &out, true);
+    /* with the types written out, the arguments are checked against the
+     * parameters, so [.int(1)] and .red know their type */
+    checkArgs(c, e, inst, &e->list, 0, &out, !typeArgs);
     e->list = out;
     e->ref = inst;
     return setType(e, inst->type);
@@ -4845,7 +4864,9 @@ static void declareGlobal(Checker *c, Scope *g, Node *d, const char *name) {
             return;
         }
     }
-    if (isBuiltinName(name)) {
+    bool stdFunc = d->kind == N_FUNC && d->src && strncmp(d->src->path, "std/", 4) == 0;
+    if (isBuiltinName(name) && !stdFunc) {
+        /* the standard library may: log.error is only reached through its module */
         error(c, d, "%s is a built-in name", name);
         return;
     }

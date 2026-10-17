@@ -13,6 +13,17 @@ pub void encode()
 @builtin
 pub void decode()
 
+@extern("iris_json_quote")
+void rawQuote(u8 *text, i64 len, String *out)
+
+// text as a JSON string, in quotes, with ", \ and control characters
+// escaped: quote("say \"hi\"") is "say \"hi\"" with the quotes.
+pub String quote(str text) {
+    String out
+    rawQuote(text.ptr, text.len, &out)
+    return out
+}
+
 @extern("iris_json_decode")
 i32 rawDecode(u8 *table, u8 *text, i64 len, u8 *out)
 

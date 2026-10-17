@@ -3,9 +3,14 @@
 // Router that sends each request to the handler for its method and path;
 // and a client. https works on both sides, with TLS from OpenSSL.
 
-import net, str
+import json, net, str, time
 
 pub enum HttpError { badUrl, badReply }
+
+// What answers a request. It can fail: an error that leaves it is
+// answered with 500 and the error's message, as res.error does. A function
+// that returns void can be given as well.
+pub type Handler = !void(Request *, Response *)
 
 // A request, as the handler sees it.
 pub struct Request {
@@ -17,6 +22,9 @@ pub struct Request {
     i64 count
     List[str] paramNames
     List[str] paramValues
+    // when the request came in, by time.clock(): time.clock() - req.received
+    // is how long it has taken
+    pub Duration received
 }
 
 // The answer the handler fills in. It is sent when the handler returns.
@@ -119,6 +127,14 @@ pub void Response.text(str body) {
     self.contentType = "text/plain; charset=utf-8".copy()
 }
 
+// Answers with an error, as JSON: {"error": "message"}.
+pub void Response.error(i32 status, str message) {
+    self.status = status
+    scoped String q = json.quote(message)
+    scoped String body = format("{{\"error\": {q}}}")
+    self.json(body)
+}
+
 // Answers with JSON text.
 pub void Response.json(str body) {
     self.body.free()
@@ -156,6 +172,7 @@ str statusText(i32 code) => match code {
     if !ok || !ok2 {
         return error(net.NetError.other, "a request line HTTP doesn't allow: '{line}'")
     }
+    req.received = time.clock()
     req.method = method.copy()
     req.path = path.copy()
     req.names = alloc(String, 64)
@@ -206,7 +223,7 @@ void serveConn(net.Conn conn, Target target) {
         if target.router != null {
             target.router.dispatch(&req, &res)
         } else {
-            target.handler(&req, &res)
+            run(target.handler, &req, &res)
         }
         keepAlive := !sameName(req.header("Connection"), "close")
         bool failed = false
@@ -229,9 +246,17 @@ i64 cpuCount()
 @extern("iris_listen_per_thread")
 i32 listenPerThread()
 
+// Calls a handler; an error from it becomes a 500.
+void run(Handler handler, Request *req, Response *res) {
+    handler(req, res) catch e {
+        res.headers.free()
+        res.error(500, e.message)
+    }
+}
+
 // What answers the requests: a handler, or a Router.
 struct Target {
-    void(Request *, Response *) handler
+    Handler handler
     Router *router
     net.TlsConfig *tls
 }
@@ -276,13 +301,13 @@ void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target t
 // Answers HTTP requests on port with handler, each connection in its own
 // task. threads event loops share the work, one per thread; 0 means one
 // per CPU core. With more than one, handler runs on several threads at once.
-pub !void serve(u16 port, void(Request *, Response *) handler, str host = "", i64 threads = 0) {
+pub !void serve(u16 port, Handler handler, str host = "", i64 threads = 0) {
     try serveTarget(port, Target{handler: handler}, host, threads)
 }
 
 // Like serve, on a listener that is already open (for port 0). Its
 // threads all accept on ln; the default is one.
-pub !void serveOn(net.Listener ln, void(Request *, Response *) handler, i64 threads = 1) {
+pub !void serveOn(net.Listener ln, Handler handler, i64 threads = 1) {
     try serveTargetOn(ln, Target{handler: handler}, threads)
 }
 
@@ -292,7 +317,7 @@ struct Route {
     String method   // "" for any method
     List[str] parts // the pattern's path, split at /
     String pattern
-    void(Request *, Response *) handler
+    Handler handler
 }
 
 // Sends each request to the handler for its method and path. Patterns are
@@ -302,6 +327,27 @@ struct Route {
 // there for other methods gets 405 with an Allow header.
 pub struct Router {
     List[Route] routes
+    List[Hook] befores
+    List[Hook] afters
+}
+
+struct Hook {
+    String prefix
+    bool(Request *, Response *) check
+    void(Request *, Response *) done
+}
+
+// Runs check before the handler of every request whose path starts with
+// prefix ("" for all), in the order they were added. When check gives
+// false, the request is answered with what check put in the response, and
+// no handler runs: an auth check, a rate limit.
+pub void Router.use(bool(Request *, Response *) check, str prefix = "") {
+    self.befores.push(Hook{prefix: prefix.copy(), check: check})
+}
+
+// Runs done after every request, answered or not: an access log.
+pub void Router.after(void(Request *, Response *) done) {
+    self.afters.push(Hook{done: done})
 }
 
 List[str] splitPath(str p) {
@@ -322,7 +368,7 @@ List[str] splitPath(str p) {
 
 // Adds a handler for a pattern, with or without a method in front:
 // "GET /users/:id" or "/health" for every method.
-pub void Router.handle(str pattern, void(Request *, Response *) handler) {
+pub void Router.handle(str pattern, Handler handler) {
     method, path, spaced := str.cut(pattern, " ")
     Route r
     r.pattern = pattern.copy()
@@ -336,17 +382,17 @@ pub void Router.handle(str pattern, void(Request *, Response *) handler) {
     self.routes.push(r)
 }
 
-pub void Router.get(str path, void(Request *, Response *) handler) => self.add("GET", path, handler)
+pub void Router.get(str path, Handler handler) => self.add("GET", path, handler)
 
-pub void Router.post(str path, void(Request *, Response *) handler) => self.add("POST", path, handler)
+pub void Router.post(str path, Handler handler) => self.add("POST", path, handler)
 
-pub void Router.put(str path, void(Request *, Response *) handler) => self.add("PUT", path, handler)
+pub void Router.put(str path, Handler handler) => self.add("PUT", path, handler)
 
-pub void Router.delete(str path, void(Request *, Response *) handler) => self.add("DELETE", path, handler)
+pub void Router.delete(str path, Handler handler) => self.add("DELETE", path, handler)
 
-pub void Router.patch(str path, void(Request *, Response *) handler) => self.add("PATCH", path, handler)
+pub void Router.patch(str path, Handler handler) => self.add("PATCH", path, handler)
 
-void Router.add(str method, str path, void(Request *, Response *) handler) {
+void Router.add(str method, str path, Handler handler) {
     scoped String pattern = format("{method} {path}")
     self.handle(pattern, handler)
 }
@@ -378,6 +424,16 @@ i64 score(Route *r, List[str] *parts) {
 }
 
 void Router.dispatch(Request *req, Response *res) {
+    defer {
+        for h in self.afters {
+            h.done(req, res)
+        }
+    }
+    for h in self.befores {
+        if str.startsWith(req.route(), h.prefix) && !h.check(req, res) {
+            return
+        }
+    }
     scoped List[str] parts = splitPath(req.route())
     Route *best = null
     i64 bestScore = -1
@@ -441,12 +497,12 @@ void Router.dispatch(Request *req, Response *res) {
             req.paramValues.push(parts.at(i))
         }
     }
-    best.handler(req, res)
+    run(best.handler, req, res)
 }
 
 // Answers HTTPS requests on port with handler, as serve does, with the
 // certificate chain and key in PEM files.
-pub !void serveTls(u16 port, void(Request *, Response *) handler, str certFile, str keyFile, str host = "",
+pub !void serveTls(u16 port, Handler handler, str certFile, str keyFile, str host = "",
     i64 threads = 0) {
         config := try net.tlsConfig(certFile, keyFile)
         defer config.free()
@@ -454,7 +510,7 @@ pub !void serveTls(u16 port, void(Request *, Response *) handler, str certFile, 
     }
 
 // Answers HTTPS requests on a listener that is already open.
-pub !void serveTlsOn(net.Listener ln, void(Request *, Response *) handler, net.TlsConfig *config,
+pub !void serveTlsOn(net.Listener ln, Handler handler, net.TlsConfig *config,
     i64 threads = 1) {
         try serveTargetOn(ln, Target{handler: handler, tls: config}, threads)
     }
@@ -488,6 +544,11 @@ pub void Router.free() {
         r.parts.free()
     }
     self.routes.free()
+    for h in self.befores {
+        h.prefix.free()
+    }
+    self.befores.free()
+    self.afters.free()
 }
 
 // ------------------------------------------------------------ the client

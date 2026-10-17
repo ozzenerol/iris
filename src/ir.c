@@ -58,6 +58,7 @@ typedef struct {
     const char *pendingLabel;
     const char *fileStr;    /* the source path, as a C string constant */
     NodeList vtables;       /* the names of the method tables written so far */
+    NodeList wrappers;      /* the !void wrappers of void functions written so far */
     StrBuf extra;           /* functions made along the way: the thunks of spawn */
     int spawns;
     const char **temps;     /* the slots of temporary Strings of the statements being written */
@@ -582,6 +583,30 @@ static const char *vtable(IR *ir, Type *st, Node *iface) {
 
 static Val emitConvert(IR *ir, Node *e) {
     Type *to = e->type, *from = e->a->type;
+    if (to->kind == TY_FUNC && from->kind == TY_FUNC) {
+        /* a void function used as a !void one: a wrapper that returns no error */
+        Node *fn = e->a->ref;
+        for (int i = 0; i < ir->wrappers.len; i++) {
+            if (ir->wrappers.items[i]->ref == fn) return val(ir->wrappers.items[i]->name, to);
+        }
+        int id = ir->wrappers.len + 1;
+        const char *name = fmt(ir, "@\"wrap.%d\"", id);
+        Node *rec = newNode(ir->arena, N_IDENT, 0, 0);
+        rec->name = name;
+        rec->ref = fn;
+        listPush(ir->arena, &ir->wrappers, rec);
+        StrBuf *x = &ir->extra;
+        sbPrintf(x, "define internal i64 %s(", name);
+        StrBuf args = {0};
+        for (int i = 0; i < from->nelems; i++) {
+            const char *t = llType(ir, from->elems[i]);
+            sbPrintf(x, "%s%s %%a%d", i ? ", " : "", t, i);
+            sbPrintf(&args, "%s%s %%a%d", i ? ", " : "", t, i);
+        }
+        sbPrintf(x, ") {\n  call void %s(%s)\n  ret i64 0\n}\n\n", fn->ir, args.buf ? args.buf : "");
+        sbFree(&args);
+        return val(name, to);
+    }
     if (to->kind == TY_PTR && from->kind == TY_PTR) {
         Val p = emitExpr(ir, e->a);
         return val(p.s, to);        /* all pointers are ptr in LLVM */

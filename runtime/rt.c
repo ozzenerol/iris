@@ -4009,3 +4009,7 @@ int iris_env_load(const EnvTable *t, char *out) {
     }
     return 0;
 }
+
+void iris_json_quote(const char *text, int64_t len, IrisString *out) {
+    jsonQuote(out, text, len);
+}

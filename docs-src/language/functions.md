@@ -129,7 +129,7 @@ i64 apply(i64(i64) f, i64 x) => f(x)
 n := apply(square, 4) // 16
 ```
 
-Iris has no lambdas, so the function passed must have a name. A function value can be kept in a variable, a field or an array, compared with `==`, and is `null` until it is set. Calling a `null` one stops a debug build with an error. Arguments are passed by position; defaults and names don't apply through a function value.
+Iris has no lambdas, so the function passed must have a name. A function value can be kept in a variable, a field or an array, compared with `==`, and is `null` until it is set. Calling a `null` one stops a debug build with an error. Arguments are passed by position; defaults and names don't apply through a function value. The type of a function that can fail is written as its declaration reads: `!void(Request *, Response *)`. A named function that returns `void` can be given where one that returns `!void` is wanted; it never fails.
 
 ```iris run
 type Op = i64(i64, i64)
