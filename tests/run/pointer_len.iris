@@ -1,0 +1,23 @@
+// expect: 3 4 1
+// expect: 3 bytes from a
+
+void show(String *s, u8[] *b, List[i64] *l) {
+    print("{s.len} {b.len} {l.len}")
+}
+
+void first(str *s) {
+    print("{s.len} bytes from {s.ptr[0:1]}")
+}
+
+void main() {
+    String s = "abc".copy()
+    u8[4] arr
+    u8[] b = arr[0:4]
+    List[i64] l
+    l.push(1)
+    show(&s, &b, &l)
+    str v = s
+    first(&v)
+    s.free()
+    l.free()
+}

@@ -10,7 +10,7 @@ pub enum RecordType { a, ns, cname, soa, ptr, mx, txt, aaaa, srv }
 // One answer to a query.
 pub struct Record {
     pub String name
-    pub RecordType type
+    pub RecordType kind
     pub Duration ttl
     // a and aaaa: the address
     pub Addr ip
@@ -243,6 +243,7 @@ i64 u32At(str m, i64 i) => if i + 4 <= m.len { u16At(m, i) << 16 | u16At(m, i + 
 i64 readName(str m, i64 i, String *out) {
     i64 end = -1
     jumps := 0
+    bool first = true
     for {
         if i >= m.len {
             return -1
@@ -266,11 +267,12 @@ i64 readName(str m, i64 i, String *out) {
             return -1
         }
         if out != null {
-            if out.len > 0 {
+            if !first {
                 out.append(".")
             }
             out.append(m[i + 1:i + 1 + n])
         }
+        first = false
         i += 1 + n
     }
 }
@@ -326,7 +328,7 @@ i64 parseReply(str m, i64 id, RecordType want, List[Record] *out) {
             r.free()
             continue
         }
-        r.type = t
+        r.kind = t
         bool good = true
         match t {
             .a => {
@@ -516,7 +518,7 @@ void lookupTask(Resolver *r, str name, RecordType t, chan[Lookup] done) {
     }
     defer found.freeEach()
     for rec in found {
-        if rec.type == t {
+        if rec.kind == t {
             l.addrs.push(rec.ip)
         }
     }
@@ -551,13 +553,18 @@ pub !List[Addr] Resolver.lookup(str host) {
     }
     v6 := chan[Lookup](1)
     spawn lookupTask(self, host, .aaaa, v6)
+    bool asked = true
     scoped List[Record] v4 = self.query(host, .a) catch e {
+        asked = e.code == NetError.notFound
         List[Record]{}
     }
     defer v4.freeEach()
     six := <-v6
+    if !asked && !six.ok {
+        return error(NetError.timeout, "looking up {host}: no DNS server answered")
+    }
     for rec in v4 {
-        if rec.type == .a {
+        if rec.kind == .a {
             out.push(rec.ip)
         }
     }
