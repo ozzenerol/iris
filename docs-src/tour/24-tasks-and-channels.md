@@ -170,7 +170,7 @@ When every task waits for something that no other task can give, the program can
 ```iris
 void main() {
     ch := chan[i64](0)
-    v := <-ch      // no task will ever send
+    v := <-ch // no task will ever send
 }
 ```
 
