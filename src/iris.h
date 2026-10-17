@@ -161,6 +161,7 @@ enum {
     F_LAZY = 1 << 26,       /* a generic struct's method for one instance, not checked until it is used */
     F_CLI = 1 << 27,        /* a struct with @flags */
     F_REST = 1 << 28,       /* a T... parameter: the arguments left over, as a T[] */
+    F_NORETURN = 1 << 29,   /* @noreturn: a call to the function never comes back, like panic */
 };
 
 typedef struct Node Node;

@@ -17,6 +17,7 @@ i32 rawGetenv(u8 *name, i64 nameLen, u8 **p, i64 *n)
 i32 rawSetenv(u8 *name, i64 n, u8 *value, i64 vn, i32 set)
 
 @extern("iris_os_exit")
+@noreturn
 void rawExit(i32 code)
 
 // How many arguments the program got, counting its own name.
@@ -59,5 +60,8 @@ pub !void unsetenv(str name) {
     }
 }
 
-// Ends the program with an exit status.
+// Ends the program with an exit status. Deferred statements don't run. A call
+// to it never comes back, so it can end a catch block or a branch that would
+// otherwise need a value.
+@noreturn
 pub void exit(i32 code) => rawExit(code)

@@ -1,0 +1,35 @@
+// expect: 42
+// expect: 1
+// expect: fail: negative
+// exit: 3
+
+import os, str
+
+@noreturn
+void fail(str msg) {
+    print("fail: {msg}")
+    os.exit(3)
+}
+
+i64 parse(str s) {
+    n := str.parseInt(s) catch e {
+        print("bad: {e.message}")
+        os.exit(1)
+    }
+    return n
+}
+
+i64 sign(i64 n) {
+    if n >= 0 {
+        return 1
+    }
+    fail("negative")
+}
+
+void main() {
+    print("{parse("42")}")
+    x := if parse("7") > 5 { 1 } else { fail("small") }
+    print("{x}")
+    v := sign(-1)
+    print("never {v}")
+}

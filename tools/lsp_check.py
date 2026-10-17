@@ -161,6 +161,42 @@ def main():
 
     # definition in the standard library opens a copy of it
     g = c.request("textDocument/definition", {"textDocument": td, "position": {"line": 0, "character": 8}})
+    loc = g and g["result"]
+    check("definition of the module json: %r" % loc, loc and loc["uri"].endswith("/json/json.iris"))
+
+    # in a project: names in type position, from another file of the module;
+    # the receiver of a method; a field in a struct literal; a module's name
+    proj = tempfile.mkdtemp()
+    os.makedirs(os.path.join(proj, "cli"))
+    files = {
+        "iris.mod": "module example.com/shelf\n",
+        "main.iris": "import cli\n\nvoid main() {\n    cli.run()\n}\n",
+        "cli/model.iris": "enum Genre { fiction, science }\n",
+        "cli/service.iris": ("import sqlite\n\npub struct Service {\n    sqlite.Db db\n}\n\n"
+                             "Service make(sqlite.Db db) => Service{db: db}\n\n"
+                             "void Service.add(str title, Genre genre) {\n}\n\npub void run() {\n}\n"),
+    }
+    for name, text in files.items():
+        with open(os.path.join(proj, name), "w") as f:
+            f.write(text)
+    spath = os.path.join(proj, "cli", "service.iris")
+    suri = "file://" + spath
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": suri, "languageId": "iris", "version": 1,
+                                                       "text": files["cli/service.iris"]}})
+
+    def where(line, character):
+        g = c.request("textDocument/definition", {"textDocument": {"uri": suri},
+                                                  "position": {"line": line, "character": character}})
+        loc = g and g["result"]
+        return loc and (loc["uri"].rsplit("/", 2)[-2:], loc["range"]["start"]["line"])
+
+    check("definition of Genre in another file: %r" % (where(8, 32),), where(8, 32) == (["cli", "model.iris"], 0))
+    check("definition of a return type: %r" % (where(6, 2),), where(6, 2) == (["cli", "service.iris"], 2))
+    check("definition of sqlite.Db: %r" % (where(3, 12),), where(3, 12) == (["sqlite", "sqlite.iris"], 82))
+    check("definition of a module name: %r" % (where(3, 6),), where(3, 6) == (["sqlite", "sqlite.iris"], 0))
+    check("definition of a method's receiver: %r" % (where(8, 7),), where(8, 7) == (["cli", "service.iris"], 2))
+    check("definition of a field in a literal: %r" % (where(6, 38),), where(6, 38) == (["cli", "service.iris"], 3))
+
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)
     c.notify("exit", None)

@@ -257,6 +257,15 @@ static const char *allocaFor(IR *ir, Type *t, const char *hint) {
     return name;
 }
 
+/* A String freed when the statement ends. It starts empty at the function's
+ * entry, so freeing it is safe on a path that didn't fill it: the value of a
+ * catch or an if is made on one branch, and the statement ends on all. */
+static const char *tempStringSlot(IR *ir, const char *hint) {
+    const char *slot = allocaFor(ir, &tyString, hint);
+    sbPrintf(&ir->allocas, "  store %%String zeroinitializer, ptr %s\n", slot);
+    return slot;
+}
+
 static int dbgType(IR *ir, Type *t);
 
 /* A struct-like debug type: name, size and members (name, type, offset). */
@@ -1680,7 +1689,12 @@ static Val emitCall(IR *ir, Node *e) {
         sbPuts(&fty, llType(ir, d->type));
     }
     Val r;
-    if (d->type->kind == TY_VOID) {
+    if (d->flags & F_NORETURN) {
+        ins(ir, "call %s %s(%s)", fty.buf, d->ir, a);
+        ins(ir, "unreachable");
+        ir->terminated = true;
+        r = val("", &tyNoreturn);
+    } else if (d->type->kind == TY_VOID) {
         ins(ir, "call %s %s(%s)", fty.buf, d->ir, a);
         r = val("", &tyVoid);
     } else {
@@ -2068,13 +2082,13 @@ static Val emitExpr(IR *ir, Node *e) {
         if (ir->terminated) {
             return v;
         }
-        const char *slot = allocaFor(ir, &tyString, "temp");
+        const char *slot = tempStringSlot(ir, "temp");
         ins(ir, "store %%String %s, ptr %s", v.s, slot);
         addTemp(ir, slot);
         return v;
     }
     if (e->kind == N_INTERP && (e->flags & F_TEMPTEXT)) {
-        const char *slot = allocaFor(ir, &tyString, "text");
+        const char *slot = tempStringSlot(ir, "text");
         ins(ir, "store %%String zeroinitializer, ptr %s", slot);
         emitText(ir, e, 3, slot);
         addTemp(ir, slot);

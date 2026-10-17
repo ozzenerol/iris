@@ -9,6 +9,7 @@ An attribute starts with `@` and goes on the line before a declaration. Some mak
 | `@flags` | a struct | fills it from the program's arguments, with the `flags` module |
 | `@inline` | a function | always puts its code where it is called |
 | `@unchecked` | a function | leaves out the checks of debug builds in its code |
+| `@noreturn` | a function | says a call to it never comes back, like `panic` |
 | `@export` | a function | makes it callable from C by its name |
 
 ## @env
@@ -103,6 +104,41 @@ void main() {
 ```
 
 A mistake in such a function isn't caught: it reads or writes the wrong memory.
+
+## @noreturn
+
+`@noreturn` says that a call to the function never comes back: it ends the program, as `os.exit` does, or panics. The compiler then knows the code after the call is never reached, so the call can end a `catch` block or a branch where a value would otherwise be needed:
+
+```iris
+import os, str
+
+@noreturn
+void fail(str msg) {
+    print("error: {msg}")
+    os.exit(2)
+}
+
+i64 port(str text) {
+    n := str.parseInt(text) catch e {
+        fail("the port {text}: {e.message}")
+    }
+    return n
+}
+
+void main() {
+    print("{port("8080")}")
+    print("{port("http")}")
+}
+```
+
+```output
+8080
+error: the port http: 'http' is not a number
+```
+
+The program stops with exit status 2 at the second call.
+
+A `@noreturn` function returns `void`, has no `return`, and can't reach its end: its last line is a call that never comes back, such as `os.exit`, `panic` or another `@noreturn` function.
 
 ## @export
 

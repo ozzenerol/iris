@@ -1,0 +1,22 @@
+// error: 7: a is @noreturn but can reach its end; end it with a call that never comes back, like panic
+// error: 13: b is @noreturn, so it can't return
+// error: 17: a @noreturn function returns void: its calls never come back with a value
+// error: 20: d is @noreturn, so its '=>' body must be a call that never comes back
+
+@noreturn
+void a() {
+    print("x")
+}
+
+@noreturn
+void b() {
+    return
+}
+
+@noreturn
+i64 c() => 1
+
+@noreturn
+void d() => print("x")
+
+void main() {}

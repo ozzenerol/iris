@@ -159,6 +159,23 @@ static Node *like(Checker *c, NodeKind kind, Node *at) {
     return n;
 }
 
+/* A name that isn't declared: if it is a standard library module, the
+ * import is what's missing. */
+static void notDeclared(Checker *c, Node *at, const char *name) {
+    static const char *mods[64];
+    static int nmods = -1;
+    if (nmods < 0) {
+        nmods = stdModuleNames(mods, 64);
+    }
+    for (int i = 0; i < nmods; i++) {
+        if (strcmp(mods[i], name) == 0) {
+            error(c, at, "%s is a standard library module that isn't imported; add import %s", name, name);
+            return;
+        }
+    }
+    error(c, at, "%s is not declared", name);
+}
+
 static void notYet(Checker *c, Node *at, const char *what, const char *version) {
     /* "generic types are", "this expression is", "enums whose values carry data are" */
     const char *sp = strchr(what, ' ');
@@ -722,7 +739,8 @@ static Type *resolveType(Checker *c, Node *t) {
             }
             return &tyError;
         }
-        return typeFromName(c, t->name, t, true);
+        t->type = typeFromName(c, t->name, t, true);   /* kept for the language server */
+        return t->type;
     case N_T_PTR: {
         Type *e = resolveType(c, t->a);
         if (isErr(e)) return e;
@@ -2793,7 +2811,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             } else if (typeFromName(c, e->name, e, false)) {
                 error(c, e, "%s is a type, not a value", e->name);
             } else if (!(e->flags & F_REPORTED)) {
-                error(c, e, "%s is not declared", e->name);
+                notDeclared(c, e, e->name);
             }
             return setType(e, &tyError);
         }
@@ -2957,6 +2975,9 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     case N_CALL: {
         Type *t = checkCall(c, e, expected);
         checkTempResult(c, e);
+        if (e->ref && e->ref->kind == N_FUNC && (e->ref->flags & F_NORETURN) && !isErr(t)) {
+            return setType(e, &tyNoreturn);     /* like panic: the code after it is never reached */
+        }
         return t;
     }
     case N_IF:
@@ -4030,7 +4051,7 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     }
     if (callee->kind == N_FIELD_ACCESS) {
         if (callee->a->kind == N_IDENT && !lookup(c, callee->a->name) && !typeFromName(c, callee->a->name, callee, false)) {
-            notYet(c, callee, "modules", "0.7");
+            notDeclared(c, callee->a, callee->a->name);
             return setType(e, &tyError);
         }
         return checkMethodCall(c, e);
@@ -4965,6 +4986,10 @@ static void checkStmt(Checker *c, Node *s) {
             error(c, s, "a deferred statement can't return");
             return;
         }
+        if (c->func->flags & F_NORETURN) {
+            error(c, s, "%s is @noreturn, so it can't return", c->func->name);
+            return;
+        }
         if (ret->kind == TY_RESULT) {
             /* return value, return error(...), or return e (an Error) */
             if (!s->a) {
@@ -5320,6 +5345,11 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
                 error(c, at, "@%s takes nothing", at->name);
             }
             f->flags |= at->name[0] == 'i' ? F_INLINE : F_UNCHECKED;
+        } else if (strcmp(at->name, "noreturn") == 0) {
+            if (at->list.len) {
+                error(c, at, "@noreturn takes nothing");
+            }
+            f->flags |= F_NORETURN;
         } else if (strcmp(at->name, "builtin") == 0 && f->module && f->src &&
                    strncmp(f->src->path, "std/", 4) == 0) {
             f->flags |= F_INTRINSIC;    /* the compiler makes calls to it */
@@ -5331,6 +5361,9 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         error(c, f, "%s has no body", f->name);
     }
     f->type = resolveType(c, f->a);
+    if ((f->flags & F_NORETURN) && f->type != &tyVoid && !isErr(f->type)) {
+        error(c, f, "a @noreturn function returns void: its calls never come back with a value");
+    }
     resolveSignatureType(c, f->type);
     int first = 0;
     if (f->b || recv) {
@@ -5473,6 +5506,9 @@ static void checkFunctionBody(Checker *c, Node *f) {
         }
     } else if (f->d) {
         Type *t = checkExpr(c, &f->d, f->type == &tyVoid ? NULL : f->type);
+        if ((f->flags & F_NORETURN) && f->type == &tyVoid && t != &tyNoreturn && !isErr(t)) {
+            error(c, f->d, "%s is @noreturn, so its '=>' body must be a call that never comes back", f->name);
+        }
         if (f->type == &tyVoid) {
             if (f->d->kind != N_CALL && !isErr(t)) {
                 error(c, f->d, "%s returns nothing, so its '=>' body must be a call", f->name);
@@ -5487,6 +5523,9 @@ static void checkFunctionBody(Checker *c, Node *f) {
                            !(f->type->kind == TY_RESULT && f->type->elem == &tyVoid);
         if (needsReturn && blockFallsThrough(f->c)) {
             error(c, f, "%s can reach its end without returning a value", f->name);
+        }
+        if ((f->flags & F_NORETURN) && blockFallsThrough(f->c)) {
+            error(c, f, "%s is @noreturn but can reach its end; end it with a call that never comes back, like panic", f->name);
         }
     }
     popScope(c);

@@ -1,0 +1,7 @@
+// error: 5: os is a standard library module that isn't imported; add import os
+// error: 6: nope is not declared
+
+void main() {
+    os.exit(1)
+    nope.call()
+}

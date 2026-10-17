@@ -552,11 +552,15 @@ static int nameLen(Node *n) {
 
 static void walk(Find *f, Node *n, Node *parent) {
     if (!n) return;
-    if (n->src == f->src && n->line == f->line && n->name &&
+    /* self is written as the receiver's type, Service.add: the type is what's there */
+    if (n->src == f->src && n->line == f->line && n->name && !(n->kind == N_PARAM && (n->flags & F_SELF)) &&
         (n->kind == N_IDENT || n->kind == N_FIELD_ACCESS || n->kind == N_FUNC || n->kind == N_STRUCT ||
          n->kind == N_ENUM || n->kind == N_CONST || n->kind == N_VAR || n->kind == N_PARAM || n->kind == N_FIELD ||
-         n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME)) {
+         n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME ||
+         n->kind == N_FIELD_INIT)) {
         int start = n->col, len = nameLen(n);
+        const char *dot = n->kind == N_T_NAME ? strrchr(n->name, '.') : NULL;
+        if (dot) start += (int)(dot + 1 - n->name);     /* sqlite.Db: the Db */
         if (f->col >= start && f->col < start + len) {
             f->best = n;
             f->parent = parent;
@@ -596,9 +600,40 @@ static Node *declOf(Node *n, Node *parent) {
         return NULL;
     case N_T_NAME:
         return n->type && n->type->decl ? n->type->decl : NULL;
+    case N_FIELD_INIT:
+        /* Point{x: 1}: the field x */
+        if (parent && parent->type && parent->type->kind == TY_STRUCT && parent->type->decl) {
+            Node *s = parent->type->decl;
+            for (int i = 0; i < s->list.len; i++) {
+                Node *f = s->list.items[i];
+                if (f->kind == N_FIELD && f->name && strcmp(f->name, n->name) == 0) return f;
+            }
+        }
+        return NULL;
     default:
         return n;       /* the declaration itself */
     }
+}
+
+/* A type named where a value goes, as in flags.parse(Options) or
+ * json.decode(User[], text): the module's declaration of that name. */
+static Node *typeNamed(Program *prog, Source *src, Node *n) {
+    if (!prog || n->kind != N_IDENT || !n->name) return NULL;
+    for (Module *m = prog->modules; m; m = m->next) {
+        bool here = false;
+        for (int f = 0; f < m->files.len && !here; f++) here = m->files.items[f]->src == src;
+        if (!here) continue;
+        for (int f = 0; f < m->files.len; f++) {
+            Node *file = m->files.items[f];
+            for (int i = 0; i < file->list.len; i++) {
+                Node *d = file->list.items[i];
+                bool isType = d->kind == N_STRUCT || d->kind == N_ENUM ||
+                              d->kind == N_INTERFACE || d->kind == N_TYPEDEF;
+                if (isType && d->name && strcmp(d->name, n->name) == 0) return d;
+            }
+        }
+    }
+    return NULL;
 }
 
 static void putTypeName(StrBuf *b, Type *t) {
@@ -718,6 +753,7 @@ static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int 
     Node *parent = NULL;
     Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
     Node *d = n ? declOf(n, parent) : NULL;
+    if (n && !d) d = typeNamed(prog, src, n);
     if (!d) {
         reply(out, id, NULL);
         return;
@@ -742,10 +778,58 @@ static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int 
     sbFree(&r);
 }
 
+static size_t offsetOf(Source *src, int line, int col);
+
+/* A module named by the word under the cursor, as in `import sqlite` or
+ * sqlite.open: the file of the module with its name (sqlite/sqlite.iris), or
+ * its first file. */
+static Node *moduleFileAt(Program *prog, Source *src, int line, int col) {
+    if (!prog || !src || !src->text) return NULL;
+    size_t at = offsetOf(src, line, col), s = at, e = at;
+    const char *t = src->text;
+    while (s > 0 && (isalnum((unsigned char)t[s - 1]) || t[s - 1] == '_')) s--;
+    while (e < src->len && (isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+    if (e == s) return NULL;
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m == prog->main || m->isC || !m->files.len || strlen(m->name) != e - s ||
+            strncmp(m->name, t + s, e - s) != 0) {
+            continue;
+        }
+        Node *best = m->files.items[0];
+        for (int i = 0; i < m->files.len; i++) {
+            const char *path = m->files.items[i]->src ? m->files.items[i]->src->path : "";
+            const char *base = strrchr(path, '/');
+            base = base ? base + 1 : path;
+            if (strncmp(base, m->name, strlen(m->name)) == 0 && strcmp(base + strlen(m->name), ".iris") == 0) {
+                best = m->files.items[i];
+            }
+        }
+        return best;
+    }
+    return NULL;
+}
+
 static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
     Node *parent = NULL;
     Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
     Node *d = n ? declOf(n, parent) : NULL;
+    if (n && !d) d = typeNamed(prog, src, n);
+    if (!d || d->kind == N_IMPORT) {
+        Node *file = moduleFileAt(prog, src, line, col);
+        if (file && file->src) {
+            char *mu = fileUri(file->src->path);
+            if (mu) {
+                StrBuf r = {0};
+                sbPuts(&r, "{\"uri\":");
+                putStr(&r, mu);
+                sbPuts(&r, ",\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}}}");
+                reply(out, id, r.buf);
+                free(mu);
+                sbFree(&r);
+                return;
+            }
+        }
+    }
     char *u = d && d->src ? fileUri(d->src->path) : NULL;
     if (!u) {
         reply(out, id, NULL);

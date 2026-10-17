@@ -1,0 +1,29 @@
+// expect: 5 0
+// expect: 5 0
+// expect: 5 2
+// expect: 80
+
+import str
+
+i64 fallback(str msg) => msg.len
+
+String name(i64 n) => format("n{n}")
+
+// text with values made on one branch only: freed on every path
+i64 port(str text) {
+    n := str.parseInt(text) catch e {
+        fallback("p {text}")
+    }
+    return n
+}
+
+void main() {
+    for i in 0..3 {
+        n := str.parseInt(if i == 1 { "x" } else { "5" }) catch e {
+            fallback("bad {i}")
+        }
+        m := if i == 2 { fallback(name(i)) } else { 0 }
+        print("{n} {m}")
+    }
+    print("{port("80")}")
+}
