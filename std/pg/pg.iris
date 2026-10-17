@@ -1,0 +1,838 @@
+// PostgreSQL, spoken over the network by Iris itself: a connection waits
+// like any other network call, so the program's other tasks keep running.
+//
+//     db := try pg.pool("postgres://ada:secret@localhost/shop")
+//     defer db.close()
+//     try db.exec("INSERT INTO users (name, age) VALUES ($1, $2)", [.text("Ada"), .int(36)])
+//     users := try pg.all[User](try db.query("SELECT * FROM users WHERE age > $1", [.int(30)]))
+//
+// Values go apart from the SQL ($1, $2, ...), so they can't change what the
+// SQL means. Results come back as text and are read with Rows.int, text
+// and so on, or into @json structs by column name with all and one.
+
+import base64, crypto, net, random, str, time, url
+
+pub enum PgError { connect, auth, failed, constraint, retry, noRows, closed }
+
+// A value for a $n in SQL: .int(36), .float(1.5), .text("ada"),
+// .bool(true) or .none for NULL.
+pub enum Value { int(i64 v), float(f64 v), text(str v), bool(bool v), none }
+
+@extern("iris_pg_scan")
+i32 rawScan(u8 *table, u8 *out, str *names, str *values, u8 *nulls, i64 n)
+
+@extern("iris_pg_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_pg_message_len")
+i64 messageLen()
+
+@builtin
+void tableOf()
+
+// ------------------------------------------------------------ messages
+
+void put16(String *out, i64 v) {
+    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:2])
+}
+
+void put32(String *out, i64 v) {
+    u8[4] b = [u8(v >> 24 & 0xff), u8(v >> 16 & 0xff), u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:4])
+}
+
+void putStr(String *out, str s) {
+    out.append(s)
+    out.append("\x00")
+}
+
+i64 get16(str m, i64 i) => if i + 2 <= m.len { i64(m[i]) << 8 | i64(m[i + 1]) } else { 0 }
+
+i64 get32(str m, i64 i) {
+    if i + 4 > m.len {
+        return 0
+    }
+    v := i64(m[i]) << 24 | i64(m[i + 1]) << 16 | i64(m[i + 2]) << 8 | i64(m[i + 3])
+    return if v >= 0x80000000 { v - 0x100000000 } else { v }
+}
+
+// A NUL-terminated string at m[*at].
+str getStr(str m, i64 *at) {
+    start := *at
+    for *at < m.len && m[*at] != 0 {
+        *at += 1
+    }
+    s := m[start:*at]
+    *at += 1
+    return s
+}
+
+// Appends a message: its type, its length, then body.
+void message(String *out, u8 kind, str body) {
+    u8[1] k = [kind]
+    out.append(k[0:1])
+    put32(out, body.len + 4)
+    out.append(body)
+}
+
+struct Msg {
+    u8 kind
+    String body
+}
+
+void Msg.free() {
+    self.body.free()
+}
+
+// ------------------------------------------------------------ connecting
+
+// One connection to a server. It is used by one task at a time; a Pool
+// shares connections between tasks and threads.
+pub struct Conn {
+    net.Conn conn
+    bool broken
+    // the server's state after the last statement: 'I' idle, 'T' in a
+    // transaction, 'E' in a failed one
+    u8 status
+}
+
+struct Settings {
+    String user
+    String password
+    String database
+    String host
+    u16 port
+    String sslmode
+    String ca
+    String appName
+    Duration timeout
+}
+
+void Settings.free() {
+    self.user.free()
+    self.password.free()
+    self.database.free()
+    self.host.free()
+    self.sslmode.free()
+    self.ca.free()
+    self.appName.free()
+}
+
+// postgres://user:password@host:port/database?sslmode=require&ca=root.pem
+!Settings settingsOf(str address) {
+    u := url.parse(address) catch e {
+        return error(PgError.connect, "'{address}' isn't a postgres:// address")
+    }
+    if u.scheme != "postgres" && u.scheme != "postgresql" {
+        return error(PgError.connect, "'{address}' isn't a postgres:// address")
+    }
+    Settings s
+    errdefer s.free()
+    name, pass, _ := str.cut(u.user, ":")
+    s.user = try url.decode(name)
+    s.password = try url.decode(pass)
+    s.host = (if u.host.len > 0 { u.host } else { "localhost" }).copy()
+    s.port = u16(if u.port > 0 { u.port } else { 5432 })
+    dbname := if str.startsWith(u.path, "/") { u.path[1:] } else { u.path }
+    s.database = try url.decode(if dbname.len > 0 { dbname } else { name })
+    s.sslmode = "disable".copy()
+    s.timeout = 10s
+    str rest = u.query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        scoped String v = try url.decode(value)
+        if key == "sslmode" {
+            if v != "disable" && v != "require" && v != "verify-full" {
+                return error(PgError.connect, "sslmode is disable, require or verify-full, not {v}")
+            }
+            s.sslmode.free()
+            s.sslmode = v.copy()
+        } else if key == "ca" || key == "sslrootcert" {
+            s.ca.free()
+            s.ca = v.copy()
+        } else if key == "application_name" {
+            s.appName.free()
+            s.appName = v.copy()
+        } else if key == "connect_timeout" {
+            secs := str.parseInt(v) catch 10
+            s.timeout = Duration(secs) * 1s
+        }
+    }
+    if s.user.len == 0 {
+        return error(PgError.connect, "'{address}' has no user")
+    }
+    return s
+}
+
+!Msg Conn.read() {
+    scoped String head = self.conn.readExactly(5) catch e {
+        self.broken = true
+        return error(PgError.closed, "the server closed the connection: {e.message}")
+    }
+    n := get32(head, 1) - 4
+    if n < 0 || n > 1GiB {
+        self.broken = true
+        return error(PgError.closed, "a message that isn't PostgreSQL's")
+    }
+    Msg m = Msg{kind: head[0]}
+    if n > 0 {
+        m.body = self.conn.readExactly(n) catch e {
+            self.broken = true
+            return error(PgError.closed, "the server closed the connection: {e.message}")
+        }
+    }
+    return m
+}
+
+!void Conn.send(str data) {
+    self.conn.write(data) catch e {
+        self.broken = true
+        return error(PgError.closed, "writing to the server: {e.message}")
+    }
+}
+
+// A field of an ErrorResponse: 'M' the message, 'C' the SQLSTATE code,
+// 'D' the detail.
+str field(str body, u8 which) {
+    i64 at = 0
+    for at < body.len && body[at] != 0 {
+        kind := body[at]
+        at += 1
+        value := getStr(body, &at)
+        if kind == which {
+            return value
+        }
+    }
+    return ""
+}
+
+PgError kindOf(str code) {
+    if str.startsWith(code, "23") {
+        return .constraint
+    }
+    if code == "40001" || code == "40P01" {
+        return .retry
+    }
+    if str.startsWith(code, "28") {
+        return .auth
+    }
+    return .failed
+}
+
+str detailSep(str detail) => if detail.len > 0 { ": " } else { "" }
+
+// The error an ErrorResponse describes: the message, and the SQLSTATE code
+// in brackets; a code of class 23 is PgError.constraint, a serialization
+// failure or a deadlock PgError.retry.
+Error serverError(str body) => error(kindOf(field(body, 'C')),
+    "{field(body, 'M')}{detailSep(field(body, 'D'))}{field(body, 'D')} ({field(body, 'C')})")
+
+// Connects to the server at address and logs in.
+pub !Conn connect(str address) {
+    scoped s := try settingsOf(address)
+    c := net.dial(s.host, s.port, s.timeout) catch e {
+        return error(PgError.connect, "connecting to {s.host}:{s.port}: {e.message}")
+    }
+    Conn pc = Conn{conn: c}
+    errdefer pc.conn.close()
+    pc.conn.setTimeout(s.timeout)
+    if s.sslmode != "disable" {
+        // SSLRequest: the server answers S to start TLS, N for no
+        String req
+        put32(&req, 8)
+        put32(&req, 80877103)
+        try pc.send(req)
+        req.free()
+        scoped String answer = pc.conn.readExactly(1) catch e {
+            return error(PgError.connect, "the server closed the connection")
+        }
+        if answer != "S" {
+            return error(PgError.connect, "the server doesn't take TLS, and sslmode is {s.sslmode}")
+        }
+        pc.conn.startTls(s.host, s.ca) catch e {
+            return error(PgError.connect, "{e.message}")
+        }
+    }
+    String start
+    put32(&start, 196608) // protocol 3.0
+    putStr(&start, "user")
+    putStr(&start, s.user)
+    putStr(&start, "database")
+    putStr(&start, s.database)
+    putStr(&start, "client_encoding")
+    putStr(&start, "UTF8")
+    if s.appName.len > 0 {
+        putStr(&start, "application_name")
+        putStr(&start, s.appName)
+    }
+    start.append("\x00")
+    String framed
+    put32(&framed, start.len + 4)
+    framed.append(start)
+    start.free()
+    pc.send(framed) catch e {
+        framed.free()
+        return e
+    }
+    framed.free()
+    try pc.login(&s)
+    // no time limit on reads from now: a query can take as long as it takes
+    pc.conn.setTimeout(0s)
+    return pc
+}
+
+!void Conn.login(Settings *s) {
+    String clientFirst
+    defer clientFirst.free()
+    String salted
+    defer salted.free()
+    String authMessage
+    defer authMessage.free()
+    for {
+        scoped m := try self.read()
+        if m.kind == 'E' {
+            return serverError(m.body)
+        }
+        if m.kind == 'Z' {
+            self.status = if m.body.len > 0 { m.body[0] } else { 'I' }
+            return
+        }
+        if m.kind != 'R' {
+            continue // ParameterStatus, BackendKeyData, notices
+        }
+        code := get32(m.body, 0)
+        if code == 0 {
+            continue
+        }
+        if code == 3 {
+            // the password as it is: only over TLS or on a trusted network
+            String p
+            putStr(&p, s.password)
+            String out
+            message(&out, 'p', p)
+            p.free()
+            self.send(out) catch e {
+                out.free()
+                return e
+            }
+            out.free()
+        } else if code == 5 {
+            // md5(md5(password + user) + salt), as hex with "md5" in front
+            scoped String both = format("{s.password}{s.user}")
+            innerHash := crypto.md5(both)
+            scoped String inner = hexOf(innerHash[0:16])
+            String withSalt
+            withSalt.append(inner)
+            withSalt.append(m.body[4:8])
+            outerHash := crypto.md5(withSalt)
+            scoped String outer = hexOf(outerHash[0:16])
+            withSalt.free()
+            String p
+            p.append("md5")
+            p.append(outer)
+            p.append("\x00")
+            String out
+            message(&out, 'p', p)
+            p.free()
+            self.send(out) catch e {
+                out.free()
+                return e
+            }
+            out.free()
+        } else if code == 10 {
+            // SCRAM-SHA-256 (RFC 5802, 7677)
+            if !str.contains(m.body[4:], "SCRAM-SHA-256\x00") {
+                return error(PgError.auth, "the server wants a login this driver doesn't have")
+            }
+            u8[18] nonceBytes
+            random.bytes(nonceBytes[0:18])
+            scoped String nonce = base64.encode(nonceBytes[0:18])
+            clientFirst = format("n=,r={nonce}")
+            String p
+            putStr(&p, "SCRAM-SHA-256")
+            scoped String first = format("n,,{clientFirst}")
+            put32(&p, first.len)
+            p.append(first)
+            String out
+            message(&out, 'p', p)
+            p.free()
+            self.send(out) catch e {
+                out.free()
+                return e
+            }
+            out.free()
+        } else if code == 11 {
+            serverFirst := m.body[4:]
+            str nonce = ""
+            str salt64 = ""
+            i64 iterations = 0
+            str rest = serverFirst
+            for rest.len > 0 {
+                part, after, _ := str.cut(rest, ",")
+                rest = after
+                if str.startsWith(part, "r=") {
+                    nonce = part[2:]
+                } else if str.startsWith(part, "s=") {
+                    salt64 = part[2:]
+                } else if str.startsWith(part, "i=") {
+                    iterations = str.parseInt(part[2:]) catch 0
+                }
+            }
+            _, ourNonce, _ := str.cut(clientFirst, ",r=")
+            if !str.startsWith(nonce, ourNonce) || iterations < 1 || iterations > 10000000 {
+                return error(PgError.auth, "the server's SCRAM reply isn't valid")
+            }
+            scoped String salt = try base64.decode(salt64)
+            salted = crypto.pbkdf2Sha256(s.password, salt, iterations)
+            clientKey := crypto.hmacSha256(salted, "Client Key")
+            storedKey := crypto.sha256(clientKey[0:32])
+            scoped String without = format("c=biws,r={nonce}")
+            authMessage = format("{clientFirst},{serverFirst},{without}")
+            signature := crypto.hmacSha256(storedKey[0:32], authMessage)
+            u8[32] proof
+            for i in 0..32 {
+                proof[i] = clientKey[i] ^ signature[i]
+            }
+            scoped String proof64 = base64.encode(proof[0:32])
+            scoped String final = format("{without},p={proof64}")
+            String out
+            message(&out, 'p', final)
+            self.send(out) catch e {
+                out.free()
+                return e
+            }
+            out.free()
+        } else if code == 12 {
+            // the server proves it knew the password too
+            serverKey := crypto.hmacSha256(salted, "Server Key")
+            want := crypto.hmacSha256(serverKey[0:32], authMessage)
+            scoped String want64 = base64.encode(want[0:32])
+            scoped String expected = format("v={want64}")
+            if !crypto.equal(m.body[4:], expected) {
+                return error(PgError.auth, "the server's SCRAM proof is wrong")
+            }
+        } else {
+            return error(PgError.auth, "the server wants a login this driver doesn't have ({code})")
+        }
+    }
+}
+
+const DIGITS = "0123456789abcdef"
+
+String hexOf(u8[] data) {
+    String out
+    for i in 0..data.len {
+        b := i64(data[i])
+        out.append(DIGITS[b >> 4:(b >> 4) + 1])
+        out.append(DIGITS[b & 15:(b & 15) + 1])
+    }
+    return out
+}
+
+pub void Conn.close() {
+    if !self.broken {
+        String bye
+        message(&bye, 'X', "")
+        self.conn.write(bye) catch e { }
+        bye.free()
+    }
+    self.conn.close()
+}
+
+// ------------------------------------------------------------ queries
+
+// The rows of a query, all read in. free gives them back.
+pub struct Rows {
+    List[String] names
+    List[String] cells // row after row
+    List[bool] nulls
+    i64 ncols
+    i64 at
+    // how many rows the statement changed, for INSERT, UPDATE and DELETE
+    pub i64 affected
+}
+
+pub void Rows.free() {
+    self.names.freeEach()
+    self.cells.freeEach()
+    self.nulls.free()
+}
+
+// How many rows there are.
+pub i64 Rows.len() => if self.ncols > 0 { self.cells.len / self.ncols } else { 0 }
+
+pub i64 Rows.columns() => self.ncols
+
+pub str Rows.name(i64 col) => if col >= 0 && col < self.names.len { self.names.at(col) } else { "" }
+
+// Moves to the next row: false when there are no more. The first call
+// moves to the first row.
+pub bool Rows.next() {
+    if self.at >= self.len() {
+        return false
+    }
+    self.at += 1
+    return true
+}
+
+i64 Rows.cell(i64 col) => (self.at - 1) * self.ncols + col
+
+// A column of the row as text: "" for NULL.
+pub str Rows.text(i64 col) {
+    if col < 0 || col >= self.ncols || self.at < 1 {
+        return ""
+    }
+    return self.cells.at(self.cell(col))
+}
+
+pub bool Rows.isNull(i64 col) => col < 0 || col >= self.ncols || self.at < 1 || self.nulls.at(self.cell(col))
+
+// A column as a number: 0 for NULL or text that isn't one.
+pub i64 Rows.int(i64 col) => str.parseInt(self.text(col)) catch 0
+
+pub f64 Rows.float(i64 col) => str.parseFloat(self.text(col)) catch 0.0
+
+pub bool Rows.bool(i64 col) => self.text(col) == "t"
+
+// Fills a @json struct from the row, each field from the column of the same
+// name. A NULL column leaves the field as it is.
+pub !void scan[T](Rows *rows, T *out) {
+    n := rows.ncols
+    str[] names = alloc(str, n)
+    defer free(names)
+    str[] values = alloc(str, n)
+    defer free(values)
+    u8[] nulls = alloc(u8, n)
+    defer free(nulls)
+    for c in 0..n {
+        names[c] = rows.names.at(c)
+        values[c] = rows.text(c)
+        nulls[c] = if rows.isNull(c) { 1 } else { 0 }
+    }
+    if rawScan(tableOf(out), out, names.ptr, values.ptr, nulls.ptr, n) != 0 {
+        return error(PgError.failed, "{messagePtr()[0:messageLen()]}")
+    }
+}
+
+// Every row as a @json struct: pg.all[User](try db.query("SELECT ...")).
+// The rows are freed; the values' Strings are the caller's.
+pub !List[T] all[T](Rows rows) {
+    defer rows.free()
+    List[T] out
+    for rows.next() {
+        T v
+        scan(&rows, &v) catch e {
+            out.free()
+            return e
+        }
+        out.push(v)
+    }
+    return out
+}
+
+// The first row as a @json struct; no rows fails with PgError.noRows.
+pub !T one[T](Rows rows) {
+    defer rows.free()
+    if !rows.next() {
+        return error(PgError.noRows, "the query has no rows")
+    }
+    T v
+    try scan(&rows, &v)
+    return v
+}
+
+String textOf(Value v) => match v {
+    .int(n) => format("{n}"),
+    .float(f) => format("{f}"),
+    .text(s) => s.copy(),
+    .bool(b) => (if b { "true" } else { "false" }).copy(),
+    .none => "".copy(),
+}
+
+// Runs one statement with values for its $1, $2, ...
+pub !Rows Conn.query(str sql, Value[] args = []) {
+    if self.broken {
+        return error(PgError.closed, "the connection is broken")
+    }
+    String out
+    defer out.free()
+    // Parse, Bind, Describe and Execute the unnamed statement, then Sync
+    String parse
+    putStr(&parse, "")
+    putStr(&parse, sql)
+    put16(&parse, 0)
+    message(&out, 'P', parse)
+    parse.free()
+    String bind
+    putStr(&bind, "")
+    putStr(&bind, "")
+    put16(&bind, 0)
+    put16(&bind, args.len)
+    for a in args {
+        isNull := match a {
+            .none => true,
+            _ => false,
+        }
+        if isNull {
+            put32(&bind, -1)
+            continue
+        }
+        scoped String t = textOf(a)
+        put32(&bind, t.len)
+        bind.append(t)
+    }
+    put16(&bind, 0)
+    message(&out, 'B', bind)
+    bind.free()
+    message(&out, 'D', "P\x00")
+    String exec
+    putStr(&exec, "")
+    put32(&exec, 0)
+    message(&out, 'E', exec)
+    exec.free()
+    message(&out, 'S', "")
+    try self.send(out)
+    return try self.results()
+}
+
+// Reads what the server sends until it is ready again.
+!Rows Conn.results() {
+    Rows rows
+    errdefer rows.free()
+    bool failed = false
+    Error first = error(PgError.failed, "")
+    for {
+        scoped m := try self.read()
+        k := m.kind
+        str b = m.body
+        if k == 'T' {
+            rows.ncols = get16(b, 0)
+            i64 at = 2
+            for c in 0..rows.ncols {
+                name := getStr(b, &at)
+                rows.names.push(name.copy())
+                at += 18
+            }
+        } else if k == 'D' {
+            n := get16(b, 0)
+            i64 at = 2
+            for c in 0..n {
+                size := get32(b, at)
+                at += 4
+                if size < 0 {
+                    rows.cells.push("".copy())
+                    rows.nulls.push(true)
+                    continue
+                }
+                rows.cells.push(b[at:at + size].copy())
+                rows.nulls.push(false)
+                at += size
+            }
+        } else if k == 'C' {
+            // "INSERT 0 3", "UPDATE 2", "SELECT 5": the last number
+            i64 at = 0
+            tag := getStr(b, &at)
+            words := str.count(tag, " ")
+            if words > 0 {
+                _, last, _ := str.cut(tag, " ")
+                for str.contains(last, " ") {
+                    _, last, _ = str.cut(last, " ")
+                }
+                rows.affected = str.parseInt(last) catch 0
+            }
+        } else if k == 'E' {
+            if !failed {
+                first = serverError(b)
+                failed = true
+            }
+        } else if k == 'Z' {
+            self.status = if b.len > 0 { b[0] } else { 'I' }
+            if failed {
+                return first
+            }
+            return rows
+        }
+    }
+}
+
+// Runs a statement: how many rows it changed.
+pub !i64 Conn.exec(str sql, Value[] args = []) {
+    scoped Rows r = try self.query(sql, args)
+    return r.affected
+}
+
+// Runs SQL with no values, which may hold several statements: a schema.
+pub !void Conn.execScript(str sql) {
+    String q
+    defer q.free()
+    String body
+    putStr(&body, sql)
+    message(&q, 'Q', body)
+    body.free()
+    try self.send(q)
+    scoped Rows r = try self.results()
+}
+
+// ------------------------------------------------------------ the pool
+
+struct PoolState {
+    String address
+    i64 max
+    Mutex lock
+    List[Conn] idle
+    i64 open
+}
+
+// Connections to a server, shared by tasks and threads: each call takes
+// one, and gives it back when it is done.
+pub struct Pool {
+    PoolState *s
+}
+
+// A pool for the server at address, with at most max connections open.
+// It connects once to check the address and the login.
+pub !Pool pool(str address, i64 max = 10) {
+    first := try connect(address)
+    PoolState[] mem = alloc(PoolState, 1)
+    s := &mem[0]
+    s.address = address.copy()
+    s.max = if max > 0 { max } else { 10 }
+    s.idle.push(first)
+    s.open = 1
+    return Pool{s: s}
+}
+
+// A connection from the pool: an idle one, a new one, or the next one given
+// back when max are open.
+!Conn Pool.take() {
+    start := time.clock()
+    for {
+        self.s.lock.lock()
+        if self.s.idle.len > 0 {
+            c := self.s.idle.pop()
+            self.s.lock.unlock()
+            return c
+        }
+        if self.s.open < self.s.max {
+            self.s.open += 1
+            self.s.lock.unlock()
+            c := connect(self.s.address) catch e {
+                self.s.lock.lock()
+                self.s.open -= 1
+                self.s.lock.unlock()
+                return e
+            }
+            return c
+        }
+        self.s.lock.unlock()
+        if time.clock() - start > 30s {
+            return error(PgError.connect, "no connection came free in 30s")
+        }
+        sleep(1ms)
+    }
+}
+
+void Pool.give(Conn c) {
+    if c.broken || c.status != 'I' {
+        // a broken one, or one left in a transaction: closed, not kept
+        c.close()
+        self.s.lock.lock()
+        self.s.open -= 1
+        self.s.lock.unlock()
+        return
+    }
+    self.s.lock.lock()
+    self.s.idle.push(c)
+    self.s.lock.unlock()
+}
+
+pub !Rows Pool.query(str sql, Value[] args = []) {
+    c := try self.take()
+    r := c.query(sql, args) catch e {
+        self.give(c)
+        return e
+    }
+    self.give(c)
+    return r
+}
+
+pub !i64 Pool.exec(str sql, Value[] args = []) {
+    scoped Rows r = try self.query(sql, args)
+    return r.affected
+}
+
+pub !void Pool.execScript(str sql) {
+    c := try self.take()
+    c.execScript(sql) catch e {
+        self.give(c)
+        return e
+    }
+    self.give(c)
+}
+
+// Closes every connection. Calls that are running keep theirs until they
+// end.
+pub void Pool.close() {
+    self.s.lock.lock()
+    for c in self.s.idle {
+        c.close()
+    }
+    self.s.idle.free()
+    self.s.lock.unlock()
+    self.s.address.free()
+    free(self.s[0:1])
+    self.s = null
+}
+
+// ------------------------------------------------------------ transactions
+
+// A transaction: its statements run on one connection, and take effect
+// together at commit.
+pub struct Tx {
+    Pool *pool
+    Conn conn
+    bool done
+}
+
+// Starts a transaction. Call commit or rollback at the end; a Tx that is
+// freed without either rolls back.
+pub !Tx Pool.begin() {
+    c := try self.take()
+    _ = c.exec("BEGIN") catch e {
+        self.give(c)
+        return e
+    }
+    return Tx{pool: self, conn: c}
+}
+
+pub !Rows Tx.query(str sql, Value[] args = []) => try self.conn.query(sql, args)
+
+pub !i64 Tx.exec(str sql, Value[] args = []) => try self.conn.exec(sql, args)
+
+pub !void Tx.commit() {
+    self.done = true
+    _ = self.conn.exec("COMMIT") catch e {
+        self.pool.give(self.conn)
+        return e
+    }
+    self.pool.give(self.conn)
+}
+
+pub !void Tx.rollback() {
+    self.done = true
+    _ = self.conn.exec("ROLLBACK") catch e {
+        self.pool.give(self.conn)
+        return e
+    }
+    self.pool.give(self.conn)
+}
+
+// Rolls back, unless commit or rollback was called: for scoped.
+pub void Tx.free() {
+    if !self.done {
+        self.rollback() catch e { }
+    }
+}

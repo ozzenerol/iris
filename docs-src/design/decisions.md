@@ -124,6 +124,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Compression uses the system's zlib, loaded when first needed, as TLS uses OpenSSL. | zlib is on every system Iris runs on, and is fast and well tested. |
 | Decompressing stops at a limit, 1 GiB unless another is given. | A few kilobytes of gzip can't fill the memory. |
 | HTTP clients ask for gzip and decompress it themselves; servers compress only when the Router asks. | Callers never see compressed bodies, and a server's output doesn't change without its author saying so. |
+| The PostgreSQL driver speaks the protocol in Iris, without libpq. | A query waits like any other network call, so other tasks run meanwhile, and there is no C library to install. |
+| `pg` sends values apart from the SQL and reads every result as text. | Values can't change what the SQL means, and text is the same for every type and every server version. |
+| A query's rows are all read before `query` returns. | The connection goes back to the pool at once, and `Rows` can't hold one up. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

@@ -4567,6 +4567,49 @@ static const char *setFromText(const JsonType *ft, bool duration, char *p, const
     }
 }
 
+/* pg: a row's text values into a @json struct, by column name. NULL
+   leaves a field as it is. 0, or 1 with the message set. */
+static _Thread_local char pgMsg[300];
+static _Thread_local int64_t pgMsgLen;
+
+const char *iris_pg_message_ptr(void) { return pgMsg; }
+int64_t iris_pg_message_len(void) { return pgMsgLen; }
+
+int iris_pg_scan(const JsonType *t, char *out, const Slice *names, const Slice *values, const uint8_t *nulls,
+                 int64_t n) {
+    const JsonField *fs = t->items;
+    for (int64_t c = 0; c < n; c++) {
+        const JsonField *f = NULL;
+        for (int64_t i = 0; i < t->count && !f; i++) {
+            if (fs[i].nameLen == names[c].len && !memcmp(fs[i].name, names[c].ptr, (size_t)names[c].len)) f = &fs[i];
+        }
+        if (!f || nulls[c]) continue;
+        char *p = out + f->offset;
+        const Slice *v = &values[c];
+        if (f->type->kind == J_STR) {
+            pgMsgLen = snprintf(pgMsg, sizeof pgMsg, "the field %.*s is a str, which can't keep a column; make it a String",
+                                (int)f->nameLen, f->name);
+            return 1;
+        }
+        if (f->type->kind == J_BOOL && v->len == 1 && (v->ptr[0] == 't' || v->ptr[0] == 'f')) {
+            *(uint8_t *)p = v->ptr[0] == 't';
+            continue;
+        }
+        char *text = malloc((size_t)v->len + 1);
+        memcpy(text, v->ptr, (size_t)v->len);
+        text[v->len] = 0;
+        const char *why = setFromText(f->type, false, p, text);
+        if (why) {
+            pgMsgLen = snprintf(pgMsg, sizeof pgMsg, "the column %.*s has '%.60s', which %s", (int)names[c].len,
+                                names[c].ptr, text, why);
+            free(text);
+            return 1;
+        }
+        free(text);
+    }
+    return 0;
+}
+
 int iris_env_load(const EnvTable *t, char *out) {
     for (int64_t i = 0; i < t->count; i++) {
         const EnvField *f = &t->fields[i];
@@ -4970,6 +5013,71 @@ int iris_signal_wait(void) {
    on it wakes up with the connection closed. */
 void iris_net_shutdown(int fd) {
     if (fd >= 0) shutdown(fd, SHUT_RDWR);
+}
+
+/* MD5 (RFC 1321), for protocols that still use it, like PostgreSQL's older
+   password login; it isn't safe for signing. */
+void iris_md5(const char *data, int64_t len, unsigned char *out) {
+    static const uint32_t K[64] = {
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391};
+    static const int R[64] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+                              5, 9,  14, 20, 5, 9,  14, 20, 5, 9,  14, 20, 5, 9,  14, 20,
+                              4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+                              6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
+    uint32_t h[4] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476};
+    uint64_t bits = (uint64_t)len * 8;
+    int64_t total = ((len + 8) / 64 + 1) * 64;
+    unsigned char *msg = calloc((size_t)total, 1);
+    if (!msg) outOfMemory();
+    memcpy(msg, data, (size_t)len);
+    msg[len] = 0x80;
+    for (int i = 0; i < 8; i++) msg[total - 8 + i] = (unsigned char)(bits >> (8 * i));
+    for (int64_t off = 0; off < total; off += 64) {
+        uint32_t w[16];
+        for (int i = 0; i < 16; i++) {
+            const unsigned char *b = msg + off + i * 4;
+            w[i] = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+        }
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
+        for (int i = 0; i < 64; i++) {
+            uint32_t f;
+            int g;
+            if (i < 16) {
+                f = (b & c) | (~b & d);
+                g = i;
+            } else if (i < 32) {
+                f = (d & b) | (~d & c);
+                g = (5 * i + 1) % 16;
+            } else if (i < 48) {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | ~d);
+                g = (7 * i) % 16;
+            }
+            uint32_t t = d;
+            d = c;
+            c = b;
+            uint32_t x = a + f + K[i] + w[g];
+            b = b + (x << R[i] | x >> (32 - R[i]));
+            a = t;
+        }
+        h[0] += a;
+        h[1] += b;
+        h[2] += c;
+        h[3] += d;
+    }
+    free(msg);
+    for (int i = 0; i < 4; i++) {
+        for (int k = 0; k < 4; k++) out[i * 4 + k] = (unsigned char)(h[i] >> (8 * k));
+    }
 }
 
 /* SHA-1, for the WebSocket handshake only: it isn't safe for signing. */

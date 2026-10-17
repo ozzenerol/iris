@@ -1,4 +1,5 @@
-// Hashes for checking data and signing it: SHA-256 and HMAC-SHA256.
+// Hashes for checking data and signing it: SHA-256, HMAC-SHA256 and
+// PBKDF2, and SHA-1 and MD5 for older protocols.
 
 @extern("iris_sha256")
 void rawSha256(u8 *data, i64 len, u8 *out)
@@ -8,6 +9,9 @@ void rawHmac(u8 *key, i64 keyLen, u8 *data, i64 len, u8 *out)
 
 @extern("iris_sha1")
 void rawSha1(u8 *data, i64 len, u8 *out)
+
+@extern("iris_md5")
+void rawMd5(u8 *data, i64 len, u8 *out)
 
 @extern("iris_const_equal")
 i32 rawEqual(u8 *a, i64 na, u8 *b, i64 nb)
@@ -36,5 +40,40 @@ pub bool equal(str a, str b) => rawEqual(a.ptr, a.len, b.ptr, b.len) != 0
 pub u8[20] sha1(str data) {
     u8[20] out
     rawSha1(data.ptr, data.len, &out[0])
+    return out
+}
+
+// The MD5 hash of data: 16 bytes. Broken for signatures too; for older
+// protocols and checksums only.
+pub u8[16] md5(str data) {
+    u8[16] out
+    rawMd5(data.ptr, data.len, &out[0])
+    return out
+}
+
+// PBKDF2 with HMAC-SHA256 (RFC 8018): a key of size bytes from a password
+// and a salt, made slow by iterations. For storing passwords, and for
+// logins like SCRAM.
+pub String pbkdf2Sha256(str password, str salt, i64 iterations, i64 size = 32) {
+    String out
+    i64 block = 1
+    for out.len < size {
+        String first
+        first.append(salt)
+        u8[4] index = [u8(block >> 24 & 0xff), u8(block >> 16 & 0xff), u8(block >> 8 & 0xff), u8(block & 0xff)]
+        first.append(index[0:4])
+        u8[32] u = hmacSha256(password, first)
+        first.free()
+        u8[32] t = u
+        for i in 1..iterations {
+            u = hmacSha256(password, u[0:32])
+            for k in 0..32 {
+                t[k] = t[k] ^ u[k]
+            }
+        }
+        take := if size - out.len < 32 { size - out.len } else { 32 }
+        out.append(t[0:take])
+        block += 1
+    }
     return out
 }
