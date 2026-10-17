@@ -57,7 +57,7 @@ A channel made with room for 0 values has no buffer: `ch <- v` waits until a tas
 ```iris
 done := chan[bool](0)
 spawn work(done)
-_ = <-done          // work has finished, and it knows it was seen
+_ = <-done // work has finished, and it knows it was seen
 ```
 
 `select` waits on several channels at once and runs the arm of the first one with a value. An `after(d)` arm runs when nothing came within that time:
