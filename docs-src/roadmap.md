@@ -38,6 +38,6 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.32 | UDP, addresses, and a DNS resolver written in Iris that `net.dial` uses. | released |
 | 0.33 | HTTP/2 for the server and the client, with HPACK, flow control and ALPN. | released |
 | 0.34 | Regular expressions (`regex`), matched in linear time. | released |
-| 0.35 | Compression: deflate and gzip, and gzip in HTTP. | planned |
+| 0.35 | Compression: deflate and gzip, and gzip in HTTP. | released |
 | 0.36 | A PostgreSQL driver written in Iris. | planned |
 | 0.37 | A Redis client. | planned |

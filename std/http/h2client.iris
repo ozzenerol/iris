@@ -257,6 +257,7 @@ H2Conn *startH2(net.Conn c, Dest *d) {
     encodeHeader(&block, ":authority", self.authority)
     encodeHeader(&block, ":path", d.path)
     encodeHeader(&block, "user-agent", "iris")
+    encodeHeader(&block, "accept-encoding", "gzip")
     if contentType.len > 0 {
         encodeHeader(&block, "content-type", contentType)
     }
@@ -332,6 +333,10 @@ H2Conn *startH2(net.Conn c, Dest *d) {
         *retry = r.retry
         defer r.why.free()
         return error(net.NetError.closed, "{r.why}")
+    }
+    r.reply.decode() catch e {
+        r.reply.free()
+        return e
     }
     return r.reply
 }

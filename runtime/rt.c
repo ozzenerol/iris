@@ -5016,3 +5016,180 @@ void iris_sha1(const char *data, int64_t len, unsigned char *out) {
         out[i * 4 + 3] = (unsigned char)h[i];
     }
 }
+
+/* ---------------------------------------------------------------- compress
+
+   zlib, loaded on first use. Its stream struct is declared here, as it is
+   in zlib.h, so no headers are needed to build programs. */
+
+typedef struct {
+    const unsigned char *next_in;
+    unsigned avail_in;
+    unsigned long total_in;
+    unsigned char *next_out;
+    unsigned avail_out;
+    unsigned long total_out;
+    const char *msg;
+    void *state;
+    void *zalloc, *zfree, *opaque;
+    int data_type;
+    unsigned long adler, reserved;
+} ZStream;
+
+static struct {
+    int loaded;
+    const char *(*version)(void);
+    int (*deflateInit2)(ZStream *, int, int, int, int, int, const char *, int);
+    int (*deflate)(ZStream *, int);
+    int (*deflateEnd)(ZStream *);
+    int (*inflateInit2)(ZStream *, int, const char *, int);
+    int (*inflate)(ZStream *, int);
+    int (*inflateEnd)(ZStream *);
+    unsigned long (*crc32)(unsigned long, const unsigned char *, unsigned);
+    unsigned long (*adler32)(unsigned long, const unsigned char *, unsigned);
+} zl;
+
+static pthread_once_t zOnce = PTHREAD_ONCE_INIT;
+static _Thread_local char zMsg[300];
+static _Thread_local int64_t zMsgLen;
+
+const char *iris_z_message_ptr(void) { return zMsg; }
+int64_t iris_z_message_len(void) { return zMsgLen; }
+
+static void zSay(const char *what, const char *detail) {
+    zMsgLen = snprintf(zMsg, sizeof zMsg, "%s%s%s", what, detail ? ": " : "", detail ? detail : "");
+    if (zMsgLen >= (int64_t)sizeof zMsg) zMsgLen = sizeof zMsg - 1;
+}
+
+static void zLoad(void) {
+#ifdef __APPLE__
+    static const char *const names[] = {"/usr/lib/libz.1.dylib", "/usr/lib/libz.dylib",
+                                        "/opt/homebrew/opt/zlib/lib/libz.1.dylib", NULL};
+#else
+    static const char *const names[] = {"libz.so.1", "libz.so", NULL};
+#endif
+    const char *env = getenv("IRIS_ZLIB");
+    void *h = env && *env ? dlopen(env, RTLD_NOW) : NULL;
+    for (int i = 0; !h && names[i]; i++) h = dlopen(names[i], RTLD_NOW);
+    zl.loaded = -1;
+    if (!h) return;
+#define ZS(field, name)                         \
+    do {                                        \
+        *(void **)&zl.field = dlsym(h, name);   \
+        if (!zl.field) return;                  \
+    } while (0)
+    ZS(version, "zlibVersion");
+    ZS(deflateInit2, "deflateInit2_");
+    ZS(deflate, "deflate");
+    ZS(deflateEnd, "deflateEnd");
+    ZS(inflateInit2, "inflateInit2_");
+    ZS(inflate, "inflate");
+    ZS(inflateEnd, "inflateEnd");
+    ZS(crc32, "crc32");
+    ZS(adler32, "adler32");
+#undef ZS
+    zl.loaded = 1;
+}
+
+static bool zReady(void) {
+    pthread_once(&zOnce, zLoad);
+    if (zl.loaded != 1) {
+        zSay("compression needs zlib (libz): install it, or set IRIS_ZLIB to its library", NULL);
+        return false;
+    }
+    return true;
+}
+
+typedef struct {
+    ZStream s;
+    int compress;
+    int done;
+} ZState;
+
+/* A stream that compresses (compress 1) or decompresses; format 0 gzip,
+   1 zlib, 2 raw deflate; decompressing gzip also takes zlib. */
+void *iris_z_new(int compress, int format, int level) {
+    if (!zReady()) return NULL;
+    ZState *z = calloc(1, sizeof *z);
+    z->compress = compress;
+    int bits = format == 0 ? 31 : format == 1 ? 15 : -15;
+    int rc;
+    if (compress) {
+        rc = zl.deflateInit2(&z->s, level < 0 ? 6 : level > 9 ? 9 : level, 8, bits, 8, 0, zl.version(),
+                             (int)sizeof(ZStream));
+    } else {
+        rc = zl.inflateInit2(&z->s, format == 0 ? 47 : bits, zl.version(), (int)sizeof(ZStream));
+    }
+    if (rc != 0) {
+        zSay("starting zlib", z->s.msg);
+        free(z);
+        return NULL;
+    }
+    return z;
+}
+
+/* Feeds n bytes and appends what comes out to out; finish ends a
+   compressed stream. 0 when more can come, 1 at the end of a decompressed
+   stream, -1 when the data is broken, -2 when out would pass limit. */
+int iris_z_push(void *handle, const char *in, int64_t n, int finish, IrisString *out, int64_t limit) {
+    ZState *z = handle;
+    if (z->done) return n > 0 && !z->compress ? -1 : 1;
+    z->s.next_in = (const unsigned char *)in;
+    z->s.avail_in = (unsigned)n;
+    char buf[65536];
+    for (;;) {
+        z->s.next_out = (unsigned char *)buf;
+        z->s.avail_out = sizeof buf;
+        int rc = z->compress ? zl.deflate(&z->s, finish ? 4 : 0) : zl.inflate(&z->s, 0);
+        int64_t got = (int64_t)(sizeof buf - z->s.avail_out);
+        if (got > 0) {
+            if (limit > 0 && out->len + got > limit) {
+                zSay("the data comes out larger than the limit", NULL);
+                return -2;
+            }
+            iris_string_append(out, buf, got);
+        }
+        if (rc == 1) {                          /* Z_STREAM_END */
+            z->done = 1;
+            return 1;
+        }
+        if (rc == -5) return 0;                 /* Z_BUF_ERROR: it needs more input */
+        if (rc != 0) {
+            zSay(z->compress ? "compressing" : "the compressed data is broken", z->s.msg);
+            return -1;
+        }
+        if (z->s.avail_in == 0 && z->s.avail_out != 0 && !finish) return 0;
+    }
+}
+
+void iris_z_free(void *handle) {
+    ZState *z = handle;
+    if (!z) return;
+    if (z->compress) zl.deflateEnd(&z->s);
+    else zl.inflateEnd(&z->s);
+    free(z);
+}
+
+int64_t iris_crc32(int64_t crc, const char *p, int64_t n) {
+    if (!zReady()) return 0;
+    unsigned long c = (unsigned long)crc;
+    while (n > 0) {
+        unsigned part = n > 0x40000000 ? 0x40000000 : (unsigned)n;
+        c = zl.crc32(c, (const unsigned char *)p, part);
+        p += part;
+        n -= part;
+    }
+    return (int64_t)c;
+}
+
+int64_t iris_adler32(int64_t a, const char *p, int64_t n) {
+    if (!zReady()) return 0;
+    unsigned long c = (unsigned long)a;
+    while (n > 0) {
+        unsigned part = n > 0x40000000 ? 0x40000000 : (unsigned)n;
+        c = zl.adler32(c, (const unsigned char *)p, part);
+        p += part;
+        n -= part;
+    }
+    return (int64_t)c;
+}
