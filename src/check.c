@@ -2344,6 +2344,10 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         }
     }
     Type *t = checkExpr(c, &e->a, NULL);
+    if (t->kind == TY_ENUM && !t->hasData && strcmp(e->name, "value") == 0) {
+        e->builtin = 3;                 /* the value's number: Status.notFound.value is 404 */
+        return setType(e, &tyI64);
+    }
     if (t->kind == TY_ENUM && strcmp(e->name, "name") == 0) {
         e->builtin = 1;                 /* the value's name, from the runtime's table */
         return setType(e, &tyStr);

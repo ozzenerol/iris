@@ -2150,6 +2150,12 @@ static Val emitExpr(IR *ir, Node *e) {
     case N_CALL:
         return emitCall(ir, e);
     case N_FIELD_ACCESS: {
+        if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin == 3) {
+            Val v = emitExpr(ir, e->a);
+            const char *r = tmp(ir);
+            ins(ir, "%s = sext i32 %s to i64", r, v.s);
+            return val(r, &tyI64);
+        }
         if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin) {
             Val v = emitExpr(ir, e->a);
             const char *p = tmp(ir), *n = tmp(ir);
