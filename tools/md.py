@@ -107,6 +107,10 @@ def code_block(info, code):
     words = info.split()
     lang = words[0] if words else ""
     mode = words[1] if len(words) > 1 else ""
+    if lang == "iris" and mode == "step":
+        # a guide's whole file after a step, folded
+        return ('<details class="step-file"><summary>main.iris after this step</summary>'
+                f'<pre class="code"><code>{highlight(code)}</code></pre></details>')
     if lang == "iris":
         body = highlight(code)
         cls = "code" + (" run" if mode == "run" else " bad" if mode == "error" else "")

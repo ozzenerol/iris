@@ -45,7 +45,7 @@ try {
 <ol><li>Write the rules. The feature's page in the Language section must say exactly how it behaves. If a rule is not settled, it goes to the maintainer as a question with a suggested answer.</li><li>Write the tests: programs that use the feature, and programs that should fail to compile.</li><li>Implement the feature.</li><li>Run all the tests on the three platforms.</li><li>Commit on a branch and merge it.</li></ol>
 <p>Language design is decided by the maintainer. How the compiler is built inside is decided by whoever writes the code, who then says what they chose.</p>
 <h2 id="building"><a href="#building">Building</a></h2>
-<pre class="code"><code>make              # builds ./iris
+<pre class="code"><code>make -j           # builds ./iris, a file per core
 make iris-debug   # builds ./iris-debug with AddressSanitizer
 make test         # runs the tests
 make test-debug   # runs the tests with iris-debug</code></pre>

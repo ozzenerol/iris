@@ -15,7 +15,7 @@ Language design is decided by the maintainer. How the compiler is built inside i
 ## Building
 
 ```shell
-make              # builds ./iris
+make -j           # builds ./iris, a file per core
 make iris-debug   # builds ./iris-debug with AddressSanitizer
 make test         # runs the tests
 make test-debug   # runs the tests with iris-debug

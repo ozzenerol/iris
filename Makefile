@@ -4,8 +4,18 @@ SRC = $(wildcard src/*.c)
 HDR = $(wildcard src/*.h)
 STD = $(sort $(wildcard std/*/*.iris))
 
-iris: $(SRC) $(HDR) build/runtime.inc build/std.inc
-	$(CC) $(CFLAGS) -Ibuild -o $@ $(SRC) -lm
+OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
+
+# each file compiles on its own, so make -j uses several cores
+iris: $(OBJ)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) -lm
+
+build/obj/%.o: src/%.c $(HDR)
+	@mkdir -p build/obj
+	$(CC) $(CFLAGS) -Ibuild -c -o $@ $<
+
+# these two carry the standard library and the runtime
+build/obj/main.o build/obj/module.o: build/runtime.inc build/std.inc
 
 # AddressSanitizer and UBSan build, for finding memory bugs in the compiler
 iris-debug: $(SRC) $(HDR) build/runtime.inc build/std.inc

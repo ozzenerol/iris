@@ -39,6 +39,11 @@
                            (```iris error blocks are skipped); an ```iris run
                            block must also run and print the ```output block
                            that follows it
+  guides/NN-name           a guide followed as a reader would: each ```iris
+                           step file checked, ```shell start run in the
+                           background, each ```shell try run and compared
+                           with its ```output block (… matches anything);
+                           see docs-src/guides/README.md
 
 Usage: python3 tools/run_tests.py [--iris PATH] [--update] [NAME...]
   --update   rewrite the .tree and fmt .out files from the current output
@@ -174,7 +179,7 @@ def fmt_tests(iris, only, update, failures):
         for md in sorted(glob.glob(os.path.join(ROOT, "docs-src/**/*.md"), recursive=True)):
             with open(md) as f:
                 text = f.read()
-            for m in re.finditer(r"```iris( run)?\n(.*?)```", text, re.S):
+            for m in re.finditer(r"```iris( run| step| whole)?\n(.*?)```", text, re.S):
                 q = subprocess.run([iris, "fmt", "-"], input=m.group(2), capture_output=True, text=True, timeout=60)
                 if q.returncode != 0 or q.stdout != m.group(2):
                     line = text[:m.start()].count("\n") + 1
@@ -381,6 +386,111 @@ def doc_tests(iris, only, failures):
     return count
 
 
+def output_mismatch(want, got):
+    """None when got has the lines of want, where … in want matches any
+    text; else what differs"""
+    w, g = want.splitlines(), got.splitlines()
+    for i in range(max(len(w), len(g))):
+        a = w[i] if i < len(w) else "<missing>"
+        b = g[i] if i < len(g) else "<missing>"
+        pattern = ".*".join(re.escape(part) for part in a.split("…"))
+        if i >= len(w) or i >= len(g) or not re.fullmatch(pattern, b):
+            return "output differs at line %d:\n  want: %s\n  got:  %s" % (i + 1, a, b)
+    return None
+
+
+def port_open(port):
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.2)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def guide_tests(iris, only, failures):
+    """Each guide, step by step in one folder, as docs-src/guides/README.md says"""
+    import signal
+    import time
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import md as markdown
+    count = 0
+    bindir = os.path.dirname(os.path.abspath(iris))
+    env = dict(os.environ, PATH=bindir + os.pathsep + os.environ.get("PATH", ""))
+    for path in sorted(glob.glob(os.path.join(ROOT, "docs-src/guides/[0-9][0-9]-*.md"))):
+        name = "guides/" + os.path.basename(path)[:-3]
+        if only and not any(o in name or o in "guides" for o in only):
+            continue
+        if not shutil.which("curl"):
+            failures.append((name, "curl isn't installed"))
+            continue
+        blocks = markdown.convert(open(path).read())[4]
+        server = None
+        last_step = None
+
+        def stop():
+            nonlocal server
+            if server:
+                try:
+                    os.killpg(server.pid, signal.SIGTERM)
+                    server.wait(timeout=15)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    os.killpg(server.pid, signal.SIGKILL)
+                server = None
+
+        with tempfile.TemporaryDirectory() as top:
+            # the reader's folder holds only what the guide makes
+            tmp = os.path.join(top, "work")
+            os.mkdir(tmp)
+            try:
+                for n, (info, code, line) in enumerate(blocks):
+                    where = "%s:%d" % (name, line)
+                    if info == "iris step":
+                        count += 1
+                        stop()
+                        last_step = code
+                        with open(os.path.join(tmp, "main.iris"), "w") as f:
+                            f.write(code + "\n")
+                        p = subprocess.run([iris, "check", "main.iris"], cwd=tmp, capture_output=True,
+                                           text=True, timeout=120)
+                        if p.returncode != 0:
+                            failures.append((where, "the step's file doesn't compile:\n" + p.stderr))
+                    elif info == "iris whole":
+                        count += 1
+                        if code != last_step:
+                            failures.append((where, "the whole program isn't the last step's file"))
+                    elif info == "shell start":
+                        count += 1
+                        stop()
+                        if port_open(8080):
+                            failures.append((where, "port 8080 is taken already"))
+                            break
+                        log = open(os.path.join(top, "server.log"), "w")
+                        server = subprocess.Popen(["bash", "-c", code], cwd=tmp, env=dict(env, HOME=top), stdout=log,
+                                                  stderr=subprocess.STDOUT, start_new_session=True)
+                        deadline = time.time() + 120
+                        while time.time() < deadline and server.poll() is None and not port_open(8080):
+                            time.sleep(0.1)
+                        if not port_open(8080):
+                            log.close()
+                            failures.append((where, "the program isn't listening on 8080:\n" +
+                                             open(os.path.join(top, "server.log")).read()))
+                            server = None
+                    elif info == "shell try":
+                        count += 1
+                        # stdout and stderr together, in the order they come, as a terminal shows them
+                        p = subprocess.run(["bash", "-c", code], cwd=tmp, env=dict(env, HOME=top),
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
+                        got = p.stdout
+                        nxt = blocks[n + 1] if n + 1 < len(blocks) else None
+                        if nxt and nxt[0] == "output":
+                            want = nxt[1] + "\n"
+                            bad = output_mismatch(want, got)
+                            if bad:
+                                failures.append((where, bad + "\n  all of it:\n" + got))
+            finally:
+                stop()
+    return count
+
+
 def service_tests(iris, only, failures, skipped, folder, script, prefix):
     """The tests in tests/FOLDER, with a server that SCRIPT starts; its
     PREFIX_ variables go to the tests. Skipped when it can't start one."""
@@ -434,6 +544,7 @@ def main():
     total += project_tests(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
+    total += guide_tests(args.iris, args.only, failures)
     total += std_tests(args.iris, args.only, failures)
     total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")
     total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")

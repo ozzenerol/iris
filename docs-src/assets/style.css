@@ -277,3 +277,10 @@ html.closed-std-left .std-left, html.closed-std-right .std-right { display: none
   .install { flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* a guide's whole file after a step */
+.step-file { margin: 16px 0; border: 1px solid var(--line); border-radius: 6px; }
+.step-file summary { cursor: pointer; padding: 8px 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.step-file summary:hover { color: var(--fg); }
+.step-file[open] summary { border-bottom: 1px solid var(--line); }
+.step-file pre { margin: 0; border-radius: 0 0 6px 6px; }
