@@ -2,6 +2,8 @@
 
 import io, os
 
+// What parseArgs fails with: help for -h or --help, with the help as the
+// message; invalid for a wrong flag or value.
 pub enum FlagError { help, invalid }
 
 // Fills a @flags struct from the program's arguments: flags.parse(Options).

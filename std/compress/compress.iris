@@ -4,6 +4,8 @@
 //     scoped String packed = try compress.gzip(text)
 //     scoped String back = try compress.gunzip(packed)
 
+// What compression fails with: broken for data that isn't valid, tooLarge when
+// the output would pass the limit, missing when zlib can't be loaded.
 pub enum CompressError { broken, tooLarge, missing }
 
 // The wrapping around deflate data: gzip (files, HTTP), zlib (PNG, some
@@ -64,6 +66,8 @@ pub !String decompress(str data, Format format = .gzip, i64 limit = 0) {
     return out
 }
 
+// Compresses data in the gzip format, at a level from 1 (fastest) to 9
+// (smallest).
 pub !String gzip(str data, i64 level = 6) => try compress(data, .gzip, level)
 
 // Decompresses gzip data; zlib data works too.
@@ -82,6 +86,7 @@ pub struct Writer {
     pub String out
 }
 
+// A Writer that compresses in format, at a level from 1 to 9.
 pub !Writer writer(Format format = .gzip, i64 level = 6) {
     z := rawNew(1, formatCode(format), i32(level))
     if z == null {
@@ -106,11 +111,13 @@ pub !Writer writer(Format format = .gzip, i64 level = 6) {
     }
 }
 
+// Compresses data and adds what comes out to out.
 pub !void Writer.write(str data) => try self.push(data, false)
 
 // Ends the stream: out is then complete.
 pub !void Writer.finish() => try self.push("", true)
 
+// Frees the stream and out.
 pub void Writer.free() {
     rawFree(self.z)
     self.z = null
@@ -125,6 +132,8 @@ pub struct Reader {
     bool ended
 }
 
+// A Reader that decompresses format; it fails with tooLarge when out would
+// pass limit bytes (0: 1 GiB).
 pub !Reader reader(Format format = .gzip, i64 limit = 0) {
     z := rawNew(0, formatCode(format), 0)
     if z == null {
@@ -157,6 +166,7 @@ pub !bool Reader.write(str data) {
     return false
 }
 
+// Frees the stream and out.
 pub void Reader.free() {
     rawFree(self.z)
     self.z = null

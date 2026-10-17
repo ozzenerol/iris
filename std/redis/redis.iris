@@ -11,6 +11,9 @@
 
 import net, str, time, url
 
+// What Redis calls fail with: connect, server (an error reply, with the
+// server's message), closed, protocol (the server sent something that isn't
+// RESP).
 pub enum RedisError { connect, server, closed, protocol }
 
 // What kind of value a reply is.
@@ -27,6 +30,7 @@ pub struct Reply {
     pub List[Reply] items
 }
 
+// Frees the reply's text and items.
 pub void Reply.free() {
     self.text.free()
     for r in self.items {
@@ -35,6 +39,7 @@ pub void Reply.free() {
     self.items.free()
 }
 
+// Whether the reply is nil: a key that isn't there.
 pub bool Reply.isNil() => self.kind == .nil
 
 // ------------------------------------------------------------ one connection
@@ -359,11 +364,13 @@ pub !i64 Client.del(str[] keys) {
     return try self.int(all.items())
 }
 
+// Whether key is there.
 pub !bool Client.exists(str key) => try self.int(["EXISTS", key]) > 0
 
 // Adds 1 to the number at key (0 when there is none): the new value.
 pub !i64 Client.incr(str key) => try self.int(["INCR", key])
 
+// Adds n to the number at key (0 when there is none): the new value.
 pub !i64 Client.incrBy(str key, i64 n) {
     scoped String by = format("{n}")
     return try self.int(["INCRBY", key, by])
@@ -382,10 +389,12 @@ pub !Duration Client.ttl(str key) {
     return if ms < 0 { Duration(ms) * 1s } else { Duration(ms) * 1ms }
 }
 
+// Sets field of the hash at key.
 pub !void Client.hset(str key, str field, str value) {
     scoped r := try self.do(["HSET", key, field, value])
 }
 
+// A field of the hash at key, and whether it is there.
 pub !(String, bool) Client.hget(str key, str field) {
     r := try self.do(["HGET", key, field])
     if r.kind == .nil {
@@ -413,8 +422,10 @@ pub !Map[str, String] Client.hgetAll(str key) {
     return out
 }
 
+// Adds value at the start of the list at key: the list's new length.
 pub !i64 Client.lpush(str key, str value) => try self.int(["LPUSH", key, value])
 
+// Adds value at the end of the list at key: the list's new length.
 pub !i64 Client.rpush(str key, str value) => try self.int(["RPUSH", key, value])
 
 // The items of a list from start to stop (-1 is the last).
@@ -425,8 +436,10 @@ pub !List[String] Client.lrange(str key, i64 start = 0, i64 stop = -1) {
     return texts(r)
 }
 
+// Adds member to the set at key: 1 when it is new, 0 when it was there.
 pub !i64 Client.sadd(str key, str member) => try self.int(["SADD", key, member])
 
+// The members of the set at key, in no particular order.
 pub !List[String] Client.smembers(str key) {
     r := try self.do(["SMEMBERS", key])
     return texts(r)
@@ -468,8 +481,10 @@ pub struct Pipeline {
     i64 count
 }
 
+// A Pipeline: commands added to it are sent together by run.
 pub Pipeline Client.pipeline() => Pipeline{client: self}
 
+// Adds a command; nothing is sent until run.
 pub void Pipeline.add(str[] args) {
     encode(&self.out, args)
     self.count += 1
@@ -501,6 +516,7 @@ pub !List[Reply] Pipeline.run() {
     return out
 }
 
+// Frees the commands not sent.
 pub void Pipeline.free() {
     self.out.free()
 }
@@ -513,6 +529,7 @@ pub struct Message {
     pub String data
 }
 
+// Frees the channel and the data.
 pub void Message.free() {
     self.channel.free()
     self.data.free()
@@ -578,6 +595,7 @@ pub !Message Subscription.next(Duration timeout = 0s) {
     }
 }
 
+// Unsubscribes, by closing the subscription's connection.
 pub void Subscription.close() {
     self.conn.conn.close()
 }

@@ -4,6 +4,7 @@
 
 import io, json, time
 
+// How much a line matters. setLevel hides the lines below a level.
 pub enum Level { debug, info, warn, error }
 
 Level minimum = .info
@@ -57,10 +58,15 @@ pub void write(Level level, str message) {
     io.ewrite(line)
 }
 
+// Writes message at the debug level: details for finding a problem.
 pub void debug(str message) => write(.debug, message)
 
+// Writes message at the info level: what the program is doing.
 pub void info(str message) => write(.info, message)
 
+// Writes message at the warn level: something went wrong, and the program goes
+// on.
 pub void warn(str message) => write(.warn, message)
 
+// Writes message at the error level: something failed.
 pub void error(str message) => write(.error, message)

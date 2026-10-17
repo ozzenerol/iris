@@ -35,6 +35,8 @@
 
 import str
 
+// What compile fails with: syntax for a pattern that isn't valid, tooLarge for
+// one that makes too big a program.
 pub enum RegexError { syntax, tooLarge }
 
 // ------------------------------------------------------------ the program
@@ -83,6 +85,7 @@ pub struct Regex {
     bool anchored // the pattern starts with \A or ^ (without (?m))
 }
 
+// Frees the compiled pattern.
 pub void Regex.free() {
     self.prog.free()
     self.classes.free()
@@ -1104,6 +1107,7 @@ pub struct Match {
     List[i64] caps
 }
 
+// Frees the positions of the groups.
 pub void Match.free() {
     self.caps.free()
 }

@@ -1,5 +1,6 @@
 // Hexadecimal: each byte as two digits, 0-9 and a-f.
 
+// What decode fails with: invalid for text that isn't hex digits in pairs.
 pub enum HexError { invalid }
 
 const DIGITS = "0123456789abcdef"

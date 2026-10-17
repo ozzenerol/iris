@@ -12,6 +12,9 @@
 
 import base64, crypto, net, random, str, time, url
 
+// What PostgreSQL calls fail with: connect, auth, failed, constraint (SQLSTATE
+// class 23), retry (a serialization failure or a deadlock: try again), noRows
+// (one found nothing), closed.
 pub enum PgError { connect, auth, failed, constraint, retry, noRows, closed }
 
 // A value for a $n in SQL: .int(36), .float(1.5), .text("ada"),
@@ -432,6 +435,7 @@ String hexOf(u8[] data) {
     return out
 }
 
+// Logs out and closes the connection.
 pub void Conn.close() {
     if !self.broken {
         String bye
@@ -455,6 +459,7 @@ pub struct Rows {
     pub i64 affected
 }
 
+// Frees the rows.
 pub void Rows.free() {
     self.names.freeEach()
     self.cells.freeEach()
@@ -464,8 +469,10 @@ pub void Rows.free() {
 // How many rows there are.
 pub i64 Rows.len() => if self.ncols > 0 { self.cells.len / self.ncols } else { 0 }
 
+// How many columns each row has.
 pub i64 Rows.columns() => self.ncols
 
+// A column's name, from 0.
 pub str Rows.name(i64 col) => if col >= 0 && col < self.names.len { self.names.at(col) } else { "" }
 
 // Moves to the next row: false when there are no more. The first call
@@ -488,13 +495,16 @@ pub str Rows.text(i64 col) {
     return self.cells.at(self.cell(col))
 }
 
+// Whether a column of the row is NULL.
 pub bool Rows.isNull(i64 col) => col < 0 || col >= self.ncols || self.at < 1 || self.nulls.at(self.cell(col))
 
 // A column as a number: 0 for NULL or text that isn't one.
 pub i64 Rows.int(i64 col) => str.parseInt(self.text(col)) catch 0
 
+// A column as a float: 0 for NULL or text that isn't one.
 pub f64 Rows.float(i64 col) => str.parseFloat(self.text(col)) catch 0.0
 
+// A column as a bool: true for t.
 pub bool Rows.bool(i64 col) => self.text(col) == "t"
 
 // Fills a @json struct from the row, each field from the column of the same
@@ -749,6 +759,8 @@ void Pool.give(Conn c) {
     self.s.lock.unlock()
 }
 
+// Runs a statement on a connection from the pool, with values for its $1, $2,
+// ...
 pub !Rows Pool.query(str sql, Value[] args = []) {
     c := try self.take()
     r := c.query(sql, args) catch e {
@@ -759,11 +771,13 @@ pub !Rows Pool.query(str sql, Value[] args = []) {
     return r
 }
 
+// Runs a statement: how many rows it changed.
 pub !i64 Pool.exec(str sql, Value[] args = []) {
     scoped Rows r = try self.query(sql, args)
     return r.affected
 }
 
+// Runs SQL with no values, which may hold several statements.
 pub !void Pool.execScript(str sql) {
     c := try self.take()
     c.execScript(sql) catch e {
@@ -808,10 +822,13 @@ pub !Tx Pool.begin() {
     return Tx{pool: self, conn: c}
 }
 
+// Runs a statement in the transaction.
 pub !Rows Tx.query(str sql, Value[] args = []) => try self.conn.query(sql, args)
 
+// Runs a statement in the transaction: how many rows it changed.
 pub !i64 Tx.exec(str sql, Value[] args = []) => try self.conn.exec(sql, args)
 
+// Makes the transaction's changes last, and gives the connection back.
 pub !void Tx.commit() {
     self.done = true
     _ = self.conn.exec("COMMIT") catch e {
@@ -821,6 +838,7 @@ pub !void Tx.commit() {
     self.pool.give(self.conn)
 }
 
+// Drops the transaction's changes, and gives the connection back.
 pub !void Tx.rollback() {
     self.done = true
     _ = self.conn.exec("ROLLBACK") catch e {

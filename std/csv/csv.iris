@@ -1,6 +1,8 @@
 // Comma-separated values (RFC 4180): fields in double quotes may hold the
 // separator, quotes (written twice) and line breaks.
 
+// What reading fails with: end when there are no more records, quote for a
+// quoted field with no closing quote.
 pub enum CsvError { end, quote }
 
 // One row: its fields, owned by the record.
@@ -8,11 +10,13 @@ pub struct Record {
     pub List[String] fields
 }
 
+// How many fields the record has.
 pub i64 Record.len() => self.fields.len
 
 // Field i, or "" past the end.
 pub str Record.at(i64 i) => if i >= 0 && i < self.fields.len { self.fields.at(i) } else { "" }
 
+// Frees the fields and the list that holds them.
 pub void Record.free() {
     self.fields.freeEach()
 }
@@ -27,6 +31,7 @@ pub struct Reader {
     pub i64 line
 }
 
+// A Reader at the start of text, with "," as the separator.
 pub Reader reader(str text) => Reader{text: text, line: 1}
 
 // The next record. At the end it fails with CsvError.end.

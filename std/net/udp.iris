@@ -54,6 +54,7 @@ pub String Addr.format() {
     return format("[{ip}]:{self.port}")
 }
 
+// Whether the two addresses have the same IP and port.
 pub bool Addr.equal(Addr other) {
     if self.port != other.port {
         return false
@@ -223,4 +224,5 @@ pub Addr Udp.localAddr() {
     return a
 }
 
+// Closes the socket.
 pub void Udp.close() => rawClose(self.fd)

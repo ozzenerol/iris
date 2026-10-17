@@ -1,5 +1,7 @@
 // URLs: taking them apart, and the %XX encoding of their parts.
 
+// What parse and decode fail with: invalid for text that isn't a URL, or a %
+// that isn't followed by two hex digits.
 pub enum UrlError { invalid }
 
 // The parts of a URL, as views into the text it was read from:

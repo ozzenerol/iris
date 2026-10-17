@@ -163,7 +163,8 @@
     var html = '<div class="crumb"><a href="#">Library</a> / ' + esc(m.group) + '<span class="badge">module</span></div>' +
       "<h1>" + esc(m.name) + "</h1>" + '<p class="lede">' + inline(m.summary) + "</p>" +
       (m.name === "core" ? "" : '<pre class="code imp"><code>' + hl("import " + m.name) + "</code></pre>") +
-      (m.intro ? '<div class="intro prose">' + m.intro + "</div>" : m.doc ? '<div class="intro prose">' + docHtml(m.doc) + "</div>" : "");
+      (m.doc ? '<div class="intro prose">' + docHtml(m.doc) + "</div>" : "") +
+      (m.intro ? '<div class="intro prose">' + m.intro + "</div>" : "");
     GROUP_ORDER.forEach(function (k) {
       if (!g[k]) return;
       html += "<h2>" + k + " (" + g[k].length + ")</h2>";

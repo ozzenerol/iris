@@ -1,10 +1,15 @@
-// HTTP/1.1: a server, where each connection gets a task and requests on it
-// are answered one after the other while the client keeps it open; a
-// Router that sends each request to the handler for its method and path;
-// and a client. https works on both sides, with TLS from OpenSSL.
+// HTTP/1.1 and HTTP/2: a server, where each connection gets a task and
+// its requests are answered while the client keeps it open; a Router that
+// sends each request to the handler for its method and path; a client,
+// with a Client that keeps connections open; and WebSockets. https works on
+// both sides, with TLS from OpenSSL; over TLS, HTTP/2 is used when the
+// other side offers it.
 
 import compress, json, net, str, time
 
+// What HTTP calls fail with: badUrl for an address that isn't http:// or
+// https://, badReply for a reply that isn't HTTP, tooBig for a body over the
+// limit, badRequest for a request line that isn't HTTP/1.x.
 pub enum HttpError { badUrl, badReply, tooBig, badRequest }
 
 // What answers a request. It can fail: an error that leaves it is
@@ -638,14 +643,19 @@ pub void Router.handle(str pattern, Handler handler) {
     self.routes.push(r)
 }
 
+// Adds a handler for GET requests to path.
 pub void Router.get(str path, Handler handler) => self.add("GET", path, handler)
 
+// Adds a handler for POST requests to path.
 pub void Router.post(str path, Handler handler) => self.add("POST", path, handler)
 
+// Adds a handler for PUT requests to path.
 pub void Router.put(str path, Handler handler) => self.add("PUT", path, handler)
 
+// Adds a handler for DELETE requests to path.
 pub void Router.delete(str path, Handler handler) => self.add("DELETE", path, handler)
 
+// Adds a handler for PATCH requests to path.
 pub void Router.patch(str path, Handler handler) => self.add("PATCH", path, handler)
 
 // Answers WebSockets at path with handler, which gets the open WebSocket.
@@ -824,6 +834,7 @@ pub !void Router.serveTlsOn(net.Listener ln, net.TlsConfig *config, i64 threads 
     try serveTargetOn(ln, Target{router: self, tls: config}, threads)
 }
 
+// Frees the routes and hooks.
 pub void Router.free() {
     for r in self.routes {
         r.method.free()
@@ -883,6 +894,7 @@ pub str Reply.header(str name) {
     return ""
 }
 
+// Frees the body and the headers.
 pub void Reply.free() {
     self.body.free()
     for n in self.names {
@@ -1140,8 +1152,10 @@ bool Client.hasIdle(Dest *d) {
     return error(net.NetError.closed, "{d.host}: the connection closed")
 }
 
+// Sends a GET request to url.
 pub !Reply Client.get(str url) => try self.send("GET", url)
 
+// Sends body to url with POST, as contentType.
 pub !Reply Client.post(str url, str contentType, str body) => try self.send("POST", url, body, contentType)
 
 // Closes the connections the client keeps.

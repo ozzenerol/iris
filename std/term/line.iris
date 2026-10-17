@@ -85,6 +85,7 @@ pub void historyAuto(bool on) {
     historyManual = !on
 }
 
+// How many lines the history has.
 pub i64 historyLen() => history.len
 
 // History line i, 0 the oldest.

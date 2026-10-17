@@ -1,6 +1,7 @@
 // Base64: bytes as text, standard (RFC 4648) and URL-safe (for URLs and
 // JSON Web Tokens).
 
+// What decoding fails with: invalid for text that isn't Base64.
 pub enum Base64Error { invalid }
 
 const STANDARD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

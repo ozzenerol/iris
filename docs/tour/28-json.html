@@ -97,7 +97,33 @@
 }</code></pre>
 <pre class="out"><code>7 Ada user true 2 London 9.5</code></pre>
 <p><code>null</code> leaves a field as it is. A decoded struct owns its <code>String</code>s and slices: the <code>free</code> method that <code>@json</code> gives the struct frees them, so <code>scoped</code> works on it, and when <code>decode</code> fails, what it had read is freed already.</p>
-<p>The type given to <code>json.decode</code> is a <code>@json</code> struct. A JSON array at the top of the text goes into a struct field: <code>{&quot;items&quot;: [...]}</code>.</p>
+<p>A JSON array is read into a slice, written as the type: <code>json.decode(User[], text)</code>. The slice is new memory, which the caller frees, after freeing each item that owns memory:</p>
+<pre class="code run"><code><span class="k">import</span> json
+
+<span class="a">@json</span>
+<span class="k">struct</span> Item {
+    <span class="t">String</span> name
+    <span class="t">i64</span> count
+}
+
+!<span class="t">void</span> main() {
+    items := <span class="k">try</span> json.decode(Item[], r<span class="s">&quot;&quot;</span><span class="s">&quot;[{&quot;</span>name<span class="s">&quot;: &quot;</span>pear<span class="s">&quot;, &quot;</span>count<span class="s">&quot;: 4}, {&quot;</span>name<span class="s">&quot;: &quot;</span>fig<span class="s">&quot;, &quot;</span>count<span class="s">&quot;: 9}]&quot;</span><span class="s">&quot;&quot;</span>)
+    <span class="k">defer</span> free(items)
+    <span class="k">defer</span> {
+        <span class="k">for</span> it <span class="k">in</span> items {
+            it.free()
+        }
+    }
+    <span class="k">for</span> it <span class="k">in</span> items {
+        print(<span class="s">&quot;{it.name}: {it.count}&quot;</span>)
+    }
+    ids := <span class="k">try</span> json.decode(<span class="t">i64</span>[], <span class="s">&quot;[3, 1, 4]&quot;</span>)
+    print(<span class="s">&quot;{ids.len} ids, the last {ids[2]}&quot;</span>)
+    free(ids)
+}</code></pre>
+<pre class="out"><code>pear: 4
+fig: 9
+3 ids, the last 4</code></pre>
 <h2 id="keys-and-required-fields"><a href="#keys-and-required-fields">Keys and required fields</a></h2>
 <p>A field's key is its name as written. <code>@json(&quot;key&quot;)</code> gives another key, and <code>@json(required)</code> makes <code>decode</code> fail when the key is missing. Both can go together, <code>@json(&quot;id&quot;, required)</code>:</p>
 <pre class="code run"><code><span class="k">import</span> json

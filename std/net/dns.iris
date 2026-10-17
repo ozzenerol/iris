@@ -24,6 +24,7 @@ pub struct Record {
     pub u16 port
 }
 
+// Frees the record's name and target.
 pub void Record.free() {
     self.name.free()
     self.target.free()
@@ -95,6 +96,7 @@ pub !Resolver resolver(str[] servers = [], str hostsFile = "") {
     return r
 }
 
+// Frees the resolver's servers, search domains and hosts.
 pub void Resolver.free() {
     self.servers.free()
     self.search.freeEach()

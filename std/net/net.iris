@@ -4,6 +4,9 @@
 
 import time
 
+// What network calls fail with: refused, closed, timeout, notFound (for a name
+// that doesn't resolve), inUse (for an address taken already), tls, tooLong
+// (for a line past its limit), and other.
 pub enum NetError { refused, closed, timeout, notFound, inUse, other, tls, tooLong }
 
 @extern("iris_net_listen")
@@ -135,6 +138,7 @@ pub !Conn Listener.accept(Duration timeout = 0s) {
     return Conn{fd: fd, buf: alloc(u8, 16KiB)}
 }
 
+// Stops listening and closes the socket.
 pub void Listener.close() => rawClose(self.fd)
 
 // Wakes a task that waits in accept, which then fails: for stopping a
@@ -351,6 +355,7 @@ pub !TlsConfig tlsConfig(str certFile, str keyFile) {
 // Lets clients ask for HTTP/2 with ALPN; http's servers call it.
 pub void TlsConfig.offerHttp2() => rawTlsHttp2(self.ctx)
 
+// Frees the certificate and the key.
 pub void TlsConfig.free() {
     rawTlsCtxFree(self.ctx)
     self.ctx = null
