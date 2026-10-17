@@ -72,7 +72,7 @@ void main() {
 [0] [false] [] [0] [0 0] [0 0]
 ```
 
-Every local variable starts at zero, so reading one before giving it a value is never undefined.
+A struct whose fields have defaults starts with those defaults instead (see [Structs](13-structs.html)). Every variable starts with a known value, so reading one before giving it a value is never undefined.
 
 ## Assignment
 
