@@ -124,7 +124,7 @@ void Frame.free() {
 // ------------------------------------------------------------ the writer
 
 // What the writer is asked to do.
-enum Job { frame, reply, window, settings, reset, open, close }
+enum Job { frame, reply, body, window, settings, reset, open, close }
 
 struct Out {
     Job job
@@ -300,6 +300,14 @@ void Writer.handle(Out o) {
             o.data.free()
         },
         .reply => self.reply(&o),
+        .body => {
+            // a client's request body, sent as the windows allow
+            extra, _ := self.early.get(o.stream)
+            _ = self.early.remove(o.stream)
+            self.active += 1
+            *self.inFlight += 1
+            self.sending.push(Sending{stream: o.stream, body: o.data, window: self.initial + extra})
+        },
         .window => {
             if o.stream == 0 {
                 self.window += o.n
@@ -494,6 +502,7 @@ i64 fillRequest(Request *req, List[String] *names, List[String] *values, i64 *le
     }
     req.method = method.copy()
     req.path = path.copy()
+    req.protocol = "HTTP/2"
     req.received = time.clock()
     return E_NONE
 }

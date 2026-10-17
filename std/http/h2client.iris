@@ -1,0 +1,348 @@
+// HTTP/2 for the Client: many requests at once on one connection to a
+// host. The connection's reader task gets the replies and hands each to the
+// request that waits for it; its writer task, the server's, is the only
+// one that writes, so a TLS connection is used from its own thread only.
+
+import net, str, time
+
+// What a request gets back.
+struct H2Result {
+    Reply reply
+    bool ok
+    bool retry // the server didn't take the request: it can go again
+    String why
+}
+
+// A reply on its way.
+struct H2Pending {
+    chan[H2Result] done
+    Reply reply
+    bool started
+}
+
+struct H2Conn {
+    net.Conn conn
+    String authority
+    bool secure
+    Mutex lock // the streams, the next id and dead
+    Map[i64, H2Pending] streams
+    i64 nextId
+    i64 maxStreams
+    bool dead
+    i64 lastGood // GOAWAY: the last stream the server will answer
+    chan[Out] jobs
+    Writer writer
+    i64 inFlight
+    chan[bool] writerDone
+    chan[bool] readerDone
+}
+
+void H2Conn.deliver(i64 stream, H2Result r) {
+    self.lock.lock()
+    p, found := self.streams.get(stream)
+    if found {
+        _ = self.streams.remove(stream)
+    }
+    self.lock.unlock()
+    if !found {
+        r.reply.free()
+        r.why.free()
+        return
+    }
+    p.done <- r
+}
+
+// Fails every request still waiting.
+void H2Conn.failAll(str why) {
+    self.lock.lock()
+    self.dead = true
+    scoped List[i64] ids = self.streams.keys()
+    self.lock.unlock()
+    for id in ids {
+        self.lock.lock()
+        p, _ := self.streams.get(id)
+        self.lock.unlock()
+        self.deliver(id, H2Result{retry: !p.started, why: why.copy()})
+    }
+}
+
+void h2Reader(H2Conn *h) {
+    Decoder dec = decoder(4096)
+    defer dec.free()
+    for {
+        f := readFrame(&h.conn, 16384) catch e {
+            break
+        }
+        defer f.free()
+        str p = f.payload
+        if f.kind == F_HEADERS || f.kind == F_DATA {
+            h.lock.lock()
+            pend, found := h.streams.get(f.stream)
+            h.lock.unlock()
+            if f.kind == F_DATA && p.len > 0 {
+                h.jobs <- Out{job: .frame, data: windowFrame(0, p.len)}
+                if found && f.flags & END_STREAM == 0 {
+                    h.jobs <- Out{job: .frame, data: windowFrame(f.stream, p.len)}
+                }
+            }
+            i64 pad = 0
+            i64 at = 0
+            if f.flags & PADDED != 0 && p.len > 0 {
+                pad = i64(p[0])
+                at = 1
+            }
+            if f.kind == F_HEADERS && f.flags & PRIORITY_FLAG != 0 {
+                at += 5
+            }
+            if at + pad > p.len {
+                break
+            }
+            if f.kind == F_HEADERS {
+                String block
+                block.append(p[at:p.len - pad])
+                flags := f.flags
+                bool broken = false
+                for flags & END_HEADERS == 0 {
+                    more := readFrame(&h.conn, 16384) catch e {
+                        broken = true
+                        break
+                    }
+                    if more.kind != F_CONTINUATION || more.stream != f.stream {
+                        more.free()
+                        broken = true
+                        break
+                    }
+                    block.append(more.payload)
+                    flags = more.flags
+                    more.free()
+                }
+                List[String] names
+                List[String] values
+                ok := !broken && dec.decode(block, &names, &values, 0)
+                block.free()
+                if !ok {
+                    names.freeEach()
+                    values.freeEach()
+                    break
+                }
+                if !found {
+                    names.freeEach()
+                    values.freeEach()
+                    continue
+                }
+                if !pend.started {
+                    for i in 0..names.len {
+                        if names.at(i) == ":status" {
+                            pend.reply.status = i32(str.parseInt(values.at(i)) catch 0)
+                        }
+                    }
+                    if pend.reply.status >= 100 && pend.reply.status < 200 {
+                        // 100 Continue and the like: the real reply comes after
+                        pend.reply.status = 0
+                        names.freeEach()
+                        values.freeEach()
+                        continue
+                    }
+                    pend.started = true
+                    pend.reply.protocol = "HTTP/2"
+                    for i in 0..names.len {
+                        if names.at(i)[0] == ':' {
+                            continue
+                        }
+                        pend.reply.names.push(names.at(i).copy())
+                        pend.reply.values.push(values.at(i).copy())
+                    }
+                }
+                names.freeEach()
+                values.freeEach()
+            } else if found {
+                pend.reply.body.append(p[at:p.len - pad])
+            }
+            if !found {
+                continue
+            }
+            if f.flags & END_STREAM != 0 {
+                h.deliver(f.stream, H2Result{reply: pend.reply, ok: true})
+            } else {
+                h.lock.lock()
+                h.streams.set(f.stream, pend)
+                h.lock.unlock()
+            }
+        } else if f.kind == F_RST && p.len == 4 {
+            code := get32(p, 0)
+            h.deliver(f.stream, H2Result{retry: code == E_REFUSED, why: format("the server reset the request (error {code})")})
+        } else if f.kind == F_SETTINGS && f.flags & ACK == 0 && p.len % 6 == 0 {
+            for i in 0..p.len / 6 {
+                id := i64(p[i * 6]) << 8 | i64(p[i * 6 + 1])
+                v := get32(p, i * 6 + 2)
+                if id == 3 {
+                    h.lock.lock()
+                    h.maxStreams = v
+                    h.lock.unlock()
+                } else if id == 4 || id == 5 {
+                    h.jobs <- Out{job: .settings, n: id, n2: v}
+                }
+            }
+            h.jobs <- Out{job: .frame, data: frameOf(F_SETTINGS, ACK, 0, "")}
+        } else if f.kind == F_PING && f.flags & ACK == 0 && p.len == 8 {
+            h.jobs <- Out{job: .frame, data: frameOf(F_PING, ACK, 0, p)}
+        } else if f.kind == F_WINDOW && p.len == 4 {
+            h.jobs <- Out{job: .window, stream: f.stream, n: get32(p, 0) & 0x7fffffff}
+        } else if f.kind == F_GOAWAY && p.len >= 8 {
+            // requests after the last one it names never reached it
+            last := get32(p, 0) & 0x7fffffff
+            h.lock.lock()
+            h.dead = true
+            h.lastGood = last
+            scoped List[i64] ids = h.streams.keys()
+            h.lock.unlock()
+            for id in ids {
+                if id > last {
+                    h.deliver(id, H2Result{retry: true, why: format("the server is going away")})
+                }
+            }
+        }
+    }
+    h.failAll("the connection closed")
+    h.jobs <- Out{job: .close}
+    _ = <-h.writerDone
+    h.readerDone <- true
+}
+
+// Starts HTTP/2 on a connection: the preface and our settings.
+H2Conn *startH2(net.Conn c, Dest *d) {
+    H2Conn[] mem = alloc(H2Conn, 1)
+    H2Conn *h = &mem[0]
+    h.conn = c
+    h.authority = d.hostPort.copy()
+    h.secure = d.secure
+    h.nextId = 1
+    h.maxStreams = 100
+    h.jobs = chan[Out](64)
+    h.writerDone = chan[bool](1)
+    h.readerDone = chan[bool](1)
+    h.writer = Writer{conn: &h.conn, jobs: h.jobs, inFlight: &h.inFlight, window: 65535, initial: 65535,
+        maxFrame: 16384}
+    // no time limit on reads: the reader waits for replies as long as the
+    // connection is open; each request has its own limit
+    h.conn.setTimeout(0s)
+    String start = PREFACE.copy()
+    String settings
+    put8(&settings, 0)
+    put8(&settings, 2)
+    put32(&settings, 0) // no server push
+    put8(&settings, 0)
+    put8(&settings, 4)
+    put32(&settings, RECV_WINDOW)
+    putFrame(&start, F_SETTINGS, 0, 0, settings)
+    settings.free()
+    scoped String grow = windowFrame(0, RECV_WINDOW - 65535)
+    start.append(grow)
+    spawn runWriter(&h.writer, h.writerDone)
+    h.jobs <- Out{job: .frame, data: start}
+    spawn h2Reader(h)
+    return h
+}
+
+// Sends a request on the connection and waits for its reply.
+!Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry) {
+    *retry = false
+    start := time.clock()
+    String block
+    defer block.free()
+    encodeHeader(&block, ":method", method)
+    encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
+    encodeHeader(&block, ":authority", self.authority)
+    encodeHeader(&block, ":path", d.path)
+    encodeHeader(&block, "user-agent", "iris")
+    if contentType.len > 0 {
+        encodeHeader(&block, "content-type", contentType)
+    }
+    if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
+        scoped String length = format("{body.len}")
+        encodeHeader(&block, "content-length", length)
+    }
+    done := chan[H2Result](1)
+    i64 id = 0
+    for {
+        self.lock.lock()
+        if self.dead {
+            self.lock.unlock()
+            *retry = true
+            return error(net.NetError.closed, "the connection is closing")
+        }
+        if self.streams.len < self.maxStreams {
+            id = self.nextId
+            self.nextId += 2
+            self.streams.set(id, H2Pending{done: done})
+            String frames
+            i64 at = 0
+            for {
+                n := if block.len - at > 16384 { 16384 } else { block.len - at }
+                last := at + n == block.len
+                i64 flags = if last { END_HEADERS } else { 0 }
+                if at == 0 && body.len == 0 {
+                    flags |= END_STREAM
+                }
+                putFrame(&frames, if at == 0 { F_HEADERS } else { F_CONTINUATION }, flags, id, block[at:at + n])
+                at += n
+                if last {
+                    break
+                }
+            }
+            // in the writer's order, which is the order of the ids
+            self.jobs <- Out{job: .frame, data: frames}
+            if body.len > 0 {
+                self.jobs <- Out{job: .body, stream: id, data: body.copy()}
+            }
+            self.lock.unlock()
+            break
+        }
+        self.lock.unlock()
+        // as many requests as the server allows are open: wait for one
+        if timeout > 0s && time.clock() - start > timeout {
+            return error(net.NetError.timeout, "no stream became free")
+        }
+        sleep(1ms)
+    }
+    Duration left = if timeout > 0s { timeout - (time.clock() - start) } else { 0s }
+    if timeout > 0s && left <= 0s {
+        left = 1ns
+    }
+    H2Result r
+    if timeout > 0s {
+        bool timedOut = false
+        select {
+            got := <-done => r = got,
+            after(left) => timedOut = true,
+        }
+        if timedOut {
+            self.lock.lock()
+            _ = self.streams.remove(id)
+            self.lock.unlock()
+            self.jobs <- Out{job: .frame, data: rstFrame(id, E_CANCEL)}
+            return error(net.NetError.timeout, "no reply in {timeout}")
+        }
+    } else {
+        r = <-done
+    }
+    if !r.ok {
+        *retry = r.retry
+        defer r.why.free()
+        return error(net.NetError.closed, "{r.why}")
+    }
+    return r.reply
+}
+
+// Ends the connection, after the requests that wait for replies fail.
+void H2Conn.close() {
+    self.lock.lock()
+    self.dead = true
+    self.lock.unlock()
+    self.conn.interrupt()
+    _ = <-self.readerDone
+    self.conn.close()
+    self.streams.free()
+    self.authority.free()
+    free(self[0:1])
+}

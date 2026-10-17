@@ -17,6 +17,8 @@ pub struct Request {
     pub String method
     pub String path
     pub String body
+    // "HTTP/1.1" or "HTTP/2"
+    pub str protocol
     String[] names
     String[] values
     i64 count
@@ -185,6 +187,7 @@ str statusText(i32 code) => match code {
         return error(HttpError.badRequest, "a request line HTTP doesn't allow: '{line}'")
     }
     req.received = time.clock()
+    req.protocol = "HTTP/1.1"
     req.method = method.copy()
     req.path = path.copy()
     req.names = alloc(String, 64)
@@ -812,6 +815,8 @@ pub void Router.free() {
 pub struct Reply {
     pub i32 status
     pub String body
+    // "HTTP/1.1" or "HTTP/2"
+    pub str protocol
     List[String] names
     List[String] values
 }
@@ -895,11 +900,11 @@ String requestText(str method, Dest *d, str body, str contentType, bool keepAliv
     return req
 }
 
-!net.Conn dialDest(Dest *d, Duration timeout) {
+!net.Conn dialDest(Dest *d, Duration timeout, str protocols = "", str ca = "") {
     c := try net.dial(d.host, d.port, timeout)
     c.setTimeout(timeout)
     if d.secure {
-        c.startTls(d.host) catch e {
+        c.startTls(d.host, ca, protocols) catch e {
             c.close()
             return e
         }
@@ -928,8 +933,15 @@ pub struct Client {
     // no limit), and how many idle connections it keeps for each host (0: 4)
     pub Duration timeout
     pub i64 maxIdle
+    // https uses HTTP/2 when the server offers it, unless noHttp2; http://
+    // uses it only with priorKnowledge, for servers known to speak it
+    pub bool noHttp2
+    pub bool priorKnowledge
+    // a file of the certificates to trust instead of the system's ("")
+    pub str ca
     Mutex lock
     Map[str, List[net.Conn]] idle
+    Map[str, H2Conn *] h2
 }
 
 Duration Client.wait() => if self.timeout == 0 { 30s } else if self.timeout < 0 { 0s } else { self.timeout }
@@ -963,16 +975,94 @@ void Client.keep(Dest *d, net.Conn c) {
     self.idle.set(key, conns)
 }
 
+// The HTTP/2 connection to d's host, if the client has one that is open.
+H2Conn *Client.h2For(Dest *d) {
+    scoped String key = destKey(d)
+    self.lock.lock()
+    defer self.lock.unlock()
+    h, found := self.h2.get(key)
+    if !found {
+        return null
+    }
+    h.lock.lock()
+    dead := h.dead
+    h.lock.unlock()
+    if dead {
+        _ = self.h2.remove(key)
+        h.close()
+        return null
+    }
+    return h
+}
+
+// A new connection for d: HTTP/2 when both sides want it (h is set), or an
+// HTTP/1.1 one.
+!net.Conn Client.dialFor(Dest *d, H2Conn **h) {
+    *h = null
+    want := d.secure && !self.noHttp2 || !d.secure && self.priorKnowledge
+    c := try dialDest(d, self.wait(), if want && d.secure { "\x02h2\x08http/1.1" } else { "" }, self.ca)
+    if !want || d.secure && c.protocol() != "h2" {
+        return c
+    }
+    conn := startH2(c, d)
+    scoped String key = destKey(d)
+    self.lock.lock()
+    old, found := self.h2.get(key)
+    self.h2.set(key, conn)
+    self.lock.unlock()
+    if found {
+        old.close()
+    }
+    *h = conn
+    return net.Conn{}
+}
+
 // Sends a request on a connection the client keeps, or a new one.
 pub !Reply Client.send(str method, str url, str body = "", str contentType = "") {
     d := try destOf(url)
-    scoped String req = requestText(method, &d, body, contentType, true)
     for attempt in 0..2 {
-        net.Conn c
-        reused := attempt == 0 && self.take(&d, &c)
-        if !reused {
-            c = try dialDest(&d, self.wait())
+        H2Conn *h = self.h2For(&d)
+        net.Conn fresh
+        bool dialed = false
+        if h == null && !self.hasIdle(&d) {
+            fresh = try self.dialFor(&d, &h)
+            dialed = h == null
         }
+        if h != null {
+            bool retry
+            r := h.request(method, &d, body, contentType, self.wait(), &retry) catch e {
+                if retry && attempt == 0 {
+                    continue
+                }
+                return e
+            }
+            return r
+        }
+        return try self.sendH1(method, &d, body, contentType, fresh, dialed)
+    }
+    return error(net.NetError.closed, "{url}: the connection closed")
+}
+
+bool Client.hasIdle(Dest *d) {
+    scoped String key = destKey(d)
+    self.lock.lock()
+    defer self.lock.unlock()
+    conns, found := self.idle.get(key)
+    return found && conns.len > 0
+}
+
+// A request over HTTP/1.1, on fresh when it was just dialed, or on an idle
+// connection, and on a new one when the idle one turns out to be closed.
+!Reply Client.sendH1(str method, Dest *d, str body, str contentType, net.Conn fresh, bool dialed) {
+    scoped String req = requestText(method, d, body, contentType, true)
+    for attempt in 0..2 {
+        net.Conn c = fresh
+        reused := !dialed
+        if reused && !self.take(d, &c) {
+            c = try dialDest(d, self.wait(), ca: self.ca)
+            reused = false
+        }
+        dialed = false
         c.write(req) catch e {
             c.close()
             if reused {
@@ -989,13 +1079,13 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "")
             return e
         }
         if reusable {
-            self.keep(&d, c)
+            self.keep(d, c)
         } else {
             c.close()
         }
         return r
     }
-    return error(net.NetError.closed, "{url}: the connection closed")
+    return error(net.NetError.closed, "{d.host}: the connection closed")
 }
 
 pub !Reply Client.get(str url) => try self.send("GET", url)
@@ -1012,7 +1102,18 @@ pub void Client.close() {
         conns.free()
     }
     self.idle.free()
+    scoped List[str] hosts = self.h2.keys()
+    List[H2Conn *] open
+    for k in hosts {
+        h, _ := self.h2.get(k)
+        open.push(h)
+    }
+    self.h2.free()
     self.lock.unlock()
+    for h in open {
+        h.close()
+    }
+    open.free()
 }
 
 // Reads a reply. reusable says whether the connection can take another
@@ -1020,6 +1121,7 @@ pub void Client.close() {
 !Reply readReply(net.Conn *c, bool *reusable) {
     *reusable = false
     Reply r
+    r.protocol = "HTTP/1.1"
     errdefer r.free()
     scoped String status = try c.readLine()
     _, after, ok := str.cut(status, " ")
