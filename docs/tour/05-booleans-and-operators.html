@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.39.0</span>
+    <span class="ver">v0.40.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -114,11 +114,22 @@ true true</code></pre>
 }</code></pre>
 <pre class="out"><code>true true true
 false true</code></pre>
+<p><code>is</code> can be written for <code>==</code>, and <code>is not</code> for <code>!=</code>. They compare the same way, and the comparison is by value: <code>a is b</code> on two structs compares their fields, as <code>==</code> does, not whether they are the same variable.</p>
+<pre class="code run"><code><span class="k">enum</span> Color { red, green }
+
+<span class="t">void</span> main() {
+    n := <span class="n">3</span>
+    c := Color.red
+    print(<span class="s">&quot;{n is 3} {c is not .green} {&quot;</span>iris<span class="s">&quot; is &quot;</span>iris<span class="s">&quot;}&quot;</span>)
+    print(<span class="s">&quot;small&quot;</span>) <span class="k">if</span> n <span class="k">is</span> <span class="k">not</span> <span class="n">10</span>
+}</code></pre>
+<pre class="out"><code>true true true
+small</code></pre>
 <h2 id="all-the-operators"><a href="#all-the-operators">All the operators</a></h2>
-<div class="table"><table><thead><tr><th>Operators</th><th>What they do</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~</code></td><td>bits: and, or, exclusive or, each bit flipped</td></tr><tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code>, <code>and or not</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>-x</code></td><td>the negative of x</td></tr><tr><td><code>&amp;x</code>, <code>*p</code></td><td>the address of x, and the value p points to (see <a href="17-pointers.html">Pointers</a>)</td></tr><tr><td><code>a..b</code></td><td>the range from a to before b, in <code>for</code> and slicing; in <code>match</code>, from a to b with both ends</td></tr><tr><td><code>ch &lt;- v</code>, <code>&lt;-ch</code></td><td>sending to a channel and taking from it (see <a href="24-tasks-and-channels.html">Tasks and channels</a>)</td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment, which is a statement</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Operators</th><th>What they do</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~</code></td><td>bits: and, or, exclusive or, each bit flipped</td></tr><tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code>, <code>and or not</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>-x</code></td><td>the negative of x</td></tr><tr><td><code>&amp;x</code>, <code>*p</code></td><td>the address of x, and the value p points to (see <a href="17-pointers.html">Pointers</a>)</td></tr><tr><td><code>a..b</code></td><td>the range from a to before b, in <code>for</code> and slicing; in <code>match</code>, from a to b with both ends</td></tr><tr><td><code>ch &lt;- v</code>, <code>&lt;-ch</code></td><td>sending to a channel and taking from it (see <a href="24-tasks-and-channels.html">Tasks and channels</a>)</td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment, which is a statement</td></tr></tbody></table></div>
 <h2 id="order"><a href="#order">Order</a></h2>
 <p>In a longer expression, some operators bind more tightly than others. From tightest to loosest:</p>
-<ol><li><code>-x</code>, <code>!x</code>, <code>~x</code>, <code>&amp;x</code>, <code>*p</code> (the ones written before a value)</li><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code></li><li><code>not</code></li><li><code>&amp;&amp;</code>, <code>and</code></li><li><code>||</code>, <code>or</code></li></ol>
+<ol><li><code>-x</code>, <code>!x</code>, <code>~x</code>, <code>&amp;x</code>, <code>*p</code> (the ones written before a value)</li><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></li><li><code>not</code></li><li><code>&amp;&amp;</code>, <code>and</code></li><li><code>||</code>, <code>or</code></li></ol>
 <p>Operators on the same level go from left to right. Parentheses group anything differently:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
     print(<span class="s">&quot;{2 + 3 * 4} {(2 + 3) * 4}&quot;</span>)
@@ -145,7 +156,7 @@ true true</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.39.0</span>
+    <span>Iris v0.40.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

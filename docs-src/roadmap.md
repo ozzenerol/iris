@@ -43,3 +43,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.37 | A Redis client, and structs that hold a `List` of themselves. | released |
 | 0.38 | The documentation: the Language Tour, guides, and the library with a comment on every public name. Struct defaults everywhere, constant array sizes, integer limits, `json.decode` into slices. | released |
 | 0.39 | `and`, `or` and `not` as words, a condition after a statement (`return -1 if n < 0`), any number of arguments with `T... name`, Tour chapters on the everyday library, log fields, `iris mod init`, and completion of local names in the language server. | released |
+| 0.40 | `is` and `is not` for `==` and `!=`, and C names that are `not`, `and`, `or` or `is` imported with a `_` after them. | released |

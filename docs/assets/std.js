@@ -20,7 +20,7 @@
 
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-  var KW = /^(if|else|for|in|match|break|continue|return|struct|enum|interface|type|dyn|pub|const|comptime|when|import|try|catch|defer|errdefer|scoped|spawn|select|chan|thread|threadlocal|test|not|and|or|true|false|null)$/;
+  var KW = /^(if|else|for|in|match|break|continue|return|struct|enum|interface|type|dyn|pub|const|comptime|when|import|try|catch|defer|errdefer|scoped|spawn|select|chan|thread|threadlocal|test|not|and|or|is|true|false|null)$/;
   var TY = /^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|void|str|String|Error|Duration|List|Map|Atomic|Mutex)$/;
   function hl(code) {
     var re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\\n])*")|('(?:\\.|[^'\\\n])+')|(@[A-Za-z_]\w*)|(\b(?:0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d+)?)\b)|([A-Za-z_]\w*)/g;
