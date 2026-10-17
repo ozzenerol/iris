@@ -81,6 +81,9 @@
       var next = dark ? "light" : "dark";
       document.documentElement.dataset.theme = next;
       try { localStorage.setItem("iris-theme", next); } catch (e) {}
+      /* opened as files, each page has its own storage; the tab's name
+         goes from page to page */
+      window.name = "iris-theme:" + next;
     });
   }
 
@@ -118,7 +121,10 @@
     document.querySelectorAll('.side-toggle[data-side="' + side + '"]').forEach(function (b) {
       var icon = closed ? shut : open;
       var text = b.getAttribute("data-text");
-      b.textContent = left ? icon + " " + text : text + " " + icon;
+      /* closed on a reading page, the pinned button is only its arrow, so
+         it doesn't cover the text */
+      var small = closed && b.parentNode.classList.contains("doc");
+      b.textContent = small ? icon : left ? icon + " " + text : text + " " + icon;
       b.setAttribute("aria-expanded", String(!closed));
       b.setAttribute("aria-label", (closed ? "Show " : "Hide ") + b.getAttribute("data-label"));
     });

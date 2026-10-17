@@ -7,8 +7,9 @@
 <meta name="description" content="A generic function or struct is written once, with type parameters, and used with many types. This chapter covers both, how the types are worked out, and how generic code is compiled.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
-<script>try {
-  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+<script>var t = /^iris-theme:(dark|light)$/.exec(window.name); if (t) document.documentElement.dataset.theme = t[1];
+try {
+  t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
   ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
     if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
   });
