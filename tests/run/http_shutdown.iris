@@ -1,0 +1,40 @@
+// expect: slow request: 200
+// expect: the server stopped
+
+import http, net
+
+void slow(http.Request *req, http.Response *res) {
+    sleep(100ms)
+    res.text("done")
+}
+
+void server(http.Router *r, net.Listener ln, chan[str] out) {
+    r.serveOn(ln) catch e {
+        out <- "the server failed"
+        return
+    }
+    out <- "the server stopped"
+}
+
+void client(u16 port, chan[str] out) {
+    scoped String url = format("http://127.0.0.1:{port}/")
+    scoped http.Reply rep = http.get(url) catch e {
+        out <- "client failed"
+        return
+    }
+    out <- if rep.status == 200 { "slow request: 200" } else { "slow request: other" }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", slow)
+    ln := try net.listen(0, "127.0.0.1")
+    events := chan[str](4)
+    spawn server(&r, ln, events)
+    spawn client(ln.port, events)
+    sleep(30ms)
+    r.shutdown(2s)
+    print(<-events)
+    print(<-events)
+}

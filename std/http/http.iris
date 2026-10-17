@@ -5,7 +5,7 @@
 
 import json, net, str, time
 
-pub enum HttpError { badUrl, badReply }
+pub enum HttpError { badUrl, badReply, tooBig }
 
 // What answers a request. It can fail: an error that leaves it is
 // answered with 500 and the error's message, as res.error does. A function
@@ -154,13 +154,25 @@ str statusText(i32 code) => match code {
     403 => "Forbidden"
     404 => "Not Found"
     405 => "Method Not Allowed"
+    408 => "Request Timeout"
+    409 => "Conflict"
+    410 => "Gone"
+    413 => "Content Too Large"
+    415 => "Unsupported Media Type"
+    422 => "Unprocessable Content"
+    429 => "Too Many Requests"
+    431 => "Request Header Fields Too Large"
     500 => "Internal Server Error"
+    501 => "Not Implemented"
+    502 => "Bad Gateway"
+    503 => "Service Unavailable"
+    504 => "Gateway Timeout"
     _ => "Status"
 }
 
 // Reads one request. False when the client has closed the connection.
-!bool readRequest(net.Conn *c, Request *req) {
-    line := c.readLine() catch e {
+!bool readRequest(net.Conn *c, Request *req, Limits *limits) {
+    line := c.readLine(limits.maxHeader) catch e {
         if e.code == net.NetError.closed {
             return false
         }
@@ -178,7 +190,7 @@ str statusText(i32 code) => match code {
     req.names = alloc(String, 64)
     req.values = alloc(String, 64)
     for {
-        scoped String h = try c.readLine()
+        scoped String h = try c.readLine(limits.maxHeader)
         if h.len == 0 {
             break
         }
@@ -190,6 +202,9 @@ str statusText(i32 code) => match code {
         }
     }
     length := str.parseInt(req.header("Content-Length")) catch 0
+    if length > limits.maxBody {
+        return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
+    }
     if length > 0 {
         req.body = try c.readExactly(length)
     }
@@ -202,17 +217,93 @@ str statusText(i32 code) => match code {
     try c.write(head)
 }
 
+// Answers a request that can't be read with status, then closes.
+void refuse(net.Conn *c, i32 status, str message) {
+    Response res
+    res.status = status
+    res.contentType = "text/plain; charset=utf-8".copy()
+    res.body = format("{message}\n")
+    writeResponse(c, &res, false) catch e { }
+    res.body.free()
+    res.contentType.free()
+}
+
+// A connection the sweeper looks after: it is shut down when it has done
+// nothing for longer than the timeout. One sweeper task per thread, so no
+// read or write needs a timer of its own.
+struct Watch {
+    net.Conn *conn
+    Duration last
+}
+
+threadlocal List[Watch *] watches
+threadlocal bool sweeping
+
+void sweep(Duration timeout, Router *router) {
+    for {
+        sleep(if timeout < 1s { timeout } else { 1s })
+        now := time.clock()
+        for i in 0..watches.len {
+            w := watches.at(i)
+            if now - w.last > timeout {
+                w.conn.interrupt()
+            }
+        }
+        if router != null && router.stopping.load() != 0 && watches.len == 0 {
+            return
+        }
+    }
+}
+
+void watch(Watch *w, Limits *limits, Router *router) {
+    if limits.timeout <= 0 {
+        return
+    }
+    if !sweeping {
+        sweeping = true
+        spawn sweep(limits.timeout, router)
+    }
+    watches.push(w)
+}
+
+void unwatch(Watch *w) {
+    for i in 0..watches.len {
+        if watches.at(i) == w {
+            watches.set(i, watches.last())
+            _ = watches.pop()
+            return
+        }
+    }
+}
+
 void serveConn(net.Conn conn, Target target) {
     defer conn.close()
+    limits := target.limits
+    Watch w = Watch{conn: &conn, last: time.clock()}
+    watch(&w, &limits, target.router)
+    defer unwatch(&w)
     if target.tls != null {
         conn.acceptTls(target.tls) catch e {
             return
         }
     }
     for {
-        Request req
-        more := readRequest(&conn, &req) catch e {
+        if target.router != null && target.router.stopping.load() != 0 {
             return
+        }
+        Request req
+        more := readRequest(&conn, &req, &limits) catch e {
+            req.free()
+            if e.code == net.NetError.tooLong {
+                refuse(&conn, 431, "a header line is too long")
+            } else if e.code == HttpError.tooBig {
+                refuse(&conn, 413, "the body is too large")
+            }
+            return
+        }
+        w.last = time.clock()
+        if target.router != null {
+            target.router.busy.add(1)
         }
         if !more {
             return
@@ -234,6 +325,10 @@ void serveConn(net.Conn conn, Target target) {
         res.contentType.free()
         res.headers.free()
         req.free()
+        if target.router != null {
+            target.router.busy.sub(1)
+        }
+        w.last = time.clock()
         if !keepAlive || failed {
             return
         }
@@ -259,6 +354,30 @@ struct Target {
     Handler handler
     Router *router
     net.TlsConfig *tls
+    Limits limits
+}
+
+// The limits of a server.
+struct Limits {
+    Duration timeout
+    i64 maxBody
+    i64 maxHeader
+}
+
+Limits limitsOf(Router *r) {
+    Limits l = Limits{timeout: 30s, maxBody: 16MiB, maxHeader: 8KiB}
+    if r != null {
+        if r.timeout != 0 {
+            l.timeout = if r.timeout < 0 { 0s } else { r.timeout }
+        }
+        if r.maxBody > 0 {
+            l.maxBody = r.maxBody
+        }
+        if r.maxHeader > 0 {
+            l.maxHeader = r.maxHeader
+        }
+    }
+    return l
 }
 
 void serveThread(net.Listener shared, bool own, u16 port, str host, Target target) {
@@ -278,13 +397,43 @@ void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target t
 }
 
 !void acceptLoop(net.Listener ln, Target target) {
-    for {
-        conn := try ln.accept()
+    if target.router == null {
+        for {
+            conn := try ln.accept()
+            spawn serveConn(conn, target)
+        }
+    }
+    // a Router can be shut down. On Linux shutdown wakes the accept; macOS
+    // doesn't, so there the loop looks every 200ms.
+    r := target.router
+    r.lock.lock()
+    r.listeners.push(ln)
+    r.lock.unlock()
+    Duration wait
+    when os == .macos {
+        wait = 200ms
+    }
+    for r.stopping.load() == 0 {
+        conn := ln.accept(wait) catch e {
+            if r.stopping.load() != 0 {
+                break
+            }
+            if e.code == net.NetError.timeout {
+                continue
+            }
+            return e
+        }
         spawn serveConn(conn, target)
+    }
+    ln.close()
+    // serve returns when the requests being answered are done
+    for r.busy.load() > 0 && time.clock() < r.drainEnd.load() {
+        sleep(5ms)
     }
 }
 
 !void serveTarget(u16 port, Target target, str host, i64 threads) {
+    target.limits = limitsOf(target.router)
     n := if threads > 0 { threads } else { cpuCount() }
     own := listenPerThread() == 1 && port != 0
     ln := try net.listen(port, host, own)
@@ -293,6 +442,7 @@ void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target t
 }
 
 !void serveTargetOn(net.Listener ln, Target target, i64 threads) {
+    target.limits = limitsOf(target.router)
     n := if threads > 0 { threads } else { cpuCount() }
     startThreads(n, ln, false, 0, "", target)
     try acceptLoop(ln, target)
@@ -329,6 +479,33 @@ pub struct Router {
     List[Route] routes
     List[Hook] befores
     List[Hook] afters
+    // how long a read or a write of a connection may wait (0: 30s, below 0:
+    // no limit), the largest body (0: 16 MiB, larger gets 413) and the
+    // longest header line (0: 8 KiB, longer gets 431)
+    pub Duration timeout
+    pub i64 maxBody
+    pub i64 maxHeader
+    Atomic[i64] stopping
+    Atomic[i64] busy
+    Mutex lock
+    List[net.Listener] listeners
+    Atomic[i64] drainEnd
+}
+
+// Stops the server: no new connections, and serve returns once the
+// requests that are being answered are done, or wait has passed.
+pub void Router.shutdown(Duration wait = 10s) {
+    self.drainEnd.store(i64(time.clock() + wait))
+    self.stopping.store(1)
+    self.lock.lock()
+    for ln in self.listeners {
+        ln.interrupt()
+    }
+    self.lock.unlock()
+    start := time.clock()
+    for self.busy.load() > 0 && time.clock() - start < wait {
+        sleep(5ms)
+    }
 }
 
 struct Hook {
@@ -549,6 +726,7 @@ pub void Router.free() {
     }
     self.befores.free()
     self.afters.free()
+    self.listeners.free()
 }
 
 // ------------------------------------------------------------ the client

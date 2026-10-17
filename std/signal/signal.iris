@@ -1,0 +1,42 @@
+// Signals from the system, like Ctrl-C: a task waits for one while the
+// other tasks run, so a server can stop cleanly.
+
+// interrupt is Ctrl-C (SIGINT), terminate is a request to stop (SIGTERM,
+// what systemd and Docker send), hangup is SIGHUP.
+pub enum Signal { interrupt, terminate, hangup }
+
+@extern("iris_signal_watch")
+void rawWatch(i32 sig)
+
+@extern("iris_signal_wait")
+i32 rawWait()
+
+i32 number(Signal s) => match s {
+    .interrupt => 2
+    .terminate => 15
+    .hangup => 1
+}
+
+// From now on these signals no longer stop the program: wait gives them.
+// The start is interrupt and terminate.
+pub void watch(Signal[] which = []) {
+    if which.len == 0 {
+        rawWatch(2)
+        rawWatch(15)
+        return
+    }
+    for s in which {
+        rawWatch(number(s))
+    }
+}
+
+// Waits for the next signal that is watched; watches interrupt and
+// terminate when nothing is watched yet.
+pub Signal wait() {
+    watch()
+    return match rawWait() {
+        2 => .interrupt
+        15 => .terminate
+        _ => .hangup
+    }
+}

@@ -1,0 +1,56 @@
+// expect: [HTTP/1.1 413 Content Too Large]
+// expect: [HTTP/1.1 431 Request Header Fields Too Large]
+// expect: closed by the server true
+// expect: [ok]
+
+import http, net, str, time
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("ok")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!String firstLine(u16 port, str request) {
+    c := try net.dial("127.0.0.1", port)
+    defer c.close()
+    try c.write(request)
+    return try c.readLine()
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.maxBody = 10
+    r.maxHeader = 100
+    r.timeout = 50ms
+    r.post("/", hello)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String a = try firstLine(ln.port, "POST / HTTP/1.1\r\nContent-Length: 20\r\n\r\n01234567890123456789")
+    print("[{a}]")
+    scoped String long = str.repeat("x", 200)
+    scoped String req = format("POST / HTTP/1.1\r\nX-Long: {long}\r\n\r\n")
+    scoped String b = try firstLine(ln.port, req)
+    print("[{b}]")
+    c := try net.dial("127.0.0.1", ln.port)
+    start := time.clock()
+    _ = c.readLine() catch e {
+        print("closed by the server {time.clock() - start < 1s}")
+        "".copy()
+    }
+    c.close()
+    d := try net.dial("127.0.0.1", ln.port)
+    try d.write("POST / HTTP/1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+    for {
+        scoped String line = d.readLine() catch e {
+            break
+        }
+        if line == "ok" {
+            print("[{line}]")
+        }
+    }
+    d.close()
+}

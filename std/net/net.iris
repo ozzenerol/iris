@@ -1,7 +1,7 @@
 // TCP: listening for connections, connecting, reading and writing, also
 // over TLS. A task that waits for the network lets the other tasks run.
 
-pub enum NetError { refused, closed, timeout, notFound, inUse, other, tls }
+pub enum NetError { refused, closed, timeout, notFound, inUse, other, tls, tooLong }
 
 @extern("iris_net_listen")
 i32 rawListen(u8 *host, i64 hostLen, i64 port, i32 shared, i32 *err)
@@ -23,6 +23,9 @@ i32 rawWrite(i32 fd, u8 *buf, i64 len, i64 timeout)
 
 @extern("iris_net_close")
 void rawClose(i32 fd)
+
+@extern("iris_net_shutdown")
+void rawShutdown(i32 fd)
 
 @extern("iris_tls_connect")
 u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen)
@@ -125,6 +128,10 @@ pub !Conn Listener.accept(Duration timeout = 0s) {
 
 pub void Listener.close() => rawClose(self.fd)
 
+// Wakes a task that waits in accept, which then fails: for stopping a
+// server.
+pub void Listener.interrupt() => rawShutdown(self.fd)
+
 // Connects to host:port, waiting at most timeout when it isn't 0.
 pub !Conn dial(str host, u16 port, Duration timeout = 0s) {
     i32 err
@@ -166,10 +173,15 @@ pub !i64 Conn.read(u8[] buf) {
     return n > 0
 }
 
-// The next line, without its line break (\n or \r\n). NetError.closed at the end.
-pub !String Conn.readLine() {
+// The next line, without its line break (\n or \r\n). NetError.closed at the
+// end; NetError.tooLong when limit isn't 0 and the line is longer.
+pub !String Conn.readLine(i64 limit = 0) {
     String line
     for {
+        if limit > 0 && line.len > limit {
+            line.free()
+            return error(NetError.tooLong, "reading a line: longer than {limit} bytes")
+        }
         more := try self.fill()
         if !more {
             if line.len > 0 {
@@ -182,6 +194,10 @@ pub !String Conn.readLine() {
             if self.buf[i] == '\n' {
                 line.append(self.buf[self.start:i])
                 self.start = i + 1
+                if limit > 0 && line.len > limit + 1 {
+                    line.free()
+                    return error(NetError.tooLong, "reading a line: longer than {limit} bytes")
+                }
                 if line.len > 0 && line.ptr[0:line.len][line.len - 1] == '\r' {
                     String trimmed = line.ptr[0:line.len - 1].copy()
                     line.free()
@@ -222,6 +238,11 @@ pub !void Conn.write(str data) {
         return error(netCode(code), "writing: {reason(code)}")
     }
 }
+
+// Ends the connection's reads and writes from another task: a task that
+// waits on it wakes up as if the other side had closed. close still has to
+// be called.
+pub void Conn.interrupt() => rawShutdown(self.fd)
 
 // Closes the connection.
 pub void Conn.close() {

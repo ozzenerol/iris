@@ -31,3 +31,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.25 | `comptime`. | released |
 | 0.26 | `iris doc`, `@env` with the `env` module, `@inline` and `@unchecked`. | released |
 | 0.27 | HTTP handlers that can fail, `res.error`, Router middleware and after hooks, `json.quote`, `sqlite.all` and `sqlite.one`, and the `log` module. | released |
+| 0.28 | Timeouts on connections, server limits, `Router.shutdown`, and the `signal` module. | released |

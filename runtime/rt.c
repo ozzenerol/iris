@@ -1294,6 +1294,25 @@ static bool useRing(void) {
     ensurePoller();
     return ring.fd >= 0;
 }
+
+/* An operation with a linked timeout: -ECANCELED when the time ran out. */
+static int ringOpUntil(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, int64_t deadline) {
+    if (deadline <= 0) {
+        return ringOp(opcode, fd, buf, len, opFlags);
+    }
+    int64_t left = deadline - nowNs();
+    if (left <= 0) {
+        return -ECANCELED;
+    }
+    struct {
+        int64_t sec, nsec;
+    } ts = {left / 1000000000LL, left % 1000000000LL};
+    ringPushFlags(opcode, fd, buf, len, opFlags, (uint64_t)(uintptr_t)current, 1 << 2, 2);
+    ringPushFlags(15, -1, &ts, 1, 0, 1, 0, 1);
+    waitingIo++;
+    schedule();
+    return current->ioResult;
+}
 #endif
 
 static void ensurePoller(void) {
@@ -1953,8 +1972,12 @@ int iris_net_accept(int fd, int *err, int64_t timeout) {
     for (;;) {
 #ifdef __linux__
         int c;
-        if (useRing() && !deadline) {
-            c = ringOp(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (useRing()) {
+            c = ringOpUntil(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC, deadline);
+            if (c == -ECANCELED) {
+                *err = 3;
+                return -1;
+            }
             if (c < 0) {
                 errno = -c;
                 c = -1;
@@ -2042,11 +2065,14 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err, int
 int64_t iris_net_read(int fd, char *buf, int64_t len, int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
 #ifdef __linux__
-    if (useRing() && !deadline) {
+    if (useRing()) {
         for (;;) {
-            int n = ringOp(RING_OP_RECV, fd, buf, len > 0x7fffffff ? 0x7fffffff : (uint32_t)len, 0);
+            int n = ringOpUntil(RING_OP_RECV, fd, buf, len > 0x7fffffff ? 0x7fffffff : (uint32_t)len, 0, deadline);
             if (n >= 0) {
                 return n;
+            }
+            if (n == -ECANCELED) {
+                return -3;
             }
             if (n != -EINTR && n != -EAGAIN) {
                 return -netCode(-n);
@@ -4103,4 +4129,57 @@ int iris_env_load(const EnvTable *t, char *out) {
 
 void iris_json_quote(const char *text, int64_t len, IrisString *out) {
     jsonQuote(out, text, len);
+}
+
+/* ---------------------------------------------------------------- signals
+
+   A signal the program watches is written, as one byte, into a pipe; a
+   task that waits for one waits on the pipe, so the other tasks run. */
+
+#include <signal.h>
+
+static int sigPipe[2] = {-1, -1};
+static int sigLock;
+
+static void onSignal(int sig) {
+    unsigned char b = (unsigned char)sig;
+    ssize_t r = write(sigPipe[1], &b, 1);
+    (void)r;
+}
+
+void iris_signal_watch(int sig) {
+    spinLock(&sigLock);
+    if (sigPipe[0] < 0) {
+        if (pipe(sigPipe) != 0) {
+            spinUnlock(&sigLock);
+            return;
+        }
+        for (int i = 0; i < 2; i++) {
+            fcntl(sigPipe[i], F_SETFL, fcntl(sigPipe[i], F_GETFL, 0) | O_NONBLOCK);
+            fcntl(sigPipe[i], F_SETFD, FD_CLOEXEC);
+        }
+    }
+    spinUnlock(&sigLock);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = onSignal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(sig, &sa, NULL);
+}
+
+/* The next signal that came, by its number. */
+int iris_signal_wait(void) {
+    for (;;) {
+        unsigned char b;
+        ssize_t n = read(sigPipe[0], &b, 1);
+        if (n == 1) return b;
+        waitFd(sigPipe[0], 0);
+    }
+}
+
+/* Ends a connection's reads and writes from another task: whatever waits
+   on it wakes up with the connection closed. */
+void iris_net_shutdown(int fd) {
+    if (fd >= 0) shutdown(fd, SHUT_RDWR);
 }

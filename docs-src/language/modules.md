@@ -110,6 +110,7 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `fs` | `readAll`, `writeAll`, `append`, `exists`, `remove`, `stat(path) Info` (`size`, `isDir`, `modified`), `mkdir`, `mkdirAll`, `rename`, `removeAll`, `readDir(path) Dir` (`entries`, sorted by name), and files opened with `open`, `create` and `openAppend`, which have `read`, `readLine`, `readAll`, `write` and `close`; `FsError` |
 | `path` | `join(a, b)`, `base`, `dir`, `ext`, `stem` and `isAbs` |
 | `process` | `run(argv, input)`: runs a program and gives an `Output` with `stdout`, `stderr`, `status` and `ok()`; `ProcessError` |
+| `signal` | `wait()` waits for Ctrl-C or SIGTERM while the other tasks run; `watch(signals)` |
 | `str` | `find`, `contains`, `startsWith`, `endsWith`, `compare`, `count`, `trim`, `trimLeft`, `trimRight`, `cut(s, sep) (str, str, bool)`, `lower`, `upper`, `replace`, `repeat`, `parseInt(s) !i64` and `parseFloat(s) !f64` |
 | `time` | `now()`, `clock()` for measuring, `date(...)`, `unix(s)`, `parse(iso)`; a `Time` has `iso()`, `format(layout)`, `dateText()`, `local()`, `utc()`, `add(d)`, `sub(t)`, `before`, `after`, `unix()`, `year()` to `nanosecond()` and `weekday()` |
 | `math` | `pi`, `e`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`, `round`, `trunc`, `abs`, `sin`, `cos`, `tan`, `atan2`, `hypot`, `min`, `max`, `isNaN` and `inf` |
@@ -123,7 +124,7 @@ The standard library comes inside the `iris` command. A few names, like `print`,
 | `os` | `argc()` and `arg(i)` for the program's arguments, `env(name) !str`, `exit(code)`, and `OsError` |
 | `log` | `debug`, `info`, `warn` and `error` write a line with the time and the level to standard error; `setLevel(level)`, and `useJson()` for JSON lines |
 | `env` | `load(T)` fills an `@env` struct from environment variables (see [Compile time](compile-time.html)); `EnvError` |
-| `net` | TCP: `listen(port, host, shared)` and `Listener.accept()`, `dial(host, port)`, and on a `Conn`: `read`, `readLine`, `readExactly`, `write` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
+| `net` | TCP: `listen(port, host, shared)` and `Listener.accept(timeout)`, `dial(host, port, timeout)`, and on a `Conn`: `read`, `readLine(limit)`, `readExactly`, `write`, `setTimeout(d)`, `interrupt` and `close`; TLS: `dialTls(host, port, ca)`, `Conn.startTls(host, ca)`, `tlsConfig(certFile, keyFile)` and `Conn.acceptTls(config)`; `NetError` |
 | `json` | `encode(v) String`, `decode(T, text) !T` and `quote(text) String` for `@json` structs (see [Compile time](compile-time.html)), and `JsonError` |
 | `http` | a server: `serve(port, handler, threads)`, `serveOn(listener, handler, threads)` and `serveTls(port, handler, cert, key)`, on every CPU core (or on `threads` of them), where `handler` gets a `Request` (`method`, `path`, `body`, `header(name)`, `param(name)`, `query(name)`, `route()`) and fills in a `Response` (`status`, `text`, `json`, `error(status, message)`, `header(name, value)`); a `Router` (`get`, `post`, `put`, `delete`, `patch`, `handle`, `use`, `after`, `serve`, `serveTls`); and a client: `get(url)`, `post(url, type, body)`, `send(method, url, body, type)`, which give a `Reply` (`status`, `body`, `header(name)`) |
 
@@ -165,6 +166,27 @@ bool auth(http.Request *req, http.Response *res) {
 When several patterns match, the one with the most fixed parts wins, so `/users/me` goes before `/users/:id`. A path no pattern has gets 404, and a path that is there only for other methods gets 405 with an `Allow` header.
 
 `r.use(check, prefix)` runs `check` before the handler of every request whose path starts with `prefix`; when it gives false, the request is answered with what `check` wrote. `r.after(done)` runs `done` after every request, for an access log. `req.received` is when the request came in, by `time.clock()`. `res.error(status, message)` answers with `{"error": "..."}`, with the message escaped as JSON needs.
+
+A server protects itself with limits, which a `Router` can change: a connection that does nothing for `timeout` (30 seconds) is closed, a body larger than `maxBody` (16 MiB) gets 413, and a header line longer than `maxHeader` (8 KiB) gets 431. Each thread checks the connections once a second, so reads and writes need no timer of their own.
+
+`r.shutdown(wait)` stops a server cleanly: no new connections, and `serve` returns once the requests being answered are done, or `wait` has passed. With the `signal` module it runs on Ctrl-C or SIGTERM:
+
+```iris
+import http, signal
+
+void stopOnSignal(http.Router *r) {
+    _ = signal.wait()
+    r.shutdown(10s)
+}
+
+!void main() {
+    http.Router r
+    r.get("/", hello)
+    signal.watch()
+    spawn stopOnSignal(&r)
+    try r.serve(8080)
+}
+```
 
 The client asks other servers, over `http://` or `https://`:
 
