@@ -9,6 +9,7 @@ pub struct Message {
     pub String data
 }
 
+// Frees the message's data.
 pub void Message.free() => self.data.free()
 
 // An open WebSocket. Pings are answered on their own while reading.

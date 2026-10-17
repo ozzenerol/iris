@@ -624,6 +624,10 @@ static Node *enumMember(Type *t, const char *name) {
 
 static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at);
 static void resolveSignatureType(Checker *c, Type *t);
+static Type *intTypeNamed(const char *name);
+static void checkEscape(Checker *c, Node *e);
+static void checkConstDecl(Checker *c, Node *decl);
+static bool hasDuration(Node *e);
 static Type *dynType(Checker *c, Node *iface);
 
 /* A type named in an expression, like the first argument of alloc. */
@@ -794,6 +798,24 @@ static Type *resolveType(Checker *c, Node *t) {
                 return &tyError;
             }
             return compound(TY_ATOMIC, e, 0);
+        }
+        if ((!d || d->kind != N_STRUCT || !d->list2.len) && t->list.len == 1 && t->list.items[0]->kind == N_T_NAME) {
+            /* i64[SLOTS]: an array whose size is a constant */
+            Node *k = lookup(c, t->list.items[0]->name);
+            if (k && k->kind == N_CONST) {
+                checkConstDecl(c, k);
+                Type *e = resolveType(c, base);
+                if (isErr(e)) return e;
+                if (!k->isConst || !k->type || !isInt(k->type)) {
+                    error(c, t->list.items[0], "an array's size must be an integer constant");
+                    return &tyError;
+                }
+                if (k->cval < 1 || k->cval > (1 << 30)) {
+                    error(c, t->list.items[0], "an array's size must be between 1 and %u", 1u << 30);
+                    return &tyError;
+                }
+                return arrayOf(e, k->cval);
+            }
         }
         if (!d || d->kind != N_STRUCT || !d->list2.len) {
             if (d && d->kind == N_STRUCT) {
@@ -1176,6 +1198,50 @@ static void completeInside(Checker *c, Type *t) {
         for (int i = 0; i < t->nelems; i++) {
             completeInside(c, t->elems[i]);
         }
+    }
+}
+
+/* Whether d is a variable or parameter of the function being checked. */
+static bool isLocalDecl(Checker *c, Node *d) {
+    for (Scope *s = c->scope; s; s = s->parent) {
+        Sym *sym = findIn(s, d->name);
+        if (sym && sym->decl == d) return true;
+        if (s->function) break;
+    }
+    return false;
+}
+
+/* The variable a place belongs to: x for x, x.f, x[i] and x.f[i]. */
+static Node *placeRoot(Node *e) {
+    for (;;) {
+        if (e->kind == N_FIELD_ACCESS || e->kind == N_INDEX) {
+            if (e->a->type && e->a->type->kind == TY_PTR) return NULL; /* through a pointer: elsewhere */
+            if (e->a->type && e->a->type->kind == TY_SLICE) return NULL;
+            e = e->a;
+        } else if (e->kind == N_IDENT) {
+            return e->ref;
+        } else {
+            return NULL;
+        }
+    }
+}
+
+/* A returned pointer or slice into the function's own variables, which are
+ * gone once it returns. */
+static void checkEscape(Checker *c, Node *e) {
+    Node *place = NULL;
+    if (e->kind == N_CONVERT && e->a->type && e->a->type->kind == TY_ARRAY && e->type && e->type->kind == TY_SLICE) {
+        place = e->a;               /* a local array given back as a slice */
+    } else if (e->kind == N_UNARY && e->op == P_AMP) {
+        place = e->a;
+    } else if (e->kind == N_SLICE && e->a->type && e->a->type->kind == TY_ARRAY) {
+        place = e->a;
+    }
+    if (!place) return;
+    Node *root = placeRoot(place);
+    if (root && (root->kind == N_VAR || root->kind == N_PARAM || root->kind == N_IDENT) && isLocalDecl(c, root)) {
+        error(c, e, "this points into %s, which is gone when %s returns; return a copy, or memory from alloc",
+              root->name, c->func->name);
     }
 }
 
@@ -2285,6 +2351,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         error(c, e, "'%s' needs integers, not %s", tokName(op), t->name);
         return setType(e, &tyError);
     }
+    if (op == P_SLASH && ta == &tyDuration && tb == &tyDuration && (!e->b->isConst || hasDuration(e->b))) {
+        return setType(e, &tyI64);      /* timeout / 1s: how many seconds */
+    }
     return setType(e, t);
 }
 
@@ -2298,6 +2367,26 @@ static Type *structOf(Type *t) {
 
 static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
+    if (e->a->kind == N_IDENT && !lookup(c, e->a->name)) {
+        /* i64.max, u8.min: the limits of an integer type */
+        Type *it = intTypeNamed(e->a->name);
+        if (it && isInt(it) && (strcmp(e->name, "min") == 0 || strcmp(e->name, "max") == 0)) {
+            int bits = it->bits;
+            bool max = e->name[1] == 'a';
+            int64_t v;
+            if (it->isSigned) {
+                v = max ? (bits == 64 ? INT64_MAX : (INT64_C(1) << (bits - 1)) - 1)
+                        : (bits == 64 ? INT64_MIN : -(INT64_C(1) << (bits - 1)));
+            } else {
+                v = max ? (bits == 64 ? -1 : (int64_t)((UINT64_C(1) << bits) - 1)) : 0;
+            }
+            e->isConst = true;
+            e->cval = v;
+            e->kind = N_INT;
+            e->ival = (uint64_t)v;
+            return setType(e, it);
+        }
+    }
     if (e->a->kind == N_IDENT) {
         Node *d = lookup(c, e->a->name);
         if (d && d->kind == N_ENUM) {
@@ -2319,6 +2408,10 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         }
     }
     Type *t = checkExpr(c, &e->a, NULL);
+    if (t->kind == TY_ENUM && !t->hasData && strcmp(e->name, "value") == 0) {
+        e->builtin = 3;                 /* the value's number: Status.notFound.value is 404 */
+        return setType(e, &tyI64);
+    }
     if (t->kind == TY_ENUM && strcmp(e->name, "name") == 0) {
         e->builtin = 1;                 /* the value's name, from the runtime's table */
         return setType(e, &tyStr);
@@ -2611,7 +2704,10 @@ static bool hasDuration(Node *e) {
     if (!e) return false;
     if (e->kind == N_INT) return e->name && !strchr("KMG", e->name[0]);
     if (e->kind == N_UNARY) return hasDuration(e->a);
-    if (e->kind == N_BINARY) return hasDuration(e->a) || hasDuration(e->b);
+    if (e->kind == N_BINARY) {
+        if (e->op == P_SLASH && hasDuration(e->a) && hasDuration(e->b)) return false; /* 90s / 1s is 90 */
+        return hasDuration(e->a) || hasDuration(e->b);
+    }
     return false;
 }
 
@@ -2732,6 +2828,14 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             }
             return setType(e, d->type);
         default:
+            if (!d->type && d->kind == N_VAR && d->a) {
+                /* a global declared further down, not checked yet: its
+                 * declared type is enough here */
+                Scope *saved = c->scope;
+                if (d->scope) c->scope = d->scope;
+                d->type = resolveType(c, d->a);
+                c->scope = saved;
+            }
             return setType(e, d->type ? d->type : &tyError);
         }
     }
@@ -2909,6 +3013,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         return setType(e, tupleOf(elems, e->list.len));
     }
     default:
+        if (e->kind == N_T_SLICE || e->kind == N_T_ARRAY || e->kind == N_T_NAME || e->kind == N_T_GENERIC) {
+            error(c, e, "this is a type, not a value");
+            return setType(e, &tyError);
+        }
         notYet(c, e, "this expression", "a later version");
         return setType(e, &tyError);
     }
@@ -3038,8 +3146,33 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
                 continue;
             }
             Type *t = checkExpr(c, part, NULL);
-            if (!isErr(t) && !printable(t)) {
-                error(c, *part, "a %s value can't be put into text", t->name);
+            Type *st = t->kind == TY_PTR ? t->elem : t;
+            Node *fm = st->kind == TY_STRUCT ? findMethodIn(st, "format") : NULL;
+            if (!isErr(t) && !printable(t) && fm) {
+                /* a struct with String format(): its text, freed after the statement */
+                if (!fm->type) checkSignature(c, fm, st);
+                if (fm->type != &tyString || fm->list.len != 1) {
+                    error(c, *part, "%s.format must take nothing and give a String to put a %s into text",
+                          st->name, st->name);
+                    continue;
+                }
+                Node *recv = *part;
+                Node *access = like(c, N_FIELD_ACCESS, recv);
+                access->a = recv;
+                access->name = "format";
+                Node *call = like(c, N_CALL, recv);
+                call->a = access;
+                *part = call;
+                checkExpr(c, part, NULL);
+                coerce(c, part, &tyStr, "the value");
+                markTempString(part, &tyStr);
+            } else if (!isErr(t) && !printable(t)) {
+                if (st->kind == TY_STRUCT) {
+                    error(c, *part, "%s can't be put into text; give it a method String %s.format()", t->name,
+                          st->name);
+                } else {
+                    error(c, *part, "a value of type %s can't be put into text", t->name);
+                }
             } else if (t->kind == TY_STRING) {
                 coerce(c, part, &tyStr, "the value");
             }
@@ -3605,6 +3738,9 @@ static Type *checkEnumNew(Checker *c, Node *e, Type *et, const char *name) {
 static Type *typeArgument(Checker *c, Node *a) {
     if (a->kind == N_IDENT) {
         return typeFromName(c, a->name, a, true);
+    }
+    if (a->kind == N_T_SLICE) {
+        return resolveType(c, a);
     }
     error(c, a, "this should be a type's name: json.decode(User, text)");
     return &tyError;
@@ -4700,8 +4836,12 @@ static void checkStmt(Checker *c, Node *s) {
                 return;
             }
         }
-        if (s->op != P_ASSIGN && !isInt(tt)) {
-            error(c, s, "'%s' needs an integer variable, not %s", tokName(s->op), tt->name);
+        bool arith = s->op == P_PLUS_ASSIGN || s->op == P_MINUS_ASSIGN || s->op == P_STAR_ASSIGN ||
+                     s->op == P_SLASH_ASSIGN || s->op == P_PERCENT_ASSIGN;
+        bool bits = s->op == P_AMP_ASSIGN || s->op == P_PIPE_ASSIGN || s->op == P_CARET_ASSIGN;
+        bool ok = isInt(tt) || (arith && isFloat(tt)) || (bits && tt->kind == TY_ENUM && tt->isFlags);
+        if (s->op != P_ASSIGN && !ok) {
+            error(c, s, "'%s' needs a number variable, not %s", tokName(s->op), tt->name);
         }
         if (s->op == P_SHL_ASSIGN || s->op == P_SHR_ASSIGN) {
             Type *ta = checkExpr(c, &s->b, NULL);
@@ -4795,6 +4935,7 @@ static void checkStmt(Checker *c, Node *s) {
             return;
         }
         coerce(c, &s->a, ret, "the returned value");
+        checkEscape(c, s->a);
         return;
     }
     case N_BREAK:
@@ -5267,6 +5408,7 @@ static void checkFunctionBody(Checker *c, Node *f) {
             }
         } else {
             coerce(c, &f->d, f->type, "the returned value");
+            checkEscape(c, f->d);
         }
     } else if (f->c) {
         checkBlock(c, f->c, false);

@@ -1,0 +1,20 @@
+// expect: 1 1.5
+// expect: w
+
+enum P flags { r, w, x }
+void main() {
+    f64 t = 1.5
+    t += 2
+    t *= 3
+    t -= 0.5
+    t /= 2
+    t %= 2
+    f32 h = 1
+    h += 0.5
+    print("{t} {h}")
+    P p = .r
+    p |= .w
+    p ^= .r
+    p &= .w
+    print("{p}")
+}

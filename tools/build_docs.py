@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
-"""Builds docs/ from docs-src/.
+"""Builds the documentation site: docs-src/ -> docs/.
 
-docs-src/index.md and docs-src/roadmap.md are single pages. docs-src/design/,
-docs-src/language/ and docs-src/guides/ are sections: their pages are listed in SECTIONS, in
-order, and each section's index.md is its first page.
+  docs/index.html            docs-src/index.md, the home page
+  docs/tour/                 docs-src/tour/NN-name.md: the Language Tour
+  docs/guides/               docs-src/guides/NN-name.md: whole programs, step by step
+  docs/design/               docs-src/design/NN-name.md: how Iris works underneath
+  docs/std/index.html        the library browser (docs-src/assets/std.js)
+  docs/std/data.js           the library's API: `iris doc --json` on every module
+                             of docs-src/std/modules.json, with docs-src/std/NAME.md
+                             as a module's introduction when there is one
+  docs/roadmap.html          docs-src/roadmap.md
+  docs/assets/               docs-src/assets/, and search.js (what the search box finds)
 
-Run from the repo root: python3 tools/build_docs.py
+A section's pages are its NN-name.md files in order; its index page lists them.
+
+Run from anywhere: python3 tools/build_docs.py [--iris PATH]
 """
+import glob
+import html
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,34 +32,84 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "docs-src")
 OUT = os.path.join(ROOT, "docs")
 
-SECTIONS = {
-    "design": ["index", "decisions", "compiler", "values", "workflow"],
-    "language": ["index", "first-program", "variables-and-types", "functions", "control-flow",
-                 "text", "structs", "enums", "pointers-and-memory", "errors", "generics",
-                 "collections", "modules", "compile-time", "concurrency", "calling-c", "tools"],
-    "guides": ["index", "rest-api", "cli"],
-}
-TOP = [("Design", "design/index.html"), ("Language", "language/index.html"),
-       ("Guides", "guides/index.html"), ("Roadmap", "roadmap.html")]
+
+def version():
+    text = open(os.path.join(ROOT, "src", "iris.h")).read()
+    return "v" + re.search(r'IRIS_VERSION "([^"]+)"', text).group(1)
 
 
-def read(path):
-    with open(path) as f:
-        return f.read()
+VERSION = version()
+
+SECTIONS = [
+    # (folder, name in the top bar, what its index page says)
+    ("tour", "Language Tour",
+     "Every part of the language, one topic per chapter, explained fully and with many small programs and "
+     "their output. Read it in order the first time; later, use it as the reference."),
+    ("guides", "Guides",
+     "Whole programs, built one step at a time, with every changed function shown in full."),
+    ("design", "Design",
+     "How Iris works underneath, and why it is the way it is: for people working on the compiler, and for "
+     "anyone who wants to know."),
+]
 
 
-def page(title, depth, current_top, body, side=""):
-    up = "../" * depth
-    nav = "".join('<a href="%s%s"%s>%s</a>' % (up, href, ' class="here"' if name == current_top else "",
-                                               name) for name, href in TOP)
-    layout = "with-side" if side else "single"
-    return ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-            "<title>%s</title>\n<link rel=\"stylesheet\" href=\"%sstyle.css\">\n</head>\n<body>\n"
-            "<header class=\"top\"><a class=\"home\" href=\"%sindex.html\">Iris</a>"
-            "<nav>%s</nav></header>\n"
-            "<div class=\"%s\">%s<main>\n%s\n</main></div>\n</body>\n</html>\n"
-            % (title, up, up, nav, layout, side, body))
+def shell(title, body, root, section="", wide=False, desc=""):
+    """A whole page: the top bar, body, footer. root: the way back to docs/ ("" or "../")."""
+    def nav(href, label, key):
+        on = ' class="on"' if key == section else ""
+        return f'<a href="{root}{href}"{on}>{label}</a>'
+    full = "Iris" if title == "Iris" else f"{title} - Iris"
+    meta = f'<meta name="description" content="{html.escape(desc)}">' if desc else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(full)}</title>
+{meta}
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="{root}assets/style.css">
+<script>try {{
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {{
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  }});
+}} catch (e) {{}}</script>
+</head>
+<body{' class="wide"' if wide else ''}>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="{root}index.html">Iris</a>
+    <nav class="main">
+      {nav("tour/index.html", "Language Tour", "tour")}
+      {nav("std/index.html", "Library", "std")}
+      {nav("guides/index.html", "Guides", "guides")}
+      {nav("design/index.html", "Design", "design")}
+      {nav("roadmap.html", "Roadmap", "roadmap")}
+    </nav>
+    <div class="search" data-root="{root}">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">{VERSION}</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+{body}
+<footer>
+  <div class="bar">
+    <span>Iris {VERSION}</span>
+    <a href="{root}tour/index.html">Language Tour</a>
+    <a href="{root}std/index.html">Library</a>
+    <a href="{root}roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="{root}assets/search.js"></script>
+<script src="{root}assets/site.js"></script>
+</body>
+</html>
+"""
 
 
 def write(rel, text):
@@ -55,46 +119,155 @@ def write(rel, text):
         f.write(text)
 
 
-def main():
-    os.makedirs(OUT, exist_ok=True)
-    write("style.css", read(os.path.join(SRC, "style.css")))
+def chapters(section):
+    """[(file stem, title, lede, html, toc)] in order"""
+    out = []
+    for path in sorted(glob.glob(os.path.join(SRC, section, "[0-9][0-9]-*.md"))):
+        title, lede, body, toc, _ = md.convert(open(path).read())
+        out.append((os.path.basename(path)[:-3], title, lede, body, toc))
+    return out
 
-    for name in ("index", "roadmap"):
-        title, _, body, _, _ = md.convert(read(os.path.join(SRC, name + ".md")))
-        top = "Roadmap" if name == "roadmap" else None
-        write(name + ".html", page(title if name == "index" else title + " - Iris", 0, top, body))
 
-    for section, names in SECTIONS.items():
-        pages = []
-        for n in names:
-            title, _, body, toc, _ = md.convert(read(os.path.join(SRC, section, n + ".md")))
-            pages.append((n, title, body, toc))
-        for i, (n, title, body, toc) in enumerate(pages):
-            links = "".join('<li><a href="%s.html"%s>%s</a></li>' % (
-                m, ' class="here"' if m == n else "", t) for m, t, _, _ in pages)
-            side = '<aside class="side"><ol>%s</ol></aside>' % links
-            prev = '<a href="%s.html">&larr; %s</a>' % (pages[i - 1][0], pages[i - 1][1]) if i else "<span></span>"
-            nxt = '<a href="%s.html">%s &rarr;</a>' % (pages[i + 1][0], pages[i + 1][1]) \
-                if i + 1 < len(pages) else "<span></span>"
-            body += '\n<div class="pager">%s%s</div>' % (prev, nxt)
-            write(os.path.join(section, n + ".html"),
-                  page(title + " - Iris", 1, section.capitalize(), body, side))
+def chapter_pages(chs, index, section, label):
+    side = "".join(
+        f'<li><a href="{stem}.html"{{on{stem}}}><span class="num">{stem[:2].lstrip("0")}</span>{html.escape(title)}</a></li>'
+        for stem, title, _, _, _ in chs)
+    for n, (stem, title, lede, body, toc) in enumerate(chs):
+        nav = side
+        for s, *_ in chs:
+            nav = nav.replace("{on" + s + "}", ' class="on"' if s == stem else "")
+        on_page = "".join(f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc)
+        prev_link = next_link = ""
+        if n > 0:
+            p = chs[n - 1]
+            prev_link = f'<a class="prev" href="{p[0]}.html"><span>Previous</span>{html.escape(p[1])}</a>'
+        if n + 1 < len(chs):
+            q = chs[n + 1]
+            next_link = f'<a class="next" href="{q[0]}.html"><span>Next</span>{html.escape(q[1])}</a>'
+        page = f"""<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="{html.escape(label)}" data-label="the chapter list" aria-expanded="true">&#8249; {html.escape(label)}</button>
+  <aside class="chapters" aria-label="Chapters"><h4>{label}</h4><ol>{nav}</ol></aside>
+  <article class="prose">
+{body}
+    <nav class="pager">{prev_link}{next_link}</nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul>{on_page}</ul></aside>
+</div>"""
+        write(f"{section}/{stem}.html", shell(title, page, "../", section, wide=True, desc=lede))
+        for sid, text in toc:
+            index.append({"t": text, "p": title, "u": f"{section}/{stem}.html#{sid}", "k": "section"})
+        index.append({"t": title, "p": label, "u": f"{section}/{stem}.html", "k": "chapter"})
 
-    # every relative link must point at a page that exists
-    bad = []
-    for d, _, files in os.walk(OUT):
+
+def section_index(section, label, lede, chs):
+    items = "".join(
+        f'<li><a href="{stem}.html"><span class="num">{stem[:2].lstrip("0")}</span>'
+        f'<b>{html.escape(title)}</b><span class="desc">{html.escape(desc)}</span></a></li>'
+        for stem, title, desc, _, _ in chs)
+    body = f"""<main class="narrow">
+  <h1>{html.escape(label)}</h1>
+  <p class="lede">{html.escape(lede)}</p>
+  <ol class="toc">{items}</ol>
+</main>"""
+    write(f"{section}/index.html", shell(label, body, "../", section, desc=lede))
+
+
+def std_pages(index, iris):
+    spec = json.load(open(os.path.join(SRC, "std", "modules.json")))
+    mods = []
+    for group in spec["groups"]:
+        for entry in group["modules"]:
+            p = subprocess.run([iris, "doc", "--json", entry["name"]], capture_output=True, text=True)
+            if p.returncode != 0:
+                sys.exit(f"iris doc --json {entry['name']}: {p.stderr.strip()}")
+            m = json.loads(p.stdout)
+            intro = os.path.join(SRC, "std", entry["name"] + ".md")
+            mods.append({
+                "name": entry["name"], "title": entry["title"], "group": group["title"],
+                "summary": entry["summary"],
+                "intro": md.convert(open(intro).read())[2] if os.path.exists(intro) else "",
+                "doc": m["doc"], "decls": m["decls"],
+            })
+    known = {m["name"] for m in mods}
+    for path in glob.glob(os.path.join(ROOT, "std", "*")):
+        name = os.path.basename(path)
+        if os.path.isdir(path) and name not in known:
+            sys.exit(f"std/{name} isn't in docs-src/std/modules.json")
+    for m in mods:
+        for d in m["decls"]:
+            index.append({"t": f"{m['name']}.{d['name']}", "p": m["title"],
+                          "u": f"std/index.html#{m['name']}/{d['name']}", "k": d["kind"]})
+        index.append({"t": m["name"], "p": m["title"], "u": f"std/index.html#{m['name']}", "k": "module"})
+    data = {"version": VERSION, "modules": mods}
+    write("std/data.js", "window.IRIS_STD = " + json.dumps(data, separators=(",", ":")) + ";\n")
+    body = """<div class="std" id="std">
+  <button class="side-toggle" type="button" data-side="std-left" data-text="Modules" data-label="modules" aria-expanded="true">&#8249; Modules</button>
+  <aside class="std-left" aria-label="Modules">
+    <input id="std-filter" type="search" placeholder="Find a function, type or module" aria-label="Find in the library" autocomplete="off">
+    <nav id="std-modules"></nav>
+    <ul id="std-found" class="std-found" hidden></ul>
+  </aside>
+  <main id="std-main" class="std-main"></main>
+  <button class="side-toggle side-toggle-r" type="button" data-side="std-right" data-text="Names" data-label="this module's names" aria-expanded="true">Names &#8250;</button>
+  <aside id="std-right" class="std-right" aria-label="In this module"></aside>
+</div>
+<script src="data.js"></script>
+<script src="../assets/std.js"></script>"""
+    write("std/index.html", shell("Library", body, "../", "std", wide=True,
+                                  desc="The Iris standard library: every module, type and function."))
+    return sum(len(m["decls"]) for m in mods)
+
+
+def prose_page(name, title, section, desc, index):
+    src = open(os.path.join(SRC, name + ".md")).read()
+    page_title, lede, body, toc, _ = md.convert(src)
+    write(name + ".html", shell(title, f'<main class="narrow prose">\n{body}\n</main>', "", section,
+                                desc=desc or lede))
+    index.append({"t": page_title or title, "p": "Iris", "u": name + ".html", "k": "page"})
+
+
+def broken_links():
+    """Links between the site's pages to a file that isn't there"""
+    out = []
+    for root, _, files in os.walk(OUT):
         for f in files:
             if not f.endswith(".html"):
                 continue
-            text = read(os.path.join(d, f))
-            for href in re.findall(r'href="([^"#:]+)(?:#[^"]*)?"', text):
-                if not os.path.exists(os.path.normpath(os.path.join(d, href))):
-                    bad.append("%s: %s" % (os.path.relpath(os.path.join(d, f), OUT), href))
-    for b in bad:
-        print("broken link:", b)
-    print("docs built%s" % (", %d broken links" % len(bad) if bad else ""))
-    return 1 if bad else 0
+            path = os.path.join(root, f)
+            for href in re.findall(r'href="([^"#:]+)(?:#[^"]*)?"', open(path).read()):
+                if not os.path.exists(os.path.normpath(os.path.join(root, href))):
+                    out.append((os.path.relpath(path, OUT), href))
+    return sorted(set(out))
+
+
+def main():
+    iris = os.path.join(ROOT, "iris")
+    if "--iris" in sys.argv:
+        iris = sys.argv[sys.argv.index("--iris") + 1]
+    if os.path.isdir(OUT):
+        shutil.rmtree(OUT)
+    os.makedirs(OUT)
+    shutil.copytree(os.path.join(SRC, "assets"), os.path.join(OUT, "assets"))
+    open(os.path.join(OUT, ".nojekyll"), "w").close()
+    index = []
+    counts = []
+    for section, label, lede in SECTIONS:
+        chs = chapters(section)
+        chapter_pages(chs, index, section, label)
+        section_index(section, label, lede, chs)
+        counts.append(f"{len(chs)} {section}")
+    n = std_pages(index, iris)
+    prose_page("index", "Iris", "", "Iris, a compiled language for servers, network tools and system programs.", index)
+    prose_page("roadmap", "Roadmap", "roadmap", "", index)
+    write("assets/search.js", "window.IRIS_SEARCH = " + json.dumps(index, separators=(",", ":")) + ";\n")
+    print(f"docs built: {', '.join(counts)}, {n} library declarations, {len(index)} search entries")
+    broken = broken_links()
+    for page, href in broken:
+        print(f"broken link: {page} -> {href}")
+    if broken:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

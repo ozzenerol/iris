@@ -1,5 +1,6 @@
 // The program's arguments and environment, and leaving the program.
 
+// What env fails with: notSet for a variable that isn't set.
 pub enum OsError { notSet }
 
 @extern("iris_os_argc")

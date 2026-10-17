@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collections - Iris</title>
+<meta name="description" content="List keeps values in order and grows as values are added; Map keeps a value for each key. Both are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.38.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html" class="on"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Collections</h1>
+<p class="lede"><code>List</code> keeps values in order and grows as values are added; <code>Map</code> keeps a value for each key. Both are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.</p>
+<h2 id="list"><a href="#list">List</a></h2>
+<p>A <code>List[T]</code> holds values of type <code>T</code> in order. A new list is empty and needs no setup; <code>free</code> gives its memory back:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    List[<span class="t">str</span>] names
+    <span class="k">defer</span> names.free()
+    names.push(<span class="s">&quot;ada&quot;</span>)
+    names.push(<span class="s">&quot;zoe&quot;</span>)
+    names.push(<span class="s">&quot;bob&quot;</span>)
+    print(<span class="s">&quot;{names.len} names: {names.at(0)} ... {names.last()}&quot;</span>)
+    names.set(<span class="n">1</span>, <span class="s">&quot;joe&quot;</span>)
+    print(<span class="s">&quot;{names.at(1)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 names: ada ... bob
+joe</code></pre>
+<p><code>len</code> is the number of values. <code>at(i)</code> gives the value at index i, from 0, and <code>set(i, v)</code> replaces it. An index outside the list stops the program, as with slices.</p>
+<h2 id="adding-and-taking-out"><a href="#adding-and-taking-out">Adding and taking out</a></h2>
+<p><code>push</code> adds at the end and <code>pop</code> takes the last value off and gives it. <code>insert(i, v)</code> and <code>remove(i)</code> work anywhere in the list, moving the values after it:</p>
+<pre class="code run"><code><span class="t">void</span> show(List[<span class="t">i64</span>] *l) {
+    <span class="t">String</span> s = <span class="s">&quot;[&quot;</span>.copy()
+    <span class="k">for</span> i, v <span class="k">in</span> l.items() {
+        <span class="k">scoped</span> <span class="t">String</span> part = format(<span class="s">&quot;{if i &gt; 0 { &quot;</span> <span class="s">&quot; } else { &quot;</span><span class="s">&quot; }}{v}&quot;</span>)
+        s.append(part)
+    }
+    s.append(<span class="s">&quot;]&quot;</span>)
+    print(s)
+    s.free()
+}
+
+<span class="t">void</span> main() {
+    List[<span class="t">i64</span>] l
+    <span class="k">defer</span> l.free()
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">6</span> {
+        l.push(i * <span class="n">10</span>)
+    }
+    show(&amp;l)
+    last := l.pop()
+    l.insert(<span class="n">0</span>, <span class="n">5</span>)
+    gone := l.remove(<span class="n">2</span>)
+    print(<span class="s">&quot;popped {last}, removed {gone}&quot;</span>)
+    show(&amp;l)
+    l.reverse()
+    show(&amp;l)
+    l.clear()
+    print(<span class="s">&quot;{l.len} after clear&quot;</span>)
+}</code></pre>
+<pre class="out"><code>[10 20 30 40 50]
+popped 50, removed 20
+[5 10 30 40]
+[40 30 10 5]
+0 after clear</code></pre>
+<p><code>clear</code> empties the list and keeps its memory for reuse. <code>reserve(n)</code> makes room for n values at once, which saves growing step by step when the count is known ahead.</p>
+<h2 id="searching-and-sorting"><a href="#searching-and-sorting">Searching and sorting</a></h2>
+<p><code>contains(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> where (-1 when it isn't). They compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
+<p><code>sort(less)</code> sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:</p>
+<pre class="code run"><code><span class="k">struct</span> Person {
+    <span class="t">str</span> name
+    <span class="t">i64</span> age
+}
+
+<span class="t">bool</span> younger(Person a, Person b) =&gt; a.age &lt; b.age
+
+<span class="t">void</span> main() {
+    List[Person] people
+    <span class="k">defer</span> people.free()
+    people.push(Person{name: <span class="s">&quot;ada&quot;</span>, age: <span class="n">36</span>})
+    people.push(Person{name: <span class="s">&quot;bob&quot;</span>, age: <span class="n">25</span>})
+    people.push(Person{name: <span class="s">&quot;cy&quot;</span>, age: <span class="n">30</span>})
+    people.sort(younger)
+    <span class="k">for</span> p <span class="k">in</span> people {
+        print(<span class="s">&quot;{p.name} {p.age}&quot;</span>)
+    }
+    List[<span class="t">str</span>] words
+    <span class="k">defer</span> words.free()
+    words.push(<span class="s">&quot;pear&quot;</span>)
+    words.push(<span class="s">&quot;fig&quot;</span>)
+    print(<span class="s">&quot;{words.contains(&quot;</span>fig<span class="s">&quot;)} {words.indexOf(&quot;</span>pear<span class="s">&quot;)} {words.indexOf(&quot;</span>kiwi<span class="s">&quot;)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>bob 25
+cy 30
+ada 36
+true 0 -1</code></pre>
+<h2 id="the-values-as-a-slice"><a href="#the-values-as-a-slice">The values as a slice</a></h2>
+<p><code>items()</code> gives the list's values as a slice, without copying: to pass to a function that takes a slice, or for a loop with indexes. The slice points into the list, so it is valid until the list next grows or is freed:</p>
+<pre class="code run"><code><span class="t">i64</span> sum(<span class="t">i64</span>[] xs) {
+    <span class="t">i64</span> total
+    <span class="k">for</span> x <span class="k">in</span> xs {
+        total += x
+    }
+    <span class="k">return</span> total
+}
+
+<span class="t">void</span> main() {
+    List[<span class="t">i64</span>] l
+    <span class="k">defer</span> l.free()
+    l.push(<span class="n">4</span>)
+    l.push(<span class="n">5</span>)
+    print(<span class="s">&quot;{sum(l.items())}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>9</code></pre>
+<h2 id="map"><a href="#map">Map</a></h2>
+<p>A <code>Map[K, V]</code> keeps a value for each key. <code>set</code> adds a key or replaces its value, and <code>get</code> gives the value and whether the key was there:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    Map[<span class="t">str</span>, <span class="t">i64</span>] ages
+    <span class="k">defer</span> ages.free()
+    ages.set(<span class="s">&quot;ada&quot;</span>, <span class="n">36</span>)
+    ages.set(<span class="s">&quot;bob&quot;</span>, <span class="n">25</span>)
+    ages.set(<span class="s">&quot;ada&quot;</span>, <span class="n">37</span>)
+    age, found := ages.get(<span class="s">&quot;ada&quot;</span>)
+    print(<span class="s">&quot;{age} {found} {ages.len}&quot;</span>)
+    _, there := ages.get(<span class="s">&quot;zoe&quot;</span>)
+    print(<span class="s">&quot;{there} {ages.getOr(&quot;</span>zoe<span class="s">&quot;, 0)} {ages.has(&quot;</span>bob<span class="s">&quot;)}&quot;</span>)
+    print(<span class="s">&quot;{ages.remove(&quot;</span>bob<span class="s">&quot;)} {ages.remove(&quot;</span>bob<span class="s">&quot;)} {ages.len}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>37 true 2
+false 0 true
+true false 1</code></pre>
+<p><code>getOr(k, fallback)</code> gives the value or the fallback, <code>has(k)</code> whether the key is there, and <code>remove(k)</code> takes it out, giving false when it wasn't there. <code>keys()</code> gives the keys as a new <code>List</code>, which the caller frees. <code>clear</code> takes every key out and keeps the memory.</p>
+<p>Keys can be integers, <code>bool</code>, enums, pointers or <code>str</code>. A <code>str</code> key is copied into the map, so the text it came from can change or go away. A map's keys come in no particular order.</p>
+<h2 id="going-over-a-map"><a href="#going-over-a-map">Going over a map</a></h2>
+<p>A loop over a map gives each key and its value:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    Map[<span class="t">str</span>, <span class="t">i64</span>] stock
+    <span class="k">defer</span> stock.free()
+    stock.set(<span class="s">&quot;pears&quot;</span>, <span class="n">4</span>)
+    total := <span class="n">0</span>
+    <span class="k">for</span> name, count <span class="k">in</span> stock {
+        print(<span class="s">&quot;{name}: {count}&quot;</span>)
+        total += count
+    }
+    <span class="k">scoped</span> List[<span class="t">str</span>] names = stock.keys()
+    print(<span class="s">&quot;{names.len} kinds, {total} in all&quot;</span>)
+}</code></pre>
+<pre class="out"><code>pears: 4
+1 kinds, 4 in all</code></pre>
+<p>For a stable order, the keys go into a list, which is sorted.</p>
+<h2 id="counting-words"><a href="#counting-words">Counting words</a></h2>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">bool</span> before(<span class="t">str</span> a, <span class="t">str</span> b) =&gt; <span class="t">str</span>.compare(a, b) &lt; <span class="n">0</span>
+
+<span class="t">void</span> main() {
+    text := <span class="s">&quot;the cat and the dog and the bird&quot;</span>
+    Map[<span class="t">str</span>, <span class="t">i64</span>] counts
+    <span class="k">defer</span> counts.free()
+    <span class="k">scoped</span> List[<span class="t">str</span>] words = <span class="t">str</span>.fields(text)
+    <span class="k">for</span> w <span class="k">in</span> words {
+        counts.set(w, counts.getOr(w, <span class="n">0</span>) + <span class="n">1</span>)
+    }
+    <span class="k">scoped</span> List[<span class="t">str</span>] keys = counts.keys()
+    keys.sort(before)
+    <span class="k">for</span> k <span class="k">in</span> keys {
+        print(<span class="s">&quot;{k} {counts.getOr(k, 0)}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>and 2
+bird 1
+cat 1
+dog 1
+the 3</code></pre>
+<h2 id="who-frees-the-values"><a href="#who-frees-the-values">Who frees the values</a></h2>
+<p>A list or a map holds its values themselves. When the values own memory, like <code>String</code>s or structs with a <code>free</code> method, something must free them before the list goes. <code>freeEach</code> frees each value, then the list:</p>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">void</span> main() {
+    List[<span class="t">String</span>] shouts
+    <span class="k">defer</span> shouts.freeEach()
+    <span class="k">for</span> w <span class="k">in</span> [<span class="s">&quot;hey&quot;</span>, <span class="s">&quot;you&quot;</span>] {
+        shouts.push(<span class="t">str</span>.upper(w))
+    }
+    print(<span class="s">&quot;{shouts.at(0)} {shouts.at(1)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>HEY YOU</code></pre>
+<p><code>at</code> and the loop give the list's own values: a <code>String</code> from <code>list.at(i)</code> belongs to the list, and is freed by <code>freeEach</code>, not by the caller. A map with values that own memory frees them in a loop before its own <code>free</code>:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    Map[<span class="t">i64</span>, <span class="t">String</span>] labels
+    <span class="k">defer</span> labels.free()
+    labels.set(<span class="n">1</span>, <span class="s">&quot;one&quot;</span>.copy())
+    labels.set(<span class="n">2</span>, <span class="s">&quot;two&quot;</span>.copy())
+    print(<span class="s">&quot;{labels.len} labels&quot;</span>)
+    <span class="k">for</span> _, v <span class="k">in</span> labels {
+        v.free()
+    }
+}</code></pre>
+<pre class="out"><code>2 labels</code></pre>
+<p>The <code>defer</code> runs last, so the loop frees the values first and the map after them.</p>
+    <nav class="pager"><a class="prev" href="21-interfaces.html"><span>Previous</span>Interfaces</a><a class="next" href="23-modules.html"><span>Next</span>Modules</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#list">List</a></li><li><a href="#adding-and-taking-out">Adding and taking out</a></li><li><a href="#searching-and-sorting">Searching and sorting</a></li><li><a href="#the-values-as-a-slice">The values as a slice</a></li><li><a href="#map">Map</a></li><li><a href="#going-over-a-map">Going over a map</a></li><li><a href="#counting-words">Counting words</a></li><li><a href="#who-frees-the-values">Who frees the values</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.38.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+// expect: 4 7 4 2 2
+
+const SLOTS = 4
+const HALF = SLOTS / 2
+
+i64[SLOTS] counts
+
+struct Ring {
+    u8[HALF] data
+}
+
+void main() {
+    counts[SLOTS - 1] = 7
+    i64[HALF][SLOTS] grid
+    r := Ring{}
+    print("{counts.len} {counts[3]} {grid.len} {grid[0].len} {r.data.len}")
+}

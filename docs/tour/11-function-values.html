@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Functions as values - Iris</title>
+<meta name="description" content="A function can be kept in a variable, passed to another function and stored in a struct. This chapter covers function types and what can be done with them.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.38.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html" class="on"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Functions as values</h1>
+<p class="lede">A function can be kept in a variable, passed to another function and stored in a struct. This chapter covers function types and what can be done with them.</p>
+<h2 id="function-types"><a href="#function-types">Function types</a></h2>
+<p>The type of a function is written as its return type followed by its parameter types in parentheses: <code>i64(i64, i64)</code> is a function that takes two <code>i64</code>s and gives one. A function's name, used without calling it, is a value of that type:</p>
+<pre class="code run"><code><span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a + b
+<span class="t">i64</span> mul(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a * b
+
+<span class="t">void</span> main() {
+    <span class="t">i64</span>(<span class="t">i64</span>, <span class="t">i64</span>) op = add
+    print(<span class="s">&quot;{op(6, 7)}&quot;</span>)
+    op = mul
+    print(<span class="s">&quot;{op(6, 7)}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>13
+42</code></pre>
+<h2 id="passing-a-function"><a href="#passing-a-function">Passing a function</a></h2>
+<p>A parameter can take a function, so a function can leave part of its work to the caller:</p>
+<pre class="code run"><code><span class="t">i64</span> apply(<span class="t">i64</span>(<span class="t">i64</span>) f, <span class="t">i64</span> x) =&gt; f(x)
+<span class="t">i64</span> double(<span class="t">i64</span> x) =&gt; x * <span class="n">2</span>
+<span class="t">i64</span> negate(<span class="t">i64</span> x) =&gt; -x
+
+<span class="t">void</span> each(<span class="t">i64</span>[] xs, <span class="t">void</span>(<span class="t">i64</span>) visit) {
+    <span class="k">for</span> x <span class="k">in</span> xs {
+        visit(x)
+    }
+}
+
+<span class="t">void</span> show(<span class="t">i64</span> x) =&gt; print(<span class="s">&quot;item {x}&quot;</span>)
+
+<span class="t">void</span> main() {
+    print(<span class="s">&quot;{apply(double, 21)} {apply(negate, 5)}&quot;</span>)
+    each([<span class="n">3</span>, <span class="n">1</span>, <span class="n">4</span>], show)
+}</code></pre>
+<pre class="out"><code>42 -5
+item 3
+item 1
+item 4</code></pre>
+<p><code>List.sort</code> takes a function like this: one that says whether its first value goes before its second (see <a href="22-collections.html">Collections</a>).</p>
+<p>There are no unnamed functions: the function passed is declared like any other, with a name. Data it needs comes through its parameters, or through a struct it is a method of.</p>
+<h2 id="type-aliases-for-functions"><a href="#type-aliases-for-functions">Type aliases for functions</a></h2>
+<p>A function type is easier to read with a name. <code>type</code> gives one:</p>
+<pre class="code run"><code><span class="k">type</span> Op = <span class="t">i64</span>(<span class="t">i64</span>, <span class="t">i64</span>)
+
+<span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a + b
+<span class="t">i64</span> sub(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a - b
+<span class="t">i64</span> mul(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a * b
+
+<span class="t">void</span> main() {
+    Op[<span class="n">3</span>] ops = [add, sub, mul]
+    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;add&quot;</span>, <span class="s">&quot;sub&quot;</span>, <span class="s">&quot;mul&quot;</span>]
+    <span class="k">for</span> i, f <span class="k">in</span> ops {
+        print(<span class="s">&quot;{names[i]}: {f(10, 4)}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>add: 14
+sub: 6
+mul: 40</code></pre>
+<h2 id="in-structs"><a href="#in-structs">In structs</a></h2>
+<p>A field can hold a function, which is called with the field's name like a method:</p>
+<pre class="code run"><code><span class="k">struct</span> Button {
+    <span class="t">str</span> label
+    <span class="t">void</span>(<span class="t">str</span>) onClick
+}
+
+<span class="t">void</span> save(<span class="t">str</span> label) =&gt; print(<span class="s">&quot;{label}: saving&quot;</span>)
+<span class="t">void</span> quit(<span class="t">str</span> label) =&gt; print(<span class="s">&quot;{label}: bye&quot;</span>)
+
+<span class="t">void</span> main() {
+    Button[<span class="n">2</span>] buttons = [Button{label: <span class="s">&quot;Save&quot;</span>, onClick: save}, Button{label: <span class="s">&quot;Quit&quot;</span>, onClick: quit}]
+    <span class="k">for</span> b <span class="k">in</span> buttons {
+        b.onClick(b.label)
+    }
+}</code></pre>
+<pre class="out"><code>Save: saving
+Quit: bye</code></pre>
+<h2 id="null-and-comparing"><a href="#null-and-comparing">null and comparing</a></h2>
+<p>A function value is <code>null</code> until it is set, and can be compared with <code>==</code> and <code>!=</code>, against <code>null</code> or another function. Calling a <code>null</code> one stops a debug build with a message:</p>
+<pre class="code run"><code><span class="t">i64</span> one() =&gt; <span class="n">1</span>
+
+<span class="t">void</span> main() {
+    <span class="t">i64</span>() f
+    print(<span class="s">&quot;{f == null}&quot;</span>)
+    f = one
+    print(<span class="s">&quot;{f == null} {f == one} {f()}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>true
+false true 1</code></pre>
+<h2 id="what-carries-over"><a href="#what-carries-over">What carries over</a></h2>
+<p>A call through a function value passes its arguments by position. Defaults and names belong to the declaration, so they don't carry over to the value: every argument is given.</p>
+<p>A function that can fail has a type that starts with <code>!</code>, as its declaration does: <code>!i64(str)</code>. A function that returns <code>void</code> can be given where one returning <code>!void</code> is wanted, since never failing is one way of not failing. This is how an HTTP route can take a plain handler or one that uses <code>try</code>:</p>
+<pre class="code run"><code><span class="k">type</span> Step = !<span class="t">void</span>(<span class="t">i64</span>)
+
+<span class="k">enum</span> StepError { tooBig }
+
+!<span class="t">void</span> check(<span class="t">i64</span> n) {
+    <span class="k">if</span> n &gt; <span class="n">10</span> {
+        <span class="k">return</span> error(StepError.tooBig, <span class="s">&quot;{n} is too big&quot;</span>)
+    }
+    print(<span class="s">&quot;{n} is fine&quot;</span>)
+}
+
+<span class="t">void</span> announce(<span class="t">i64</span> n) =&gt; print(<span class="s">&quot;step {n}&quot;</span>)
+
+!<span class="t">void</span> runAll(Step[] steps, <span class="t">i64</span> n) {
+    <span class="k">for</span> s <span class="k">in</span> steps {
+        <span class="k">try</span> s(n)
+    }
+}
+
+<span class="t">void</span> main() {
+    Step[<span class="n">2</span>] steps = [announce, check]
+    runAll(steps, <span class="n">4</span>) <span class="k">catch</span> e { }
+    runAll(steps, <span class="n">40</span>) <span class="k">catch</span> e {
+        print(<span class="s">&quot;stopped: {e.message}&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>step 4
+4 is fine
+step 40
+stopped: 40 is too big</code></pre>
+<p>A generic function, and a C function with <code>...</code>, can't be used as a value. Methods are called through their struct; a function value holds a plain function.</p>
+    <nav class="pager"><a class="prev" href="10-functions.html"><span>Previous</span>Functions</a><a class="next" href="12-arrays-and-slices.html"><span>Next</span>Arrays and slices</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#function-types">Function types</a></li><li><a href="#passing-a-function">Passing a function</a></li><li><a href="#type-aliases-for-functions">Type aliases for functions</a></li><li><a href="#in-structs">In structs</a></li><li><a href="#null-and-comparing">null and comparing</a></li><li><a href="#what-carries-over">What carries over</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.38.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

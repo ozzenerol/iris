@@ -1,0 +1,8 @@
+// error: 3: a global's value must be known when compiling
+
+i64 a = b + 1
+i64 b = 2
+
+void main() {
+    print("{a}")
+}

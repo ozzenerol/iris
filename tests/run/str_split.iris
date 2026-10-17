@@ -1,0 +1,15 @@
+// expect: 4 [] [c]
+// expect: 4 the-quick-brown-fox 3
+// expect: 1
+
+import str
+
+void main() {
+    scoped parts := str.split("a,b,,c", ",")
+    print("{parts.len} [{parts.at(2)}] [{parts.at(3)}]")
+    scoped words := str.fields("  the quick\tbrown\n fox  ")
+    scoped String joined = str.join(words.items(), "-")
+    print("{words.len} {joined} {str.findLast("a/b/c", "/")}")
+    scoped one := str.split("", ",")
+    print("{one.len}")
+}

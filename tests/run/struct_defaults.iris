@@ -1,0 +1,39 @@
+// expect: local: localhost:8080 30s info true
+// expect: nested: 8080 app 8080
+// expect: global: 8080 info
+// expect: array: 8080 8080
+// expect: literal keeps what it sets: 9000 localhost
+// expect: alloc is zero: 0
+
+enum Level { debug, info }
+
+struct Config {
+    str host = "localhost"
+    u16 port = 8080
+    Duration timeout = 30s
+    Level level = .info
+    bool on = true
+}
+
+struct App {
+    Config c
+    str name = "app"
+    Config[2] spares
+}
+
+Config global
+
+void main() {
+    Config c
+    print("local: {c.host}:{c.port} {c.timeout} {c.level} {c.on}")
+    a := App{}
+    print("nested: {a.c.port} {a.name} {a.spares[1].port}")
+    print("global: {global.port} {global.level}")
+    Config[2] arr
+    print("array: {arr[0].port} {arr[1].port}")
+    b := Config{port: 9000}
+    print("literal keeps what it sets: {b.port} {b.host}")
+    Config[] raw = alloc(Config, 1)
+    print("alloc is zero: {raw[0].port}")
+    free(raw)
+}

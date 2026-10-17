@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build a command-line tool - Iris</title>
+<meta name="description" content="This guide builds sizes, a tool that shows what takes the space in a folder. It reads flags, lines its output up in a table with colors, shows a progress bar, and can ask for folders one after another with an editable prompt. Each step shows every function and declaration it adds or changes, in full. The last section has the whole program.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html" class="on">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.38.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Guides" data-label="the chapter list" aria-expanded="true">&#8249; Guides</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html" class="on"><span class="num">2</span>Build a command-line tool</a></li></ol></aside>
+  <article class="prose">
+<h1>Build a command-line tool</h1>
+<p class="lede">This guide builds <code>sizes</code>, a tool that shows what takes the space in a folder. It reads flags, lines its output up in a table with colors, shows a progress bar, and can ask for folders one after another with an editable prompt. Each step shows every function and declaration it adds or changes, in full. The last section has the whole program.</p>
+<p>The guide's examples run it on a folder called <code>demo</code>.</p>
+<h2 id="flags"><a href="#flags">Flags</a></h2>
+<p>A struct with <code>@flags</code> describes the flags. <code>flags.parse</code> fills it from the program's arguments. Each field is a flag named after it. <code>@flag</code> gives a letter for the short form and the help, and the <code>str[]</code> field with <code>@flag(args)</code> gets the arguments that aren't flags.</p>
+<pre class="code"><code><span class="c">// sizes: what takes the space in a folder.</span>
+
+<span class="k">import</span> flags
+
+<span class="a">@flags</span>(<span class="s">&quot;shows what takes the space in a folder&quot;</span>)
+<span class="k">struct</span> Options {
+    <span class="a">@flag</span>(<span class="s">&#x27;n&#x27;</span>, <span class="s">&quot;how many entries to show&quot;</span>) <span class="t">i64</span> top = <span class="n">10</span>
+    <span class="a">@flag</span>(<span class="s">&#x27;a&#x27;</span>, <span class="s">&quot;count names that start with a dot&quot;</span>) <span class="t">bool</span> all
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] folders
+}
+
+<span class="t">void</span> main() {
+    opts := flags.parse(Options)
+    print(<span class="s">&quot;top {opts.top}, all {opts.all}, {opts.folders.len} folders&quot;</span>)
+}</code></pre>
+<pre class="code"><code>iris build main.iris -o sizes
+./sizes -n 3 demo
+./sizes --top x</code></pre>
+<pre class="out"><code>top 3, all false, 1 folders
+error: --top: &#x27;x&#x27; isn&#x27;t a whole number
+usage: sizes [flags] [folders...]
+run sizes --help to see the flags</code></pre>
+<p>A wrong flag ends the program with status 2. <code>--help</code> prints the help made from the struct:</p>
+<pre class="out"><code>shows what takes the space in a folder
+
+usage: sizes [flags] [folders...]
+
+flags:
+  -n, --top &lt;n&gt;   how many entries to show (default 10)
+  -a, --all       count names that start with a dot
+  -h, --help      show this help</code></pre>
+<h2 id="adding-up-the-sizes"><a href="#adding-up-the-sizes">Adding up the sizes</a></h2>
+<p><code>sizeOf</code> gives the bytes in a file, or in a folder and everything in it. A file or folder it can't read counts as 0.</p>
+<pre class="code"><code><span class="k">import</span> flags, fs, path, <span class="t">str</span></code></pre>
+<pre class="code"><code><span class="k">struct</span> Item {
+    <span class="t">String</span> name
+    <span class="t">i64</span> size
+    <span class="t">bool</span> isDir
+}
+
+<span class="k">pub</span> <span class="t">void</span> Item.free() {
+    self.name.free()
+}</code></pre>
+<pre class="code"><code>Options opts</code></pre>
+<pre class="code"><code><span class="c">// The bytes in p: a file, or a folder and everything in it.</span>
+<span class="t">i64</span> sizeOf(<span class="t">str</span> p) {
+    info := fs.stat(p) <span class="k">catch</span> e {
+        <span class="k">return</span> <span class="n">0</span>
+    }
+    <span class="k">if</span> !info.isDir {
+        <span class="k">return</span> info.size
+    }
+    <span class="k">scoped</span> fs.Dir dir = fs.readDir(p) <span class="k">catch</span> e {
+        <span class="k">return</span> <span class="n">0</span>
+    }
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        <span class="k">scoped</span> <span class="t">String</span> inside = path.join(p, e.name)
+        total += sizeOf(inside)
+    }
+    <span class="k">return</span> total
+}</code></pre>
+<p><code>human</code> writes a size as people read it, with one decimal:</p>
+<pre class="code"><code><span class="c">// 1536 is &quot;1.5 KiB&quot;.</span>
+<span class="t">String</span> human(<span class="t">i64</span> n) {
+    <span class="k">if</span> n &lt; <span class="n">1024</span> {
+        <span class="k">return</span> format(<span class="s">&quot;{n} B&quot;</span>)
+    }
+    units := [<span class="s">&quot;KiB&quot;</span>, <span class="s">&quot;MiB&quot;</span>, <span class="s">&quot;GiB&quot;</span>, <span class="s">&quot;TiB&quot;</span>]
+    <span class="t">i64</span> scaled = n * <span class="n">10</span> / <span class="n">1024</span>
+    <span class="t">i64</span> u = <span class="n">0</span>
+    <span class="k">for</span> scaled &gt;= <span class="n">10240</span> &amp;&amp; u &lt; <span class="n">3</span> {
+        scaled /= <span class="n">1024</span>
+        u += <span class="n">1</span>
+    }
+    <span class="k">return</span> format(<span class="s">&quot;{scaled / 10}.{scaled % 10} {units[u]}&quot;</span>)
+}</code></pre>
+<p><code>show</code> reads the folder, adds up each entry, sorts them with the biggest first and prints the first <code>opts.top</code>. <code>Item.free</code> is <code>pub</code> because <code>List.freeEach</code> calls it from the standard library.</p>
+<pre class="code"><code><span class="t">bool</span> bigger(Item a, Item b) =&gt; a.size &gt; b.size
+
+!<span class="t">void</span> show(<span class="t">str</span> folder) {
+    <span class="k">scoped</span> fs.Dir dir = <span class="k">try</span> fs.readDir(folder)
+    List[Item] items
+    <span class="k">defer</span> items.freeEach()
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        <span class="k">if</span> !opts.all &amp;&amp; <span class="t">str</span>.startsWith(e.name, <span class="s">&quot;.&quot;</span>) {
+            <span class="k">continue</span>
+        }
+        <span class="k">scoped</span> <span class="t">String</span> full = path.join(folder, e.name)
+        size := sizeOf(full)
+        total += size
+        items.push(Item{name: e.name.copy(), size: size, isDir: e.isDir})
+    }
+    items.sort(bigger)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..items.len {
+        <span class="k">if</span> i == opts.top {
+            <span class="k">break</span>
+        }
+        it := items.at(i)
+        <span class="k">scoped</span> <span class="t">String</span> size = human(it.size)
+        print(<span class="s">&quot;{size}  {it.name}&quot;</span>)
+    }
+    <span class="k">scoped</span> <span class="t">String</span> sum = human(total)
+    print(<span class="s">&quot;{folder}: {sum} in {items.len} entries&quot;</span>)
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    opts = flags.parse(Options)
+    <span class="k">if</span> opts.folders.len == <span class="n">0</span> {
+        <span class="k">try</span> show(<span class="s">&quot;.&quot;</span>)
+        <span class="k">return</span>
+    }
+    <span class="k">for</span> f <span class="k">in</span> opts.folders {
+        <span class="k">try</span> show(f)
+    }
+}</code></pre>
+<pre class="out"><code>4.2 MiB  video.mp4
+2.1 MiB  photos
+40.0 KiB  code
+12.0 KiB  notes.txt
+3.0 KiB  [draft].md
+demo: 6.4 MiB in 5 entries</code></pre>
+<h2 id="a-table-and-colors"><a href="#a-table-and-colors">A table and colors</a></h2>
+<p><code>term.table</code> lines the columns up. A column of numbers lines up on the right; sizes like <code>4.2 MiB</code> aren't numbers, so <code>t.align</code> puts that column on the right. Text for <code>term</code> can hold markup: <code>[blue]...[/]</code> colors the folders. A name from the disk could hold a <code>[</code>, so <code>term.escape</code> writes it as <code>[[</code> first.</p>
+<p><code>term.success</code> and <code>term.error</code> print a line after a green ✓ or a red ✗. Colors are only used on a terminal: in a pipe or a file, and when <code>NO_COLOR</code> is set, the markup is taken out.</p>
+<pre class="code"><code><span class="k">import</span> flags, fs, os, path, <span class="t">str</span>, term</code></pre>
+<pre class="code"><code>!<span class="t">void</span> show(<span class="t">str</span> folder) {
+    <span class="k">scoped</span> fs.Dir dir = <span class="k">try</span> fs.readDir(folder)
+    List[Item] items
+    <span class="k">defer</span> items.freeEach()
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        <span class="k">if</span> !opts.all &amp;&amp; <span class="t">str</span>.startsWith(e.name, <span class="s">&quot;.&quot;</span>) {
+            <span class="k">continue</span>
+        }
+        <span class="k">scoped</span> <span class="t">String</span> full = path.join(folder, e.name)
+        size := sizeOf(full)
+        total += size
+        items.push(Item{name: e.name.copy(), size: size, isDir: e.isDir})
+    }
+    items.sort(bigger)
+
+    <span class="k">scoped</span> t := term.table([<span class="s">&quot;SIZE&quot;</span>, <span class="s">&quot;NAME&quot;</span>])
+    t.<span class="k">align</span>(<span class="n">0</span>, .right)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..items.len {
+        <span class="k">if</span> i == opts.top {
+            <span class="k">break</span>
+        }
+        it := items.at(i)
+        <span class="k">scoped</span> <span class="t">String</span> size = human(it.size)
+        <span class="k">scoped</span> <span class="t">String</span> name = term.escape(it.name)
+        <span class="k">scoped</span> <span class="t">String</span> shown = <span class="k">if</span> it.isDir { format(<span class="s">&quot;[blue]{name}/[/]&quot;</span>) } <span class="k">else</span> { name.copy() }
+        t.row([size, shown])
+    }
+    t.print()
+    <span class="k">scoped</span> <span class="t">String</span> sum = human(total)
+    term.success(<span class="s">&quot;{folder}: {sum} in {items.len} entries&quot;</span>)
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    opts = flags.parse(Options)
+    <span class="k">if</span> opts.folders.len == <span class="n">0</span> {
+        <span class="k">try</span> show(<span class="s">&quot;.&quot;</span>)
+        <span class="k">return</span>
+    }
+    <span class="k">for</span> f <span class="k">in</span> opts.folders {
+        show(f) <span class="k">catch</span> e {
+            term.error(e.message)
+            os.exit(<span class="n">1</span>)
+        }
+    }
+}</code></pre>
+<pre class="out"><code>    SIZE  NAME
+ 4.2 MiB  video.mp4
+ 2.1 MiB  photos/
+40.0 KiB  code/
+12.0 KiB  notes.txt
+ 3.0 KiB  [draft].md
+✓ demo: 6.4 MiB in 5 entries</code></pre>
+<p>A folder that isn't there:</p>
+<pre class="out"><code>✗ /nope: no such file</code></pre>
+<h2 id="a-progress-bar"><a href="#a-progress-bar">A progress bar</a></h2>
+<p>Adding up a big folder takes a while. <code>term.progress</code> draws a bar on stderr, redrawn in place as <code>p.add()</code> is called. Lines printed with <code>term</code> while it runs go above it. <code>p.done()</code> writes the last line, with the time it took.</p>
+<pre class="code"><code>!<span class="t">void</span> show(<span class="t">str</span> folder) {
+    <span class="k">scoped</span> fs.Dir dir = <span class="k">try</span> fs.readDir(folder)
+    List[Item] items
+    <span class="k">defer</span> items.freeEach()
+    p := term.progress(folder, dir.entries.len)
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        p.add()
+        <span class="k">if</span> !opts.all &amp;&amp; <span class="t">str</span>.startsWith(e.name, <span class="s">&quot;.&quot;</span>) {
+            <span class="k">continue</span>
+        }
+        <span class="k">scoped</span> <span class="t">String</span> full = path.join(folder, e.name)
+        size := sizeOf(full)
+        total += size
+        items.push(Item{name: e.name.copy(), size: size, isDir: e.isDir})
+    }
+    p.done()
+    items.sort(bigger)
+
+    <span class="k">scoped</span> t := term.table([<span class="s">&quot;SIZE&quot;</span>, <span class="s">&quot;NAME&quot;</span>])
+    t.<span class="k">align</span>(<span class="n">0</span>, .right)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..items.len {
+        <span class="k">if</span> i == opts.top {
+            <span class="k">break</span>
+        }
+        it := items.at(i)
+        <span class="k">scoped</span> <span class="t">String</span> size = human(it.size)
+        <span class="k">scoped</span> <span class="t">String</span> name = term.escape(it.name)
+        <span class="k">scoped</span> <span class="t">String</span> shown = <span class="k">if</span> it.isDir { format(<span class="s">&quot;[blue]{name}/[/]&quot;</span>) } <span class="k">else</span> { name.copy() }
+        t.row([size, shown])
+    }
+    t.print()
+    <span class="k">scoped</span> <span class="t">String</span> sum = human(total)
+    term.success(<span class="s">&quot;{folder}: {sum} in {items.len} entries&quot;</span>)
+}</code></pre>
+<pre class="out"><code>demo  ██████████████████████████████  100%  6/6  0.0s</code></pre>
+<h2 id="asking-for-folders"><a href="#asking-for-folders">Asking for folders</a></h2>
+<p>With <code>-i</code>, <code>sizes</code> asks for one folder after another. <code>term.readLine</code> shows a prompt and lets the line be edited with the usual keys: arrows, Home and End, Ctrl-W to cut a word, Up and Down for the lines typed before. <code>term.historyFile</code> keeps those lines in a file between runs. At Ctrl-D, <code>readLine</code> fails, which ends the loop.</p>
+<pre class="code"><code><span class="a">@flags</span>(<span class="s">&quot;shows what takes the space in a folder&quot;</span>)
+<span class="k">struct</span> Options {
+    <span class="a">@flag</span>(<span class="s">&#x27;n&#x27;</span>, <span class="s">&quot;how many entries to show&quot;</span>) <span class="t">i64</span> top = <span class="n">10</span>
+    <span class="a">@flag</span>(<span class="s">&#x27;a&#x27;</span>, <span class="s">&quot;count names that start with a dot&quot;</span>) <span class="t">bool</span> all
+    <span class="a">@flag</span>(<span class="s">&#x27;i&#x27;</span>, <span class="s">&quot;ask for folders, one after another&quot;</span>) <span class="t">bool</span> interactive
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] folders
+}</code></pre>
+<pre class="code"><code><span class="t">void</span> shell() {
+    home := os.env(<span class="s">&quot;HOME&quot;</span>) <span class="k">catch</span> e { <span class="s">&quot;.&quot;</span> }
+    <span class="k">scoped</span> <span class="t">String</span> history = path.join(home, <span class="s">&quot;.sizes_history&quot;</span>)
+    term.historyFile(history)
+    term.info(<span class="s">&quot;type a folder to see what is in it; Ctrl-D ends&quot;</span>)
+    <span class="k">for</span> {
+        line := term.readLine(<span class="s">&quot;[bold]folder&gt;[/] &quot;</span>) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        folder := <span class="t">str</span>.trim(line)
+        <span class="k">if</span> folder.len &gt; <span class="n">0</span> {
+            show(folder) <span class="k">catch</span> e {
+                term.error(e.message)
+            }
+        }
+        line.free()
+    }
+}</code></pre>
+<pre class="code"><code>!<span class="t">void</span> main() {
+    opts = flags.parse(Options)
+    <span class="k">if</span> opts.interactive {
+        shell()
+        <span class="k">return</span>
+    }
+    <span class="k">if</span> opts.folders.len == <span class="n">0</span> {
+        <span class="k">try</span> show(<span class="s">&quot;.&quot;</span>)
+        <span class="k">return</span>
+    }
+    <span class="k">for</span> f <span class="k">in</span> opts.folders {
+        show(f) <span class="k">catch</span> e {
+            term.error(e.message)
+            os.exit(<span class="n">1</span>)
+        }
+    }
+}</code></pre>
+<pre class="out"><code>• type a folder to see what is in it; Ctrl-D ends
+folder&gt; demo/photos
+demo/photos  ██████████████████████████████  100%  2/2  0.0s
+     SIZE  NAME
+  1.2 MiB  beach.jpg
+900.0 KiB  hills.jpg
+✓ demo/photos: 2.1 MiB in 2 entries
+folder&gt;</code></pre>
+<h2 id="the-whole-program"><a href="#the-whole-program">The whole program</a></h2>
+<pre class="code"><code><span class="c">// sizes: what takes the space in a folder.</span>
+
+<span class="k">import</span> flags, fs, os, path, <span class="t">str</span>, term
+
+<span class="a">@flags</span>(<span class="s">&quot;shows what takes the space in a folder&quot;</span>)
+<span class="k">struct</span> Options {
+    <span class="a">@flag</span>(<span class="s">&#x27;n&#x27;</span>, <span class="s">&quot;how many entries to show&quot;</span>) <span class="t">i64</span> top = <span class="n">10</span>
+    <span class="a">@flag</span>(<span class="s">&#x27;a&#x27;</span>, <span class="s">&quot;count names that start with a dot&quot;</span>) <span class="t">bool</span> all
+    <span class="a">@flag</span>(<span class="s">&#x27;i&#x27;</span>, <span class="s">&quot;ask for folders, one after another&quot;</span>) <span class="t">bool</span> interactive
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] folders
+}
+
+<span class="k">struct</span> Item {
+    <span class="t">String</span> name
+    <span class="t">i64</span> size
+    <span class="t">bool</span> isDir
+}
+
+<span class="k">pub</span> <span class="t">void</span> Item.free() {
+    self.name.free()
+}
+
+Options opts
+
+<span class="c">// The bytes in p: a file, or a folder and everything in it.</span>
+<span class="t">i64</span> sizeOf(<span class="t">str</span> p) {
+    info := fs.stat(p) <span class="k">catch</span> e {
+        <span class="k">return</span> <span class="n">0</span>
+    }
+    <span class="k">if</span> !info.isDir {
+        <span class="k">return</span> info.size
+    }
+    <span class="k">scoped</span> fs.Dir dir = fs.readDir(p) <span class="k">catch</span> e {
+        <span class="k">return</span> <span class="n">0</span>
+    }
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        <span class="k">scoped</span> <span class="t">String</span> inside = path.join(p, e.name)
+        total += sizeOf(inside)
+    }
+    <span class="k">return</span> total
+}
+
+<span class="c">// 1536 is &quot;1.5 KiB&quot;.</span>
+<span class="t">String</span> human(<span class="t">i64</span> n) {
+    <span class="k">if</span> n &lt; <span class="n">1024</span> {
+        <span class="k">return</span> format(<span class="s">&quot;{n} B&quot;</span>)
+    }
+    units := [<span class="s">&quot;KiB&quot;</span>, <span class="s">&quot;MiB&quot;</span>, <span class="s">&quot;GiB&quot;</span>, <span class="s">&quot;TiB&quot;</span>]
+    <span class="t">i64</span> scaled = n * <span class="n">10</span> / <span class="n">1024</span>
+    <span class="t">i64</span> u = <span class="n">0</span>
+    <span class="k">for</span> scaled &gt;= <span class="n">10240</span> &amp;&amp; u &lt; <span class="n">3</span> {
+        scaled /= <span class="n">1024</span>
+        u += <span class="n">1</span>
+    }
+    <span class="k">return</span> format(<span class="s">&quot;{scaled / 10}.{scaled % 10} {units[u]}&quot;</span>)
+}
+
+<span class="t">bool</span> bigger(Item a, Item b) =&gt; a.size &gt; b.size
+
+!<span class="t">void</span> show(<span class="t">str</span> folder) {
+    <span class="k">scoped</span> fs.Dir dir = <span class="k">try</span> fs.readDir(folder)
+    List[Item] items
+    <span class="k">defer</span> items.freeEach()
+    p := term.progress(folder, dir.entries.len)
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> e <span class="k">in</span> dir.entries {
+        p.add()
+        <span class="k">if</span> !opts.all &amp;&amp; <span class="t">str</span>.startsWith(e.name, <span class="s">&quot;.&quot;</span>) {
+            <span class="k">continue</span>
+        }
+        <span class="k">scoped</span> <span class="t">String</span> full = path.join(folder, e.name)
+        size := sizeOf(full)
+        total += size
+        items.push(Item{name: e.name.copy(), size: size, isDir: e.isDir})
+    }
+    p.done()
+    items.sort(bigger)
+
+    <span class="k">scoped</span> t := term.table([<span class="s">&quot;SIZE&quot;</span>, <span class="s">&quot;NAME&quot;</span>])
+    t.<span class="k">align</span>(<span class="n">0</span>, .right)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..items.len {
+        <span class="k">if</span> i == opts.top {
+            <span class="k">break</span>
+        }
+        it := items.at(i)
+        <span class="k">scoped</span> <span class="t">String</span> size = human(it.size)
+        <span class="k">scoped</span> <span class="t">String</span> name = term.escape(it.name)
+        <span class="k">scoped</span> <span class="t">String</span> shown = <span class="k">if</span> it.isDir { format(<span class="s">&quot;[blue]{name}/[/]&quot;</span>) } <span class="k">else</span> { name.copy() }
+        t.row([size, shown])
+    }
+    t.print()
+    <span class="k">scoped</span> <span class="t">String</span> sum = human(total)
+    term.success(<span class="s">&quot;{folder}: {sum} in {items.len} entries&quot;</span>)
+}
+
+<span class="t">void</span> shell() {
+    home := os.env(<span class="s">&quot;HOME&quot;</span>) <span class="k">catch</span> e { <span class="s">&quot;.&quot;</span> }
+    <span class="k">scoped</span> <span class="t">String</span> history = path.join(home, <span class="s">&quot;.sizes_history&quot;</span>)
+    term.historyFile(history)
+    term.info(<span class="s">&quot;type a folder to see what is in it; Ctrl-D ends&quot;</span>)
+    <span class="k">for</span> {
+        line := term.readLine(<span class="s">&quot;[bold]folder&gt;[/] &quot;</span>) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        folder := <span class="t">str</span>.trim(line)
+        <span class="k">if</span> folder.len &gt; <span class="n">0</span> {
+            show(folder) <span class="k">catch</span> e {
+                term.error(e.message)
+            }
+        }
+        line.free()
+    }
+}
+
+!<span class="t">void</span> main() {
+    opts = flags.parse(Options)
+    <span class="k">if</span> opts.interactive {
+        shell()
+        <span class="k">return</span>
+    }
+    <span class="k">if</span> opts.folders.len == <span class="n">0</span> {
+        <span class="k">try</span> show(<span class="s">&quot;.&quot;</span>)
+        <span class="k">return</span>
+    }
+    <span class="k">for</span> f <span class="k">in</span> opts.folders {
+        show(f) <span class="k">catch</span> e {
+            term.error(e.message)
+            os.exit(<span class="n">1</span>)
+        }
+    }
+}</code></pre>
+    <nav class="pager"><a class="prev" href="01-rest-api.html"><span>Previous</span>Build a REST API</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#flags">Flags</a></li><li><a href="#adding-up-the-sizes">Adding up the sizes</a></li><li><a href="#a-table-and-colors">A table and colors</a></li><li><a href="#a-progress-bar">A progress bar</a></li><li><a href="#asking-for-folders">Asking for folders</a></li><li><a href="#the-whole-program">The whole program</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.38.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

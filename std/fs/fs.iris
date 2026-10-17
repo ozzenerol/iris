@@ -3,6 +3,8 @@
 
 import str, time
 
+// What file calls fail with: notFound, permission, exists (for a path that is
+// there already), isDir (for a folder where a file is wanted), end, and other.
 pub enum FsError { notFound, permission, exists, isDir, other, end }
 
 @extern("iris_fs_read_all")
@@ -160,6 +162,7 @@ pub struct Dir {
     pub List[Entry] entries
 }
 
+// Frees the names and the list.
 pub void Dir.free() {
     for e in self.entries {
         e.name.free()

@@ -62,8 +62,11 @@ pub Rng seeded(u64 seed) {
     return r
 }
 
+// A number from lo up to hi - 1, from this generator.
 pub i64 Rng.int(i64 lo, i64 hi) => between(&self.state[0], lo, hi)
 
+// A number from 0 up to 1, from this generator.
 pub f64 Rng.float() => f64(i64(rawNext(&self.state[0]) >> 11)) / 9007199254740992.0
 
+// true or false, each half the time, from this generator.
 pub bool Rng.coin() => rawNext(&self.state[0]) >> 63 == 1

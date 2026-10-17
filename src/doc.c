@@ -4,6 +4,7 @@
  *   iris doc http.Router       one of its names, with its methods
  *   iris doc main.iris         a file or a project's folder
  *   iris doc main.iris User    one name in it
+ *   iris doc --json http       a module as JSON, for the documentation site
  *
  * Declarations are shown as they are written in the source, so defaults
  * and attributes read the same as in the code, followed by the comment
@@ -204,12 +205,26 @@ static void showDecl(StrBuf *out, Node *d, bool all, NodeList *decls) {
     }
 }
 
-/* The comment at the top of a module's first file. */
+/* The comment at the top of the module's file named after it (http.iris
+ * in http), or of its first file that has one. */
 static void moduleComment(StrBuf *out, Module *m) {
-    for (int f = 0; f < m->files.len; f++) {
-        Node *file = m->files.items[f];
+    int order[256], n = 0;
+    const char *mname = m->name ? m->name : "";
+    for (int f = 0; f < m->files.len && n < 256; f++) {
+        const char *path = ((Node *)m->files.items[f])->src->path;
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        size_t ml = strlen(mname);
+        if (strncmp(base, mname, ml) == 0 && strcmp(base + ml, ".iris") == 0) order[n++] = f;
+    }
+    for (int f = 0; f < m->files.len && n < 256; f++) {
+        if (n == 0 || order[0] != f) order[n++] = f;
+    }
+    for (int k = 0; k < n; k++) {
+        Node *file = m->files.items[order[k]];
         Source *src = file->src;
         int l = 1;
+        size_t mark = out->len;
         bool any = false;
         for (;;) {
             const char *s = lineStart(src, l), *e = lineEnd(src, s);
@@ -221,7 +236,14 @@ static void moduleComment(StrBuf *out, Module *m) {
             any = true;
             l++;
         }
-        /* a comment that belongs to the first declaration isn't the module's */
+        /* a comment right above the first declaration, with no blank line
+         * between, is that declaration's, not the module's */
+        const char *after = lineStart(src, l), *afterEnd = lineEnd(src, after);
+        while (after < afterEnd && (*after == ' ' || *after == '\t' || *after == '\r')) after++;
+        if (any && after < afterEnd) {
+            out->len = mark;
+            continue;
+        }
         if (any) return;
     }
 }
@@ -281,7 +303,135 @@ static int showModule(Module *m, const char *name, bool all) {
     return 0;
 }
 
+/* ---------------------------------------------------------------- --json */
+
+static void jsonStr(StrBuf *out, const char *s, size_t n) {
+    sbPutc(out, '"');
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') {
+            sbPutc(out, '\\');
+            sbPutc(out, (char)c);
+        } else if (c == '\n') {
+            sbPuts(out, "\\n");
+        } else if (c == '\t') {
+            sbPuts(out, "\\t");
+        } else if (c < 0x20) {
+            sbPrintf(out, "\\u%04x", c);
+        } else {
+            sbPutc(out, (char)c);
+        }
+    }
+    sbPutc(out, '"');
+}
+
+static void jsonBuf(StrBuf *out, StrBuf *b) {
+    size_t n = b->len;
+    while (n && b->buf[n - 1] == '\n') n--;
+    jsonStr(out, b->buf ? b->buf : "", n);
+}
+
+static const char *kindName(Node *d) {
+    if (builtinDecl(d)) return "builtin";
+    switch (d->kind) {
+    case N_STRUCT: return "struct";
+    case N_ENUM: return "enum";
+    case N_INTERFACE: return "interface";
+    case N_TYPEDEF: return "type";
+    case N_CONST: return "const";
+    case N_FUNC: return receiverName(d) ? "method" : "func";
+    default: return "var";
+    }
+}
+
+static void jsonDecl(StrBuf *out, Node *d, const char *name, bool *first) {
+    StrBuf sig = {0}, doc = {0};
+    if (builtinDecl(d)) {
+        sbPuts(&sig, d->name);
+    } else {
+        attributes(&sig, d->src, d->line);
+        if (d->kind == N_STRUCT) {
+            showStruct(&sig, d, false);
+        } else if (d->kind == N_ENUM || d->kind == N_INTERFACE) {
+            const char *s = lineStart(d->src, d->line), *p = s, *end = d->src->text + d->src->len;
+            int depth = 0;
+            while (p < end) {
+                if (*p == '{') depth++;
+                if (*p == '}' && --depth == 0) {
+                    p++;
+                    break;
+                }
+                p++;
+            }
+            sbPutn(&sig, s, (size_t)(p - s));
+        } else {
+            head(&sig, d->src, d->line);
+        }
+    }
+    comment(&doc, d->src, d->line, "");
+    const char *path = d->src->path, *std = strstr(path, "std/");
+    sbPuts(out, *first ? "\n    " : ",\n    ");
+    *first = false;
+    sbPuts(out, "{\"name\": ");
+    jsonStr(out, name, strlen(name));
+    sbPrintf(out, ", \"kind\": \"%s\", \"sig\": ", kindName(d));
+    jsonBuf(out, &sig);
+    sbPuts(out, ", \"doc\": ");
+    jsonBuf(out, &doc);
+    sbPuts(out, ", \"file\": ");
+    const char *rel = std ? std + 4 : path;
+    jsonStr(out, rel, strlen(rel));
+    sbPrintf(out, ", \"line\": %d}", d->line);
+    sbFree(&sig);
+    sbFree(&doc);
+}
+
+/* A module as JSON, for the documentation site's library browser: its
+ * comment, and each pub declaration with its methods after it. */
+static int jsonModule(Module *m) {
+    NodeList decls = {0};
+    Arena a = {0};
+    for (int f = 0; f < m->files.len; f++) {
+        Node *file = m->files.items[f];
+        for (int i = 0; i < file->list.len; i++) listPush(&a, &decls, file->list.items[i]);
+    }
+    StrBuf out = {0}, top = {0};
+    moduleComment(&top, m);
+    sbPuts(&out, "{\"name\": ");
+    const char *mn = m->name ? m->name : m->path;
+    jsonStr(&out, mn, strlen(mn));
+    sbPuts(&out, ", \"doc\": ");
+    jsonBuf(&out, &top);
+    sbPuts(&out, ", \"decls\": [");
+    bool first = true;
+    for (int i = 0; i < decls.len; i++) {
+        Node *d = decls.items[i];
+        const char *dn = declName(d);
+        if (!dn || !shown(d, false) || receiverName(d)) continue;
+        jsonDecl(&out, d, dn, &first);
+        for (int k = 0; d->kind == N_STRUCT && k < decls.len; k++) {
+            Node *meth = decls.items[k];
+            const char *rn = receiverName(meth);
+            if (!rn || strcmp(rn, d->name) != 0 || !shown(meth, false)) continue;
+            char full[512];
+            snprintf(full, sizeof full, "%s.%s", d->name, meth->name);
+            jsonDecl(&out, meth, full, &first);
+        }
+    }
+    sbPuts(&out, "\n]}\n");
+    fputs(out.buf, stdout);
+    sbFree(&out);
+    sbFree(&top);
+    arenaFree(&a);
+    return 0;
+}
+
 int cmdDoc(int argc, char **argv) {
+    bool json = argc > 2 && strcmp(argv[2], "--json") == 0;
+    if (json) {
+        argv++;
+        argc--;
+    }
     if (argc < 3) {
         fputs("usage: iris doc <module>[.name], or iris doc <file or folder> [name]\n", stderr);
         return 2;
@@ -328,7 +478,7 @@ int cmdDoc(int argc, char **argv) {
         }
         if (strcmp(mod, "core") == 0) m = prog->core;
         if (m) {
-            rc = showModule(m, name, false);
+            rc = json ? jsonModule(m) : showModule(m, name, false);
         } else {
             fprintf(stderr, "iris doc: there is no module or name %s\n", what);
         }

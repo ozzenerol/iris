@@ -42,7 +42,8 @@
 
 Usage: python3 tools/run_tests.py [--iris PATH] [--update] [NAME...]
   --update   rewrite the .tree and fmt .out files from the current output
-  NAME       run only tests whose name contains NAME ("docs" for the docs)
+  NAME       run only tests whose name contains NAME ("docs" for the docs,
+             "docs-src/tour/03" for one page's examples)
 """
 import argparse
 import glob
@@ -328,13 +329,16 @@ def get_test(iris, only, failures):
 
 
 def doc_tests(iris, only, failures):
-    if only and not any(o in "docs" for o in only):
+    files = sorted(glob.glob(os.path.join(ROOT, "docs-src/**/*.md"), recursive=True))
+    # "docs" runs every page's examples; "docs-src/tour/03" only that page's
+    if only and not any(o in "docs" or any(o in os.path.relpath(f, ROOT) for f in files) for o in only):
         return 0
     count = 0
-    files = sorted(glob.glob(os.path.join(ROOT, "docs-src/**/*.md"), recursive=True))
     with tempfile.TemporaryDirectory() as tmp:
         for md in files:
             rel = os.path.relpath(md, ROOT)
+            if only and not any(o in "docs" or o in rel for o in only):
+                continue
             lines = open(md).read().split("\n")
             i = 0
             while i < len(lines):

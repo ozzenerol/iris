@@ -3,8 +3,10 @@
 
 import str
 
+// What parse fails with: invalid for text that isn't an ISO 8601 time.
 pub enum TimeError { invalid }
 
+// The days of the week, Monday first.
 pub enum Weekday { monday, tuesday, wednesday, thursday, friday, saturday, sunday }
 
 // A moment: nanoseconds since 1970-01-01 00:00 UTC, and the offset of the
@@ -85,13 +87,16 @@ pub Time Time.utc() => Time{ns: self.ns}
 // The same moment shown with an offset in seconds east of UTC.
 pub Time Time.withOffset(i32 seconds) => Time{ns: self.ns, offset: seconds}
 
+// The moment d after this one; a negative d goes back.
 pub Time Time.add(Duration d) => Time{ns: self.ns + d, offset: self.offset}
 
 // The time from other to this moment.
 pub Duration Time.sub(Time other) => self.ns - other.ns
 
+// Whether this moment is before other.
 pub bool Time.before(Time other) => self.ns < other.ns
 
+// Whether this moment is after other.
 pub bool Time.after(Time other) => self.ns > other.ns
 
 // Seconds since 1970-01-01 00:00 UTC.
@@ -100,6 +105,7 @@ pub i64 Time.unix() => floorDiv(self.ns, NS)
 // Milliseconds since 1970-01-01 00:00 UTC.
 pub i64 Time.unixMs() => floorDiv(self.ns, 1000000)
 
+// The year, in the time zone the moment is shown in.
 pub i64 Time.year() {
     secs, _ := self.shown()
     y, _, _ := civilFromDays(floorDiv(secs, 86400))
@@ -120,26 +126,31 @@ pub i64 Time.day() {
     return d
 }
 
+// The hour, 0 to 23.
 pub i64 Time.hour() {
     secs, _ := self.shown()
     return (secs - floorDiv(secs, 86400) * 86400) / 3600
 }
 
+// The minute, 0 to 59.
 pub i64 Time.minute() {
     secs, _ := self.shown()
     return (secs - floorDiv(secs, 3600) * 3600) / 60
 }
 
+// The second, 0 to 59.
 pub i64 Time.second() {
     secs, _ := self.shown()
     return secs - floorDiv(secs, 60) * 60
 }
 
+// The nanoseconds after the second, 0 to 999999999.
 pub i64 Time.nanosecond() {
     _, ns := self.shown()
     return ns
 }
 
+// The day of the week.
 pub Weekday Time.weekday() {
     secs, _ := self.shown()
     days := floorDiv(secs, 86400)

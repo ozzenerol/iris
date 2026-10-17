@@ -1,5 +1,7 @@
 // Running other programs.
 
+// What run fails with: notFound for a program that isn't there, failed when it
+// can't be started.
 pub enum ProcessError { notFound, failed }
 
 // What a program wrote, and its exit status. free gives the text back.
@@ -12,6 +14,7 @@ pub struct Output {
 // Whether the program ended with status 0.
 pub bool Output.ok() => self.status == 0
 
+// Frees what the program printed.
 pub void Output.free() {
     self.stdout.free()
     self.stderr.free()

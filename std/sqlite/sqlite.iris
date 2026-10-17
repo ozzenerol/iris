@@ -2,6 +2,9 @@
 // opens one. Calls wait for the database on the calling thread; a Db can be
 // shared by threads.
 
+// What database calls fail with: failed, busy (the database is locked),
+// constraint (a UNIQUE, NOT NULL or other constraint), and noRows (one found
+// nothing).
 pub enum SqlError { failed, busy, constraint, noRows }
 
 // A value for a ? in SQL: .int(36), .float(1.5), .text("ada") or .none for
@@ -89,6 +92,7 @@ pub !Db open(str path) {
     return Db{handle: h}
 }
 
+// Closes the database.
 pub void Db.close() {
     rawClose(self.handle)
     self.handle = null
@@ -165,10 +169,13 @@ pub i64 Db.lastId() => rawLastId(self.handle)
 // How many rows the last INSERT, UPDATE or DELETE changed.
 pub i64 Db.changes() => rawChanges(self.handle)
 
+// Starts a transaction.
 pub !void Db.begin() => try self.exec("BEGIN")
 
+// Makes the transaction's changes last.
 pub !void Db.commit() => try self.exec("COMMIT")
 
+// Drops the transaction's changes.
 pub !void Db.rollback() => try self.exec("ROLLBACK")
 
 // The rows of a query. close gives it back.
@@ -203,8 +210,10 @@ pub str Rows.name(i64 col) {
     return p[0:n]
 }
 
+// A column as an integer.
 pub i64 Rows.int(i64 col) => rawInt(self.stmt, col)
 
+// A column as a float.
 pub f64 Rows.float(i64 col) => rawFloat(self.stmt, col)
 
 // A column as text, valid until the next call to next.
@@ -217,6 +226,7 @@ pub str Rows.text(i64 col) {
 // Whether a column is NULL.
 pub bool Rows.isNull(i64 col) => rawType(self.stmt, col) == 5
 
+// Ends the query; the row's text is gone after it.
 pub void Rows.close() {
     rawFinalize(self.stmt)
     self.stmt = null

@@ -1,56 +1,77 @@
 // Floating point math: roots, powers, logarithms, rounding and angles.
 
+// The ratio of a circle's circumference to its diameter.
 pub const pi = 3.141592653589793
+// The base of the natural logarithm.
 pub const e = 2.718281828459045
 
+// The square root of x; NaN for a negative x.
 @extern("sqrt")
 pub f64 sqrt(f64 x)
 
+// The cube root of x.
 @extern("cbrt")
 pub f64 cbrt(f64 x)
 
+// x to the power y.
 @extern("pow")
 pub f64 pow(f64 x, f64 y)
 
+// e to the power x.
 @extern("exp")
 pub f64 exp(f64 x)
 
+// The natural logarithm of x; -inf for 0, NaN below it.
 @extern("log")
 pub f64 log(f64 x)
 
+// The base-2 logarithm of x.
 @extern("log2")
 pub f64 log2(f64 x)
 
+// The base-10 logarithm of x.
 @extern("log10")
 pub f64 log10(f64 x)
 
+// The largest whole number not above x: floor(2.7) is 2, floor(-2.1) is -3.
 @extern("floor")
 pub f64 floor(f64 x)
 
+// The smallest whole number not below x: ceil(2.1) is 3.
 @extern("ceil")
 pub f64 ceil(f64 x)
 
+// x rounded to the nearest whole number, halves away from zero: round(2.5) is
+// 3.
 @extern("round")
 pub f64 round(f64 x)
 
+// x with its fraction dropped, toward zero: trunc(-2.7) is -2.
 @extern("trunc")
 pub f64 trunc(f64 x)
 
+// x without its sign.
 @extern("fabs")
 pub f64 abs(f64 x)
 
+// The sine of x, in radians.
 @extern("sin")
 pub f64 sin(f64 x)
 
+// The cosine of x, in radians.
 @extern("cos")
 pub f64 cos(f64 x)
 
+// The tangent of x, in radians.
 @extern("tan")
 pub f64 tan(f64 x)
 
+// The angle of the point (x, y) from the x axis, in radians, from -pi to pi.
 @extern("atan2")
 pub f64 atan2(f64 y, f64 x)
 
+// The length of the hypotenuse: the square root of x*x + y*y, without overflow
+// along the way.
 @extern("hypot")
 pub f64 hypot(f64 x, f64 y)
 

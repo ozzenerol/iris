@@ -1,5 +1,6 @@
 // Reading from standard input, and writing to standard output and error.
 
+// What reading fails with: eof at the end of input, other for anything else.
 pub enum IoError { eof, other }
 
 @extern("iris_io_read_line")

@@ -557,6 +557,7 @@ pub String Table.format(bool color = false) {
 // Writes the table to stdout.
 pub void Table.print() => emit(1, self.format(colorOn(1)))
 
+// Frees the table's cells.
 pub void Table.free() {
     for r in self.rows {
         r.freeEach()

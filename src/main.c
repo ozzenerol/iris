@@ -366,9 +366,15 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         } else if (argv[i][0] == '-' && argv[i][1]) {
             fprintf(stderr, "iris: unknown option %s\n", argv[i]);
             return 2;
-        } else {
+        } else if (strcmp(cmd, "run") == 0 || strcmp(cmd, "test") == 0) {
+            /* what follows is the program's arguments, or the test's name */
             path = argv[i++];
             break;
+        } else if (!path) {
+            path = argv[i];     /* build, check and ir take options after the file too */
+        } else {
+            usage(stderr);
+            return 2;
         }
     }
     bool test = strcmp(cmd, "test") == 0;

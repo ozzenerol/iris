@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interfaces - Iris</title>
+<meta name="description" content="An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as dyn values, worked out when the program runs.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try {
+  var t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.38.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html" class="on"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-calling-c.html"><span class="num">29</span>Calling C</a></li><li><a href="30-testing.html"><span class="num">30</span>Testing</a></li><li><a href="31-tools.html"><span class="num">31</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Interfaces</h1>
+<p class="lede">An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as <code>dyn</code> values, worked out when the program runs.</p>
+<h2 id="declaring-an-interface"><a href="#declaring-an-interface">Declaring an interface</a></h2>
+<p>An interface lists the methods a type must have, with their types:</p>
+<pre class="code"><code><span class="k">interface</span> Shape {
+    <span class="t">f64</span> area()
+    <span class="t">String</span> format()
+}</code></pre>
+<p>Any struct with an <code>area</code> method that takes nothing and gives an <code>f64</code>, and a <code>format</code> method that gives a <code>String</code>, has <code>Shape</code>. Only structs have methods, so only structs have interfaces.</p>
+<h2 id="bounds"><a href="#bounds">Bounds</a></h2>
+<p>A type parameter written <code>T: Shape</code> takes only types that have <code>Shape</code>, and the generic code can then call its methods:</p>
+<pre class="code run"><code><span class="k">interface</span> Shape {
+    <span class="t">f64</span> area()
+}
+
+<span class="k">struct</span> Square {
+    <span class="t">f64</span> side
+}
+
+<span class="t">f64</span> Square.area() =&gt; self.side * self.side
+
+<span class="k">struct</span> Circle {
+    <span class="t">f64</span> radius
+}
+
+<span class="t">f64</span> Circle.area() =&gt; <span class="n">3.0</span> * self.radius * self.radius
+
+T bigger[T: Shape](T a, T b) =&gt; <span class="k">if</span> a.area() &gt;= b.area() { a } <span class="k">else</span> { b }
+
+<span class="t">f64</span> areaOf[T: Shape](T s) =&gt; s.area()
+
+<span class="t">void</span> main() {
+    big := bigger(Square{side: <span class="n">2</span>}, Square{side: <span class="n">3</span>})
+    print(<span class="s">&quot;{big.side} {areaOf(Circle{radius: 1})}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 3</code></pre>
+<p>A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.</p>
+<h2 id="self"><a href="#self">Self</a></h2>
+<p>In an interface, <code>Self</code> stands for the type that has the interface. It lets a method take or give a value of the same type:</p>
+<pre class="code run"><code><span class="k">interface</span> Ordered {
+    <span class="t">i64</span> compare(Self other)
+}
+
+<span class="k">struct</span> Version {
+    <span class="t">i64</span> major
+    <span class="t">i64</span> minor
+}
+
+<span class="t">i64</span> Version.compare(Version other) {
+    <span class="k">if</span> self.major != other.major {
+        <span class="k">return</span> self.major - other.major
+    }
+    <span class="k">return</span> self.minor - other.minor
+}
+
+T max[T: Ordered](T a, T b) =&gt; <span class="k">if</span> a.compare(b) &gt;= <span class="n">0</span> { a } <span class="k">else</span> { b }
+
+<span class="t">void</span> main() {
+    v := max(Version{major: <span class="n">1</span>, minor: <span class="n">2</span>}, Version{major: <span class="n">1</span>, minor: <span class="n">5</span>})
+    print(<span class="s">&quot;{v.major}.{v.minor}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1.5</code></pre>
+<h2 id="dyn"><a href="#dyn">dyn</a></h2>
+<p>A <code>dyn Shape</code> value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things:</p>
+<pre class="code run"><code><span class="k">interface</span> Shape {
+    <span class="t">f64</span> area()
+    <span class="t">str</span> name()
+}
+
+<span class="k">struct</span> Square {
+    <span class="t">f64</span> side
+}
+
+<span class="t">f64</span> Square.area() =&gt; self.side * self.side
+<span class="t">str</span> Square.name() =&gt; <span class="s">&quot;square&quot;</span>
+
+<span class="k">struct</span> Circle {
+    <span class="t">f64</span> radius
+}
+
+<span class="t">f64</span> Circle.area() =&gt; <span class="n">3.0</span> * self.radius * self.radius
+<span class="t">str</span> Circle.name() =&gt; <span class="s">&quot;circle&quot;</span>
+
+<span class="t">void</span> describe(<span class="k">dyn</span> Shape s) =&gt; print(<span class="s">&quot;a {s.name()} of {s.area()}&quot;</span>)
+
+<span class="t">void</span> main() {
+    sq := Square{side: <span class="n">2</span>}
+    ci := Circle{radius: <span class="n">1</span>}
+    describe(&amp;sq)
+    List[<span class="k">dyn</span> Shape] all
+    <span class="k">defer</span> all.free()
+    all.push(&amp;sq)
+    all.push(&amp;ci)
+    <span class="t">f64</span> total = <span class="n">0</span>
+    <span class="k">for</span> s <span class="k">in</span> all {
+        total += s.area()
+    }
+    print(<span class="s">&quot;{all.len} shapes, {total} in all&quot;</span>)
+}</code></pre>
+<pre class="out"><code>a square of 4
+2 shapes, 7 in all</code></pre>
+<p>A <code>dyn</code> value holds a pointer, not a copy: the struct must live as long as the <code>dyn</code> value is used. Its type must have each of the interface's methods with the same types. An interface with <code>Self</code> can't be used with <code>dyn</code>, since the type behind it isn't known when compiling.</p>
+<h2 id="which-one-to-use"><a href="#which-one-to-use">Which one to use</a></h2>
+<p>Bounds are the default: they cost nothing when the program runs, and the compiler checks each use with its own type. <code>dyn</code> is for values whose types are known only when the program runs, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through <code>dyn</code> costs one lookup in the value's table.</p>
+    <nav class="pager"><a class="prev" href="20-generics.html"><span>Previous</span>Generics</a><a class="next" href="22-collections.html"><span>Next</span>Collections</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-an-interface">Declaring an interface</a></li><li><a href="#bounds">Bounds</a></li><li><a href="#self">Self</a></li><li><a href="#dyn">dyn</a></li><li><a href="#which-one-to-use">Which one to use</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.38.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

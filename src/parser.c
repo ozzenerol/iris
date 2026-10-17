@@ -633,6 +633,19 @@ static Node *tryType(Parser *p) {
                 continue;
             }
             if (ty->kind != N_T_NAME) {
+                if (peekAt(p, 1)->kind == T_IDENT && peekAt(p, 2)->kind == P_RBRACK) {
+                    /* u8[4][ROWS]: a size from a constant, which the checker finds */
+                    next(p);
+                    Node *g = node(p, N_T_GENERIC, s);
+                    g->a = ty;
+                    Token *k = next(p);
+                    Node *name = node(p, N_T_NAME, k);
+                    name->name = tokText(p, k);
+                    push(p, &g->list, name);
+                    next(p);
+                    ty = g;
+                    continue;
+                }
                 break;
             }
             int s2 = p->pos;
@@ -741,6 +754,9 @@ static Node *parseCallArgs(Parser *p, Node *callee, Token *t) {
             arg->name = tokText(p, name);
             arg->a = parseExpr(p);
             push(p, &call->list, arg);
+        } else if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_LBRACK && peekAt(p, 2)->kind == P_RBRACK) {
+            /* a slice type given to a call that takes a type: json.decode(User[], text) */
+            push(p, &call->list, parseType(p));
         } else {
             push(p, &call->list, parseExpr(p));
         }

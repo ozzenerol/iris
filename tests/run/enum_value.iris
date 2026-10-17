@@ -1,0 +1,9 @@
+// expect: 404 5 3
+
+enum S { a = 5, b = 404 }
+enum P flags { r, w }
+void main() {
+    x := S.b
+    P p = .r | .w
+    print("{x.value} {S.a.value} {p.value}")
+}
