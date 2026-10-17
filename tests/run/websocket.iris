@@ -1,0 +1,57 @@
+// expect: hello back
+// expect: binary 3 true
+// expect: big 100000
+// expect: the server closed: NetError.closed
+// expect: 404
+
+import http, net, str
+
+!void echo(http.WebSocket *ws, http.Request *req) {
+    for {
+        scoped http.Message m = ws.read() catch e {
+            return
+        }
+        if m.data == "bye" {
+            return
+        }
+        if m.binary {
+            try ws.sendBinary(m.data)
+        } else {
+            scoped String back = format("{m.data} back")
+            try ws.send(back)
+        }
+    }
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.websocket("/ws", echo)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String url = format("ws://127.0.0.1:{ln.port}/ws")
+    ws := try http.dialWebSocket(url)
+    try ws.send("hello")
+    scoped http.Message a = try ws.read()
+    print(a.data)
+    try ws.sendBinary("\x00\x01\x02")
+    scoped http.Message b = try ws.read()
+    print("binary {b.data.len} {b.binary}")
+    scoped String big = str.repeat("x", 100000)
+    try ws.send(big)
+    scoped http.Message c = try ws.read()
+    print("big {c.data.len - 5}")
+    try ws.send("bye")
+    _ = ws.read() catch e {
+        print("the server closed: {e.code}")
+        http.Message{}
+    }
+    ws.close()
+    scoped String plain = format("http://127.0.0.1:{ln.port}/ws")
+    scoped http.Reply rep = try http.get(plain)
+    print("{rep.status}")
+}

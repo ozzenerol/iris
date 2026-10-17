@@ -4267,3 +4267,48 @@ int iris_signal_wait(void) {
 void iris_net_shutdown(int fd) {
     if (fd >= 0) shutdown(fd, SHUT_RDWR);
 }
+
+/* SHA-1, for the WebSocket handshake only: it isn't safe for signing. */
+void iris_sha1(const char *data, int64_t len, unsigned char *out) {
+    uint32_t h[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+    uint64_t bits = (uint64_t)len * 8;
+    int64_t total = ((len + 8) / 64 + 1) * 64;
+    unsigned char *msg = calloc((size_t)total, 1);
+    if (!msg) outOfMemory();
+    memcpy(msg, data, (size_t)len);
+    msg[len] = 0x80;
+    for (int i = 0; i < 8; i++) msg[total - 1 - i] = (unsigned char)(bits >> (8 * i));
+    for (int64_t off = 0; off < total; off += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; i++) {
+            const unsigned char *p = msg + off + i * 4;
+            w[i] = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+        }
+        for (int i = 16; i < 80; i++) {
+            uint32_t x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+            w[i] = (x << 1) | (x >> 31);
+        }
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; i++) {
+            uint32_t f, k;
+            if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+            else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+            else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+            uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+            e = d;
+            d = c;
+            c = (b << 30) | (b >> 2);
+            b = a;
+            a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    }
+    free(msg);
+    for (int i = 0; i < 5; i++) {
+        out[i * 4] = (unsigned char)(h[i] >> 24);
+        out[i * 4 + 1] = (unsigned char)(h[i] >> 16);
+        out[i * 4 + 2] = (unsigned char)(h[i] >> 8);
+        out[i * 4 + 3] = (unsigned char)h[i];
+    }
+}

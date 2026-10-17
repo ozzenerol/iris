@@ -1,0 +1,203 @@
+// WebSockets (RFC 6455): a connection that stays open for messages both
+// ways. A Router answers them with websocket; dialWebSocket opens one.
+
+import base64, crypto, net, random, str
+
+// One message: text, or bytes when binary is true. free gives it back.
+pub struct Message {
+    pub bool binary
+    pub String data
+}
+
+pub void Message.free() => self.data.free()
+
+// An open WebSocket. Pings are answered on their own while reading.
+pub struct WebSocket {
+    net.Conn *conn
+    net.Conn own            // the client's connection; the server's lives in serveConn
+    bool client             // a client masks what it sends
+    bool closed
+    i64 maxMessage
+}
+
+const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+// The connection: the client's own, or the server's.
+net.Conn *WebSocket.c() => if self.client { &self.own } else { self.conn }
+
+String acceptKey(str key) {
+    scoped String both = format("{key}{GUID}")
+    return base64.encode(crypto.sha1(both))
+}
+
+void putLength(String *head, i64 n, u8 mask) {
+    if n < 126 {
+        u8[1] b = [mask | u8(n)]
+        head.append(b)
+    } else if n < 65536 {
+        u8[3] b = [mask | 126, u8(n >> 8), u8(n & 255)]
+        head.append(b)
+    } else {
+        u8[9] b = [mask | 127, 0, 0, 0, 0, u8(n >> 24 & 255), u8(n >> 16 & 255), u8(n >> 8 & 255), u8(n & 255)]
+        head.append(b)
+    }
+}
+
+!void WebSocket.frame(u8 opcode, str data) {
+    if self.closed {
+        return error(net.NetError.closed, "the WebSocket is closed")
+    }
+    String f
+    defer f.free()
+    u8[1] first = [0x80 | opcode]
+    f.append(first)
+    putLength(&f, data.len, if self.client { 0x80 } else { 0 })
+    if !self.client {
+        f.append(data)
+    } else {
+        u8[4] key
+        random.bytes(key)
+        f.append(key)
+        start := f.len
+        f.append(data)
+        p := f.ptr[0:f.len]
+        for i in 0..data.len {
+            p[start + i] = p[start + i] ^ key[i % 4]
+        }
+    }
+    try self.c().write(f)
+}
+
+// Sends a text message.
+pub !void WebSocket.send(str text) => try self.frame(1, text)
+
+// Sends a message of bytes.
+pub !void WebSocket.sendBinary(str data) => try self.frame(2, data)
+
+// The next message. NetError.closed when the other side has closed.
+pub !Message WebSocket.read() {
+    Message m
+    errdefer m.free()
+    for {
+        scoped String head = try self.c().readExactly(2)
+        b0 := head[0]
+        b1 := head[1]
+        final := b0 & 0x80 != 0
+        opcode := b0 & 0x0f
+        masked := b1 & 0x80 != 0
+        i64 n = i64(b1 & 0x7f)
+        if n == 126 {
+            scoped String ext = try self.c().readExactly(2)
+            n = i64(ext[0]) << 8 | i64(ext[1])
+        } else if n == 127 {
+            scoped String ext = try self.c().readExactly(8)
+            n = 0
+            for i in 0..8 {
+                n = n << 8 | i64(ext[i])
+            }
+        }
+        limit := if self.maxMessage > 0 { self.maxMessage } else { 16MiB }
+        if n > limit || m.data.len + n > limit {
+            self.close()
+            return error(net.NetError.tooLong, "a WebSocket message over {limit} bytes")
+        }
+        u8[4] key
+        if masked {
+            scoped String k = try self.c().readExactly(4)
+            for i in 0..4 {
+                key[i] = k[i]
+            }
+        }
+        scoped String payload = if n > 0 { try self.c().readExactly(n) } else { "".copy() }
+        if masked {
+            p := payload.ptr[0:payload.len]
+            for i in 0..p.len {
+                p[i] = p[i] ^ key[i % 4]
+            }
+        }
+        if opcode == 8 {
+            // close: answer it, and the reading is over
+            self.frame(8, "") catch e { }
+            self.closed = true
+            return error(net.NetError.closed, "the WebSocket was closed")
+        }
+        if opcode == 9 {
+            try self.frame(10, payload)
+            continue
+        }
+        if opcode == 10 {
+            continue
+        }
+        if opcode == 1 || opcode == 2 {
+            m.binary = opcode == 2
+        }
+        m.data.append(payload)
+        if final {
+            return m
+        }
+    }
+}
+
+// Closes the WebSocket: the other side is told, and the connection goes.
+pub void WebSocket.close() {
+    if !self.closed {
+        self.frame(8, "") catch e { }
+        self.closed = true
+    }
+    if self.client {
+        self.own.close()
+    }
+}
+
+// Opens a WebSocket to a ws:// or wss:// address.
+pub !WebSocket dialWebSocket(str url) {
+    secure := str.startsWith(url, "wss://")
+    if !secure && !str.startsWith(url, "ws://") {
+        return error(HttpError.badUrl, "{url}: a WebSocket address starts with ws:// or wss://")
+    }
+    rest := url[if secure { 6 } else { 5 }:]
+    hostPort, _, _ := str.cut(rest, "/")
+    path := rest[hostPort.len:]
+    if path.len == 0 {
+        path = "/"
+    }
+    host, portText, hasPort := str.cut(hostPort, ":")
+    i64 port = if secure { 443 } else { 80 }
+    if hasPort {
+        port = str.parseInt(portText) catch e {
+            return error(HttpError.badUrl, "{url}: the port isn't a number")
+        }
+    }
+    WebSocket ws
+    ws.client = true
+    ws.own = if secure { try net.dialTls(host, u16(port)) } else { try net.dial(host, u16(port)) }
+    errdefer ws.own.close()
+    u8[16] nonce
+    random.bytes(nonce)
+    scoped String key = base64.encode(nonce)
+    scoped String req = format("GET {path} HTTP/1.1\r\nHost: {hostPort}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
+    try ws.own.write(req)
+    scoped String status = try ws.own.readLine()
+    if !str.startsWith(status, "HTTP/1.1 101") {
+        return error(HttpError.badReply, "{url}: the server didn't open a WebSocket: '{status}'")
+    }
+    scoped String want = acceptKey(key)
+    bool ok
+    for {
+        scoped String h = try ws.own.readLine()
+        if h.len == 0 {
+            break
+        }
+        name, value, _ := str.cut(h, ":")
+        if sameName(str.trim(name), "Sec-WebSocket-Accept") && str.trim(value) == want {
+            ok = true
+        }
+    }
+    if !ok {
+        return error(HttpError.badReply, "{url}: the server's Sec-WebSocket-Accept is wrong")
+    }
+    return ws
+}
+
+// What answers a WebSocket of a Router.
+pub type SocketHandler = !void(WebSocket *, Request *)

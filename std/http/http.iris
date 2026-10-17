@@ -217,6 +217,19 @@ str statusText(i32 code) => match code {
     try c.write(head)
 }
 
+// Opens a WebSocket on the connection and hands it to the route's handler.
+void upgrade(net.Conn *conn, Request *req, Route *route, Watch *w, Limits *limits) {
+    scoped String accept = acceptKey(req.header("Sec-WebSocket-Key"))
+    scoped String reply = format("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n")
+    conn.write(reply) catch e {
+        return
+    }
+    unwatch(w)          // a WebSocket may stay quiet for long
+    WebSocket ws = WebSocket{conn: conn, maxMessage: limits.maxBody}
+    route.socket(&ws, req) catch e { }
+    ws.close()
+}
+
 // Answers a request that can't be read with status, then closes.
 void refuse(net.Conn *c, i32 status, str message) {
     Response res
@@ -303,6 +316,12 @@ void serveConn(net.Conn conn, Target target) {
         }
         w.last = time.clock()
         if target.router != null {
+            route := target.router.socketRoute(&req)
+            if route != null {
+                upgrade(&conn, &req, route, &w, &limits)
+                req.free()
+                return
+            }
             target.router.busy.add(1)
         }
         if !more {
@@ -468,6 +487,7 @@ struct Route {
     List[str] parts // the pattern's path, split at /
     String pattern
     Handler handler
+    SocketHandler socket // a WebSocket route
 }
 
 // Sends each request to the handler for its method and path. Patterns are
@@ -569,6 +589,32 @@ pub void Router.delete(str path, Handler handler) => self.add("DELETE", path, ha
 
 pub void Router.patch(str path, Handler handler) => self.add("PATCH", path, handler)
 
+// Answers WebSockets at path with handler, which gets the open WebSocket.
+// The connection is closed when handler returns.
+pub void Router.websocket(str path, SocketHandler handler) {
+    Route r
+    r.pattern = path.copy()
+    r.method = "GET".copy()
+    r.socket = handler
+    r.parts = splitPath(r.pattern)
+    self.routes.push(r)
+}
+
+// The WebSocket route for a request that asks for one, or null.
+Route *Router.socketRoute(Request *req) {
+    if !sameName(req.header("Upgrade"), "websocket") {
+        return null
+    }
+    scoped List[str] parts = splitPath(req.route())
+    for i in 0..self.routes.len {
+        r := &self.routes.items()[i]
+        if r.socket != null && score(r, &parts) >= 0 {
+            return r
+        }
+    }
+    return null
+}
+
 void Router.add(str method, str path, Handler handler) {
     scoped String pattern = format("{method} {path}")
     self.handle(pattern, handler)
@@ -619,6 +665,9 @@ void Router.dispatch(Request *req, Response *res) {
     defer allow.free()
     for i in 0..self.routes.len {
         r := &self.routes.items()[i]
+        if r.socket != null {
+            continue        // WebSocket routes only answer upgrades
+        }
         sc := score(r, &parts)
         if sc < 0 {
             continue
