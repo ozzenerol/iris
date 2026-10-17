@@ -7,9 +7,15 @@
 <meta name="description" content="Putting values into text with braces, the format function that keeps the result, and how the temporary text is freed for you.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
-<script>var t = /^iris-theme:(dark|light)$/.exec(window.name); if (t) document.documentElement.dataset.theme = t[1];
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
 try {
-  t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
   ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
     if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
   });

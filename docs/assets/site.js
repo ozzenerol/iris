@@ -61,7 +61,7 @@
       else if (e.key === "Enter") {
         var links = list.querySelectorAll("a");
         var a = links[sel >= 0 ? sel : 0];
-        if (a) { location.href = a.href; list.hidden = true; }
+        if (a) { location.href = withTheme(a.href); list.hidden = true; }
       } else if (e.key === "Escape") { input.value = ""; show(""); input.blur(); }
     });
     document.addEventListener("click", function (e) { if (!box.contains(e.target)) list.hidden = true; });
@@ -81,11 +81,36 @@
       var next = dark ? "light" : "dark";
       document.documentElement.dataset.theme = next;
       try { localStorage.setItem("iris-theme", next); } catch (e) {}
-      /* opened as files, each page has its own storage; the tab's name
-         goes from page to page */
       window.name = "iris-theme:" + next;
+      history.replaceState(history.state, "", withTheme(location.href));
     });
   }
+  /* Back and Forward can show a page as it was left, without running this
+     again: it takes the theme picked since then */
+  window.addEventListener("pageshow", function () {
+    var m = /^iris-theme:(dark|light)$/.exec(window.name), t = m && m[1];
+    try { t = localStorage.getItem("iris-theme") || t; } catch (e) {}
+    if (t && document.documentElement.dataset.theme !== t) {
+      document.documentElement.dataset.theme = t;
+      history.replaceState(history.state, "", withTheme(location.href));
+    }
+  });
+  /* Opened as files, each page has storage of its own in some browsers, so
+     a link to another page of the site carries the theme in its address. */
+  function withTheme(url) {
+    var t = document.documentElement.dataset.theme;
+    var u = new URL(url, location.href);
+    if (!t || u.protocol !== location.protocol || u.host !== location.host) return url;
+    u.searchParams.set("theme", t);
+    return u.href;
+  }
+  function carryTheme(e) {
+    var a = e.target.closest && e.target.closest("a[href]");
+    if (a && a.getAttribute("href").charAt(0) !== "#") a.href = withTheme(a.href);
+  }
+  document.addEventListener("click", carryTheme, true);
+  document.addEventListener("auxclick", carryTheme, true);
+  document.addEventListener("contextmenu", carryTheme, true);
 
   /* A Copy button copies el's text, or selects it when the clipboard is out of reach */
   function copyOnClick(b, el) {

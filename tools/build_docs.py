@@ -14,7 +14,11 @@
 
 A section's pages are its NN-name.md files in order; its index page lists them.
 
-Run from anywhere: python3 tools/build_docs.py [--iris PATH]
+Run from anywhere: python3 tools/build_docs.py [--iris PATH] [--serve [PORT]]
+
+--serve then serves docs/ at http://localhost:8000 (or PORT) until Ctrl-C.
+Read that way, every page shares the theme and the sidebars' state; pages
+opened as files can't share them in every browser.
 """
 import glob
 import html
@@ -69,9 +73,15 @@ def shell(title, body, root, section="", wide=False, desc=""):
 {meta}
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="{root}assets/style.css">
-<script>var t = /^iris-theme:(dark|light)$/.exec(window.name); if (t) document.documentElement.dataset.theme = t[1];
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
 try {{
-  t = localStorage.getItem("iris-theme"); if (t) document.documentElement.dataset.theme = t;
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
   ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {{
     if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
   }});
@@ -268,6 +278,23 @@ def main():
         print(f"broken link: {page} -> {href}")
     if broken:
         sys.exit(1)
+    if "--serve" in sys.argv:
+        serve()
+
+
+def serve():
+    import functools
+    import http.server
+    rest = sys.argv[sys.argv.index("--serve") + 1:]
+    port = int(rest[0]) if rest and rest[0].isdigit() else 8000
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=OUT)
+    handler.log_message = lambda *a: None
+    with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as srv:
+        print(f"the docs are at http://localhost:{port}/ (Ctrl-C stops)", flush=True)
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

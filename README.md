@@ -16,13 +16,13 @@ It needs a C11 compiler, `clang` 15 or newer (to compile programs) and Python 3 
 
 ## Docs
 
-The docs are in `docs-src/` as Markdown. Build them with:
+The docs are in `docs-src/` as Markdown. Build and read them with:
 
 ```
-python3 tools/build_docs.py
+python3 tools/build_docs.py --serve
 ```
 
-and open `docs/index.html`. They have five parts:
+and open http://localhost:8000. Without `--serve` it only builds `docs/`; its pages can be opened as files too, but then some browsers can't keep the theme from page to page. They have five parts:
 
 - Language Tour: each part of the language, with examples.
 - Library: every module of the standard library.
