@@ -3095,8 +3095,12 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
                 coerce(c, part, &tyStr, "the value");
                 markTempString(part, &tyStr);
             } else if (!isErr(t) && !printable(t)) {
-                error(c, *part, "a %s value can't be put into text; give %s a method String format()", t->name,
-                      st->kind == TY_STRUCT ? st->name : t->name);
+                if (st->kind == TY_STRUCT) {
+                    error(c, *part, "%s can't be put into text; give it a method String %s.format()", t->name,
+                          st->name);
+                } else {
+                    error(c, *part, "a value of type %s can't be put into text", t->name);
+                }
             } else if (t->kind == TY_STRING) {
                 coerce(c, part, &tyStr, "the value");
             }
