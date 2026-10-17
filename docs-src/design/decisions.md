@@ -111,6 +111,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | Inside a module, a bare `error`, `format` or `print` is always the builtin, even when the module has a function of that name. | `log.error` and `term.error` keep their names, and the module's own code can still make errors. |
 | A catch block keeps its own copy of the error's message. | Code in the block, like logging, can make and handle errors without changing `e.message`. |
 | `term` writes colors as markup in the text: `[green]ok[/]`. | Colored output reads like the text it prints, and the same text works without colors. |
+| Names are looked up by a resolver written in Iris, over the scheduler's UDP and TCP. The system's resolver is only used for names it can't find. | A lookup no longer holds up a whole thread, and names only the system knows (mDNS, a VPN's own servers) still work. |
+| `lookup` asks for IPv4 and IPv6 at once and gives the IPv4 addresses first. | Half the time of asking in turn, and `dial` doesn't wait on IPv6 where there is none. |
+| An address keeps an IPv4 address as an IPv6 one, `::ffff:a.b.c.d`. | One type and one size for both, as the system's own calls do. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

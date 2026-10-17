@@ -35,5 +35,5 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.29 | Generic methods checked when used (`List.contains`, `indexOf`, `freeEach`, `Map.keys`), and channels with no buffer. | released |
 | 0.30 | WebSockets, `http.Client` with connections kept open, the `csv` module, `crypto.sha1`, and a guide to building a REST API. | released |
 | 0.31 | Command-line flags from `@flags` structs, the `term` module (colors, tables, progress, line editing), `scoped name := value`, and a guide to building a command-line tool. | released |
-| 0.32 | UDP, and a DNS resolver written in Iris. | planned |
+| 0.32 | UDP, addresses, and a DNS resolver written in Iris that `net.dial` uses. | released |
 | 0.33 | HTTP/2 for the server and the client. | planned |
