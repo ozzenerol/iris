@@ -1,0 +1,12 @@
+// expect: 1m30s 3m0s 22.5s 90 1m30.5s 30s
+// expect: 3 30s 3m0s 90
+// expect: 90 180 5000
+
+void main() {
+    t := 90s
+    print("{t} {2 * t} {t / 4} {t / 1s} {t + 500ms} {t - 1m}")
+    b := 30s
+    print("{t / b} {t / 3} {t * 2} {i64(t) / 1000000000}")
+    i64 n = 5s / 1ms
+    print("{90s / 1s} {(90s / 1s) * 2} {n}")
+}

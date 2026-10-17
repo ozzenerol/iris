@@ -35,4 +35,4 @@ Debug builds check array bounds, integer overflow, null pointers and use after f
 
 ## How the compiler works
 
-The compiler is a C program. It reads Iris source, checks it, and writes LLVM IR, which `clang` turns into a native program. The [compiler](compiler.html) page has the details, and [How values are stored](values.html) shows what each Iris type looks like in memory.
+The compiler is a C program. It reads Iris source, checks it, and writes LLVM IR, which `clang` turns into a native program. The [compiler](03-compiler.html) page has the details, and [How values are stored](04-values.html) shows what each Iris type looks like in memory.

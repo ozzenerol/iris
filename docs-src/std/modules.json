@@ -1,0 +1,42 @@
+{
+  "groups": [
+    {"title": "Core", "modules": [
+      {"name": "core", "title": "Collections", "summary": "List and Map, which every program has without an import."},
+      {"name": "str", "title": "Text", "summary": "Searching, cutting, trimming and changing text, and reading numbers from it."},
+      {"name": "math", "title": "Maths", "summary": "Constants and functions on floating point numbers."},
+      {"name": "random", "title": "Random numbers", "summary": "Numbers and bytes from the system's random source, and seeded generators."},
+      {"name": "time", "title": "Time", "summary": "The time of day, dates, a clock for measuring, and Durations."}
+    ]},
+    {"title": "Text and data", "modules": [
+      {"name": "json", "title": "JSON", "summary": "Turning @json structs into JSON text and back."},
+      {"name": "csv", "title": "CSV", "summary": "Reading and writing comma-separated values."},
+      {"name": "regex", "title": "Regular expressions", "summary": "Patterns in RE2's syntax, matched in time linear in the text."},
+      {"name": "base64", "title": "Base64", "summary": "Base64, the standard and the URL-safe alphabet."},
+      {"name": "hex", "title": "Hex", "summary": "Bytes as hexadecimal digits, and back."},
+      {"name": "url", "title": "URLs", "summary": "Taking URLs apart, and the %XX encoding of their parts."},
+      {"name": "compress", "title": "Compression", "summary": "Deflate in the gzip, zlib and raw formats."},
+      {"name": "crypto", "title": "Hashes", "summary": "SHA-256, HMAC, PBKDF2, SHA-1, MD5 and a constant-time compare."}
+    ]},
+    {"title": "System", "modules": [
+      {"name": "io", "title": "Standard input and output", "summary": "Lines from standard input, and writing to standard output and error."},
+      {"name": "fs", "title": "Files", "summary": "Reading and writing files, folders, and what stat says about them."},
+      {"name": "path", "title": "Paths", "summary": "Joining file paths and taking them apart."},
+      {"name": "os", "title": "The program", "summary": "Its arguments, its environment, and leaving it."},
+      {"name": "process", "title": "Processes", "summary": "Running other programs and reading what they print."},
+      {"name": "env", "title": "Settings", "summary": "Environment variables into an @env struct."},
+      {"name": "flags", "title": "Flags", "summary": "Command-line flags into a @flags struct, with --help made from it."},
+      {"name": "signal", "title": "Signals", "summary": "Waiting for Ctrl-C and SIGTERM while the other tasks run."},
+      {"name": "log", "title": "Logging", "summary": "Lines with the time and a level, as text or JSON."},
+      {"name": "term", "title": "Terminal", "summary": "Colors as markup, status lines, tables, a progress bar, and lines read with editing."}
+    ]},
+    {"title": "Network", "modules": [
+      {"name": "net", "title": "Networking", "summary": "TCP, UDP, TLS, addresses and looking up names."},
+      {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."}
+    ]},
+    {"title": "Databases", "modules": [
+      {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},
+      {"name": "pg", "title": "PostgreSQL", "summary": "A PostgreSQL driver in Iris, with a pool and transactions."},
+      {"name": "redis", "title": "Redis", "summary": "A Redis and Valkey client, with pipelines and pub/sub."}
+    ]}
+  ]
+}

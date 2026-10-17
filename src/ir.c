@@ -967,7 +967,8 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
                 ins(ir, "%s = fpext float %s to double", x, v.s);
             }
             ins(ir, "call void @iris_write_float(i32 %d, ptr %s, double %s, i32 %d)", sink, dst, x, v.t->bits);
-        } else if (v.t == &tyDuration) {
+        } else if ((list[i]->type ? list[i]->type : v.t) == &tyDuration) {
+            /* by the checked type: timeout / 1s is a plain number */
             ins(ir, "call void @iris_write_duration(i32 %d, ptr %s, i64 %s)", sink, dst, v.s);
         } else {
             ins(ir, "call void @iris_write_%s(i32 %d, ptr %s, i64 %s)", v.t->isSigned ? "i64" : "u64", sink, dst,

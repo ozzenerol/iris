@@ -624,6 +624,8 @@ static Node *enumMember(Type *t, const char *name) {
 
 static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at);
 static void resolveSignatureType(Checker *c, Type *t);
+static Type *intTypeNamed(const char *name);
+static bool hasDuration(Node *e);
 static Type *dynType(Checker *c, Node *iface);
 
 /* A type named in an expression, like the first argument of alloc. */
@@ -2285,6 +2287,9 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         error(c, e, "'%s' needs integers, not %s", tokName(op), t->name);
         return setType(e, &tyError);
     }
+    if (op == P_SLASH && ta == &tyDuration && tb == &tyDuration && (!e->b->isConst || hasDuration(e->b))) {
+        return setType(e, &tyI64);      /* timeout / 1s: how many seconds */
+    }
     return setType(e, t);
 }
 
@@ -2298,6 +2303,26 @@ static Type *structOf(Type *t) {
 
 static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
     Node *e = *slot;
+    if (e->a->kind == N_IDENT && !lookup(c, e->a->name)) {
+        /* i64.max, u8.min: the limits of an integer type */
+        Type *it = intTypeNamed(e->a->name);
+        if (it && isInt(it) && (strcmp(e->name, "min") == 0 || strcmp(e->name, "max") == 0)) {
+            int bits = it->bits;
+            bool max = e->name[1] == 'a';
+            int64_t v;
+            if (it->isSigned) {
+                v = max ? (bits == 64 ? INT64_MAX : (INT64_C(1) << (bits - 1)) - 1)
+                        : (bits == 64 ? INT64_MIN : -(INT64_C(1) << (bits - 1)));
+            } else {
+                v = max ? (bits == 64 ? -1 : (int64_t)((UINT64_C(1) << bits) - 1)) : 0;
+            }
+            e->isConst = true;
+            e->cval = v;
+            e->kind = N_INT;
+            e->ival = (uint64_t)v;
+            return setType(e, it);
+        }
+    }
     if (e->a->kind == N_IDENT) {
         Node *d = lookup(c, e->a->name);
         if (d && d->kind == N_ENUM) {
@@ -2611,7 +2636,10 @@ static bool hasDuration(Node *e) {
     if (!e) return false;
     if (e->kind == N_INT) return e->name && !strchr("KMG", e->name[0]);
     if (e->kind == N_UNARY) return hasDuration(e->a);
-    if (e->kind == N_BINARY) return hasDuration(e->a) || hasDuration(e->b);
+    if (e->kind == N_BINARY) {
+        if (e->op == P_SLASH && hasDuration(e->a) && hasDuration(e->b)) return false; /* 90s / 1s is 90 */
+        return hasDuration(e->a) || hasDuration(e->b);
+    }
     return false;
 }
 
@@ -2732,6 +2760,14 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             }
             return setType(e, d->type);
         default:
+            if (!d->type && d->kind == N_VAR && d->a) {
+                /* a global declared further down, not checked yet: its
+                 * declared type is enough here */
+                Scope *saved = c->scope;
+                if (d->scope) c->scope = d->scope;
+                d->type = resolveType(c, d->a);
+                c->scope = saved;
+            }
             return setType(e, d->type ? d->type : &tyError);
         }
     }
