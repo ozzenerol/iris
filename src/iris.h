@@ -156,6 +156,7 @@ enum {
     F_INLINE = 1 << 23,     /* @inline: always put the function's code where it is called */
     F_UNCHECKED = 1 << 24,  /* @unchecked: no checks in the function's code */
     F_ENV = 1 << 25,        /* a struct with @env */
+    F_LAZY = 1 << 26,       /* a generic struct's method for one instance, not checked until it is used */
 };
 
 typedef struct Node Node;

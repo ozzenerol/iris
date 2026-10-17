@@ -143,6 +143,19 @@ pub void Map[K, V].free() {
     self.state = alloc(u8, 0)
 }
 
+// The keys, in no particular order. A str key points into the map's own
+// copy, valid until the key is removed.
+pub List[K] Map[K, V].keys() {
+    List[K] out
+    out.reserve(self.len)
+    for i in 0..self.state.len {
+        if self.state[i] == 1 {
+            out.push(self.keys[i])
+        }
+    }
+    return out
+}
+
 // for k, v in map, in no particular order
 pub (K, V, bool) Map[K, V].next(i64 *at) {
     for *at < self.state.len {

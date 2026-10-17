@@ -1266,10 +1266,27 @@ static int findField(Type *t, const char *name, Node **path, int max) {
     return 0;
 }
 
+static Checker *gChecker;           /* for methods checked when first used */
+static void queueBody(Checker *c, Node *fn, Scope *scope, Node *site);
+
+/* A method of a generic struct's instance is checked, and compiled, only
+ * once something uses it: List[T].contains needs T to have ==, and a List
+ * of structs that never calls it still works. */
+static Node *usedMethod(Node *m) {
+    if (m && (m->flags & F_LAZY) && gChecker) {
+        m->flags &= ~F_LAZY;
+        Type *rt = m->list.len ? m->list.items[0]->type : NULL;
+        Node *site = rt && rt->kind == TY_PTR && rt->elem->decl ? rt->elem->decl : m;
+        queueBody(gChecker, m, m->scope, site);
+        listPush(gChecker->arena, gChecker->instOut, m);
+    }
+    return m;
+}
+
 static Node *findMethodIn(Type *t, const char *name) {
     for (int i = 0; i < t->methods.len; i++) {
         if (strcmp(t->methods.items[i]->name, name) == 0) {
-            return t->methods.items[i];
+            return usedMethod(t->methods.items[i]);
         }
     }
     return NULL;
@@ -1522,8 +1539,7 @@ static void instantiateMethods(Checker *c, Type *t) {
         checkSignature(c, copy, t);
         c->scope = saved;
         c->module = savedModule;
-        queueBody(c, copy, s, t->decl);
-        listPush(c->arena, c->instOut, copy);
+        copy->flags |= F_LAZY;      /* the body waits until the method is used */
     }
 }
 
@@ -5314,6 +5330,7 @@ bool checkProgram(Arena *a, Program *prog) {
     Checker c = {0};
     c.arena = a;
     gArena = a;
+    gChecker = &c;     /* cleared before it returns */
     gTypes = NULL;
     c.instOut = &prog->instances;
     int before = gErrors;
@@ -5557,5 +5574,6 @@ bool checkProgram(Arena *a, Program *prog) {
             error(&c, mainFn, "main must return void, i32 or !void");
         }
     }
+    gChecker = NULL;
     return gErrors == before;
 }
