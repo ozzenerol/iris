@@ -625,6 +625,7 @@ static Node *enumMember(Type *t, const char *name) {
 static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at);
 static void resolveSignatureType(Checker *c, Type *t);
 static Type *intTypeNamed(const char *name);
+static void checkEscape(Checker *c, Node *e);
 static bool hasDuration(Node *e);
 static Type *dynType(Checker *c, Node *iface);
 
@@ -1178,6 +1179,50 @@ static void completeInside(Checker *c, Type *t) {
         for (int i = 0; i < t->nelems; i++) {
             completeInside(c, t->elems[i]);
         }
+    }
+}
+
+/* Whether d is a variable or parameter of the function being checked. */
+static bool isLocalDecl(Checker *c, Node *d) {
+    for (Scope *s = c->scope; s; s = s->parent) {
+        Sym *sym = findIn(s, d->name);
+        if (sym && sym->decl == d) return true;
+        if (s->function) break;
+    }
+    return false;
+}
+
+/* The variable a place belongs to: x for x, x.f, x[i] and x.f[i]. */
+static Node *placeRoot(Node *e) {
+    for (;;) {
+        if (e->kind == N_FIELD_ACCESS || e->kind == N_INDEX) {
+            if (e->a->type && e->a->type->kind == TY_PTR) return NULL; /* through a pointer: elsewhere */
+            if (e->a->type && e->a->type->kind == TY_SLICE) return NULL;
+            e = e->a;
+        } else if (e->kind == N_IDENT) {
+            return e->ref;
+        } else {
+            return NULL;
+        }
+    }
+}
+
+/* A returned pointer or slice into the function's own variables, which are
+ * gone once it returns. */
+static void checkEscape(Checker *c, Node *e) {
+    Node *place = NULL;
+    if (e->kind == N_CONVERT && e->a->type && e->a->type->kind == TY_ARRAY && e->type && e->type->kind == TY_SLICE) {
+        place = e->a;               /* a local array given back as a slice */
+    } else if (e->kind == N_UNARY && e->op == P_AMP) {
+        place = e->a;
+    } else if (e->kind == N_SLICE && e->a->type && e->a->type->kind == TY_ARRAY) {
+        place = e->a;
+    }
+    if (!place) return;
+    Node *root = placeRoot(place);
+    if (root && (root->kind == N_VAR || root->kind == N_PARAM || root->kind == N_IDENT) && isLocalDecl(c, root)) {
+        error(c, e, "this points into %s, which is gone when %s returns; return a copy, or memory from alloc",
+              root->name, c->func->name);
     }
 }
 
@@ -4860,6 +4905,7 @@ static void checkStmt(Checker *c, Node *s) {
             return;
         }
         coerce(c, &s->a, ret, "the returned value");
+        checkEscape(c, s->a);
         return;
     }
     case N_BREAK:
@@ -5332,6 +5378,7 @@ static void checkFunctionBody(Checker *c, Node *f) {
             }
         } else {
             coerce(c, &f->d, f->type, "the returned value");
+            checkEscape(c, f->d);
         }
     } else if (f->c) {
         checkBlock(c, f->c, false);

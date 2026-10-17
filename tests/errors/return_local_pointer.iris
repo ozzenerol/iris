@@ -1,0 +1,41 @@
+// error: 13: this points into n, which is gone when a returns; return a copy, or memory from alloc
+// error: 18: this points into xs, which is gone when b returns; return a copy, or memory from alloc
+// error: 23: this points into xs, which is gone when c2 returns; return a copy, or memory from alloc
+// error: 26: this points into k, which is gone when d returns; return a copy, or memory from alloc
+// error: 29: this points into p, which is gone when e returns; return a copy, or memory from alloc
+struct P {
+    i64 x
+    i64[2] arr
+}
+
+i64 *a() {
+    i64 n = 5
+    return &n
+}
+
+i64[] b() {
+    i64[3] xs
+    return xs[0:2]
+}
+
+i64[] c2() {
+    i64[3] xs
+    return xs
+}
+
+i64 *d(i64 k) => &k
+
+i64 *e(P p) {
+    return &p.arr[1]
+}
+
+i64 g = 1
+
+i64 *ok1() => &g
+
+i64 *ok2(P *p) => &p.x
+
+i64[] ok3(i64[] s) => s[1:]
+
+void main() {
+}
