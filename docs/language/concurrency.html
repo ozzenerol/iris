@@ -32,7 +32,7 @@
 <p>A task can't return an error, since nothing waits for its result: a spawned function returns no <code>!T</code>. The program ends when <code>main</code> returns, even if other tasks are still running.</p>
 <p><code>sleep(d)</code> waits for a <code>Duration</code> and lets other tasks run meanwhile.</p>
 <h2 id="channels"><a href="#channels">Channels</a></h2>
-<p>A channel passes values from one task to another. It has a type and room for a number of values, at least one:</p>
+<p>A channel passes values from one task to another. It has a type and room for a number of values:</p>
 <pre class="code"><code>jobs := <span class="k">chan</span>[Job](<span class="n">64</span>)
 
 <span class="k">spawn</span> worker(jobs)
@@ -44,6 +44,10 @@ jobs &lt;- Job{id: <span class="n">1</span>}</code></pre>
         run(j)
     }
 }</code></pre>
+<p>A channel made with room for 0 values has no buffer: <code>ch &lt;- v</code> waits until a task takes the value, and the value goes straight from one to the other. It is how two tasks wait for each other:</p>
+<pre class="code"><code>done := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">0</span>)
+<span class="k">spawn</span> work(done)
+_ = &lt;-done          <span class="c">// work has finished, and it knows it was seen</span></code></pre>
 <p><code>select</code> waits on several channels at once and runs the arm of the first one with a value. An <code>after(d)</code> arm runs when nothing came within that time:</p>
 <pre class="code"><code><span class="k">select</span> {
     j := &lt;-jobs =&gt; run(j)

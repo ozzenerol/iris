@@ -122,6 +122,7 @@ T max[T: Ordered](T a, b) =&gt; <span class="k">if</span> a.compare(b) &gt;= <sp
 <p>A <code>dyn</code> value is made from a pointer to a struct: <code>&amp;file</code>. Its type must have every method of the interface, with the same types. <code>Self</code> can't be used in an interface that is used with <code>dyn</code>.</p>
 <h2 id="how-it-is-compiled"><a href="#how-it-is-compiled">How it is compiled</a></h2>
 <p>Each generic function or struct is compiled once for each set of types it is used with. The result is as fast as writing a separate copy for each type by hand.</p>
+<p>A method of a generic struct is checked and compiled for a set of types only when the program uses it. A method can need more of its types than the others do: <code>List[T].contains</code> compares values with <code>==</code>, so a <code>List</code> of a struct that <code>==</code> can't compare works, until <code>contains</code> is called on it.</p>
 <div class="pager"><a href="errors.html">&larr; Errors</a><a href="collections.html">Collections &rarr;</a></div>
 </main></div>
 </body>

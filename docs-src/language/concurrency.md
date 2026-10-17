@@ -32,7 +32,7 @@ A task can't return an error, since nothing waits for its result: a spawned func
 
 ## Channels
 
-A channel passes values from one task to another. It has a type and room for a number of values, at least one:
+A channel passes values from one task to another. It has a type and room for a number of values:
 
 ```iris
 jobs := chan[Job](64)
@@ -50,6 +50,14 @@ void worker(chan[Job] jobs) {
         run(j)
     }
 }
+```
+
+A channel made with room for 0 values has no buffer: `ch <- v` waits until a task takes the value, and the value goes straight from one to the other. It is how two tasks wait for each other:
+
+```iris
+done := chan[bool](0)
+spawn work(done)
+_ = <-done          // work has finished, and it knows it was seen
 ```
 
 `select` waits on several channels at once and runs the arm of the first one with a value. An `after(d)` arm runs when nothing came within that time:

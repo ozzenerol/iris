@@ -173,3 +173,5 @@ A `dyn` value is made from a pointer to a struct: `&file`. Its type must have ev
 ## How it is compiled
 
 Each generic function or struct is compiled once for each set of types it is used with. The result is as fast as writing a separate copy for each type by hand.
+
+A method of a generic struct is checked and compiled for a set of types only when the program uses it. A method can need more of its types than the others do: `List[T].contains` compares values with `==`, so a `List` of a struct that `==` can't compare works, until `contains` is called on it.

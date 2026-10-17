@@ -2,7 +2,7 @@
 // or str; a str key is copied, so the map keeps its own. A new Map is
 // empty; free gives its memory back.
 pub struct Map[K, V] {
-    K[] keys
+    K[] keyArr
     V[] vals
     u8[] state // 0 empty, 1 used, 2 removed
     pub i64 len
@@ -32,7 +32,7 @@ void keyFree()
             if firstRemoved < 0 {
                 firstRemoved = i
             }
-        } else if self.keys[i] == k {
+        } else if self.keyArr[i] == k {
             return (i, true)
         }
         i = (i + 1) & mask
@@ -40,18 +40,18 @@ void keyFree()
 }
 
 void Map[K, V].grow() {
-    oldKeys := self.keys
+    oldKeys := self.keyArr
     oldVals := self.vals
     oldState := self.state
     size := if oldState.len == 0 { 8 } else if self.len * 2 >= oldState.len { oldState.len * 2 } else { oldState.len }
-    self.keys = alloc(K, size)
+    self.keyArr = alloc(K, size)
     self.vals = alloc(V, size)
     self.state = alloc(u8, size)
     self.removed = 0
     for i in 0..oldState.len {
         if oldState[i] == 1 {
             at, _ := self.slot(oldKeys[i])
-            self.keys[at] = oldKeys[i]
+            self.keyArr[at] = oldKeys[i]
             self.vals[at] = oldVals[i]
             self.state[at] = 1
         }
@@ -71,7 +71,7 @@ pub void Map[K, V].set(K k, V v) {
         if self.state[at] == 2 {
             self.removed -= 1
         }
-        self.keys[at] = keyOwn(k)
+        self.keyArr[at] = keyOwn(k)
         self.state[at] = 1
         self.len += 1
     }
@@ -113,7 +113,7 @@ pub bool Map[K, V].remove(K k) {
     if !found {
         return false
     }
-    keyFree(self.keys[at])
+    keyFree(self.keyArr[at])
     self.state[at] = 2
     self.len -= 1
     self.removed += 1
@@ -124,7 +124,7 @@ pub bool Map[K, V].remove(K k) {
 pub void Map[K, V].clear() {
     for i in 0..self.state.len {
         if self.state[i] == 1 {
-            keyFree(self.keys[i])
+            keyFree(self.keyArr[i])
         }
         self.state[i] = 0
     }
@@ -135,10 +135,10 @@ pub void Map[K, V].clear() {
 // Gives the map's memory back; the map is empty after.
 pub void Map[K, V].free() {
     self.clear()
-    free(self.keys)
+    free(self.keyArr)
     free(self.vals)
     free(self.state)
-    self.keys = alloc(K, 0)
+    self.keyArr = alloc(K, 0)
     self.vals = alloc(V, 0)
     self.state = alloc(u8, 0)
 }
@@ -150,7 +150,7 @@ pub List[K] Map[K, V].keys() {
     out.reserve(self.len)
     for i in 0..self.state.len {
         if self.state[i] == 1 {
-            out.push(self.keys[i])
+            out.push(self.keyArr[i])
         }
     }
     return out
@@ -162,7 +162,7 @@ pub (K, V, bool) Map[K, V].next(i64 *at) {
         i := *at
         *at += 1
         if self.state[i] == 1 {
-            return (self.keys[i], self.vals[i], true)
+            return (self.keyArr[i], self.vals[i], true)
         }
     }
     K noKey
