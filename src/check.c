@@ -3815,6 +3815,11 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     }
     const char *name = callee->name;
     Node *d = lookup(c, name);
+    if (d && d->kind == N_FUNC && isBuiltinName(name)) {
+        /* a module's own error or format (log.error, term.format) is
+         * called with the module's name; a bare one is the builtin */
+        d = NULL;
+    }
     if (d && d->kind == N_FUNC && (d->flags & F_INTRINSIC)) {
         return checkIntrinsic(c, e, d);
     }
@@ -3953,6 +3958,10 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         } else if (!(callee->flags & F_REPORTED)) {
             error(c, callee, "%s is not declared", name);
         }
+        return setType(e, &tyError);
+    }
+    if (d->kind == N_IMPORT || d->kind == N_IMPORT_ITEM) {
+        error(c, callee, "%s is a module, not a function", name);
         return setType(e, &tyError);
     }
     if (d->kind != N_FUNC) {
@@ -4380,7 +4389,24 @@ static bool assignable(Checker *c, Node *target) {
 }
 
 static void checkLocalVar(Checker *c, Node *s) {
-    Type *t = resolveType(c, s->a);
+    Type *t;
+    bool checked = false;
+    if (!s->a) {
+        /* scoped name := value */
+        t = checkExpr(c, &s->b, NULL);
+        checked = true;
+        if (!isErr(t) && !noCopy(c, s->b)) {
+            t = &tyError;
+        } else if (t == &tyVoid) {
+            error(c, s->b, "this gives no value to store");
+            t = &tyError;
+        } else if (t->kind == TY_NORETURN || t->kind == TY_TUPLE || t->kind == TY_NULL) {
+            error(c, s->b, "this can't be stored in a scoped variable");
+            t = &tyError;
+        }
+    } else {
+        t = resolveType(c, s->a);
+    }
     if (t == &tyVoid) {
         error(c, s->a, "a variable can't be void");
         t = &tyError;
@@ -4403,7 +4429,7 @@ static void checkLocalVar(Checker *c, Node *s) {
             s->ref = m;
         }
     }
-    if (s->b && !isErr(t)) {
+    if (s->b && !isErr(t) && !checked) {
         checkExpr(c, &s->b, t);
         coerce(c, &s->b, t, "the value");
     }

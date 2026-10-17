@@ -14,6 +14,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 #include <dirent.h>
 #include <fcntl.h>
 
@@ -756,6 +758,67 @@ int iris_io_read_all(IrisString *out) {
 void iris_io_ewrite(const char *p, int64_t n) {
     fflush(stdout);
     fwrite(p, 1, (size_t)n, stderr);
+}
+
+void iris_io_write(const char *p, int64_t n) {
+    fwrite(p, 1, (size_t)n, stdout);
+}
+
+/* ---------------------------------------------------------------- term */
+
+int iris_term_isatty(int fd) { return isatty(fd); }
+
+static struct termios termSaved;
+static int termIsRaw;
+
+/* Raw mode on stdin: each key as it is pressed, nothing shown. */
+int iris_term_raw(int on) {
+    if (on) {
+        if (termIsRaw) return 1;
+        if (tcgetattr(0, &termSaved) != 0) return 0;
+        struct termios raw = termSaved;
+        cfmakeraw(&raw);
+        raw.c_oflag |= OPOST;           /* \n still starts a new line */
+        if (tcsetattr(0, TCSADRAIN, &raw) != 0) return 0;
+        termIsRaw = 1;
+        return 1;
+    }
+    if (termIsRaw) {
+        tcsetattr(0, TCSADRAIN, &termSaved);
+        termIsRaw = 0;
+    }
+    return 1;
+}
+
+void iris_term_size(int64_t *cols, int64_t *rows) {
+    struct winsize ws;
+    *cols = 80;
+    *rows = 24;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col) {
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+    }
+}
+
+/* One byte from stdin, -1 at the end. */
+int iris_term_read_byte(void) {
+    for (;;) {
+        int c = fgetc(stdin);
+        if (c != EOF) return c;
+        if (ferror(stdin) && errno == EINTR) {
+            clearerr(stdin);
+            continue;
+        }
+        return -1;
+    }
+}
+
+/* Writes and flushes, in order with print. */
+void iris_term_write(int fd, const char *p, int64_t n) {
+    FILE *f = fd == 2 ? stderr : stdout;
+    if (fd == 2) fflush(stdout);
+    fwrite(p, 1, (size_t)n, f);
+    fflush(f);
 }
 
 /* str.parseFloat: 0 ok, 1 empty, 2 not a number */

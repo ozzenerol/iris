@@ -1,0 +1,9 @@
+// error: 7: str is a module, not a function
+// error: 8: this gives no value to store
+
+import str
+
+void main() {
+    t := str("x")
+    scoped v := print("x")
+}

@@ -14,6 +14,12 @@
                                // command: test    use iris test instead of iris run
                                // args: A B        arguments after the file
                                // env: NAME=VALUE  set for the run
+                               // stdin: LINE      one per line of input
+                               // tty: KEYS        run in a terminal and type KEYS
+                                                   (Python escapes: \r, \x1b[D), one
+                                                   line at a time once the output
+                                                   is quiet; each // expect: line
+                                                   must then be in the output
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -43,10 +49,60 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def run(iris, args, env=None):
+def run(iris, args, env=None, stdin=None):
     full = dict(os.environ, **(env or {}))
-    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=full)
+    p = subprocess.run([iris] + args, capture_output=True, text=True, timeout=60, env=full,
+                       **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}))
     return p.returncode, p.stdout, p.stderr
+
+
+def run_tty(iris, args, env, keys):
+    """Runs iris in a pseudo-terminal and types each of keys once the output
+    has been quiet for a while. Gives the exit status and everything shown,
+    without escape codes."""
+    import pty
+    import select
+    import time
+    master, slave = pty.openpty()
+    full = dict(os.environ, TERM="xterm", **(env or {}))
+    full.pop("NO_COLOR", None)
+    p = subprocess.Popen([iris] + args, stdin=slave, stdout=slave, stderr=slave, env=full, close_fds=True)
+    os.close(slave)
+    shown = b""
+
+    def drain(quiet, limit):
+        nonlocal shown
+        end = time.time() + limit
+        last = time.time()
+        while time.time() < end:
+            r, _, _ = select.select([master], [], [], 0.05)
+            if r:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    return False
+                if not data:
+                    return False
+                shown += data
+                last = time.time()
+            elif shown and time.time() - last > quiet:
+                return True
+        return True
+
+    for k in keys:
+        if not drain(0.3, 30):
+            break
+        os.write(master, k.encode("utf-8").decode("unicode_escape").encode("latin-1"))
+    drain(0.5, 10)
+    try:
+        code = p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        code = -1
+    os.close(master)
+    text = shown.decode("utf-8", "replace")
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z~]", "", text).replace("\r", "")
+    return code, text
 
 
 def parse_tests(iris, only, update, failures):
@@ -173,9 +229,24 @@ def run_tests(iris, only, failures):
         args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
         args += extra[0].split() if extra else []
         envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M)
-        code, out, err = run(iris, args, dict(envs))
-        want_out = "".join(line + "\n" for line in expect)
+        stdin = re.findall(r"^// stdin:(?: (.*))?$", text, re.M)
+        keys = re.findall(r"^// tty: (.*)$", text, re.M)
         problems = []
+        if keys:
+            code, out = run_tty(iris, args, dict(envs), keys)
+            err = ""
+            for line in expect:
+                if line not in out:
+                    problems.append("the terminal didn't show '%s'" % line)
+            if problems:
+                problems.append("it showed:\n" + out)
+            if code != want_exit:
+                problems.append("exit status %d, want %d" % (code, want_exit))
+            if problems:
+                failures.append((name, "\n".join(problems)))
+            continue
+        code, out, err = run(iris, args, dict(envs), "".join(l + "\n" for l in stdin) if stdin else None)
+        want_out = "".join(line + "\n" for line in expect)
         if out != want_out:
             problems.append(diff(want_out, out).replace("tree", "output"))
         if code != want_exit:

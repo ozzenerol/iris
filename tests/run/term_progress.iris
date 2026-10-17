@@ -1,0 +1,18 @@
+// stderr: copying  ██████████████████████████████  100%  4/4
+// exit: 0
+// expect: step 1
+// expect: step 4
+
+import term
+
+void main() {
+    term.setColors(false)
+    p := term.progress("copying", 4)
+    for i in 1..5 {
+        p.add()
+        if i == 1 || i == 4 {
+            term.print("step {i}")
+        }
+    }
+    p.done()
+}

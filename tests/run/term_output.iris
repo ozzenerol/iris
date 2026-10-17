@@ -1,0 +1,31 @@
+// expect: ok saved x and [literal] [notatag] [/]
+// expect: ✓ deployed 3
+// expect: 10 5
+// expect: ESC[32mokESC[0m ESC[1;31mboldESC[0m ESC[37;44mwhite on blueESC[0m ESC[90mgrayESC[0m
+// expect: ESC[1mESC[31mredESC[0mESC[1m boldESC[0m
+// expect: [nope] [red on]
+// expect: a [[b] c
+// expect: false
+
+import str, term
+
+void show(str text) {
+    scoped String f = term.format(text)
+    scoped String e = str.replace(f, "\x1b", "ESC")
+    print(e)
+}
+
+void main() {
+    term.setColors(false)
+    term.print("[green]ok[/] saved [bold]x[/] and [[literal] [notatag] [/]")
+    term.success("deployed 3")
+    print("{term.width("[red]héllo[/] 日本")} {term.width("[bold]hello")}")
+    term.setColors(true)
+    show("[green]ok[/] [bold red]bold[/] [white on blue]white on blue[/] [gray]gray[/]")
+    show("[bold][red]red[/] bold[/]")
+    show("[nope] [red on]")
+    scoped String esc = term.escape("a [b] c")
+    print(esc)
+    term.setColors(false)
+    print("{term.colors()}")
+}

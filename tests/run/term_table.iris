@@ -1,0 +1,39 @@
+// expect: NAME   STATUS    CPU
+// expect: web    running  12.5
+// expect: db     stopped     3
+// expect: cache  日本      100
+// expect: ╭───────┬─────────┬──────╮
+// expect: │ NAME  │ STATUS  │  CPU │
+// expect: ├───────┼─────────┼──────┤
+// expect: │ web   │ running │ 12.5 │
+// expect: │ db    │ stopped │    3 │
+// expect: │ cache │  日本   │  100 │
+// expect: ╰───────┴─────────┴──────╯
+// expect: | NAME  | STATUS  |  CPU |
+// expect: | ----- | :-----: | ---: |
+// expect: | web   | running | 12.5 |
+// expect: | db    | stopped |    3 |
+// expect: | cache |  日本   |  100 |
+// expect: 3 rows
+// expect: a  b
+
+import term
+
+void main() {
+    term.setColors(false)
+    scoped t := term.table(["NAME", "STATUS", "CPU"])
+    t.row(["web", "[green]running[/]", "12.5"])
+    t.row(["db", "[red]stopped[/]", "3"])
+    t.row(["cache", "日本", "100"])
+    t.print()
+    t.border = .box
+    t.align(1, .center)
+    t.print()
+    t.border = .markdown
+    scoped String md = t.format()
+    print(md[0:md.len - 1])
+    print("{t.len()} rows")
+    scoped plain := term.table([])
+    plain.row(["a", "b"])
+    plain.print()
+}

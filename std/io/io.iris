@@ -1,4 +1,4 @@
-// Reading from standard input and writing to standard error.
+// Reading from standard input, and writing to standard output and error.
 
 pub enum IoError { eof, other }
 
@@ -7,6 +7,9 @@ i32 rawReadLine(String *out)
 
 @extern("iris_io_read_all")
 i32 rawReadAll(String *out)
+
+@extern("iris_io_write")
+void rawWrite(u8 *p, i64 n)
 
 @extern("iris_io_ewrite")
 void rawEwrite(u8 *p, i64 n)
@@ -33,6 +36,9 @@ pub !String readAll() {
     }
     return s
 }
+
+// Writes text to standard output, without a newline.
+pub void write(str text) => rawWrite(text.ptr, text.len)
 
 // Writes text to standard error.
 pub void ewrite(str text) => rawEwrite(text.ptr, text.len)
