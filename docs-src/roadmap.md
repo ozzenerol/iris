@@ -40,4 +40,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.34 | Regular expressions (`regex`), matched in linear time. | released |
 | 0.35 | Compression: deflate and gzip, and gzip in HTTP. | released |
 | 0.36 | A PostgreSQL driver written in Iris. | released |
-| 0.37 | A Redis client. | planned |
+| 0.37 | A Redis client, and structs that hold a `List` of themselves. | released |

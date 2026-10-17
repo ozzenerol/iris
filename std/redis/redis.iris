@@ -1,0 +1,586 @@
+// Redis (and Valkey), spoken over the network by Iris itself. A Client
+// keeps a few connections open and can be shared by tasks and threads; a
+// call waits like any other network call, so other tasks run meanwhile.
+//
+//     db := try redis.connect("redis://localhost:6379")
+//     defer db.close()
+//     try db.set("greeting", "hello", ttl: 1h)
+//     value, found := try db.get("greeting")
+//
+// do sends any command: try db.do(["ZADD", "scores", "10", "ada"]).
+
+import net, str, time, url
+
+pub enum RedisError { connect, server, closed, protocol }
+
+// What kind of value a reply is.
+pub enum Kind { text, error, int, bulk, array, nil, double, bool, map, set, push }
+
+// A reply from the server: text for simple and bulk strings (and errors),
+// int for integers and booleans (1 or 0), items for arrays, maps (keys and
+// values one after the other) and sets.
+pub struct Reply {
+    pub Kind kind
+    pub String text
+    pub i64 int
+    pub f64 double
+    pub List[Reply] items
+}
+
+pub void Reply.free() {
+    self.text.free()
+    for r in self.items {
+        r.free()
+    }
+    self.items.free()
+}
+
+pub bool Reply.isNil() => self.kind == .nil
+
+// ------------------------------------------------------------ one connection
+
+struct Conn {
+    net.Conn conn
+    bool broken
+}
+
+!Reply Conn.read() {
+    scoped String line = self.conn.readLine(64MiB) catch e {
+        self.broken = true
+        return error(RedisError.closed, "the server closed the connection: {e.message}")
+    }
+    if line.len == 0 {
+        self.broken = true
+        return error(RedisError.protocol, "an empty line from the server")
+    }
+    t := line[0]
+    rest := line[1:]
+    if t == '+' || t == '-' {
+        return Reply{kind: if t == '+' { .text } else { .error }, text: rest.copy()}
+    }
+    if t == ':' {
+        n := str.parseInt(rest) catch e {
+            self.broken = true
+            return error(RedisError.protocol, "the server sent '{line}'")
+        }
+        return Reply{kind: .int, int: n}
+    }
+    if t == ',' {
+        return Reply{kind: .double, double: str.parseFloat(rest) catch 0.0}
+    }
+    if t == '#' {
+        return Reply{kind: .bool, int: if rest == "t" { 1 } else { 0 }}
+    }
+    if t == '_' {
+        return Reply{kind: .nil}
+    }
+    if t == '$' || t == '=' || t == '!' {
+        n := str.parseInt(rest) catch e {
+            self.broken = true
+            return error(RedisError.protocol, "the server sent '{line}'")
+        }
+        if n < 0 {
+            return Reply{kind: .nil}
+        }
+        data := self.conn.readExactly(n + 2) catch e {
+            self.broken = true
+            return error(RedisError.closed, "the server closed the connection")
+        }
+        String text
+        text.append(data[if t == '=' && n >= 4 { 4 } else { 0 }:n])
+        data.free()
+        return Reply{kind: if t == '!' { .error } else { .bulk }, text: text}
+    }
+    if t == '*' || t == '%' || t == '~' || t == '>' {
+        n := str.parseInt(rest) catch e {
+            self.broken = true
+            return error(RedisError.protocol, "the server sent '{line}'")
+        }
+        if n < 0 {
+            return Reply{kind: .nil}
+        }
+        kind := match t {
+            '%' => Kind.map,
+            '~' => Kind.set,
+            '>' => Kind.push,
+            _ => Kind.array,
+        }
+        Reply r = Reply{kind: kind}
+        count := if t == '%' { n * 2 } else { n }
+        for i in 0..count {
+            item := self.read() catch e {
+                r.free()
+                return e
+            }
+            r.items.push(item)
+        }
+        return r
+    }
+    self.broken = true
+    return error(RedisError.protocol, "the server sent '{line}'")
+}
+
+// A command as RESP: an array of bulk strings.
+void encode(String *out, str[] args) {
+    scoped String head = format("*{args.len}\r\n")
+    out.append(head)
+    for a in args {
+        scoped String size = format("${a.len}\r\n")
+        out.append(size)
+        out.append(a)
+        out.append("\r\n")
+    }
+}
+
+!void Conn.send(str data) {
+    self.conn.write(data) catch e {
+        self.broken = true
+        return error(RedisError.closed, "writing to the server: {e.message}")
+    }
+}
+
+struct Settings {
+    String host
+    u16 port
+    String user
+    String password
+    i64 db
+    bool tls
+    String ca
+}
+
+void Settings.free() {
+    self.host.free()
+    self.user.free()
+    self.password.free()
+    self.ca.free()
+}
+
+// redis://user:password@host:6379/2, or rediss:// for TLS (?ca=file to
+// trust other certificates than the system's).
+!Settings settingsOf(str address) {
+    u := url.parse(address) catch e {
+        return error(RedisError.connect, "'{address}' isn't a redis:// address")
+    }
+    if u.scheme != "redis" && u.scheme != "rediss" {
+        return error(RedisError.connect, "'{address}' isn't a redis:// address")
+    }
+    Settings s
+    errdefer s.free()
+    name, pass, hasPass := str.cut(u.user, ":")
+    s.user = try url.decode(if hasPass { name } else { "" })
+    s.password = try url.decode(if hasPass { pass } else { name })
+    s.host = (if u.host.len > 0 { u.host } else { "localhost" }).copy()
+    s.port = u16(if u.port > 0 { u.port } else { 6379 })
+    s.tls = u.scheme == "rediss"
+    path := if str.startsWith(u.path, "/") { u.path[1:] } else { u.path }
+    if path.len > 0 {
+        s.db = str.parseInt(path) catch e {
+            return error(RedisError.connect, "the database in '{address}' isn't a number")
+        }
+    }
+    str rest = u.query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        if key == "ca" {
+            s.ca = try url.decode(value)
+        }
+    }
+    return s
+}
+
+!Conn open(Settings *s) {
+    c := net.dial(s.host, s.port, 10s) catch e {
+        return error(RedisError.connect, "connecting to {s.host}:{s.port}: {e.message}")
+    }
+    Conn rc = Conn{conn: c}
+    errdefer rc.conn.close()
+    if s.tls {
+        rc.conn.startTls(s.host, s.ca) catch e {
+            return error(RedisError.connect, "{e.message}")
+        }
+    }
+    if s.password.len > 0 {
+        r := if s.user.len > 0 {
+            try rc.command(["AUTH", s.user, s.password])
+        } else {
+            try rc.command(["AUTH", s.password])
+        }
+        r.free()
+    }
+    if s.db != 0 {
+        scoped String db = format("{s.db}")
+        r := try rc.command(["SELECT", db])
+        r.free()
+    }
+    return rc
+}
+
+// Sends a command and reads its reply; an error reply fails with
+// RedisError.server.
+!Reply Conn.command(str[] args) {
+    String out
+    encode(&out, args)
+    self.send(out) catch e {
+        out.free()
+        return e
+    }
+    out.free()
+    r := try self.read()
+    if r.kind == .error {
+        defer r.free()
+        return error(RedisError.server, "{r.text}")
+    }
+    return r
+}
+
+// ------------------------------------------------------------ the client
+
+struct State {
+    Settings settings
+    i64 max
+    Mutex lock
+    List[Conn] idle
+    i64 open
+}
+
+// Connections to a server, shared by tasks and threads.
+pub struct Client {
+    State *s
+}
+
+// A client for the server at address, with at most max connections open.
+// It connects once, to check the address and the password.
+pub !Client connect(str address, i64 max = 10) {
+    settings := try settingsOf(address)
+    first := open(&settings) catch e {
+        settings.free()
+        return e
+    }
+    State[] mem = alloc(State, 1)
+    s := &mem[0]
+    s.settings = settings
+    s.max = if max > 0 { max } else { 10 }
+    s.idle.push(first)
+    s.open = 1
+    return Client{s: s}
+}
+
+!Conn Client.take() {
+    start := time.clock()
+    for {
+        self.s.lock.lock()
+        if self.s.idle.len > 0 {
+            c := self.s.idle.pop()
+            self.s.lock.unlock()
+            return c
+        }
+        if self.s.open < self.s.max {
+            self.s.open += 1
+            self.s.lock.unlock()
+            c := open(&self.s.settings) catch e {
+                self.s.lock.lock()
+                self.s.open -= 1
+                self.s.lock.unlock()
+                return e
+            }
+            return c
+        }
+        self.s.lock.unlock()
+        if time.clock() - start > 30s {
+            return error(RedisError.connect, "no connection came free in 30s")
+        }
+        sleep(1ms)
+    }
+}
+
+void Client.give(Conn c) {
+    if c.broken {
+        c.conn.close()
+        self.s.lock.lock()
+        self.s.open -= 1
+        self.s.lock.unlock()
+        return
+    }
+    self.s.lock.lock()
+    self.s.idle.push(c)
+    self.s.lock.unlock()
+}
+
+// Sends any command: db.do(["HSET", "user:1", "name", "Ada"]). An error
+// reply fails with RedisError.server and the server's message.
+pub !Reply Client.do(str[] args) {
+    c := try self.take()
+    r := c.command(args) catch e {
+        self.give(c)
+        return e
+    }
+    self.give(c)
+    return r
+}
+
+!i64 Client.int(str[] args) {
+    scoped r := try self.do(args)
+    return r.int
+}
+
+// The value of key, and whether there is one.
+pub !(String, bool) Client.get(str key) {
+    r := try self.do(["GET", key])
+    if r.kind == .nil {
+        r.free()
+        String none
+        return (none, false)
+    }
+    r.items.free()
+    return (r.text, true)
+}
+
+// Sets key to value; with a ttl, it goes away after that time.
+pub !void Client.set(str key, str value, Duration ttl = 0s) {
+    if ttl > 0s {
+        scoped String ms = format("{i64(ttl / 1ms)}")
+        scoped r := try self.do(["SET", key, value, "PX", ms])
+        return
+    }
+    scoped r := try self.do(["SET", key, value])
+}
+
+// Removes keys: how many were there.
+pub !i64 Client.del(str[] keys) {
+    List[str] all
+    defer all.free()
+    all.push("DEL")
+    for k in keys {
+        all.push(k)
+    }
+    return try self.int(all.items())
+}
+
+pub !bool Client.exists(str key) => try self.int(["EXISTS", key]) > 0
+
+// Adds 1 to the number at key (0 when there is none): the new value.
+pub !i64 Client.incr(str key) => try self.int(["INCR", key])
+
+pub !i64 Client.incrBy(str key, i64 n) {
+    scoped String by = format("{n}")
+    return try self.int(["INCRBY", key, by])
+}
+
+// Makes key go away after d: false when there is no such key.
+pub !bool Client.expire(str key, Duration d) {
+    scoped String ms = format("{i64(d / 1ms)}")
+    return try self.int(["PEXPIRE", key, ms]) == 1
+}
+
+// How long until key goes away: -1s when it doesn't, -2s when there is no
+// such key.
+pub !Duration Client.ttl(str key) {
+    ms := try self.int(["PTTL", key])
+    return if ms < 0 { Duration(ms) * 1s } else { Duration(ms) * 1ms }
+}
+
+pub !void Client.hset(str key, str field, str value) {
+    scoped r := try self.do(["HSET", key, field, value])
+}
+
+pub !(String, bool) Client.hget(str key, str field) {
+    r := try self.do(["HGET", key, field])
+    if r.kind == .nil {
+        r.free()
+        String none
+        return (none, false)
+    }
+    r.items.free()
+    return (r.text, true)
+}
+
+// Every field of a hash, with its value. The map keeps its own copies of
+// the names; the values are the caller's to free.
+pub !Map[str, String] Client.hgetAll(str key) {
+    r := try self.do(["HGETALL", key])
+    Map[str, String] out
+    i := 0
+    for i + 1 < r.items.len {
+        k := r.items.at(i)
+        v := r.items.at(i + 1)
+        out.set(k.text, v.text.copy())
+        i += 2
+    }
+    r.free()
+    return out
+}
+
+pub !i64 Client.lpush(str key, str value) => try self.int(["LPUSH", key, value])
+
+pub !i64 Client.rpush(str key, str value) => try self.int(["RPUSH", key, value])
+
+// The items of a list from start to stop (-1 is the last).
+pub !List[String] Client.lrange(str key, i64 start = 0, i64 stop = -1) {
+    scoped String a = format("{start}")
+    scoped String b = format("{stop}")
+    r := try self.do(["LRANGE", key, a, b])
+    return texts(r)
+}
+
+pub !i64 Client.sadd(str key, str member) => try self.int(["SADD", key, member])
+
+pub !List[String] Client.smembers(str key) {
+    r := try self.do(["SMEMBERS", key])
+    return texts(r)
+}
+
+// Sends message to the subscribers of channel: how many got it.
+pub !i64 Client.publish(str channel, str message) => try self.int(["PUBLISH", channel, message])
+
+List[String] texts(Reply r) {
+    List[String] out
+    for item in r.items {
+        out.push(item.text)
+        item.items.free()
+    }
+    r.items.free()
+    r.text.free()
+    return out
+}
+
+// Closes the connections. Calls that are running keep theirs until they end.
+pub void Client.close() {
+    self.s.lock.lock()
+    for c in self.s.idle {
+        c.conn.close()
+    }
+    self.s.idle.free()
+    self.s.lock.unlock()
+    self.s.settings.free()
+    free(self.s[0:1])
+    self.s = null
+}
+
+// ------------------------------------------------------------ pipelines
+
+// Commands sent together and answered together: one round trip.
+pub struct Pipeline {
+    Client *client
+    String out
+    i64 count
+}
+
+pub Pipeline Client.pipeline() => Pipeline{client: self}
+
+pub void Pipeline.add(str[] args) {
+    encode(&self.out, args)
+    self.count += 1
+}
+
+// Sends the commands and gives their replies in the same order. An error
+// reply is a Reply of kind .error, so the others still come back.
+pub !List[Reply] Pipeline.run() {
+    defer self.out.free()
+    c := try self.client.take()
+    List[Reply] out
+    c.send(self.out) catch e {
+        self.client.give(c)
+        return e
+    }
+    for i in 0..self.count {
+        r := c.read() catch e {
+            for x in out {
+                x.free()
+            }
+            out.free()
+            self.client.give(c)
+            return e
+        }
+        out.push(r)
+    }
+    self.client.give(c)
+    self.count = 0
+    return out
+}
+
+pub void Pipeline.free() {
+    self.out.free()
+}
+
+// ------------------------------------------------------------ pub/sub
+
+// A message from a subscribed channel.
+pub struct Message {
+    pub String channel
+    pub String data
+}
+
+pub void Message.free() {
+    self.channel.free()
+    self.data.free()
+}
+
+// A connection of its own, subscribed to channels.
+pub struct Subscription {
+    Conn conn
+}
+
+// Subscribes to channels; patterns like "news.*" are subscribed with
+// PSUBSCRIBE when pattern is true.
+pub !Subscription subscribe(str address, str[] channels, bool pattern = false) {
+    scoped s := try settingsOf(address)
+    c := try open(&s)
+    Subscription sub = Subscription{conn: c}
+    errdefer sub.conn.conn.close()
+    List[str] args
+    defer args.free()
+    args.push(if pattern { "PSUBSCRIBE" } else { "SUBSCRIBE" })
+    for ch in channels {
+        args.push(ch)
+    }
+    String out
+    encode(&out, args.items())
+    sub.conn.send(out) catch e {
+        out.free()
+        return e
+    }
+    out.free()
+    // one confirmation for each channel
+    for i in 0..channels.len {
+        r := try sub.conn.read()
+        bad := r.kind == .error
+        r.free()
+        if bad {
+            return error(RedisError.server, "the server refused the subscription")
+        }
+    }
+    return sub
+}
+
+// Waits for the next message, for at most timeout when it isn't 0.
+pub !Message Subscription.next(Duration timeout = 0s) {
+    self.conn.conn.setTimeout(timeout)
+    for {
+        r := self.conn.read() catch e {
+            if e.code == RedisError.closed && str.contains(e.message, "timed out") {
+                return error(RedisError.closed, "no message in {timeout}")
+            }
+            return e
+        }
+        defer r.free()
+        if (r.kind == .array || r.kind == .push) && r.items.len >= 3 {
+            kind := r.items.at(0).text
+            if kind == "message" {
+                return Message{channel: r.items.at(1).text.copy(), data: r.items.at(2).text.copy()}
+            }
+            if kind == "pmessage" && r.items.len >= 4 {
+                return Message{channel: r.items.at(2).text.copy(), data: r.items.at(3).text.copy()}
+            }
+        }
+    }
+}
+
+pub void Subscription.close() {
+    self.conn.conn.close()
+}
+
+// close, for scoped.
+pub void Subscription.free() => self.close()

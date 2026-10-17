@@ -1,0 +1,10 @@
+// error: 3: B contains itself; use a pointer (B *) for the inner one
+
+struct B {
+    i64 v
+    (B, i64) pair
+}
+
+void main() {
+    B b
+}

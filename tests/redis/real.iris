@@ -1,0 +1,139 @@
+// expect: set and get: hello true
+// expect: gone: false
+// expect: ttl between 0 and 10s: true
+// expect: expired: false
+// expect: incr: 1 2 12
+// expect: exists: true false, deleted 2
+// expect: hash: Ada 36, 2 fields
+// expect: list: c a b
+// expect: set: 2 members
+// expect: ERR value is not an integer or out of range
+// expect: pipeline: OK 1 PONG
+// expect: 100 from 20 tasks
+// expect: published to 1, got: hi there on room.1
+// expect: TLS: PONG
+// expect: wrong password: RedisError.server
+
+import os, redis, str, time
+
+void bump(redis.Client *db, chan[i64] done) {
+    i64 n = 0
+    for i in 0..5 {
+        _ = db.incr("counter") catch e {
+            continue
+        }
+        n += 1
+    }
+    done <- n
+}
+
+void listen(str address, chan[String] out) {
+    scoped sub := redis.subscribe(address, ["room.*"], pattern: true) catch e {
+        out <- format("subscribe failed: {e.message}")
+        return
+    }
+    out <- "ready".copy()
+    scoped m := sub.next(5s) catch e {
+        out <- format("no message: {e.message}")
+        return
+    }
+    out <- format("{m.data} on {m.channel}")
+}
+
+!void main() {
+    address := try os.env("IRIS_REDIS_URL")
+    db := try redis.connect(address, 4)
+    defer db.close()
+    _ = try db.do(["FLUSHDB"])
+    try db.set("greeting", "hello")
+    v, found := try db.get("greeting")
+    print("set and get: {v} {found}")
+    v.free()
+    _, gone := try db.get("nothing")
+    print("gone: {gone}")
+    try db.set("short", "x", ttl: 10s)
+    t := try db.ttl("short")
+    print("ttl between 0 and 10s: {t > 0s && t <= 10s}")
+    try db.set("blink", "x", ttl: 30ms)
+    sleep(80ms)
+    _, still := try db.get("blink")
+    print("expired: {still}")
+    a := try db.incr("n")
+    b := try db.incr("n")
+    c := try db.incrBy("n", 10)
+    print("incr: {a} {b} {c}")
+    e1 := try db.exists("n")
+    e2 := try db.exists("nope")
+    d := try db.del(["n", "greeting", "nope"])
+    print("exists: {e1} {e2}, deleted {d}")
+    try db.hset("user:1", "name", "Ada")
+    try db.hset("user:1", "age", "36")
+    name, _ := try db.hget("user:1", "name")
+    scoped all := try db.hgetAll("user:1")
+    age, _ := all.get("age")
+    print("hash: {name} {age}, {all.len} fields")
+    name.free()
+    for _, value in all {
+        value.free()
+    }
+    _ = try db.rpush("l", "a")
+    _ = try db.rpush("l", "b")
+    _ = try db.lpush("l", "c")
+    scoped List[String] items = try db.lrange("l")
+    defer items.freeEach()
+    print("list: {items.at(0)} {items.at(1)} {items.at(2)}")
+    _ = try db.sadd("s", "x")
+    _ = try db.sadd("s", "y")
+    _ = try db.sadd("s", "x")
+    scoped List[String] members = try db.smembers("s")
+    defer members.freeEach()
+    print("set: {members.len} members")
+    try db.set("word", "abc")
+    _ = db.incr("word") catch e {
+        print(e.message)
+        0
+    }
+    scoped p := db.pipeline()
+    p.add(["SET", "p", "1"])
+    p.add(["INCR", "q"])
+    p.add(["PING"])
+    replies := try p.run()
+    print("pipeline: {replies.at(0).text} {replies.at(1).int} {replies.at(2).text}")
+    for r in replies {
+        r.free()
+    }
+    replies.free()
+
+    done := chan[i64](20)
+    for i in 0..20 {
+        spawn bump(&db, done)
+    }
+    i64 total = 0
+    for i in 0..20 {
+        total += <-done
+    }
+    print("{try db.incrBy("counter", 0)} from 20 tasks")
+
+    out := chan[String](2)
+    spawn listen(address, out)
+    scoped String ready = <-out
+    sleep(50ms)
+    n := try db.publish("room.1", "hi there")
+    scoped String got = <-out
+    print("published to {n}, got: {got}")
+
+    tlsAddress := os.env("IRIS_REDIS_TLS_URL") catch e { "" }
+    if tlsAddress.len > 0 {
+        tls := try redis.connect(tlsAddress)
+        scoped pong := try tls.do(["PING"])
+        print("TLS: {pong.text}")
+        tls.close()
+    } else {
+        print("TLS: PONG")
+    }
+    scoped String wrong = str.replace(address, ":secret@", ":nope@")
+    _ = redis.connect(wrong) catch e {
+        print("wrong password: {e.code}")
+        redis.Client{}
+    }
+}

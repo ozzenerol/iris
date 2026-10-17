@@ -1,0 +1,33 @@
+// expect: 2 children, the second has 1
+// expect: total 6
+
+struct Node {
+    i64 value
+    List[Node] kids
+}
+
+void Node.free() {
+    for k in self.kids {
+        k.free()
+    }
+    self.kids.free()
+}
+
+i64 Node.sum() {
+    i64 total = self.value
+    for k in self.kids {
+        total += k.sum()
+    }
+    return total
+}
+
+void main() {
+    Node root = Node{value: 1}
+    root.kids.push(Node{value: 2})
+    Node second = Node{value: 3}
+    second.kids.push(Node{value: 0})
+    root.kids.push(second)
+    print("{root.kids.len} children, the second has {root.kids.at(1).kids.len}")
+    print("total {root.sum()}")
+    root.free()
+}

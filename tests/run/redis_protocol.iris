@@ -1,0 +1,125 @@
+// expect: get: value true
+// expect: missing: '' false
+// expect: incr: 42
+// expect: echo: [line one
+// expect: line two]
+// expect: RedisError.server: ERR wrong kind of value
+// expect: kinds: map 4, double 3.5, bool 1, nil true, set 2, push 2
+// expect: list: a b c
+// expect: pipeline: text int error bulk
+// expect: message on news: hello
+// expect: auth sent: AUTH pw
+
+import net, redis, str
+
+// The arguments of the next command, read as RESP.
+!List[String] readCommand(net.Conn *c) {
+    scoped String head = try c.readLine()
+    n := try str.parseInt(head[1:])
+    List[String] args
+    for i in 0..n {
+        scoped String size = try c.readLine()
+        len := try str.parseInt(size[1:])
+        data := try c.readExactly(len + 2)
+        args.push(data[0:len].copy())
+        data.free()
+    }
+    return args
+}
+
+void serve(net.Conn c, chan[String] seen) {
+    defer c.close()
+    for {
+        args := readCommand(&c) catch e {
+            return
+        }
+        defer args.freeEach()
+        cmd := args.at(0)
+        if cmd == "AUTH" {
+            seen <- format("AUTH {args.at(1)}")
+        }
+        str reply = match cmd {
+            "AUTH" => "+OK\r\n",
+            "PING" => "+PONG\r\n",
+            "SET" => "+OK\r\n",
+            "INCR" => ":42\r\n",
+            "BAD" => "-ERR wrong kind of value\r\n",
+            "LRANGE" => "*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n",
+            "TYPES" => "*6\r\n%2\r\n+a\r\n:1\r\n+b\r\n:2\r\n,3.5\r\n#t\r\n_\r\n~2\r\n+x\r\n+y\r\n>2\r\n+p\r\n+q\r\n",
+            _ => "",
+        }
+        if cmd == "GET" {
+            reply = if args.at(1) == "missing" { "$-1\r\n" } else { "$5\r\nvalue\r\n" }
+        }
+        if cmd == "ECHO" {
+            scoped String bulk = format("${args.at(1).len}\r\n{args.at(1)}\r\n")
+            c.write(bulk) catch e {
+                return
+            }
+            continue
+        }
+        if cmd == "SUBSCRIBE" {
+            c.write("*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n") catch e {
+                return
+            }
+            sleep(20ms)
+            reply = "*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n"
+        }
+        c.write(reply) catch e {
+            return
+        }
+    }
+}
+
+void server(net.Listener ln, chan[String] seen) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        spawn serve(c, seen)
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    seen := chan[String](8)
+    spawn server(ln, seen)
+    scoped String address = format("redis://:pw@127.0.0.1:{ln.port}")
+    db := try redis.connect(address)
+    defer db.close()
+    v, found := try db.get("key")
+    print("get: {v} {found}")
+    v.free()
+    m, has := try db.get("missing")
+    print("missing: '{m}' {has}")
+    print("incr: {try db.incr("n")}")
+    scoped e := try db.do(["ECHO", "[line one\r\nline two]"])
+    print("echo: {str.replace(e.text, "\r\n", "\n")}")
+    _ = db.do(["BAD"]) catch err {
+        print("{err.code}: {err.message}")
+        redis.Reply{}
+    }
+    scoped t := try db.do(["TYPES"])
+    k := t.items
+    print("kinds: map {k.at(0).items.len}, double {k.at(1).double}, bool {k.at(2).int}, nil {k.at(3).isNil()}, set {k.at(4).items.len}, push {k.at(5).items.len}")
+    scoped List[String] items = try db.lrange("list")
+    defer items.freeEach()
+    print("list: {items.at(0)} {items.at(1)} {items.at(2)}")
+    scoped p := db.pipeline()
+    p.add(["PING"])
+    p.add(["INCR", "n"])
+    p.add(["BAD"])
+    p.add(["GET", "key"])
+    replies := try p.run()
+    print("pipeline: {replies.at(0).kind} {replies.at(1).kind} {replies.at(2).kind} {replies.at(3).kind}")
+    for r in replies {
+        r.free()
+    }
+    replies.free()
+    scoped sub := try redis.subscribe(address, ["news"])
+    scoped msg := try sub.next(2s)
+    print("message on {msg.channel}: {msg.data}")
+    scoped String auth = <-seen
+    print("auth sent: {auth}")
+    ln.close()
+}
