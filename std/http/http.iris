@@ -5,7 +5,7 @@
 
 import json, net, str, time
 
-pub enum HttpError { badUrl, badReply, tooBig }
+pub enum HttpError { badUrl, badReply, tooBig, badRequest }
 
 // What answers a request. It can fail: an error that leaves it is
 // answered with 500 and the error's message, as res.error does. A function
@@ -180,9 +180,9 @@ str statusText(i32 code) => match code {
     }
     defer line.free()
     method, rest, ok := str.cut(line, " ")
-    path, _, ok2 := str.cut(rest, " ")
-    if !ok || !ok2 {
-        return error(net.NetError.other, "a request line HTTP doesn't allow: '{line}'")
+    path, version, ok2 := str.cut(rest, " ")
+    if !ok || !ok2 || !str.startsWith(version, "HTTP/1.") && !(method == "PRI" && version == "HTTP/2.0") {
+        return error(HttpError.badRequest, "a request line HTTP doesn't allow: '{line}'")
     }
     req.received = time.clock()
     req.method = method.copy()
@@ -299,6 +299,18 @@ void serveConn(net.Conn conn, Target target) {
         conn.acceptTls(target.tls) catch e {
             return
         }
+        if conn.protocol() == "h2" {
+            scoped String preface = conn.readExactly(PREFACE.len) catch e {
+                return
+            }
+            if preface == PREFACE {
+                serveH2(&conn, target, limits, &w)
+            } else {
+                scoped String bye = goawayFrame(0, E_PROTOCOL)
+                conn.write(bye) catch e { }
+            }
+            return
+        }
     }
     for {
         if target.router != null && target.router.stopping.load() != 0 {
@@ -311,11 +323,25 @@ void serveConn(net.Conn conn, Target target) {
                 refuse(&conn, 431, "a header line is too long")
             } else if e.code == HttpError.tooBig {
                 refuse(&conn, 413, "the body is too large")
+            } else if e.code == HttpError.badRequest {
+                refuse(&conn, 400, "the request line isn't HTTP/1.1")
             }
             return
         }
         w.last = time.clock()
         if !more {
+            return
+        }
+        if req.method == "PRI" && req.path == "*" {
+            // HTTP/2 with prior knowledge: the rest of the preface, then
+            // frames
+            req.free()
+            scoped String rest = conn.readExactly(6) catch e {
+                return
+            }
+            if rest == "SM\r\n\r\n" {
+                serveH2(&conn, target, limits, &w)
+            }
             return
         }
         if target.router != null {
@@ -732,6 +758,7 @@ pub !void serveTls(u16 port, Handler handler, str certFile, str keyFile, str hos
     i64 threads = 0) {
         config := try net.tlsConfig(certFile, keyFile)
         defer config.free()
+        config.offerHttp2()
         try serveTarget(port, Target{handler: handler, tls: &config}, host, threads)
     }
 
@@ -755,6 +782,7 @@ pub !void Router.serveOn(net.Listener ln, i64 threads = 1) {
 pub !void Router.serveTls(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0) {
     config := try net.tlsConfig(certFile, keyFile)
     defer config.free()
+    config.offerHttp2()
     try serveTarget(port, Target{router: self, tls: &config}, host, threads)
 }
 

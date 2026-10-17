@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <termios.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -3571,6 +3572,11 @@ static struct {
     void (*errString)(unsigned long, char *, size_t);
     void (*errClear)(void);
     const char *(*verifyString)(long);
+    /* ALPN, which old OpenSSLs lack */
+    void (*ctxSetAlpnSelect)(void *, int (*)(void *, const unsigned char **, unsigned char *,
+                                            const unsigned char *, unsigned int, void *), void *);
+    int (*sslSetAlpnProtos)(void *, const unsigned char *, unsigned int);
+    void (*sslGetAlpn)(const void *, const unsigned char **, unsigned int *);
 } ossl;
 
 static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
@@ -3678,6 +3684,9 @@ static void osslLoad(void) {
     SYM(crypto, errClear, "ERR_clear_error");
     SYM(crypto, verifyString, "X509_verify_cert_error_string");
 #undef SYM
+    *(void **)&ossl.ctxSetAlpnSelect = dlsym(ssl, "SSL_CTX_set_alpn_select_cb");
+    *(void **)&ossl.sslSetAlpnProtos = dlsym(ssl, "SSL_set_alpn_protos");
+    *(void **)&ossl.sslGetAlpn = dlsym(ssl, "SSL_get0_alpn_selected");
     ossl.loaded = 1;
 }
 
@@ -3733,6 +3742,46 @@ static bool tlsWaitUntil(void *ssl, int r, int64_t deadline, bool *timedOut) {
     return false;
 }
 
+/* OpenSSL writes to the socket itself, and on Linux a write to a closed
+   connection raises SIGPIPE, which ends the program. While it writes the
+   signal is held, and one it raised is taken back. macOS sockets have
+   SO_NOSIGPIPE instead. */
+typedef struct {
+    sigset_t old;
+    bool pending;
+} PipeGuard;
+
+static void pipeHold(PipeGuard *g) {
+#ifdef __linux__
+    sigset_t set, now;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    sigpending(&now);
+    g->pending = sigismember(&now, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &set, &g->old);
+#else
+    (void)g;
+#endif
+}
+
+static void pipeRelease(PipeGuard *g) {
+#ifdef __linux__
+    if (!g->pending) {
+        sigset_t set, now;
+        sigemptyset(&set);
+        sigaddset(&set, SIGPIPE);
+        sigpending(&now);
+        if (sigismember(&now, SIGPIPE)) {
+            struct timespec zero = {0, 0};
+            sigtimedwait(&set, NULL, &zero);
+        }
+    }
+    pthread_sigmask(SIG_SETMASK, &g->old, NULL);
+#else
+    (void)g;
+#endif
+}
+
 static bool tlsWait(void *ssl, int r) {
     bool t = false;
     return tlsWaitUntil(ssl, r, 0, &t);
@@ -3742,7 +3791,8 @@ static bool tlsWait(void *ssl, int r) {
    have a certificate for host. ca, when not empty, is a file of the
    certificates to trust instead of the system's. NULL on an error, with
    the message set. */
-void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca, int64_t caLen) {
+void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca, int64_t caLen, const char *alpn,
+                       int64_t alpnLen) {
     if (!tlsReady()) return NULL;
     char *h = cpath(host, hostLen), *caPath = caLen > 0 ? cpath(ca, caLen) : NULL;
     void *ctx = caPath ? newClientCtx(caPath) : sharedClientCtx();
@@ -3759,8 +3809,15 @@ void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca
     ossl.sslSetFd(ssl, fd);
     ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);
     ossl.sslSet1Host(ssl, h);
+    if (alpnLen > 0 && ossl.sslSetAlpnProtos) {
+        /* the protocols to offer, each with its length in front: "\x02h2\x08http/1.1" */
+        ossl.sslSetAlpnProtos(ssl, (const unsigned char *)alpn, (unsigned)alpnLen);
+    }
     for (;;) {
+        PipeGuard g;
+        pipeHold(&g);
         int r = ossl.sslConnect(ssl);
+        pipeRelease(&g);
         if (r == 1) break;
         if (tlsWait(ssl, r)) continue;
         long v = ossl.sslVerifyResult(ssl);
@@ -3811,6 +3868,38 @@ void *iris_tls_server_ctx(const char *cert, int64_t certLen, const char *key, in
     return ctx;
 }
 
+/* The server picks the first of its protocols that the client offers. */
+static int alpnSelect(void *ssl, const unsigned char **out, unsigned char *outLen, const unsigned char *in,
+                      unsigned int inLen, void *arg) {
+    (void)ssl;
+    const unsigned char *ours = arg;
+    for (unsigned i = 0; ours[i]; i += 1u + ours[i]) {
+        for (unsigned j = 0; j < inLen; j += 1u + in[j]) {
+            if (in[j] == ours[i] && j + 1u + in[j] <= inLen && memcmp(in + j + 1, ours + i + 1, ours[i]) == 0) {
+                *out = in + j + 1;
+                *outLen = in[j];
+                return 0;               /* SSL_TLSEXT_ERR_OK */
+            }
+        }
+    }
+    return 3;                           /* SSL_TLSEXT_ERR_NOACK: no protocol, the connection goes on */
+}
+
+/* Lets clients of a server context ask for HTTP/2. */
+void iris_tls_ctx_http2(void *ctx) {
+    static const unsigned char protos[] = "\x02h2\x08http/1.1";
+    if (ctx && ossl.ctxSetAlpnSelect) ossl.ctxSetAlpnSelect(ctx, alpnSelect, (void *)protos);
+}
+
+/* The protocol the two sides picked with ALPN: "" for none. */
+void iris_tls_alpn(void *ssl, const char **p, int64_t *n) {
+    const unsigned char *data = NULL;
+    unsigned len = 0;
+    if (ssl && ossl.sslGetAlpn) ossl.sslGetAlpn(ssl, &data, &len);
+    *p = data ? (const char *)data : "";
+    *n = data ? len : 0;
+}
+
 void iris_tls_ctx_free(void *ctx) {
     if (ctx && ossl.loaded == 1) ossl.ctxFree(ctx);
 }
@@ -3826,7 +3915,10 @@ void *iris_tls_accept(void *ctx, int fd, int64_t timeout) {
     }
     ossl.sslSetFd(ssl, fd);
     for (;;) {
+        PipeGuard g;
+        pipeHold(&g);
         int r = ossl.sslAccept(ssl);
+        pipeRelease(&g);
         if (r == 1) return ssl;
         bool timedOut = false;
         if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
@@ -3841,7 +3933,10 @@ int64_t iris_tls_read(void *ssl, char *buf, int64_t len, int64_t timeout) {
     int n = len > 0x40000000 ? 0x40000000 : (int)len;
     int64_t deadline = deadlineOf(timeout);
     for (;;) {
+        PipeGuard g;
+        pipeHold(&g);
         int r = ossl.sslRead(ssl, buf, n);
+        pipeRelease(&g);
         if (r > 0) return r;
         bool timedOut = false;
         if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
@@ -3861,7 +3956,10 @@ int iris_tls_write(void *ssl, const char *data, int64_t len, int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
     while (len > 0) {
         int n = len > 0x40000000 ? 0x40000000 : (int)len;
+        PipeGuard g;
+        pipeHold(&g);
         int r = ossl.sslWrite(ssl, data, n);
+        pipeRelease(&g);
         if (r > 0) {
             data += r;
             len -= r;
@@ -3878,7 +3976,10 @@ int iris_tls_write(void *ssl, const char *data, int64_t len, int64_t timeout) {
 
 void iris_tls_close(void *ssl) {
     if (!ssl) return;
+    PipeGuard g;
+    pipeHold(&g);
     ossl.sslShutdown(ssl);      /* one try: the socket closes right after */
+    pipeRelease(&g);
     if (ossl.errClear) ossl.errClear();
     ossl.sslFree(ssl);
 }

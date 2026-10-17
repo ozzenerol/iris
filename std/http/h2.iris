@@ -1,0 +1,870 @@
+// HTTP/2 (RFC 9113) for the server: over TLS when the client asks for it
+// with ALPN, and on a plain connection that starts with HTTP/2's preface.
+//
+// The connection's task reads the frames. Each request runs in a task of
+// its own, as on HTTP/1.1, and hands its response to a writer task, which
+// is the only one that writes to the connection: it encodes the headers
+// and sends the body as the flow-control windows allow.
+
+import net, str, time
+
+const PREFACE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+// frame types
+const F_DATA = 0
+const F_HEADERS = 1
+const F_PRIORITY = 2
+const F_RST = 3
+const F_SETTINGS = 4
+const F_PUSH = 5
+const F_PING = 6
+const F_GOAWAY = 7
+const F_WINDOW = 8
+const F_CONTINUATION = 9
+
+// flags
+const END_STREAM = 1
+const ACK = 1
+const END_HEADERS = 4
+const PADDED = 8
+const PRIORITY_FLAG = 0x20
+
+// error codes
+const E_NONE = 0
+const E_PROTOCOL = 1
+const E_INTERNAL = 2
+const E_FLOW = 3
+const E_STREAM_CLOSED = 5
+const E_FRAME_SIZE = 6
+const E_REFUSED = 7
+const E_CANCEL = 8
+const E_COMPRESSION = 9
+
+// what this server allows
+const MAX_STREAMS = 250
+const RECV_WINDOW = 1048576
+const MAX_WINDOW = 2147483647
+
+void put8(String *out, i64 v) {
+    u8[1] b = [u8(v & 0xff)]
+    out.append(b[0:1])
+}
+
+void put32(String *out, i64 v) {
+    u8[4] b = [u8(v >> 24 & 0xff), u8(v >> 16 & 0xff), u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:4])
+}
+
+i64 get32(str m, i64 i) => i64(m[i]) << 24 | i64(m[i + 1]) << 16 | i64(m[i + 2]) << 8 | i64(m[i + 3])
+
+// Appends a frame: its 9-byte header, then the payload.
+void putFrame(String *out, i64 kind, i64 flags, i64 stream, str payload) {
+    put8(out, payload.len >> 16)
+    put8(out, payload.len >> 8)
+    put8(out, payload.len)
+    put8(out, kind)
+    put8(out, flags)
+    put32(out, stream & 0x7fffffff)
+    out.append(payload)
+}
+
+String frameOf(i64 kind, i64 flags, i64 stream, str payload) {
+    String out
+    putFrame(&out, kind, flags, stream, payload)
+    return out
+}
+
+String rstFrame(i64 stream, i64 code) {
+    String p
+    defer p.free()
+    put32(&p, code)
+    return frameOf(F_RST, 0, stream, p)
+}
+
+String goawayFrame(i64 last, i64 code) {
+    String p
+    defer p.free()
+    put32(&p, last)
+    put32(&p, code)
+    return frameOf(F_GOAWAY, 0, 0, p)
+}
+
+String windowFrame(i64 stream, i64 n) {
+    String p
+    defer p.free()
+    put32(&p, n)
+    return frameOf(F_WINDOW, 0, stream, p)
+}
+
+struct Frame {
+    i64 kind
+    i64 flags
+    i64 stream
+    String payload
+}
+
+void Frame.free() {
+    self.payload.free()
+}
+
+// The next frame; NetError.tooLong when it is larger than max.
+!Frame readFrame(net.Conn *c, i64 max) {
+    scoped String head = try c.readExactly(9)
+    n := i64(head[0]) << 16 | i64(head[1]) << 8 | i64(head[2])
+    f := Frame{kind: i64(head[3]), flags: i64(head[4]), stream: get32(head, 5) & 0x7fffffff}
+    if n > max {
+        return error(net.NetError.tooLong, "a frame of {n} bytes")
+    }
+    if n > 0 {
+        f.payload = try c.readExactly(n)
+    }
+    return f
+}
+
+// ------------------------------------------------------------ the writer
+
+// What the writer is asked to do.
+enum Job { frame, reply, window, settings, reset, open, close }
+
+struct Out {
+    Job job
+    i64 stream
+    i64 n       // window: the increment; settings: the setting
+    i64 n2      // settings: its value
+    String data // frame: the bytes; reply: the body
+    i32 status
+    String contentType
+    String headers // "Name: value\r\n" lines, as Response keeps them
+}
+
+// A reply whose body is waiting for window.
+struct Sending {
+    i64 stream
+    String body
+    i64 at
+    i64 window
+}
+
+struct Writer {
+    net.Conn *conn
+    chan[Out] jobs
+    i64 *inFlight // requests started and not answered yet, which the reader counts too
+    i64 window    // the connection's send window
+    i64 initial   // a new stream's send window
+    i64 maxFrame
+    List[Sending] sending
+    Map[i64, i64] early // window updates for streams that have no reply yet
+    List[i64] reset     // streams the client reset before their reply
+    i64 active          // requests being answered
+    bool closing
+    bool broken // writing failed: the rest is dropped
+}
+
+// A request is answered, or dropped.
+void Writer.finished() {
+    self.active -= 1
+    *self.inFlight -= 1
+}
+
+void Writer.write(str data) {
+    if self.broken {
+        return
+    }
+    self.conn.write(data) catch e {
+        self.broken = true
+        self.conn.interrupt()
+    }
+}
+
+// Response headers in HTTP/2's form: names in lower case, and none of the
+// headers that only HTTP/1.1 has.
+void encodeReply(String *block, Out *o) {
+    scoped String status = format("{o.status}")
+    encodeHeader(block, ":status", status)
+    if o.contentType.len > 0 {
+        encodeHeader(block, "content-type", o.contentType)
+    }
+    scoped String length = format("{o.data.len}")
+    encodeHeader(block, "content-length", length)
+    str rest = o.headers
+    for rest.len > 0 {
+        line, after, _ := str.cut(rest, "\r\n")
+        rest = after
+        name, value, ok := str.cut(line, ":")
+        if !ok {
+            continue
+        }
+        scoped String lower = str.lower(str.trim(name))
+        if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" ||
+            lower == "upgrade" || lower == "proxy-connection" || lower == "content-length" {
+                continue
+            }
+        encodeHeader(block, lower, str.trim(value))
+    }
+}
+
+void Writer.reply(Out *o) {
+    for i in 0..self.reset.len {
+        if self.reset.at(i) == o.stream {
+            // the client gave up on it
+            _ = self.reset.remove(i)
+            _ = self.early.remove(o.stream)
+            o.data.free()
+            self.finished()
+            return
+        }
+    }
+    String block
+    defer block.free()
+    encodeReply(&block, o)
+    bodyless := o.data.len == 0
+    String frames
+    defer frames.free()
+    // the block in frames of at most maxFrame: HEADERS, then CONTINUATION
+    i64 at = 0
+    for {
+        n := if block.len - at > self.maxFrame { self.maxFrame } else { block.len - at }
+        last := at + n == block.len
+        kind := if at == 0 { F_HEADERS } else { F_CONTINUATION }
+        i64 flags = 0
+        if last {
+            flags |= END_HEADERS
+        }
+        if at == 0 && bodyless {
+            flags |= END_STREAM
+        }
+        putFrame(&frames, kind, flags, o.stream, block[at:at + n])
+        at += n
+        if last {
+            break
+        }
+    }
+    self.write(frames)
+    extra, _ := self.early.get(o.stream)
+    _ = self.early.remove(o.stream)
+    if bodyless {
+        o.data.free()
+        self.finished()
+        return
+    }
+    self.sending.push(Sending{stream: o.stream, body: o.data, window: self.initial + extra})
+}
+
+// Sends what the windows allow. True when it sent something.
+bool Writer.pump() {
+    bool sent = false
+    i := 0
+    for i < self.sending.len {
+        if self.window <= 0 {
+            break
+        }
+        s := self.sending.at(i)
+        left := s.body.len - s.at
+        n := left
+        if n > s.window {
+            n = s.window
+        }
+        if n > self.window {
+            n = self.window
+        }
+        if n > self.maxFrame {
+            n = self.maxFrame
+        }
+        if n <= 0 {
+            i += 1
+            continue
+        }
+        last := n == left
+        scoped String f = frameOf(F_DATA, if last { END_STREAM } else { 0 }, s.stream, s.body[s.at:s.at + n])
+        self.write(f)
+        sent = true
+        s.at += n
+        s.window -= n
+        self.window -= n
+        if last {
+            s.body.free()
+            _ = self.sending.remove(i)
+            self.finished()
+            continue
+        }
+        self.sending.set(i, s)
+        i += 1
+    }
+    return sent
+}
+
+void Writer.handle(Out o) {
+    match o.job {
+        .frame => {
+            self.write(o.data)
+            o.data.free()
+        },
+        .reply => self.reply(&o),
+        .window => {
+            if o.stream == 0 {
+                self.window += o.n
+                if self.window > MAX_WINDOW {
+                    // a connection error: the reader stops when the
+                    // connection is shut down
+                    scoped String bye = goawayFrame(0, E_FLOW)
+                    self.write(bye)
+                    self.broken = true
+                    self.conn.interrupt()
+                }
+                return
+            }
+            for i in 0..self.sending.len {
+                s := self.sending.at(i)
+                if s.stream == o.stream {
+                    s.window += o.n
+                    if s.window > MAX_WINDOW {
+                        scoped String rst = rstFrame(o.stream, E_FLOW)
+                        self.write(rst)
+                        s.body.free()
+                        _ = self.sending.remove(i)
+                        self.finished()
+                        return
+                    }
+                    self.sending.set(i, s)
+                    return
+                }
+            }
+            had, _ := self.early.get(o.stream)
+            if self.initial + had + o.n > MAX_WINDOW {
+                scoped String rst = rstFrame(o.stream, E_FLOW)
+                self.write(rst)
+                _ = self.early.remove(o.stream)
+                self.reset.push(o.stream)
+                return
+            }
+            self.early.set(o.stream, had + o.n)
+        },
+        .settings => {
+            if o.n == 4 {
+                // a new initial window changes every stream's by the difference
+                delta := o.n2 - self.initial
+                self.initial = o.n2
+                for i in 0..self.sending.len {
+                    s := self.sending.at(i)
+                    s.window += delta
+                    self.sending.set(i, s)
+                }
+            } else if o.n == 5 {
+                self.maxFrame = o.n2
+            }
+        },
+        .reset => {
+            for i in 0..self.sending.len {
+                s := self.sending.at(i)
+                if s.stream == o.stream {
+                    s.body.free()
+                    _ = self.sending.remove(i)
+                    self.finished()
+                    return
+                }
+            }
+            self.reset.push(o.stream)
+        },
+        .open => self.active += 1,
+        .close => self.closing = true,
+    }
+}
+
+void runWriter(Writer *w, chan[bool] done) {
+    for {
+        sent := w.pump()
+        if w.closing && w.active <= 0 {
+            break
+        }
+        if sent {
+            // let the reader and the requests run between bursts
+            net.yield()
+            continue
+        }
+        o := <-w.jobs
+        w.handle(o)
+    }
+    // whatever is left now has no one to read it
+    for s in w.sending {
+        s.body.free()
+    }
+    w.sending.free()
+    w.early.free()
+    w.reset.free()
+    done <- true
+}
+
+// ------------------------------------------------------------ the reader
+
+// A request whose headers or body are still coming.
+struct Incoming {
+    Request req
+    i64 length // content-length, or -1
+    bool tooBig
+}
+
+struct Reader {
+    net.Conn *conn
+    Target target
+    Limits limits
+    Watch *watch
+    chan[Out] jobs
+    Decoder headers
+    Map[i64, Incoming] open
+    i64 last   // the highest stream the client opened
+    i64 window // the connection's receive window
+    i64 *inFlight
+    bool goingAway // we said GOAWAY: no new requests, and the connection ends
+    bool peerGone  // the client said GOAWAY: no new requests
+}
+
+void Reader.send(String frame) {
+    self.jobs <- Out{job: .frame, data: frame}
+}
+
+void Reader.resetStream(i64 stream, i64 code) {
+    self.send(rstFrame(stream, code))
+}
+
+// Ends the connection for a connection error.
+void Reader.fail(i64 code) {
+    self.send(goawayFrame(self.last, code))
+    self.goingAway = true
+}
+
+// The request's fields from a header block; the error code when the
+// headers aren't valid for a request (a stream error).
+i64 fillRequest(Request *req, List[String] *names, List[String] *values, i64 *length) {
+    str method = ""
+    str path = ""
+    str scheme = ""
+    str authority = ""
+    bool regular = false
+    *length = -1
+    req.names = alloc(String, 64)
+    req.values = alloc(String, 64)
+    for i in 0..names.len {
+        n := names.at(i)
+        v := values.at(i)
+        for k in 0..n.len {
+            if n[k] >= 'A' && n[k] <= 'Z' {
+                return E_PROTOCOL
+            }
+        }
+        if n.len > 0 && n[0] == ':' {
+            if regular {
+                return E_PROTOCOL
+            }
+            if n == ":method" && method.len == 0 {
+                method = v
+            } else if n == ":path" && path.len == 0 {
+                path = v
+            } else if n == ":scheme" && scheme.len == 0 {
+                scheme = v
+            } else if n == ":authority" && authority.len == 0 {
+                authority = v
+            } else {
+                return E_PROTOCOL
+            }
+            continue
+        }
+        regular = true
+        if n == "connection" || n == "keep-alive" || n == "proxy-connection" || n == "transfer-encoding" ||
+            n == "upgrade" || n == "te" && v != "trailers" {
+                return E_PROTOCOL
+            }
+        if n == "content-length" {
+            *length = str.parseInt(v) catch e {
+                return E_PROTOCOL
+            }
+        }
+        if req.count < 64 {
+            req.names[req.count] = n.copy()
+            req.values[req.count] = v.copy()
+            req.count += 1
+        }
+    }
+    if method.len == 0 || scheme.len == 0 || path.len == 0 {
+        return E_PROTOCOL
+    }
+    if authority.len > 0 && req.count < 64 {
+        req.names[req.count] = "host".copy()
+        req.values[req.count] = authority.copy()
+        req.count += 1
+    }
+    req.method = method.copy()
+    req.path = path.copy()
+    req.received = time.clock()
+    return E_NONE
+}
+
+// Runs one request and hands its response to the writer.
+void answer(Request req, i64 stream, Target target, chan[Out] jobs) {
+    Response res
+    res.status = 200
+    res.contentType = "text/plain; charset=utf-8".copy()
+    if target.router != null {
+        target.router.dispatch(&req, &res)
+    } else {
+        run(target.handler, &req, &res)
+    }
+    req.free()
+    if target.router != null {
+        target.router.busy.sub(1)
+    }
+    jobs <- Out{job: .reply, stream: stream, status: res.status, data: res.body, contentType: res.contentType,
+        headers: res.headers}
+}
+
+void Reader.start(i64 stream, Incoming inc) {
+    if inc.length >= 0 && inc.length != inc.req.body.len {
+        inc.req.free()
+        self.resetStream(stream, E_PROTOCOL)
+        return
+    }
+    if self.target.router != null {
+        if self.target.router.socketRoute(&inc.req) != null {
+            // WebSockets over HTTP/2 need extended CONNECT, which isn't here
+            inc.req.free()
+            self.resetStream(stream, E_REFUSED)
+            return
+        }
+        self.target.router.busy.add(1)
+    }
+    *self.inFlight += 1
+    self.jobs <- Out{job: .open}
+    spawn answer(inc.req, stream, self.target, self.jobs)
+}
+
+// A body too large for the limit: 413, and the rest of it is dropped.
+void Reader.refuseBody(i64 stream, Incoming *inc) {
+    inc.tooBig = true
+    inc.req.body.free()
+    *self.inFlight += 1
+    self.jobs <- Out{job: .open}
+    self.jobs <- Out{job: .reply, stream: stream, status: 413, data: format("the body is too large\n"),
+        contentType: "text/plain; charset=utf-8".copy()}
+}
+
+// HEADERS, and the CONTINUATION frames that finish its block.
+!void Reader.headersFrame(Frame *f) {
+    stream := f.stream
+    str p = f.payload
+    if stream == 0 || stream % 2 == 0 {
+        self.fail(E_PROTOCOL)
+        return
+    }
+    i64 pad = 0
+    i64 at = 0
+    if f.flags & PADDED != 0 {
+        if p.len < 1 {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        pad = i64(p[0])
+        at = 1
+    }
+    if f.flags & PRIORITY_FLAG != 0 {
+        if p.len < at + 5 {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        if get32(p, at) & 0x7fffffff == stream {
+            self.resetStream(stream, E_PROTOCOL)
+        }
+        at += 5
+    }
+    if at + pad > p.len {
+        self.fail(E_PROTOCOL)
+        return
+    }
+    String block
+    defer block.free()
+    block.append(p[at:p.len - pad])
+    flags := f.flags
+    for flags & END_HEADERS == 0 {
+        // nothing else may come between the frames of a block
+        scoped Frame more = try readFrame(self.conn, 16384)
+        if more.kind != F_CONTINUATION || more.stream != stream {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        block.append(more.payload)
+        if block.len > self.limits.maxHeader * 8 {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        flags = more.flags
+    }
+    List[String] names
+    List[String] values
+    defer names.freeEach()
+    defer values.freeEach()
+    if !self.headers.decode(block, &names, &values, self.limits.maxHeader * 8) {
+        self.fail(E_COMPRESSION)
+        return
+    }
+    inc, known := self.open.get(stream)
+    if known {
+        // trailers: the request's body is done
+        if f.flags & END_STREAM == 0 {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        _ = self.open.remove(stream)
+        if !inc.tooBig {
+            self.start(stream, inc)
+        }
+        return
+    }
+    if stream <= self.last {
+        self.fail(E_STREAM_CLOSED)
+        return
+    }
+    self.last = stream
+    if self.goingAway || self.peerGone {
+        return
+    }
+    if self.open.len + *self.inFlight >= MAX_STREAMS {
+        self.resetStream(stream, E_REFUSED)
+        return
+    }
+    Incoming fresh
+    code := fillRequest(&fresh.req, &names, &values, &fresh.length)
+    if code != E_NONE {
+        fresh.req.free()
+        self.resetStream(stream, code)
+        return
+    }
+    if fresh.length > self.limits.maxBody {
+        self.refuseBody(stream, &fresh)
+    }
+    if f.flags & END_STREAM != 0 {
+        if fresh.tooBig {
+            fresh.req.free()
+            return
+        }
+        self.start(stream, fresh)
+        return
+    }
+    self.open.set(stream, fresh)
+}
+
+void Reader.dataFrame(Frame *f) {
+    stream := f.stream
+    str p = f.payload
+    if stream == 0 {
+        self.fail(E_PROTOCOL)
+        return
+    }
+    // what came counts against the windows, padding too; it is given back
+    // at once, so the client can keep sending
+    if p.len > 0 {
+        self.send(windowFrame(0, p.len))
+    }
+    inc, known := self.open.get(stream)
+    if !known {
+        self.fail(if stream > self.last { E_PROTOCOL } else { E_STREAM_CLOSED })
+        return
+    }
+    i64 pad = 0
+    i64 at = 0
+    if f.flags & PADDED != 0 {
+        if p.len < 1 || i64(p[0]) >= p.len {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        pad = i64(p[0])
+        at = 1
+    }
+    if !inc.tooBig {
+        inc.req.body.append(p[at:p.len - pad])
+        if inc.req.body.len > self.limits.maxBody {
+            self.refuseBody(stream, &inc)
+        }
+    }
+    if f.flags & END_STREAM != 0 {
+        _ = self.open.remove(stream)
+        if inc.tooBig {
+            inc.req.free()
+            return
+        }
+        self.start(stream, inc)
+        return
+    }
+    if p.len > 0 {
+        self.send(windowFrame(stream, p.len))
+    }
+    self.open.set(stream, inc)
+}
+
+!void Reader.settingsFrame(Frame *f) {
+    str p = f.payload
+    if f.stream != 0 {
+        self.fail(E_PROTOCOL)
+        return
+    }
+    if f.flags & ACK != 0 {
+        if p.len != 0 {
+            self.fail(E_FRAME_SIZE)
+        }
+        return
+    }
+    if p.len % 6 != 0 {
+        self.fail(E_FRAME_SIZE)
+        return
+    }
+    for i in 0..p.len / 6 {
+        id := i64(p[i * 6]) << 8 | i64(p[i * 6 + 1])
+        v := get32(p, i * 6 + 2)
+        if id == 2 && v > 1 || id == 5 && (v < 16384 || v > 16777215) {
+            self.fail(E_PROTOCOL)
+            return
+        }
+        if id == 4 && v > MAX_WINDOW {
+            self.fail(E_FLOW)
+            return
+        }
+        if id == 4 || id == 5 {
+            self.jobs <- Out{job: .settings, n: id, n2: v}
+        }
+    }
+    self.send(frameOf(F_SETTINGS, ACK, 0, ""))
+}
+
+// One frame from the client. False when the connection is done.
+!bool Reader.frame(Frame *f) {
+    str p = f.payload
+    match f.kind {
+        F_DATA => self.dataFrame(f),
+        F_HEADERS => try self.headersFrame(f),
+        F_PRIORITY => {
+            if f.stream == 0 {
+                self.fail(E_PROTOCOL)
+            } else if p.len != 5 {
+                self.resetStream(f.stream, E_FRAME_SIZE)
+            } else if get32(p, 0) & 0x7fffffff == f.stream {
+                self.resetStream(f.stream, E_PROTOCOL)
+            }
+        },
+        F_RST => {
+            if f.stream == 0 {
+                self.fail(E_PROTOCOL)
+            } else if p.len != 4 {
+                self.fail(E_FRAME_SIZE)
+            } else if f.stream > self.last {
+                self.fail(E_PROTOCOL)
+            } else {
+                inc, known := self.open.get(f.stream)
+                if known {
+                    _ = self.open.remove(f.stream)
+                    inc.req.free()
+                } else {
+                    self.jobs <- Out{job: .reset, stream: f.stream}
+                }
+            }
+        },
+        F_SETTINGS => try self.settingsFrame(f),
+        F_PUSH => self.fail(E_PROTOCOL),
+        F_PING => {
+            if f.stream != 0 {
+                self.fail(E_PROTOCOL)
+            } else if p.len != 8 {
+                self.fail(E_FRAME_SIZE)
+            } else if f.flags & ACK == 0 {
+                self.send(frameOf(F_PING, ACK, 0, p))
+            }
+        },
+        F_GOAWAY => {
+            // the client takes no new requests; the connection goes on
+            // until it closes
+            if f.stream != 0 {
+                self.fail(E_PROTOCOL)
+            }
+            self.peerGone = true
+        },
+        F_WINDOW => {
+            if p.len != 4 {
+                self.fail(E_FRAME_SIZE)
+            } else {
+                n := get32(p, 0) & 0x7fffffff
+                _, open := self.open.get(f.stream)
+                if f.stream > self.last && !open {
+                    self.fail(E_PROTOCOL) // a stream that was never opened
+                } else if n == 0 {
+                    if f.stream == 0 {
+                        self.fail(E_PROTOCOL)
+                    } else {
+                        self.resetStream(f.stream, E_PROTOCOL)
+                    }
+                } else {
+                    self.jobs <- Out{job: .window, stream: f.stream, n: n}
+                }
+            }
+        },
+        F_CONTINUATION => self.fail(E_PROTOCOL),
+        _ => {},
+    }
+    return !self.goingAway
+}
+
+// Serves HTTP/2 on a connection whose preface was read already, until the
+// client goes away.
+void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w) {
+    jobs := chan[Out](64)
+    i64 inFlight = 0
+    Writer writer = Writer{conn: conn, jobs: jobs, inFlight: &inFlight, window: 65535, initial: 65535, maxFrame: 16384}
+    done := chan[bool](0)
+    spawn runWriter(&writer, done)
+    Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, inFlight: &inFlight,
+        headers: decoder(4096)}
+    // our settings: how many requests at once, a larger window for request
+    // bodies, and no server push
+    String settings
+    for pair in [[3, MAX_STREAMS], [4, RECV_WINDOW], [2, 0], [6, limits.maxHeader * 8]] {
+        put8(&settings, pair[0] >> 8)
+        put8(&settings, pair[0])
+        put32(&settings, pair[1])
+    }
+    r.send(frameOf(F_SETTINGS, 0, 0, settings))
+    settings.free()
+    r.send(windowFrame(0, RECV_WINDOW - 65535))
+    bool first = true
+    for {
+        if target.router != null && target.router.stopping.load() != 0 && !r.goingAway {
+            r.send(goawayFrame(r.last, E_NONE))
+            r.goingAway = true
+            break
+        }
+        f := readFrame(conn, 16384) catch e {
+            if e.code == net.NetError.tooLong {
+                r.fail(E_FRAME_SIZE)
+            }
+            break
+        }
+        w.last = time.clock()
+        if first && f.kind != F_SETTINGS {
+            // the preface must be followed by SETTINGS
+            f.payload.free()
+            r.fail(E_PROTOCOL)
+            break
+        }
+        first = false
+        more := r.frame(&f) catch e {
+            f.payload.free()
+            break
+        }
+        f.payload.free()
+        if !more {
+            break
+        }
+    }
+    // the requests still running finish, then the writer stops
+    for _, inc in r.open {
+        inc.req.free()
+    }
+    r.open.free()
+    r.headers.free()
+    jobs <- Out{job: .close}
+    _ = <-done
+}

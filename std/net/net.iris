@@ -31,7 +31,13 @@ void rawClose(i32 fd)
 void rawShutdown(i32 fd)
 
 @extern("iris_tls_connect")
-u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen)
+u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen)
+
+@extern("iris_tls_ctx_http2")
+void rawTlsHttp2(u8 *ctx)
+
+@extern("iris_tls_alpn")
+void rawTlsAlpn(u8 *ssl, u8 **p, i64 *n)
 
 @extern("iris_tls_server_ctx")
 u8 *rawTlsServerCtx(u8 *cert, i64 certLen, u8 *key, i64 keyLen)
@@ -308,12 +314,23 @@ pub !Conn dialTls(str host, u16 port, str ca = "") {
 }
 
 // Starts TLS as the client on a connection that is open, as dialTls does.
-pub !void Conn.startTls(str host, str ca = "") {
-    ssl := rawTlsConnect(self.fd, host.ptr, host.len, ca.ptr, ca.len)
+// protocols are offered to the server with ALPN, each with its length in
+// front: "\x02h2\x08http/1.1"; protocol() says which one it took.
+pub !void Conn.startTls(str host, str ca = "", str protocols = "") {
+    ssl := rawTlsConnect(self.fd, host.ptr, host.len, ca.ptr, ca.len, protocols.ptr, protocols.len)
     if ssl == null {
         return error(NetError.tls, "{host}: {tlsMessage()}")
     }
     self.tls = ssl
+}
+
+// The protocol the two sides of a TLS connection agreed on with ALPN, as
+// "h2"; "" when they didn't.
+pub str Conn.protocol() {
+    u8 *p
+    i64 n
+    rawTlsAlpn(self.tls, &p, &n)
+    return p[0:n]
 }
 
 // A server's certificate and key, for accepting TLS connections. It can be
@@ -330,6 +347,9 @@ pub !TlsConfig tlsConfig(str certFile, str keyFile) {
     }
     return TlsConfig{ctx: ctx}
 }
+
+// Lets clients ask for HTTP/2 with ALPN; http's servers call it.
+pub void TlsConfig.offerHttp2() => rawTlsHttp2(self.ctx)
 
 pub void TlsConfig.free() {
     rawTlsCtxFree(self.ctx)
