@@ -17,6 +17,9 @@
 // expect: https ada:pw example.com 8443 /docs/a q=1 top
 // expect: localhost 80 / | 0 /just/a/path x=1
 // expect: 15 true false false
+// expect: da39a3ee5e6b4b0d3255bfef95601890afd80709
+// expect: a9993e364706816aba3e25717850c26c9cd0d89d
+// expect: 84983e441c3bd26ebaae4aa1f95129e5e54670f1
 
 import base64, crypto, hex, random, url
 
@@ -72,4 +75,8 @@ import base64, crypto, hex, random, url
         sum += x
     }
     print("{sum} {crypto.equal("abc", "abc")} {crypto.equal("abc", "abd")} {crypto.equal("ab", "abc")}")
+    for text in ["", "abc", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"] {
+        scoped String digest = hex.encode(crypto.sha1(text))
+        print(digest)
+    }
 }
