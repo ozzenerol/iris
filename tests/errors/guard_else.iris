@@ -1,0 +1,5 @@
+// error: 4: an 'if' after a statement takes only a condition; write a full if to have a block or an else
+
+void main() {
+    print("a") if true else false
+}

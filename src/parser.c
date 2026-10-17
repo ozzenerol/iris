@@ -29,6 +29,7 @@ static Node *parseExpr(Parser *p);
 static Node *parseBlock(Parser *p);
 static Node *parseStmt(Parser *p);
 static Node *parseSimpleStmt(Parser *p, bool allowList);
+static Node *parseGuard(Parser *p, Node *s);
 static Node *parseIf(Parser *p);
 static Node *parseMatch(Parser *p);
 static Node *tryType(Parser *p);
@@ -940,6 +941,11 @@ static Node *parseUnaryInner(Parser *p) {
         n->a = parseUnary(p);
         return n;
     }
+    case K_NOT:
+        /* `not` takes a whole comparison, so it can't go where only one
+         * operand fits: a == not b */
+        fail(p, t, "'not' can't be used here; put it in parentheses, or use '!'");
+        return NULL;
     case K_TRY: {
         next(p);
         Node *n = node(p, N_TRY, t);
@@ -962,8 +968,8 @@ static int precedence(TokKind k) {
     switch (k) {
     case P_LARROW: return 1;
     case P_DOTDOT: return 2;
-    case P_OROR: return 3;
-    case P_ANDAND: return 4;
+    case P_OROR: case K_OR: return 3;
+    case P_ANDAND: case K_AND: return 4;
     case P_EQ: case P_NE: case P_LT: case P_LE: case P_GT: case P_GE: return 5;
     case P_PLUS: case P_MINUS: case P_PIPE: case P_CARET: return 6;
     case P_STAR: case P_SLASH: case P_PERCENT: case P_SHL: case P_SHR: case P_AMP: return 7;
@@ -994,8 +1000,21 @@ static Node *parseOperand(Parser *p) {
     return e;
 }
 
+/* `not` comes between `and` and the comparisons, as in Python and Ruby:
+ * `not a == b` is `!(a == b)`, and `not a and b` is `!a && b`. */
+#define NOT_PREC 5
+
 static Node *parseBinary(Parser *p, int minPrec) {
-    Node *left = parseOperand(p);
+    Node *left;
+    if (at(p, K_NOT) && minPrec <= NOT_PREC) {
+        Token *t = next(p);
+        left = node(p, N_UNARY, t);
+        left->op = P_BANG;
+        left->ival = 1;                 /* written as `not`, for messages */
+        left->a = parseBinary(p, NOT_PREC);
+    } else {
+        left = parseOperand(p);
+    }
     for (;;) {
         Token *t = peek(p);
         int prec = precedence(t->kind);
@@ -1004,7 +1023,7 @@ static Node *parseBinary(Parser *p, int minPrec) {
         }
         next(p);
         Node *n = node(p, N_BINARY, t);
-        n->op = t->kind;
+        n->op = t->kind == K_AND ? P_ANDAND : t->kind == K_OR ? P_OROR : t->kind;
         n->a = left;
         n->b = parseBinary(p, prec + 1);
         left = n;
@@ -1087,7 +1106,7 @@ static Node *parseArmBody(Parser *p) {
     case K_RETURN: case K_BREAK: case K_CONTINUE:
         return parseStmt(p);
     default:
-        return parseSimpleStmt(p, false);
+        return parseGuard(p, parseSimpleStmt(p, false));
     }
 }
 
@@ -1283,7 +1302,75 @@ static Node *parseSimpleStmt(Parser *p, bool allowList) {
 
 static Node *parseWhen(Parser *p, bool top);
 
+/* Whether the `if` at the parser's position is a guard (`return if done`)
+ * rather than an if that gives a value (`return if ok { 1 } else { 2 }`):
+ * a guard has no block on its line. */
+static bool guardFollows(Parser *p) {
+    int depth = 0;
+    for (int i = p->pos + 1; i < p->ntoks; i++) {
+        switch (p->toks[i].kind) {
+        case P_LPAREN: case P_LBRACK:
+            depth++;
+            break;
+        case P_RPAREN: case P_RBRACK:
+            depth--;
+            break;
+        case P_LBRACE:
+            if (depth == 0) {
+                return false;
+            }
+            break;
+        case P_RBRACE:
+            if (depth == 0) {
+                return true;
+            }
+            break;
+        case T_NEWLINE: case T_EOF:
+            return true;
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
+/* A guard after a statement, `return if n < 0` or `print(x) if verbose`,
+ * becomes an if around it. */
+static Node *parseGuard(Parser *p, Node *s) {
+    if (!at(p, K_IF)) {
+        return s;
+    }
+    switch (s->kind) {
+    case N_RETURN: case N_BREAK: case N_CONTINUE: case N_EXPR_STMT: case N_ASSIGN: case N_SPAWN:
+        break;
+    case N_VAR: case N_DEFINE:
+        fail(p, peek(p), "a declaration can't have an 'if' after it: the name would only exist when the condition holds");
+        return s;
+    case N_DEFER: case N_ERRDEFER:
+        fail(p, peek(p), "a defer can't have an 'if' after it; put the defer in an if block");
+        return s;
+    default:
+        return s;
+    }
+    Token *t = next(p);
+    Node *n = node(p, N_IF, t);
+    n->a = parseHeadExpr(p);
+    if (at(p, P_LBRACE) || at(p, K_ELSE)) {
+        fail(p, peek(p), "an 'if' after a statement takes only a condition; write a full if to have a block or an else");
+    }
+    Node *b = node(p, N_BLOCK, t);
+    push(p, &b->list, s);
+    n->c = b;
+    return n;
+}
+
+static Node *parseStmtCore(Parser *p);
+
 static Node *parseStmt(Parser *p) {
+    return parseGuard(p, parseStmtCore(p));
+}
+
+static Node *parseStmtCore(Parser *p) {
     Token *t = peek(p);
     switch (t->kind) {
     case K_IF:
@@ -1301,7 +1388,8 @@ static Node *parseStmt(Parser *p) {
     case K_RETURN: {
         next(p);
         Node *r = node(p, N_RETURN, t);
-        if (!at(p, T_NEWLINE) && !at(p, P_RBRACE) && !at(p, T_EOF) && !at(p, P_COMMA)) {
+        if (!at(p, T_NEWLINE) && !at(p, P_RBRACE) && !at(p, T_EOF) && !at(p, P_COMMA) &&
+            !(at(p, K_IF) && guardFollows(p))) {
             r->a = parseExpr(p);
         }
         return r;
@@ -1317,7 +1405,7 @@ static Node *parseStmt(Parser *p) {
     case K_DEFER: case K_ERRDEFER: case K_SPAWN: {
         next(p);
         Node *d = node(p, t->kind == K_DEFER ? N_DEFER : t->kind == K_ERRDEFER ? N_ERRDEFER : N_SPAWN, t);
-        d->a = t->kind == K_SPAWN ? parseExpr(p) : parseStmt(p);
+        d->a = t->kind == K_SPAWN ? parseExpr(p) : parseStmtCore(p);
         return d;
     }
     case K_ASM: {

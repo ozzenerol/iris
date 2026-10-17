@@ -1,0 +1,5 @@
+// error: 4: a declaration can't have an 'if' after it: the name would only exist when the condition holds
+
+void main() {
+    x := 1 if true
+}

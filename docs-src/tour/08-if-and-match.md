@@ -35,6 +35,41 @@ void main() {
 
 The condition is a `bool` and needs no parentheses. The block always has braces. `else` goes on the line of the closing brace before it, or on the next line.
 
+## A condition after a statement
+
+A short statement can have its condition after it, on the same line: the statement runs only when the condition is true. This suits the checks at the top of a function and in loops:
+
+```iris run
+i64 sign(i64 n) {
+    return -1 if n < 0
+    return 0 if n == 0
+    return 1
+}
+
+void main() {
+    verbose := true
+    print("{sign(-5)} {sign(0)} {sign(9)}")
+    print("checking") if verbose
+    for i in 0..10 {
+        continue if i % 2 == 0
+        break if i > 6
+        print("odd {i}")
+    }
+}
+```
+
+```output
+-1 0 1
+checking
+odd 1
+odd 3
+odd 5
+```
+
+`stmt if cond` is the same as `if cond { stmt }`. It works after `return`, `break`, `continue`, an assignment, a call or `spawn`, and takes only a condition: there is no `else`. A declaration can't have one, since the name would only exist when the condition held, and neither can `defer`.
+
+`return if` followed by a block is still an if that gives a value: `return if ok { 1 } else { 2 }`.
+
 ## if as a value
 
 `if` can give a value. Each branch ends with the value it gives, without `return`, and `else` is required, since there must be a value whichever way it goes:

@@ -1,0 +1,33 @@
+// expect: true false true
+// expect: true true
+// expect: false true
+// expect: checked a
+// expect: checked c
+// expect: one
+// expect: continued
+
+bool check(str what, bool value) {
+    print("checked {what}")
+    return value
+}
+
+void main() {
+    done := false
+    n := 3
+    // not takes the whole comparison
+    print("{not done} {not n == 3} {not n > 5}")
+    // not is done before and, and before or
+    print("{not done and n == 3} {not done or done}")
+    print("{not (n > 2) and not done} {done or n == 3 and not done}")
+    // and and or stop early, as && and || do
+    if check("a", false) and check("b", true) {
+        print("both")
+    }
+    if check("c", true) or check("d", true) {
+        print("one")
+    }
+    if n > 1 and
+        n < 10 {
+        print("continued")
+    }
+}

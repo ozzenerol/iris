@@ -54,6 +54,26 @@ false true
 
 This makes conditions like `p != null && p.len > 0` safe: the second part isn't reached when the first is false.
 
+They can also be written as words: `and`, `or` and `not`. `and` and `or` are the same as `&&` and `||`. `not` takes everything up to the next `and` or `or`, so `not a == b` is `!(a == b)`, where `!` takes only the value right after it:
+
+```iris run
+void main() {
+    done := false
+    n := 3
+    if not done and n > 0 {
+        print("working")
+    }
+    print("{not n == 4} {done or n == 3}")
+}
+```
+
+```output
+working
+true true
+```
+
+Which to write is a matter of taste; a project usually picks one. `not` can't go where only one value fits, as in `a == not b`; parentheses or `!` are used there.
+
 ## Comparing
 
 | Operator | True when |
@@ -96,7 +116,7 @@ false true
 | `& \| ^ ~` | bits: and, or, exclusive or, each bit flipped |
 | `<< >>` | shifts |
 | `== != < <= > >=` | comparison |
-| `&& \|\| !` | and, or, not, on `bool` |
+| `&& \|\| !`, `and or not` | and, or, not, on `bool` |
 | `-x` | the negative of x |
 | `&x`, `*p` | the address of x, and the value p points to (see [Pointers](17-pointers.html)) |
 | `a..b` | the range from a to before b, in `for` and slicing; in `match`, from a to b with both ends |
@@ -111,8 +131,9 @@ In a longer expression, some operators bind more tightly than others. From tight
 2. `* / % << >> &`
 3. `+ - | ^`
 4. `== != < <= > >=`
-5. `&&`
-6. `||`
+5. `not`
+6. `&&`, `and`
+7. `||`, `or`
 
 Operators on the same level go from left to right. Parentheses group anything differently:
 

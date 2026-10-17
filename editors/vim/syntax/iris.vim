@@ -5,6 +5,7 @@ endif
 
 syn keyword irisKeyword if else for in match break continue return try catch defer errdefer scoped
 syn keyword irisKeyword spawn select thread when comptime import pub const test asm
+syn keyword irisOperator not and or
 syn keyword irisStructure struct union enum interface type dyn chan threadlocal
 syn keyword irisType void bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 str String Error Duration
 syn keyword irisType Mutex Thread Atomic
@@ -31,6 +32,7 @@ syn region irisComment start="//" end="$" contains=irisTodo,@Spell
 syn region irisComment start="/\*" end="\*/" contains=irisTodo,@Spell
 
 hi def link irisKeyword Keyword
+hi def link irisOperator Operator
 hi def link irisStructure Structure
 hi def link irisType Type
 hi def link irisBoolean Boolean

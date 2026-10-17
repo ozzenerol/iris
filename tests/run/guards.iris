@@ -1,0 +1,47 @@
+// expect: -1 0 1
+// expect: 1 2
+// expect: small 2
+// expect: shown
+// expect: 13
+// expect: odd 1
+// expect: odd 3
+// expect: odd 5
+// expect: thirteen
+
+i64 sign(i64 n) {
+    return -1 if n < 0
+    return 0 if n == 0
+    return 1
+}
+
+// an if that gives a value is still one: it has a block
+i64 pick(bool ok) {
+    return if ok { 1 } else { 2 }
+}
+
+void report(i64 n) {
+    return if n > 3
+    print("small {n}")
+}
+
+void main() {
+    print("{sign(-5)} {sign(0)} {sign(9)}")
+    print("{pick(true)} {pick(false)}")
+    report(2)
+    report(5)
+    verbose := true
+    print("shown") if verbose
+    print("hidden") if not verbose
+    a := 3
+    a += 10 if a < 5
+    print("{a}")
+    outer: for i in 0..10 {
+        continue if i % 2 == 0
+        break outer if i > 6
+        print("odd {i}")
+    }
+    match a {
+        13 => print("thirteen") if verbose,
+        _ => {}
+    }
+}

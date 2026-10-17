@@ -1,0 +1,5 @@
+// error: 4: the value after 'not' is i64, but bool is needed
+
+void main() {
+    b := not 5
+}

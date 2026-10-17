@@ -2872,7 +2872,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         }
         case P_BANG:
             checkExpr(c, &e->a, &tyBool);
-            coerce(c, &e->a, &tyBool, "the value after '!'");
+            coerce(c, &e->a, &tyBool, e->ival ? "the value after 'not'" : "the value after '!'");
             return setType(e, &tyBool);
         case P_TILDE: {
             Type *t = checkExpr(c, &e->a, expected && (isInt(expected) || expected->isFlags) ? expected : NULL);

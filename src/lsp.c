@@ -1084,7 +1084,7 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
     static const char *words[] = {"if", "else", "for", "in", "match", "break", "continue", "return", "struct",
                                   "union", "enum", "interface", "type", "dyn", "pub", "const", "comptime", "when",
                                   "import", "try", "catch", "defer", "errdefer", "scoped", "spawn", "select", "chan",
-                                  "thread", "threadlocal", "asm", "test", "true", "false", "null"};
+                                  "thread", "threadlocal", "asm", "test", "not", "and", "or", "true", "false", "null"};
     for (size_t i = 0; i < sizeof words / sizeof words[0]; i++) addItem(&it, words[i], 14, NULL);
     sbPutc(&it.r, ']');
     reply(out, id, it.r.buf);

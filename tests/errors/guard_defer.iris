@@ -1,0 +1,5 @@
+// error: 4: a defer can't have an 'if' after it; put the defer in an if block
+
+void main() {
+    defer print("a") if true
+}

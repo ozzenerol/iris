@@ -14,6 +14,8 @@ The choices made so far, the ones proposed and waiting for an answer, and the fe
 | No semicolons. Blocks need braces. Conditions need no parentheses. | Less to type, no dangling `else`. |
 | `for` is the only loop. | `while` and `do` add nothing `for` can't do. |
 | `match` replaces `switch`. `if` and `match` give values. | No fall-through bugs, and no need for a separate `?:` operator. |
+| `and`, `or` and `not` can be written for `&&`, `\|\|` and `!`. `not` takes a whole comparison. | Conditions read as words, as in Ruby and Python; the symbols stay for those used to C. |
+| A short statement can end with `if cond`: `return if n < 0`. No `else`, and not after a declaration or `defer`. | Guards at the top of a function take one line instead of three. |
 | No garbage collector. | Predictable memory use and latency. |
 
 ## Proposed

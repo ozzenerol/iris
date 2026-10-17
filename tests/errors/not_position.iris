@@ -1,0 +1,5 @@
+// error: 4: 'not' can't be used here; put it in parentheses, or use '!'
+
+void main() {
+    b := 1 == not true
+}

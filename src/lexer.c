@@ -103,6 +103,7 @@ static const struct {
     {"errdefer", K_ERRDEFER}, {"scoped", K_SCOPED}, {"spawn", K_SPAWN},
     {"select", K_SELECT}, {"chan", K_CHAN}, {"thread", K_THREAD},
     {"threadlocal", K_THREADLOCAL}, {"asm", K_ASM}, {"test", K_TEST},
+    {"not", K_NOT}, {"and", K_AND}, {"or", K_OR},
     {"true", K_TRUE}, {"false", K_FALSE}, {"null", K_NULL},
 };
 
