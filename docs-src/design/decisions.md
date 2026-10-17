@@ -127,6 +127,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | The PostgreSQL driver speaks the protocol in Iris, without libpq. | A query waits like any other network call, so other tasks run meanwhile, and there is no C library to install. |
 | `pg` sends values apart from the SQL and reads every result as text. | Values can't change what the SQL means, and text is the same for every type and every server version. |
 | A query's rows are all read before `query` returns. | The connection goes back to the pool at once, and `Rows` can't hold one up. |
+| `redis.Client` is a pool from the start. | Most programs share one client between tasks; one connection per task is never what they want. |
+| A struct may hold a `List` of itself. | The list keeps its items behind a pointer, so trees and nested replies need no pointer games. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |
 | A panic exits with status 2. | Tells a crash apart from a program that returns 1. |

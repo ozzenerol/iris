@@ -23,6 +23,7 @@
   tests/pg/NAME.iris       as tests/run, with a PostgreSQL server that
                            tools/pg-cluster.sh starts (IRIS_PG_URL); skipped
                            when there is no PostgreSQL
+  tests/redis/NAME.iris    the same with tools/redis-server.sh (IRIS_REDIS_URL)
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -376,20 +377,24 @@ def doc_tests(iris, only, failures):
     return count
 
 
-def pg_tests(iris, only, failures, skipped):
-    paths = glob.glob(os.path.join(ROOT, "tests/pg/*.iris"))
-    if not paths or (only and not any(o in "pg/" + os.path.basename(p)[:-5] for p in paths for o in only)):
+def service_tests(iris, only, failures, skipped, folder, script, prefix):
+    """The tests in tests/FOLDER, with a server that SCRIPT starts; its
+    PREFIX_ variables go to the tests. Skipped when it can't start one."""
+    paths = glob.glob(os.path.join(ROOT, "tests", folder, "*.iris"))
+    names = [folder + "/" + os.path.basename(p)[:-5] for p in paths]
+    if not paths or (only and not any(o in n for n in names for o in only)):
         return 0
-    script = os.path.join(ROOT, "tools/pg-cluster.sh")
+    script = os.path.join(ROOT, "tools", script)
     p = subprocess.run([script, "start"], capture_output=True, text=True)
-    if p.returncode != 0 or "IRIS_PG_URL" not in p.stdout:
-        skipped.append("pg (no PostgreSQL here)")
+    found = dict(re.findall(r"(%s_\w+)='([^']*)'" % prefix, p.stdout))
+    dirs = [v for k, v in found.items() if k.endswith("_DIR")]
+    if p.returncode != 0 or not dirs:
+        skipped.append("%s (no server here)" % folder)
         return 0
-    found = dict(re.findall(r"(IRIS_PG_\w+)='([^']*)'", p.stdout))
     try:
-        return run_tests(iris, only, failures, "pg", {"IRIS_PG_URL": found["IRIS_PG_URL"]})
+        return run_tests(iris, only, failures, folder, {k: v for k, v in found.items() if not k.endswith("_DIR")})
     finally:
-        subprocess.run([script, "stop", found["IRIS_PG_DIR"]], capture_output=True)
+        subprocess.run([script, "stop", dirs[0]], capture_output=True)
 
 
 def std_tests(iris, only, failures):
@@ -426,7 +431,8 @@ def main():
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
     total += std_tests(args.iris, args.only, failures)
-    total += pg_tests(args.iris, args.only, failures, skipped)
+    total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")
+    total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],

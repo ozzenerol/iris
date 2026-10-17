@@ -623,6 +623,7 @@ static Node *enumMember(Type *t, const char *name) {
 }
 
 static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node *at);
+static void resolveSignatureType(Checker *c, Type *t);
 static Type *dynType(Checker *c, Node *iface);
 
 /* A type named in an expression, like the first argument of alloc. */
@@ -774,7 +775,7 @@ static Type *resolveType(Checker *c, Node *t) {
                 error(c, t->list.items[i], "a tuple can't hold void");
                 return &tyError;
             }
-            if (elems[i]->kind == TY_STRUCT) resolveStruct(c, elems[i]);
+            if (elems[i]->kind == TY_STRUCT) resolveSignatureType(c, elems[i]);
         }
         return tupleOf(elems, t->list.len);
     }
@@ -831,7 +832,7 @@ static Type *resolveType(Checker *c, Node *t) {
             error(c, t, "a channel of void carries nothing");
             return &tyError;
         }
-        if (e->kind == TY_STRUCT) resolveStruct(c, e);
+        if (e->kind == TY_STRUCT) resolveSignatureType(c, e);
         return chanOf(e);
     }
     case N_T_DYN: {
@@ -1163,6 +1164,31 @@ static void checkJsonFields(Checker *c, Type *t, Node *d) {
     (void)t;
 }
 
+/* The structs a field holds by value, in arrays and tuples too, must be
+ * complete first: a struct that holds itself that way is an error. */
+static void completeInside(Checker *c, Type *t) {
+    while (t->kind == TY_ARRAY) {
+        t = t->elem;
+    }
+    if (t->kind == TY_STRUCT) {
+        resolveStruct(c, t);
+    } else if (t->kind == TY_TUPLE) {
+        for (int i = 0; i < t->nelems; i++) {
+            completeInside(c, t->elems[i]);
+        }
+    }
+}
+
+/* A struct in a function's signature. One whose fields are being resolved
+ * now (List[Node] inside Node: List's methods take a Node) is left to
+ * finish: the signature only needs it complete by the time code is written. */
+static void resolveSignatureType(Checker *c, Type *t) {
+    if (t->kind == TY_STRUCT && t->state == 1) {
+        return;
+    }
+    resolveStruct(c, t);
+}
+
 static void resolveStruct(Checker *c, Type *t) {
     if (t->kind != TY_STRUCT || t->state == 2) {
         return;
@@ -1212,13 +1238,7 @@ static void resolveStruct(Checker *c, Type *t) {
             ft = &tyError;
         }
         /* a struct inside (not behind a pointer) must be complete first */
-        Type *inner = ft;
-        while (inner->kind == TY_ARRAY) {
-            inner = inner->elem;
-        }
-        if (inner->kind == TY_STRUCT) {
-            resolveStruct(c, inner);
-        }
+        completeInside(c, ft);
         f->type = ft;
         if (f->kind == N_EMBED) {
             if (ft->kind != TY_STRUCT && !isErr(ft)) {
@@ -5099,7 +5119,7 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         error(c, f, "%s has no body", f->name);
     }
     f->type = resolveType(c, f->a);
-    resolveStruct(c, f->type);
+    resolveSignatureType(c, f->type);
     int first = 0;
     if (f->b || recv) {
         /* a method: self, a pointer to the receiver, comes first */
@@ -5150,7 +5170,7 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
             error(c, p, "a parameter can't be void");
             p->type = &tyError;
         }
-        resolveStruct(c, p->type);
+        resolveSignatureType(c, p->type);
         for (int j = 0; j < i; j++) {
             if (strcmp(f->list.items[j]->name, p->name) == 0) {
                 error(c, p, "%s is already a parameter", p->name);
