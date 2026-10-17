@@ -1,0 +1,48 @@
+// expect: NetError.timeout true
+// expect: NetError.timeout true
+// expect: NetError.tooLong
+
+import net, time
+
+void silent(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    sleep(500ms)
+    c.close()
+}
+
+void talker(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    c.write("a very long line that goes on\n") catch e { }
+    sleep(100ms)
+    c.close()
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn silent(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    c.setTimeout(50ms)
+    start := time.clock()
+    _ = c.readLine() catch e {
+        took := time.clock() - start
+        print("{e.code} {took >= 50ms && took < 400ms}")
+        "".copy()
+    }
+    c.close()
+    start2 := time.clock()
+    _ = ln.accept(30ms) catch e {
+        print("{e.code} {time.clock() - start2 >= 30ms}")
+        net.Conn{}
+    }
+    spawn talker(ln)
+    d := try net.dial("127.0.0.1", ln.port)
+    _ = d.readLine(10) catch e {
+        print("{e.code}")
+        "".copy()
+    }
+    d.close()
+}

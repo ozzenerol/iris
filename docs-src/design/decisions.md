@@ -99,6 +99,8 @@ These are suggestions. They are used in the examples on these pages until they a
 | A function that returns `void` can be given where a function that returns `!void` is wanted. | HTTP handlers can use `try`, and the ones that can't fail still fit. |
 | `!R(A)` is a function that returns `!R`. | The type reads as it is declared: `!void handle(Request *req)`. |
 | Router middleware is a function that gives false to stop the request. | No closures needed, and the order is the order of `use`. |
+| A server closes idle connections with one sweeper task per thread, which shuts down connections that did nothing for the timeout. | A timer for each read and write cost 15% of the throughput; the sweeper costs under 2%. |
+| `Conn.setTimeout` gives each read and write its own deadline. | For clients, where one call waiting too long is what matters. |
 | Text with values can be passed straight to a `str` parameter. It lives in a temporary `String` until the statement ends. | Calls like `res.text("hi {name}")` need no `format` and no `free`. |
 | A channel has room for at least one value. | Sending into a full channel waits; there is no hand-over without room yet. |
 | A task can't return an error. | Nothing waits for a task's result, so the error would be lost. |

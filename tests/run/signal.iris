@@ -1,0 +1,16 @@
+// expect: got interrupt
+
+import process, signal
+
+void sendLater() {
+    scoped process.Output o = process.run(["sh", "-c", "sleep 0.1; kill -INT $PPID"]) catch e {
+        return
+    }
+}
+
+void main() {
+    signal.watch()
+    spawn sendLater()
+    s := signal.wait()
+    print("got {s}")
+}

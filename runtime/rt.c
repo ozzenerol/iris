@@ -1229,9 +1229,10 @@ static void ringEnter(bool wait, int64_t timeout) {
 }
 
 /* Writes an operation for the next submit. */
-static void ringPush(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, uint64_t userData) {
+static void ringPushFlags(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, uint64_t userData,
+                          uint8_t sqeFlags, unsigned room) {
     uint32_t tail = *ring.sqTail;
-    while (tail - __atomic_load_n(ring.sqHead, __ATOMIC_ACQUIRE) >= ring.sqCount) {
+    while (tail - __atomic_load_n(ring.sqHead, __ATOMIC_ACQUIRE) + room > ring.sqCount) {
         ringEnter(false, 0);    /* full: submit what is there */
     }
     uint32_t i = tail & ring.sqMask;
@@ -1243,9 +1244,14 @@ static void ringPush(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t o
     e->len = len;
     e->opFlags = opFlags;
     e->userData = userData;
+    e->flags = sqeFlags;
     ring.sqArray[i] = i;
     __atomic_store_n(ring.sqTail, tail + 1, __ATOMIC_RELEASE);
     ring.pending++;
+}
+
+static void ringPush(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, uint64_t userData) {
+    ringPushFlags(opcode, fd, buf, len, opFlags, userData, 0, 1);
 }
 
 /* Hands an operation to the kernel and waits for its result: a count,
@@ -1263,6 +1269,10 @@ static void ringReap(void) {
     uint32_t tail = __atomic_load_n(ring.cqTail, __ATOMIC_ACQUIRE);
     while (head != tail) {
         RingCqe *c = &ring.cqes[head & ring.cqMask];
+        if (c->userData == 1) {         /* a linked timeout's own result */
+            head++;
+            continue;
+        }
         if (c->userData == 0) {         /* the wake descriptor */
             head++;
             __atomic_store_n(ring.cqHead, head, __ATOMIC_RELEASE);
@@ -1283,6 +1293,25 @@ static void ringReap(void) {
 static bool useRing(void) {
     ensurePoller();
     return ring.fd >= 0;
+}
+
+/* An operation with a linked timeout: -ECANCELED when the time ran out. */
+static int ringOpUntil(uint8_t opcode, int fd, void *buf, uint32_t len, uint32_t opFlags, int64_t deadline) {
+    if (deadline <= 0) {
+        return ringOp(opcode, fd, buf, len, opFlags);
+    }
+    int64_t left = deadline - nowNs();
+    if (left <= 0) {
+        return -ECANCELED;
+    }
+    struct {
+        int64_t sec, nsec;
+    } ts = {left / 1000000000LL, left % 1000000000LL};
+    ringPushFlags(opcode, fd, buf, len, opFlags, (uint64_t)(uintptr_t)current, 1 << 2, 2);
+    ringPushFlags(15, -1, &ts, 1, 0, 1, 0, 1);
+    waitingIo++;
+    schedule();
+    return current->ioResult;
 }
 #endif
 
@@ -1549,6 +1578,8 @@ void iris_sleep(int64_t ns) {
 }
 
 /* Waits until fd can be read (write = 0) or written (write = 1). */
+static bool waitFdOn(int fd, int write, int64_t deadline);
+
 static void waitFd(int fd, int write) {
 #ifdef __linux__
     if (useRing()) {
@@ -1556,6 +1587,12 @@ static void waitFd(int fd, int write) {
         return;
     }
 #endif
+    waitFdOn(fd, write, 0);
+}
+
+/* epoll and kqueue: the task waits on fd, and as a sleeper when there is a
+   deadline; false when the deadline came first. */
+static bool waitFdOn(int fd, int write, int64_t deadline) {
     ensurePoller();
     if (fd >= fdWaitsCap) {
         int cap = fdWaitsCap ? fdWaitsCap : 256;
@@ -1593,7 +1630,50 @@ static void waitFd(int fd, int write) {
         w->reader = current;
     }
     waitingIo++;
+    if (deadline > 0) {
+        addSleeper(current, deadline);
+    }
     schedule();
+    w = &fdWaits[fd];               /* the table may have grown meanwhile */
+    Task **slot = write ? &w->writer : &w->reader;
+    if (*slot == current) {
+        /* the timer woke it: the descriptor didn't */
+        *slot = NULL;
+        waitingIo--;
+        return false;
+    }
+    if (current->wakeAt) {
+        removeSleeper(current);
+    }
+    return true;
+}
+
+/* Like waitFd, giving up at deadline (ns on the monotonic clock; 0 for
+   never). False when the time ran out. */
+static bool waitFdUntil(int fd, int write, int64_t deadline) {
+    if (deadline <= 0) {
+        waitFd(fd, write);
+        return true;
+    }
+    int64_t left = deadline - nowNs();
+    if (left <= 0) {
+        return false;
+    }
+#ifdef __linux__
+    if (useRing()) {
+        /* POLL_ADD linked to a timeout: the poll ends with -ECANCELED when it fires */
+        struct {
+            int64_t sec, nsec;
+        } ts = {left / 1000000000LL, left % 1000000000LL};
+        ringPushFlags(RING_OP_POLL_ADD, fd, NULL, 0, write ? POLLOUT : POLLIN, (uint64_t)(uintptr_t)current,
+                      1 << 2 /* IOSQE_IO_LINK */, 2);
+        ringPushFlags(15 /* IORING_OP_LINK_TIMEOUT */, -1, &ts, 1, 0, 1, 0, 1);
+        waitingIo++;
+        schedule();
+        return current->ioResult >= 0;
+    }
+#endif
+    return waitFdOn(fd, write, deadline);
 }
 
 /* ---------------------------------------------------------------- channels */
@@ -1885,12 +1965,19 @@ int64_t iris_net_port(int fd) {
     return ntohs(((struct sockaddr_in *)&ss)->sin_port);
 }
 
-int iris_net_accept(int fd, int *err) {
+static int64_t deadlineOf(int64_t timeout) { return timeout > 0 ? nowNs() + timeout : 0; }
+
+int iris_net_accept(int fd, int *err, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
     for (;;) {
 #ifdef __linux__
         int c;
         if (useRing()) {
-            c = ringOp(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC);
+            c = ringOpUntil(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC, deadline);
+            if (c == -ECANCELED) {
+                *err = 3;
+                return -1;
+            }
             if (c < 0) {
                 errno = -c;
                 c = -1;
@@ -1912,7 +1999,10 @@ int iris_net_accept(int fd, int *err) {
             return c;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            waitFd(fd, 0);
+            if (!waitFdUntil(fd, 0, deadline)) {
+                *err = 3;
+                return -1;
+            }
             continue;
         }
         *err = netCode(errno);
@@ -1920,7 +2010,7 @@ int iris_net_accept(int fd, int *err) {
     }
 }
 
-int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err) {
+int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err, int64_t timeout) {
     char *h = cpath(host, hostLen);
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_UNSPEC;
@@ -1948,7 +2038,12 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err) {
             freeaddrinfo(res);
             return -1;
         }
-        waitFd(fd, 1);
+        if (!waitFdUntil(fd, 1, deadlineOf(timeout))) {
+            *err = 3;
+            close(fd);
+            freeaddrinfo(res);
+            return -1;
+        }
         int soerr = 0;
         socklen_t sl = sizeof soerr;
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl);
@@ -1967,13 +2062,17 @@ int iris_net_dial(const char *host, int64_t hostLen, int64_t port, int *err) {
 }
 
 /* bytes read, 0 at the end, -code on an error */
-int64_t iris_net_read(int fd, char *buf, int64_t len) {
+int64_t iris_net_read(int fd, char *buf, int64_t len, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
 #ifdef __linux__
     if (useRing()) {
         for (;;) {
-            int n = ringOp(RING_OP_RECV, fd, buf, len > 0x7fffffff ? 0x7fffffff : (uint32_t)len, 0);
+            int n = ringOpUntil(RING_OP_RECV, fd, buf, len > 0x7fffffff ? 0x7fffffff : (uint32_t)len, 0, deadline);
             if (n >= 0) {
                 return n;
+            }
+            if (n == -ECANCELED) {
+                return -3;
             }
             if (n != -EINTR && n != -EAGAIN) {
                 return -netCode(-n);
@@ -1987,7 +2086,9 @@ int64_t iris_net_read(int fd, char *buf, int64_t len) {
             return n;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            waitFd(fd, 0);
+            if (!waitFdUntil(fd, 0, deadline)) {
+                return -3;
+            }
             continue;
         }
         return -netCode(errno);
@@ -1995,7 +2096,8 @@ int64_t iris_net_read(int fd, char *buf, int64_t len) {
 }
 
 /* 0 when everything was written, a code on an error */
-int iris_net_write(int fd, const char *buf, int64_t len) {
+int iris_net_write(int fd, const char *buf, int64_t len, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
     while (len > 0) {
 #ifdef MSG_NOSIGNAL
         ssize_t n = send(fd, buf, (size_t)len, MSG_NOSIGNAL);
@@ -2008,7 +2110,9 @@ int iris_net_write(int fd, const char *buf, int64_t len) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            waitFd(fd, 1);
+            if (!waitFdUntil(fd, 1, deadline)) {
+                return 3;
+            }
             continue;
         }
         return netCode(errno);
@@ -3271,18 +3375,23 @@ static void *sharedClientCtx(void) {
     return c;
 }
 
-/* Waits for what OpenSSL asked for; false for any other answer. */
-static bool tlsWait(void *ssl, int r) {
+/* Waits for what OpenSSL asked for; false for any other answer. *timedOut
+   says whether the deadline passed. */
+static bool tlsWaitUntil(void *ssl, int r, int64_t deadline, bool *timedOut) {
     int e = ossl.sslGetError(ssl, r);
-    if (e == TLS_WANT_READ) {
-        waitFd(ossl.sslGetFd(ssl), 0);
-        return true;
-    }
-    if (e == TLS_WANT_WRITE) {
-        waitFd(ossl.sslGetFd(ssl), 1);
+    if (e == TLS_WANT_READ || e == TLS_WANT_WRITE) {
+        if (!waitFdUntil(ossl.sslGetFd(ssl), e == TLS_WANT_WRITE, deadline)) {
+            *timedOut = true;
+            return false;
+        }
         return true;
     }
     return false;
+}
+
+static bool tlsWait(void *ssl, int r) {
+    bool t = false;
+    return tlsWaitUntil(ssl, r, 0, &t);
 }
 
 /* The client side of a handshake on a connected socket: the server must
@@ -3363,7 +3472,8 @@ void iris_tls_ctx_free(void *ctx) {
 }
 
 /* The server side of a handshake on an accepted socket. */
-void *iris_tls_accept(void *ctx, int fd) {
+void *iris_tls_accept(void *ctx, int fd, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
     if (!tlsReady()) return NULL;
     void *ssl = ossl.sslNew(ctx);
     if (!ssl) {
@@ -3374,20 +3484,24 @@ void *iris_tls_accept(void *ctx, int fd) {
     for (;;) {
         int r = ossl.sslAccept(ssl);
         if (r == 1) return ssl;
-        if (tlsWait(ssl, r)) continue;
-        tlsSayOpenssl("the TLS handshake failed");
+        bool timedOut = false;
+        if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
+        tlsSayOpenssl(timedOut ? "the TLS handshake timed out" : "the TLS handshake failed");
         ossl.sslFree(ssl);
         return NULL;
     }
 }
 
 /* Bytes read (0 when the other side closed), or minus net's error code. */
-int64_t iris_tls_read(void *ssl, char *buf, int64_t len) {
+int64_t iris_tls_read(void *ssl, char *buf, int64_t len, int64_t timeout) {
     int n = len > 0x40000000 ? 0x40000000 : (int)len;
+    int64_t deadline = deadlineOf(timeout);
     for (;;) {
         int r = ossl.sslRead(ssl, buf, n);
         if (r > 0) return r;
-        if (tlsWait(ssl, r)) continue;
+        bool timedOut = false;
+        if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
+        if (timedOut) return -3;
         int e = ossl.sslGetError(ssl, r);
         if (e == TLS_ZERO_RETURN || (e == TLS_ERROR_SYSCALL && errno == 0)) {
             if (ossl.errClear) ossl.errClear();
@@ -3399,7 +3513,8 @@ int64_t iris_tls_read(void *ssl, char *buf, int64_t len) {
 }
 
 /* 0 when everything was written, else net's error code. */
-int iris_tls_write(void *ssl, const char *data, int64_t len) {
+int iris_tls_write(void *ssl, const char *data, int64_t len, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
     while (len > 0) {
         int n = len > 0x40000000 ? 0x40000000 : (int)len;
         int r = ossl.sslWrite(ssl, data, n);
@@ -3408,7 +3523,9 @@ int iris_tls_write(void *ssl, const char *data, int64_t len) {
             len -= r;
             continue;
         }
-        if (tlsWait(ssl, r)) continue;
+        bool timedOut = false;
+        if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
+        if (timedOut) return 3;
         tlsSayOpenssl("writing over TLS");
         return 7;
     }
@@ -4012,4 +4129,57 @@ int iris_env_load(const EnvTable *t, char *out) {
 
 void iris_json_quote(const char *text, int64_t len, IrisString *out) {
     jsonQuote(out, text, len);
+}
+
+/* ---------------------------------------------------------------- signals
+
+   A signal the program watches is written, as one byte, into a pipe; a
+   task that waits for one waits on the pipe, so the other tasks run. */
+
+#include <signal.h>
+
+static int sigPipe[2] = {-1, -1};
+static int sigLock;
+
+static void onSignal(int sig) {
+    unsigned char b = (unsigned char)sig;
+    ssize_t r = write(sigPipe[1], &b, 1);
+    (void)r;
+}
+
+void iris_signal_watch(int sig) {
+    spinLock(&sigLock);
+    if (sigPipe[0] < 0) {
+        if (pipe(sigPipe) != 0) {
+            spinUnlock(&sigLock);
+            return;
+        }
+        for (int i = 0; i < 2; i++) {
+            fcntl(sigPipe[i], F_SETFL, fcntl(sigPipe[i], F_GETFL, 0) | O_NONBLOCK);
+            fcntl(sigPipe[i], F_SETFD, FD_CLOEXEC);
+        }
+    }
+    spinUnlock(&sigLock);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = onSignal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(sig, &sa, NULL);
+}
+
+/* The next signal that came, by its number. */
+int iris_signal_wait(void) {
+    for (;;) {
+        unsigned char b;
+        ssize_t n = read(sigPipe[0], &b, 1);
+        if (n == 1) return b;
+        waitFd(sigPipe[0], 0);
+    }
+}
+
+/* Ends a connection's reads and writes from another task: whatever waits
+   on it wakes up with the connection closed. */
+void iris_net_shutdown(int fd) {
+    if (fd >= 0) shutdown(fd, SHUT_RDWR);
 }
