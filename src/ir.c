@@ -51,6 +51,8 @@ typedef struct {
     StrBuf allocas;         /* the current function's entry block */
     StrBuf body;            /* the current function's code */
     int tmp, label, strings, vars;
+    int catchDepth;         /* catch blocks the code is in */
+    unsigned msgBufs;       /* the depths whose message buffer is allocated */
     bool terminated;        /* the current block has ended */
     Node *func;
     Loop *loop;
@@ -1905,6 +1907,19 @@ static Val emitCatch(IR *ir, Node *e) {
         Node *var = e->d;
         var->ir = varSlot(ir, &tyErrorValue, var, 0);
         ins(ir, "store i64 %s, ptr %s", err, var->ir);
+        /* the message is copied for the block: errors made while it runs,
+         * even ones caught further down, don't change e.message */
+        int depth = ir->catchDepth;
+        var->ival = 0;
+        if (depth < 16) {
+            if (!(ir->msgBufs & (1u << depth))) {
+                ir->msgBufs |= 1u << depth;
+                sbPrintf(&ir->allocas, "  %%errmsg.%d = alloca [1024 x i8]\n  %%errlen.%d = alloca i64\n", depth, depth);
+            }
+            ins(ir, "call void @iris_error_save(ptr %%errmsg.%d, ptr %%errlen.%d)", depth, depth);
+            var->ival = (uint64_t)depth + 1;
+        }
+        ir->catchDepth++;
         if (e->c->kind == N_MATCH) {
             Val v = emitMatch(ir, e->c, value);
             if (value && !ir->terminated) {
@@ -1915,6 +1930,7 @@ static Val emitCatch(IR *ir, Node *e) {
         } else {
             emitBlock(ir, e->c);
         }
+        ir->catchDepth--;
     }
     br(ir, end);
     placeLabel(ir, end);
@@ -1922,6 +1938,12 @@ static Val emitCatch(IR *ir, Node *e) {
         return val("", &tyVoid);
     }
     return load(ir, slot, t);
+}
+
+/* The catch variable an expression names, when its message was copied. */
+static int savedMessage(Node *e) {
+    if (e->kind != N_IDENT || !e->ref || !e->ref->ival || e->ref->type != &tyErrorValue) return 0;
+    return (int)e->ref->ival;
 }
 
 static Val emitSlice(IR *ir, Node *e) {
@@ -2129,6 +2151,12 @@ static Val emitExpr(IR *ir, Node *e) {
             Val err = emitExpr(ir, e->a);
             if (strcmp(e->name, "code") == 0) {
                 return val(err.s, &tyErrCode);
+            }
+            int saved = savedMessage(e->a);
+            if (saved) {
+                const char *n = tmp(ir);
+                ins(ir, "%s = load i64, ptr %%errlen.%d", n, saved - 1);
+                return makeSlice(ir, fmt(ir, "%%errmsg.%d", saved - 1), n, &tyStr);
             }
             const char *p = tmp(ir), *n = tmp(ir);
             ins(ir, "%s = call ptr @iris_error_message_ptr()", p);
@@ -2806,6 +2834,11 @@ static void emitStmtInner(IR *ir, Node *s) {
                 return;
             }
             if (s->a->type->kind == TY_ERRVAL) {
+                int saved = savedMessage(s->a);
+                if (saved) {
+                    /* its own message again, whatever came after it */
+                    ins(ir, "call void @iris_error_restore(ptr %%errmsg.%d, ptr %%errlen.%d)", saved - 1, saved - 1);
+                }
                 if (!(s->a->kind == N_CALL && s->a->builtin == BI_ERROR)) {
                     traceAdd(ir, s);    /* passing on an error it caught */
                 }
@@ -2872,6 +2905,8 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->tmp = 0;
     ir->label = 0;
     ir->vars = 0;
+    ir->catchDepth = 0;
+    ir->msgBufs = 0;
     ir->terminated = false;
     ir->allocas = (StrBuf){0};
     ir->body = (StrBuf){0};
@@ -3258,6 +3293,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i64 @iris_error_finish(i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_trace_add(ptr, i32, i32, ptr)\n"
            "declare ptr @iris_error_message_ptr()\n"
+           "declare void @iris_error_save(ptr, ptr)\n"
+           "declare void @iris_error_restore(ptr, ptr)\n"
            "declare i64 @iris_error_message_len()\n"
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"

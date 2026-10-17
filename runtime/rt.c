@@ -348,6 +348,18 @@ int64_t iris_error_finish(int64_t code, const char *file, int line, int col, con
 
 void iris_trace_add(const char *file, int line, int col, const char *fn) { addFrame(file, line, col, fn); }
 
+/* A catch block's own copy of the message, and putting it back when the
+ * block returns the error. */
+void iris_error_save(char *buf, int64_t *len) {
+    memcpy(buf, msgCur, msgCurLen);
+    *len = (int64_t)msgCurLen;
+}
+
+void iris_error_restore(const char *buf, const int64_t *len) {
+    memcpy(msgCur, buf, (size_t)*len);
+    msgCurLen = (size_t)*len;
+}
+
 const char *iris_error_message_ptr(void) { return msgCur; }
 
 int64_t iris_error_message_len(void) { return (int64_t)msgCurLen; }
