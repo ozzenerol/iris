@@ -2,7 +2,7 @@
 // opens one. Calls wait for the database on the calling thread; a Db can be
 // shared by threads.
 
-pub enum SqlError { failed, busy, constraint }
+pub enum SqlError { failed, busy, constraint, noRows }
 
 // A value for a ? in SQL: .int(36), .float(1.5), .text("ada") or .none for
 // NULL.
@@ -228,4 +228,40 @@ pub !void scan[T](Rows *rows, T *out) {
     if rawScan(rows.stmt, tableOf(out), out) != 0 {
         return error(SqlError.failed, "{message()}")
     }
+}
+
+// Every row of a query, as @json structs: sqlite.all(User, &db, "SELECT ...").
+// The values' Strings are the caller's to free.
+pub !List[T] all[T](Db *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
+    List[T] out
+    for {
+        more := rows.next() catch e {
+            out.free()
+            return e
+        }
+        if !more {
+            return out
+        }
+        T v
+        scan(&rows, &v) catch e {
+            out.free()
+            return e
+        }
+        out.push(v)
+    }
+}
+
+// The first row of a query, as a @json struct. A query with no rows fails
+// with SqlError.noRows.
+pub !T one[T](Db *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
+    if !(try rows.next()) {
+        return error(SqlError.noRows, "the query has no rows")
+    }
+    T v
+    try scan(&rows, &v)
+    return v
 }

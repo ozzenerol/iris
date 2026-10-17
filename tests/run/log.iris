@@ -1,0 +1,14 @@
+// stderr: INFO listening on 8080
+// stderr: ERROR disk full
+// stderr: "level": "warn", "message": "say \"hi\""}
+// exit: 0
+
+import log
+
+void main() {
+    log.info("listening on {8080}")
+    log.debug("left out")
+    log.error("disk full")
+    log.useJson()
+    log.warn("say \"hi\"")
+}

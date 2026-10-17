@@ -1,0 +1,31 @@
+// expect: 2 ada zoe
+// expect: zoe 41
+// expect: SqlError.noRows
+
+import sqlite
+
+@json
+struct User {
+    i64 id
+    String name
+    i64 age
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    try db.exec("INSERT INTO users (name, age) VALUES ('ada', 36), ('zoe', 41)")
+    users := try sqlite.all[User](&db, "SELECT * FROM users ORDER BY name")
+    print("{users.len} {users.at(0).name} {users.at(1).name}")
+    for u in users {
+        u.free()
+    }
+    users.free()
+    scoped User z = try sqlite.one[User](&db, "SELECT * FROM users WHERE age > ?", [.int(40)])
+    print("{z.name} {z.age}")
+    _ = sqlite.one[User](&db, "SELECT * FROM users WHERE age > 100") catch e {
+        print("{e.code}")
+        User{}
+    }
+}
