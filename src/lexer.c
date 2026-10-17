@@ -121,7 +121,7 @@ static const struct {
     const char *s;
     TokKind kind;
 } puncts[] = {
-    {"<<=", P_SHL_ASSIGN}, {">>=", P_SHR_ASSIGN},
+    {"<<=", P_SHL_ASSIGN}, {">>=", P_SHR_ASSIGN}, {"...", P_ELLIPSIS},
     {"..", P_DOTDOT}, {":=", P_DEFINE}, {"==", P_EQ}, {"!=", P_NE},
     {"<=", P_LE}, {">=", P_GE}, {"<<", P_SHL}, {">>", P_SHR},
     {"+=", P_PLUS_ASSIGN}, {"-=", P_MINUS_ASSIGN}, {"*=", P_STAR_ASSIGN},

@@ -3231,8 +3231,20 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
     bool named = false;
     int before = gErrors;
     int pos = first;
+    /* a T... parameter: the arguments left over go into an array literal,
+     * which becomes the T[]; by name it takes a slice as it is */
+    int restAt = np > first && (fn->list.items[np - 1]->flags & F_REST) ? np - 1 : -1;
+    Node *rest = NULL;
     for (int i = 0; i < given->len; i++) {
         Node *arg = given->items[i];
+        if (arg->kind != N_NAMED_ARG && !named && pos == restAt) {
+            if (!rest) {
+                rest = like(c, N_ARRAY_LIT, arg);
+                args[pos] = rest;
+            }
+            listPush(c->arena, &rest->list, arg);
+            continue;
+        }
         if (arg->kind == N_NAMED_ARG) {
             named = true;
             int k = -1;
@@ -3267,6 +3279,9 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
         }
         args[pos++] = arg;
     }
+    if (restAt >= 0 && !args[restAt]) {
+        args[restAt] = like(c, N_ARRAY_LIT, e);     /* nothing left over: an empty slice */
+    }
     for (int j = first; j < np; j++) {
         Node *param = fn->list.items[j];
         if (!args[j]) {
@@ -3281,7 +3296,24 @@ static void checkArgs(Checker *c, Node *e, Node *fn, NodeList *given, int first,
         } else if (!checked && checkTempText(c, &args[j], param->type)) {
             /* built when the call is made */
         } else {
-            if (!checked) {
+            if (j == restAt && args[j] == rest) {
+                /* each value left over is an argument for the T... */
+                Type *elem = param->type->elem;
+                char what[96];
+                snprintf(what, sizeof what, "an argument for %s", param->name);
+                for (int k = 0; k < rest->list.len; k++) {
+                    Node **slot = &rest->list.items[k];
+                    if (!checked && checkTempText(c, slot, elem)) {
+                        continue;
+                    }
+                    if (!checked) {
+                        checkExpr(c, slot, elem);
+                    }
+                    coerce(c, slot, elem, what);
+                    markTempString(slot, elem);
+                }
+                setType(rest, arrayOf(elem, rest->list.len));
+            } else if (!checked || (j == restAt && args[j]->kind == N_ARRAY_LIT && !args[j]->list.len)) {
                 checkExpr(c, &args[j], param->type);
             }
             char what[96];
@@ -3692,8 +3724,13 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
                 }
                 if (param) infer(param->a, arg->a->type, &d->list2, args);
             } else if (pos < d->list.len) {
-                param = d->list.items[pos++];
-                infer(param->a, arg->type, &d->list2, args);
+                param = d->list.items[pos];
+                if (param->flags & F_REST) {
+                    infer(param->a->a, arg->type, &d->list2, args);     /* T... takes each one as a T */
+                } else {
+                    pos++;
+                    infer(param->a, arg->type, &d->list2, args);
+                }
             }
         }
         for (int i = 0; i < n; i++) {

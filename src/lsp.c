@@ -623,7 +623,12 @@ static void signature(StrBuf *b, Node *d) {
         for (int i = first; i < d->list.len; i++) {
             Node *p = d->list.items[i];
             if (i > first) sbPuts(b, ", ");
-            putTypeName(b, p->type);
+            if ((p->flags & F_REST) && p->type && p->type->kind == TY_SLICE) {
+                putTypeName(b, p->type->elem);
+                sbPuts(b, "...");
+            } else {
+                putTypeName(b, p->type);
+            }
             sbPrintf(b, " %s", p->name);
         }
         sbPutc(b, ')');

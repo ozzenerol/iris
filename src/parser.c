@@ -1501,10 +1501,24 @@ static void parseParams(Parser *p, NodeList *out) {
             if (!type) {
                 fail(p, peek(p), "expected a parameter type, found %s", describe(p, peek(p)));
             }
+            Token *dots = peek(p);
+            bool rest = accept(p, P_ELLIPSIS);
+            if (rest) {
+                /* T... name: the arguments left over, as a T[] */
+                Node *sl = node(p, N_T_SLICE, dots);
+                sl->a = type;
+                type = sl;
+            }
             t = expectIdent(p, "a parameter name");
             param = node(p, N_PARAM, t);
             param->a = type;
-            prevType = type;
+            if (rest) {
+                param->flags |= F_REST;
+                if (!at(p, P_RPAREN)) {
+                    fail(p, peek(p), "a '...' parameter takes the arguments left over, so it comes last and has no default");
+                }
+            }
+            prevType = rest ? NULL : type;
         }
         param->name = tokText(p, t);
         if (accept(p, P_ASSIGN)) {

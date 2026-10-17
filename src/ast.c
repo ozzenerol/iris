@@ -200,7 +200,7 @@ static void printNode(Node *n, int depth, const char *label) {
         line(depth, label, b.buf);
         break;
     case N_PARAM:
-        sbPrintf(&b, "param %s %s", n->name, typeString(&tmp, n->a));
+        sbPrintf(&b, "param %s %s%s", n->name, typeString(&tmp, n->a), n->flags & F_REST ? " rest" : "");
         line(depth, label, b.buf);
         child(n->b, d, "default");
         break;

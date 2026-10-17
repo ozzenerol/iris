@@ -1,0 +1,7 @@
+// error: 6: xs is given twice
+
+i64 f(i64... xs) => xs.len
+
+void main() {
+    _ = f(1, xs: [2])
+}

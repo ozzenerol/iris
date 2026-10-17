@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.38.0"
+#define IRIS_VERSION "0.39.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -75,7 +75,7 @@ void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
     X(K_TRUE, "true") X(K_FALSE, "false") X(K_NULL, "null")                \
     X(P_LPAREN, "(") X(P_RPAREN, ")") X(P_LBRACK, "[") X(P_RBRACK, "]")    \
     X(P_LBRACE, "{") X(P_RBRACE, "}") X(P_COMMA, ",") X(P_DOT, ".")        \
-    X(P_DOTDOT, "..") X(P_COLON, ":") X(P_DEFINE, ":=") X(P_ASSIGN, "=")   \
+    X(P_DOTDOT, "..") X(P_ELLIPSIS, "...") X(P_COLON, ":") X(P_DEFINE, ":=") X(P_ASSIGN, "=")   \
     X(P_EQ, "==") X(P_NE, "!=") X(P_LT, "<") X(P_LE, "<=") X(P_GT, ">")    \
     X(P_GE, ">=") X(P_SHL, "<<") X(P_SHR, ">>") X(P_SHL_ASSIGN, "<<=")     \
     X(P_SHR_ASSIGN, ">>=") X(P_PLUS, "+") X(P_PLUS_ASSIGN, "+=")           \
@@ -160,6 +160,7 @@ enum {
     F_ENV = 1 << 25,        /* a struct with @env */
     F_LAZY = 1 << 26,       /* a generic struct's method for one instance, not checked until it is used */
     F_CLI = 1 << 27,        /* a struct with @flags */
+    F_REST = 1 << 28,       /* a T... parameter: the arguments left over, as a T[] */
 };
 
 typedef struct Node Node;

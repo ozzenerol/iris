@@ -112,8 +112,12 @@ static bool spaceBetween(const Token *toks, int prev, int i, bool inBrackets) {
     TokKind pk = a->kind, k = b->kind;
     bool written = hadSpace(a, b);
 
-    if (k == P_COMMA || k == P_RPAREN || k == P_RBRACK || k == P_COLON || (k == P_DOT && endsOperand(pk))) {
-        return false;
+    if (k == P_COMMA || k == P_RPAREN || k == P_RBRACK || k == P_COLON || (k == P_DOT && endsOperand(pk)) ||
+        k == P_ELLIPSIS) {
+        return false;                           /* i64... xs */
+    }
+    if (pk == P_ELLIPSIS) {
+        return true;
     }
     if (k == P_DOT) {
         /* .read, .{x: 1}: a value of a type worked out from the context */

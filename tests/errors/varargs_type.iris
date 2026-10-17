@@ -1,0 +1,7 @@
+// error: 6: an argument for xs is str, but i64 is needed
+
+i64 f(i64... xs) => xs.len
+
+void main() {
+    _ = f(1, "a")
+}

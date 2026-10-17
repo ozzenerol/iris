@@ -1,0 +1,70 @@
+// expect: 0 1 6
+// expect: 15
+// expect: - a
+// expect: - b
+// expect: 3
+// expect: 7 p
+// expect: 15
+// expect: 3 -1
+// expect: true
+// expect: plain
+// expect: n is 4
+// expect: n5
+
+i64 sum(i64... xs) {
+    total := 0
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+void say(str prefix, str... words) {
+    for w in words {
+        print("{prefix}{w}")
+    }
+}
+
+struct Bag {
+    i64 n
+}
+
+void Bag.add(i64... xs) {
+    for x in xs {
+        self.n += x
+    }
+}
+
+T first[T](T... xs) => xs[0]
+
+enum E { none }
+
+!i64 checked(i64... xs) {
+    return error(E.none) if xs.len == 0
+    return sum(xs: xs)
+}
+
+String name(i64 n) => format("n{n}")
+
+void main() {
+    print("{sum()} {sum(1)} {sum(1, 2, 3)}")
+    nums := [4, 5, 6]
+    // by name, the parameter takes a slice as it is
+    print("{sum(xs: nums[:])}")
+    say("- ", "a", "b")
+    say("x")
+    b := Bag{}
+    b.add(1, 2)
+    b.add()
+    print("{b.n}")
+    print("{first(7, 8)} {first("p", "q")}")
+    // as a value, the function takes the slice
+    i64(i64[]) f = sum
+    print("{f(nums[:])}")
+    v := checked(1, 2) catch -1
+    w := checked() catch -1
+    print("{v} {w}")
+    print("{sum(1, 2, 3) == 6 and not (sum() > 0)}")
+    n := 4
+    say("", "plain", "n is {n}", name(5))
+}

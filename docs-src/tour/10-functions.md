@@ -174,6 +174,43 @@ localhost:80 timeout 30s tls false
 
 Named arguments come after the ones given by position, in any order among themselves. A parameter is given once, by position or by name.
 
+## Any number of arguments
+
+A last parameter written `T... name` takes the arguments left over, any number of them, and the function sees them as a slice, `T[]`. A slice the caller already has is given by the parameter's name:
+
+```iris run
+i64 sum(i64... xs) {
+    total := 0
+    for x in xs {
+        total += x
+    }
+    return total
+}
+
+void log(str level, str... parts) {
+    for p in parts {
+        print("{level}: {p}")
+    }
+}
+
+void main() {
+    print("{sum()} {sum(4)} {sum(1, 2, 3)}")
+    nums := [10, 20]
+    print("{sum(xs: nums[:])}")
+    n := 7
+    log("info", "starting", "n is {n}")
+}
+```
+
+```output
+0 4 6
+30
+info: starting
+info: n is 7
+```
+
+The values are put in an array for the call, so nothing is allocated. A `...` parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, `sum` is an `i64(i64[])`: a call through it gives the slice.
+
 ## Several values
 
 A function can give several values. Its return type lists their types in parentheses, and `return` gives them separated by commas, also in parentheses:
