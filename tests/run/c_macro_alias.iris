@@ -1,0 +1,17 @@
+// expect: 1: 192 168 1 10
+// expect: 192.168.1.10
+// A macro defined as another macro comes through: on Linux AF_INET is
+// #define AF_INET PF_INET.
+
+import c "arpa/inet.h", c "string.h"
+
+void main() {
+    u8[4] addr
+    ok := c.inet_pton(c.AF_INET, "192.168.1.10\0".ptr, &addr[0])
+    print("{ok}: {addr[0]} {addr[1]} {addr[2]} {addr[3]}")
+    u8[16] text
+    p := c.inet_ntop(c.AF_INET, &addr[0], &text[0], 16)
+    if p != null {
+        print("{text[0:c.strlen(&text[0])]}")
+    }
+}

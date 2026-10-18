@@ -710,8 +710,33 @@ static bool predefinedName(const char *pre, const char *name) {
     return strstr(pre, key) != NULL;
 }
 
-/* #define NAME 42, (-1), 0x10u, "text": constants. pre holds the macros
- * clang defines by itself (linux, unix ...), which are left out. */
+/* The value of #define name in the macros text, into out; false when
+ * there is no such macro. */
+static bool macroValue(const char *text, const char *name, char *out, size_t size) {
+    char key[600];
+    snprintf(key, sizeof key, "#define %s ", name);
+    size_t kl = strlen(key);
+    for (const char *p = text; (p = strstr(p, key)) != NULL; p += kl) {
+        if (p != text && p[-1] != '\n') continue;
+        const char *v = p + kl;
+        const char *nl = strchr(v, '\n');
+        snprintf(out, size, "%.*s", (int)(nl ? nl - v : (long)strlen(v)), v);
+        return true;
+    }
+    return false;
+}
+
+static bool isIdent(const char *s) {
+    if (!isalpha((unsigned char)*s) && *s != '_') return false;
+    for (; *s; s++) {
+        if (!isalnum((unsigned char)*s) && *s != '_') return false;
+    }
+    return true;
+}
+
+/* #define NAME 42, (-1), 0x10u, "text": constants, and a name defined as
+ * another such macro (#define AF_INET PF_INET). pre holds the macros clang
+ * defines by itself (linux, unix ...), which are left out. */
 static void genMacros(Gen *g, const char *text, const char *pre) {
     for (const char *line = text; line && *line;) {
         const char *nl = strchr(line, '\n');
@@ -739,12 +764,18 @@ static void genMacros(Gen *g, const char *text, const char *pre) {
             }
             continue;
         }
-        /* strip parentheses around the value */
-        size_t vl = strlen(v);
-        while (vl >= 2 && v[0] == '(' && v[vl - 1] == ')') {
-            v[vl - 1] = 0;
-            v++;
-            vl -= 2;
+        /* strip parentheses around the value, and follow a value that names
+           another macro, a few steps at most */
+        char alias[512];
+        for (int step = 0;; step++) {
+            size_t vl = strlen(v);
+            while (vl >= 2 && v[0] == '(' && v[vl - 1] == ')') {
+                v[vl - 1] = 0;
+                v++;
+                vl -= 2;
+            }
+            if (step == 8 || !isIdent(v) || !macroValue(text, v, alias, sizeof alias)) break;
+            v = alias;
         }
         bool neg = false;
         if (*v == '-') {
