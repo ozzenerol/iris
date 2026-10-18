@@ -471,6 +471,16 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     }
     loadImports(&L, m);
     m->state = 2;
+    /* str: its functions are methods of text, s.startsWith("/api") */
+    Node *textItem = newNode(a, N_IDENT, 0, 0);
+    textItem->name = "str";
+    L.prog->textImplicit = !findModule(&L, "str");
+    Module *text = loadModule(&L, textItem);
+    if (text) {
+        loadImports(&L, text);
+        text->state = 2;
+        L.prog->text = text;
+    }
     return L.failed && !gLenient ? NULL : L.prog;
 }
 

@@ -263,6 +263,8 @@ typedef struct {
     int nlinks;
     NodeList tests;         /* iris test: the functions the test blocks became */
     Module *core;           /* std/core: its names are seen by every module */
+    Module *text;           /* std/str: its functions are also methods of str and String */
+    bool textImplicit;      /* ... loaded only for that: only what is called is compiled */
 } Program;
 
 /* iris test: test blocks are compiled, and main runs them */
@@ -348,6 +350,7 @@ int64_t typeSizeOf(Type *t);
 int64_t fieldOffset(Type *t, int index);
 bool isJsonStruct(Type *t);
 bool isJsonList(Type *t);
+Node *textMethod(Program *prog, const char *name);
 
 /* What a call does when it isn't a call to a user function. */
 enum {

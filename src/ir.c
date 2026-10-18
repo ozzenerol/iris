@@ -3141,6 +3141,47 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
     }
 }
 
+static bool inList(NodeList *l, Node *n) {
+    for (int i = 0; i < l->len; i++) {
+        if (l->items[i] == n) return true;
+    }
+    return false;
+}
+
+/* Whether d is one of m's declarations. */
+static bool inModule(Module *m, Node *d) {
+    for (int f = 0; f < m->files.len; f++) {
+        if (inList(&m->files.items[f]->list, d)) return true;
+    }
+    return false;
+}
+
+/* Adds the functions of m that the tree n names to used. */
+static void namedIn(Arena *a, Module *m, Node *n, NodeList *used) {
+    if (!n) return;
+    if (n->ref && n->ref->kind == N_FUNC && !inList(used, n->ref) && inModule(m, n->ref)) {
+        listPush(a, used, n->ref);
+    }
+    namedIn(a, m, n->a, used);
+    namedIn(a, m, n->b, used);
+    namedIn(a, m, n->c, used);
+    namedIn(a, m, n->d, used);
+    for (int i = 0; i < n->list.len; i++) namedIn(a, m, n->list.items[i], used);
+    for (int i = 0; i < n->list2.len; i++) namedIn(a, m, n->list2.items[i], used);
+}
+
+/* The functions of std/str, loaded only for the methods of text, that the
+ * program calls, and those they call in turn. */
+static void usedText(Arena *a, Module *text, NodeList *all, NodeList *used) {
+    for (int i = 0; i < all->len; i++) {
+        Node *d = all->items[i];
+        if (!inModule(text, d)) namedIn(a, text, d, used);
+    }
+    for (int i = 0; i < used->len; i++) {
+        namedIn(a, text, used->items[i], used);
+    }
+}
+
 char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     IR ir = {0};
     ir.arena = a;
@@ -3258,9 +3299,16 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                      constValue(&ir, d->b, id->type));
         }
     }
+    NodeList textUsed = {0};
+    if (prog->text && prog->textImplicit) {
+        usedText(a, prog->text, &all, &textUsed);
+    }
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
         if (d->kind == N_FUNC && !(d->flags & (F_EXTERN | F_INTRINSIC))) {
+            if (prog->text && prog->textImplicit && inModule(prog->text, d) && !inList(&textUsed, d)) {
+                continue;               /* str wasn't imported and nothing calls this */
+            }
             emitFunction(&ir, d, &funcs);
         }
     }

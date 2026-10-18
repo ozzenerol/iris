@@ -1,6 +1,6 @@
 # Text
 
-Iris has two types for text. A `str` looks at text that is stored somewhere else; a `String` owns its text and can grow. This chapter covers both, the ways to write text in the program, and the functions that work on it.
+Iris has two types for text. A `str` looks at text that is stored somewhere else; a `String` owns its text and can grow. This chapter covers both, the ways to write text in the program, and the methods that work on it.
 
 ## str
 
@@ -34,15 +34,13 @@ void main() {
 [GET] [/index.html] [HTTP/1.1] [GET] []
 ```
 
-`==` and `!=` compare the bytes of two strings. `str.compare` puts them in order, giving a number below zero, zero or above zero:
+`==` and `!=` compare the bytes of two strings. `compare` puts them in order, giving a number below zero, zero or above zero:
 
 ```iris run
-import str
-
 void main() {
     method := "POST"
     print("{method == "POST"} {method != "GET"}")
-    print("{str.compare("api.lan", "db.lan")} {str.compare("web2", "web1")} {str.compare("x", "x")}")
+    print("{"api.lan".compare("db.lan")} {"web2".compare("web1")} {"x".compare("x")}")
 }
 ```
 
@@ -113,12 +111,10 @@ void main() {
 A `String` can be given wherever a `str` is wanted: to a function, to `==`, to slicing. The `str` points into the `String`'s bytes, so it is valid while the `String` is alive and doesn't grow.
 
 ```iris run
-import str
-
 void main() {
     scoped String url = "https://api.example.com/v1".copy()
     str scheme = url[0:5]
-    print("{scheme} {str.contains(url, "example")} {url == "https://api.example.com/v1"}")
+    print("{scheme} {url.contains("example")} {url == "https://api.example.com/v1"}")
 }
 ```
 
@@ -126,7 +122,7 @@ void main() {
 https true true
 ```
 
-A function that gives back a `String` gives the caller a new one to free. `str.upper`, `str.replace` and `format` are such functions.
+A function that gives back a `String` gives the caller a new one to free. `upper`, `replace` and `format` are such functions.
 
 ## Writing text in the program
 
@@ -202,21 +198,19 @@ void main() {
 {"host": "10.0.0.5", "ports": [22, 443]}
 ```
 
-## The str module
+## Methods of text
 
-The `str` module has the functions that look at text and make new text. Those that give a `str` give part of the text they were given, so nothing is copied:
+A `str` and a `String` have methods that look at the text and make new text. Those that give a `str` give part of the text they were given, so nothing is copied:
 
 ```iris run
-import str
-
 void main() {
     raw := "  Content-Type: text/html  "
-    h := str.trim(raw)
-    print("[{h}] [{str.trimLeft(raw)}] [{str.trimRight(raw)}]")
-    name, value, found := str.cut(h, ": ")
+    h := raw.trim()
+    print("[{h}] [{raw.trimLeft()}] [{raw.trimRight()}]")
+    name, value, found := h.cut(": ")
     print("{name} -> {value} ({found})")
-    print("{str.find(h, ":")} {str.findLast("/api/v1/users", "/")} {str.contains(h, "html")}")
-    print("{str.startsWith(h, "Content-")} {str.endsWith(h, "/html")} {str.count("10.0.0.1", ".")}")
+    print("{h.find(":")} {"/api/v1/users".findLast("/")} {h.contains("html")}")
+    print("{h.startsWith("Content-")} {h.endsWith("/html")} {"10.0.0.1".count(".")}")
 }
 ```
 
@@ -227,15 +221,17 @@ Content-Type -> text/html (true)
 true true 3
 ```
 
-`split` cuts text at each separator and `fields` at each run of spaces, tabs and newlines. Both give a `List` of `str`s that point into the text. `join` puts parts together:
+The methods are the functions of the `str` module, with the text as the first argument: `h.trim()` is `str.trim(h)`. They need no import. The module's functions, called as `str.trim(h)`, need `import str`, and so does `str.join`, which takes a slice of parts.
+
+`split` cuts text at each separator and `fields` at each run of spaces, tabs and newlines. Both give a `List` of `str`s that point into the text. `str.join` puts parts together:
 
 ```iris run
 import str
 
 void main() {
-    scoped parts := str.split("GET,/health,,200", ",")
+    scoped parts := "GET,/health,,200".split(",")
     print("{parts.len} parts, the third is [{parts.at(2)}]")
-    scoped cols := str.fields("tcp   0  0 0.0.0.0:22\tLISTEN\n")
+    scoped cols := "tcp   0  0 0.0.0.0:22\tLISTEN\n".fields()
     scoped String joined = str.join(cols.items(), " | ")
     print(joined)
 }
@@ -246,16 +242,14 @@ void main() {
 tcp | 0 | 0 | 0.0.0.0:22 | LISTEN
 ```
 
-The functions that change text give a new `String`:
+The methods that change text give a new `String`:
 
 ```iris run
-import str
-
 void main() {
-    scoped String a = str.upper("get")
-    scoped String b = str.lower("Content-Length")
-    scoped String c = str.replace("/api/v1/users/v1", "v1", "v2")
-    scoped String d = str.repeat("-", 12)
+    scoped String a = "get".upper()
+    scoped String b = "Content-Length".lower()
+    scoped String c = "/api/v1/users/v1".replace("v1", "v2")
+    scoped String d = "-".repeat(12)
     print("{a} {b} {c}")
     print(d)
 }
@@ -270,18 +264,16 @@ GET content-length /api/v2/users/v2
 
 ## Reading numbers from text
 
-`str.parseInt` and `str.parseFloat` read a number and give an error when the text isn't one (errors are covered in [Errors](18-errors.html)):
+`parseInt` and `parseFloat` read a number and give an error when the text isn't one (errors are covered in [Errors](18-errors.html)):
 
 ```iris run
-import str
-
 void main() {
-    port := str.parseInt("8080") catch 0
-    loss := str.parseFloat("0.25") catch 0.0
-    bad := str.parseInt("80a") catch -1
+    port := "8080".parseInt() catch 0
+    loss := "0.25".parseFloat() catch 0.0
+    bad := "80a".parseInt() catch -1
     print("{port} {loss} {bad}")
 
-    _ = str.parseInt("") catch e {
+    _ = "".parseInt() catch e {
         print("{e.code}: {e.message}")
         0
     }

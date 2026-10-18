@@ -1,0 +1,35 @@
+// expect: true true true 11 -1
+// expect: [Billing] true 2
+// expect: /API/USERS/7.JSON /api/v2
+// expect: /api/users .json true
+// expect: 3 [b]
+// expect: 42 -1 0.5
+// expect: true false
+
+// No import str: the methods are there without it.
+
+@json
+struct Svc {
+    String name
+}
+
+i64 port(str text) => text.parseInt() catch -1
+
+void main() {
+    path := "/api/users/7.json"
+    print("{path.startsWith("/api")} {path.endsWith(".json")} {path.contains("users")} {path.find("7")} {path.find("x")}")
+    scoped String name = "  Billing  ".copy()
+    print("[{name.trim()}] {name.endsWith("  ")} {name.count("  ")}")
+    scoped String up = path.upper()
+    scoped String v2 = "/api/v1".replace("v1", "v2")
+    print("{up} {v2}")
+    dir, file, ok := path.cut("/7")
+    print("{dir} {file} {ok}")
+    scoped parts := "a,b,c".split(",")
+    print("{parts.len} [{parts.at(1)}]")
+    f := "0.5".parseFloat() catch 0.0
+    print("{port("42")} {port("x")} {f}")
+    s := Svc{name: "billing-eu".copy()}
+    print("{s.name.startsWith("billing")} {s.name[0:3].endsWith("x")}")
+    s.name.free()
+}

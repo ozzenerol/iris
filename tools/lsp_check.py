@@ -114,10 +114,16 @@ def main():
     comp = c.request("textDocument/completion", {"textDocument": td, "position": {"line": 13, "character": 9}})
     labels = [x["label"] for x in (comp and comp["result"]) or []]
     check("completion after json.: %r" % labels, {"encode", "decode", "JsonError"} <= set(labels))
+    text4 = SOURCE.replace('    print("{p.sum()}")', '    path := "/api/users"\n    path.\n    print("{p.sum()}")')
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": 4}, "contentChanges": [{"text": text4}]})
+    c.read()
+    comp = c.request("textDocument/completion", {"textDocument": td, "position": {"line": 14, "character": 9}})
+    labels = [x["label"] for x in (comp and comp["result"]) or []]
+    check("completion after a str's name: %r" % labels, {"len", "copy", "startsWith", "endsWith", "trim"} <= set(labels))
 
     # completion of any name while a line is half typed: locals in scope, the
     # module's names, imports, built-ins; and module names in an import line
-    version = [3]
+    version = [4]
 
     def complete(text):
         """the labels offered at the | in text"""

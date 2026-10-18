@@ -133,6 +133,7 @@ typedef struct {
     int instGen;            /* how many instances deep the body being checked is */
     NodeList genericMethods;
     NodeList exports;       /* @export functions, to catch two with one name */
+    Program *prog;
 } Checker;
 
 typedef struct Instance Instance;
@@ -3613,6 +3614,24 @@ static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
     return setType(e, &tyError);
 }
 
+/* The function of std/str that s.name(...) calls on a str or String: a
+ * pub one whose first parameter is the text, or NULL. */
+Node *textMethod(Program *prog, const char *name) {
+    Module *m = prog ? prog->text : NULL;
+    for (int f = 0; m && f < m->files.len; f++) {
+        Node *file = m->files.items[f];
+        for (int i = 0; i < file->list.len; i++) {
+            Node *d = file->list.items[i];
+            if (d->kind != N_FUNC || !(d->flags & F_PUB) || (d->flags & (F_INTRINSIC | F_EXTERN)) || d->b ||
+                !d->name || strcmp(d->name, name) != 0) {
+                continue;
+            }
+            if (d->list.len && d->list.items[0]->type && isStr(d->list.items[0]->type)) return d;
+        }
+    }
+    return NULL;
+}
+
 /* A method call: v.m(...). The receiver becomes the first argument, as a
  * pointer. */
 static Type *checkMethodCall(Checker *c, Node *e) {
@@ -3638,6 +3657,22 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         }
         e->builtin = BI_STR_COPY;
         return setType(e, &tyString);
+    }
+    if (isStr(t) || t->kind == TY_STRING) {
+        /* the functions of std/str, as methods: s.startsWith("/api") is str.startsWith(s, "/api") */
+        Node *fn = strcmp(name, "append") && strcmp(name, "free") ? textMethod(c->prog, name) : NULL;
+        if (fn) {
+            if (t->kind == TY_STRING) {
+                coerce(c, &callee->a, &tyStr, "the text");
+            }
+            NodeList args = {0};
+            listPush(c->arena, &args, callee->a);
+            checkArgs(c, e, fn, &e->list, 1, &args, false);
+            e->list = args;
+            e->ref = fn;
+            callee->ref = fn;
+            return setType(e, fn->type);
+        }
     }
     if (t->kind == TY_STRING || (t->kind == TY_PTR && t->elem->kind == TY_STRING)) {
         if (strcmp(name, "append") == 0 || strcmp(name, "free") == 0) {
@@ -5928,6 +5963,7 @@ bool checkProgram(Arena *a, Program *prog) {
     c.arena = a;
     gArena = a;
     gChecker = &c;     /* cleared before it returns */
+    c.prog = prog;
     gTypes = NULL;
     c.instOut = &prog->instances;
     int before = gErrors;

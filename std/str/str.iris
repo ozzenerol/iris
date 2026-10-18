@@ -1,5 +1,6 @@
 // Working with text: searching, trimming, splitting, changing case and
-// reading numbers.
+// reading numbers. A function whose first parameter is the text is also a
+// method of str and String, with no import: s.trim() is str.trim(s).
 
 // What parseInt and parseFloat fail with: empty for empty text, notNumber for
 // text that isn't a number, tooBig for a number that doesn't fit.

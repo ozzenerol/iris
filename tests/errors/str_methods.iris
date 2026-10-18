@@ -1,0 +1,12 @@
+// error: 8: str has no method nope
+// error: 9: str has no method check
+// error: 10: String has no method join
+// error: 11: str is a standard library module that isn't imported; add import str
+
+void main() {
+    s := "abc"
+    _ = s.nope()
+    _ = s.check(1)
+    _ = "x".copy().join(",")
+    _ = str.find(s, "b")
+}

@@ -916,6 +916,22 @@ static void putItem(StrBuf *r, bool *first, const char *label, int kind, const c
     sbPutc(r, '}');
 }
 
+/* The functions of std/str that text has as methods. */
+static void textMethods(StrBuf *r, bool *first, Program *prog) {
+    Module *m = prog ? prog->text : NULL;
+    for (int f = 0; m && f < m->files.len; f++) {
+        Node *file = m->files.items[f];
+        for (int i = 0; i < file->list.len; i++) {
+            Node *d = file->list.items[i];
+            if (d->kind != N_FUNC || !d->name || textMethod(prog, d->name) != d) continue;
+            StrBuf sig = {0};
+            signature(&sig, d);
+            putItem(r, first, d->name, 2, sig.buf);
+            sbFree(&sig);
+        }
+    }
+}
+
 /* After "name.": a module's pub names, or a value's fields and methods. */
 static void completion(StrBuf *out, J *id, Program *prog, Source *src, const char *word, int line) {
     StrBuf r = {0};
@@ -962,9 +978,14 @@ static void completion(StrBuf *out, J *id, Program *prog, Source *src, const cha
         putItem(&r, &first, "append", 2, "void String.append(str text)");
         putItem(&r, &first, "free", 2, "void String.free()");
         putItem(&r, &first, "copy", 2, "String String.copy()");
+        textMethods(&r, &first, prog);
     } else if (t && t->kind == TY_SLICE) {
         putItem(&r, &first, "len", 5, "i64");
         putItem(&r, &first, "ptr", 5, NULL);
+        if (t->elem && t->elem->kind == TY_INT && t->elem->bits == 8 && !t->elem->isSigned) {
+            putItem(&r, &first, "copy", 2, "String str.copy()");
+            textMethods(&r, &first, prog);
+        }
     } else {
         /* a module: the names in its scope */
         for (Module *m = prog ? prog->modules : NULL; m; m = m->next) {
