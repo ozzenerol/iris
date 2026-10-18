@@ -76,7 +76,7 @@ try {
 <p>Fields can be numbers, <code>bool</code> (<code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code>, <code>no</code>, <code>on</code>, <code>off</code>), <code>str</code>, <code>String</code>, plain enums by their value's name, and <code>Duration</code> (<code>30s</code>, <code>1500ms</code>, <code>1m30s</code>). The errors are <code>env.EnvError.missing</code> and <code>invalid</code>, with the variable's name in the message:</p>
 <pre class="out"><code>error: EnvError.missing: DATABASE_URL is needed but isn&#x27;t set</code></pre>
 <p>An <code>@env</code> struct gets a <code>free</code> method, which frees its <code>String</code>s, so <code>scoped</code> works on it.</p>
-<p><code>env.loadFile(path)</code> reads a file of <code>KEY=value</code> lines into the environment, so the <code>@env</code> struct can read them. Call it before <code>env.load</code>:</p>
+<p><code>env.loadWith(Settings, path)</code> first reads a file of <code>KEY=value</code> lines into the environment and then fills the struct like <code>env.load</code>. A file that isn't there is skipped, so the same program runs with only the environment:</p>
 <pre class="code"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
@@ -86,17 +86,29 @@ try {
 }
 
 !<span class="t">void</span> main() {
-    env.loadFile(<span class="s">&quot;.env&quot;</span>) <span class="k">catch</span> e {
-        print(<span class="s">&quot;no settings file: {e.message}&quot;</span>)
-    }
-    <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
+    <span class="k">scoped</span> s := <span class="k">try</span> env.loadWith(Settings, <span class="s">&quot;.env&quot;</span>)
     print(<span class="s">&quot;{s.listenAddress}:{s.port}&quot;</span>)
 }</code></pre>
 <p>A <code>.env</code> for it:</p>
 <pre class="code"><code># the proxy
 PROXY_LISTEN_ADDRESS=&quot;127.0.0.1&quot;
 PROXY_PORT=9001 # the port it listens on</code></pre>
-<p>Blank lines and lines starting with <code>#</code> are skipped, and a <code>#</code> after a space starts a comment. A line may start with <code>export </code>. A value may be wrapped in double or single quotes, which are taken off, and inside them <code>#</code> is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no <code>=</code>, a name that isn't letters, digits and <code>_</code>, or a quote that isn't closed is <code>EnvError.invalid</code>, with the file and line in the message. A file that can't be read gives the error from <a href="../std/index.html#fs">fs</a>.</p>
+<p>Blank lines and lines starting with <code>#</code> are skipped, and a <code>#</code> after a space starts a comment. A line may start with <code>export </code>. A value may be wrapped in double or single quotes, which are taken off, and inside them <code>#</code> is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no <code>=</code>, a name that isn't letters, digits and <code>_</code>, or a quote that isn't closed is <code>EnvError.invalid</code>, with the file and line in the message. A file that is there but can't be read gives the error from <a href="../std/index.html#fs">fs</a>.</p>
+<p><code>env.loadFile(path)</code> does only the first half: it puts the file's lines into the environment, and a missing file is an error. It suits several files read in order before one <code>env.load</code>:</p>
+<pre class="code"><code><span class="k">import</span> env
+
+<span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
+<span class="k">struct</span> Settings {
+    <span class="t">u16</span> port = <span class="n">8390</span>
+}
+
+!<span class="t">void</span> main() {
+    <span class="k">try</span> env.loadFile(<span class="s">&quot;.env.local&quot;</span>)
+    <span class="k">try</span> env.loadFile(<span class="s">&quot;.env&quot;</span>)
+    <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
+    print(<span class="s">&quot;{s.port}&quot;</span>)
+}</code></pre>
+<p>The first file wins for a variable set in both, since a variable that is already set keeps its value.</p>
 <h2 id="flags"><a href="#flags">@flags</a></h2>
 <p><code>@flags</code> lets <code>flags.parse</code> fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The <a href="30-flags.html">Command-line flags</a> chapter covers it.</p>
 <h2 id="inline"><a href="#inline">@inline</a></h2>

@@ -1,0 +1,51 @@
+// expect: 127.0.0.1 7000 db
+// expect: 0.0.0.0 7000 none
+// expect: EnvError.invalid
+// expect: EnvError.invalid: APP_PORT:
+// expect: no file: 0.0.0.0 7000 none
+
+import env, fs, os, str
+
+@env("APP")
+struct Settings {
+    str listen = "0.0.0.0"
+    u16 port = 8080
+    str db = "none"
+}
+
+!void main() {
+    dir := os.env("TMPDIR") catch "/tmp"
+    scoped path := str.format("{dir}/iris-env-load-with.env")
+    try fs.writeAll(path, "APP_LISTEN=127.0.0.1\nAPP_PORT=9001\nAPP_DB=db\n")
+    try os.setenv("APP_PORT", "7000")
+    scoped s := try env.loadWith(Settings, path)
+    print("{s.listen} {s.port} {s.db}")
+    try fs.remove(path)
+    try os.unsetenv("APP_LISTEN")
+    try os.unsetenv("APP_DB")
+
+    scoped t := try env.loadWith(Settings, "{dir}/iris-env-load-with-missing.env")
+    print("{t.listen} {t.port} {t.db}")
+
+    try fs.writeAll(path, "broken\n")
+    _ = env.loadWith(Settings, path) catch e {
+        print("{e.code}")
+        Settings{}
+    }
+    try fs.remove(path)
+
+    try os.setenv("APP_PORT", "lots")
+    _ = env.loadWith(Settings, path) catch e {
+        first, _, _ := str.cut(e.message, " ")
+        print("{e.code}: {first}")
+        Settings{}
+    }
+    try os.setenv("APP_PORT", "7000")
+
+    s2 := env.loadWith(Settings, path) catch e {
+        print("unexpected: {e.message}")
+        return
+    }
+    print("no file: {s2.listen} {s2.port} {s2.db}")
+    s2.free()
+}

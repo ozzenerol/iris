@@ -57,7 +57,7 @@ error: EnvError.missing: DATABASE_URL is needed but isn't set
 
 An `@env` struct gets a `free` method, which frees its `String`s, so `scoped` works on it.
 
-`env.loadFile(path)` reads a file of `KEY=value` lines into the environment, so the `@env` struct can read them. Call it before `env.load`:
+`env.loadWith(Settings, path)` first reads a file of `KEY=value` lines into the environment and then fills the struct like `env.load`. A file that isn't there is skipped, so the same program runs with only the environment:
 
 ```iris
 import env
@@ -69,10 +69,7 @@ struct Settings {
 }
 
 !void main() {
-    env.loadFile(".env") catch e {
-        print("no settings file: {e.message}")
-    }
-    scoped s := try env.load(Settings)
+    scoped s := try env.loadWith(Settings, ".env")
     print("{s.listenAddress}:{s.port}")
 }
 ```
@@ -85,7 +82,27 @@ PROXY_LISTEN_ADDRESS="127.0.0.1"
 PROXY_PORT=9001 # the port it listens on
 ```
 
-Blank lines and lines starting with `#` are skipped, and a `#` after a space starts a comment. A line may start with `export `. A value may be wrapped in double or single quotes, which are taken off, and inside them `#` is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no `=`, a name that isn't letters, digits and `_`, or a quote that isn't closed is `EnvError.invalid`, with the file and line in the message. A file that can't be read gives the error from [fs](../std/index.html#fs).
+Blank lines and lines starting with `#` are skipped, and a `#` after a space starts a comment. A line may start with `export `. A value may be wrapped in double or single quotes, which are taken off, and inside them `#` is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no `=`, a name that isn't letters, digits and `_`, or a quote that isn't closed is `EnvError.invalid`, with the file and line in the message. A file that is there but can't be read gives the error from [fs](../std/index.html#fs).
+
+`env.loadFile(path)` does only the first half: it puts the file's lines into the environment, and a missing file is an error. It suits several files read in order before one `env.load`:
+
+```iris
+import env
+
+@env("PROXY")
+struct Settings {
+    u16 port = 8390
+}
+
+!void main() {
+    try env.loadFile(".env.local")
+    try env.loadFile(".env")
+    scoped s := try env.load(Settings)
+    print("{s.port}")
+}
+```
+
+The first file wins for a variable set in both, since a variable that is already set keeps its value.
 
 ## @flags
 

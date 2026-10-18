@@ -1,0 +1,18 @@
+// error: 15: env.loadWith takes the struct's type and a file: env.loadWith(Settings, ".env")
+// error: 16: Plain needs @env to be read from the environment
+// error: 17: the file's path is i64, but str is needed
+
+import env
+
+@env
+struct Settings {
+    i64 port = 80
+}
+
+struct Plain {}
+
+!void main() {
+    a := try env.loadWith(Settings)
+    b := try env.loadWith(Plain, ".env")
+    c := try env.loadWith(Settings, 5)
+}

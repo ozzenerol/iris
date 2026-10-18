@@ -1538,7 +1538,13 @@ static Val emitBuiltin(IR *ir, Node *e) {
         Val init = emitExpr(ir, e->b);
         ins(ir, "store %s %s, ptr %s", llType(ir, t), init.s, slot);
         const char *err = tmp(ir);
-        ins(ir, "%s = call i64 %s(ptr %s, ptr %s)", err, e->ref->ir, envTable(ir, t), slot);
+        if (e->list.len == 2) {
+            Val path = emitExpr(ir, e->list.items[1]);
+            ins(ir, "%s = call i64 %s(ptr %s, ptr %s, %s %s)", err, e->ref->ir, envTable(ir, t), slot,
+                llType(ir, &tyStr), path.s);
+        } else {
+            ins(ir, "%s = call i64 %s(ptr %s, ptr %s)", err, e->ref->ir, envTable(ir, t), slot);
+        }
         Val v = load(ir, slot, t);
         const char *rt = llType(ir, e->type);
         const char *r1 = tmp(ir), *r2 = tmp(ir);

@@ -3298,6 +3298,8 @@ static Node *tempArg(Node *a) {
  * gets one can't give back something that may point into it. */
 static void checkTempResult(Checker *c, Node *e) {
     if (!e->type || isErr(e->type) || !mayPoint(e->type)) return;
+    /* env.loadWith's struct points into the environment, never its path */
+    if (e->builtin == BI_ENV_LOAD) return;
     for (int i = 0; i < e->list.len; i++) {
         Node *a = tempArg(e->list.items[i]);
         if (!a) continue;
@@ -4078,10 +4080,16 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         e->builtin = BI_FLAGS_PARSE;
         return setType(e, own ? t : resultOf(t));
     }
-    if (strcmp(d->name, "load") == 0 && d->module && strcmp(d->module, "env") == 0) {
-        /* env.load(Settings) */
-        if (e->list.len != 1) {
+    if ((strcmp(d->name, "load") == 0 || strcmp(d->name, "loadWith") == 0) && d->module &&
+        strcmp(d->module, "env") == 0) {
+        /* env.load(Settings), env.loadWith(Settings, ".env") */
+        bool withFile = strcmp(d->name, "loadWith") == 0;
+        if (!withFile && e->list.len != 1) {
             error(c, e, "env.load takes the struct's type: env.load(Settings)");
+            return setType(e, &tyError);
+        }
+        if (withFile && e->list.len != 2) {
+            error(c, e, "env.loadWith takes the struct's type and a file: env.loadWith(Settings, \".env\")");
             return setType(e, &tyError);
         }
         Type *t = typeArgument(c, e->list.items[0]);
@@ -4091,9 +4099,18 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
             error(c, e->list.items[0], "%s needs @env to be read from the environment", t->name);
             return setType(e, &tyError);
         }
-        Node *into = lookup(c, "env.loadInto");
+        if (withFile) {
+            Node **path = &e->list.items[1];
+            if (!checkTempText(c, path, &tyStr)) {
+                Type *pt = checkExpr(c, path, &tyStr);
+                if (isErr(pt)) return setType(e, &tyError);
+                coerce(c, path, &tyStr, "the file's path");
+                markTempString(path, &tyStr);
+            }
+        }
+        Node *into = lookup(c, withFile ? "env.loadFileInto" : "env.loadInto");
         if (!into) {
-            error(c, e, "env.load needs the env module's loadInto");
+            error(c, e, "env.%s needs the env module's %s", d->name, withFile ? "loadFileInto" : "loadInto");
             return setType(e, &tyError);
         }
         e->ref = into;
