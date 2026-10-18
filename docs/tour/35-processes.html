@@ -69,10 +69,10 @@ argument 2: b c</code></pre>
 
 <span class="t">void</span> main() {
     <span class="k">if</span> os.argc() &lt; <span class="n">2</span> {
-        print(<span class="s">&quot;usage: greet &lt;name&gt;&quot;</span>)
+        print(<span class="s">&quot;usage: probe &lt;host&gt;&quot;</span>)
         os.exit(<span class="n">2</span>)
     }
-    print(<span class="s">&quot;hello, {os.arg(1)}&quot;</span>)
+    print(<span class="s">&quot;probing {os.arg(1)}&quot;</span>)
 }</code></pre>
 <h2 id="environment-variables"><a href="#environment-variables">Environment variables</a></h2>
 <p><code>os.env(name)</code> gives a variable's value as a <code>!str</code>. A variable that isn't set is the error <code>OsError.notSet</code>, so <code>catch</code> gives a default:</p>
@@ -81,29 +81,29 @@ argument 2: b c</code></pre>
 <span class="t">void</span> main() {
     path := os.env(<span class="s">&quot;PATH&quot;</span>) <span class="k">catch</span> <span class="s">&quot;&quot;</span>
     print(<span class="s">&quot;PATH is set: {path.len &gt; 0}&quot;</span>)
-    editor := os.env(<span class="s">&quot;IRIS_TOUR_EDITOR&quot;</span>) <span class="k">catch</span> <span class="s">&quot;vi&quot;</span>
-    print(<span class="s">&quot;the editor is {editor}&quot;</span>)
-    _ = os.env(<span class="s">&quot;IRIS_TOUR_EDITOR&quot;</span>) <span class="k">catch</span> err {
+    upstream := os.env(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;127.0.0.1:9000&quot;</span>
+    print(<span class="s">&quot;the upstream is {upstream}&quot;</span>)
+    _ = os.env(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> err {
         print(<span class="s">&quot;{err.code}: {err.message}&quot;</span>)
         <span class="s">&quot;&quot;</span>
     }
 }</code></pre>
 <pre class="out"><code>PATH is set: true
-the editor is vi
-OsError.notSet: IRIS_TOUR_EDITOR is not set</code></pre>
+the upstream is 127.0.0.1:9000
+OsError.notSet: IRIS_TOUR_UPSTREAM is not set</code></pre>
 <p><code>os.setenv(name, value)</code> sets a variable, for the program and the programs it runs from then on, and <code>os.unsetenv(name)</code> removes one. A name that can't be one, empty or with <code>=</code> in it, fails with <code>OsError.invalid</code>:</p>
 <pre class="code run"><code><span class="k">import</span> os, process, <span class="t">str</span>
 
 !<span class="t">void</span> main() {
-    <span class="k">try</span> os.setenv(<span class="s">&quot;GREETING&quot;</span>, <span class="s">&quot;hello there&quot;</span>)
-    print(<span class="k">try</span> os.env(<span class="s">&quot;GREETING&quot;</span>))
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo $GREETING&quot;</span>])
+    <span class="k">try</span> os.setenv(<span class="s">&quot;UPSTREAM&quot;</span>, <span class="s">&quot;10.0.0.11:9000&quot;</span>)
+    print(<span class="k">try</span> os.env(<span class="s">&quot;UPSTREAM&quot;</span>))
+    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo $UPSTREAM&quot;</span>])
     print(<span class="s">&quot;sh sees: {str.trim(out.stdout)}&quot;</span>)
-    <span class="k">try</span> os.unsetenv(<span class="s">&quot;GREETING&quot;</span>)
-    print(os.env(<span class="s">&quot;GREETING&quot;</span>) <span class="k">catch</span> <span class="s">&quot;not set&quot;</span>)
+    <span class="k">try</span> os.unsetenv(<span class="s">&quot;UPSTREAM&quot;</span>)
+    print(os.env(<span class="s">&quot;UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;not set&quot;</span>)
 }</code></pre>
-<pre class="out"><code>hello there
-sh sees: hello there
+<pre class="out"><code>10.0.0.11:9000
+sh sees: 10.0.0.11:9000
 not set</code></pre>
 <p>Set variables at the start, before the program starts threads: the environment isn't safe to change while another thread reads it.</p>
 <p>For a program's settings, a struct marked <code>@env</code> reads every variable at once, with types and defaults (see <a href="27-attributes.html">Attributes</a>).</p>
@@ -112,12 +112,12 @@ not set</code></pre>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
 !<span class="t">void</span> main() {
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;echo&quot;</span>, <span class="s">&quot;hello&quot;</span>, <span class="s">&quot;from echo&quot;</span>])
+    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;echo&quot;</span>, <span class="s">&quot;listening on&quot;</span>, <span class="s">&quot;8080&quot;</span>])
     print(<span class="s">&quot;status {out.status}, ok {out.ok()}&quot;</span>)
     print(<span class="s">&quot;it printed: {str.trim(out.stdout)}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>status 0, ok true
-it printed: hello from echo</code></pre>
+it printed: listening on 8080</code></pre>
 <p><code>Output</code> owns <code>stdout</code> and <code>stderr</code>, and its <code>free</code> method frees them, so <code>scoped</code> works on it.</p>
 <p>A program that ends with a status other than 0 is no error: <code>status</code> says how it ended. <code>run</code> fails only when the program can't be started, with <code>ProcessError.notFound</code> when it isn't there:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
@@ -138,15 +138,15 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
 !<span class="t">void</span> main() {
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sort&quot;</span>], <span class="s">&quot;pear\nfig\napple\n&quot;</span>)
+    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sort&quot;</span>, <span class="s">&quot;-u&quot;</span>], <span class="s">&quot;10.0.0.9\n10.0.0.5\n10.0.0.9\n10.0.0.7\n&quot;</span>)
     print(<span class="t">str</span>.trim(out.stdout))
-    <span class="k">scoped</span> count := <span class="k">try</span> process.run([<span class="s">&quot;wc&quot;</span>, <span class="s">&quot;-l&quot;</span>], <span class="s">&quot;one\ntwo\nthree\n&quot;</span>)
-    print(<span class="s">&quot;{str.trim(count.stdout)} lines&quot;</span>)
+    <span class="k">scoped</span> count := <span class="k">try</span> process.run([<span class="s">&quot;wc&quot;</span>, <span class="s">&quot;-l&quot;</span>], <span class="s">&quot;GET /\nGET /login\nPOST /login\n&quot;</span>)
+    print(<span class="s">&quot;{str.trim(count.stdout)} requests&quot;</span>)
 }</code></pre>
-<pre class="out"><code>apple
-fig
-pear
-3 lines</code></pre>
+<pre class="out"><code>10.0.0.5
+10.0.0.7
+10.0.0.9
+3 requests</code></pre>
 <p>While a program runs, the other tasks of the thread go on (see <a href="24-tasks-and-channels.html">Tasks and channels</a>), so a server that runs a program keeps answering.</p>
 <h2 id="signals"><a href="#signals">Signals</a></h2>
 <p>Ctrl-C sends a program the signal <code>interrupt</code>, and systemd and Docker send <code>terminate</code> when they stop it. By default either one ends the program at once. <code>signal.wait()</code> waits for one instead and gives it as a <code>signal.Signal</code>, so the program can finish what it was doing first:</p>

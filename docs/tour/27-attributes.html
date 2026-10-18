@@ -53,20 +53,20 @@ try {
 <p><code>@env</code> lets <code>env.load</code> fill a struct from environment variables. Each field reads the variable named after it in capitals, with <code>_</code> between its words: <code>dbUrl</code> reads <code>DB_URL</code>. A prefix on the struct goes in front of every name:</p>
 <pre class="code run"><code><span class="k">import</span> env
 
-<span class="a">@env</span>(<span class="s">&quot;SHOP&quot;</span>)
+<span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
 <span class="k">struct</span> Settings {
-    <span class="t">u16</span> port = <span class="n">8080</span>        <span class="c">// SHOP_PORT</span>
-    <span class="t">str</span> db = <span class="s">&quot;shop.db&quot;</span>     <span class="c">// SHOP_DB</span>
-    <span class="t">Duration</span> timeout = 30s <span class="c">// SHOP_TIMEOUT</span>
-    <span class="t">bool</span> debug             <span class="c">// SHOP_DEBUG</span>
+    <span class="t">u16</span> port = <span class="n">8080</span>                 <span class="c">// PROXY_PORT</span>
+    <span class="t">str</span> upstream = <span class="s">&quot;127.0.0.1:9000&quot;</span> <span class="c">// PROXY_UPSTREAM</span>
+    <span class="t">Duration</span> timeout = 30s          <span class="c">// PROXY_TIMEOUT</span>
+    <span class="t">bool</span> debug                      <span class="c">// PROXY_DEBUG</span>
 }
 
 !<span class="t">void</span> main() {
     <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
-    print(<span class="s">&quot;{s.port} {s.db} {s.timeout} {s.debug}&quot;</span>)
+    print(<span class="s">&quot;{s.port} -&gt; {s.upstream}, timeout {s.timeout}, debug {s.debug}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>8080 shop.db 30s false</code></pre>
-<p>Run with <code>SHOP_PORT=9000 SHOP_DEBUG=yes</code>, the same program prints <code>9000 shop.db 30s true</code>. A variable that isn't set leaves the field's default.</p>
+<pre class="out"><code>8080 -&gt; 127.0.0.1:9000, timeout 30s, debug false</code></pre>
+<p>Run with <code>PROXY_PORT=80 PROXY_DEBUG=yes</code>, the same program prints <code>80 -&gt; 127.0.0.1:9000, timeout 30s, debug true</code>. A variable that isn't set leaves the field's default.</p>
 <p><code>@env(&quot;NAME&quot;)</code> on a field gives the variable's whole name, without the prefix, and <code>@env(required)</code> makes a missing variable an error; both can go together:</p>
 <pre class="code"><code><span class="a">@env</span>
 <span class="k">struct</span> Secrets {
@@ -81,12 +81,12 @@ try {
 <h2 id="inline"><a href="#inline">@inline</a></h2>
 <p><code>@inline</code> puts the function's code at every place it is called, instead of a call. It suits a tiny function on a path that runs very often:</p>
 <pre class="code run"><code><span class="a">@inline</span>
-<span class="t">i64</span> square(<span class="t">i64</span> x) =&gt; x * x
+<span class="t">u16</span> swap16(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{square(12)}&quot;</span>)
+    print(<span class="s">&quot;{swap16(8080)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>144</code></pre>
+<pre class="out"><code>36895</code></pre>
 <p>The optimiser already inlines small functions on its own in release builds; <code>@inline</code> makes sure of it.</p>
 <h2 id="unchecked"><a href="#unchecked">@unchecked</a></h2>
 <p><code>@unchecked</code> leaves out the checks that debug builds add (indexes, overflow, <code>null</code>) from one function's code, in every build. It is for code that has been measured, whose indexes are known to be in range:</p>
@@ -100,9 +100,9 @@ try {
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{checksum(&quot;</span>hello<span class="s">&quot;)}&quot;</span>)
+    print(<span class="s">&quot;{checksum(&quot;</span>GET / HTTP/<span class="n">1.1</span><span class="s">&quot;)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>99162322</code></pre>
+<pre class="out"><code>2574418856</code></pre>
 <p>A mistake in such a function isn't caught: it reads or writes the wrong memory.</p>
 <h2 id="noreturn"><a href="#noreturn">@noreturn</a></h2>
 <p><code>@noreturn</code> says that a call to the function never comes back: it ends the program, as <code>os.exit</code> does, or panics. The compiler then knows the code after the call is never reached, so the call can end a <code>catch</code> block or a branch where a value would otherwise be needed:</p>

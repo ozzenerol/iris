@@ -10,23 +10,23 @@ A program reads its input from standard input, and has two places to write text:
 import io
 
 void main() {
-    io.write("one, ")
-    io.write("two\n")
+    io.write("HTTP/1.1 ")
+    io.write("200 OK\n")
     io.eprint("this goes to standard error")
-    print("three")
+    print("Content-Length: 0")
 }
 ```
 
 ```output
-one, two
-three
+HTTP/1.1 200 OK
+Content-Length: 0
 ```
 
 The line on standard error isn't part of the output above: it shows in the terminal, but `./program > out.txt` puts only the other lines in the file, and `./program 2> errors.txt` puts it in its own file. Results go to standard output, so another program can read them; messages for the person running it go to standard error.
 
 ## Reading standard input
 
-`io.readLine()` gives the next line of standard input as a new `String`, without its line break, and fails with `io.IoError.eof` when there is no more. `io.readAll()` gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this:
+`io.readLine()` gives the next line of standard input as a new `String`, without its line break, and fails with `io.IoError.eof` when there is no more. `io.readAll()` gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this. It prints the client address at the start of each access log line:
 
 ```iris
 import io, str
@@ -41,21 +41,21 @@ import io, str
             return e
         }
         n += 1
-        scoped String up = str.upper(line)
-        print("{n}: {up}")
+        ip, _, _ := str.cut(line, " ")
+        print("{n}: {ip}")
         line.free()
     }
     io.eprint("{n} lines")
 }
 ```
 
-Given three lines in a pipe, it prints them numbered, and the count on standard error:
+Given three lines in a pipe, it prints the addresses numbered, and the count on standard error:
 
 ```output
-$ printf 'pear\nfig\nplum\n' | ./upper
-1: PEAR
-2: FIG
-3: PLUM
+$ printf '10.0.0.5 GET /\n10.0.0.9 GET /login\n10.0.0.5 POST /login\n' | ./clients
+1: 10.0.0.5
+2: 10.0.0.9
+3: 10.0.0.5
 3 lines
 ```
 
@@ -102,9 +102,9 @@ import log
 
 void main() {
     log.showTime(false)
-    user := "ada"
-    log.info("signed in", [("user", .text(user)), ("id", .int(7)), ("admin", .bool(true))])
-    log.warn("slow request", [("path", .text("/search")), ("ms", .int(950)), ("query", .text("red pears"))])
+    peer := "10.0.0.5:51234"
+    log.info("client connected", [("peer", .text(peer)), ("fd", .int(7)), ("tls", .bool(true))])
+    log.warn("slow request", [("path", .text("/search")), ("ms", .int(950)), ("query", .text("status 502"))])
     print("done")
 }
 ```
@@ -116,8 +116,8 @@ done
 Standard error gets:
 
 ```output
-INFO signed in user=ada id=7 admin=true
-WARN slow request path=/search ms=950 query="red pears"
+INFO client connected peer=10.0.0.5:51234 fd=7 tls=true
+WARN slow request path=/search ms=950 query="status 502"
 ```
 
 `log.showTime(false)` leaves the time out, as here. It suits a program that systemd or Docker runs, since they put the time on each line themselves.
@@ -167,7 +167,7 @@ import log
 
 void main() {
     log.useJson()
-    log.info("user \"ada\" signed in")
+    log.info("client \"edge-1\" connected")
     log.useJson(false)
     log.info("plain again")
 }
@@ -176,7 +176,7 @@ void main() {
 Standard error gets:
 
 ```output
-{"time": "2026-10-17T09:30:00.250Z", "level": "info", "message": "user \"ada\" signed in"}
+{"time": "2026-10-17T09:30:00.250Z", "level": "info", "message": "client \"edge-1\" connected"}
 2026-10-17T09:30:00.250Z INFO plain again
 ```
 

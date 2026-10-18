@@ -8,18 +8,18 @@ A `const` is a value worked out when compiling, from numbers, text, other consta
 
 ```iris run
 const KiB = 1024
-const BUFFER = 64 * KiB
-const NAME = "iris"
-const VERSION = 3
-const WIDTH = VERSION * 10 + 2
+const MAX_FRAME = 16 * KiB
+const HEADER = 9
+const MAX_PAYLOAD = MAX_FRAME - HEADER
+const NAME = "edge"
 
 void main() {
-    print("{NAME} v{VERSION}: {BUFFER} bytes, width {WIDTH}")
+    print("{NAME}: frames up to {MAX_FRAME} bytes, {MAX_PAYLOAD} of payload")
 }
 ```
 
 ```output
-iris v3: 65536 bytes, width 32
+edge: frames up to 16384 bytes, 16375 of payload
 ```
 
 Text with values in braces can be a constant too, when every value is a constant number, `bool` or text. The text is put together when compiling, and the constant is a `str`. The text can be written as it is, or given to `format` or `str.format`:
@@ -27,20 +27,20 @@ Text with values in braces can be a constant too, when every value is a constant
 ```iris run
 import str
 
-const TABLE = "books"
-const LIMIT = 50
-const FIND = str.format("SELECT 1 FROM {TABLE} WHERE isbn = ?")
-const PAGE = "SELECT * FROM {TABLE} LIMIT {LIMIT}"
+const HOST = "api.example.com"
+const VERSION = 2
+const BASE = str.format("https://{HOST}/v{VERSION}")
+const AGENT = "edge/{VERSION} (+https://{HOST})"
 
 void main() {
-    print(FIND)
-    print(PAGE)
+    print(BASE)
+    print(AGENT)
 }
 ```
 
 ```output
-SELECT 1 FROM books WHERE isbn = ?
-SELECT * FROM books LIMIT 50
+https://api.example.com/v2
+edge/2 (+https://api.example.com)
 ```
 
 A `Duration`, an enum or a struct can't go into a constant's text; a `comptime` constant can build that text (see below).
@@ -48,18 +48,18 @@ A `Duration`, an enum or a struct can't go into a constant's text; a `comptime` 
 A constant has no address and takes no memory: each use is the value itself. It can be used where a value must be known when compiling: an array's size, a parameter's default, a field's default, a global's first value, a `match` arm.
 
 ```iris run
-const SLOTS = 4
+const WORKERS = 4
 
-i64[SLOTS] counts
+i64[WORKERS] busy // jobs in hand, for each worker
 
 void main() {
-    counts[SLOTS - 1] = 7
-    print("{counts.len} {counts[3]}")
+    busy[WORKERS - 1] = 7
+    print("{busy.len} workers, the last has {busy[3]} jobs")
 }
 ```
 
 ```output
-4 7
+4 workers, the last has 7 jobs
 ```
 
 ## comptime

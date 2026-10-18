@@ -264,45 +264,46 @@ run copy --help to see the flags
 $ echo $?
 2</code></pre>
 <h2 id="subcommands"><a href="#subcommands">Subcommands</a></h2>
-<p>A program with subcommands, like <code>tool add</code> and <code>tool list</code>, has one <code>@flags</code> struct for each. The first argument picks the subcommand, and <code>flags.parseArgs</code> reads the rest with that subcommand's struct:</p>
+<p>A program with subcommands, like <code>net ping</code> and <code>net scan</code>, has one <code>@flags</code> struct for each. The first argument picks the subcommand, and <code>flags.parseArgs</code> reads the rest with that subcommand's struct:</p>
 <pre class="code run"><code><span class="k">import</span> flags
 
-<span class="a">@flags</span>(<span class="s">&quot;adds a task&quot;</span>)
-<span class="k">struct</span> AddOptions {
-    <span class="a">@flag</span>(<span class="s">&#x27;p&#x27;</span>, <span class="s">&quot;how urgent, 1 to 3&quot;</span>) <span class="t">u8</span> priority = <span class="n">2</span>
-    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] words
+<span class="a">@flags</span>(<span class="s">&quot;sends echo requests to hosts&quot;</span>)
+<span class="k">struct</span> PingOptions {
+    <span class="a">@flag</span>(<span class="s">&#x27;c&#x27;</span>, <span class="s">&quot;how many to send to each&quot;</span>) <span class="t">i64</span> count = <span class="n">4</span>
+    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] hosts
 }
 
-<span class="a">@flags</span>(<span class="s">&quot;lists the tasks&quot;</span>)
-<span class="k">struct</span> ListOptions {
-    <span class="a">@flag</span>(<span class="s">&#x27;a&#x27;</span>, <span class="s">&quot;include the finished ones&quot;</span>) <span class="t">bool</span> all
+<span class="a">@flags</span>(<span class="s">&quot;finds the open ports of a host&quot;</span>)
+<span class="k">struct</span> ScanOptions {
+    <span class="a">@flag</span>(<span class="s">&#x27;t&#x27;</span>, <span class="s">&quot;how long to wait for each port&quot;</span>) <span class="t">Duration</span> timeout = 1s
+    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] hosts
 }
 
 !<span class="t">void</span> run(<span class="t">str</span>[] args) {
     <span class="k">if</span> args.len == <span class="n">0</span> {
-        print(<span class="s">&quot;usage: tool add|list ...&quot;</span>)
+        print(<span class="s">&quot;usage: net ping|scan ...&quot;</span>)
         <span class="k">return</span>
     }
     rest := args[<span class="n">1</span>:]
     <span class="k">match</span> args[<span class="n">0</span>] {
-        <span class="s">&quot;add&quot;</span> =&gt; {
-            <span class="k">scoped</span> o := <span class="k">try</span> flags.parseArgs(AddOptions, rest, <span class="s">&quot;tool add&quot;</span>)
-            print(<span class="s">&quot;add: {o.words.len} words, priority {o.priority}&quot;</span>)
+        <span class="s">&quot;ping&quot;</span> =&gt; {
+            <span class="k">scoped</span> o := <span class="k">try</span> flags.parseArgs(PingOptions, rest, <span class="s">&quot;net ping&quot;</span>)
+            print(<span class="s">&quot;ping: {o.hosts.len} hosts, {o.count} each&quot;</span>)
         }
-        <span class="s">&quot;list&quot;</span> =&gt; {
-            <span class="k">scoped</span> o := <span class="k">try</span> flags.parseArgs(ListOptions, rest, <span class="s">&quot;tool list&quot;</span>)
-            print(<span class="s">&quot;list: all {o.all}&quot;</span>)
+        <span class="s">&quot;scan&quot;</span> =&gt; {
+            <span class="k">scoped</span> o := <span class="k">try</span> flags.parseArgs(ScanOptions, rest, <span class="s">&quot;net scan&quot;</span>)
+            print(<span class="s">&quot;scan: {o.hosts[0]}, {o.timeout} a port&quot;</span>)
         }
         _ =&gt; print(<span class="s">&quot;{args[0]} isn&#x27;t a command&quot;</span>)
     }
 }
 
 !<span class="t">void</span> main() {
-    <span class="k">try</span> run([<span class="s">&quot;add&quot;</span>, <span class="s">&quot;-p&quot;</span>, <span class="s">&quot;1&quot;</span>, <span class="s">&quot;buy&quot;</span>, <span class="s">&quot;milk&quot;</span>])
-    <span class="k">try</span> run([<span class="s">&quot;list&quot;</span>, <span class="s">&quot;-a&quot;</span>])
+    <span class="k">try</span> run([<span class="s">&quot;ping&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;2&quot;</span>, <span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>])
+    <span class="k">try</span> run([<span class="s">&quot;scan&quot;</span>, <span class="s">&quot;-t&quot;</span>, <span class="s">&quot;200ms&quot;</span>, <span class="s">&quot;10.0.0.5&quot;</span>])
 }</code></pre>
-<pre class="out"><code>add: 2 words, priority 1
-list: all true</code></pre>
+<pre class="out"><code>ping: 2 hosts, 2 each
+scan: 10.0.0.5, 200ms a port</code></pre>
 <p>A real program builds <code>args</code> from its own arguments, with <code>os.argc()</code> and <code>os.arg(i)</code>.</p>
 <h2 id="the-raw-arguments"><a href="#the-raw-arguments">The raw arguments</a></h2>
 <p>The <code>os</code> module gives the arguments as they are, without flags: <code>os.argc()</code> is how many there are, and <code>os.arg(i)</code> gives one, <code>os.arg(0)</code> being the program's own name:</p>

@@ -36,10 +36,10 @@ import os
 
 void main() {
     if os.argc() < 2 {
-        print("usage: greet <name>")
+        print("usage: probe <host>")
         os.exit(2)
     }
-    print("hello, {os.arg(1)}")
+    print("probing {os.arg(1)}")
 }
 ```
 
@@ -53,9 +53,9 @@ import os
 void main() {
     path := os.env("PATH") catch ""
     print("PATH is set: {path.len > 0}")
-    editor := os.env("IRIS_TOUR_EDITOR") catch "vi"
-    print("the editor is {editor}")
-    _ = os.env("IRIS_TOUR_EDITOR") catch err {
+    upstream := os.env("IRIS_TOUR_UPSTREAM") catch "127.0.0.1:9000"
+    print("the upstream is {upstream}")
+    _ = os.env("IRIS_TOUR_UPSTREAM") catch err {
         print("{err.code}: {err.message}")
         ""
     }
@@ -64,8 +64,8 @@ void main() {
 
 ```output
 PATH is set: true
-the editor is vi
-OsError.notSet: IRIS_TOUR_EDITOR is not set
+the upstream is 127.0.0.1:9000
+OsError.notSet: IRIS_TOUR_UPSTREAM is not set
 ```
 
 `os.setenv(name, value)` sets a variable, for the program and the programs it runs from then on, and `os.unsetenv(name)` removes one. A name that can't be one, empty or with `=` in it, fails with `OsError.invalid`:
@@ -74,18 +74,18 @@ OsError.notSet: IRIS_TOUR_EDITOR is not set
 import os, process, str
 
 !void main() {
-    try os.setenv("GREETING", "hello there")
-    print(try os.env("GREETING"))
-    scoped out := try process.run(["sh", "-c", "echo $GREETING"])
+    try os.setenv("UPSTREAM", "10.0.0.11:9000")
+    print(try os.env("UPSTREAM"))
+    scoped out := try process.run(["sh", "-c", "echo $UPSTREAM"])
     print("sh sees: {str.trim(out.stdout)}")
-    try os.unsetenv("GREETING")
-    print(os.env("GREETING") catch "not set")
+    try os.unsetenv("UPSTREAM")
+    print(os.env("UPSTREAM") catch "not set")
 }
 ```
 
 ```output
-hello there
-sh sees: hello there
+10.0.0.11:9000
+sh sees: 10.0.0.11:9000
 not set
 ```
 
@@ -101,7 +101,7 @@ For a program's settings, a struct marked `@env` reads every variable at once, w
 import process, str
 
 !void main() {
-    scoped out := try process.run(["echo", "hello", "from echo"])
+    scoped out := try process.run(["echo", "listening on", "8080"])
     print("status {out.status}, ok {out.ok()}")
     print("it printed: {str.trim(out.stdout)}")
 }
@@ -109,7 +109,7 @@ import process, str
 
 ```output
 status 0, ok true
-it printed: hello from echo
+it printed: listening on 8080
 ```
 
 `Output` owns `stdout` and `stderr`, and its `free` method frees them, so `scoped` works on it.
@@ -144,18 +144,18 @@ The second argument to `run` is given to the program on its standard input:
 import process, str
 
 !void main() {
-    scoped out := try process.run(["sort"], "pear\nfig\napple\n")
+    scoped out := try process.run(["sort", "-u"], "10.0.0.9\n10.0.0.5\n10.0.0.9\n10.0.0.7\n")
     print(str.trim(out.stdout))
-    scoped count := try process.run(["wc", "-l"], "one\ntwo\nthree\n")
-    print("{str.trim(count.stdout)} lines")
+    scoped count := try process.run(["wc", "-l"], "GET /\nGET /login\nPOST /login\n")
+    print("{str.trim(count.stdout)} requests")
 }
 ```
 
 ```output
-apple
-fig
-pear
-3 lines
+10.0.0.5
+10.0.0.7
+10.0.0.9
+3 requests
 ```
 
 While a program runs, the other tasks of the thread go on (see [Tasks and channels](24-tasks-and-channels.html)), so a server that runs a program keeps answering.

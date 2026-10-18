@@ -78,9 +78,9 @@ void file(http.Request *req, http.Response *res) {
     res.text("file {req.param("path")}")
 }
 
-void search(http.Request *req, http.Response *res) {
+void logs(http.Request *req, http.Response *res) {
     page := req.query("page")
-    res.text("{req.query("q")}, page {if page == "" { "1" } else { page }}")
+    res.text("logs of {req.query("host")}, page {if page == "" { "1" } else { page }}")
 }
 
 void serve(http.Router *r, net.Listener ln) {
@@ -94,11 +94,11 @@ void serve(http.Router *r, net.Listener ln) {
     defer r.free()
     r.get("/users/:id", user)
     r.get("/files/*path", file)
-    r.get("/search", search)
+    r.get("/logs", logs)
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
-    for path in ["/users/42", "/files/docs/a.txt", "/search?q=pears&page=2", "/search?q=figs", "/nope"] {
+    for path in ["/users/42", "/files/docs/a.txt", "/logs?host=edge-1&page=2", "/logs?host=edge-2", "/nope"] {
         scoped String url = format("http://127.0.0.1:{ln.port}{path}")
         scoped http.Reply reply = try http.get(url)
         print("{reply.status} {str.trim(reply.body)}")
@@ -112,8 +112,8 @@ void serve(http.Router *r, net.Listener ln) {
 ```output
 200 user 42
 200 file docs/a.txt
-200 pears, page 2
-200 figs, page 1
+200 logs of edge-1, page 2
+200 logs of edge-2, page 1
 404 not found
 405 allowed: GET
 ```
@@ -145,20 +145,21 @@ A JSON body is read with `json.decode`, and a struct is answered with `json.enco
 ```iris run
 import http, json, net
 
+// A backend to add to a load balancer.
 @json
-struct NewItem {
-    @json(required) String name
-    i64 count = 1
+struct NewBackend {
+    @json(required) String addr
+    i64 weight = 1
 }
 
-void addItem(http.Request *req, http.Response *res) {
-    scoped NewItem it = json.decode(NewItem, req.body) catch e {
+void addBackend(http.Request *req, http.Response *res) {
+    scoped NewBackend b = json.decode(NewBackend, req.body) catch e {
         res.error(400, e.message)
         return
     }
-    scoped String body = json.encode(it)
+    scoped String body = json.encode(b)
     res.status = 201
-    res.header("Location", "/items/1")
+    res.header("Location", "/backends/1")
     res.json(body)
 }
 
@@ -171,12 +172,12 @@ void serve(http.Router *r, net.Listener ln) {
 !void main() {
     http.Router r
     defer r.free()
-    r.post("/items", addItem)
+    r.post("/backends", addBackend)
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
-    scoped String url = format("http://127.0.0.1:{ln.port}/items")
-    for body in [r"""{"name": "pear", "count": 3}""", r"""{"count": 3}""", "oops"] {
+    scoped String url = format("http://127.0.0.1:{ln.port}/backends")
+    for body in [r"""{"addr": "10.0.0.11:8080", "weight": 3}""", r"""{"weight": 3}""", "oops"] {
         scoped http.Reply reply = try http.post(url, "application/json", body)
         print("{reply.status} {reply.body}")
         if reply.status == 201 {
@@ -187,9 +188,9 @@ void serve(http.Router *r, net.Listener ln) {
 ```
 
 ```output
-201 {"name":"pear","count":3}
-at /items/1
-400 {"error": "the required field \"name\" is missing"}
+201 {"addr":"10.0.0.11:8080","weight":3}
+at /backends/1
+400 {"error": "the required field \"addr\" is missing"}
 400 {"error": "line 1, column 1: expected an object, found something else"}
 ```
 
@@ -301,14 +302,15 @@ A JSON reply is read with `json.decode`:
 ```iris run
 import http, json, net
 
+// What a service's health endpoint answers.
 @json
-struct Point {
-    i64 x
-    i64 y
+struct Health {
+    i64 open
+    i64 uptime
 }
 
-void point(http.Request *req, http.Response *res) {
-    res.json(r"""{"x": 3, "y": 4}""")
+void health(http.Request *req, http.Response *res) {
+    res.json(r"""{"open": 3, "uptime": 86400}""")
 }
 
 void serve(http.Router *r, net.Listener ln) {
@@ -320,18 +322,18 @@ void serve(http.Router *r, net.Listener ln) {
 !void main() {
     http.Router r
     defer r.free()
-    r.get("/point", point)
+    r.get("/health", health)
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
-    scoped String url = format("http://127.0.0.1:{ln.port}/point")
+    scoped String url = format("http://127.0.0.1:{ln.port}/health")
     scoped http.Reply reply = try http.get(url)
     if reply.status != 200 {
         print("the server answered {reply.status}")
         return
     }
-    p := try json.decode(Point, reply.body)
-    print("{p.x} {p.y} ({reply.header("content-type")})")
+    h := try json.decode(Health, reply.body)
+    print("{h.open} open, up {h.uptime}s ({reply.header("content-type")})")
 
     _ = http.get("ftp://example.com/") catch e {
         print("{e.code}: {e.message}")
@@ -341,7 +343,7 @@ void serve(http.Router *r, net.Listener ln) {
 ```
 
 ```output
-3 4 (application/json)
+3 open, up 86400s (application/json)
 HttpError.badUrl: ftp://example.com/: the address should start with http:// or https://
 ```
 

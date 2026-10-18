@@ -7,19 +7,25 @@ Iris calls C functions directly, with no wrapper code to write: `import c` reads
 `import c "header.h"` reads the header with `clang` and makes what it declares available under `c.`:
 
 ```iris run
-import c "stdio.h", c "string.h"
+import c "arpa/inet.h", c "stdio.h", c "string.h"
 
 void main() {
-    c.puts("hello from C\0".ptr)
-    n := c.strlen("iris\0".ptr)
-    c.printf("%s has %ld letters\n\0".ptr, "iris\0".ptr, n)
+    c.puts("parsing an address\0".ptr)
+    u8[4] addr
+    ok := c.inet_pton(c.AF_INET, "192.168.1.10\0".ptr, &addr[0])
+    print("{ok}: {addr[0]} {addr[1]} {addr[2]} {addr[3]}")
+    n := c.strlen("192.168.1.10\0".ptr)
+    c.printf("%s has %ld characters\n\0".ptr, "192.168.1.10\0".ptr, n)
 }
 ```
 
 ```output
-hello from C
-iris has 4 letters
+parsing an address
+1: 192 168 1 10
+192.168.1.10 has 12 characters
 ```
+
+`inet_pton` writes the four bytes of the address into `addr`, and `c.AF_INET` is the constant from the header.
 
 All the headers a file imports share one `c`. Headers are found where `clang` looks for them, in the project's folder, and in folders given with `-I`. The C library is always linked; another library is linked with `-l name` on the command line, or a `link` line in `iris.mod`:
 
@@ -75,7 +81,7 @@ C types become Iris types of the same size and layout, so values pass between th
 
 A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`. A struct named like a function, as `struct stat` and `stat()` are, is `c.struct_stat`. Functions with `...`, like `printf`, take extra numbers and pointers.
 
-Left out, for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers or text.
+Left out, for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers, text, or the name of another such macro.
 
 ## Callbacks
 
@@ -91,14 +97,14 @@ i32 compare(u8 *pa, u8 *pb) {
 }
 
 void main() {
-    i64[5] xs = [5, 3, 9, 1, 7]
-    c.qsort(&xs[0], 5, 8, compare)
-    print("{xs[0]} {xs[1]} {xs[2]} {xs[3]} {xs[4]}")
+    i64[5] rtts = [52, 31, 90, 12, 70] // milliseconds
+    c.qsort(&rtts[0], 5, 8, compare)
+    print("{rtts[0]} {rtts[1]} {rtts[2]} {rtts[3]} {rtts[4]}")
 }
 ```
 
 ```output
-1 3 5 7 9
+12 31 52 70 90
 ```
 
 ## Called from C

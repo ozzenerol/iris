@@ -202,7 +202,7 @@ took under a second: true</code></pre>
 <p><code>{took}</code> writes the <code>Duration</code> in its units, like <code>20.1ms</code>. As in <a href="03-integers.html#units">Integers</a>, dividing by a unit gives a plain number, so <code>took / 1ms</code> is the milliseconds, and <code>i64(took)</code> the nanoseconds.</p>
 <h2 id="waiting"><a href="#waiting">Waiting</a></h2>
 <p><code>sleep(d)</code> waits for a <code>Duration</code>, and while one task sleeps the others run. In a <code>select</code>, an <code>after(d)</code> arm gives up waiting on channels after that time. Both are built in, without an import; <a href="24-tasks-and-channels.html#select">Tasks and channels</a> shows them with tasks.</p>
-<p>To do something at a steady rate, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait:</p>
+<p>To do something at a steady rate, like a health check every few seconds, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> main() {
@@ -211,15 +211,15 @@ took under a second: true</code></pre>
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
         next += 10ms
         sleep(next - time.clock())
-        print(<span class="s">&quot;tick {i}&quot;</span>)
+        print(<span class="s">&quot;health check {i}&quot;</span>)
     }
     took := time.clock() - start
-    print(<span class="s">&quot;three ticks in at least 30ms: {took &gt;= 30ms}&quot;</span>)
+    print(<span class="s">&quot;three checks in at least 30ms: {took &gt;= 30ms}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>tick 1
-tick 2
-tick 3
-three ticks in at least 30ms: true</code></pre>
+<pre class="out"><code>health check 1
+health check 2
+health check 3
+three checks in at least 30ms: true</code></pre>
     <nav class="pager"><a class="prev" href="30-flags.html"><span>Previous</span>Command-line flags</a><a class="next" href="32-logging.html"><span>Next</span>Input, output and logging</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>

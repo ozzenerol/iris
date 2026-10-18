@@ -53,17 +53,17 @@ try {
 <pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> main() {
-    path := <span class="s">&quot;/tmp/iris-tour-whole.txt&quot;</span>
-    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;first\n&quot;</span>)
-    <span class="k">try</span> fs.append(path, <span class="s">&quot;second\n&quot;</span>)
+    path := <span class="s">&quot;/tmp/iris-tour-proxy.conf&quot;</span>
+    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;listen 8080\n&quot;</span>)
+    <span class="k">try</span> fs.append(path, <span class="s">&quot;upstream 10.0.0.11:9000\n&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
     print(<span class="s">&quot;{text.len} bytes&quot;</span>)
     print(text)
     <span class="k">try</span> fs.remove(path)
 }</code></pre>
-<pre class="out"><code>13 bytes
-first
-second
+<pre class="out"><code>36 bytes
+listen 8080
+upstream 10.0.0.11:9000
 </code></pre>
 <p>Reading a whole file suits files that fit in memory: settings, templates, small data files. A big file is read a line or a block at a time.</p>
 <h2 id="when-a-file-isn-t-there"><a href="#when-a-file-isn-t-there">When a file isn't there</a></h2>
@@ -73,26 +73,26 @@ second
 <pre class="code run"><code><span class="k">import</span> fs
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{fs.exists(&quot;</span>/tmp/iris-tour-missing.txt<span class="s">&quot;)}&quot;</span>)
-    text := fs.readAll(<span class="s">&quot;/tmp/iris-tour-missing.txt&quot;</span>) <span class="k">catch</span> e {
+    print(<span class="s">&quot;{fs.exists(&quot;</span>/tmp/iris-tour-missing.conf<span class="s">&quot;)}&quot;</span>)
+    text := fs.readAll(<span class="s">&quot;/tmp/iris-tour-missing.conf&quot;</span>) <span class="k">catch</span> e {
         <span class="k">if</span> e.code == fs.FsError.notFound {
             print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
         }
-        <span class="s">&quot;default&quot;</span>.copy()
+        <span class="s">&quot;listen 8080&quot;</span>.copy()
     }
     print(text)
     text.free()
 }</code></pre>
 <pre class="out"><code>false
-FsError.notFound: /tmp/iris-tour-missing.txt: no such file
-default</code></pre>
+FsError.notFound: /tmp/iris-tour-missing.conf: no such file
+listen 8080</code></pre>
 <h2 id="line-by-line"><a href="#line-by-line">Line by line</a></h2>
 <p><code>fs.open(path)</code> opens a file for reading and gives an <code>fs.File</code>. <code>File.readLine()</code> gives the next line as a new <code>String</code>, without its line break, and fails with <code>FsError.end</code> after the last one. The file is read in blocks, so a file of any size takes little memory:</p>
 <pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> main() {
-    path := <span class="s">&quot;/tmp/iris-tour-lines.txt&quot;</span>
-    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;ada 36\r\nzoe 41\nmax 29&quot;</span>)
+    path := <span class="s">&quot;/tmp/iris-tour-hosts&quot;</span>
+    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;127.0.0.1 localhost\r\n10.0.0.5 db\n10.0.0.6 cache&quot;</span>)
     f := <span class="k">try</span> fs.open(path)
     <span class="k">defer</span> f.close()
     <span class="t">i64</span> n = <span class="n">0</span>
@@ -109,32 +109,32 @@ default</code></pre>
     }
     <span class="k">try</span> fs.remove(path)
 }</code></pre>
-<pre class="out"><code>1: ada 36
-2: zoe 41
-3: max 29</code></pre>
+<pre class="out"><code>1: 127.0.0.1 localhost
+2: 10.0.0.5 db
+3: 10.0.0.6 cache</code></pre>
 <p>Any other error, like a disk that fails while reading, goes on to the caller with <code>return e</code> (see <a href="18-errors.html">Errors</a>). A <code>\r</code> before the line break is taken off too, and the last line counts even without a line break after it. <code>File.readAll()</code> gives the rest of an open file.</p>
 <h2 id="writing-a-part-at-a-time"><a href="#writing-a-part-at-a-time">Writing a part at a time</a></h2>
 <p><code>fs.create(path)</code> opens a file for writing, making it or emptying it, and <code>fs.openAppend(path)</code> opens one for writing at its end. <code>File.write(text)</code> writes, and <code>File.close()</code> closes the file:</p>
 <pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> main() {
-    path := <span class="s">&quot;/tmp/iris-tour-log.txt&quot;</span>
+    path := <span class="s">&quot;/tmp/iris-tour-access.log&quot;</span>
     f := <span class="k">try</span> fs.create(path)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
-        <span class="k">try</span> f.write(<span class="s">&quot;line {i}\n&quot;</span>)
+        <span class="k">try</span> f.write(<span class="s">&quot;request {i} 200\n&quot;</span>)
     }
     f.close()
     g := <span class="k">try</span> fs.openAppend(path)
-    <span class="k">try</span> g.write(<span class="s">&quot;one more\n&quot;</span>)
+    <span class="k">try</span> g.write(<span class="s">&quot;request 4 502\n&quot;</span>)
     g.close()
     <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
     print(text)
     <span class="k">try</span> fs.remove(path)
 }</code></pre>
-<pre class="out"><code>line 1
-line 2
-line 3
-one more
+<pre class="out"><code>request 1 200
+request 2 200
+request 3 200
+request 4 502
 </code></pre>
 <h2 id="bytes"><a href="#bytes">Bytes</a></h2>
 <p><code>File.read(buf)</code> reads into a <code>u8[]</code> and gives how many bytes it put there, <code>0</code> at the end of the file. It is how a file that isn't text is read:</p>
@@ -166,8 +166,8 @@ one more
 <pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> main() {
-    path := <span class="s">&quot;/tmp/iris-tour-stat.txt&quot;</span>
-    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;hello&quot;</span>)
+    path := <span class="s">&quot;/tmp/iris-tour-proxy.pid&quot;</span>
+    <span class="k">try</span> fs.writeAll(path, <span class="s">&quot;4242\n&quot;</span>)
     info := <span class="k">try</span> fs.stat(path)
     print(<span class="s">&quot;{info.size} bytes, a folder: {info.isDir}&quot;</span>)
     dir := <span class="k">try</span> fs.stat(<span class="s">&quot;/tmp&quot;</span>)
@@ -181,12 +181,13 @@ one more
 <pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> main() {
-    <span class="k">try</span> fs.writeAll(<span class="s">&quot;/tmp/iris-tour-old.txt&quot;</span>, <span class="s">&quot;x&quot;</span>)
-    <span class="k">try</span> fs.rename(<span class="s">&quot;/tmp/iris-tour-old.txt&quot;</span>, <span class="s">&quot;/tmp/iris-tour-new.txt&quot;</span>)
-    print(<span class="s">&quot;{fs.exists(&quot;</span>/tmp/iris-tour-old.txt<span class="s">&quot;)} {fs.exists(&quot;</span>/tmp/iris-tour-new.txt<span class="s">&quot;)}&quot;</span>)
-    <span class="k">try</span> fs.remove(<span class="s">&quot;/tmp/iris-tour-new.txt&quot;</span>)
+    <span class="c">// a log rotated by hand: access.log becomes access.log.1</span>
+    <span class="k">try</span> fs.writeAll(<span class="s">&quot;/tmp/iris-tour-access.log&quot;</span>, <span class="s">&quot;request 1 200\n&quot;</span>)
+    <span class="k">try</span> fs.rename(<span class="s">&quot;/tmp/iris-tour-access.log&quot;</span>, <span class="s">&quot;/tmp/iris-tour-access.log.1&quot;</span>)
+    print(<span class="s">&quot;{fs.exists(&quot;</span>/tmp/iris-tour-access.log<span class="s">&quot;)} {fs.exists(&quot;</span>/tmp/iris-tour-access.log.<span class="n">1</span><span class="s">&quot;)}&quot;</span>)
+    <span class="k">try</span> fs.remove(<span class="s">&quot;/tmp/iris-tour-access.log.1&quot;</span>)
     <span class="k">try</span> fs.removeAll(<span class="s">&quot;/tmp/iris-tour-nothing-here&quot;</span>)
-    fs.remove(<span class="s">&quot;/tmp/iris-tour-new.txt&quot;</span>) <span class="k">catch</span> e {
+    fs.remove(<span class="s">&quot;/tmp/iris-tour-access.log.1&quot;</span>) <span class="k">catch</span> e {
         print(<span class="s">&quot;{e.code}&quot;</span>)
     }
 }</code></pre>
@@ -260,18 +261,18 @@ src/
 30 bytes</code></pre>
 <h2 id="paths"><a href="#paths">Paths</a></h2>
 <p>The <code>path</code> module works on the text of a path and never looks at the disk. <code>path.join(a, b)</code> gives a new <code>String</code>; the others give a part of the path they are given, as a <code>str</code>:</p>
-<div class="table"><table><thead><tr><th>Call</th><th>Gives</th></tr></thead><tbody><tr><td><code>path.join(&quot;/srv&quot;, &quot;data.db&quot;)</code></td><td><code>/srv/data.db</code>, and <code>b</code> itself when <code>b</code> starts with <code>/</code></td></tr><tr><td><code>path.base(&quot;/home/ada/notes.txt&quot;)</code></td><td><code>notes.txt</code></td></tr><tr><td><code>path.dir(&quot;/home/ada/notes.txt&quot;)</code></td><td><code>/home/ada</code>, and <code>.</code> when there is no folder</td></tr><tr><td><code>path.ext(&quot;notes.tar.gz&quot;)</code></td><td><code>.gz</code>, and <code>&quot;&quot;</code> when there is none</td></tr><tr><td><code>path.stem(&quot;notes.txt&quot;)</code></td><td><code>notes</code></td></tr><tr><td><code>path.isAbs(&quot;/etc&quot;)</code></td><td><code>true</code></td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Call</th><th>Gives</th></tr></thead><tbody><tr><td><code>path.join(&quot;/srv&quot;, &quot;www&quot;)</code></td><td><code>/srv/www</code>, and <code>b</code> itself when <code>b</code> starts with <code>/</code></td></tr><tr><td><code>path.base(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>access.log</code></td></tr><tr><td><code>path.dir(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>/var/log/proxy</code>, and <code>.</code> when there is no folder</td></tr><tr><td><code>path.ext(&quot;access.log.gz&quot;)</code></td><td><code>.gz</code>, and <code>&quot;&quot;</code> when there is none</td></tr><tr><td><code>path.stem(&quot;access.log&quot;)</code></td><td><code>access</code></td></tr><tr><td><code>path.isAbs(&quot;/etc&quot;)</code></td><td><code>true</code></td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">import</span> path
 
 <span class="t">void</span> main() {
-    p := <span class="s">&quot;/home/ada/photos/cat.jpeg&quot;</span>
+    p := <span class="s">&quot;/var/log/proxy/access.log.gz&quot;</span>
     print(<span class="s">&quot;{path.dir(p)} | {path.base(p)} | {path.stem(p)} | {path.ext(p)}&quot;</span>)
-    print(<span class="s">&quot;{path.dir(&quot;</span>notes.txt<span class="s">&quot;)} | {path.ext(&quot;</span>.bashrc<span class="s">&quot;)} | {path.base(&quot;</span>/srv/www/<span class="s">&quot;)}&quot;</span>)
+    print(<span class="s">&quot;{path.dir(&quot;</span>proxy.conf<span class="s">&quot;)} | {path.ext(&quot;</span>.bashrc<span class="s">&quot;)} | {path.base(&quot;</span>/srv/www/<span class="s">&quot;)}&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> full = path.join(<span class="s">&quot;/srv/www&quot;</span>, <span class="s">&quot;index.html&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> abs = path.join(<span class="s">&quot;/srv/www&quot;</span>, <span class="s">&quot;/etc/hosts&quot;</span>)
     print(<span class="s">&quot;{full} {abs} {path.isAbs(full)} {path.isAbs(&quot;</span>a/b<span class="s">&quot;)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>/home/ada/photos | cat.jpeg | cat | .jpeg
+<pre class="out"><code>/var/log/proxy | access.log.gz | access.log | .gz
 . |  | www
 /srv/www/index.html /etc/hosts true false</code></pre>
 <p>A name that starts with a dot, like <code>.bashrc</code>, has no extension. A <code>/</code> at the end of a path is ignored.</p>

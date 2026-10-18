@@ -53,16 +53,16 @@ try {
 <pre class="code run"><code><span class="k">import</span> io
 
 <span class="t">void</span> main() {
-    io.write(<span class="s">&quot;one, &quot;</span>)
-    io.write(<span class="s">&quot;two\n&quot;</span>)
+    io.write(<span class="s">&quot;HTTP/1.1 &quot;</span>)
+    io.write(<span class="s">&quot;200 OK\n&quot;</span>)
     io.eprint(<span class="s">&quot;this goes to standard error&quot;</span>)
-    print(<span class="s">&quot;three&quot;</span>)
+    print(<span class="s">&quot;Content-Length: 0&quot;</span>)
 }</code></pre>
-<pre class="out"><code>one, two
-three</code></pre>
+<pre class="out"><code>HTTP/1.1 200 OK
+Content-Length: 0</code></pre>
 <p>The line on standard error isn't part of the output above: it shows in the terminal, but <code>./program &gt; out.txt</code> puts only the other lines in the file, and <code>./program 2&gt; errors.txt</code> puts it in its own file. Results go to standard output, so another program can read them; messages for the person running it go to standard error.</p>
 <h2 id="reading-standard-input"><a href="#reading-standard-input">Reading standard input</a></h2>
-<p><code>io.readLine()</code> gives the next line of standard input as a new <code>String</code>, without its line break, and fails with <code>io.IoError.eof</code> when there is no more. <code>io.readAll()</code> gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this:</p>
+<p><code>io.readLine()</code> gives the next line of standard input as a new <code>String</code>, without its line break, and fails with <code>io.IoError.eof</code> when there is no more. <code>io.readAll()</code> gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this. It prints the client address at the start of each access log line:</p>
 <pre class="code"><code><span class="k">import</span> io, <span class="t">str</span>
 
 !<span class="t">void</span> main() {
@@ -75,17 +75,17 @@ three</code></pre>
             <span class="k">return</span> e
         }
         n += <span class="n">1</span>
-        <span class="k">scoped</span> <span class="t">String</span> up = <span class="t">str</span>.upper(line)
-        print(<span class="s">&quot;{n}: {up}&quot;</span>)
+        ip, _, _ := <span class="t">str</span>.cut(line, <span class="s">&quot; &quot;</span>)
+        print(<span class="s">&quot;{n}: {ip}&quot;</span>)
         line.free()
     }
     io.eprint(<span class="s">&quot;{n} lines&quot;</span>)
 }</code></pre>
-<p>Given three lines in a pipe, it prints them numbered, and the count on standard error:</p>
-<pre class="out"><code>$ printf &#x27;pear\nfig\nplum\n&#x27; | ./upper
-1: PEAR
-2: FIG
-3: PLUM
+<p>Given three lines in a pipe, it prints the addresses numbered, and the count on standard error:</p>
+<pre class="out"><code>$ printf &#x27;10.0.0.5 GET /\n10.0.0.9 GET /login\n10.0.0.5 POST /login\n&#x27; | ./clients
+1: 10.0.0.5
+2: 10.0.0.9
+3: 10.0.0.5
 3 lines</code></pre>
 <p>When nothing is piped in, <code>io.readLine</code> waits for the person at the terminal to type a line; Ctrl-D ends the input. <code>term.readLine(prompt)</code> shows a prompt and lets the line be edited, with the lines typed before under Up and Down (see the <a href="../guides/02-cli.html">command-line guide</a>).</p>
 <h2 id="log-lines"><a href="#log-lines">Log lines</a></h2>
@@ -113,15 +113,15 @@ three</code></pre>
 
 <span class="t">void</span> main() {
     log.showTime(<span class="k">false</span>)
-    user := <span class="s">&quot;ada&quot;</span>
-    log.info(<span class="s">&quot;signed in&quot;</span>, [(<span class="s">&quot;user&quot;</span>, .text(user)), (<span class="s">&quot;id&quot;</span>, .int(<span class="n">7</span>)), (<span class="s">&quot;admin&quot;</span>, .<span class="t">bool</span>(<span class="k">true</span>))])
-    log.warn(<span class="s">&quot;slow request&quot;</span>, [(<span class="s">&quot;path&quot;</span>, .text(<span class="s">&quot;/search&quot;</span>)), (<span class="s">&quot;ms&quot;</span>, .int(<span class="n">950</span>)), (<span class="s">&quot;query&quot;</span>, .text(<span class="s">&quot;red pears&quot;</span>))])
+    peer := <span class="s">&quot;10.0.0.5:51234&quot;</span>
+    log.info(<span class="s">&quot;client connected&quot;</span>, [(<span class="s">&quot;peer&quot;</span>, .text(peer)), (<span class="s">&quot;fd&quot;</span>, .int(<span class="n">7</span>)), (<span class="s">&quot;tls&quot;</span>, .<span class="t">bool</span>(<span class="k">true</span>))])
+    log.warn(<span class="s">&quot;slow request&quot;</span>, [(<span class="s">&quot;path&quot;</span>, .text(<span class="s">&quot;/search&quot;</span>)), (<span class="s">&quot;ms&quot;</span>, .int(<span class="n">950</span>)), (<span class="s">&quot;query&quot;</span>, .text(<span class="s">&quot;status 502&quot;</span>))])
     print(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
 <pre class="out"><code>done</code></pre>
 <p>Standard error gets:</p>
-<pre class="out"><code>INFO signed in user=ada id=7 admin=true
-WARN slow request path=/search ms=950 query=&quot;red pears&quot;</code></pre>
+<pre class="out"><code>INFO client connected peer=10.0.0.5:51234 fd=7 tls=true
+WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 <p><code>log.showTime(false)</code> leaves the time out, as here. It suits a program that systemd or Docker runs, since they put the time on each line themselves.</p>
 <h2 id="levels"><a href="#levels">Levels</a></h2>
 <p>The levels are the values of <code>log.Level</code>, from least to most important:</p>
@@ -148,12 +148,12 @@ WARN slow request path=/search ms=950 query=&quot;red pears&quot;</code></pre>
 
 <span class="t">void</span> main() {
     log.useJson()
-    log.info(<span class="s">&quot;user \&quot;ada\&quot; signed in&quot;</span>)
+    log.info(<span class="s">&quot;client \&quot;edge-1\&quot; connected&quot;</span>)
     log.useJson(<span class="k">false</span>)
     log.info(<span class="s">&quot;plain again&quot;</span>)
 }</code></pre>
 <p>Standard error gets:</p>
-<pre class="out"><code>{&quot;time&quot;: &quot;2026-10-17T09:30:00.250Z&quot;, &quot;level&quot;: &quot;info&quot;, &quot;message&quot;: &quot;user \&quot;ada\&quot; signed in&quot;}
+<pre class="out"><code>{&quot;time&quot;: &quot;2026-10-17T09:30:00.250Z&quot;, &quot;level&quot;: &quot;info&quot;, &quot;message&quot;: &quot;client \&quot;edge-1\&quot; connected&quot;}
 2026-10-17T09:30:00.250Z INFO plain again</code></pre>
 <p>The message is quoted with <code>json.quote</code>, so quotes and line breaks in it keep the line valid JSON. Fields become keys of the object, with numbers and <code>true</code> or <code>false</code> as JSON values: <code>&quot;ms&quot;: 950</code>.</p>
 <h2 id="writing-to-a-file"><a href="#writing-to-a-file">Writing to a file</a></h2>

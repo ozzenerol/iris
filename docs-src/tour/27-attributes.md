@@ -19,25 +19,25 @@ An attribute starts with `@` and goes on the line before a declaration. Some mak
 ```iris run
 import env
 
-@env("SHOP")
+@env("PROXY")
 struct Settings {
-    u16 port = 8080        // SHOP_PORT
-    str db = "shop.db"     // SHOP_DB
-    Duration timeout = 30s // SHOP_TIMEOUT
-    bool debug             // SHOP_DEBUG
+    u16 port = 8080                 // PROXY_PORT
+    str upstream = "127.0.0.1:9000" // PROXY_UPSTREAM
+    Duration timeout = 30s          // PROXY_TIMEOUT
+    bool debug                      // PROXY_DEBUG
 }
 
 !void main() {
     scoped s := try env.load(Settings)
-    print("{s.port} {s.db} {s.timeout} {s.debug}")
+    print("{s.port} -> {s.upstream}, timeout {s.timeout}, debug {s.debug}")
 }
 ```
 
 ```output
-8080 shop.db 30s false
+8080 -> 127.0.0.1:9000, timeout 30s, debug false
 ```
 
-Run with `SHOP_PORT=9000 SHOP_DEBUG=yes`, the same program prints `9000 shop.db 30s true`. A variable that isn't set leaves the field's default.
+Run with `PROXY_PORT=80 PROXY_DEBUG=yes`, the same program prints `80 -> 127.0.0.1:9000, timeout 30s, debug true`. A variable that isn't set leaves the field's default.
 
 `@env("NAME")` on a field gives the variable's whole name, without the prefix, and `@env(required)` makes a missing variable an error; both can go together:
 
@@ -67,15 +67,15 @@ An `@env` struct gets a `free` method, which frees its `String`s, so `scoped` wo
 
 ```iris run
 @inline
-i64 square(i64 x) => x * x
+u16 swap16(u16 x) => (x << 8) | (x >> 8)
 
 void main() {
-    print("{square(12)}")
+    print("{swap16(8080)}")
 }
 ```
 
 ```output
-144
+36895
 ```
 
 The optimiser already inlines small functions on its own in release builds; `@inline` makes sure of it.
@@ -95,12 +95,12 @@ u32 checksum(u8[] data) {
 }
 
 void main() {
-    print("{checksum("hello")}")
+    print("{checksum("GET / HTTP/1.1")}")
 }
 ```
 
 ```output
-99162322
+2574418856
 ```
 
 A mistake in such a function isn't caught: it reads or writes the wrong memory.

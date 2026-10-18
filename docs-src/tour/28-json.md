@@ -9,31 +9,32 @@ A struct marked `@json` can be turned into JSON text and read back from it, with
 ```iris run
 import json
 
-enum Role { admin, user }
+enum Proto { http, grpc }
 
+// A service, as a service registry lists it.
 @json
-struct User {
+struct Service {
     i64 id
     String name
-    Role role
-    bool active = true
-    str[] tags
+    Proto proto
+    bool healthy = true
+    str[] addrs
 }
 
 void main() {
-    str[2] tags = ["math", "engines"]
-    u := User{id: 7, name: "Ada".copy(), role: .admin, tags: tags}
-    scoped String text = json.encode(u)
+    str[2] addrs = ["10.0.0.11:8080", "10.0.0.12:8080"]
+    s := Service{id: 7, name: "billing".copy(), proto: .grpc, addrs: addrs}
+    scoped String text = json.encode(s)
     print(text)
-    u.name.free()
+    s.name.free()
 }
 ```
 
 ```output
-{"id":7,"name":"Ada","role":"admin","active":true,"tags":["math","engines"]}
+{"id":7,"name":"billing","proto":"grpc","healthy":true,"addrs":["10.0.0.11:8080","10.0.0.12:8080"]}
 ```
 
-Arrays, slices and plain values can be encoded too: `json.encode(users.items())` gives a JSON array. An enum is written as its value's name.
+Arrays, slices and plain values can be encoded too: `json.encode(services.items())` gives a JSON array. An enum is written as its value's name.
 
 ## Decoding
 
@@ -42,73 +43,73 @@ Arrays, slices and plain values can be encoded too: `json.encode(users.items())`
 ```iris run
 import json
 
-enum Role { admin, user }
+enum Proto { http, grpc }
 
 @json
-struct Address {
-    String city
-    u16 zip
+struct Check {
+    String path
+    u16 port
 }
 
 @json
-struct User {
+struct Service {
     i64 id
     String name
-    Role role = .user
-    bool active = true
-    String[] tags
-    Address home
-    f64 score
+    Proto proto = .http
+    bool healthy = true
+    String[] addrs
+    Check check
+    f64 load
 }
 
 !void main() {
     text := r"""
-        {"id": 7, "name": "Ada", "tags": ["math", "engines"],
-         "home": {"city": "London", "zip": 1815}, "score": 9.5, "unknown": [1, 2]}
+        {"id": 7, "name": "billing", "addrs": ["10.0.0.11:8080", "10.0.0.12:8080"],
+         "check": {"path": "/health", "port": 9090}, "load": 0.25, "region": "eu"}
         """
-    scoped User u = try json.decode(User, text)
-    print("{u.id} {u.name} {u.role} {u.active} {u.tags.len} {u.home.city} {u.score}")
+    scoped Service s = try json.decode(Service, text)
+    print("{s.id} {s.name} {s.proto} {s.healthy} {s.addrs.len} {s.check.path} {s.check.port} {s.load}")
 }
 ```
 
 ```output
-7 Ada user true 2 London 9.5
+7 billing http true 2 /health 9090 0.25
 ```
 
 `null` leaves a field as it is. A decoded struct owns its `String`s and slices: the `free` method that `@json` gives the struct frees them, so `scoped` works on it, and when `decode` fails, what it had read is freed already.
 
-A JSON array is read into a slice, written as the type: `json.decode(User[], text)`. The slice is new memory, which the caller frees, after freeing each item that owns memory:
+A JSON array is read into a slice, written as the type: `json.decode(Service[], text)`. The slice is new memory, which the caller frees, after freeing each item that owns memory:
 
 ```iris run
 import json
 
 @json
-struct Item {
-    String name
-    i64 count
+struct Backend {
+    String addr
+    i64 weight
 }
 
 !void main() {
-    items := try json.decode(Item[], r"""[{"name": "pear", "count": 4}, {"name": "fig", "count": 9}]""")
-    defer free(items)
+    backends := try json.decode(Backend[], r"""[{"addr": "10.0.0.11:8080", "weight": 3}, {"addr": "10.0.0.12:8080", "weight": 1}]""")
+    defer free(backends)
     defer {
-        for it in items {
-            it.free()
+        for b in backends {
+            b.free()
         }
     }
-    for it in items {
-        print("{it.name}: {it.count}")
+    for b in backends {
+        print("{b.addr} weight {b.weight}")
     }
-    ids := try json.decode(i64[], "[3, 1, 4]")
-    print("{ids.len} ids, the last {ids[2]}")
-    free(ids)
+    ports := try json.decode(u16[], "[80, 443, 8080]")
+    print("{ports.len} ports, the last {ports[2]}")
+    free(ports)
 }
 ```
 
 ```output
-pear: 4
-fig: 9
-3 ids, the last 4
+10.0.0.11:8080 weight 3
+10.0.0.12:8080 weight 1
+3 ports, the last 8080
 ```
 
 ## Keys and required fields
@@ -118,32 +119,33 @@ A field's key is its name as written. `@json("key")` gives another key, and `@js
 ```iris run
 import json
 
+// One line of a JSON access log.
 @json
-struct Event {
-    @json("event_id", required) i64 id
-    @json("created_at") i64 created
-    String kind
+struct Access {
+    @json("request_id", required) i64 id
+    @json("remote_addr") String remote
+    i64 status
 }
 
 void main() {
-    scoped Event e = json.decode(Event, r"""{"event_id": 3, "created_at": 1700000000, "kind": "signup"}""") catch err {
+    scoped Access a = json.decode(Access, r"""{"request_id": 3, "remote_addr": "10.0.0.5", "status": 200}""") catch err {
         print(err.message)
-        Event{}
+        Access{}
     }
-    print("{e.id} {e.created} {e.kind}")
-    scoped String back = json.encode(e)
+    print("{a.id} {a.remote} {a.status}")
+    scoped String back = json.encode(a)
     print(back)
-    _ = json.decode(Event, r"""{"kind": "signup"}""") catch err {
+    _ = json.decode(Access, r"""{"status": 502}""") catch err {
         print("{err.code}: {err.message}")
-        Event{}
+        Access{}
     }
 }
 ```
 
 ```output
-3 1700000000 signup
-{"event_id":3,"created_at":1700000000,"kind":"signup"}
-JsonError.missing: the required field "event_id" is missing
+3 10.0.0.5 200
+{"request_id":3,"remote_addr":"10.0.0.5","status":200}
+JsonError.missing: the required field "request_id" is missing
 ```
 
 ## What a @json struct can hold
@@ -165,26 +167,26 @@ The errors are values of `json.JsonError`, and the message says where in the tex
 import json
 
 @json
-struct Point {
-    i64 x
-    u8 tag
-    String[] labels
+struct Listen {
+    i64 backlog
+    u8 ttl
+    String[] hosts
 }
 
 void main() {
-    for text in [r"""{"x": "one"}""", r"""{"tag": 300}""", r"""{"labels": [1]}""", r"{oops"] {
-        _ = json.decode(Point, text) catch e {
+    for text in [r"""{"backlog": "many"}""", r"""{"ttl": 300}""", r"""{"hosts": [1]}""", r"{oops"] {
+        _ = json.decode(Listen, text) catch e {
             print("{e.code}: {e.message}")
-            Point{}
+            Listen{}
         }
     }
 }
 ```
 
 ```output
-JsonError.wrongType: x: expected a number, found a string
-JsonError.range: tag: 300 doesn't fit in u8
-JsonError.wrongType: labels[0]: expected a string, found a number
+JsonError.wrongType: backlog: expected a number, found a string
+JsonError.range: ttl: 300 doesn't fit in u8
+JsonError.wrongType: hosts[0]: expected a string, found a number
 JsonError.syntax: line 1, column 2: expected a key in quotes
 ```
 
@@ -196,12 +198,12 @@ JsonError.syntax: line 1, column 2: expected a key in quotes
 import json
 
 void main() {
-    msg := "say \"hi\"\nthen go"
+    msg := "upstream \"billing\" timed out\nafter 30s"
     scoped String q = json.quote(msg)
-    print("{{\"message\": {q}}}")
+    print("{{\"error\": {q}}}")
 }
 ```
 
 ```output
-{"message": "say \"hi\"\nthen go"}
+{"error": "upstream \"billing\" timed out\nafter 30s"}
 ```

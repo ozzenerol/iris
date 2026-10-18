@@ -102,9 +102,9 @@ try {
     res.text(<span class="s">&quot;file {req.param(&quot;</span>path<span class="s">&quot;)}&quot;</span>)
 }
 
-<span class="t">void</span> search(http.Request *req, http.Response *res) {
+<span class="t">void</span> logs(http.Request *req, http.Response *res) {
     page := req.query(<span class="s">&quot;page&quot;</span>)
-    res.text(<span class="s">&quot;{req.query(&quot;</span>q<span class="s">&quot;)}, page {if page == &quot;</span><span class="s">&quot; { &quot;</span><span class="n">1</span><span class="s">&quot; } else { page }}&quot;</span>)
+    res.text(<span class="s">&quot;logs of {req.query(&quot;</span>host<span class="s">&quot;)}, page {if page == &quot;</span><span class="s">&quot; { &quot;</span><span class="n">1</span><span class="s">&quot; } else { page }}&quot;</span>)
 }
 
 <span class="t">void</span> serve(http.Router *r, net.Listener ln) {
@@ -118,11 +118,11 @@ try {
     <span class="k">defer</span> r.free()
     r.get(<span class="s">&quot;/users/:id&quot;</span>, user)
     r.get(<span class="s">&quot;/files/*path&quot;</span>, file)
-    r.get(<span class="s">&quot;/search&quot;</span>, search)
+    r.get(<span class="s">&quot;/logs&quot;</span>, logs)
     ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> serve(&amp;r, ln)
 
-    <span class="k">for</span> path <span class="k">in</span> [<span class="s">&quot;/users/42&quot;</span>, <span class="s">&quot;/files/docs/a.txt&quot;</span>, <span class="s">&quot;/search?q=pears&amp;page=2&quot;</span>, <span class="s">&quot;/search?q=figs&quot;</span>, <span class="s">&quot;/nope&quot;</span>] {
+    <span class="k">for</span> path <span class="k">in</span> [<span class="s">&quot;/users/42&quot;</span>, <span class="s">&quot;/files/docs/a.txt&quot;</span>, <span class="s">&quot;/logs?host=edge-1&amp;page=2&quot;</span>, <span class="s">&quot;/logs?host=edge-2&quot;</span>, <span class="s">&quot;/nope&quot;</span>] {
         <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}{path}&quot;</span>)
         <span class="k">scoped</span> http.Reply reply = <span class="k">try</span> http.get(url)
         print(<span class="s">&quot;{reply.status} {str.trim(reply.body)}&quot;</span>)
@@ -133,8 +133,8 @@ try {
 }</code></pre>
 <pre class="out"><code>200 user 42
 200 file docs/a.txt
-200 pears, page 2
-200 figs, page 1
+200 logs of edge-1, page 2
+200 logs of edge-2, page 1
 404 not found
 405 allowed: GET</code></pre>
 <p>A path no pattern has gets 404, with the text <code>not found</code> and a newline, which <code>str.trim</code> takes off here. A path that is there for other methods gets 405, with an <code>Allow</code> header that lists them. When several patterns match, the one with the most fixed parts wins: <code>/users/me</code> goes before <code>/users/:id</code>, whatever the order they were added in.</p>
@@ -146,20 +146,21 @@ try {
 <p>A JSON body is read with <code>json.decode</code>, and a struct is answered with <code>json.encode</code> (see <a href="28-json.html">JSON</a>):</p>
 <pre class="code run"><code><span class="k">import</span> http, json, net
 
+<span class="c">// A backend to add to a load balancer.</span>
 <span class="a">@json</span>
-<span class="k">struct</span> NewItem {
-    <span class="a">@json</span>(required) <span class="t">String</span> name
-    <span class="t">i64</span> count = <span class="n">1</span>
+<span class="k">struct</span> NewBackend {
+    <span class="a">@json</span>(required) <span class="t">String</span> addr
+    <span class="t">i64</span> weight = <span class="n">1</span>
 }
 
-<span class="t">void</span> addItem(http.Request *req, http.Response *res) {
-    <span class="k">scoped</span> NewItem it = json.decode(NewItem, req.body) <span class="k">catch</span> e {
+<span class="t">void</span> addBackend(http.Request *req, http.Response *res) {
+    <span class="k">scoped</span> NewBackend b = json.decode(NewBackend, req.body) <span class="k">catch</span> e {
         res.error(<span class="n">400</span>, e.message)
         <span class="k">return</span>
     }
-    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(it)
+    <span class="k">scoped</span> <span class="t">String</span> body = json.encode(b)
     res.status = <span class="n">201</span>
-    res.header(<span class="s">&quot;Location&quot;</span>, <span class="s">&quot;/items/1&quot;</span>)
+    res.header(<span class="s">&quot;Location&quot;</span>, <span class="s">&quot;/backends/1&quot;</span>)
     res.json(body)
 }
 
@@ -172,12 +173,12 @@ try {
 !<span class="t">void</span> main() {
     http.Router r
     <span class="k">defer</span> r.free()
-    r.post(<span class="s">&quot;/items&quot;</span>, addItem)
+    r.post(<span class="s">&quot;/backends&quot;</span>, addBackend)
     ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> serve(&amp;r, ln)
 
-    <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}/items&quot;</span>)
-    <span class="k">for</span> body <span class="k">in</span> [r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>name<span class="s">&quot;: &quot;</span>pear<span class="s">&quot;, &quot;</span>count<span class="s">&quot;: 3}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>count<span class="s">&quot;: 3}&quot;</span><span class="s">&quot;&quot;</span>, <span class="s">&quot;oops&quot;</span>] {
+    <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}/backends&quot;</span>)
+    <span class="k">for</span> body <span class="k">in</span> [r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>addr<span class="s">&quot;: &quot;</span><span class="n">10.0</span>.<span class="n">0.11</span>:<span class="n">8080</span><span class="s">&quot;, &quot;</span>weight<span class="s">&quot;: 3}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>weight<span class="s">&quot;: 3}&quot;</span><span class="s">&quot;&quot;</span>, <span class="s">&quot;oops&quot;</span>] {
         <span class="k">scoped</span> http.Reply reply = <span class="k">try</span> http.post(url, <span class="s">&quot;application/json&quot;</span>, body)
         print(<span class="s">&quot;{reply.status} {reply.body}&quot;</span>)
         <span class="k">if</span> reply.status == <span class="n">201</span> {
@@ -185,9 +186,9 @@ try {
         }
     }
 }</code></pre>
-<pre class="out"><code>201 {&quot;name&quot;:&quot;pear&quot;,&quot;count&quot;:3}
-at /items/1
-400 {&quot;error&quot;: &quot;the required field \&quot;name\&quot; is missing&quot;}
+<pre class="out"><code>201 {&quot;addr&quot;:&quot;10.0.0.11:8080&quot;,&quot;weight&quot;:3}
+at /backends/1
+400 {&quot;error&quot;: &quot;the required field \&quot;addr\&quot; is missing&quot;}
 400 {&quot;error&quot;: &quot;line 1, column 1: expected an object, found something else&quot;}</code></pre>
 <h2 id="checks-and-logging"><a href="#checks-and-logging">Checks and logging</a></h2>
 <p><code>r.use(check)</code> runs a check before the handler of every request, and <code>r.use(check, &quot;/admin&quot;)</code> only for paths that start with <code>/admin</code>. A check that answers the request itself returns <code>false</code>, and the handler isn't called: a login check, a rate limit. <code>r.after(done)</code> runs after every request, answered or not, for a log:</p>
@@ -271,14 +272,15 @@ stopped</code></pre>
 <p>A JSON reply is read with <code>json.decode</code>:</p>
 <pre class="code run"><code><span class="k">import</span> http, json, net
 
+<span class="c">// What a service&#x27;s health endpoint answers.</span>
 <span class="a">@json</span>
-<span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<span class="k">struct</span> Health {
+    <span class="t">i64</span> open
+    <span class="t">i64</span> uptime
 }
 
-<span class="t">void</span> point(http.Request *req, http.Response *res) {
-    res.json(r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>x<span class="s">&quot;: 3, &quot;</span>y<span class="s">&quot;: 4}&quot;</span><span class="s">&quot;&quot;</span>)
+<span class="t">void</span> health(http.Request *req, http.Response *res) {
+    res.json(r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>open<span class="s">&quot;: 3, &quot;</span>uptime<span class="s">&quot;: 86400}&quot;</span><span class="s">&quot;&quot;</span>)
 }
 
 <span class="t">void</span> serve(http.Router *r, net.Listener ln) {
@@ -290,25 +292,25 @@ stopped</code></pre>
 !<span class="t">void</span> main() {
     http.Router r
     <span class="k">defer</span> r.free()
-    r.get(<span class="s">&quot;/point&quot;</span>, point)
+    r.get(<span class="s">&quot;/health&quot;</span>, health)
     ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> serve(&amp;r, ln)
 
-    <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}/point&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}/health&quot;</span>)
     <span class="k">scoped</span> http.Reply reply = <span class="k">try</span> http.get(url)
     <span class="k">if</span> reply.status != <span class="n">200</span> {
         print(<span class="s">&quot;the server answered {reply.status}&quot;</span>)
         <span class="k">return</span>
     }
-    p := <span class="k">try</span> json.decode(Point, reply.body)
-    print(<span class="s">&quot;{p.x} {p.y} ({reply.header(&quot;</span>content-<span class="k">type</span><span class="s">&quot;)})&quot;</span>)
+    h := <span class="k">try</span> json.decode(Health, reply.body)
+    print(<span class="s">&quot;{h.open} open, up {h.uptime}s ({reply.header(&quot;</span>content-<span class="k">type</span><span class="s">&quot;)})&quot;</span>)
 
     _ = http.get(<span class="s">&quot;ftp://example.com/&quot;</span>) <span class="k">catch</span> e {
         print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
         http.Reply{}
     }
 }</code></pre>
-<pre class="out"><code>3 4 (application/json)
+<pre class="out"><code>3 open, up 86400s (application/json)
 HttpError.badUrl: ftp://example.com/: the address should start with http:// or https://</code></pre>
 <p><code>http.get</code> and the others open a connection for each request and wait at most 30 seconds for each step. A <code>Client</code> keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its <code>timeout</code> sets how long it waits, and it can be shared by tasks and threads:</p>
 <pre class="code run"><code><span class="k">import</span> http, net

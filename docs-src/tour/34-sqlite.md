@@ -9,32 +9,33 @@ The `sqlite` module keeps data in a SQLite database: one file, or memory, with t
 ```iris run
 import fs, sqlite
 
-!void visit(str path) {
+// Records that the service started, and says how many times it has.
+!void started(str path) {
     db := try sqlite.open(path)
     defer db.close()
-    try db.exec("CREATE TABLE IF NOT EXISTS visits (n INTEGER)")
-    try db.exec("INSERT INTO visits VALUES (1)")
-    print("visits: {try count(&db)}")
+    try db.exec("CREATE TABLE IF NOT EXISTS starts (n INTEGER)")
+    try db.exec("INSERT INTO starts VALUES (1)")
+    print("starts: {try count(&db)}")
 }
 
 !i64 count(sqlite.Db *db) {
-    rows := try db.query("SELECT COUNT(*) FROM visits")
+    rows := try db.query("SELECT COUNT(*) FROM starts")
     defer rows.close()
     _ = try rows.next()
     return rows.int(0)
 }
 
 !void main() {
-    path := "/tmp/iris-tour-visits.db"
-    try visit(path)
-    try visit(path)
+    path := "/tmp/iris-tour-starts.db"
+    try started(path)
+    try started(path)
     try fs.remove(path)
 }
 ```
 
 ```output
-visits: 1
-visits: 2
+starts: 1
+starts: 2
 ```
 
 `count` reads the table with `query`, which [Row by row](#row-by-row) shows.
@@ -67,11 +68,11 @@ import sqlite
     db := try sqlite.open(":memory:")
     defer db.close()
     try db.exec(r"""
-        CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, age INTEGER);
-        CREATE TABLE posts (id INTEGER PRIMARY KEY, user INTEGER, title TEXT);
-        INSERT INTO users (name, age) VALUES ('Ada', 36), ('Zoe', 41);
+        CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, port INTEGER);
+        CREATE TABLE checks (id INTEGER PRIMARY KEY, host INTEGER, ok INTEGER);
+        INSERT INTO hosts (name, port) VALUES ('db', 5432), ('cache', 6379);
         """)
-    try db.exec("UPDATE users SET age = age + 1")
+    try db.exec("UPDATE hosts SET port = port + 10000")
     print("{db.changes()} changed")
 }
 ```
@@ -84,7 +85,7 @@ import sqlite
 
 ## Values in SQL
 
-Each `?` in the SQL takes the next value from the list given after it. The values are kept apart from the SQL text, so a name with a quote in it, or one typed by a user, can't change what the SQL does. A value is one of `sqlite.Value`: `.int`, `.float`, `.text`, `.blob` for bytes, or `.none` for NULL:
+Each `?` in the SQL takes the next value from the list given after it. The values are kept apart from the SQL text, so text with a quote in it, or text that came over the network, can't change what the SQL does. A value is one of `sqlite.Value`: `.int`, `.float`, `.text`, `.blob` for bytes, or `.none` for NULL:
 
 ```iris run
 import sqlite
@@ -92,19 +93,19 @@ import sqlite
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER, score REAL)")
-    try db.exec("INSERT INTO users (name, age, score) VALUES (?, ?, ?)", [.text("Ada"), .int(36), .float(9.5)])
-    print("Ada is {db.lastId()}")
-    try db.exec("INSERT INTO users (name, age, score) VALUES (?, ?, ?)", [.text("O'Brien"), .none, .none])
-    print("O'Brien is {db.lastId()}")
-    try db.exec("DELETE FROM users WHERE age IS NULL")
+    try db.exec("CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, port INTEGER, note TEXT)")
+    try db.exec("INSERT INTO hosts (name, port, note) VALUES (?, ?, ?)", [.text("db"), .int(5432), .text("the main database")])
+    print("db is {db.lastId()}")
+    try db.exec("INSERT INTO hosts (name, port, note) VALUES (?, ?, ?)", [.text("old"), .none, .text("ops' test box")])
+    print("old is {db.lastId()}")
+    try db.exec("DELETE FROM hosts WHERE port IS NULL")
     print("{db.changes()} deleted")
 }
 ```
 
 ```output
-Ada is 1
-O'Brien is 2
+db is 1
+old is 2
 1 deleted
 ```
 
@@ -112,36 +113,36 @@ With values, `exec` runs one statement: SQL with another statement after it fail
 
 ## Bytes
 
-A BLOB column keeps bytes as they are, for images, hashes or packed data. `.blob(bytes)` puts a `u8[]` into one, and `rows.bytes(col)` reads it back; like `text`, what it gives is valid until the next `next`. A `String` field of a struct read with `all` or `one` gets the bytes too:
+A BLOB column keeps bytes as they are, for certificates, hashes or packed data. `.blob(bytes)` puts a `u8[]` into one, and `rows.bytes(col)` reads it back; like `text`, what it gives is valid until the next `next`. A `String` field of a struct read with `all` or `one` gets the bytes too:
 
 ```iris run
 import sqlite
 
 @json
-struct Picture {
-    String name
-    String data
+struct Cert {
+    String host
+    String der
 }
 
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE pictures (name TEXT, data BLOB)")
-    u8[6] head = [0x89, 'P', 'N', 'G', 0, 0xff]
-    try db.exec("INSERT INTO pictures VALUES (?, ?)", [.text("cat.png"), .blob(head[:])])
-    rows := try db.query("SELECT data, typeof(data) FROM pictures")
+    try db.exec("CREATE TABLE certs (host TEXT, der BLOB)")
+    u8[6] start = [0x30, 0x82, 0x03, 0x0a, 0x30, 0x00] // how a DER certificate starts
+    try db.exec("INSERT INTO certs VALUES (?, ?)", [.text("api.example.com"), .blob(start[:])])
+    rows := try db.query("SELECT der, typeof(der) FROM certs")
     defer rows.close()
     _ = try rows.next()
     b := rows.bytes(0)
     print("{rows.text(1)}: {b.len} bytes, the first {b[0]}, the last {b[5]}")
-    scoped Picture p = try sqlite.one[Picture](&db, "SELECT * FROM pictures")
-    print("{p.name}: {p.data.len} bytes")
+    scoped Cert c = try sqlite.one[Cert](&db, "SELECT * FROM certs")
+    print("{c.host}: {c.der.len} bytes")
 }
 ```
 
 ```output
-blob: 6 bytes, the first 137, the last 255
-cat.png: 6 bytes
+blob: 6 bytes, the first 48, the last 0
+api.example.com: 6 bytes
 ```
 
 ## Rows into structs
@@ -152,33 +153,33 @@ cat.png: 6 bytes
 import sqlite
 
 @json
-struct User {
+struct Host {
     i64 id
     String name
-    i64 age
+    i64 port
 }
 
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
-    try db.exec("INSERT INTO users (name, age) VALUES ('Ada', 36), ('Zoe', 41), ('Bo', 7)")
-    users := try sqlite.all[User](&db, "SELECT * FROM users WHERE age > ? ORDER BY name", [.int(18)])
+    try db.exec("CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, port INTEGER)")
+    try db.exec("INSERT INTO hosts (name, port) VALUES ('db', 5432), ('cache', 6379), ('dns', 53)")
+    hosts := try sqlite.all[Host](&db, "SELECT * FROM hosts WHERE port > ? ORDER BY name", [.int(1023)])
     defer {
-        for u in users {
-            u.free()
+        for h in hosts {
+            h.free()
         }
-        users.free()
+        hosts.free()
     }
-    for u in users {
-        print("{u.id} {u.name} {u.age}")
+    for h in hosts {
+        print("{h.id} {h.name} {h.port}")
     }
 }
 ```
 
 ```output
-1 Ada 36
-2 Zoe 41
+2 cache 6379
+1 db 5432
 ```
 
 `sqlite.one[T]` gives the first row. When the query finds nothing, it fails with `SqlError.noRows`:
@@ -187,7 +188,7 @@ struct User {
 import sqlite
 
 @json
-struct User {
+struct Host {
     i64 id
     String name
 }
@@ -195,19 +196,19 @@ struct User {
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-    try db.exec("INSERT INTO users (name) VALUES ('Ada'), ('Bo')")
-    scoped User bo = try sqlite.one[User](&db, "SELECT * FROM users WHERE name = ?", [.text("Bo")])
-    print("found {bo.name}, id {bo.id}")
-    _ = sqlite.one[User](&db, "SELECT * FROM users WHERE id = ?", [.int(99)]) catch e {
+    try db.exec("CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT)")
+    try db.exec("INSERT INTO hosts (name) VALUES ('db'), ('dns')")
+    scoped Host dns = try sqlite.one[Host](&db, "SELECT * FROM hosts WHERE name = ?", [.text("dns")])
+    print("found {dns.name}, id {dns.id}")
+    _ = sqlite.one[Host](&db, "SELECT * FROM hosts WHERE id = ?", [.int(99)]) catch e {
         print("{e.code}")
-        User{}
+        Host{}
     }
 }
 ```
 
 ```output
-found Bo, id 2
+found dns, id 2
 SqlError.noRows
 ```
 
@@ -216,42 +217,42 @@ A field can be an integer, a float, a `bool` (0 is `false`), a `String`, or a pl
 ```iris run
 import sqlite
 
-enum Status { open, done }
+enum State { up, down }
 
 @json
-struct Task {
-    String title
-    Status status
-    bool urgent
+struct Check {
+    String host
+    State state
+    bool tls
 }
 
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE tasks (title TEXT, status TEXT, urgent INTEGER)")
-    try db.exec("INSERT INTO tasks VALUES ('write', 'open', 1), ('read', 'done', 0)")
-    tasks := try sqlite.all[Task](&db, "SELECT * FROM tasks")
+    try db.exec("CREATE TABLE checks (host TEXT, state TEXT, tls INTEGER)")
+    try db.exec("INSERT INTO checks VALUES ('api', 'up', 1), ('cache', 'down', 0)")
+    checks := try sqlite.all[Check](&db, "SELECT * FROM checks")
     defer {
-        for t in tasks {
-            t.free()
+        for c in checks {
+            c.free()
         }
-        tasks.free()
+        checks.free()
     }
-    for t in tasks {
-        print("{t.title}: {t.status}, urgent {t.urgent}")
+    for c in checks {
+        print("{c.host}: {c.state}, tls {c.tls}")
     }
-    try db.exec("UPDATE tasks SET status = 'later' WHERE title = 'read'")
-    _ = sqlite.one[Task](&db, "SELECT * FROM tasks WHERE title = 'read'") catch e {
+    try db.exec("UPDATE checks SET state = 'flapping' WHERE host = 'cache'")
+    _ = sqlite.one[Check](&db, "SELECT * FROM checks WHERE host = 'cache'") catch e {
         print("{e.code}: {e.message}")
-        Task{}
+        Check{}
     }
 }
 ```
 
 ```output
-write: open, urgent true
-read: done, urgent false
-SqlError.failed: the column status has 'later', which isn't one of the enum's values
+api: up, tls true
+cache: down, tls false
+SqlError.failed: the column state has 'flapping', which isn't one of the enum's values
 ```
 
 A number that doesn't fit its field fails the same way, instead of being cut down to fit:
@@ -260,24 +261,24 @@ A number that doesn't fit its field fails the same way, instead of being cut dow
 import sqlite
 
 @json
-struct Reading {
-    u8 level
+struct Route {
+    u8 ttl
 }
 
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE readings (level INTEGER)")
-    try db.exec("INSERT INTO readings VALUES (300)")
-    _ = sqlite.one[Reading](&db, "SELECT * FROM readings") catch e {
+    try db.exec("CREATE TABLE routes (ttl INTEGER)")
+    try db.exec("INSERT INTO routes VALUES (300)")
+    _ = sqlite.one[Route](&db, "SELECT * FROM routes") catch e {
         print("{e.code}: {e.message}")
-        Reading{}
+        Route{}
     }
 }
 ```
 
 ```output
-SqlError.failed: the column level has 300, which doesn't fit in u8
+SqlError.failed: the column ttl has 300, which doesn't fit in u8
 ```
 
 When `all` or `one` fails partway, they free what they had read, so nothing is left for the caller.
@@ -292,23 +293,23 @@ import sqlite
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE t (name TEXT, score REAL); INSERT INTO t VALUES ('a', 1.5), ('b', NULL), ('c', 4)")
-    rows := try db.query("SELECT name, score FROM t ORDER BY name")
+    try db.exec("CREATE TABLE pings (host TEXT, rtt REAL); INSERT INTO pings VALUES ('api', 1.5), ('cache', NULL), ('db', 4)")
+    rows := try db.query("SELECT host, rtt FROM pings ORDER BY host")
     defer rows.close()
     for try rows.next() {
         if rows.isNull(1) {
-            print("{rows.text(0)}: no score")
+            print("{rows.text(0)}: no reply")
         } else {
-            print("{rows.text(0)}: {rows.float(1)}")
+            print("{rows.text(0)}: {rows.float(1)}ms")
         }
     }
 }
 ```
 
 ```output
-a: 1.5
-b: no score
-c: 4
+api: 1.5ms
+cache: no reply
+db: 4ms
 ```
 
 The `str` that `text` gives points into SQLite's memory, and is valid until the next call to `next`. To keep it, copy it with `.copy()`. `sqlite.scan(&rows, &v)` fills a `@json` struct from the current row, as `sqlite.all` does for each row.
@@ -321,7 +322,7 @@ import sqlite
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    rows := try db.query("SELECT 1 AS one, 'two' AS two, 3.5 AS three")
+    rows := try db.query("SELECT 8080 AS port, 'edge-1' AS host, 0.25 AS load")
     defer rows.close()
     _ = try rows.next()
     for i in 0..rows.columns() {
@@ -331,9 +332,9 @@ import sqlite
 ```
 
 ```output
-one = 1
-two = two
-three = 3.5
+port = 8080
+host = edge-1
+load = 0.25
 ```
 
 A query that adds things up gives one row, read the same way:
@@ -344,16 +345,16 @@ import sqlite
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE sales (amount INTEGER); INSERT INTO sales VALUES (5), (12), (30)")
-    rows := try db.query("SELECT COUNT(*), SUM(amount) FROM sales WHERE amount > ?", [.int(10)])
+    try db.exec("CREATE TABLE requests (status INTEGER, bytes INTEGER); INSERT INTO requests VALUES (200, 5120), (502, 120), (503, 80)")
+    rows := try db.query("SELECT COUNT(*), SUM(bytes) FROM requests WHERE status >= ?", [.int(500)])
     defer rows.close()
     _ = try rows.next()
-    print("{rows.int(0)} sales, {rows.int(1)} in all")
+    print("{rows.int(0)} failed requests, {rows.int(1)} bytes")
 }
 ```
 
 ```output
-2 sales, 42 in all
+2 failed requests, 200 bytes
 ```
 
 ## NULL
@@ -364,32 +365,32 @@ A NULL column reads as `0` with `int` and `float` and as `""` with `text`, so `i
 import sqlite
 
 @json
-struct Item {
+struct Host {
     String name
-    i64 stock = -1
+    i64 port = -1
 }
 
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE items (name TEXT, stock INTEGER)")
-    try db.exec("INSERT INTO items VALUES (?, ?), (?, ?)", [.text("pear"), .int(4), .text("fig"), .none])
-    items := try sqlite.all[Item](&db, "SELECT * FROM items")
-    defer items.free()
-    for it in items {
-        if it.stock < 0 {
-            print("{it.name}: unknown")
+    try db.exec("CREATE TABLE hosts (name TEXT, port INTEGER)")
+    try db.exec("INSERT INTO hosts VALUES (?, ?), (?, ?)", [.text("db"), .int(5432), .text("new"), .none])
+    hosts := try sqlite.all[Host](&db, "SELECT * FROM hosts")
+    defer hosts.free()
+    for h in hosts {
+        if h.port < 0 {
+            print("{h.name}: no port yet")
         } else {
-            print("{it.name}: {it.stock}")
+            print("{h.name}: {h.port}")
         }
-        it.free()
+        h.free()
     }
 }
 ```
 
 ```output
-pear: 4
-fig: unknown
+db: 5432
+new: no port yet
 ```
 
 ## Transactions
@@ -399,16 +400,17 @@ fig: unknown
 ```iris run
 import sqlite
 
-!void transfer(sqlite.Db *db, i64 from, i64 to, i64 amount) {
+// Moves bandwidth, in Mbit/s, from one link's share to another's.
+!void move(sqlite.Db *db, i64 from, i64 to, i64 mbps) {
     try db.begin()
     errdefer _ = db.rollback()
-    try db.exec("UPDATE accounts SET balance = balance - ? WHERE id = ?", [.int(amount), .int(from)])
-    try db.exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", [.int(amount), .int(to)])
+    try db.exec("UPDATE links SET mbps = mbps - ? WHERE id = ?", [.int(mbps), .int(from)])
+    try db.exec("UPDATE links SET mbps = mbps + ? WHERE id = ?", [.int(mbps), .int(to)])
     try db.commit()
 }
 
 !void show(sqlite.Db *db) {
-    rows := try db.query("SELECT id, balance FROM accounts ORDER BY id")
+    rows := try db.query("SELECT id, mbps FROM links ORDER BY id")
     defer rows.close()
     for try rows.next() {
         print("  {rows.int(0)}: {rows.int(1)}")
@@ -419,13 +421,13 @@ import sqlite
     db := try sqlite.open(":memory:")
     defer db.close()
     try db.exec(r"""
-        CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER CHECK (balance <= 100));
-        INSERT INTO accounts (balance) VALUES (50), (90);
+        CREATE TABLE links (id INTEGER PRIMARY KEY, mbps INTEGER CHECK (mbps <= 100));
+        INSERT INTO links (mbps) VALUES (50), (90);
         """)
-    try transfer(&db, 1, 2, 5)
+    try move(&db, 1, 2, 5)
     print("after 5:")
     try show(&db)
-    transfer(&db, 1, 2, 20) catch e {
+    move(&db, 1, 2, 20) catch e {
         print("20 failed: {e.code}")
     }
     print("after 20:")
@@ -443,7 +445,7 @@ after 20:
   2: 95
 ```
 
-The second transfer took 20 from account 1, then failed on account 2, whose `CHECK` allows no more than 100. The rollback put account 1 back.
+The second move took 20 from link 1, then failed on link 2, whose `CHECK` allows no more than 100. The rollback put link 1 back.
 
 ## Errors
 
@@ -462,26 +464,26 @@ import sqlite
 !void main() {
     db := try sqlite.open(":memory:")
     defer db.close()
-    try db.exec("CREATE TABLE users (name TEXT UNIQUE NOT NULL)")
-    try db.exec("INSERT INTO users VALUES ('Ada')")
-    db.exec("INSERT INTO users VALUES (?)", [.text("Ada")]) catch e {
+    try db.exec("CREATE TABLE hosts (name TEXT UNIQUE NOT NULL)")
+    try db.exec("INSERT INTO hosts VALUES ('db')")
+    db.exec("INSERT INTO hosts VALUES (?)", [.text("db")]) catch e {
         print("{e.code}: {e.message}")
     }
-    db.exec("INSERT INTO users VALUES (?)", [.none]) catch e {
+    db.exec("INSERT INTO hosts VALUES (?)", [.none]) catch e {
         print("{e.code}: {e.message}")
     }
     db.exec("SELEKT 1") catch e {
         print("{e.code}: {e.message}")
     }
-    db.exec("INSERT INTO users VALUES (?)", [.text("a"), .text("b")]) catch e {
+    db.exec("INSERT INTO hosts VALUES (?)", [.text("a"), .text("b")]) catch e {
         print("{e.code}: {e.message}")
     }
 }
 ```
 
 ```output
-SqlError.constraint: running the SQL: UNIQUE constraint failed: users.name
-SqlError.constraint: running the SQL: NOT NULL constraint failed: users.name
+SqlError.constraint: running the SQL: UNIQUE constraint failed: hosts.name
+SqlError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
 SqlError.failed: in the SQL: near "SELEKT": syntax error
 SqlError.failed: the SQL has 1 ? but 2 values were given
 ```

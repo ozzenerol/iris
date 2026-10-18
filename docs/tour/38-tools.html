@@ -98,7 +98,7 @@ iris build --target=x86_64-macos main.iris</code></pre>
 (gdb) run
 Breakpoint 1, f.main.handle (req=..., res=...) at main.iris:42
 (gdb) info locals
-user = {id = 7, name = {ptr = &quot;Ada&quot;, len = 3, cap = 16}}</code></pre>
+conn = {fd = 7, peer = {ptr = &quot;10.0.0.5&quot;, len = 8, cap = 16}}</code></pre>
 <p>A function's name in the debugger is its module and name, <code>f.main.handle</code>, or <code>m.main.Server.close</code> for a method. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.</p>
 <h2 id="the-libraries-iris-loads"><a href="#the-libraries-iris-loads">The libraries Iris loads</a></h2>
 <p>Some modules use a C library that is loaded the first time a program uses it, so a program that doesn't use it needs nothing installed:</p>

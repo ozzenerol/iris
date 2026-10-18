@@ -7,11 +7,12 @@ Tests sit next to the code they test, in `test` blocks, and `iris test` runs the
 A `test` block has a name in quotes and a body, and can go in any file of a module, at the top level:
 
 ```iris
-i64 add(i64 a, i64 b) => a + b
+// A 16-bit number in network byte order.
+u16 swap16(u16 x) => (x << 8) | (x >> 8)
 
-test "add" {
-    expect(add(2, 3) == 5)
-    expect(add(-1, 1) == 0, "add(-1, 1) is {add(-1, 1)}")
+test "swap16" {
+    expect(swap16(0x1F90) == 0x901F)
+    expect(swap16(swap16(8080)) == 8080, "swapping twice gives {swap16(swap16(8080))}")
 }
 ```
 
@@ -32,15 +33,15 @@ test "parse a port" {
 `expect` can be used only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:
 
 ```iris
-String checkUser(User u) {
-    if u.name.len == 0 {
-        return format("the user has no name")
+String checkConfig(Config c) {
+    if c.upstream.len == 0 {
+        return format("the config has no upstream")
     }
     return format("")
 }
 
-test "users" {
-    scoped String problem = checkUser(load())
+test "config" {
+    scoped String problem = checkConfig(load())
     expect(problem.len == 0, problem)
 }
 ```
@@ -71,7 +72,7 @@ iris test main.iris
 ```
 
 ```output
-ok   add
+ok   swap16
     main.iris:22:11: expect failed: n is 8080
 FAIL parse a port
     error: ParseError.notNumber: 'x' is not a number

@@ -234,7 +234,7 @@ took under a second: true
 
 `sleep(d)` waits for a `Duration`, and while one task sleeps the others run. In a `select`, an `after(d)` arm gives up waiting on channels after that time. Both are built in, without an import; [Tasks and channels](24-tasks-and-channels.html#select) shows them with tasks.
 
-To do something at a steady rate, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A `Duration` of 0 or less doesn't wait:
+To do something at a steady rate, like a health check every few seconds, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A `Duration` of 0 or less doesn't wait:
 
 ```iris run
 import time
@@ -245,16 +245,16 @@ void main() {
     for i in 1..4 {
         next += 10ms
         sleep(next - time.clock())
-        print("tick {i}")
+        print("health check {i}")
     }
     took := time.clock() - start
-    print("three ticks in at least 30ms: {took >= 30ms}")
+    print("three checks in at least 30ms: {took >= 30ms}")
 }
 ```
 
 ```output
-tick 1
-tick 2
-tick 3
-three ticks in at least 30ms: true
+health check 1
+health check 2
+health check 3
+three checks in at least 30ms: true
 ```

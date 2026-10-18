@@ -302,50 +302,51 @@ $ echo $?
 
 ## Subcommands
 
-A program with subcommands, like `tool add` and `tool list`, has one `@flags` struct for each. The first argument picks the subcommand, and `flags.parseArgs` reads the rest with that subcommand's struct:
+A program with subcommands, like `net ping` and `net scan`, has one `@flags` struct for each. The first argument picks the subcommand, and `flags.parseArgs` reads the rest with that subcommand's struct:
 
 ```iris run
 import flags
 
-@flags("adds a task")
-struct AddOptions {
-    @flag('p', "how urgent, 1 to 3") u8 priority = 2
-    @flag(args, required) str[] words
+@flags("sends echo requests to hosts")
+struct PingOptions {
+    @flag('c', "how many to send to each") i64 count = 4
+    @flag(args, required) str[] hosts
 }
 
-@flags("lists the tasks")
-struct ListOptions {
-    @flag('a', "include the finished ones") bool all
+@flags("finds the open ports of a host")
+struct ScanOptions {
+    @flag('t', "how long to wait for each port") Duration timeout = 1s
+    @flag(args, required) str[] hosts
 }
 
 !void run(str[] args) {
     if args.len == 0 {
-        print("usage: tool add|list ...")
+        print("usage: net ping|scan ...")
         return
     }
     rest := args[1:]
     match args[0] {
-        "add" => {
-            scoped o := try flags.parseArgs(AddOptions, rest, "tool add")
-            print("add: {o.words.len} words, priority {o.priority}")
+        "ping" => {
+            scoped o := try flags.parseArgs(PingOptions, rest, "net ping")
+            print("ping: {o.hosts.len} hosts, {o.count} each")
         }
-        "list" => {
-            scoped o := try flags.parseArgs(ListOptions, rest, "tool list")
-            print("list: all {o.all}")
+        "scan" => {
+            scoped o := try flags.parseArgs(ScanOptions, rest, "net scan")
+            print("scan: {o.hosts[0]}, {o.timeout} a port")
         }
         _ => print("{args[0]} isn't a command")
     }
 }
 
 !void main() {
-    try run(["add", "-p", "1", "buy", "milk"])
-    try run(["list", "-a"])
+    try run(["ping", "-c", "2", "10.0.0.1", "10.0.0.2"])
+    try run(["scan", "-t", "200ms", "10.0.0.5"])
 }
 ```
 
 ```output
-add: 2 words, priority 1
-list: all true
+ping: 2 hosts, 2 each
+scan: 10.0.0.5, 200ms a port
 ```
 
 A real program builds `args` from its own arguments, with `os.argc()` and `os.arg(i)`.

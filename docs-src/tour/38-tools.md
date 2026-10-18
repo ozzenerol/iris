@@ -116,7 +116,7 @@ $ gdb ./server
 (gdb) run
 Breakpoint 1, f.main.handle (req=..., res=...) at main.iris:42
 (gdb) info locals
-user = {id = 7, name = {ptr = "Ada", len = 3, cap = 16}}
+conn = {fd = 7, peer = {ptr = "10.0.0.5", len = 8, cap = 16}}
 ```
 
 A function's name in the debugger is its module and name, `f.main.handle`, or `m.main.Server.close` for a method. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.

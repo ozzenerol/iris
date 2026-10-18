@@ -10,9 +10,9 @@ The `fs` module reads and writes files and folders, and the `path` module joins 
 import fs
 
 !void main() {
-    path := "/tmp/iris-tour-whole.txt"
-    try fs.writeAll(path, "first\n")
-    try fs.append(path, "second\n")
+    path := "/tmp/iris-tour-proxy.conf"
+    try fs.writeAll(path, "listen 8080\n")
+    try fs.append(path, "upstream 10.0.0.11:9000\n")
     scoped String text = try fs.readAll(path)
     print("{text.len} bytes")
     print(text)
@@ -21,9 +21,9 @@ import fs
 ```
 
 ```output
-13 bytes
-first
-second
+36 bytes
+listen 8080
+upstream 10.0.0.11:9000
 
 ```
 
@@ -48,12 +48,12 @@ Every call that can fail gives an error of `fs.FsError`, with the path in its me
 import fs
 
 void main() {
-    print("{fs.exists("/tmp/iris-tour-missing.txt")}")
-    text := fs.readAll("/tmp/iris-tour-missing.txt") catch e {
+    print("{fs.exists("/tmp/iris-tour-missing.conf")}")
+    text := fs.readAll("/tmp/iris-tour-missing.conf") catch e {
         if e.code == fs.FsError.notFound {
             print("{e.code}: {e.message}")
         }
-        "default".copy()
+        "listen 8080".copy()
     }
     print(text)
     text.free()
@@ -62,8 +62,8 @@ void main() {
 
 ```output
 false
-FsError.notFound: /tmp/iris-tour-missing.txt: no such file
-default
+FsError.notFound: /tmp/iris-tour-missing.conf: no such file
+listen 8080
 ```
 
 ## Line by line
@@ -74,8 +74,8 @@ default
 import fs
 
 !void main() {
-    path := "/tmp/iris-tour-lines.txt"
-    try fs.writeAll(path, "ada 36\r\nzoe 41\nmax 29")
+    path := "/tmp/iris-tour-hosts"
+    try fs.writeAll(path, "127.0.0.1 localhost\r\n10.0.0.5 db\n10.0.0.6 cache")
     f := try fs.open(path)
     defer f.close()
     i64 n = 0
@@ -95,9 +95,9 @@ import fs
 ```
 
 ```output
-1: ada 36
-2: zoe 41
-3: max 29
+1: 127.0.0.1 localhost
+2: 10.0.0.5 db
+3: 10.0.0.6 cache
 ```
 
 Any other error, like a disk that fails while reading, goes on to the caller with `return e` (see [Errors](18-errors.html)). A `\r` before the line break is taken off too, and the last line counts even without a line break after it. `File.readAll()` gives the rest of an open file.
@@ -110,14 +110,14 @@ Any other error, like a disk that fails while reading, goes on to the caller wit
 import fs
 
 !void main() {
-    path := "/tmp/iris-tour-log.txt"
+    path := "/tmp/iris-tour-access.log"
     f := try fs.create(path)
     for i in 1..4 {
-        try f.write("line {i}\n")
+        try f.write("request {i} 200\n")
     }
     f.close()
     g := try fs.openAppend(path)
-    try g.write("one more\n")
+    try g.write("request 4 502\n")
     g.close()
     scoped String text = try fs.readAll(path)
     print(text)
@@ -126,10 +126,10 @@ import fs
 ```
 
 ```output
-line 1
-line 2
-line 3
-one more
+request 1 200
+request 2 200
+request 3 200
+request 4 502
 
 ```
 
@@ -174,8 +174,8 @@ import fs
 import fs
 
 !void main() {
-    path := "/tmp/iris-tour-stat.txt"
-    try fs.writeAll(path, "hello")
+    path := "/tmp/iris-tour-proxy.pid"
+    try fs.writeAll(path, "4242\n")
     info := try fs.stat(path)
     print("{info.size} bytes, a folder: {info.isDir}")
     dir := try fs.stat("/tmp")
@@ -197,12 +197,13 @@ import fs
 import fs
 
 !void main() {
-    try fs.writeAll("/tmp/iris-tour-old.txt", "x")
-    try fs.rename("/tmp/iris-tour-old.txt", "/tmp/iris-tour-new.txt")
-    print("{fs.exists("/tmp/iris-tour-old.txt")} {fs.exists("/tmp/iris-tour-new.txt")}")
-    try fs.remove("/tmp/iris-tour-new.txt")
+    // a log rotated by hand: access.log becomes access.log.1
+    try fs.writeAll("/tmp/iris-tour-access.log", "request 1 200\n")
+    try fs.rename("/tmp/iris-tour-access.log", "/tmp/iris-tour-access.log.1")
+    print("{fs.exists("/tmp/iris-tour-access.log")} {fs.exists("/tmp/iris-tour-access.log.1")}")
+    try fs.remove("/tmp/iris-tour-access.log.1")
     try fs.removeAll("/tmp/iris-tour-nothing-here")
-    fs.remove("/tmp/iris-tour-new.txt") catch e {
+    fs.remove("/tmp/iris-tour-access.log.1") catch e {
         print("{e.code}")
     }
 }
@@ -301,20 +302,20 @@ The `path` module works on the text of a path and never looks at the disk. `path
 
 | Call | Gives |
 |---|---|
-| `path.join("/srv", "data.db")` | `/srv/data.db`, and `b` itself when `b` starts with `/` |
-| `path.base("/home/ada/notes.txt")` | `notes.txt` |
-| `path.dir("/home/ada/notes.txt")` | `/home/ada`, and `.` when there is no folder |
-| `path.ext("notes.tar.gz")` | `.gz`, and `""` when there is none |
-| `path.stem("notes.txt")` | `notes` |
+| `path.join("/srv", "www")` | `/srv/www`, and `b` itself when `b` starts with `/` |
+| `path.base("/var/log/proxy/access.log")` | `access.log` |
+| `path.dir("/var/log/proxy/access.log")` | `/var/log/proxy`, and `.` when there is no folder |
+| `path.ext("access.log.gz")` | `.gz`, and `""` when there is none |
+| `path.stem("access.log")` | `access` |
 | `path.isAbs("/etc")` | `true` |
 
 ```iris run
 import path
 
 void main() {
-    p := "/home/ada/photos/cat.jpeg"
+    p := "/var/log/proxy/access.log.gz"
     print("{path.dir(p)} | {path.base(p)} | {path.stem(p)} | {path.ext(p)}")
-    print("{path.dir("notes.txt")} | {path.ext(".bashrc")} | {path.base("/srv/www/")}")
+    print("{path.dir("proxy.conf")} | {path.ext(".bashrc")} | {path.base("/srv/www/")}")
     scoped String full = path.join("/srv/www", "index.html")
     scoped String abs = path.join("/srv/www", "/etc/hosts")
     print("{full} {abs} {path.isAbs(full)} {path.isAbs("a/b")}")
@@ -322,7 +323,7 @@ void main() {
 ```
 
 ```output
-/home/ada/photos | cat.jpeg | cat | .jpeg
+/var/log/proxy | access.log.gz | access.log | .gz
 . |  | www
 /srv/www/index.html /etc/hosts true false
 ```

@@ -50,11 +50,12 @@ try {
 <p class="lede">Tests sit next to the code they test, in <code>test</code> blocks, and <code>iris test</code> runs them. This chapter covers writing tests, checking with <code>expect</code>, tests that use errors, and running them.</p>
 <h2 id="test-blocks"><a href="#test-blocks">test blocks</a></h2>
 <p>A <code>test</code> block has a name in quotes and a body, and can go in any file of a module, at the top level:</p>
-<pre class="code"><code><span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a + b
+<pre class="code"><code><span class="c">// A 16-bit number in network byte order.</span>
+<span class="t">u16</span> swap16(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
-<span class="k">test</span> <span class="s">&quot;add&quot;</span> {
-    expect(add(<span class="n">2</span>, <span class="n">3</span>) == <span class="n">5</span>)
-    expect(add(-<span class="n">1</span>, <span class="n">1</span>) == <span class="n">0</span>, <span class="s">&quot;add(-1, 1) is {add(-1, 1)}&quot;</span>)
+<span class="k">test</span> <span class="s">&quot;swap16&quot;</span> {
+    expect(swap16(<span class="n">0x1F90</span>) == <span class="n">0x901F</span>)
+    expect(swap16(swap16(<span class="n">8080</span>)) == <span class="n">8080</span>, <span class="s">&quot;swapping twice gives {swap16(swap16(8080))}&quot;</span>)
 }</code></pre>
 <p>A test is a function the compiler makes from the block. It sees everything in its module, including names that aren't <code>pub</code>, so a test can check a module's inner parts. <code>iris run</code> and <code>iris build</code> leave tests out of the program; <code>iris check</code> checks them like the rest of the code.</p>
 <h2 id="expect"><a href="#expect">expect</a></h2>
@@ -65,15 +66,15 @@ try {
     expect(n &gt; <span class="n">0</span> &amp;&amp; n &lt; <span class="n">65536</span>, <span class="s">&quot;port {n} out of range&quot;</span>)
 }</code></pre>
 <p><code>expect</code> can be used only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:</p>
-<pre class="code"><code><span class="t">String</span> checkUser(User u) {
-    <span class="k">if</span> u.name.len == <span class="n">0</span> {
-        <span class="k">return</span> format(<span class="s">&quot;the user has no name&quot;</span>)
+<pre class="code"><code><span class="t">String</span> checkConfig(Config c) {
+    <span class="k">if</span> c.upstream.len == <span class="n">0</span> {
+        <span class="k">return</span> format(<span class="s">&quot;the config has no upstream&quot;</span>)
     }
     <span class="k">return</span> format(<span class="s">&quot;&quot;</span>)
 }
 
-<span class="k">test</span> <span class="s">&quot;users&quot;</span> {
-    <span class="k">scoped</span> <span class="t">String</span> problem = checkUser(load())
+<span class="k">test</span> <span class="s">&quot;config&quot;</span> {
+    <span class="k">scoped</span> <span class="t">String</span> problem = checkConfig(load())
     expect(problem.len == <span class="n">0</span>, problem)
 }</code></pre>
 <h2 id="errors-in-tests"><a href="#errors-in-tests">Errors in tests</a></h2>
@@ -90,7 +91,7 @@ try {
 <h2 id="iris-test"><a href="#iris-test">iris test</a></h2>
 <p><code>iris test</code> runs every test of the program's module, in the order they are written, and prints a line for each, then a count:</p>
 <pre class="code"><code>iris test main.iris</code></pre>
-<pre class="out"><code>ok   add
+<pre class="out"><code>ok   swap16
     main.iris:22:11: expect failed: n is 8080
 FAIL parse a port
     error: ParseError.notNumber: &#x27;x&#x27; is not a number

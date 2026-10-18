@@ -52,113 +52,115 @@ try {
 <p><code>json.encode(v)</code> gives the JSON text of a value as a new <code>String</code>:</p>
 <pre class="code run"><code><span class="k">import</span> json
 
-<span class="k">enum</span> Role { admin, user }
+<span class="k">enum</span> Proto { http, grpc }
 
+<span class="c">// A service, as a service registry lists it.</span>
 <span class="a">@json</span>
-<span class="k">struct</span> User {
+<span class="k">struct</span> Service {
     <span class="t">i64</span> id
     <span class="t">String</span> name
-    Role role
-    <span class="t">bool</span> active = <span class="k">true</span>
-    <span class="t">str</span>[] tags
+    Proto proto
+    <span class="t">bool</span> healthy = <span class="k">true</span>
+    <span class="t">str</span>[] addrs
 }
 
 <span class="t">void</span> main() {
-    <span class="t">str</span>[<span class="n">2</span>] tags = [<span class="s">&quot;math&quot;</span>, <span class="s">&quot;engines&quot;</span>]
-    u := User{id: <span class="n">7</span>, name: <span class="s">&quot;Ada&quot;</span>.copy(), role: .admin, tags: tags}
-    <span class="k">scoped</span> <span class="t">String</span> text = json.encode(u)
+    <span class="t">str</span>[<span class="n">2</span>] addrs = [<span class="s">&quot;10.0.0.11:8080&quot;</span>, <span class="s">&quot;10.0.0.12:8080&quot;</span>]
+    s := Service{id: <span class="n">7</span>, name: <span class="s">&quot;billing&quot;</span>.copy(), proto: .grpc, addrs: addrs}
+    <span class="k">scoped</span> <span class="t">String</span> text = json.encode(s)
     print(text)
-    u.name.free()
+    s.name.free()
 }</code></pre>
-<pre class="out"><code>{&quot;id&quot;:7,&quot;name&quot;:&quot;Ada&quot;,&quot;role&quot;:&quot;admin&quot;,&quot;active&quot;:true,&quot;tags&quot;:[&quot;math&quot;,&quot;engines&quot;]}</code></pre>
-<p>Arrays, slices and plain values can be encoded too: <code>json.encode(users.items())</code> gives a JSON array. An enum is written as its value's name.</p>
+<pre class="out"><code>{&quot;id&quot;:7,&quot;name&quot;:&quot;billing&quot;,&quot;proto&quot;:&quot;grpc&quot;,&quot;healthy&quot;:true,&quot;addrs&quot;:[&quot;10.0.0.11:8080&quot;,&quot;10.0.0.12:8080&quot;]}</code></pre>
+<p>Arrays, slices and plain values can be encoded too: <code>json.encode(services.items())</code> gives a JSON array. An enum is written as its value's name.</p>
 <h2 id="decoding"><a href="#decoding">Decoding</a></h2>
 <p><code>json.decode(T, text)</code> reads a <code>T</code> from JSON text and gives a <code>!T</code>. Keys the struct doesn't have are skipped, and fields whose keys are missing keep their defaults:</p>
 <pre class="code run"><code><span class="k">import</span> json
 
-<span class="k">enum</span> Role { admin, user }
+<span class="k">enum</span> Proto { http, grpc }
 
 <span class="a">@json</span>
-<span class="k">struct</span> Address {
-    <span class="t">String</span> city
-    <span class="t">u16</span> zip
+<span class="k">struct</span> Check {
+    <span class="t">String</span> path
+    <span class="t">u16</span> port
 }
 
 <span class="a">@json</span>
-<span class="k">struct</span> User {
+<span class="k">struct</span> Service {
     <span class="t">i64</span> id
     <span class="t">String</span> name
-    Role role = .user
-    <span class="t">bool</span> active = <span class="k">true</span>
-    <span class="t">String</span>[] tags
-    Address home
-    <span class="t">f64</span> score
+    Proto proto = .http
+    <span class="t">bool</span> healthy = <span class="k">true</span>
+    <span class="t">String</span>[] addrs
+    Check check
+    <span class="t">f64</span> load
 }
 
 !<span class="t">void</span> main() {
     text := r<span class="s">&quot;&quot;</span>&quot;
-        {<span class="s">&quot;id&quot;</span>: <span class="n">7</span>, <span class="s">&quot;name&quot;</span>: <span class="s">&quot;Ada&quot;</span>, <span class="s">&quot;tags&quot;</span>: [<span class="s">&quot;math&quot;</span>, <span class="s">&quot;engines&quot;</span>],
-         <span class="s">&quot;home&quot;</span>: {<span class="s">&quot;city&quot;</span>: <span class="s">&quot;London&quot;</span>, <span class="s">&quot;zip&quot;</span>: <span class="n">1815</span>}, <span class="s">&quot;score&quot;</span>: <span class="n">9.5</span>, <span class="s">&quot;unknown&quot;</span>: [<span class="n">1</span>, <span class="n">2</span>]}
+        {<span class="s">&quot;id&quot;</span>: <span class="n">7</span>, <span class="s">&quot;name&quot;</span>: <span class="s">&quot;billing&quot;</span>, <span class="s">&quot;addrs&quot;</span>: [<span class="s">&quot;10.0.0.11:8080&quot;</span>, <span class="s">&quot;10.0.0.12:8080&quot;</span>],
+         <span class="s">&quot;check&quot;</span>: {<span class="s">&quot;path&quot;</span>: <span class="s">&quot;/health&quot;</span>, <span class="s">&quot;port&quot;</span>: <span class="n">9090</span>}, <span class="s">&quot;load&quot;</span>: <span class="n">0.25</span>, <span class="s">&quot;region&quot;</span>: <span class="s">&quot;eu&quot;</span>}
         <span class="s">&quot;&quot;</span>&quot;
-    <span class="k">scoped</span> User u = <span class="k">try</span> json.decode(User, text)
-    print(<span class="s">&quot;{u.id} {u.name} {u.role} {u.active} {u.tags.len} {u.home.city} {u.score}&quot;</span>)
+    <span class="k">scoped</span> Service s = <span class="k">try</span> json.decode(Service, text)
+    print(<span class="s">&quot;{s.id} {s.name} {s.proto} {s.healthy} {s.addrs.len} {s.check.path} {s.check.port} {s.load}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>7 Ada user true 2 London 9.5</code></pre>
+<pre class="out"><code>7 billing http true 2 /health 9090 0.25</code></pre>
 <p><code>null</code> leaves a field as it is. A decoded struct owns its <code>String</code>s and slices: the <code>free</code> method that <code>@json</code> gives the struct frees them, so <code>scoped</code> works on it, and when <code>decode</code> fails, what it had read is freed already.</p>
-<p>A JSON array is read into a slice, written as the type: <code>json.decode(User[], text)</code>. The slice is new memory, which the caller frees, after freeing each item that owns memory:</p>
+<p>A JSON array is read into a slice, written as the type: <code>json.decode(Service[], text)</code>. The slice is new memory, which the caller frees, after freeing each item that owns memory:</p>
 <pre class="code run"><code><span class="k">import</span> json
 
 <span class="a">@json</span>
-<span class="k">struct</span> Item {
-    <span class="t">String</span> name
-    <span class="t">i64</span> count
+<span class="k">struct</span> Backend {
+    <span class="t">String</span> addr
+    <span class="t">i64</span> weight
 }
 
 !<span class="t">void</span> main() {
-    items := <span class="k">try</span> json.decode(Item[], r<span class="s">&quot;&quot;</span><span class="s">&quot;[{&quot;</span>name<span class="s">&quot;: &quot;</span>pear<span class="s">&quot;, &quot;</span>count<span class="s">&quot;: 4}, {&quot;</span>name<span class="s">&quot;: &quot;</span>fig<span class="s">&quot;, &quot;</span>count<span class="s">&quot;: 9}]&quot;</span><span class="s">&quot;&quot;</span>)
-    <span class="k">defer</span> free(items)
+    backends := <span class="k">try</span> json.decode(Backend[], r<span class="s">&quot;&quot;</span><span class="s">&quot;[{&quot;</span>addr<span class="s">&quot;: &quot;</span><span class="n">10.0</span>.<span class="n">0.11</span>:<span class="n">8080</span><span class="s">&quot;, &quot;</span>weight<span class="s">&quot;: 3}, {&quot;</span>addr<span class="s">&quot;: &quot;</span><span class="n">10.0</span>.<span class="n">0.12</span>:<span class="n">8080</span><span class="s">&quot;, &quot;</span>weight<span class="s">&quot;: 1}]&quot;</span><span class="s">&quot;&quot;</span>)
+    <span class="k">defer</span> free(backends)
     <span class="k">defer</span> {
-        <span class="k">for</span> it <span class="k">in</span> items {
-            it.free()
+        <span class="k">for</span> b <span class="k">in</span> backends {
+            b.free()
         }
     }
-    <span class="k">for</span> it <span class="k">in</span> items {
-        print(<span class="s">&quot;{it.name}: {it.count}&quot;</span>)
+    <span class="k">for</span> b <span class="k">in</span> backends {
+        print(<span class="s">&quot;{b.addr} weight {b.weight}&quot;</span>)
     }
-    ids := <span class="k">try</span> json.decode(<span class="t">i64</span>[], <span class="s">&quot;[3, 1, 4]&quot;</span>)
-    print(<span class="s">&quot;{ids.len} ids, the last {ids[2]}&quot;</span>)
-    free(ids)
+    ports := <span class="k">try</span> json.decode(<span class="t">u16</span>[], <span class="s">&quot;[80, 443, 8080]&quot;</span>)
+    print(<span class="s">&quot;{ports.len} ports, the last {ports[2]}&quot;</span>)
+    free(ports)
 }</code></pre>
-<pre class="out"><code>pear: 4
-fig: 9
-3 ids, the last 4</code></pre>
+<pre class="out"><code>10.0.0.11:8080 weight 3
+10.0.0.12:8080 weight 1
+3 ports, the last 8080</code></pre>
 <h2 id="keys-and-required-fields"><a href="#keys-and-required-fields">Keys and required fields</a></h2>
 <p>A field's key is its name as written. <code>@json(&quot;key&quot;)</code> gives another key, and <code>@json(required)</code> makes <code>decode</code> fail when the key is missing. Both can go together, <code>@json(&quot;id&quot;, required)</code>:</p>
 <pre class="code run"><code><span class="k">import</span> json
 
+<span class="c">// One line of a JSON access log.</span>
 <span class="a">@json</span>
-<span class="k">struct</span> Event {
-    <span class="a">@json</span>(<span class="s">&quot;event_id&quot;</span>, required) <span class="t">i64</span> id
-    <span class="a">@json</span>(<span class="s">&quot;created_at&quot;</span>) <span class="t">i64</span> created
-    <span class="t">String</span> kind
+<span class="k">struct</span> Access {
+    <span class="a">@json</span>(<span class="s">&quot;request_id&quot;</span>, required) <span class="t">i64</span> id
+    <span class="a">@json</span>(<span class="s">&quot;remote_addr&quot;</span>) <span class="t">String</span> remote
+    <span class="t">i64</span> status
 }
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> Event e = json.decode(Event, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>event_id<span class="s">&quot;: 3, &quot;</span>created_at<span class="s">&quot;: 1700000000, &quot;</span>kind<span class="s">&quot;: &quot;</span>signup<span class="s">&quot;}&quot;</span><span class="s">&quot;&quot;</span>) <span class="k">catch</span> err {
+    <span class="k">scoped</span> Access a = json.decode(Access, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>request_id<span class="s">&quot;: 3, &quot;</span>remote_addr<span class="s">&quot;: &quot;</span><span class="n">10.0</span>.<span class="n">0.5</span><span class="s">&quot;, &quot;</span>status<span class="s">&quot;: 200}&quot;</span><span class="s">&quot;&quot;</span>) <span class="k">catch</span> err {
         print(err.message)
-        Event{}
+        Access{}
     }
-    print(<span class="s">&quot;{e.id} {e.created} {e.kind}&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> back = json.encode(e)
+    print(<span class="s">&quot;{a.id} {a.remote} {a.status}&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> back = json.encode(a)
     print(back)
-    _ = json.decode(Event, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>kind<span class="s">&quot;: &quot;</span>signup<span class="s">&quot;}&quot;</span><span class="s">&quot;&quot;</span>) <span class="k">catch</span> err {
+    _ = json.decode(Access, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>status<span class="s">&quot;: 502}&quot;</span><span class="s">&quot;&quot;</span>) <span class="k">catch</span> err {
         print(<span class="s">&quot;{err.code}: {err.message}&quot;</span>)
-        Event{}
+        Access{}
     }
 }</code></pre>
-<pre class="out"><code>3 1700000000 signup
-{&quot;event_id&quot;:3,&quot;created_at&quot;:1700000000,&quot;kind&quot;:&quot;signup&quot;}
-JsonError.missing: the required field &quot;event_id&quot; is missing</code></pre>
+<pre class="out"><code>3 10.0.0.5 200
+{&quot;request_id&quot;:3,&quot;remote_addr&quot;:&quot;10.0.0.5&quot;,&quot;status&quot;:200}
+JsonError.missing: the required field &quot;request_id&quot; is missing</code></pre>
 <h2 id="what-a-json-struct-can-hold"><a href="#what-a-json-struct-can-hold">What a @json struct can hold</a></h2>
 <p>Integers, floats, <code>bool</code>, <code>String</code>, plain enums, other <code>@json</code> structs, and slices and arrays of those. Fields of an embedded struct appear as fields of the outer one. A <code>str</code> field can be encoded but not decoded, since a <code>str</code> can't own the text it would point to; decoded text goes in a <code>String</code>.</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
@@ -167,34 +169,34 @@ JsonError.missing: the required field &quot;event_id&quot; is missing</code></pr
 <pre class="code run"><code><span class="k">import</span> json
 
 <span class="a">@json</span>
-<span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">u8</span> tag
-    <span class="t">String</span>[] labels
+<span class="k">struct</span> Listen {
+    <span class="t">i64</span> backlog
+    <span class="t">u8</span> ttl
+    <span class="t">String</span>[] hosts
 }
 
 <span class="t">void</span> main() {
-    <span class="k">for</span> text <span class="k">in</span> [r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>x<span class="s">&quot;: &quot;</span>one<span class="s">&quot;}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>tag<span class="s">&quot;: 300}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>labels<span class="s">&quot;: [1]}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;{oops&quot;</span>] {
-        _ = json.decode(Point, text) <span class="k">catch</span> e {
+    <span class="k">for</span> text <span class="k">in</span> [r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>backlog<span class="s">&quot;: &quot;</span>many<span class="s">&quot;}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>ttl<span class="s">&quot;: 300}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;&quot;</span><span class="s">&quot;{&quot;</span>hosts<span class="s">&quot;: [1]}&quot;</span><span class="s">&quot;&quot;</span>, r<span class="s">&quot;{oops&quot;</span>] {
+        _ = json.decode(Listen, text) <span class="k">catch</span> e {
             print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
-            Point{}
+            Listen{}
         }
     }
 }</code></pre>
-<pre class="out"><code>JsonError.wrongType: x: expected a number, found a string
-JsonError.range: tag: 300 doesn&#x27;t fit in u8
-JsonError.wrongType: labels[0]: expected a string, found a number
+<pre class="out"><code>JsonError.wrongType: backlog: expected a number, found a string
+JsonError.range: ttl: 300 doesn&#x27;t fit in u8
+JsonError.wrongType: hosts[0]: expected a string, found a number
 JsonError.syntax: line 1, column 2: expected a key in quotes</code></pre>
 <h2 id="quoting-text"><a href="#quoting-text">Quoting text</a></h2>
 <p><code>json.quote(text)</code> gives text as a JSON string, in quotes, with the characters that need it escaped. It is how a bit of JSON is written by hand:</p>
 <pre class="code run"><code><span class="k">import</span> json
 
 <span class="t">void</span> main() {
-    msg := <span class="s">&quot;say \&quot;hi\&quot;\nthen go&quot;</span>
+    msg := <span class="s">&quot;upstream \&quot;billing\&quot; timed out\nafter 30s&quot;</span>
     <span class="k">scoped</span> <span class="t">String</span> q = json.quote(msg)
-    print(<span class="s">&quot;{{\&quot;message\&quot;: {q}}}&quot;</span>)
+    print(<span class="s">&quot;{{\&quot;error\&quot;: {q}}}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>{&quot;message&quot;: &quot;say \&quot;hi\&quot;\nthen go&quot;}</code></pre>
+<pre class="out"><code>{&quot;error&quot;: &quot;upstream \&quot;billing\&quot; timed out\nafter 30s&quot;}</code></pre>
     <nav class="pager"><a class="prev" href="27-attributes.html"><span>Previous</span>Attributes</a><a class="next" href="29-files.html"><span>Next</span>Files</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
