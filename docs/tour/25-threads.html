@@ -50,65 +50,92 @@ try {
 <p class="lede">Threads run at the same time, on different CPU cores. This chapter covers starting and joining them, sharing data between them with <code>Atomic</code> and <code>Mutex</code>, and <code>threadlocal</code>.</p>
 <h2 id="thread"><a href="#thread">thread</a></h2>
 <p>A program starts with one thread. <code>thread f(args)</code> starts a function call on a new thread and gives a <code>Thread</code>; its arguments are worked out first, as with <code>spawn</code>. <code>join</code> waits for the thread to finish:</p>
-<pre class="code run"><code><span class="t">i64</span> count(<span class="t">i64</span> from, <span class="t">i64</span> to) {
-    <span class="t">i64</span> n = <span class="n">0</span>
-    <span class="k">for</span> i <span class="k">in</span> from..to {
-        <span class="k">if</span> i % <span class="n">7</span> == <span class="n">0</span> {
-            n += <span class="n">1</span>
-        }
+<p>Here two threads add up the halves of a megabyte of data, the way the IP, TCP and UDP checksums do, and <code>main</code> puts the two sums together:</p>
+<pre class="code run"><code><span class="c">// The 16-bit sum the IP, TCP and UDP checksums are made from.</span>
+<span class="t">u64</span> sum16(<span class="t">u8</span>[] data) {
+    <span class="t">u64</span> s = <span class="n">0</span>
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..data.len / <span class="n">2</span> {
+        s += <span class="t">u64</span>(data[<span class="n">2</span> * i]) &lt;&lt; <span class="n">8</span> | <span class="t">u64</span>(data[<span class="n">2</span> * i + <span class="n">1</span>])
     }
-    <span class="k">return</span> n
+    <span class="k">return</span> s
 }
 
-<span class="t">void</span> part(<span class="t">i64</span> from, <span class="t">i64</span> to, <span class="k">chan</span>[<span class="t">i64</span>] out) {
-    out &lt;- count(from, to)
+<span class="t">void</span> part(<span class="t">u8</span>[] data, <span class="k">chan</span>[<span class="t">u64</span>] out) {
+    out &lt;- sum16(data)
 }
 
 <span class="t">void</span> main() {
-    results := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">4</span>)
-    a := thread part(<span class="n">0</span>, <span class="n">500000</span>, results)
-    b := thread part(<span class="n">500000</span>, <span class="n">1000000</span>, results)
+    <span class="t">u8</span>[] data = alloc(<span class="t">u8</span>, 1MiB)
+    <span class="k">defer</span> free(data)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..data.len {
+        data[i] = <span class="t">u8</span>(i % <span class="n">251</span>)
+    }
+    half := data.len / <span class="n">2</span>
+    sums := <span class="k">chan</span>[<span class="t">u64</span>](<span class="n">2</span>)
+    a := thread part(data[<span class="n">0</span>:half], sums)
+    b := thread part(data[half:], sums)
     a.join()
     b.join()
-    print(<span class="s">&quot;{&lt;-results + &lt;-results} multiples of 7&quot;</span>)
+    s := &lt;-sums + &lt;-sums
+    <span class="k">for</span> s &gt; <span class="n">0xffff</span> {
+        s = (s &amp; <span class="n">0xffff</span>) + (s &gt;&gt; <span class="n">16</span>) <span class="c">// fold the carries back in</span>
+    }
+    print(<span class="s">&quot;checksum {~s &amp; 0xffff}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>142858 multiples of 7</code></pre>
+<pre class="out"><code>checksum 57619</code></pre>
+<p>Both threads read the same memory, which is safe while nothing changes it.</p>
 <p>Each thread has its own tasks. A task spawned inside a thread stays on that thread, and the thread ends when its function and all the tasks it spawned are done. <code>join</code> waits for that, and while it waits, the other tasks of the joining thread keep running. A <code>Thread</code> is joined once. A thread started without keeping its <code>Thread</code> runs on its own, and the program still ends when <code>main</code> returns.</p>
 <p>Channels work between threads as they do between tasks: any task can send and take, wherever it runs. They are the simplest way for threads to share work.</p>
 <h2 id="data-shared-between-threads"><a href="#data-shared-between-threads">Data shared between threads</a></h2>
 <p>Two threads that change the same variable at the same time can lose changes, since a change is several steps. A global that threads change needs an <code>Atomic</code>, a <code>Mutex</code>, or a channel that one task owns.</p>
 <h2 id="atomic"><a href="#atomic">Atomic</a></h2>
 <p><code>Atomic[T]</code> holds an integer or a <code>bool</code> that every thread can change safely. It is used through its methods only:</p>
-<pre class="code run"><code>Atomic[<span class="t">i64</span>] hits
+<p>Here four threads accept connections on one listener, and count them in one <code>Atomic</code>:</p>
+<pre class="code run"><code><span class="k">import</span> net
 
-<span class="t">void</span> visit(<span class="t">i64</span> times) {
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..times {
-        hits.add(<span class="n">1</span>)
+Atomic[<span class="t">i64</span>] accepted
+
+<span class="t">void</span> acceptLoop(net.Listener ln) {
+    <span class="k">for</span> {
+        c := ln.accept() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        accepted.add(<span class="n">1</span>)
+        c.write(<span class="s">&quot;hi\n&quot;</span>) <span class="k">catch</span> e { }
+        c.close()
     }
 }
 
-<span class="t">void</span> main() {
-    a := thread visit(<span class="n">10000</span>)
-    b := thread visit(<span class="n">20000</span>)
-    a.join()
-    b.join()
-    print(<span class="s">&quot;{hits.load()} hits&quot;</span>)
-    old := hits.swap(<span class="n">0</span>)
-    print(<span class="s">&quot;{old} {hits.load()} {hits.cas(0, 5)} {hits.load()}&quot;</span>)
+!<span class="t">void</span> main() {
+    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
+        thread acceptLoop(ln)
+    }
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">8</span> {
+        c := <span class="k">try</span> net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+        <span class="k">scoped</span> <span class="t">String</span> hi = <span class="k">try</span> c.readLine()
+        c.close()
+    }
+    print(<span class="s">&quot;{accepted.load()} connections accepted&quot;</span>)
+    old := accepted.swap(<span class="n">0</span>)
+    print(<span class="s">&quot;{old} {accepted.load()} {accepted.cas(0, 5)} {accepted.load()}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>30000 hits
-30000 0 true 5</code></pre>
+<pre class="out"><code>8 connections accepted
+8 0 true 5</code></pre>
+<p>Several threads can wait in <code>accept</code> on the same listener; each connection goes to one of them.</p>
 <div class="table"><table><thead><tr><th>Method</th><th>What it does</th></tr></thead><tbody><tr><td><code>load()</code></td><td>the value</td></tr><tr><td><code>store(v)</code></td><td>sets it</td></tr><tr><td><code>add(n)</code>, <code>sub(n)</code></td><td>adds or subtracts, and gives the new value</td></tr><tr><td><code>swap(v)</code></td><td>sets it and gives the old value</td></tr><tr><td><code>cas(old, new)</code></td><td>sets it to new if it is old; true if it did</td></tr></tbody></table></div>
 <p>An <code>Atomic[bool]</code> has <code>load</code>, <code>store</code>, <code>swap</code> and <code>cas</code>. Every operation is sequentially consistent: all threads see the changes in the same order.</p>
 <h2 id="mutex"><a href="#mutex">Mutex</a></h2>
 <p>A <code>Mutex</code> protects data that takes more than one step to change. <code>lock</code> takes it, waiting while another task holds it, and <code>unlock</code> gives it back; <code>defer</code> puts the unlock right after the lock:</p>
-<pre class="code run"><code>Mutex lock
-Map[<span class="t">i64</span>, <span class="t">i64</span>] seen
+<pre class="code run"><code><span class="c">// requests for each client, counted by every thread</span>
+Mutex lock
+Map[<span class="t">i64</span>, <span class="t">i64</span>] perClient
 
 <span class="t">void</span> record(<span class="t">i64</span> from, <span class="t">i64</span> to) {
     <span class="k">for</span> i <span class="k">in</span> from..to {
+        client := i % <span class="n">10</span> <span class="c">// stands for the client&#x27;s id</span>
         lock.lock()
-        seen.set(i % <span class="n">10</span>, seen.getOr(i % <span class="n">10</span>, <span class="n">0</span>) + <span class="n">1</span>)
+        perClient.set(client, perClient.getOr(client, <span class="n">0</span>) + <span class="n">1</span>)
         lock.unlock()
     }
 }
@@ -120,15 +147,15 @@ Map[<span class="t">i64</span>, <span class="t">i64</span>] seen
     b.join()
     lock.lock()
     <span class="k">defer</span> lock.unlock()
-    print(<span class="s">&quot;{seen.len} keys, {seen.getOr(3, 0)} for 3&quot;</span>)
-    seen.free()
+    print(<span class="s">&quot;{perClient.len} clients, {perClient.getOr(3, 0)} requests from client 3&quot;</span>)
+    perClient.free()
 }</code></pre>
-<pre class="out"><code>10 keys, 200 for 3</code></pre>
+<pre class="out"><code>10 clients, 200 requests from client 3</code></pre>
 <p>While a task waits for a lock, the other tasks of its thread keep running. <code>tryLock()</code> takes the lock if it is free and says whether it did. Unlocking a <code>Mutex</code> that isn't locked is a bug and stops the program.</p>
 <p>An <code>Atomic</code> or a <code>Mutex</code> is used where it is declared, or through a pointer. Copying one, or a struct that holds one, is a compile error, since the copy would guard nothing.</p>
 <h2 id="threadlocal"><a href="#threadlocal">threadlocal</a></h2>
 <p>A global marked <code>threadlocal</code> has a separate value on each thread. Each thread starts with the global's first value:</p>
-<pre class="code run"><code><span class="k">threadlocal</span> <span class="t">i64</span> handled
+<pre class="code run"><code><span class="k">threadlocal</span> <span class="t">i64</span> handled <span class="c">// requests this thread answered</span>
 
 <span class="t">void</span> serve(<span class="t">i64</span> n, <span class="k">chan</span>[<span class="t">i64</span>] out) {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..n {

@@ -52,82 +52,82 @@ try {
 <p>A file that isn't in a project is a program on its own. <code>iris run hello.iris</code> compiles that file and the standard library modules it imports, and nothing else. Most of the examples in this tour are such programs.</p>
 <h2 id="projects"><a href="#projects">Projects</a></h2>
 <p>A project is a folder with an <code>iris.mod</code> file in it. <code>iris mod init</code> makes one, naming the project by its path, usually the address of its repository; without a path, the folder's name is used:</p>
-<pre class="code"><code>mkdir inventory
-cd inventory
-iris mod init github.com/me/inventory</code></pre>
+<pre class="code"><code>mkdir proxy
+cd proxy
+iris mod init github.com/me/proxy</code></pre>
 <p>The file's first line is that name:</p>
-<pre class="out"><code>module github.com/me/inventory</code></pre>
+<pre class="out"><code>module github.com/me/proxy</code></pre>
 <p>Each folder of the project is a module. All the <code>.iris</code> files in one folder belong to its module: they see each other's names, whatever order they are in, with no imports between them. The files in the project's own folder are the program's main module, which has <code>main</code>:</p>
-<pre class="out"><code>inventory/
+<pre class="out"><code>proxy/
     iris.mod
     main.iris          main, and the program&#x27;s other code
-    report.iris        the same module as main.iris
-    store/
-        store.iris     the module store
-        query.iris     also store
-    store/disk/
-        disk.iris      the module disk</code></pre>
-<p><code>iris run inventory</code>, or <code>iris run main.iris</code> from inside the folder, compiles the whole project, and <code>iris build</code> writes the program. A file's name doesn't matter to the compiler; it is for people.</p>
+    stats.iris         the same module as main.iris
+    upstream/
+        upstream.iris  the module upstream
+        pick.iris      also upstream
+    upstream/probe/
+        probe.iris     the module probe</code></pre>
+<p><code>iris run proxy</code>, or <code>iris run main.iris</code> from inside the folder, compiles the whole project, and <code>iris build</code> writes the program. A file's name doesn't matter to the compiler; it is for people.</p>
 <h2 id="import"><a href="#import">import</a></h2>
 <p><code>import</code> makes another module's names available, with the module's name and a dot in front. A bare name is a module of the standard library; a quoted path is a folder of the project, from its root:</p>
 <pre class="code"><code><span class="k">import</span> fs, <span class="t">str</span>
-<span class="k">import</span> <span class="s">&quot;store&quot;</span>, <span class="s">&quot;store/disk&quot;</span>
+<span class="k">import</span> <span class="s">&quot;upstream&quot;</span>, <span class="s">&quot;upstream/probe&quot;</span>
 
 !<span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(<span class="s">&quot;stock.txt&quot;</span>)
-    items := <span class="k">try</span> store.parse(text)
-    <span class="k">try</span> disk.save(items)
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(<span class="s">&quot;upstreams.txt&quot;</span>)
+    servers := <span class="k">try</span> upstream.parse(text)
+    <span class="k">try</span> probe.check(servers)
 }</code></pre>
-<p>A quoted path's module is used by its last part: <code>&quot;store/disk&quot;</code> is <code>disk</code>. Imports go at the top of each file that uses them, and only that file sees them. Two modules can't import each other, directly or through others: the program says which one depends on which.</p>
-<p>A file's own names can't be the same as the name of a module it imports. A module's names are used with its name in front, so names in different modules never clash: <code>store.parse</code> and <code>json.parse</code> are two different functions.</p>
+<p>A quoted path's module is used by its last part: <code>&quot;upstream/probe&quot;</code> is <code>probe</code>. Imports go at the top of each file that uses them, and only that file sees them. Two modules can't import each other, directly or through others: the program says which one depends on which.</p>
+<p>A file's own names can't be the same as the name of a module it imports. A module's names are used with its name in front, so names in different modules never clash: <code>upstream.parse</code> and <code>json.parse</code> are two different functions.</p>
 <h2 id="pub"><a href="#pub">pub</a></h2>
 <p>A module's names are its own unless they are marked <code>pub</code>. Other modules can use only those:</p>
-<pre class="code"><code><span class="c">// store/store.iris</span>
-<span class="k">pub</span> <span class="k">struct</span> Item {
-    <span class="k">pub</span> <span class="t">str</span> name
-    <span class="k">pub</span> <span class="t">i64</span> count
-    <span class="t">i64</span> checksum <span class="c">// only store&#x27;s code can read or set it</span>
+<pre class="code"><code><span class="c">// upstream/upstream.iris</span>
+<span class="k">pub</span> <span class="k">struct</span> Server {
+    <span class="k">pub</span> <span class="t">str</span> addr
+    <span class="k">pub</span> <span class="t">i64</span> weight
+    <span class="t">i64</span> failures <span class="c">// only upstream&#x27;s code can read or set it</span>
 }
 
-<span class="k">pub</span> !List[Item] parse(<span class="t">str</span> text) {
-    List[Item] items
-    <span class="k">return</span> items
+<span class="k">pub</span> !List[Server] parse(<span class="t">str</span> text) {
+    List[Server] servers
+    <span class="k">return</span> servers
 }
 
-<span class="c">// only store&#x27;s code can call it</span>
-<span class="t">i64</span> checksumOf(<span class="t">str</span> line) =&gt; line.len</code></pre>
+<span class="c">// only upstream&#x27;s code can call it</span>
+<span class="t">i64</span> weightOf(<span class="t">str</span> line) =&gt; line.len</code></pre>
 <p>A <code>pub</code> struct's fields and methods are visible outside only when they are marked <code>pub</code> themselves, which keeps a struct's insides free to change. All the values of a <code>pub</code> enum are visible. Using a name that isn't <code>pub</code> is an error that says so:</p>
-<pre class="out"><code>main.iris:11: the field checksum of Item isn&#x27;t pub, so only its own module can use it
-main.iris:12: store.checksumOf isn&#x27;t pub, so only its own module can use it</code></pre>
+<pre class="out"><code>main.iris:11: the field failures of Server isn&#x27;t pub, so only its own module can use it
+main.iris:12: upstream.weightOf isn&#x27;t pub, so only its own module can use it</code></pre>
 <h2 id="the-standard-library"><a href="#the-standard-library">The standard library</a></h2>
 <p>The modules of the standard library are imported by name: <code>import http, json, log</code>. <code>List</code> and <code>Map</code> come from <code>core</code>, which every module sees without an import. The <a href="../std/index.html">Library</a> has every module, with each of its types and functions and what its comments say. A quick look at one:</p>
 <pre class="code run"><code><span class="k">import</span> path, <span class="t">str</span>, time
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> p = path.join(<span class="s">&quot;/var/log&quot;</span>, <span class="s">&quot;app.log&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> p = path.join(<span class="s">&quot;/var/log&quot;</span>, <span class="s">&quot;proxy.log&quot;</span>)
     print(<span class="s">&quot;{path.base(p)} in {path.dir(p)}, extension {path.ext(p)}&quot;</span>)
     print(<span class="s">&quot;{str.startsWith(p, &quot;</span>/var<span class="s">&quot;)}&quot;</span>)
     start := time.clock()
     print(<span class="s">&quot;{time.clock() - start &lt; 1s}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>app.log in /var/log, extension .log
+<pre class="out"><code>proxy.log in /var/log, extension .log
 true
 true</code></pre>
 <h2 id="packages"><a href="#packages">Packages</a></h2>
 <p>A package is a module from another project, imported by its repository's address:</p>
-<pre class="code"><code><span class="k">import</span> <span class="s">&quot;github.com/someone/greet&quot;</span>
+<pre class="code"><code><span class="k">import</span> <span class="s">&quot;github.com/someone/backoff&quot;</span>
 
 <span class="t">void</span> main() {
-    print(greet.hello(<span class="s">&quot;iris&quot;</span>))
+    print(<span class="s">&quot;{backoff.delay(3)}&quot;</span>)
 }</code></pre>
 <p><code>iris get</code> downloads a package at a version, which is a tag in its repository, and writes it into <code>iris.mod</code>:</p>
-<pre class="code"><code>iris get github.com/someone/greet@v1.2.0</code></pre>
-<pre class="out"><code>module github.com/me/inventory
+<pre class="code"><code>iris get github.com/someone/backoff@v1.2.0</code></pre>
+<pre class="out"><code>module github.com/me/proxy
 
-require github.com/someone/greet v1.2.0</code></pre>
+require github.com/someone/backoff v1.2.0</code></pre>
 <p>A project uses one version of each package. Packages are kept in <code>~/.cache/iris/pkg</code>, or <code>$IRIS_PATH/pkg</code> when that is set, and found there when the program is compiled; nothing is downloaded while compiling.</p>
 <p>To work on a package next to the project that uses it, <code>replace</code> points the package at a folder:</p>
-<pre class="out"><code>replace github.com/someone/greet =&gt; ../greet</code></pre>
+<pre class="out"><code>replace github.com/someone/backoff =&gt; ../backoff</code></pre>
 <p>A package is a project like any other: its <code>iris.mod</code> names it by its address, and its <code>pub</code> names are what its users see.</p>
 <h2 id="c-libraries"><a href="#c-libraries">C libraries</a></h2>
 <p>A project can also use C code: <code>import c &quot;header.h&quot;</code> reads a C header, and a <code>link</code> line in <code>iris.mod</code> links the library (see <a href="36-calling-c.html">Calling C</a>):</p>

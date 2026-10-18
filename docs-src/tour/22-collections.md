@@ -8,20 +8,20 @@ A `List[T]` holds values of type `T` in order. A new list is empty and needs no 
 
 ```iris run
 void main() {
-    List[str] names
-    defer names.free()
-    names.push("ada")
-    names.push("zoe")
-    names.push("bob")
-    print("{names.len} names: {names.at(0)} ... {names.last()}")
-    names.set(1, "joe")
-    print("{names.at(1)}")
+    List[str] hosts
+    defer hosts.free()
+    hosts.push("10.0.0.1")
+    hosts.push("10.0.0.2")
+    hosts.push("10.0.0.3")
+    print("{hosts.len} hosts: {hosts.at(0)} ... {hosts.last()}")
+    hosts.set(1, "10.0.0.9")
+    print("{hosts.at(1)}")
 }
 ```
 
 ```output
-3 names: ada ... bob
-joe
+3 hosts: 10.0.0.1 ... 10.0.0.3
+10.0.0.9
 ```
 
 `len` is the number of values. `at(i)` gives the value at index i, from 0, and `set(i, v)` replaces it. An index outside the list stops the program, as with slices.
@@ -31,10 +31,10 @@ joe
 `push` adds at the end and `pop` takes the last value off and gives it. `insert(i, v)` and `remove(i)` work anywhere in the list, moving the values after it:
 
 ```iris run
-void show(List[i64] *l) {
+void show(List[u16] *ports) {
     String s = "[".copy()
-    for i, v in l.items() {
-        scoped String part = format("{if i > 0 { " " } else { "" }}{v}")
+    for i, p in ports.items() {
+        scoped String part = format("{if i > 0 { " " } else { "" }}{p}")
         s.append(part)
     }
     s.append("]")
@@ -43,29 +43,29 @@ void show(List[i64] *l) {
 }
 
 void main() {
-    List[i64] l
-    defer l.free()
-    for i in 1..6 {
-        l.push(i * 10)
+    List[u16] ports
+    defer ports.free()
+    for i in 0..5 {
+        ports.push(u16(8080 + i))
     }
-    show(&l)
-    last := l.pop()
-    l.insert(0, 5)
-    gone := l.remove(2)
+    show(&ports)
+    last := ports.pop()
+    ports.insert(0, 22)
+    gone := ports.remove(2)
     print("popped {last}, removed {gone}")
-    show(&l)
-    l.reverse()
-    show(&l)
-    l.clear()
-    print("{l.len} after clear")
+    show(&ports)
+    ports.reverse()
+    show(&ports)
+    ports.clear()
+    print("{ports.len} after clear")
 }
 ```
 
 ```output
-[10 20 30 40 50]
-popped 50, removed 20
-[5 10 30 40]
-[40 30 10 5]
+[8080 8081 8082 8083 8084]
+popped 8084, removed 8081
+[22 8080 8082 8083]
+[8083 8082 8080 22]
 0 after clear
 ```
 
@@ -78,35 +78,35 @@ popped 50, removed 20
 `sort(less)` sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:
 
 ```iris run
-struct Person {
-    str name
-    i64 age
+struct Upstream {
+    str addr
+    Duration latency
 }
 
-bool younger(Person a, Person b) => a.age < b.age
+bool faster(Upstream a, Upstream b) => a.latency < b.latency
 
 void main() {
-    List[Person] people
-    defer people.free()
-    people.push(Person{name: "ada", age: 36})
-    people.push(Person{name: "bob", age: 25})
-    people.push(Person{name: "cy", age: 30})
-    people.sort(younger)
-    for p in people {
-        print("{p.name} {p.age}")
+    List[Upstream] ups
+    defer ups.free()
+    ups.push(Upstream{addr: "10.0.0.11:8080", latency: 36ms})
+    ups.push(Upstream{addr: "10.0.0.12:8080", latency: 4ms})
+    ups.push(Upstream{addr: "10.0.0.13:8080", latency: 12ms})
+    ups.sort(faster)
+    for u in ups {
+        print("{u.addr} {u.latency}")
     }
-    List[str] words
-    defer words.free()
-    words.push("pear")
-    words.push("fig")
-    print("{words.contains("fig")} {words.indexOf("pear")} {words.indexOf("kiwi")}")
+    List[str] protocols
+    defer protocols.free()
+    protocols.push("http/1.1")
+    protocols.push("h2")
+    print("{protocols.contains("h2")} {protocols.indexOf("http/1.1")} {protocols.indexOf("h3")}")
 }
 ```
 
 ```output
-bob 25
-cy 30
-ada 36
+10.0.0.12:8080 4ms
+10.0.0.13:8080 12ms
+10.0.0.11:8080 36ms
 true 0 -1
 ```
 
@@ -115,25 +115,25 @@ true 0 -1
 `items()` gives the list's values as a slice, without copying: to pass to a function that takes a slice, or for a loop with indexes. The slice points into the list, so it is valid until the list next grows or is freed:
 
 ```iris run
-i64 sum(i64[] xs) {
-    i64 total
-    for x in xs {
-        total += x
+i64 total(i64[] sizes) {
+    i64 sum
+    for s in sizes {
+        sum += s
     }
-    return total
+    return sum
 }
 
 void main() {
-    List[i64] l
-    defer l.free()
-    l.push(4)
-    l.push(5)
-    print("{sum(l.items())}")
+    List[i64] reads
+    defer reads.free()
+    reads.push(4096)
+    reads.push(1200)
+    print("{total(reads.items())} bytes read")
 }
 ```
 
 ```output
-9
+5296 bytes read
 ```
 
 ## Map
@@ -142,21 +142,22 @@ A `Map[K, V]` keeps a value for each key. `set` adds a key or replaces its value
 
 ```iris run
 void main() {
-    Map[str, i64] ages
-    defer ages.free()
-    ages.set("ada", 36)
-    ages.set("bob", 25)
-    ages.set("ada", 37)
-    age, found := ages.get("ada")
-    print("{age} {found} {ages.len}")
-    _, there := ages.get("zoe")
-    print("{there} {ages.getOr("zoe", 0)} {ages.has("bob")}")
-    print("{ages.remove("bob")} {ages.remove("bob")} {ages.len}")
+    // open connections for each client address
+    Map[str, i64] conns
+    defer conns.free()
+    conns.set("10.0.0.5", 3)
+    conns.set("10.0.0.9", 1)
+    conns.set("10.0.0.5", 4)
+    n, found := conns.get("10.0.0.5")
+    print("{n} {found} {conns.len}")
+    _, there := conns.get("10.0.0.7")
+    print("{there} {conns.getOr("10.0.0.7", 0)} {conns.has("10.0.0.9")}")
+    print("{conns.remove("10.0.0.9")} {conns.remove("10.0.0.9")} {conns.len}")
 }
 ```
 
 ```output
-37 true 2
+4 true 2
 false 0 true
 true false 1
 ```
@@ -171,27 +172,29 @@ A loop over a map gives each key and its value:
 
 ```iris run
 void main() {
-    Map[str, i64] stock
-    defer stock.free()
-    stock.set("pears", 4)
+    Map[str, i64] hits
+    defer hits.free()
+    hits.set("/health", 4)
     total := 0
-    for name, count in stock {
-        print("{name}: {count}")
+    for path, count in hits {
+        print("{path}: {count}")
         total += count
     }
-    scoped List[str] names = stock.keys()
-    print("{names.len} kinds, {total} in all")
+    scoped List[str] paths = hits.keys()
+    print("{paths.len} paths, {total} requests")
 }
 ```
 
 ```output
-pears: 4
-1 kinds, 4 in all
+/health: 4
+1 paths, 4 requests
 ```
 
 For a stable order, the keys go into a list, which is sorted.
 
-## Counting words
+## Requests per client
+
+An access log has a line for each request, with the client's address first. A map counts the lines of each address, and the sorted keys print them in order:
 
 ```iris run
 import str
@@ -199,27 +202,33 @@ import str
 bool before(str a, str b) => str.compare(a, b) < 0
 
 void main() {
-    text := "the cat and the dog and the bird"
+    log := """
+        10.0.0.5 GET / 200
+        10.0.0.9 GET /login 200
+        10.0.0.5 POST /login 302
+        10.0.0.7 GET / 200
+        10.0.0.5 GET /admin 403
+        """
     Map[str, i64] counts
     defer counts.free()
-    scoped List[str] words = str.fields(text)
-    for w in words {
-        counts.set(w, counts.getOr(w, 0) + 1)
+    scoped List[str] lines = str.split(log, "\n")
+    for line in lines {
+        ip, _, found := str.cut(line, " ")
+        continue if !found
+        counts.set(ip, counts.getOr(ip, 0) + 1)
     }
-    scoped List[str] keys = counts.keys()
-    keys.sort(before)
-    for k in keys {
-        print("{k} {counts.getOr(k, 0)}")
+    scoped List[str] ips = counts.keys()
+    ips.sort(before)
+    for ip in ips {
+        print("{ip} {counts.getOr(ip, 0)}")
     }
 }
 ```
 
 ```output
-and 2
-bird 1
-cat 1
-dog 1
-the 3
+10.0.0.5 3
+10.0.0.7 1
+10.0.0.9 1
 ```
 
 ## Who frees the values
@@ -230,36 +239,37 @@ A list or a map holds its values themselves. When the values own memory, like `S
 import str
 
 void main() {
-    List[String] shouts
-    defer shouts.freeEach()
-    for w in ["hey", "you"] {
-        shouts.push(str.upper(w))
+    List[String] headers
+    defer headers.freeEach()
+    for h in ["Content-Type", "X-Request-Id"] {
+        headers.push(str.lower(h))
     }
-    print("{shouts.at(0)} {shouts.at(1)}")
+    print("{headers.at(0)} {headers.at(1)}")
 }
 ```
 
 ```output
-HEY YOU
+content-type x-request-id
 ```
 
 `at` and the loop give the list's own values: a `String` from `list.at(i)` belongs to the list, and is freed by `freeEach`, not by the caller. A map with values that own memory frees them in a loop before its own `free`:
 
 ```iris run
 void main() {
-    Map[i64, String] labels
-    defer labels.free()
-    labels.set(1, "one".copy())
-    labels.set(2, "two".copy())
-    print("{labels.len} labels")
-    for _, v in labels {
+    Map[i64, String] reasons
+    defer reasons.free()
+    reasons.set(200, "OK".copy())
+    reasons.set(404, "Not Found".copy())
+    text, _ := reasons.get(404)
+    print("{reasons.len} reasons, 404 is {text}")
+    for _, v in reasons {
         v.free()
     }
 }
 ```
 
 ```output
-2 labels
+2 reasons, 404 is Not Found
 ```
 
 The `defer` runs last, so the loop frees the values first and the map after them.

@@ -50,161 +50,229 @@ try {
 <p class="lede">A task is a function call that runs alongside the rest of the program. Tasks take turns on a thread, switching whenever one waits, so a program can do many things at once without callbacks. Channels pass values between them. This chapter covers <code>spawn</code>, channels, <code>select</code> and timers.</p>
 <h2 id="spawn"><a href="#spawn">spawn</a></h2>
 <p><code>spawn</code> starts a function call as a new task and goes on at once, without waiting for it. Its arguments are worked out first, in the task that spawns:</p>
-<pre class="code run"><code><span class="t">void</span> greet(<span class="t">str</span> name, <span class="t">Duration</span> after) {
-    sleep(after)
-    print(<span class="s">&quot;hello, {name}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> fetch(<span class="t">str</span> host, <span class="t">Duration</span> rtt) {
+    sleep(rtt) <span class="c">// the time the reply takes to come back</span>
+    print(<span class="s">&quot;reply from {host}&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    <span class="k">spawn</span> greet(<span class="s">&quot;slow&quot;</span>, 20ms)
-    <span class="k">spawn</span> greet(<span class="s">&quot;fast&quot;</span>, 5ms)
-    print(<span class="s">&quot;both started&quot;</span>)
+    <span class="k">spawn</span> fetch(<span class="s">&quot;eu.example.com&quot;</span>, 20ms)
+    <span class="k">spawn</span> fetch(<span class="s">&quot;us.example.com&quot;</span>, 5ms)
+    print(<span class="s">&quot;both requests sent&quot;</span>)
     sleep(40ms)
     print(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
-<pre class="out"><code>both started
-hello, fast
-hello, slow
+<pre class="out"><code>both requests sent
+reply from us.example.com
+reply from eu.example.com
 done</code></pre>
 <p><code>sleep(d)</code> waits for a <code>Duration</code>, and while a task waits, the others run. The same is true of every wait: for the network, a file, a channel, a lock, a timer. Code in a task is written in order, as if each call simply took its time, and the waiting is where the tasks take turns.</p>
 <p>Tasks are cheap: each has its own stack, kept small until it is needed, so a server can start one for each connection. The program ends when <code>main</code> returns, whether or not other tasks are still running.</p>
 <p>A spawned function can't return an error, since nothing waits for its result. It handles its errors itself, or sends them to a task that does.</p>
 <h2 id="channels"><a href="#channels">Channels</a></h2>
-<p>A channel carries values of one type from one task to another. <code>chan[T](n)</code> makes one with room for n values. <code>ch &lt;- v</code> puts a value in, waiting while the channel is full; <code>&lt;-ch</code> takes the next value out, waiting while it is empty:</p>
-<pre class="code run"><code><span class="t">void</span> produce(<span class="k">chan</span>[<span class="t">i64</span>] out) {
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">6</span> {
-        out &lt;- i * i
+<p>A channel carries values of one type from one task to another. <code>chan[T](n)</code> makes one with room for n values. <code>ch &lt;- v</code> puts a value in, waiting while the channel is full; <code>&lt;-ch</code> takes the next value out, waiting while it is empty.</p>
+<p>Here a server task reads the lines of a connection and passes each one to <code>main</code> on a channel. <code>net.listen(0, &quot;127.0.0.1&quot;)</code> listens on a free port, which <code>ln.port</code> then holds, and <code>net.dial</code> connects to it (see <a href="../std/index.html#net">the net library</a>):</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="c">// Reads the lines of one connection and passes each one on.</span>
+<span class="t">void</span> serve(net.Listener ln, <span class="k">chan</span>[<span class="t">String</span>] lines) {
+    conn := ln.accept() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> conn.close()
+    <span class="k">for</span> {
+        line := conn.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        lines &lt;- line
     }
 }
 
-<span class="t">void</span> main() {
-    squares := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
-    <span class="k">spawn</span> produce(squares)
-    total := <span class="n">0</span>
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">5</span> {
-        total += &lt;-squares
+!<span class="t">void</span> main() {
+    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    lines := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">8</span>)
+    <span class="k">spawn</span> serve(ln, lines)
+    c := <span class="k">try</span> net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> c.close()
+    <span class="k">try</span> c.write(<span class="s">&quot;PING\nSTATS\nQUIT\n&quot;</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        <span class="k">scoped</span> <span class="t">String</span> l = &lt;-lines
+        print(<span class="s">&quot;the server read {l}&quot;</span>)
     }
-    print(<span class="s">&quot;sum of squares {total}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>sum of squares 55</code></pre>
+<pre class="out"><code>the server read PING
+the server read STATS
+the server read QUIT</code></pre>
 <p>Values come out in the order they went in. A channel is a value that refers to the same queue wherever it is copied, so it can be passed to tasks as an argument, kept in a struct or held in a global. Several tasks can send to one channel, and several can take from it.</p>
-<p>A value sent on a channel is copied into it. A <code>String</code> or another value that owns memory is handed over that way: the task that takes it frees it.</p>
+<p>A value sent on a channel is copied into it. A <code>String</code> or another value that owns memory is handed over that way: the task that takes it frees it. Above, <code>serve</code> sends each line it read, and <code>main</code> frees it.</p>
 <h2 id="no-buffer"><a href="#no-buffer">No buffer</a></h2>
-<p>A channel made with room for 0 values has no buffer: <code>ch &lt;- v</code> waits until another task takes the value, which goes straight from one to the other. Both sides know the hand-over happened, which makes it a way for tasks to wait for each other:</p>
-<pre class="code run"><code><span class="t">void</span> work(<span class="k">chan</span>[<span class="t">bool</span>] done) {
-    print(<span class="s">&quot;working&quot;</span>)
-    sleep(5ms)
-    done &lt;- <span class="k">true</span>
+<p>A channel made with room for 0 values has no buffer: <code>ch &lt;- v</code> waits until another task takes the value, which goes straight from one to the other. Both sides know the hand-over happened, which makes it a way for tasks to wait for each other. Here <code>main</code> waits until the server is listening before it connects:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="c">// Listens, says it is ready by sending its port, then greets one client.</span>
+<span class="t">void</span> serve(<span class="k">chan</span>[<span class="t">u16</span>] ready) {
+    ln := net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>) <span class="k">catch</span> e {
+        ready &lt;- <span class="n">0</span>
+        <span class="k">return</span>
+    }
+    ready &lt;- ln.port
+    conn := ln.accept() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> conn.close()
+    conn.write(<span class="s">&quot;220 ready\n&quot;</span>) <span class="k">catch</span> e { }
 }
 
-<span class="t">void</span> main() {
-    done := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">0</span>)
-    <span class="k">spawn</span> work(done)
-    _ = &lt;-done
-    print(<span class="s">&quot;the work is finished&quot;</span>)
+!<span class="t">void</span> main() {
+    ready := <span class="k">chan</span>[<span class="t">u16</span>](<span class="n">0</span>)
+    <span class="k">spawn</span> serve(ready)
+    port := &lt;-ready
+    <span class="k">if</span> port == <span class="n">0</span> {
+        print(<span class="s">&quot;the server didn&#x27;t start&quot;</span>)
+        <span class="k">return</span>
+    }
+    c := <span class="k">try</span> net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, port)
+    <span class="k">defer</span> c.close()
+    <span class="k">scoped</span> <span class="t">String</span> hello = <span class="k">try</span> c.readLine()
+    print(<span class="s">&quot;connected: {hello}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>working
-the work is finished</code></pre>
+<pre class="out"><code>connected: 220 ready</code></pre>
 <h2 id="workers"><a href="#workers">Workers</a></h2>
-<p>A common shape: a channel of jobs, a few tasks taking jobs from it, and a channel for the results:</p>
-<pre class="code run"><code><span class="k">struct</span> Job {
-    <span class="t">i64</span> id
-    <span class="t">i64</span> size
+<p>A common shape: a channel of jobs, a few tasks taking jobs from it, and a channel for the results. Here three workers check which ports accept a connection. Ports 1 to 3 have nothing listening on them, so connecting fails at once:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="k">struct</span> Job {
+    <span class="t">i64</span> index
+    <span class="t">u16</span> port
 }
 
-<span class="t">void</span> worker(<span class="k">chan</span>[Job] jobs, <span class="k">chan</span>[<span class="t">i64</span>] results) {
+<span class="k">struct</span> Result {
+    <span class="t">i64</span> index
+    <span class="t">bool</span> open
+}
+
+<span class="t">void</span> worker(<span class="k">chan</span>[Job] jobs, <span class="k">chan</span>[Result] results) {
     <span class="k">for</span> {
         j := &lt;-jobs
-        sleep(1ms)
-        results &lt;- j.size * <span class="n">10</span>
+        c := net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, j.port, 1s) <span class="k">catch</span> e {
+            results &lt;- Result{index: j.index}
+            <span class="k">continue</span>
+        }
+        c.close()
+        results &lt;- Result{index: j.index, open: <span class="k">true</span>}
     }
 }
 
-<span class="t">void</span> main() {
+!<span class="t">void</span> main() {
+    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">defer</span> ln.close()
+    <span class="t">u16</span>[<span class="n">4</span>] ports = [ln.port, <span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
     jobs := <span class="k">chan</span>[Job](<span class="n">16</span>)
-    results := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">16</span>)
+    results := <span class="k">chan</span>[Result](<span class="n">16</span>)
     <span class="k">for</span> w <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
         <span class="k">spawn</span> worker(jobs, results)
     }
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">8</span> {
-        jobs &lt;- Job{id: i, size: i + <span class="n">1</span>}
+    <span class="k">for</span> i, p <span class="k">in</span> ports {
+        jobs &lt;- Job{index: i, port: p}
     }
-    total := <span class="n">0</span>
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">8</span> {
-        total += &lt;-results
+    <span class="t">bool</span>[<span class="n">4</span>] open
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..ports.len {
+        r := &lt;-results
+        open[r.index] = r.open
     }
-    print(<span class="s">&quot;total {total}&quot;</span>)
+    print(<span class="s">&quot;our listener: {open[0]}; ports 1 to 3: {open[1]} {open[2]} {open[3]}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>total 360</code></pre>
-<p>The workers loop forever, taking jobs as they come; when <code>main</code> has all the results it returns, and the program ends.</p>
+<pre class="out"><code>our listener: true; ports 1 to 3: false false false</code></pre>
+<p>The results come back in whatever order the checks finish, so each carries the index of its job. The workers loop forever, taking jobs as they come; when <code>main</code> has all the results it returns, and the program ends.</p>
 <h2 id="select"><a href="#select">select</a></h2>
-<p><code>select</code> waits on several channels at once and runs the arm of the first one that has a value. An <code>after(d)</code> arm runs when nothing came in that time, which gives any wait a timeout:</p>
-<pre class="code run"><code><span class="t">void</span> slowAnswer(<span class="k">chan</span>[<span class="t">str</span>] out) {
-    sleep(50ms)
-    out &lt;- <span class="s">&quot;late answer&quot;</span>
+<p><code>select</code> waits on several channels at once and runs the arm of the first one that has a value. An <code>after(d)</code> arm runs when nothing came in that time, which gives any wait a timeout. Here the server accepts the connection but never answers, so the reply never comes:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="c">// Asks a server for a line and passes the reply on.</span>
+<span class="t">void</span> ask(<span class="t">u16</span> port, <span class="k">chan</span>[<span class="t">String</span>] replies) {
+    c := net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, port) <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> c.close()
+    c.write(<span class="s">&quot;PING\n&quot;</span>) <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    line := c.readLine() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    replies &lt;- line
 }
 
-<span class="t">void</span> main() {
-    answers := <span class="k">chan</span>[<span class="t">str</span>](<span class="n">1</span>)
+!<span class="t">void</span> main() {
+    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>) <span class="c">// nothing here ever answers</span>
+    <span class="k">defer</span> ln.close()
+    replies := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">1</span>)
     control := <span class="k">chan</span>[<span class="t">str</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> slowAnswer(answers)
-    control &lt;- <span class="s">&quot;stop&quot;</span>
+    <span class="k">spawn</span> ask(ln.port, replies)
+    control &lt;- <span class="s">&quot;reload&quot;</span>
     <span class="k">select</span> {
-        a := &lt;-answers =&gt; print(a)
+        r := &lt;-replies =&gt; print(r)
         c := &lt;-control =&gt; print(<span class="s">&quot;control: {c}&quot;</span>)
         after(1s) =&gt; print(<span class="s">&quot;nothing came&quot;</span>)
     }
     <span class="k">select</span> {
-        a := &lt;-answers =&gt; print(a)
-        after(10ms) =&gt; print(<span class="s">&quot;no answer within 10ms&quot;</span>)
+        r := &lt;-replies =&gt; print(r)
+        after(50ms) =&gt; print(<span class="s">&quot;no reply within 50ms&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>control: stop
-no answer within 10ms</code></pre>
+<pre class="out"><code>control: reload
+no reply within 50ms</code></pre>
 <p>When several channels have values, <code>select</code> takes the first arm in order. An arm takes from a channel, or waits with <code>after</code>; sending is done outside <code>select</code>.</p>
 <h2 id="deadlocks"><a href="#deadlocks">Deadlocks</a></h2>
 <p>When every task waits for something that no other task can give, the program can never go on. It stops with a panic that says so, instead of hanging:</p>
 <pre class="code"><code><span class="t">void</span> main() {
-    ch := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">0</span>)
-    v := &lt;-ch <span class="c">// no task will ever send</span>
+    replies := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">0</span>)
+    r := &lt;-replies <span class="c">// no task will ever send</span>
 }</code></pre>
 <pre class="out"><code>panic: every task is waiting and nothing can wake them: a deadlock</code></pre>
 <h2 id="errors-from-tasks"><a href="#errors-from-tasks">Errors from tasks</a></h2>
-<p>A task that can fail sends its error, or its result, on a channel. A struct carries either:</p>
-<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+<p>A task that can fail sends its error, or its result, on a channel. A struct carries either. Here each probe sends what it found, with the error's code when connecting failed:</p>
+<pre class="code run"><code><span class="k">import</span> net
 
-<span class="k">struct</span> Parsed {
-    <span class="t">str</span> input
-    <span class="t">i64</span> value
+<span class="k">struct</span> Probe {
+    <span class="t">i64</span> index
     <span class="t">bool</span> ok
+    <span class="t">String</span> why
 }
 
-<span class="t">void</span> parse(<span class="t">str</span> input, <span class="k">chan</span>[Parsed] out) {
-    n := <span class="t">str</span>.parseInt(input) <span class="k">catch</span> e {
-        out &lt;- Parsed{input: input}
+<span class="t">void</span> probe(<span class="t">i64</span> index, <span class="t">u16</span> port, <span class="k">chan</span>[Probe] out) {
+    c := net.dial(<span class="s">&quot;127.0.0.1&quot;</span>, port, 1s) <span class="k">catch</span> e {
+        out &lt;- Probe{index: index, why: format(<span class="s">&quot;{e.code}&quot;</span>)}
         <span class="k">return</span>
     }
-    out &lt;- Parsed{input: input, value: n, ok: <span class="k">true</span>}
+    c.close()
+    out &lt;- Probe{index: index, ok: <span class="k">true</span>}
 }
 
-<span class="t">void</span> main() {
-    out := <span class="k">chan</span>[Parsed](<span class="n">4</span>)
-    <span class="k">for</span> s <span class="k">in</span> [<span class="s">&quot;12&quot;</span>, <span class="s">&quot;x&quot;</span>, <span class="s">&quot;30&quot;</span>] {
-        <span class="k">spawn</span> parse(s, out)
-    }
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+!<span class="t">void</span> main() {
+    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">defer</span> ln.close()
+    out := <span class="k">chan</span>[Probe](<span class="n">4</span>)
+    <span class="k">spawn</span> probe(<span class="n">0</span>, ln.port, out)
+    <span class="k">spawn</span> probe(<span class="n">1</span>, <span class="n">1</span>, out)
+    <span class="t">str</span>[<span class="n">2</span>] names = [<span class="s">&quot;our listener&quot;</span>, <span class="s">&quot;port 1&quot;</span>]
+    Probe[<span class="n">2</span>] found
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
         p := &lt;-out
+        found[p.index] = p
+    }
+    <span class="k">for</span> p <span class="k">in</span> found {
         <span class="k">if</span> p.ok {
-            print(<span class="s">&quot;{p.input} -&gt; {p.value}&quot;</span>)
+            print(<span class="s">&quot;{names[p.index]}: open&quot;</span>)
         } <span class="k">else</span> {
-            print(<span class="s">&quot;{p.input} isn&#x27;t a number&quot;</span>)
+            print(<span class="s">&quot;{names[p.index]}: {p.why}&quot;</span>)
         }
+        p.why.free()
     }
 }</code></pre>
-<pre class="out"><code>12 -&gt; 12
-x isn&#x27;t a number
-30 -&gt; 30</code></pre>
-<p>Each task runs until it waits, so here they finish in the order they were started. Tasks on one thread never run at the same moment; the next chapter covers threads, which do.</p>
+<pre class="out"><code>our listener: open
+port 1: NetError.refused</code></pre>
+<p>Tasks on one thread never run at the same moment; the next chapter covers threads, which do.</p>
     <nav class="pager"><a class="prev" href="23-modules.html"><span>Previous</span>Modules</a><a class="next" href="25-threads.html"><span>Next</span>Threads</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>

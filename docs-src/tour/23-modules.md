@@ -11,32 +11,32 @@ A file that isn't in a project is a program on its own. `iris run hello.iris` co
 A project is a folder with an `iris.mod` file in it. `iris mod init` makes one, naming the project by its path, usually the address of its repository; without a path, the folder's name is used:
 
 ```shell
-mkdir inventory
-cd inventory
-iris mod init github.com/me/inventory
+mkdir proxy
+cd proxy
+iris mod init github.com/me/proxy
 ```
 
 The file's first line is that name:
 
 ```output
-module github.com/me/inventory
+module github.com/me/proxy
 ```
 
 Each folder of the project is a module. All the `.iris` files in one folder belong to its module: they see each other's names, whatever order they are in, with no imports between them. The files in the project's own folder are the program's main module, which has `main`:
 
 ```output
-inventory/
+proxy/
     iris.mod
     main.iris          main, and the program's other code
-    report.iris        the same module as main.iris
-    store/
-        store.iris     the module store
-        query.iris     also store
-    store/disk/
-        disk.iris      the module disk
+    stats.iris         the same module as main.iris
+    upstream/
+        upstream.iris  the module upstream
+        pick.iris      also upstream
+    upstream/probe/
+        probe.iris     the module probe
 ```
 
-`iris run inventory`, or `iris run main.iris` from inside the folder, compiles the whole project, and `iris build` writes the program. A file's name doesn't matter to the compiler; it is for people.
+`iris run proxy`, or `iris run main.iris` from inside the folder, compiles the whole project, and `iris build` writes the program. A file's name doesn't matter to the compiler; it is for people.
 
 ## import
 
@@ -44,45 +44,45 @@ inventory/
 
 ```iris
 import fs, str
-import "store", "store/disk"
+import "upstream", "upstream/probe"
 
 !void main() {
-    scoped String text = try fs.readAll("stock.txt")
-    items := try store.parse(text)
-    try disk.save(items)
+    scoped String text = try fs.readAll("upstreams.txt")
+    servers := try upstream.parse(text)
+    try probe.check(servers)
 }
 ```
 
-A quoted path's module is used by its last part: `"store/disk"` is `disk`. Imports go at the top of each file that uses them, and only that file sees them. Two modules can't import each other, directly or through others: the program says which one depends on which.
+A quoted path's module is used by its last part: `"upstream/probe"` is `probe`. Imports go at the top of each file that uses them, and only that file sees them. Two modules can't import each other, directly or through others: the program says which one depends on which.
 
-A file's own names can't be the same as the name of a module it imports. A module's names are used with its name in front, so names in different modules never clash: `store.parse` and `json.parse` are two different functions.
+A file's own names can't be the same as the name of a module it imports. A module's names are used with its name in front, so names in different modules never clash: `upstream.parse` and `json.parse` are two different functions.
 
 ## pub
 
 A module's names are its own unless they are marked `pub`. Other modules can use only those:
 
 ```iris
-// store/store.iris
-pub struct Item {
-    pub str name
-    pub i64 count
-    i64 checksum // only store's code can read or set it
+// upstream/upstream.iris
+pub struct Server {
+    pub str addr
+    pub i64 weight
+    i64 failures // only upstream's code can read or set it
 }
 
-pub !List[Item] parse(str text) {
-    List[Item] items
-    return items
+pub !List[Server] parse(str text) {
+    List[Server] servers
+    return servers
 }
 
-// only store's code can call it
-i64 checksumOf(str line) => line.len
+// only upstream's code can call it
+i64 weightOf(str line) => line.len
 ```
 
 A `pub` struct's fields and methods are visible outside only when they are marked `pub` themselves, which keeps a struct's insides free to change. All the values of a `pub` enum are visible. Using a name that isn't `pub` is an error that says so:
 
 ```output
-main.iris:11: the field checksum of Item isn't pub, so only its own module can use it
-main.iris:12: store.checksumOf isn't pub, so only its own module can use it
+main.iris:11: the field failures of Server isn't pub, so only its own module can use it
+main.iris:12: upstream.weightOf isn't pub, so only its own module can use it
 ```
 
 ## The standard library
@@ -93,7 +93,7 @@ The modules of the standard library are imported by name: `import http, json, lo
 import path, str, time
 
 void main() {
-    scoped String p = path.join("/var/log", "app.log")
+    scoped String p = path.join("/var/log", "proxy.log")
     print("{path.base(p)} in {path.dir(p)}, extension {path.ext(p)}")
     print("{str.startsWith(p, "/var")}")
     start := time.clock()
@@ -102,7 +102,7 @@ void main() {
 ```
 
 ```output
-app.log in /var/log, extension .log
+proxy.log in /var/log, extension .log
 true
 true
 ```
@@ -112,23 +112,23 @@ true
 A package is a module from another project, imported by its repository's address:
 
 ```iris
-import "github.com/someone/greet"
+import "github.com/someone/backoff"
 
 void main() {
-    print(greet.hello("iris"))
+    print("{backoff.delay(3)}")
 }
 ```
 
 `iris get` downloads a package at a version, which is a tag in its repository, and writes it into `iris.mod`:
 
 ```shell
-iris get github.com/someone/greet@v1.2.0
+iris get github.com/someone/backoff@v1.2.0
 ```
 
 ```output
-module github.com/me/inventory
+module github.com/me/proxy
 
-require github.com/someone/greet v1.2.0
+require github.com/someone/backoff v1.2.0
 ```
 
 A project uses one version of each package. Packages are kept in `~/.cache/iris/pkg`, or `$IRIS_PATH/pkg` when that is set, and found there when the program is compiled; nothing is downloaded while compiling.
@@ -136,7 +136,7 @@ A project uses one version of each package. Packages are kept in `~/.cache/iris/
 To work on a package next to the project that uses it, `replace` points the package at a folder:
 
 ```output
-replace github.com/someone/greet => ../greet
+replace github.com/someone/backoff => ../backoff
 ```
 
 A package is a project like any other: its `iris.mod` names it by its address, and its `pub` names are what its users see.
