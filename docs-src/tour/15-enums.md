@@ -138,70 +138,72 @@ A flags value prints the names of the values that are set, joined by `|`. A flag
 A value of an enum can carry data, written like a function's parameters after its name:
 
 ```iris
-enum Shape {
-    Circle(f64 radius)
-    Rect(f64 width, f64 height)
-    Empty
+enum Frame {
+    Data(i64 stream, i64 size)
+    Ping(u64 payload)
+    Close
 }
 ```
 
 A value is made by calling it like a function, and taken apart with `match`. Each arm names a value and gives names to its data, which the arm then uses:
 
 ```iris run
-enum Shape {
-    Circle(f64 radius)
-    Rect(f64 width, f64 height)
-    Empty
+// The frames of a protocol, each with a 9-byte header.
+enum Frame {
+    Data(i64 stream, i64 size)
+    Ping(u64 payload)
+    Close
 }
 
-f64 area(Shape s) => match s {
-    Circle(r) => 3.14159 * r * r
-    Rect(w, h) => w * h
-    Empty => 0.0
+i64 wireSize(Frame f) => match f {
+    Data(stream, size) => 9 + size
+    Ping(payload) => 9 + 8
+    Close => 9
 }
 
 void main() {
-    Shape[3] shapes = [Shape.Circle(1), .Rect(2, 3), .Empty]
-    for s in shapes {
-        print("{s}: {area(s)}")
+    Frame[3] frames = [Frame.Data(1, 1200), .Ping(42), .Close]
+    for f in frames {
+        print("{f}: {wireSize(f)} bytes")
     }
 }
 ```
 
 ```output
-Circle: 3.14159
-Rect: 6
-Empty: 0
+Data: 1209 bytes
+Ping: 17 bytes
+Close: 9 bytes
 ```
 
 A name in an arm can be `_` for data that isn't needed, and a value's name on its own takes it whatever its data. A value prints as its name:
 
 ```iris run
+// What a poller reports about a socket.
 enum Event {
-    Key(u8 code)
-    Click(i64 x, i64 y)
-    Resize(i64 w, i64 h)
+    Readable(i32 fd, i64 bytes)
+    Writable(i32 fd)
+    Hangup(i32 fd)
 }
 
 void handle(Event e) {
     match e {
-        Key(c) => print("key {c}")
-        Click(x, _) => print("click at x {x}")
-        Resize => print("resized")
+        Readable(fd, _) => print("fd {fd} has data")
+        Writable(fd) => print("fd {fd} can be written")
+        Hangup => print("a peer went away")
     }
 }
 
 void main() {
-    handle(.Key('q'))
-    handle(.Click(10, 20))
-    handle(Event.Resize(800, 600))
+    handle(.Readable(5, 512))
+    handle(.Writable(6))
+    handle(Event.Hangup(5))
 }
 ```
 
 ```output
-key 113
-click at x 10
-resized
+fd 5 has data
+fd 6 can be written
+a peer went away
 ```
 
 The data is part of the value, which is copied as a whole like a struct. Values of an enum with data can't be compared with `==`, since their data may differ; `match` is the way to look at them.

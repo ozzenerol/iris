@@ -8,18 +8,18 @@ An array's type is its item type followed by its size in brackets. A literal lis
 
 ```iris run
 void main() {
-    i64[4] counts = [10, 20, 30, 40]
-    str[2] names = ["ada", "zoe"]
+    u16[4] ports = [22, 80, 443, 8080]
+    str[2] resolvers = ["1.1.1.1", "8.8.8.8"]
     u8[16] buffer
-    print("{counts[0]} {counts[3]} {names[1]} {buffer[15]} {counts.len}")
+    print("{ports[0]} {ports[3]} {resolvers[1]} {buffer[15]} {ports.len}")
 }
 ```
 
 ```output
-10 40 zoe 0 4
+22 8080 8.8.8.8 0 4
 ```
 
-The size is part of the type and is known when compiling, so `counts.len` costs nothing. An array declared without a value has every item at zero. A literal must have as many items as the array.
+The size is part of the type and is known when compiling, so `ports.len` costs nothing. An array declared without a value has every item at zero. A literal must have as many items as the array.
 
 An index runs from 0 to `len - 1`. Every index is checked: one outside the array stops the program with a message that says where. When the index is a constant, the compiler checks it before the program runs:
 
@@ -32,29 +32,29 @@ Arrays are values. Assigning one copies all its items, and so does passing it to
 
 ```iris run
 void main() {
-    i64[3] a = [1, 2, 3]
-    b := a
-    b[0] = 99
-    print("{a[0]} {b[0]}")
+    u8[4] ip = [10, 0, 0, 1]
+    next := ip
+    next[3] = 2
+    print("{ip[3]} {next[3]}")
 }
 ```
 
 ```output
-1 99
+1 2
 ```
 
-An array of arrays is written with the sizes one after the other, read from the left: `i64[3][2]` is two arrays of three `i64`s each. The first index picks one of the two:
+An array of arrays is written with the sizes one after the other, read from the left: `i64[3][2]` is two arrays of three `i64`s each. The first index picks one of the two. Here each of two servers counts its replies in three buckets: fast, slow, failed:
 
 ```iris run
 void main() {
-    i64[3][2] grid
-    grid[1][2] = 5
-    print("{grid.len} rows of {grid[0].len}, grid[1][2] = {grid[1][2]}")
+    i64[3][2] replies
+    replies[1][2] = 5 // server 1, failed
+    print("{replies.len} servers, {replies[0].len} buckets, {replies[1][2]} failed on server 1")
 }
 ```
 
 ```output
-2 rows of 3, grid[1][2] = 5
+2 servers, 3 buckets, 5 failed on server 1
 ```
 
 ## Slices
@@ -62,43 +62,44 @@ void main() {
 A slice, `T[]`, is a pointer to items and their count. It doesn't own them: they live in an array, in memory from `alloc`, or anywhere else. An array can be given wherever a slice of its item type is wanted, so a function that takes a slice works with an array of any size:
 
 ```iris run
-i64 sum(i64[] xs) {
-    i64 total
-    for x in xs {
-        total += x
+i64 total(i64[] sizes) {
+    i64 sum
+    for s in sizes {
+        sum += s
     }
-    return total
+    return sum
 }
 
 void main() {
-    i64[3] small = [1, 2, 3]
-    i64[5] large = [10, 20, 30, 40, 50]
-    print("{sum(small)} {sum(large)} {sum([7, 8])}")
+    i64[3] reads = [4096, 4096, 812]
+    i64[5] writes = [100, 200, 300, 400, 500]
+    print("{total(reads)} {total(writes)} {total([1460, 40])}")
 }
 ```
 
 ```output
-6 150 15
+9004 1500 1500
 ```
 
 A slice looks at the same items as what it came from, so changing an item through it changes the original:
 
 ```iris run
-void zero(i64[] xs) {
-    for i in 0..xs.len {
-        xs[i] = 0
+void zero(u8[] buf) {
+    for i in 0..buf.len {
+        buf[i] = 0
     }
 }
 
 void main() {
-    i64[4] nums = [1, 2, 3, 4]
-    zero(nums[1:3])
-    print("{nums[0]} {nums[1]} {nums[2]} {nums[3]}")
+    // an IPv4 header starts with these; bytes 10 and 11 are its checksum
+    u8[12] header = [0x45, 0, 0, 60, 0x1c, 0x46, 0x40, 0, 64, 6, 0xb1, 0xe6]
+    zero(header[10:12]) // the checksum is worked out with these at zero
+    print("{header[9]} {header[10]} {header[11]}")
 }
 ```
 
 ```output
-1 0 0 4
+6 0 0
 ```
 
 ## Slicing
@@ -107,21 +108,22 @@ void main() {
 
 ```iris run
 void main() {
-    i64[6] xs = [0, 1, 2, 3, 4, 5]
-    s := xs[2:5]
-    print("{s.len} items: {s[0]} {s[1]} {s[2]}")
-    head := xs[:2]
-    tail := xs[4:]
-    print("{head.len} {tail.len} {tail[0]}")
-    inner := s[1:]
-    print("{inner[0]}")
+    // a UDP header: source port, destination port, length, checksum, two bytes each
+    u8[8] udp = [0x1f, 0x90, 0x00, 0x35, 0x00, 0x1c, 0x00, 0x00]
+    src := udp[0:2]
+    print("{src.len} bytes: source port {u16(src[0]) << 8 | u16(src[1])}")
+    ports := udp[:4]
+    rest := udp[4:]
+    print("{ports.len} {rest.len}, length {rest[1]}")
+    dst := ports[2:]
+    print("destination port {dst[1]}")
 }
 ```
 
 ```output
-3 items: 2 3 4
-2 2 4
-3
+2 bytes: source port 8080
+4 4, length 28
+destination port 53
 ```
 
 Both ends are checked: a slice can't reach past the end of what it is taken from, and its start can't be after its end. `a[n:n]` is an empty slice.
@@ -129,19 +131,20 @@ Both ends are checked: a slice can't reach past the end of what it is taken from
 `[]` is an empty slice of any type, for a parameter with nothing to give:
 
 ```iris run
-void list(str[] items) {
-    print("{items.len} items")
+// The protocols a TLS client offers (ALPN).
+void offer(str[] protocols) {
+    print("{protocols.len} protocols offered")
 }
 
 void main() {
-    list([])
-    list(["one", "two"])
+    offer([])
+    offer(["h2", "http/1.1"])
 }
 ```
 
 ```output
-0 items
-2 items
+0 protocols offered
+2 protocols offered
 ```
 
 ## Slices of new memory
@@ -150,18 +153,18 @@ void main() {
 
 ```iris run
 void main() {
-    n := 5
-    i64[] squares = alloc(i64, n)
-    defer free(squares)
-    for i in 0..n {
-        squares[i] = i * i
+    clients := 5 // known only when the program runs
+    i64[] sent = alloc(i64, clients)
+    defer free(sent)
+    for i in 0..clients {
+        sent[i] = 1460 * (i + 1)
     }
-    print("{squares[4]} of {squares.len}")
+    print("client 4 sent {sent[4]} bytes; {sent.len} clients")
 }
 ```
 
 ```output
-16 of 5
+client 4 sent 7300 bytes; 5 clients
 ```
 
 `defer` frees it when the block ends, on every way out (see [Memory](19-memory.html)). A slice from `alloc` has a fixed length; a list that grows is a `List` (see [Collections](22-collections.html)).
@@ -172,16 +175,16 @@ void main() {
 
 ```iris run
 void main() {
-    i64[3] xs = [4, 5, 6]
-    s := xs[0:3]
-    i64 *p = s.ptr
+    u8[4] ip = [127, 0, 0, 1]
+    s := ip[0:4]
+    u8 *p = s.ptr // what a C function such as inet_ntop would take
     again := p[0:2]
-    print("{s.len} {again[1]}")
+    print("{s.len} {again[0]}")
 }
 ```
 
 ```output
-3 5
+4 127
 ```
 
 ## Text is a slice

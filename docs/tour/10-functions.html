@@ -50,83 +50,85 @@ try {
 <p class="lede">Declaring functions, passing them arguments, giving defaults and names to those arguments, and returning one value or several.</p>
 <h2 id="declaring-a-function"><a href="#declaring-a-function">Declaring a function</a></h2>
 <p>A function is written as its return type, its name, its parameters in parentheses, and a block. <code>void</code> means it gives nothing back:</p>
-<pre class="code run"><code><span class="t">i64</span> add(<span class="t">i64</span> a, <span class="t">i64</span> b) {
-    <span class="k">return</span> a + b
+<pre class="code run"><code><span class="t">i64</span> frameSize(<span class="t">i64</span> payload, <span class="t">i64</span> headers) {
+    <span class="k">return</span> payload + headers
 }
 
-<span class="t">void</span> greet(<span class="t">str</span> name) {
-    print(<span class="s">&quot;hello, {name}&quot;</span>)
+<span class="t">void</span> announce(<span class="t">str</span> addr) {
+    print(<span class="s">&quot;listening on {addr}&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    greet(<span class="s">&quot;Ada&quot;</span>)
-    print(<span class="s">&quot;{add(2, 3)}&quot;</span>)
+    announce(<span class="s">&quot;0.0.0.0:8080&quot;</span>)
+    print(<span class="s">&quot;{frameSize(1460, 54)} bytes&quot;</span>)
 }</code></pre>
-<pre class="out"><code>hello, Ada
-5</code></pre>
-<p>Parameters next to each other with the same type can share it: <code>i64 add(i64 a, b)</code> is the same as <code>i64 add(i64 a, i64 b)</code>.</p>
+<pre class="out"><code>listening on 0.0.0.0:8080
+1514 bytes</code></pre>
+<p>Parameters next to each other with the same type can share it: <code>i64 frameSize(i64 payload, headers)</code> is the same as <code>i64 frameSize(i64 payload, i64 headers)</code>.</p>
 <p>A function that gives a value must give it on every way out of its block. One that can reach its closing brace without a <code>return</code> doesn't compile.</p>
 <h2 id="one-expression"><a href="#one-expression">One expression</a></h2>
 <p>A function whose body is one expression can be written with <code>=&gt;</code>, leaving out the braces and the <code>return</code>:</p>
-<pre class="code run"><code><span class="t">i64</span> square(<span class="t">i64</span> x) =&gt; x * x
+<pre class="code run"><code><span class="c">// A 16-bit number in network byte order: its two bytes swapped.</span>
+<span class="t">u16</span> swap16(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 <span class="t">bool</span> isDigit(<span class="t">u8</span> c) =&gt; c &gt;= <span class="s">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="s">&#x27;9&#x27;</span>
-<span class="t">str</span> sign(<span class="t">i64</span> n) =&gt; <span class="k">if</span> n &lt; <span class="n">0</span> { <span class="s">&quot;negative&quot;</span> } <span class="k">else</span> <span class="k">if</span> n == <span class="n">0</span> { <span class="s">&quot;zero&quot;</span> } <span class="k">else</span> { <span class="s">&quot;positive&quot;</span> }
-<span class="t">void</span> show(<span class="t">i64</span> n) =&gt; print(<span class="s">&quot;{n} is {sign(n)}&quot;</span>)
+<span class="t">str</span> kind(<span class="t">i64</span> status) =&gt; <span class="k">if</span> status &gt;= <span class="n">500</span> { <span class="s">&quot;a server error&quot;</span> } <span class="k">else</span> <span class="k">if</span> status &gt;= <span class="n">400</span> { <span class="s">&quot;a client error&quot;</span> } <span class="k">else</span> { <span class="s">&quot;fine&quot;</span> }
+<span class="t">void</span> show(<span class="t">i64</span> status) =&gt; print(<span class="s">&quot;{status} is {kind(status)}&quot;</span>)
 
 <span class="t">void</span> main() {
-    show(square(-<span class="n">3</span>))
-    show(<span class="n">0</span>)
-    print(<span class="s">&quot;{isDigit(&#x27;7&#x27;)} {isDigit(&#x27;x&#x27;)}&quot;</span>)
+    show(<span class="n">503</span>)
+    show(<span class="n">200</span>)
+    print(<span class="s">&quot;{swap16(0x1F90)} {isDigit(&#x27;7&#x27;)} {isDigit(&#x27;x&#x27;)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>9 is positive
-0 is zero
-true false</code></pre>
+<pre class="out"><code>503 is a server error
+200 is fine
+36895 true false</code></pre>
 <p>For a <code>void</code> function, the expression after <code>=&gt;</code> is a call.</p>
 <h2 id="order"><a href="#order">Order</a></h2>
 <p>Functions can be declared in any order: a function can call one declared further down the file, or in another file of the same module. A function can call itself:</p>
-<pre class="code run"><code><span class="t">i64</span> fib(<span class="t">i64</span> n) =&gt; <span class="k">if</span> n &lt; <span class="n">2</span> { n } <span class="k">else</span> { fib(n - <span class="n">1</span>) + fib(n - <span class="n">2</span>) }
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="c">// Prints the labels of a DNS name from the top down, the way a resolver walks them.</span>
+<span class="t">void</span> labels(<span class="t">str</span> name) {
+    head, rest, found := <span class="t">str</span>.cut(name, <span class="s">&quot;.&quot;</span>)
+    <span class="k">if</span> found {
+        labels(rest)
+    }
+    print(head)
+}
 
 <span class="t">void</span> main() {
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">10</span> {
-        print(<span class="s">&quot;{fib(i)}&quot;</span>)
-    }
+    labels(<span class="s">&quot;api.eu.example.com&quot;</span>)
 }</code></pre>
-<pre class="out"><code>0
-1
-1
-2
-3
-5
-8
-13
-21
-34</code></pre>
+<pre class="out"><code>com
+example
+eu
+api</code></pre>
 <p>Each name means one function: two functions can't share a name, even with different parameters. A function's name can't be a built-in one (<code>print</code>, <code>format</code>, <code>free</code>...) or a type's.</p>
 <h2 id="arguments-are-copies"><a href="#arguments-are-copies">Arguments are copies</a></h2>
 <p>Each argument is copied into its parameter. A function that changes a parameter changes its copy, not the caller's variable:</p>
-<pre class="code run"><code><span class="t">void</span> bump(<span class="t">i64</span> n) {
-    n += <span class="n">1</span>
-    print(<span class="s">&quot;inside: {n}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> record(<span class="t">i64</span> sent) {
+    sent += <span class="n">1500</span>
+    print(<span class="s">&quot;inside: {sent}&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    count := <span class="n">5</span>
-    bump(count)
-    print(<span class="s">&quot;outside: {count}&quot;</span>)
+    sent := <span class="n">3000</span>
+    record(sent)
+    print(<span class="s">&quot;outside: {sent}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>inside: 6
-outside: 5</code></pre>
+<pre class="out"><code>inside: 4500
+outside: 3000</code></pre>
 <p>To let a function change the caller's value, pass a pointer to it, with <code>&amp;</code>. The function reads and writes through it with <code>*</code> (the <a href="17-pointers.html">Pointers</a> chapter has more):</p>
-<pre class="code run"><code><span class="t">void</span> bump(<span class="t">i64</span> *n) {
-    *n += <span class="n">1</span>
+<pre class="code run"><code><span class="t">void</span> record(<span class="t">i64</span> *sent) {
+    *sent += <span class="n">1500</span>
 }
 
 <span class="t">void</span> main() {
-    count := <span class="n">5</span>
-    bump(&amp;count)
-    print(<span class="s">&quot;{count}&quot;</span>)
+    sent := <span class="n">3000</span>
+    record(&amp;sent)
+    print(<span class="s">&quot;{sent}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>6</code></pre>
+<pre class="out"><code>4500</code></pre>
 <p>A struct is copied too, field by field. A large struct, or one the function should change, is passed as a pointer: a pointer to a struct reaches the fields with a dot, as the value does.</p>
 <h2 id="defaults"><a href="#defaults">Defaults</a></h2>
 <p>A parameter can have a default value, which is used when the call leaves it out. Parameters with defaults come after the ones without:</p>
@@ -160,12 +162,12 @@ localhost:80 timeout 30s tls false</code></pre>
 <p>Named arguments come after the ones given by position, in any order among themselves. A parameter is given once, by position or by name.</p>
 <h2 id="any-number-of-arguments"><a href="#any-number-of-arguments">Any number of arguments</a></h2>
 <p>A last parameter written <code>T... name</code> takes the arguments left over, any number of them, and the function sees them as a slice, <code>T[]</code>. A slice the caller already has is given by the parameter's name:</p>
-<pre class="code run"><code><span class="t">i64</span> sum(<span class="t">i64</span>... xs) {
-    total := <span class="n">0</span>
-    <span class="k">for</span> x <span class="k">in</span> xs {
-        total += x
+<pre class="code run"><code><span class="t">i64</span> total(<span class="t">i64</span>... sizes) {
+    sum := <span class="n">0</span>
+    <span class="k">for</span> s <span class="k">in</span> sizes {
+        sum += s
     }
-    <span class="k">return</span> total
+    <span class="k">return</span> sum
 }
 
 <span class="t">void</span> log(<span class="t">str</span> level, <span class="t">str</span>... parts) {
@@ -175,72 +177,84 @@ localhost:80 timeout 30s tls false</code></pre>
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{sum()} {sum(4)} {sum(1, 2, 3)}&quot;</span>)
-    nums := [<span class="n">10</span>, <span class="n">20</span>]
-    print(<span class="s">&quot;{sum(xs: nums[:])}&quot;</span>)
-    n := <span class="n">7</span>
-    log(<span class="s">&quot;info&quot;</span>, <span class="s">&quot;starting&quot;</span>, <span class="s">&quot;n is {n}&quot;</span>)
+    print(<span class="s">&quot;{total()} {total(512)} {total(1460, 1460, 80)}&quot;</span>)
+    reads := [<span class="n">4096</span>, <span class="n">1024</span>]
+    print(<span class="s">&quot;{total(sizes: reads[:])}&quot;</span>)
+    port := <span class="n">8080</span>
+    log(<span class="s">&quot;info&quot;</span>, <span class="s">&quot;starting&quot;</span>, <span class="s">&quot;port {port}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>0 4 6
-30
+<pre class="out"><code>0 512 3000
+5120
 info: starting
-info: n is 7</code></pre>
-<p>The values are put in an array for the call, so nothing is allocated. A <code>...</code> parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, <code>sum</code> is an <code>i64(i64[])</code>: a call through it gives the slice.</p>
+info: port 8080</code></pre>
+<p>The values are put in an array for the call, so nothing is allocated. A <code>...</code> parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, <code>total</code> is an <code>i64(i64[])</code>: a call through it gives the slice.</p>
 <h2 id="several-values"><a href="#several-values">Several values</a></h2>
 <p>A function can give several values. Its return type lists their types in parentheses, and <code>return</code> gives them separated by commas, also in parentheses:</p>
-<pre class="code run"><code>(<span class="t">i64</span>, <span class="t">i64</span>) divmod(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; (a / b, a % b)
+<pre class="code run"><code><span class="c">// Full segments, and the bytes left for a last one.</span>
+(<span class="t">i64</span>, <span class="t">i64</span>) segments(<span class="t">i64</span> size, <span class="t">i64</span> mss) =&gt; (size / mss, size % mss)
 
-(<span class="t">str</span>, <span class="t">bool</span>) firstWord(<span class="t">str</span> text) {
-    <span class="k">for</span> i, c <span class="k">in</span> text {
+<span class="c">// The first word of a request line, and whether more follows.</span>
+(<span class="t">str</span>, <span class="t">bool</span>) method(<span class="t">str</span> line) {
+    <span class="k">for</span> i, c <span class="k">in</span> line {
         <span class="k">if</span> c == <span class="s">&#x27; &#x27;</span> {
-            <span class="k">return</span> (text[<span class="n">0</span>:i], <span class="k">true</span>)
+            <span class="k">return</span> (line[<span class="n">0</span>:i], <span class="k">true</span>)
         }
     }
-    <span class="k">return</span> (text, <span class="k">false</span>)
+    <span class="k">return</span> (line, <span class="k">false</span>)
 }
 
 <span class="t">void</span> main() {
-    q, r := divmod(<span class="n">17</span>, <span class="n">5</span>)
-    print(<span class="s">&quot;{q} remainder {r}&quot;</span>)
-    word, more := firstWord(<span class="s">&quot;hello world&quot;</span>)
-    print(<span class="s">&quot;{word} {more}&quot;</span>)
-    _, last := divmod(<span class="n">20</span>, <span class="n">6</span>)
+    full, rest := segments(<span class="n">4000</span>, <span class="n">1460</span>)
+    print(<span class="s">&quot;{full} full segments and {rest} bytes&quot;</span>)
+    m, more := method(<span class="s">&quot;GET /index.html HTTP/1.1&quot;</span>)
+    print(<span class="s">&quot;{m} {more}&quot;</span>)
+    _, last := segments(<span class="n">9000</span>, <span class="n">1460</span>)
     print(<span class="s">&quot;{last}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>3 remainder 2
-hello true
-2</code></pre>
+<pre class="out"><code>2 full segments and 1080 bytes
+GET true
+240</code></pre>
 <p>The caller unpacks the values into names, one for each; <code>_</code> leaves one out. A function's several values can't be kept together in one variable: they are unpacked where the call is.</p>
 <h2 id="functions-that-can-fail"><a href="#functions-that-can-fail">Functions that can fail</a></h2>
 <p>A function whose return type starts with <code>!</code> can fail: it gives its value or an error. The caller must deal with the error, with <code>try</code> or <code>catch</code>:</p>
-<pre class="code run"><code><span class="k">enum</span> ParseError { empty, notDigit }
+<pre class="code run"><code><span class="k">enum</span> PortError { empty, notNumber, tooBig }
 
-!<span class="t">i64</span> digit(<span class="t">str</span> s) {
+!<span class="t">u16</span> parsePort(<span class="t">str</span> s) {
     <span class="k">if</span> s.len == <span class="n">0</span> {
-        <span class="k">return</span> error(ParseError.empty, <span class="s">&quot;nothing to read&quot;</span>)
+        <span class="k">return</span> error(PortError.empty, <span class="s">&quot;no port given&quot;</span>)
     }
-    <span class="k">if</span> s[<span class="n">0</span>] &lt; <span class="s">&#x27;0&#x27;</span> || s[<span class="n">0</span>] &gt; <span class="s">&#x27;9&#x27;</span> {
-        <span class="k">return</span> error(ParseError.notDigit, <span class="s">&quot;&#x27;{s}&#x27; isn&#x27;t a digit&quot;</span>)
+    <span class="t">i64</span> n = <span class="n">0</span>
+    <span class="k">for</span> c <span class="k">in</span> s {
+        <span class="k">if</span> c &lt; <span class="s">&#x27;0&#x27;</span> || c &gt; <span class="s">&#x27;9&#x27;</span> {
+            <span class="k">return</span> error(PortError.notNumber, <span class="s">&quot;&#x27;{s}&#x27; isn&#x27;t a number&quot;</span>)
+        }
+        n = n * <span class="n">10</span> + <span class="t">i64</span>(c - <span class="s">&#x27;0&#x27;</span>)
+        <span class="k">if</span> n &gt; <span class="n">65535</span> {
+            <span class="k">return</span> error(PortError.tooBig, <span class="s">&quot;{s} is above 65535&quot;</span>)
+        }
     }
-    <span class="k">return</span> <span class="t">i64</span>(s[<span class="n">0</span>] - <span class="s">&#x27;0&#x27;</span>)
+    <span class="k">return</span> <span class="t">u16</span>(n)
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{digit(&quot;</span><span class="n">7</span><span class="s">&quot;) catch -1}&quot;</span>)
-    print(<span class="s">&quot;{digit(&quot;</span>x<span class="s">&quot;) catch -1}&quot;</span>)
+    print(<span class="s">&quot;{parsePort(&quot;</span><span class="n">8080</span><span class="s">&quot;) catch 0}&quot;</span>)
+    print(<span class="s">&quot;{parsePort(&quot;</span>http<span class="s">&quot;) catch 0}&quot;</span>)
+    print(<span class="s">&quot;{parsePort(&quot;</span><span class="n">70000</span><span class="s">&quot;) catch 0}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>7
--1</code></pre>
+<pre class="out"><code>8080
+0
+0</code></pre>
 <p>The <a href="18-errors.html">Errors</a> chapter covers them in full. The result of any other function can be left unused, as with a <code>print</code> of nothing:</p>
-<pre class="code run"><code><span class="t">i64</span> log(<span class="t">str</span> s) {
-    print(s)
-    <span class="k">return</span> s.len
+<pre class="code run"><code><span class="c">// Sends a line and gives how many bytes it took.</span>
+<span class="t">i64</span> send(<span class="t">str</span> line) {
+    print(line)
+    <span class="k">return</span> line.len
 }
 
 <span class="t">void</span> main() {
-    log(<span class="s">&quot;the length isn&#x27;t needed here&quot;</span>)
+    send(<span class="s">&quot;the byte count isn&#x27;t needed here&quot;</span>)
 }</code></pre>
-<pre class="out"><code>the length isn&#x27;t needed here</code></pre>
+<pre class="out"><code>the byte count isn&#x27;t needed here</code></pre>
     <nav class="pager"><a class="prev" href="09-loops.html"><span>Previous</span>Loops</a><a class="next" href="11-function-values.html"><span>Next</span>Functions as values</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>

@@ -7,60 +7,62 @@ A method is a function that belongs to a struct. This chapter covers declaring t
 A method is declared like a function, with the struct's name and a dot in front of its name. Inside it, `self` is a pointer to the value it was called on, and reaches its fields with a dot:
 
 ```iris run
-struct Counter {
-    i64 count
+struct Server {
     str name
+    i64 open
 }
 
-void Counter.add(i64 n) {
-    self.count += n
+void Server.accepted(i64 n) {
+    self.open += n
 }
 
-str Counter.describe() => if self.count > 10 { "busy" } else { "quiet" }
+str Server.load() => if self.open > 10 { "busy" } else { "quiet" }
 
 void main() {
-    c := Counter{name: "visits"}
-    c.add(4)
-    c.add(9)
-    print("{c.name}: {c.count}, {c.describe()}")
+    s := Server{name: "edge-1"}
+    s.accepted(4)
+    s.accepted(9)
+    print("{s.name}: {s.open} open, {s.load()}")
 }
 ```
 
 ```output
-visits: 13, busy
+edge-1: 13 open, busy
 ```
 
 Since `self` is a pointer, a method can change the value. Called on a variable, it changes the variable. Called on a value that isn't in a variable, like the result of a function, it works on a copy:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+// A TCP sender's window: the bytes it may send before an acknowledgement.
+struct Window {
+    i64 start // the first byte not acknowledged yet
+    i64 size
 }
 
-Point origin() => Point{}
+Window initial() => Window{size: 1460}
 
-void Point.move(i64 dx, i64 dy) {
-    self.x += dx
-    self.y += dy
+// In slow start the window grows by what was acknowledged.
+void Window.ack(i64 bytes) {
+    self.start += bytes
+    self.size += bytes
 }
 
-i64 Point.dist2() => self.x * self.x + self.y * self.y
+i64 Window.end() => self.start + self.size
 
 void main() {
-    p := Point{x: 1, y: 1}
-    p.move(2, 3)
-    print("{p.x}, {p.y}: {p.dist2()}")
-    print("{origin().dist2()}")
+    w := Window{start: 1000, size: 2920}
+    w.ack(1460)
+    print("may send {w.start} to {w.end()}")
+    print("{initial().end()}")
 }
 ```
 
 ```output
-3, 4: 25
-0
+may send 2460 to 6840
+1460
 ```
 
-Through a pointer to a struct, methods are called the same way: `pp.move(1, 1)` changes the value `pp` points to.
+Through a pointer to a struct, methods are called the same way: `wp.ack(1460)` changes the value `wp` points to.
 
 A method can be declared in any file of the module that declares the struct, and in any order. A struct can't have a method and a field with the same name, and each method name is used once.
 
@@ -91,14 +93,14 @@ str Buffer.text() => self.data[0:self.used]
 
 void main() {
     scoped Buffer b = buffer(64)
-    b.add("hello ")
-    b.add("there")
+    b.add("HTTP/1.1 ")
+    b.add("200 OK")
     print("[{b.text()}] {b.used} of {b.data.len}")
 }
 ```
 
 ```output
-[hello there] 11 of 64
+[HTTP/1.1 200 OK] 15 of 64
 ```
 
 A method that can fail returns `!T` like any function, and a function that makes a value and can fail returns `!Type`.
@@ -114,36 +116,36 @@ Some method names make a struct work with parts of the language:
 | `(T, bool) next(i64 *at)` | a `for` loop's values, one round at a time |
 
 ```iris run
-struct Range {
-    i64 from
-    i64 to
+struct PortRange {
+    u16 first
+    u16 last
 }
 
-String Range.format() => format("[{self.from}..{self.to})")
+String PortRange.format() => format("{self.first}-{self.last}")
 
-(i64, bool) Range.next(i64 *at) {
-    v := self.from + *at
-    if v >= self.to {
+(u16, bool) PortRange.next(i64 *at) {
+    p := i64(self.first) + *at
+    if p > i64(self.last) {
         return (0, false)
     }
     *at += 1
-    return (v, true)
+    return (u16(p), true)
 }
 
 void main() {
-    r := Range{from: 3, to: 6}
-    print("going over {r}")
-    for n in r {
-        print("{n}")
+    r := PortRange{first: 8080, last: 8082}
+    print("scanning {r}")
+    for port in r {
+        print("{port}")
     }
 }
 ```
 
 ```output
-going over [3..6)
-3
-4
-5
+scanning 8080-8082
+8080
+8081
+8082
 ```
 
 Methods with the names an interface lists let the struct be used where that interface is wanted (see [Interfaces](21-interfaces.html)).

@@ -7,22 +7,22 @@ A struct puts several values together into one type, each with a name. This chap
 A struct lists its fields, one on each line, each with its type and name:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Endpoint {
+    str host
+    u16 port
 }
 
 void main() {
-    p := Point{x: 3, y: 4}
-    print("{p.x}, {p.y}")
-    p.x = 10
-    print("{p.x}, {p.y}")
+    e := Endpoint{host: "10.0.0.5", port: 22}
+    print("{e.host}:{e.port}")
+    e.port = 2222
+    print("{e.host}:{e.port}")
 }
 ```
 
 ```output
-3, 4
-10, 4
+10.0.0.5:22
+10.0.0.5:2222
 ```
 
 Fields are read and changed with a dot. A field can be of any type: a number, text, an array, another struct, a pointer, a function, a `List`.
@@ -57,23 +57,23 @@ A default is a value known when compiling. Defaults apply wherever a value is ma
 When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Endpoint {
+    str host
+    u16 port
 }
 
-void draw(Point p) => print("drawing at {p.x}, {p.y}")
+void connect(Endpoint e) => print("connecting to {e.host}:{e.port}")
 
 void main() {
-    Point start = .{x: 1, y: 2}
-    draw(.{x: 5, y: 6})
-    draw(start)
+    Endpoint db = .{host: "db.lan", port: 5432}
+    connect(.{host: "cache.lan", port: 6379})
+    connect(db)
 }
 ```
 
 ```output
-drawing at 5, 6
-drawing at 1, 2
+connecting to cache.lan:6379
+connecting to db.lan:5432
 ```
 
 ## Copying and comparing
@@ -81,40 +81,40 @@ drawing at 1, 2
 A struct is a value: assigning it, or passing it to a function, copies every field. The copy and the original are separate:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Endpoint {
+    str host
+    u16 port
 }
 
 void main() {
-    a := Point{x: 1, y: 2}
-    b := a
-    b.x = 100
-    print("{a.x} {b.x}")
+    plain := Endpoint{host: "example.com", port: 80}
+    secure := plain
+    secure.port = 443
+    print("{plain.port} {secure.port}")
 }
 ```
 
 ```output
-1 100
+80 443
 ```
 
 `==` and `!=` compare two structs field by field, when every field can be compared that way: numbers, `bool`, `str`, enums, pointers and structs of those. A `String`, a slice or a `List` holds a pointer to memory it owns, so a struct with one can't be compared with `==`; the program compares the fields it means:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Addr {
+    u32 ip
+    u16 port
 }
 
-struct Tag {
-    str name
+struct Route {
+    str path
     i64 weight
 }
 
 void main() {
-    print("{Point{x: 1, y: 2} == Point{x: 1, y: 2}} {Point{x: 1} == Point{x: 2}}")
-    a := Tag{name: "new", weight: 1}
-    b := Tag{name: "new", weight: 1}
+    print("{Addr{ip: 1, port: 80} == Addr{ip: 1, port: 80}} {Addr{port: 80} == Addr{port: 443}}")
+    a := Route{path: "/api", weight: 1}
+    b := Route{path: "/api", weight: 1}
     print("{a == b}")
 }
 ```
@@ -129,32 +129,34 @@ true
 A field can be another struct. Its fields are reached with one more dot:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Counters {
+    i64 packets
+    i64 bytes
 }
 
-struct Rect {
-    Point min
-    Point max
+struct Iface {
+    str name
+    Counters rx
+    Counters tx
 }
 
-i64 area(Rect r) => (r.max.x - r.min.x) * (r.max.y - r.min.y)
+i64 traffic(Iface i) => i.rx.bytes + i.tx.bytes
 
 void main() {
-    r := Rect{min: Point{x: 1, y: 1}, max: Point{x: 4, y: 3}}
-    r.max.x = 6
-    print("area {area(r)}")
+    eth := Iface{name: "eth0", rx: Counters{packets: 10, bytes: 9000}, tx: Counters{packets: 4, bytes: 600}}
+    eth.tx.bytes += 1500
+    print("{eth.name}: {traffic(eth)} bytes")
 }
 ```
 
 ```output
-area 10
+eth0: 11100 bytes
 ```
 
 A struct can't hold itself, since its size would have no end. It can hold a pointer to itself, or a `List` of itself, whose items are kept apart:
 
 ```iris run
+// One part of a URL path, with the parts that can follow it.
 struct Node {
     str name
     List[Node] children
@@ -176,19 +178,19 @@ i64 Node.count() {
 }
 
 void main() {
-    root := Node{name: "root"}
+    root := Node{name: "/"}
     defer root.free()
-    leaf := Node{name: "leaf"}
-    branch := Node{name: "branch"}
-    branch.children.push(leaf)
-    root.children.push(branch)
-    root.children.push(Node{name: "other"})
-    print("{root.count()} nodes")
+    users := Node{name: "users"}
+    api := Node{name: "api"}
+    api.children.push(users)
+    root.children.push(api)
+    root.children.push(Node{name: "static"})
+    print("{root.count()} paths")
 }
 ```
 
 ```output
-4 nodes
+4 paths
 ```
 
 ## Embedding

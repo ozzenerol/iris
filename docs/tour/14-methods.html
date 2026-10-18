@@ -50,48 +50,50 @@ try {
 <p class="lede">A method is a function that belongs to a struct. This chapter covers declaring them, what <code>self</code> is, the conventions for making and freeing values, and methods that make a type work with the rest of the language.</p>
 <h2 id="declaring-a-method"><a href="#declaring-a-method">Declaring a method</a></h2>
 <p>A method is declared like a function, with the struct's name and a dot in front of its name. Inside it, <code>self</code> is a pointer to the value it was called on, and reaches its fields with a dot:</p>
-<pre class="code run"><code><span class="k">struct</span> Counter {
-    <span class="t">i64</span> count
+<pre class="code run"><code><span class="k">struct</span> Server {
     <span class="t">str</span> name
+    <span class="t">i64</span> open
 }
 
-<span class="t">void</span> Counter.add(<span class="t">i64</span> n) {
-    self.count += n
+<span class="t">void</span> Server.accepted(<span class="t">i64</span> n) {
+    self.open += n
 }
 
-<span class="t">str</span> Counter.describe() =&gt; <span class="k">if</span> self.count &gt; <span class="n">10</span> { <span class="s">&quot;busy&quot;</span> } <span class="k">else</span> { <span class="s">&quot;quiet&quot;</span> }
+<span class="t">str</span> Server.load() =&gt; <span class="k">if</span> self.open &gt; <span class="n">10</span> { <span class="s">&quot;busy&quot;</span> } <span class="k">else</span> { <span class="s">&quot;quiet&quot;</span> }
 
 <span class="t">void</span> main() {
-    c := Counter{name: <span class="s">&quot;visits&quot;</span>}
-    c.add(<span class="n">4</span>)
-    c.add(<span class="n">9</span>)
-    print(<span class="s">&quot;{c.name}: {c.count}, {c.describe()}&quot;</span>)
+    s := Server{name: <span class="s">&quot;edge-1&quot;</span>}
+    s.accepted(<span class="n">4</span>)
+    s.accepted(<span class="n">9</span>)
+    print(<span class="s">&quot;{s.name}: {s.open} open, {s.load()}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>visits: 13, busy</code></pre>
+<pre class="out"><code>edge-1: 13 open, busy</code></pre>
 <p>Since <code>self</code> is a pointer, a method can change the value. Called on a variable, it changes the variable. Called on a value that isn't in a variable, like the result of a function, it works on a copy:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="c">// A TCP sender&#x27;s window: the bytes it may send before an acknowledgement.</span>
+<span class="k">struct</span> Window {
+    <span class="t">i64</span> start <span class="c">// the first byte not acknowledged yet</span>
+    <span class="t">i64</span> size
 }
 
-Point origin() =&gt; Point{}
+Window initial() =&gt; Window{size: <span class="n">1460</span>}
 
-<span class="t">void</span> Point.move(<span class="t">i64</span> dx, <span class="t">i64</span> dy) {
-    self.x += dx
-    self.y += dy
+<span class="c">// In slow start the window grows by what was acknowledged.</span>
+<span class="t">void</span> Window.ack(<span class="t">i64</span> bytes) {
+    self.start += bytes
+    self.size += bytes
 }
 
-<span class="t">i64</span> Point.dist2() =&gt; self.x * self.x + self.y * self.y
+<span class="t">i64</span> Window.end() =&gt; self.start + self.size
 
 <span class="t">void</span> main() {
-    p := Point{x: <span class="n">1</span>, y: <span class="n">1</span>}
-    p.move(<span class="n">2</span>, <span class="n">3</span>)
-    print(<span class="s">&quot;{p.x}, {p.y}: {p.dist2()}&quot;</span>)
-    print(<span class="s">&quot;{origin().dist2()}&quot;</span>)
+    w := Window{start: <span class="n">1000</span>, size: <span class="n">2920</span>}
+    w.ack(<span class="n">1460</span>)
+    print(<span class="s">&quot;may send {w.start} to {w.end()}&quot;</span>)
+    print(<span class="s">&quot;{initial().end()}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>3, 4: 25
-0</code></pre>
-<p>Through a pointer to a struct, methods are called the same way: <code>pp.move(1, 1)</code> changes the value <code>pp</code> points to.</p>
+<pre class="out"><code>may send 2460 to 6840
+1460</code></pre>
+<p>Through a pointer to a struct, methods are called the same way: <code>wp.ack(1460)</code> changes the value <code>wp</code> points to.</p>
 <p>A method can be declared in any file of the module that declares the struct, and in any order. A struct can't have a method and a field with the same name, and each method name is used once.</p>
 <h2 id="making-and-freeing"><a href="#making-and-freeing">Making and freeing</a></h2>
 <p>By convention, a function named after the type, in lower case, makes a value of it, and a method <code>free</code> gives back what the value holds. <code>scoped</code> calls <code>free</code> when the block ends:</p>
@@ -117,42 +119,42 @@ Buffer buffer(<span class="t">i64</span> size) =&gt; Buffer{data: alloc(<span cl
 
 <span class="t">void</span> main() {
     <span class="k">scoped</span> Buffer b = buffer(<span class="n">64</span>)
-    b.add(<span class="s">&quot;hello &quot;</span>)
-    b.add(<span class="s">&quot;there&quot;</span>)
+    b.add(<span class="s">&quot;HTTP/1.1 &quot;</span>)
+    b.add(<span class="s">&quot;200 OK&quot;</span>)
     print(<span class="s">&quot;[{b.text()}] {b.used} of {b.data.len}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>[hello there] 11 of 64</code></pre>
+<pre class="out"><code>[HTTP/1.1 200 OK] 15 of 64</code></pre>
 <p>A method that can fail returns <code>!T</code> like any function, and a function that makes a value and can fail returns <code>!Type</code>.</p>
 <h2 id="methods-the-language-uses"><a href="#methods-the-language-uses">Methods the language uses</a></h2>
 <p>Some method names make a struct work with parts of the language:</p>
 <div class="table"><table><thead><tr><th>Method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code> calls it, and so does <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>the struct's text, when it is put into text with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td>a <code>for</code> loop's values, one round at a time</td></tr></tbody></table></div>
-<pre class="code run"><code><span class="k">struct</span> Range {
-    <span class="t">i64</span> from
-    <span class="t">i64</span> to
+<pre class="code run"><code><span class="k">struct</span> PortRange {
+    <span class="t">u16</span> first
+    <span class="t">u16</span> last
 }
 
-<span class="t">String</span> Range.format() =&gt; format(<span class="s">&quot;[{self.from}..{self.to})&quot;</span>)
+<span class="t">String</span> PortRange.format() =&gt; format(<span class="s">&quot;{self.first}-{self.last}&quot;</span>)
 
-(<span class="t">i64</span>, <span class="t">bool</span>) Range.next(<span class="t">i64</span> *at) {
-    v := self.from + *at
-    <span class="k">if</span> v &gt;= self.to {
+(<span class="t">u16</span>, <span class="t">bool</span>) PortRange.next(<span class="t">i64</span> *at) {
+    p := <span class="t">i64</span>(self.first) + *at
+    <span class="k">if</span> p &gt; <span class="t">i64</span>(self.last) {
         <span class="k">return</span> (<span class="n">0</span>, <span class="k">false</span>)
     }
     *at += <span class="n">1</span>
-    <span class="k">return</span> (v, <span class="k">true</span>)
+    <span class="k">return</span> (<span class="t">u16</span>(p), <span class="k">true</span>)
 }
 
 <span class="t">void</span> main() {
-    r := Range{from: <span class="n">3</span>, to: <span class="n">6</span>}
-    print(<span class="s">&quot;going over {r}&quot;</span>)
-    <span class="k">for</span> n <span class="k">in</span> r {
-        print(<span class="s">&quot;{n}&quot;</span>)
+    r := PortRange{first: <span class="n">8080</span>, last: <span class="n">8082</span>}
+    print(<span class="s">&quot;scanning {r}&quot;</span>)
+    <span class="k">for</span> port <span class="k">in</span> r {
+        print(<span class="s">&quot;{port}&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>going over [3..6)
-3
-4
-5</code></pre>
+<pre class="out"><code>scanning 8080-8082
+8080
+8081
+8082</code></pre>
 <p>Methods with the names an interface lists let the struct be used where that interface is wanted (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="methods-through-embedding"><a href="#methods-through-embedding">Methods through embedding</a></h2>
 <p>The methods of an embedded struct can be called on the outer one, and get the embedded struct as <code>self</code>:</p>

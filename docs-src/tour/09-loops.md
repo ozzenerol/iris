@@ -8,19 +8,22 @@
 
 ```iris run
 void main() {
-    n := 1
+    remaining := 10000 // bytes of the body still to read
+    reads := 0
     for {
-        n *= 2
-        if n > 100 {
+        got := 4096 if remaining > 4096 else remaining
+        remaining -= got
+        reads += 1
+        if remaining == 0 {
             break
         }
     }
-    print("{n}")
+    print("{reads} reads")
 }
 ```
 
 ```output
-128
+3 reads
 ```
 
 A server's accept loop is the usual place for it: it runs as long as the program does.
@@ -31,18 +34,23 @@ A server's accept loop is the usual place for it: it runs as long as the program
 
 ```iris run
 void main() {
-    n := 27
-    steps := 0
-    for n != 1 {
-        n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 }
-        steps += 1
+    delay := 100ms
+    attempt := 1
+    for delay < 5s {
+        print("attempt {attempt}, then wait {delay}")
+        delay *= 2
+        attempt += 1
     }
-    print("{steps} steps")
 }
 ```
 
 ```output
-111 steps
+attempt 1, then wait 100ms
+attempt 2, then wait 200ms
+attempt 3, then wait 400ms
+attempt 4, then wait 800ms
+attempt 5, then wait 1.6s
+attempt 6, then wait 3.2s
 ```
 
 ## Over a range
@@ -51,44 +59,43 @@ void main() {
 
 ```iris run
 void main() {
-    for i in 0..4 {
-        print("round {i}")
+    for i in 0..3 {
+        print("starting worker {i}")
     }
     for i in 3..3 {
         print("never")
     }
-    total := 0
-    for i in 1..101 {
-        total += i
+    for port in 8080..8083 {
+        print("listening on {port}")
     }
-    print("1 + ... + 100 = {total}")
 }
 ```
 
 ```output
-round 0
-round 1
-round 2
-round 3
-1 + ... + 100 = 5050
+starting worker 0
+starting worker 1
+starting worker 2
+listening on 8080
+listening on 8081
+listening on 8082
 ```
 
 `i` is a new variable for each round, and it belongs to the loop. A range counts up by one; a loop that goes another way uses a condition:
 
 ```iris run
 void main() {
-    i := 10
-    for i > 0 {
-        print("{i}")
-        i -= 4
+    left := 10s
+    for left > 0s {
+        print("stopping in {left}")
+        left -= 4s
     }
 }
 ```
 
 ```output
-10
-6
-2
+stopping in 10s
+stopping in 6s
+stopping in 2s
 ```
 
 ## Over items
@@ -97,73 +104,73 @@ void main() {
 
 ```iris run
 void main() {
-    i64[4] primes = [2, 3, 5, 7]
-    for p in primes {
+    u16[4] ports = [22, 80, 443, 8080]
+    for p in ports {
         print("{p}")
     }
-    for i, p in primes[1:3] {
+    for i, p in ports[1:3] {
         print("{i}: {p}")
     }
-    for i, b in "hi" {
+    for i, b in "OK" {
         print("byte {i} is {b}")
     }
 }
 ```
 
 ```output
-2
-3
-5
-7
-0: 3
-1: 5
-byte 0 is 104
-byte 1 is 105
+22
+80
+443
+8080
+0: 80
+1: 443
+byte 0 is 79
+byte 1 is 75
 ```
 
 A `List` gives its values. Its `items()` is a slice of them, which takes the form with an index:
 
 ```iris run
 void main() {
-    List[str] names
-    defer names.free()
-    names.push("ada")
-    names.push("zoe")
-    for n in names {
-        print(n)
+    List[str] upstreams
+    defer upstreams.free()
+    upstreams.push("10.0.0.11:8080")
+    upstreams.push("10.0.0.12:8080")
+    for u in upstreams {
+        print(u)
     }
-    for i, n in names.items() {
-        print("{i}: {n}")
+    for i, u in upstreams.items() {
+        print("{i}: {u}")
     }
 }
 ```
 
 ```output
-ada
-zoe
-0: ada
-1: zoe
+10.0.0.11:8080
+10.0.0.12:8080
+0: 10.0.0.11:8080
+1: 10.0.0.12:8080
 ```
 
 A `Map` gives each key and its value, in no particular order. `_` leaves out what isn't needed:
 
 ```iris run
 void main() {
-    Map[str, i64] stock
-    defer stock.free()
-    stock.set("apples", 3)
-    for name, count in stock {
-        print("{name}: {count}")
+    Map[str, i64] hits
+    defer hits.free()
+    hits.set("/health", 3)
+    for path, count in hits {
+        print("{path}: {count}")
     }
-    for name, _ in stock {
-        print("we have {name}")
+    for path, _ in hits {
+        print("served {path}")
     }
 }
 ```
 
 ```output
-apples: 3
-we have apples
+/health: 3
+served /health
 ```
 
 The items are copies: changing `x` in `for x in items` doesn't change the item. To change them, go over the indexes: `for i in 0..items.len { items[i] += 1 }`.
@@ -174,24 +181,22 @@ The items are copies: changing `x` in `for x in items` doesn't change the item. 
 
 ```iris run
 void main() {
-    for n in 1..20 {
-        if n % 2 == 0 {
+    // the status of each request in a log; 0 marks the end
+    for status in [200, 200, 500, 404, 200, 0, 503] {
+        if status == 200 {
             continue
         }
-        if n > 9 {
+        if status == 0 {
             break
         }
-        print("{n}")
+        print("failed with {status}")
     }
 }
 ```
 
 ```output
-1
-3
-5
-7
-9
+failed with 500
+failed with 404
 ```
 
 ## Labels
@@ -200,27 +205,28 @@ A label in front of a loop, `name:`, lets `break` and `continue` in a loop insid
 
 ```iris run
 void main() {
-    grid: for row in 0..3 {
-        for col in 0..3 {
-            if col > row {
-                continue grid
+    down := "10.0.0.1"
+    probe: for host in ["10.0.0.1", "10.0.0.2", "10.0.0.3"] {
+        for port in [22, 80, 443] {
+            if host == down {
+                print("{host} is down")
+                continue probe
             }
-            if row == 2 && col == 1 {
-                break grid
+            print("probing {host}:{port}")
+            if host == "10.0.0.2" && port == 80 {
+                print("web server at {host}")
+                break probe
             }
-            print("{row},{col}")
         }
     }
-    print("done")
 }
 ```
 
 ```output
-0,0
-1,0
-1,1
-2,0
-done
+10.0.0.1 is down
+probing 10.0.0.2:22
+probing 10.0.0.2:80
+web server at 10.0.0.2
 ```
 
 ## Making a type a loop can go over
@@ -228,35 +234,41 @@ done
 Any struct can be gone over with `for`, by giving it a method `next(i64 *at)` that gives the next value and a `bool`, which is false when there are no more. `at` starts at 0 for each loop, and the method moves it on:
 
 ```iris run
-struct Countdown {
-    i64 from
+// The lines of a text, without their line breaks.
+struct Lines {
+    str text
 }
 
-(i64, bool) Countdown.next(i64 *at) {
-    if *at >= self.from {
-        return (0, false)
+(str, bool) Lines.next(i64 *at) {
+    if *at >= self.text.len {
+        return ("", false)
     }
-    *at += 1
-    return (self.from - *at + 1, true)
+    start := *at
+    end := start
+    for end < self.text.len && self.text[end] != '\n' {
+        end += 1
+    }
+    *at = end + 1
+    return (self.text[start:end], true)
 }
 
 void main() {
-    c := Countdown{from: 3}
-    for n in c {
-        print("{n}")
+    req := Lines{text: "GET / HTTP/1.1\nHost: example.com\nAccept: */*"}
+    for line in req {
+        print("[{line}]")
     }
-    for n in (Countdown{from: 2}) {
-        print("again {n}")
+    for cmd in (Lines{text: "PING\nQUIT"}) {
+        print("command {cmd}")
     }
 }
 ```
 
 ```output
-3
-2
-1
-again 2
-again 1
+[GET / HTTP/1.1]
+[Host: example.com]
+[Accept: */*]
+command PING
+command QUIT
 ```
 
 A method that gives two values and a `bool` makes a loop with two names, as a `Map` has. A struct literal in a `for` or `if` line goes in parentheses, so its braces aren't taken for the start of the block.

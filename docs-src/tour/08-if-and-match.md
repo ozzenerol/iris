@@ -196,7 +196,6 @@ letter digit space other
 
 Like `if`, `match` can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a `match` reads well with `=>`, as `portKind` above shows:
 
-
 ```iris run
 void main() {
     status := 404

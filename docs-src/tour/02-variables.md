@@ -239,4 +239,3 @@ void main() {
 ```
 
 A constant has no address and takes no memory: each use is the value itself. An integer constant takes the type the place it is used needs, as long as the value fits, so `const TTL = 64` can be given to a `u8` and to an `i64`.
-

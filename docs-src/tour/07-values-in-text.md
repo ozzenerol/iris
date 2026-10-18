@@ -188,5 +188,4 @@ Accept: */*
 Connection: close
 ```
 
-
 `str.join` puts a list of parts together with a separator between them (see [Text](06-text.html)).

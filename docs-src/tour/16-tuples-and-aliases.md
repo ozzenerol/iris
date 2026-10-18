@@ -7,46 +7,47 @@ Tuples are the several values a function gives back. Type aliases give another n
 A tuple type lists types in parentheses: `(i64, str)`. A function returns one to give back several values, and the caller unpacks it into names right where the call is:
 
 ```iris run
-(str, str) splitName(str full) {
-    for i, c in full {
-        if c == ' ' {
-            return (full[0:i], full[i + 1:])
+// "db.lan:5432" is the host and the port.
+(str, str) hostPort(str addr) {
+    for i, c in addr {
+        if c == ':' {
+            return (addr[0:i], addr[i + 1:])
         }
     }
-    return (full, "")
+    return (addr, "")
 }
 
 void main() {
-    first, last := splitName("Ada Lovelace")
-    print("{last}, {first}")
+    host, port := hostPort("db.lan:5432")
+    print("host {host}, port {port}")
 }
 ```
 
 ```output
-Lovelace, Ada
+host db.lan, port 5432
 ```
 
 The values go into new variables with `:=`, or into existing ones with `=`. `_` leaves one out. A tuple can't be kept whole in one variable; values that belong together beyond one call belong in a struct, whose fields have names:
 
 ```iris error
-pair := splitName("Ada Lovelace") // error: this gives 2 values; unpack them into names: a, b := ...
+pair := hostPort("db.lan:5432") // error: this gives 2 values; unpack them into names: a, b := ...
 ```
 
-Writing several values on the right of `:=` or `=` makes a tuple too, which is how two variables swap:
+Writing several values on the right of `:=` or `=` makes a tuple too, so two variables change in one step:
 
 ```iris run
 void main() {
-    a, b := 1, 2
-    a, b = b + 10, a + 10
-    print("{a} {b}")
+    seq, ack := 1000, 5000
+    seq, ack = ack, seq + 1460
+    print("{seq} {ack}")
 }
 ```
 
 ```output
-12 11
+5000 2460
 ```
 
-Every value on the right is worked out before any variable changes, so `b + 10` uses the old `b`.
+Every value on the right is worked out before any variable changes, so `seq + 1460` uses the old `seq`.
 
 Tuples also give the values of a `for` loop over a type with a `next` method: `(T, bool)` for one value a round, `(K, V, bool)` for two (see [Loops](09-loops.html)).
 
@@ -82,24 +83,24 @@ An alias suits a type that is long to write, like a function type, or one that s
 A struct with one field is the way to get a type that can't be mixed up with another:
 
 ```iris run
-struct UserId {
+struct ConnId {
     i64 v
 }
 
-struct OrderId {
+struct StreamId {
     i64 v
 }
 
-void cancel(OrderId id) => print("cancelling order {id.v}")
+void reset(StreamId id) => print("resetting stream {id.v}")
 
 void main() {
-    order := OrderId{v: 7}
-    cancel(order)
+    s := StreamId{v: 7}
+    reset(s)
 }
 ```
 
 ```output
-cancelling order 7
+resetting stream 7
 ```
 
-Here `cancel(UserId{v: 7})` doesn't compile, while two aliases of `i64` would mix freely.
+Here `reset(ConnId{v: 7})` doesn't compile, while two aliases of `i64` would mix freely.

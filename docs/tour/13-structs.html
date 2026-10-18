@@ -50,19 +50,19 @@ try {
 <p class="lede">A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, and embedding one struct in another.</p>
 <h2 id="declaring-a-struct"><a href="#declaring-a-struct">Declaring a struct</a></h2>
 <p>A struct lists its fields, one on each line, each with its type and name:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Endpoint {
+    <span class="t">str</span> host
+    <span class="t">u16</span> port
 }
 
 <span class="t">void</span> main() {
-    p := Point{x: <span class="n">3</span>, y: <span class="n">4</span>}
-    print(<span class="s">&quot;{p.x}, {p.y}&quot;</span>)
-    p.x = <span class="n">10</span>
-    print(<span class="s">&quot;{p.x}, {p.y}&quot;</span>)
+    e := Endpoint{host: <span class="s">&quot;10.0.0.5&quot;</span>, port: <span class="n">22</span>}
+    print(<span class="s">&quot;{e.host}:{e.port}&quot;</span>)
+    e.port = <span class="n">2222</span>
+    print(<span class="s">&quot;{e.host}:{e.port}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>3, 4
-10, 4</code></pre>
+<pre class="out"><code>10.0.0.5:22
+10.0.0.5:2222</code></pre>
 <p>Fields are read and changed with a dot. A field can be of any type: a number, text, an array, another struct, a pointer, a function, a <code>List</code>.</p>
 <h2 id="making-a-value"><a href="#making-a-value">Making a value</a></h2>
 <p>A struct literal is the type's name and, in braces, the fields to set, by name. Fields left out are zero, or their default:</p>
@@ -83,75 +83,77 @@ try {
 localhost:9000 true 30s</code></pre>
 <p>A default is a value known when compiling. Defaults apply wherever a value is made without one: a field left out of a literal, a variable or a global declared with no value (<code>Config c</code>), the items of an array of structs, and a struct inside another struct. Memory from <code>alloc</code> is the exception: it is all zeros, as it comes.</p>
 <p>When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Endpoint {
+    <span class="t">str</span> host
+    <span class="t">u16</span> port
 }
 
-<span class="t">void</span> draw(Point p) =&gt; print(<span class="s">&quot;drawing at {p.x}, {p.y}&quot;</span>)
+<span class="t">void</span> connect(Endpoint e) =&gt; print(<span class="s">&quot;connecting to {e.host}:{e.port}&quot;</span>)
 
 <span class="t">void</span> main() {
-    Point start = .{x: <span class="n">1</span>, y: <span class="n">2</span>}
-    draw(.{x: <span class="n">5</span>, y: <span class="n">6</span>})
-    draw(start)
+    Endpoint db = .{host: <span class="s">&quot;db.lan&quot;</span>, port: <span class="n">5432</span>}
+    connect(.{host: <span class="s">&quot;cache.lan&quot;</span>, port: <span class="n">6379</span>})
+    connect(db)
 }</code></pre>
-<pre class="out"><code>drawing at 5, 6
-drawing at 1, 2</code></pre>
+<pre class="out"><code>connecting to cache.lan:6379
+connecting to db.lan:5432</code></pre>
 <h2 id="copying-and-comparing"><a href="#copying-and-comparing">Copying and comparing</a></h2>
 <p>A struct is a value: assigning it, or passing it to a function, copies every field. The copy and the original are separate:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Endpoint {
+    <span class="t">str</span> host
+    <span class="t">u16</span> port
 }
 
 <span class="t">void</span> main() {
-    a := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
-    b := a
-    b.x = <span class="n">100</span>
-    print(<span class="s">&quot;{a.x} {b.x}&quot;</span>)
+    plain := Endpoint{host: <span class="s">&quot;example.com&quot;</span>, port: <span class="n">80</span>}
+    secure := plain
+    secure.port = <span class="n">443</span>
+    print(<span class="s">&quot;{plain.port} {secure.port}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>1 100</code></pre>
+<pre class="out"><code>80 443</code></pre>
 <p><code>==</code> and <code>!=</code> compare two structs field by field, when every field can be compared that way: numbers, <code>bool</code>, <code>str</code>, enums, pointers and structs of those. A <code>String</code>, a slice or a <code>List</code> holds a pointer to memory it owns, so a struct with one can't be compared with <code>==</code>; the program compares the fields it means:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Addr {
+    <span class="t">u32</span> ip
+    <span class="t">u16</span> port
 }
 
-<span class="k">struct</span> Tag {
-    <span class="t">str</span> name
+<span class="k">struct</span> Route {
+    <span class="t">str</span> path
     <span class="t">i64</span> weight
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{Point{x: 1, y: 2} == Point{x: 1, y: 2}} {Point{x: 1} == Point{x: 2}}&quot;</span>)
-    a := Tag{name: <span class="s">&quot;new&quot;</span>, weight: <span class="n">1</span>}
-    b := Tag{name: <span class="s">&quot;new&quot;</span>, weight: <span class="n">1</span>}
+    print(<span class="s">&quot;{Addr{ip: 1, port: 80} == Addr{ip: 1, port: 80}} {Addr{port: 80} == Addr{port: 443}}&quot;</span>)
+    a := Route{path: <span class="s">&quot;/api&quot;</span>, weight: <span class="n">1</span>}
+    b := Route{path: <span class="s">&quot;/api&quot;</span>, weight: <span class="n">1</span>}
     print(<span class="s">&quot;{a == b}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true false
 true</code></pre>
 <h2 id="structs-inside-structs"><a href="#structs-inside-structs">Structs inside structs</a></h2>
 <p>A field can be another struct. Its fields are reached with one more dot:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Counters {
+    <span class="t">i64</span> packets
+    <span class="t">i64</span> bytes
 }
 
-<span class="k">struct</span> Rect {
-    Point min
-    Point max
+<span class="k">struct</span> Iface {
+    <span class="t">str</span> name
+    Counters rx
+    Counters tx
 }
 
-<span class="t">i64</span> area(Rect r) =&gt; (r.max.x - r.min.x) * (r.max.y - r.min.y)
+<span class="t">i64</span> traffic(Iface i) =&gt; i.rx.bytes + i.tx.bytes
 
 <span class="t">void</span> main() {
-    r := Rect{min: Point{x: <span class="n">1</span>, y: <span class="n">1</span>}, max: Point{x: <span class="n">4</span>, y: <span class="n">3</span>}}
-    r.max.x = <span class="n">6</span>
-    print(<span class="s">&quot;area {area(r)}&quot;</span>)
+    eth := Iface{name: <span class="s">&quot;eth0&quot;</span>, rx: Counters{packets: <span class="n">10</span>, bytes: <span class="n">9000</span>}, tx: Counters{packets: <span class="n">4</span>, bytes: <span class="n">600</span>}}
+    eth.tx.bytes += <span class="n">1500</span>
+    print(<span class="s">&quot;{eth.name}: {traffic(eth)} bytes&quot;</span>)
 }</code></pre>
-<pre class="out"><code>area 10</code></pre>
+<pre class="out"><code>eth0: 11100 bytes</code></pre>
 <p>A struct can't hold itself, since its size would have no end. It can hold a pointer to itself, or a <code>List</code> of itself, whose items are kept apart:</p>
-<pre class="code run"><code><span class="k">struct</span> Node {
+<pre class="code run"><code><span class="c">// One part of a URL path, with the parts that can follow it.</span>
+<span class="k">struct</span> Node {
     <span class="t">str</span> name
     List[Node] children
 }
@@ -172,16 +174,16 @@ true</code></pre>
 }
 
 <span class="t">void</span> main() {
-    root := Node{name: <span class="s">&quot;root&quot;</span>}
+    root := Node{name: <span class="s">&quot;/&quot;</span>}
     <span class="k">defer</span> root.free()
-    leaf := Node{name: <span class="s">&quot;leaf&quot;</span>}
-    branch := Node{name: <span class="s">&quot;branch&quot;</span>}
-    branch.children.push(leaf)
-    root.children.push(branch)
-    root.children.push(Node{name: <span class="s">&quot;other&quot;</span>})
-    print(<span class="s">&quot;{root.count()} nodes&quot;</span>)
+    users := Node{name: <span class="s">&quot;users&quot;</span>}
+    api := Node{name: <span class="s">&quot;api&quot;</span>}
+    api.children.push(users)
+    root.children.push(api)
+    root.children.push(Node{name: <span class="s">&quot;static&quot;</span>})
+    print(<span class="s">&quot;{root.count()} paths&quot;</span>)
 }</code></pre>
-<pre class="out"><code>4 nodes</code></pre>
+<pre class="out"><code>4 paths</code></pre>
 <h2 id="embedding"><a href="#embedding">Embedding</a></h2>
 <p>A field written as just a type, without a name, embeds that struct. Its fields and methods can then be used as if they were the outer struct's own:</p>
 <pre class="code run"><code><span class="k">struct</span> Socket {

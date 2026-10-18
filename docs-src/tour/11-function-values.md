@@ -7,20 +7,21 @@ A function can be kept in a variable, passed to another function and stored in a
 The type of a function is written as its return type followed by its parameter types in parentheses: `i64(i64, i64)` is a function that takes two `i64`s and gives one. A function's name, used without calling it, is a value of that type:
 
 ```iris run
-i64 add(i64 a, i64 b) => a + b
-i64 mul(i64 a, i64 b) => a * b
+// Two ways to pick which of n servers gets request number r.
+i64 roundRobin(i64 r, i64 n) => r % n
+i64 firstOnly(i64 r, i64 n) => 0
 
 void main() {
-    i64(i64, i64) op = add
-    print("{op(6, 7)}")
-    op = mul
-    print("{op(6, 7)}")
+    i64(i64, i64) pick = roundRobin
+    print("request 7 goes to server {pick(7, 3)}")
+    pick = firstOnly
+    print("request 7 goes to server {pick(7, 3)}")
 }
 ```
 
 ```output
-13
-42
+request 7 goes to server 1
+request 7 goes to server 0
 ```
 
 ## Passing a function
@@ -28,29 +29,44 @@ void main() {
 A parameter can take a function, so a function can leave part of its work to the caller:
 
 ```iris run
-i64 apply(i64(i64) f, i64 x) => f(x)
-i64 double(i64 x) => x * 2
-i64 negate(i64 x) => -x
+// Calls attempt until it succeeds, at most times times.
+bool retry(bool(i64) attempt, i64 times) {
+    for i in 1..times + 1 {
+        if attempt(i) {
+            return true
+        }
+    }
+    return false
+}
 
-void each(i64[] xs, void(i64) visit) {
-    for x in xs {
-        visit(x)
+bool flaky(i64 n) {
+    print("connecting, try {n}")
+    return n == 3
+}
+
+bool dead(i64 n) => false
+
+void each(str[] hosts, void(str) visit) {
+    for h in hosts {
+        visit(h)
     }
 }
 
-void show(i64 x) => print("item {x}")
+void ping(str host) => print("ping {host}")
 
 void main() {
-    print("{apply(double, 21)} {apply(negate, 5)}")
-    each([3, 1, 4], show)
+    print("{retry(flaky, 5)} {retry(dead, 2)}")
+    each(["10.0.0.1", "10.0.0.2"], ping)
 }
 ```
 
 ```output
-42 -5
-item 3
-item 1
-item 4
+connecting, try 1
+connecting, try 2
+connecting, try 3
+true false
+ping 10.0.0.1
+ping 10.0.0.2
 ```
 
 `List.sort` takes a function like this: one that says whether its first value goes before its second (see [Collections](22-collections.html)).
@@ -62,25 +78,26 @@ There are no unnamed functions: the function passed is declared like any other, 
 A function type is easier to read with a name. `type` gives one:
 
 ```iris run
-type Op = i64(i64, i64)
+// Takes a request body and gives the status of the reply.
+type Handler = i64(str)
 
-i64 add(i64 a, i64 b) => a + b
-i64 sub(i64 a, i64 b) => a - b
-i64 mul(i64 a, i64 b) => a * b
+i64 health(str body) => 200
+i64 create(str body) => if body.len > 0 { 201 } else { 400 }
+i64 gone(str body) => 410
 
 void main() {
-    Op[3] ops = [add, sub, mul]
-    str[3] names = ["add", "sub", "mul"]
-    for i, f in ops {
-        print("{names[i]}: {f(10, 4)}")
+    Handler[3] routes = [health, create, gone]
+    str[3] paths = ["GET /health", "POST /users", "GET /old"]
+    for i, h in routes {
+        print("{paths[i]}: {h("name=ada")}")
     }
 }
 ```
 
 ```output
-add: 14
-sub: 6
-mul: 40
+GET /health: 200
+POST /users: 201
+GET /old: 410
 ```
 
 ## In structs
@@ -88,25 +105,26 @@ mul: 40
 A field can hold a function, which is called with the field's name like a method:
 
 ```iris run
-struct Button {
-    str label
-    void(str) onClick
+// A command typed at a server's admin console.
+struct Command {
+    str name
+    void(str) run
 }
 
-void save(str label) => print("{label}: saving")
-void quit(str label) => print("{label}: bye")
+void stats(str name) => print("{name}: 12 connections open")
+void reload(str name) => print("{name}: config read again")
 
 void main() {
-    Button[2] buttons = [Button{label: "Save", onClick: save}, Button{label: "Quit", onClick: quit}]
-    for b in buttons {
-        b.onClick(b.label)
+    Command[2] commands = [Command{name: "stats", run: stats}, Command{name: "reload", run: reload}]
+    for c in commands {
+        c.run(c.name)
     }
 }
 ```
 
 ```output
-Save: saving
-Quit: bye
+stats: 12 connections open
+reload: config read again
 ```
 
 ## null and comparing
@@ -114,19 +132,21 @@ Quit: bye
 A function value is `null` until it is set, and can be compared with `==` and `!=`, against `null` or another function. Calling a `null` one stops a debug build with a message:
 
 ```iris run
-i64 one() => 1
+void logClose(str peer) => print("closed {peer}")
 
 void main() {
-    i64() f
-    print("{f == null}")
-    f = one
-    print("{f == null} {f == one} {f()}")
+    void(str) onClose
+    print("{onClose == null}")
+    onClose = logClose
+    print("{onClose == null} {onClose == logClose}")
+    onClose("10.0.0.5:51234")
 }
 ```
 
 ```output
 true
-false true 1
+false true
+closed 10.0.0.5:51234
 ```
 
 ## What carries over
@@ -136,39 +156,40 @@ A call through a function value passes its arguments by position. Defaults and n
 A function that can fail has a type that starts with `!`, as its declaration does: `!i64(str)`. A function that returns `void` can be given where one returning `!void` is wanted, since never failing is one way of not failing. This is how an HTTP route can take a plain handler or one that uses `try`:
 
 ```iris run
-type Step = !void(i64)
+// A check run on each request, given its size in bytes.
+type Check = !void(i64)
 
-enum StepError { tooBig }
+enum LimitError { tooBig }
 
-!void check(i64 n) {
-    if n > 10 {
-        return error(StepError.tooBig, "{n} is too big")
+!void limit(i64 size) {
+    if size > 1MiB {
+        return error(LimitError.tooBig, "{size} bytes is over the limit")
     }
-    print("{n} is fine")
+    print("{size} bytes is fine")
 }
 
-void announce(i64 n) => print("step {n}")
+void logSize(i64 size) => print("request of {size} bytes")
 
-!void runAll(Step[] steps, i64 n) {
-    for s in steps {
-        try s(n)
+!void runAll(Check[] checks, i64 size) {
+    for c in checks {
+        try c(size)
     }
 }
 
 void main() {
-    Step[2] steps = [announce, check]
-    runAll(steps, 4) catch e { }
-    runAll(steps, 40) catch e {
-        print("stopped: {e.message}")
+    Check[2] checks = [logSize, limit]
+    runAll(checks, 4096) catch e { }
+    runAll(checks, 5MiB) catch e {
+        print("rejected: {e.message}")
     }
 }
 ```
 
 ```output
-step 4
-4 is fine
-step 40
-stopped: 40 is too big
+request of 4096 bytes
+4096 bytes is fine
+request of 5242880 bytes
+rejected: 5242880 bytes is over the limit
 ```
 
 A generic function, and a C function with `...`, can't be used as a value. Methods are called through their struct; a function value holds a plain function.

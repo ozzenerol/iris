@@ -7,26 +7,26 @@ Declaring functions, passing them arguments, giving defaults and names to those 
 A function is written as its return type, its name, its parameters in parentheses, and a block. `void` means it gives nothing back:
 
 ```iris run
-i64 add(i64 a, i64 b) {
-    return a + b
+i64 frameSize(i64 payload, i64 headers) {
+    return payload + headers
 }
 
-void greet(str name) {
-    print("hello, {name}")
+void announce(str addr) {
+    print("listening on {addr}")
 }
 
 void main() {
-    greet("Ada")
-    print("{add(2, 3)}")
+    announce("0.0.0.0:8080")
+    print("{frameSize(1460, 54)} bytes")
 }
 ```
 
 ```output
-hello, Ada
-5
+listening on 0.0.0.0:8080
+1514 bytes
 ```
 
-Parameters next to each other with the same type can share it: `i64 add(i64 a, b)` is the same as `i64 add(i64 a, i64 b)`.
+Parameters next to each other with the same type can share it: `i64 frameSize(i64 payload, headers)` is the same as `i64 frameSize(i64 payload, i64 headers)`.
 
 A function that gives a value must give it on every way out of its block. One that can reach its closing brace without a `return` doesn't compile.
 
@@ -35,22 +35,23 @@ A function that gives a value must give it on every way out of its block. One th
 A function whose body is one expression can be written with `=>`, leaving out the braces and the `return`:
 
 ```iris run
-i64 square(i64 x) => x * x
+// A 16-bit number in network byte order: its two bytes swapped.
+u16 swap16(u16 x) => (x << 8) | (x >> 8)
 bool isDigit(u8 c) => c >= '0' && c <= '9'
-str sign(i64 n) => if n < 0 { "negative" } else if n == 0 { "zero" } else { "positive" }
-void show(i64 n) => print("{n} is {sign(n)}")
+str kind(i64 status) => if status >= 500 { "a server error" } else if status >= 400 { "a client error" } else { "fine" }
+void show(i64 status) => print("{status} is {kind(status)}")
 
 void main() {
-    show(square(-3))
-    show(0)
-    print("{isDigit('7')} {isDigit('x')}")
+    show(503)
+    show(200)
+    print("{swap16(0x1F90)} {isDigit('7')} {isDigit('x')}")
 }
 ```
 
 ```output
-9 is positive
-0 is zero
-true false
+503 is a server error
+200 is fine
+36895 true false
 ```
 
 For a `void` function, the expression after `=>` is a call.
@@ -60,26 +61,27 @@ For a `void` function, the expression after `=>` is a call.
 Functions can be declared in any order: a function can call one declared further down the file, or in another file of the same module. A function can call itself:
 
 ```iris run
-i64 fib(i64 n) => if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+import str
+
+// Prints the labels of a DNS name from the top down, the way a resolver walks them.
+void labels(str name) {
+    head, rest, found := str.cut(name, ".")
+    if found {
+        labels(rest)
+    }
+    print(head)
+}
 
 void main() {
-    for i in 0..10 {
-        print("{fib(i)}")
-    }
+    labels("api.eu.example.com")
 }
 ```
 
 ```output
-0
-1
-1
-2
-3
-5
-8
-13
-21
-34
+com
+example
+eu
+api
 ```
 
 Each name means one function: two functions can't share a name, even with different parameters. A function's name can't be a built-in one (`print`, `format`, `free`...) or a type's.
@@ -89,39 +91,39 @@ Each name means one function: two functions can't share a name, even with differ
 Each argument is copied into its parameter. A function that changes a parameter changes its copy, not the caller's variable:
 
 ```iris run
-void bump(i64 n) {
-    n += 1
-    print("inside: {n}")
+void record(i64 sent) {
+    sent += 1500
+    print("inside: {sent}")
 }
 
 void main() {
-    count := 5
-    bump(count)
-    print("outside: {count}")
+    sent := 3000
+    record(sent)
+    print("outside: {sent}")
 }
 ```
 
 ```output
-inside: 6
-outside: 5
+inside: 4500
+outside: 3000
 ```
 
 To let a function change the caller's value, pass a pointer to it, with `&`. The function reads and writes through it with `*` (the [Pointers](17-pointers.html) chapter has more):
 
 ```iris run
-void bump(i64 *n) {
-    *n += 1
+void record(i64 *sent) {
+    *sent += 1500
 }
 
 void main() {
-    count := 5
-    bump(&count)
-    print("{count}")
+    sent := 3000
+    record(&sent)
+    print("{sent}")
 }
 ```
 
 ```output
-6
+4500
 ```
 
 A struct is copied too, field by field. A large struct, or one the function should change, is passed as a pointer: a pointer to a struct reaches the fields with a dot, as the value does.
@@ -179,12 +181,12 @@ Named arguments come after the ones given by position, in any order among themse
 A last parameter written `T... name` takes the arguments left over, any number of them, and the function sees them as a slice, `T[]`. A slice the caller already has is given by the parameter's name:
 
 ```iris run
-i64 sum(i64... xs) {
-    total := 0
-    for x in xs {
-        total += x
+i64 total(i64... sizes) {
+    sum := 0
+    for s in sizes {
+        sum += s
     }
-    return total
+    return sum
 }
 
 void log(str level, str... parts) {
@@ -194,53 +196,55 @@ void log(str level, str... parts) {
 }
 
 void main() {
-    print("{sum()} {sum(4)} {sum(1, 2, 3)}")
-    nums := [10, 20]
-    print("{sum(xs: nums[:])}")
-    n := 7
-    log("info", "starting", "n is {n}")
+    print("{total()} {total(512)} {total(1460, 1460, 80)}")
+    reads := [4096, 1024]
+    print("{total(sizes: reads[:])}")
+    port := 8080
+    log("info", "starting", "port {port}")
 }
 ```
 
 ```output
-0 4 6
-30
+0 512 3000
+5120
 info: starting
-info: n is 7
+info: port 8080
 ```
 
-The values are put in an array for the call, so nothing is allocated. A `...` parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, `sum` is an `i64(i64[])`: a call through it gives the slice.
+The values are put in an array for the call, so nothing is allocated. A `...` parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, `total` is an `i64(i64[])`: a call through it gives the slice.
 
 ## Several values
 
 A function can give several values. Its return type lists their types in parentheses, and `return` gives them separated by commas, also in parentheses:
 
 ```iris run
-(i64, i64) divmod(i64 a, i64 b) => (a / b, a % b)
+// Full segments, and the bytes left for a last one.
+(i64, i64) segments(i64 size, i64 mss) => (size / mss, size % mss)
 
-(str, bool) firstWord(str text) {
-    for i, c in text {
+// The first word of a request line, and whether more follows.
+(str, bool) method(str line) {
+    for i, c in line {
         if c == ' ' {
-            return (text[0:i], true)
+            return (line[0:i], true)
         }
     }
-    return (text, false)
+    return (line, false)
 }
 
 void main() {
-    q, r := divmod(17, 5)
-    print("{q} remainder {r}")
-    word, more := firstWord("hello world")
-    print("{word} {more}")
-    _, last := divmod(20, 6)
+    full, rest := segments(4000, 1460)
+    print("{full} full segments and {rest} bytes")
+    m, more := method("GET /index.html HTTP/1.1")
+    print("{m} {more}")
+    _, last := segments(9000, 1460)
     print("{last}")
 }
 ```
 
 ```output
-3 remainder 2
-hello true
-2
+2 full segments and 1080 bytes
+GET true
+240
 ```
 
 The caller unpacks the values into names, one for each; `_` leaves one out. A function's several values can't be kept together in one variable: they are unpacked where the call is.
@@ -250,42 +254,52 @@ The caller unpacks the values into names, one for each; `_` leaves one out. A fu
 A function whose return type starts with `!` can fail: it gives its value or an error. The caller must deal with the error, with `try` or `catch`:
 
 ```iris run
-enum ParseError { empty, notDigit }
+enum PortError { empty, notNumber, tooBig }
 
-!i64 digit(str s) {
+!u16 parsePort(str s) {
     if s.len == 0 {
-        return error(ParseError.empty, "nothing to read")
+        return error(PortError.empty, "no port given")
     }
-    if s[0] < '0' || s[0] > '9' {
-        return error(ParseError.notDigit, "'{s}' isn't a digit")
+    i64 n = 0
+    for c in s {
+        if c < '0' || c > '9' {
+            return error(PortError.notNumber, "'{s}' isn't a number")
+        }
+        n = n * 10 + i64(c - '0')
+        if n > 65535 {
+            return error(PortError.tooBig, "{s} is above 65535")
+        }
     }
-    return i64(s[0] - '0')
+    return u16(n)
 }
 
 void main() {
-    print("{digit("7") catch -1}")
-    print("{digit("x") catch -1}")
+    print("{parsePort("8080") catch 0}")
+    print("{parsePort("http") catch 0}")
+    print("{parsePort("70000") catch 0}")
 }
 ```
 
 ```output
-7
--1
+8080
+0
+0
 ```
 
 The [Errors](18-errors.html) chapter covers them in full. The result of any other function can be left unused, as with a `print` of nothing:
 
 ```iris run
-i64 log(str s) {
-    print(s)
-    return s.len
+// Sends a line and gives how many bytes it took.
+i64 send(str line) {
+    print(line)
+    return line.len
 }
 
 void main() {
-    log("the length isn't needed here")
+    send("the byte count isn't needed here")
 }
 ```
 
 ```output
-the length isn't needed here
+the byte count isn't needed here
 ```
