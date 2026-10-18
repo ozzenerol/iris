@@ -2620,6 +2620,7 @@ typedef struct JsonType {
     int32_t kind, size;
     int64_t count;              /* fields, array items or enum values */
     const void *items;          /* JsonField[], the element's JsonType, or JsonName[] */
+    const void *init;           /* the default value, or NULL when it is all zeros */
 } JsonType;
 
 typedef struct {
@@ -3206,6 +3207,7 @@ static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
             }
             size_t saved = in->pathLen;
             pathPush(in, "[%d]%s", "", n);
+            if (slice && et->init) memcpy(buf + n * et->size, et->init, (size_t)et->size);
             ok = jsonValue(in, et, buf + n * et->size);
             in->pathLen = saved;
             in->path[saved] = 0;

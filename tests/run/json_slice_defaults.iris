@@ -1,0 +1,33 @@
+// expect: x info 5 2
+// expect: y warn 5 2
+// expect: z info 5 2
+
+import json
+
+enum Level { debug, info, warn, error }
+
+@json
+struct Inner {
+    i64 k = 2
+}
+
+@json
+struct Rule {
+    String name
+    Level level = .info
+    i64 n = 5
+    Inner inner
+}
+
+!void main() {
+    rs := try json.decode(Rule[], r"""[{"name": "x"}, {"name": "y", "level": "warn"}, {"name": "z"}]""")
+    defer free(rs)
+    defer {
+        for r in rs {
+            r.free()
+        }
+    }
+    for r in rs {
+        print("{r.name} {r.level} {r.n} {r.inner.k}")
+    }
+}

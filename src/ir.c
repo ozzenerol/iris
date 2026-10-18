@@ -1140,8 +1140,14 @@ static const char *jsonType(IR *ir, Type *t) {
     default:
         break;
     }
-    sbPrintf(&ir->head, "%s = private constant { i32, i32, i64, ptr } { i32 %d, i32 %lld, i64 %lld, ptr %s }\n", name,
-             kind, (long long)size, (long long)count, items);
+    /* the type's default value, which a new slice item starts from */
+    const char *init = "null";
+    if (hasDefaults(t)) {
+        init = fmt(ir, "@json.%d.init", id);
+        sbPrintf(&ir->head, "%s = private constant %s %s\n", init, llType(ir, t), constValue(ir, NULL, t));
+    }
+    sbPrintf(&ir->head, "%s = private constant { i32, i32, i64, ptr, ptr } { i32 %d, i32 %lld, i64 %lld, ptr %s, ptr %s }\n",
+             name, kind, (long long)size, (long long)count, items, init);
     return name;
 }
 
