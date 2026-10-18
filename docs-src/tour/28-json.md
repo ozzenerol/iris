@@ -112,6 +112,67 @@ struct Backend {
 3 ports, the last 8080
 ```
 
+## Enums
+
+An enum field is a string in JSON, the name of one of the enum's values. `decode` turns the string back into the value, and a slice of an enum is read from an array of strings. A string that names no value is a `wrongType` error:
+
+```iris run
+import json
+
+enum Level { debug, info, warn, error }
+enum Proto { http, grpc }
+
+// One rule of an alerting config.
+@json
+struct Rule {
+    String name
+    Level level = .info
+    Proto[] protos
+}
+
+void main() {
+    text := r"""
+        [{"name": "slow requests", "level": "warn", "protos": ["http", "grpc"]},
+         {"name": "crashes", "level": "error", "protos": ["grpc"]},
+         {"name": "deploys", "protos": []}]
+        """
+    rules := json.decode(Rule[], text) catch e {
+        print("{e.code}: {e.message}")
+        return
+    }
+    defer free(rules)
+    defer {
+        for r in rules {
+            r.free()
+        }
+    }
+    for r in rules {
+        action := match r.level {
+            .error => "page someone"
+            .warn => "post in the channel"
+            _ => "only log it"
+        }
+        print("{r.name}: {r.level}, {r.protos.len} protocols, {action}")
+    }
+    scoped String back = json.encode(rules[0])
+    print(back)
+    _ = json.decode(Rule, r"""{"name": "x", "level": "fatal"}""") catch e {
+        print("{e.code}: {e.message}")
+        Rule{}
+    }
+}
+```
+
+```output
+slow requests: warn, 2 protocols, post in the channel
+crashes: error, 1 protocols, page someone
+deploys: info, 0 protocols, only log it
+{"name":"slow requests","level":"warn","protos":["http","grpc"]}
+JsonError.wrongType: level: "fatal" isn't one of the enum's values
+```
+
+The third rule has no `"level"`, so it keeps the default, `.info`.
+
 ## Keys and required fields
 
 A field's key is its name as written. `@json("key")` gives another key, and `@json(required)` makes `decode` fail when the key is missing. Both can go together, `@json("id", required)`:
