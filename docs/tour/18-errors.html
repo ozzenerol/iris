@@ -90,17 +90,18 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <p><code>try</code> calls a function that can fail and, when it does, returns the same error from the function <code>try</code> is in. That function must be able to fail too:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-!<span class="t">i64</span> sum(<span class="t">str</span> a, <span class="t">str</span> b) {
-    x := <span class="k">try</span> <span class="t">str</span>.parseInt(a)
-    y := <span class="k">try</span> <span class="t">str</span>.parseInt(b)
-    <span class="k">return</span> x + y
+<span class="c">// The number of bytes in a Range header&#x27;s &quot;from-to&quot;.</span>
+!<span class="t">i64</span> rangeSize(<span class="t">str</span> from, <span class="t">str</span> to) {
+    a := <span class="k">try</span> <span class="t">str</span>.parseInt(from)
+    b := <span class="k">try</span> <span class="t">str</span>.parseInt(to)
+    <span class="k">return</span> b - a + <span class="n">1</span>
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{sum(&quot;</span><span class="n">2</span><span class="s">&quot;, &quot;</span><span class="n">40</span><span class="s">&quot;) catch -1}&quot;</span>)
-    print(<span class="s">&quot;{sum(&quot;</span><span class="n">2</span><span class="s">&quot;, &quot;</span>forty<span class="s">&quot;) catch -1}&quot;</span>)
+    print(<span class="s">&quot;{rangeSize(&quot;</span><span class="n">0</span><span class="s">&quot;, &quot;</span><span class="n">499</span><span class="s">&quot;) catch -1}&quot;</span>)
+    print(<span class="s">&quot;{rangeSize(&quot;</span><span class="n">500</span><span class="s">&quot;, &quot;</span>end<span class="s">&quot;) catch -1}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>42
+<pre class="out"><code>500
 -1</code></pre>
 <p><code>try</code> is part of an expression, so it can sit where the value is needed: <code>return try f(x) + 1</code>, <code>print(&quot;{try load()}&quot;)</code>. Everything that was set up with <code>defer</code> and <code>scoped</code> still runs on the way out, so passing an error up never leaks (see <a href="19-memory.html">Memory</a>).</p>
 <h2 id="catch-with-a-value"><a href="#catch-with-a-value">catch with a value</a></h2>
@@ -117,39 +118,39 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <p><code>catch e { ... }</code> runs the block when the call fails, with the error in <code>e</code>. When the call gives a value, the block's last line is the value to use instead; the block can also leave with <code>return</code>, <code>break</code> or <code>continue</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">i64</span> parseOr(<span class="t">str</span> s, <span class="t">i64</span> fallback) {
+<span class="t">i64</span> portOr(<span class="t">str</span> s, <span class="t">i64</span> fallback) {
     n := <span class="t">str</span>.parseInt(s) <span class="k">catch</span> e {
-        print(<span class="s">&quot;can&#x27;t read &#x27;{s}&#x27;: {e.message}&quot;</span>)
+        print(<span class="s">&quot;can&#x27;t read the port &#x27;{s}&#x27;: {e.message}&quot;</span>)
         fallback
     }
     <span class="k">return</span> n
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{parseOr(&quot;</span><span class="n">12</span><span class="s">&quot;, 0)}&quot;</span>)
-    print(<span class="s">&quot;{parseOr(&quot;</span>x<span class="s">&quot;, 7)}&quot;</span>)
+    print(<span class="s">&quot;{portOr(&quot;</span><span class="n">8443</span><span class="s">&quot;, 443)}&quot;</span>)
+    print(<span class="s">&quot;{portOr(&quot;</span>https<span class="s">&quot;, 443)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>12
-can&#x27;t read &#x27;x&#x27;: &#x27;x&#x27; is not a number
-7</code></pre>
+<pre class="out"><code>8443
+can&#x27;t read the port &#x27;https&#x27;: &#x27;https&#x27; is not a number
+443</code></pre>
 <p>For a function that gives no value, the block is just what to do; it can also be empty, to drop the error on purpose:</p>
-<pre class="code run"><code><span class="k">enum</span> JobError { failed }
+<pre class="code run"><code><span class="k">enum</span> LogError { full }
 
-!<span class="t">void</span> job(<span class="t">bool</span> ok) {
-    <span class="k">if</span> !ok {
-        <span class="k">return</span> error(JobError.failed, <span class="s">&quot;the job failed&quot;</span>)
+!<span class="t">void</span> flush(<span class="t">bool</span> roomLeft) {
+    <span class="k">if</span> !roomLeft {
+        <span class="k">return</span> error(LogError.full, <span class="s">&quot;the disk is full&quot;</span>)
     }
-    print(<span class="s">&quot;the job ran&quot;</span>)
+    print(<span class="s">&quot;log flushed&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    job(<span class="k">true</span>) <span class="k">catch</span> e { }
-    job(<span class="k">false</span>) <span class="k">catch</span> e {
-        print(<span class="s">&quot;noted: {e.message}&quot;</span>)
+    flush(<span class="k">true</span>) <span class="k">catch</span> e { }
+    flush(<span class="k">false</span>) <span class="k">catch</span> e {
+        print(<span class="s">&quot;log not flushed: {e.message}&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>the job ran
-noted: the job failed</code></pre>
+<pre class="out"><code>log flushed
+log not flushed: the disk is full</code></pre>
 <p>The error's message stays the same for the whole block, even when code in the block makes and handles errors of its own.</p>
 <h2 id="deciding-by-the-code"><a href="#deciding-by-the-code">Deciding by the code</a></h2>
 <p><code>catch e match e.code</code> picks what to do by the error's code. Each arm gives a value or leaves:</p>

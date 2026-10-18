@@ -7,47 +7,49 @@ An interface is a list of methods. A struct with those methods has the interface
 An interface lists the methods a type must have, with their types:
 
 ```iris
-interface Shape {
-    f64 area()
+interface Link {
+    i64 mtu()
     String format()
 }
 ```
 
-Any struct with an `area` method that takes nothing and gives an `f64`, and a `format` method that gives a `String`, has `Shape`. Only structs have methods, so only structs have interfaces.
+Any struct with an `mtu` method that takes nothing and gives an `i64`, and a `format` method that gives a `String`, has `Link`. Only structs have methods, so only structs have interfaces.
 
 ## Bounds
 
-A type parameter written `T: Shape` takes only types that have `Shape`, and the generic code can then call its methods:
+A type parameter written `T: Link` takes only types that have `Link`, and the generic code can then call its methods:
 
 ```iris run
-interface Shape {
-    f64 area()
+// A network link, and the largest packet it carries.
+interface Link {
+    i64 mtu()
 }
 
-struct Square {
-    f64 side
+struct Ethernet {
+    bool jumbo
 }
 
-f64 Square.area() => self.side * self.side
+i64 Ethernet.mtu() => if self.jumbo { 9000 } else { 1500 }
 
-struct Circle {
-    f64 radius
+struct Tunnel {
+    i64 overhead
 }
 
-f64 Circle.area() => 3.0 * self.radius * self.radius
+i64 Tunnel.mtu() => 1500 - self.overhead
 
-T bigger[T: Shape](T a, T b) => if a.area() >= b.area() { a } else { b }
+T roomier[T: Link](T a, T b) => if a.mtu() >= b.mtu() { a } else { b }
 
-f64 areaOf[T: Shape](T s) => s.area()
+// The TCP payload a packet on the link can carry.
+i64 payload[T: Link](T l) => l.mtu() - 40
 
 void main() {
-    big := bigger(Square{side: 2}, Square{side: 3})
-    print("{big.side} {areaOf(Circle{radius: 1})}")
+    big := roomier(Ethernet{}, Ethernet{jumbo: true})
+    print("{big.jumbo} {payload(Tunnel{overhead: 80})}")
 }
 ```
 
 ```output
-3 3
+true 1380
 ```
 
 A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.
@@ -87,49 +89,49 @@ void main() {
 
 ## dyn
 
-A `dyn Shape` value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things:
+A `dyn Link` value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things. Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:
 
 ```iris run
-interface Shape {
-    f64 area()
+interface Link {
+    i64 mtu()
     str name()
 }
 
-struct Square {
-    f64 side
+struct Ethernet {
+    bool jumbo
 }
 
-f64 Square.area() => self.side * self.side
-str Square.name() => "square"
+i64 Ethernet.mtu() => if self.jumbo { 9000 } else { 1500 }
+str Ethernet.name() => "ethernet"
 
-struct Circle {
-    f64 radius
+struct Tunnel {
+    i64 overhead
 }
 
-f64 Circle.area() => 3.0 * self.radius * self.radius
-str Circle.name() => "circle"
+i64 Tunnel.mtu() => 1500 - self.overhead
+str Tunnel.name() => "tunnel"
 
-void describe(dyn Shape s) => print("a {s.name()} of {s.area()}")
+void describe(dyn Link l) => print("{l.name()} carries {l.mtu()} bytes")
 
 void main() {
-    sq := Square{side: 2}
-    ci := Circle{radius: 1}
-    describe(&sq)
-    List[dyn Shape] all
-    defer all.free()
-    all.push(&sq)
-    all.push(&ci)
-    f64 total = 0
-    for s in all {
-        total += s.area()
+    lan := Ethernet{jumbo: true}
+    vpn := Tunnel{overhead: 80}
+    describe(&vpn)
+    List[dyn Link] path
+    defer path.free()
+    path.push(&lan)
+    path.push(&vpn)
+    i64 pmtu = 65535
+    for l in path {
+        pmtu = l.mtu() if l.mtu() < pmtu
     }
-    print("{all.len} shapes, {total} in all")
+    print("{path.len} links, path MTU {pmtu}")
 }
 ```
 
 ```output
-a square of 4
-2 shapes, 7 in all
+tunnel carries 1420 bytes
+2 links, path MTU 1420
 ```
 
 A `dyn` value holds a pointer, not a copy: the struct must live as long as the `dyn` value is used. Its type must have each of the interface's methods with the same types. An interface with `Self` can't be used with `dyn`, since the type behind it isn't known when compiling.

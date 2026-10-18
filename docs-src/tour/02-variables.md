@@ -82,11 +82,11 @@ A struct whose fields have defaults starts with those defaults instead (see [Str
 void main() {
     window := 4096
     window = 8192
-    window += 1460  // 9652
-    window -= 652   // 9000
-    window *= 2     // 18000
-    window /= 3     // 6000
-    window %= 1460  // 160
+    window += 1460 // 9652
+    window -= 652  // 9000
+    window *= 2    // 18000
+    window /= 3    // 6000
+    window %= 1460 // 160
     print("window {window}")
     flags := 0x02 // SYN
     flags <<= 3   // 16, the ACK bit

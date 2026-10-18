@@ -59,20 +59,21 @@ Each module lists what can go wrong with it in an enum of its own: `fs.FsError`,
 ```iris run
 import str
 
-!i64 sum(str a, str b) {
-    x := try str.parseInt(a)
-    y := try str.parseInt(b)
-    return x + y
+// The number of bytes in a Range header's "from-to".
+!i64 rangeSize(str from, str to) {
+    a := try str.parseInt(from)
+    b := try str.parseInt(to)
+    return b - a + 1
 }
 
 void main() {
-    print("{sum("2", "40") catch -1}")
-    print("{sum("2", "forty") catch -1}")
+    print("{rangeSize("0", "499") catch -1}")
+    print("{rangeSize("500", "end") catch -1}")
 }
 ```
 
 ```output
-42
+500
 -1
 ```
 
@@ -104,49 +105,49 @@ The value after `catch` is one value: a name, a literal, a call, or an expressio
 ```iris run
 import str
 
-i64 parseOr(str s, i64 fallback) {
+i64 portOr(str s, i64 fallback) {
     n := str.parseInt(s) catch e {
-        print("can't read '{s}': {e.message}")
+        print("can't read the port '{s}': {e.message}")
         fallback
     }
     return n
 }
 
 void main() {
-    print("{parseOr("12", 0)}")
-    print("{parseOr("x", 7)}")
+    print("{portOr("8443", 443)}")
+    print("{portOr("https", 443)}")
 }
 ```
 
 ```output
-12
-can't read 'x': 'x' is not a number
-7
+8443
+can't read the port 'https': 'https' is not a number
+443
 ```
 
 For a function that gives no value, the block is just what to do; it can also be empty, to drop the error on purpose:
 
 ```iris run
-enum JobError { failed }
+enum LogError { full }
 
-!void job(bool ok) {
-    if !ok {
-        return error(JobError.failed, "the job failed")
+!void flush(bool roomLeft) {
+    if !roomLeft {
+        return error(LogError.full, "the disk is full")
     }
-    print("the job ran")
+    print("log flushed")
 }
 
 void main() {
-    job(true) catch e { }
-    job(false) catch e {
-        print("noted: {e.message}")
+    flush(true) catch e { }
+    flush(false) catch e {
+        print("log not flushed: {e.message}")
     }
 }
 ```
 
 ```output
-the job ran
-noted: the job failed
+log flushed
+log not flushed: the disk is full
 ```
 
 The error's message stays the same for the whole block, even when code in the block makes and handles errors of its own.

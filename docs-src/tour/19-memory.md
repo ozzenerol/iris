@@ -14,18 +14,18 @@ Memory that must outlive a function, or whose size is known only when the progra
 
 ```iris run
 void main() {
-    n := 4
-    f64[] weights = alloc(f64, n)
-    for i in 0..n {
-        weights[i] = f64(i) * 0.5
+    size := 4KiB // could come from a setting
+    u8[] buf = alloc(u8, size)
+    for i, b in "PING\r\n" {
+        buf[i] = b
     }
-    print("{weights[3]} of {weights.len}")
-    free(weights)
+    print("{buf[0:4]} in a {buf.len} byte buffer")
+    free(buf)
 }
 ```
 
 ```output
-1.5 of 4
+PING in a 4096 byte buffer
 ```
 
 The slice can be passed around and stored like any other; whoever holds it last frees it, once. Memory from `alloc` is all zeros, even for a struct whose fields have defaults.
@@ -35,55 +35,55 @@ The slice can be passed around and stored like any other; whoever holds it last 
 `defer` runs a statement when the block it is in ends, however it ends: at the closing brace, at a `return`, at a `break` or `continue`, or when `try` passes an error up. It puts the cleanup right after the code that needs it:
 
 ```iris run
-void work(bool early) {
-    print("open")
-    defer print("close")
-    if early {
-        print("leaving early")
+void serve(bool badRequest) {
+    print("connection accepted")
+    defer print("connection closed")
+    if badRequest {
+        print("bad request, leaving early")
         return
     }
-    print("working")
+    print("request answered")
 }
 
 void main() {
-    work(false)
-    work(true)
+    serve(false)
+    serve(true)
 }
 ```
 
 ```output
-open
-working
-close
-open
-leaving early
-close
+connection accepted
+request answered
+connection closed
+connection accepted
+bad request, leaving early
+connection closed
 ```
 
 Several defers run in the reverse order of their lines, so what was set up last is undone first. A defer in a loop runs at the end of each round, since the round is a block. `defer { ... }` defers a whole block:
 
 ```iris run
 void main() {
-    defer print("third")
+    defer print("socket closed")
     defer {
-        print("first")
-        print("second")
+        print("log flushed")
+        print("log closed")
     }
     for i in 0..2 {
-        defer print("end of round {i}")
-        print("round {i}")
+        defer print("buffer {i} freed")
+        print("sending buffer {i}")
     }
 }
 ```
 
 ```output
-round 0
-end of round 0
-round 1
-end of round 1
-first
-second
-third
+sending buffer 0
+buffer 0 freed
+sending buffer 1
+buffer 1 freed
+log flushed
+log closed
+socket closed
 ```
 
 A deferred statement can't `return`, `break` or `continue` out of the block.
@@ -93,33 +93,33 @@ A deferred statement can't `return`, `break` or `continue` out of the block.
 `errdefer` runs only when the function returns an error. It undoes work that should stay done only if everything succeeds, such as a half-built value:
 
 ```iris run
-enum SetupError { failed }
+enum ListenError { inUse }
 
-!void setup(bool failAtEnd) {
-    print("make the thing")
-    errdefer print("undo: remove the thing")
-    defer print("tidy up")
-    if failAtEnd {
-        return error(SetupError.failed, "the last step failed")
+!void listen(bool portTaken) {
+    print("socket opened")
+    errdefer print("socket closed again")
+    defer print("attempt logged")
+    if portTaken {
+        return error(ListenError.inUse, "port 8080 is taken")
     }
-    print("all done")
+    print("listening")
 }
 
 void main() {
-    setup(false) catch e { }
+    listen(false) catch e { }
     print("--")
-    setup(true) catch e { }
+    listen(true) catch e { }
 }
 ```
 
 ```output
-make the thing
-all done
-tidy up
+socket opened
+listening
+attempt logged
 --
-make the thing
-tidy up
-undo: remove the thing
+socket opened
+attempt logged
+socket closed again
 ```
 
 ## scoped
@@ -130,16 +130,16 @@ undo: remove the thing
 import str
 
 void main() {
-    scoped String name = str.upper("ada")
-    scoped List[i64] nums
-    nums.push(1)
-    nums.push(2)
-    print("{name} {nums.len}")
+    scoped String method = str.upper("get")
+    scoped List[u16] ports
+    ports.push(80)
+    ports.push(443)
+    print("{method} on {ports.len} ports")
 }
 ```
 
 ```output
-ADA 2
+GET on 2 ports
 ```
 
 The type can come from the value, as with `:=`: `scoped t := term.table(...)`. Any type with a `free` method that takes nothing works with `scoped`: `String`, `List`, `Map`, the library's types, and the program's own structs.
@@ -156,31 +156,32 @@ A few conventions say who frees each piece of memory, and the standard library f
 ```iris run
 import str
 
-struct User {
-    String name
-    List[String] tags
+// A peer, and the protocols it offered.
+struct Peer {
+    String host
+    List[String] protocols
 }
 
-void User.free() {
-    self.name.free()
-    self.tags.freeEach()
+void Peer.free() {
+    self.host.free()
+    self.protocols.freeEach()
 }
 
-User makeUser(str name) {
-    User u = User{name: str.upper(name)}
-    u.tags.push("new".copy())
-    return u
+Peer makePeer(str host) {
+    Peer p = Peer{host: str.lower(host)}
+    p.protocols.push("http/1.1".copy())
+    return p
 }
 
 void main() {
-    scoped u := makeUser("ada")
-    u.tags.push("admin".copy())
-    print("{u.name} has {u.tags.len} tags")
+    scoped p := makePeer("API.Example.com")
+    p.protocols.push("h2".copy())
+    print("{p.host} offers {p.protocols.len} protocols")
 }
 ```
 
 ```output
-ADA has 2 tags
+api.example.com offers 2 protocols
 ```
 
 Structs marked `@json`, `@env` or `@flags` get a `free` method made for them, which frees their Strings and slices (see [Attributes](27-attributes.html)).

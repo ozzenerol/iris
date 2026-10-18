@@ -52,22 +52,22 @@ try {
 <p>Type parameters go in square brackets after the function's name. Inside the function they are used like any type:</p>
 <pre class="code run"><code>T first[T](T[] items) =&gt; items[<span class="n">0</span>]
 
-T largest[T](T[] xs) {
-    T best = xs[<span class="n">0</span>]
-    <span class="k">for</span> x <span class="k">in</span> xs {
-        <span class="k">if</span> x &gt; best {
-            best = x
+T peak[T](T[] samples) {
+    T best = samples[<span class="n">0</span>]
+    <span class="k">for</span> s <span class="k">in</span> samples {
+        <span class="k">if</span> s &gt; best {
+            best = s
         }
     }
     <span class="k">return</span> best
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{first([4, 5, 6])} {first([&quot;</span>a<span class="s">&quot;, &quot;</span>b<span class="s">&quot;])}&quot;</span>)
-    print(<span class="s">&quot;{largest([3, 9, 2])} {largest([1.5, 0.5])}&quot;</span>)
+    print(<span class="s">&quot;{first([&quot;</span><span class="n">1.1</span>.<span class="n">1.1</span><span class="s">&quot;, &quot;</span><span class="n">8.8</span>.<span class="n">8.8</span><span class="s">&quot;])} {first([8080, 8081])}&quot;</span>)
+    print(<span class="s">&quot;{peak([12, 48, 9])} {peak([0.4, 0.93])} {peak([20ms, 1s, 250ms])}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>4 a
-9 1.5</code></pre>
+<pre class="out"><code>1.1.1.1 8080
+48 0.93 1s</code></pre>
 <h2 id="working-out-the-types"><a href="#working-out-the-types">Working out the types</a></h2>
 <p>The types are worked out from the arguments, so calls rarely name them. When there is nothing to work them out from, or another type is wanted, they are given in brackets after the name:</p>
 <pre class="code run"><code>T zero[T]() {
@@ -79,23 +79,23 @@ T twice[T](T x) =&gt; x + x
 
 <span class="t">void</span> main() {
     print(<span class="s">&quot;{zero[i64]()} [{zero[str]()}] {zero[bool]()}&quot;</span>)
-    print(<span class="s">&quot;{twice(21)} {twice[f64](1.25)}&quot;</span>)
+    print(<span class="s">&quot;{twice(1460)} {twice(250ms)} {twice[f64](0.25)}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>0 [] false
-42 2.5</code></pre>
+2920 500ms 0.5</code></pre>
 <h2 id="what-a-generic-function-may-do"><a href="#what-a-generic-function-may-do">What a generic function may do</a></h2>
 <p>A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't make sense for one of them is an error that names the call that used it:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code>T largest[T](T[] xs) {
-    T best = xs[<span class="n">0</span>]
-    <span class="k">for</span> x <span class="k">in</span> xs {
-        <span class="k">if</span> x &gt; best {    <span class="c">// error: &#x27;&gt;&#x27; can&#x27;t compare str values</span>
-            best = x
+<pre class="code bad"><span class="tag">does not compile</span><code>T peak[T](T[] samples) {
+    T best = samples[<span class="n">0</span>]
+    <span class="k">for</span> s <span class="k">in</span> samples {
+        <span class="k">if</span> s &gt; best {    <span class="c">// error: &#x27;&gt;&#x27; can&#x27;t compare str values</span>
+            best = s
         }
     }
     <span class="k">return</span> best
 }
 
-largest([<span class="s">&quot;b&quot;</span>, <span class="s">&quot;a&quot;</span>])      <span class="c">// error: largest[str], made here, has the errors above</span></code></pre>
+peak([<span class="s">&quot;web1&quot;</span>, <span class="s">&quot;web2&quot;</span>])   <span class="c">// error: peak[str], made here, has the errors above</span></code></pre>
 <p>To say ahead which types a parameter takes, and give the function methods to call on it, a type parameter can have an interface as its bound (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="generic-structs"><a href="#generic-structs">Generic structs</a></h2>
 <p>A struct's type parameters go after its name. A generic struct is always used with its types written out:</p>
@@ -107,11 +107,11 @@ largest([<span class="s">&quot;b&quot;</span>, <span class="s">&quot;a&quot;</sp
 Pair[B, A] swap[A, B](Pair[A, B] p) =&gt; Pair[B, A]{first: p.second, second: p.first}
 
 <span class="t">void</span> main() {
-    p := Pair[<span class="t">str</span>, <span class="t">i64</span>]{first: <span class="s">&quot;age&quot;</span>, second: <span class="n">36</span>}
+    p := Pair[<span class="t">str</span>, <span class="t">u16</span>]{first: <span class="s">&quot;db.lan&quot;</span>, second: <span class="n">5432</span>}
     q := swap(p)
-    print(<span class="s">&quot;{p.first}={p.second} / {q.first}={q.second}&quot;</span>)
+    print(<span class="s">&quot;{p.first}:{p.second} / {q.first}:{q.second}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>age=36 / 36=age</code></pre>
+<pre class="out"><code>db.lan:5432 / 5432:db.lan</code></pre>
 <p><code>List[T]</code> and <code>Map[K, V]</code> from the standard library are generic structs like these (see <a href="22-collections.html">Collections</a>).</p>
 <h2 id="methods-of-generic-structs"><a href="#methods-of-generic-structs">Methods of generic structs</a></h2>
 <p>A method of a generic struct repeats the type parameters after the struct's name:</p>
@@ -134,16 +134,17 @@ Pair[B, A] swap[A, B](Pair[A, B] p) =&gt; Pair[B, A]{first: p.second, second: p.
 <span class="t">void</span> Stack[T].free() =&gt; self.items.free()
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> Stack[<span class="t">str</span>] s
-    s.push(<span class="s">&quot;first&quot;</span>)
-    s.push(<span class="s">&quot;second&quot;</span>)
-    top, ok := s.pop()
-    print(<span class="s">&quot;{top} {ok} {s.len()}&quot;</span>)
-    <span class="k">scoped</span> Stack[<span class="t">i64</span>] nums
-    _, any := nums.pop()
+    <span class="c">// idle connections, the last one put back is used first</span>
+    <span class="k">scoped</span> Stack[<span class="t">str</span>] idle
+    idle.push(<span class="s">&quot;10.0.0.11:5432&quot;</span>)
+    idle.push(<span class="s">&quot;10.0.0.12:5432&quot;</span>)
+    conn, ok := idle.pop()
+    print(<span class="s">&quot;{conn} {ok}, {idle.len()} left&quot;</span>)
+    <span class="k">scoped</span> Stack[<span class="t">i32</span>] freeFds
+    _, any := freeFds.pop()
     print(<span class="s">&quot;{any}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>second true 1
+<pre class="out"><code>10.0.0.12:5432 true, 1 left
 false</code></pre>
 <p>A method is checked for a set of types only when the program uses it with them. A method can need more of its types than the others do, and the struct still works with types that only the other methods suit. <code>List[T].contains</code> compares values with <code>==</code>; a list of a struct that can't be compared works until <code>contains</code> is called on it.</p>
 <h2 id="how-generics-are-compiled"><a href="#how-generics-are-compiled">How generics are compiled</a></h2>

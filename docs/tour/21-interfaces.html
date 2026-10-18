@@ -50,38 +50,40 @@ try {
 <p class="lede">An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as <code>dyn</code> values, worked out when the program runs.</p>
 <h2 id="declaring-an-interface"><a href="#declaring-an-interface">Declaring an interface</a></h2>
 <p>An interface lists the methods a type must have, with their types:</p>
-<pre class="code"><code><span class="k">interface</span> Shape {
-    <span class="t">f64</span> area()
+<pre class="code"><code><span class="k">interface</span> Link {
+    <span class="t">i64</span> mtu()
     <span class="t">String</span> format()
 }</code></pre>
-<p>Any struct with an <code>area</code> method that takes nothing and gives an <code>f64</code>, and a <code>format</code> method that gives a <code>String</code>, has <code>Shape</code>. Only structs have methods, so only structs have interfaces.</p>
+<p>Any struct with an <code>mtu</code> method that takes nothing and gives an <code>i64</code>, and a <code>format</code> method that gives a <code>String</code>, has <code>Link</code>. Only structs have methods, so only structs have interfaces.</p>
 <h2 id="bounds"><a href="#bounds">Bounds</a></h2>
-<p>A type parameter written <code>T: Shape</code> takes only types that have <code>Shape</code>, and the generic code can then call its methods:</p>
-<pre class="code run"><code><span class="k">interface</span> Shape {
-    <span class="t">f64</span> area()
+<p>A type parameter written <code>T: Link</code> takes only types that have <code>Link</code>, and the generic code can then call its methods:</p>
+<pre class="code run"><code><span class="c">// A network link, and the largest packet it carries.</span>
+<span class="k">interface</span> Link {
+    <span class="t">i64</span> mtu()
 }
 
-<span class="k">struct</span> Square {
-    <span class="t">f64</span> side
+<span class="k">struct</span> Ethernet {
+    <span class="t">bool</span> jumbo
 }
 
-<span class="t">f64</span> Square.area() =&gt; self.side * self.side
+<span class="t">i64</span> Ethernet.mtu() =&gt; <span class="k">if</span> self.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
 
-<span class="k">struct</span> Circle {
-    <span class="t">f64</span> radius
+<span class="k">struct</span> Tunnel {
+    <span class="t">i64</span> overhead
 }
 
-<span class="t">f64</span> Circle.area() =&gt; <span class="n">3.0</span> * self.radius * self.radius
+<span class="t">i64</span> Tunnel.mtu() =&gt; <span class="n">1500</span> - self.overhead
 
-T bigger[T: Shape](T a, T b) =&gt; <span class="k">if</span> a.area() &gt;= b.area() { a } <span class="k">else</span> { b }
+T roomier[T: Link](T a, T b) =&gt; <span class="k">if</span> a.mtu() &gt;= b.mtu() { a } <span class="k">else</span> { b }
 
-<span class="t">f64</span> areaOf[T: Shape](T s) =&gt; s.area()
+<span class="c">// The TCP payload a packet on the link can carry.</span>
+<span class="t">i64</span> payload[T: Link](T l) =&gt; l.mtu() - <span class="n">40</span>
 
 <span class="t">void</span> main() {
-    big := bigger(Square{side: <span class="n">2</span>}, Square{side: <span class="n">3</span>})
-    print(<span class="s">&quot;{big.side} {areaOf(Circle{radius: 1})}&quot;</span>)
+    big := roomier(Ethernet{}, Ethernet{jumbo: <span class="k">true</span>})
+    print(<span class="s">&quot;{big.jumbo} {payload(Tunnel{overhead: 80})}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>3 3</code></pre>
+<pre class="out"><code>true 1380</code></pre>
 <p>A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.</p>
 <h2 id="self"><a href="#self">Self</a></h2>
 <p>In an interface, <code>Self</code> stands for the type that has the interface. It lets a method take or give a value of the same type:</p>
@@ -109,44 +111,44 @@ T max[T: Ordered](T a, T b) =&gt; <span class="k">if</span> a.compare(b) &gt;= <
 }</code></pre>
 <pre class="out"><code>1.5</code></pre>
 <h2 id="dyn"><a href="#dyn">dyn</a></h2>
-<p>A <code>dyn Shape</code> value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things:</p>
-<pre class="code run"><code><span class="k">interface</span> Shape {
-    <span class="t">f64</span> area()
+<p>A <code>dyn Link</code> value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things. Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:</p>
+<pre class="code run"><code><span class="k">interface</span> Link {
+    <span class="t">i64</span> mtu()
     <span class="t">str</span> name()
 }
 
-<span class="k">struct</span> Square {
-    <span class="t">f64</span> side
+<span class="k">struct</span> Ethernet {
+    <span class="t">bool</span> jumbo
 }
 
-<span class="t">f64</span> Square.area() =&gt; self.side * self.side
-<span class="t">str</span> Square.name() =&gt; <span class="s">&quot;square&quot;</span>
+<span class="t">i64</span> Ethernet.mtu() =&gt; <span class="k">if</span> self.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
+<span class="t">str</span> Ethernet.name() =&gt; <span class="s">&quot;ethernet&quot;</span>
 
-<span class="k">struct</span> Circle {
-    <span class="t">f64</span> radius
+<span class="k">struct</span> Tunnel {
+    <span class="t">i64</span> overhead
 }
 
-<span class="t">f64</span> Circle.area() =&gt; <span class="n">3.0</span> * self.radius * self.radius
-<span class="t">str</span> Circle.name() =&gt; <span class="s">&quot;circle&quot;</span>
+<span class="t">i64</span> Tunnel.mtu() =&gt; <span class="n">1500</span> - self.overhead
+<span class="t">str</span> Tunnel.name() =&gt; <span class="s">&quot;tunnel&quot;</span>
 
-<span class="t">void</span> describe(<span class="k">dyn</span> Shape s) =&gt; print(<span class="s">&quot;a {s.name()} of {s.area()}&quot;</span>)
+<span class="t">void</span> describe(<span class="k">dyn</span> Link l) =&gt; print(<span class="s">&quot;{l.name()} carries {l.mtu()} bytes&quot;</span>)
 
 <span class="t">void</span> main() {
-    sq := Square{side: <span class="n">2</span>}
-    ci := Circle{radius: <span class="n">1</span>}
-    describe(&amp;sq)
-    List[<span class="k">dyn</span> Shape] all
-    <span class="k">defer</span> all.free()
-    all.push(&amp;sq)
-    all.push(&amp;ci)
-    <span class="t">f64</span> total = <span class="n">0</span>
-    <span class="k">for</span> s <span class="k">in</span> all {
-        total += s.area()
+    lan := Ethernet{jumbo: <span class="k">true</span>}
+    vpn := Tunnel{overhead: <span class="n">80</span>}
+    describe(&amp;vpn)
+    List[<span class="k">dyn</span> Link] path
+    <span class="k">defer</span> path.free()
+    path.push(&amp;lan)
+    path.push(&amp;vpn)
+    <span class="t">i64</span> pmtu = <span class="n">65535</span>
+    <span class="k">for</span> l <span class="k">in</span> path {
+        pmtu = l.mtu() <span class="k">if</span> l.mtu() &lt; pmtu
     }
-    print(<span class="s">&quot;{all.len} shapes, {total} in all&quot;</span>)
+    print(<span class="s">&quot;{path.len} links, path MTU {pmtu}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>a square of 4
-2 shapes, 7 in all</code></pre>
+<pre class="out"><code>tunnel carries 1420 bytes
+2 links, path MTU 1420</code></pre>
 <p>A <code>dyn</code> value holds a pointer, not a copy: the struct must live as long as the <code>dyn</code> value is used. Its type must have each of the interface's methods with the same types. An interface with <code>Self</code> can't be used with <code>dyn</code>, since the type behind it isn't known when compiling.</p>
 <h2 id="which-one-to-use"><a href="#which-one-to-use">Which one to use</a></h2>
 <p>Bounds are the default: they cost nothing when the program runs, and the compiler checks each use with its own type. <code>dyn</code> is for values whose types are known only when the program runs, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through <code>dyn</code> costs one lookup in the value's table.</p>

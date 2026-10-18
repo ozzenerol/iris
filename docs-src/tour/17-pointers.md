@@ -8,13 +8,13 @@ A pointer holds the address of a value, so code can read and change the value wh
 
 ```iris run
 void main() {
-    i64 x = 5
-    i64 *p = &x
+    i64 open = 5
+    i64 *p = &open
     print("{*p}")
     *p = 6
-    print("{x}")
+    print("{open}")
     *p += 10
-    print("{x}")
+    print("{open}")
 }
 ```
 
@@ -27,24 +27,24 @@ void main() {
 A pointer can point to a field or an item, as well as to a whole variable:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Stats {
+    i64 sent
+    i64 dropped
 }
 
 void main() {
-    p := Point{x: 1, y: 2}
-    i64 *py = &p.y
-    *py = 20
-    i64[3] xs = [1, 2, 3]
-    i64 *last = &xs[2]
-    *last = 30
-    print("{p.y} {xs[2]}")
+    s := Stats{sent: 100, dropped: 2}
+    i64 *d = &s.dropped
+    *d += 1
+    i64[3] perCore = [10, 20, 30]
+    i64 *last = &perCore[2]
+    *last += 5
+    print("{s.dropped} {perCore[2]}")
 }
 ```
 
 ```output
-20 30
+3 35
 ```
 
 ## Pointers to structs
@@ -52,26 +52,26 @@ void main() {
 A pointer to a struct reaches the struct's fields and methods with a dot, as the struct itself does: there is no separate operator for it.
 
 ```iris run
-struct Account {
-    str owner
-    i64 balance
+struct Conn {
+    str peer
+    i64 sent
 }
 
-void deposit(Account *a, i64 amount) {
-    a.balance += amount
+void record(Conn *c, i64 bytes) {
+    c.sent += bytes
 }
 
 void main() {
-    acct := Account{owner: "ada", balance: 100}
-    deposit(&acct, 50)
-    Account *p = &acct
-    p.balance -= 20
-    print("{acct.owner}: {acct.balance}")
+    conn := Conn{peer: "10.0.0.9:51000", sent: 100}
+    record(&conn, 1460)
+    Conn *p = &conn
+    p.sent += 40
+    print("{conn.peer}: {conn.sent} bytes")
 }
 ```
 
 ```output
-ada: 130
+10.0.0.9:51000: 1600 bytes
 ```
 
 This is the usual reason for a pointer parameter: the function changes the caller's value. Methods get `self` as a pointer for the same reason.
@@ -81,30 +81,31 @@ This is the usual reason for a pointer parameter: the function changes the calle
 A pointer can be `null`: it points to nothing. A pointer variable declared without a value starts as `null`, and `==` and `!=` compare pointers with each other and with `null`:
 
 ```iris run
-struct Node {
-    i64 value
-    Node *next
+// A message kept as a chain of buffers, each pointing to the next.
+struct Chunk {
+    i64 size
+    Chunk *next
 }
 
-i64 total(Node *n) {
+i64 total(Chunk *c) {
     i64 sum = 0
-    for n != null {
-        sum += n.value
-        n = n.next
+    for c != null {
+        sum += c.size
+        c = c.next
     }
     return sum
 }
 
 void main() {
-    c := Node{value: 3}
-    b := Node{value: 2, next: &c}
-    a := Node{value: 1, next: &b}
-    print("{total(&a)} {total(null)}")
+    tail := Chunk{size: 300}
+    mid := Chunk{size: 4096, next: &tail}
+    head := Chunk{size: 4096, next: &mid}
+    print("{total(&head)} {total(null)}")
 }
 ```
 
 ```output
-6 0
+8492 0
 ```
 
 Reading or writing through a `null` pointer is a bug. A debug build stops the program with a message that says where:
@@ -135,45 +136,45 @@ A function that needs to give back something that outlives it returns the value 
 
 ```iris run
 void main() {
-    i64 n = 42
-    u8 *any = &n
-    i64 *back = any
+    i32 fd = 3
+    u8 *any = &fd // what a C function such as setsockopt takes
+    i32 *back = any
     print("{*back}")
 }
 ```
 
 ```output
-42
+3
 ```
 
 Adding a number to a pointer moves it by that many items, not bytes, as in C:
 
 ```iris run
 void main() {
-    i64[4] xs = [10, 20, 30, 40]
-    i64 *p = &xs[0]
-    i64 *third = p + 2
+    u16[4] ports = [22, 80, 443, 8080]
+    u16 *p = &ports[0]
+    u16 *third = p + 2
     print("{*third}")
 }
 ```
 
 ```output
-30
+443
 ```
 
 A pointer has no length, so the program can't check that `p + 2` is still inside the array. A slice knows its length and is checked on every index, which is why slices are the usual way to pass a run of items. A pointer can be turned into a slice when the length is known, with `p[0:n]`, for memory that came from C:
 
 ```iris run
 void main() {
-    i64[4] xs = [10, 20, 30, 40]
-    i64 *p = &xs[1]
-    s := p[0:3]
-    print("{s.len} {s[0]} {s[2]}")
+    u8[6] mac = [0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e]
+    u8 *p = &mac[3] // the last three bytes name the device
+    device := p[0:3]
+    print("{device.len} {device[0]} {device[2]}")
 }
 ```
 
 ```output
-3 20 40
+3 60 94
 ```
 
 A pointer to a pointer is written with two stars, `T **`, and is mostly found in C functions that hand back a pointer through an argument.

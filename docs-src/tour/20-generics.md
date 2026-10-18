@@ -9,25 +9,25 @@ Type parameters go in square brackets after the function's name. Inside the func
 ```iris run
 T first[T](T[] items) => items[0]
 
-T largest[T](T[] xs) {
-    T best = xs[0]
-    for x in xs {
-        if x > best {
-            best = x
+T peak[T](T[] samples) {
+    T best = samples[0]
+    for s in samples {
+        if s > best {
+            best = s
         }
     }
     return best
 }
 
 void main() {
-    print("{first([4, 5, 6])} {first(["a", "b"])}")
-    print("{largest([3, 9, 2])} {largest([1.5, 0.5])}")
+    print("{first(["1.1.1.1", "8.8.8.8"])} {first([8080, 8081])}")
+    print("{peak([12, 48, 9])} {peak([0.4, 0.93])} {peak([20ms, 1s, 250ms])}")
 }
 ```
 
 ```output
-4 a
-9 1.5
+1.1.1.1 8080
+48 0.93 1s
 ```
 
 ## Working out the types
@@ -44,13 +44,13 @@ T twice[T](T x) => x + x
 
 void main() {
     print("{zero[i64]()} [{zero[str]()}] {zero[bool]()}")
-    print("{twice(21)} {twice[f64](1.25)}")
+    print("{twice(1460)} {twice(250ms)} {twice[f64](0.25)}")
 }
 ```
 
 ```output
 0 [] false
-42 2.5
+2920 500ms 0.5
 ```
 
 ## What a generic function may do
@@ -58,17 +58,17 @@ void main() {
 A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't make sense for one of them is an error that names the call that used it:
 
 ```iris error
-T largest[T](T[] xs) {
-    T best = xs[0]
-    for x in xs {
-        if x > best {    // error: '>' can't compare str values
-            best = x
+T peak[T](T[] samples) {
+    T best = samples[0]
+    for s in samples {
+        if s > best {    // error: '>' can't compare str values
+            best = s
         }
     }
     return best
 }
 
-largest(["b", "a"])      // error: largest[str], made here, has the errors above
+peak(["web1", "web2"])   // error: peak[str], made here, has the errors above
 ```
 
 To say ahead which types a parameter takes, and give the function methods to call on it, a type parameter can have an interface as its bound (see [Interfaces](21-interfaces.html)).
@@ -86,14 +86,14 @@ struct Pair[A, B] {
 Pair[B, A] swap[A, B](Pair[A, B] p) => Pair[B, A]{first: p.second, second: p.first}
 
 void main() {
-    p := Pair[str, i64]{first: "age", second: 36}
+    p := Pair[str, u16]{first: "db.lan", second: 5432}
     q := swap(p)
-    print("{p.first}={p.second} / {q.first}={q.second}")
+    print("{p.first}:{p.second} / {q.first}:{q.second}")
 }
 ```
 
 ```output
-age=36 / 36=age
+db.lan:5432 / 5432:db.lan
 ```
 
 `List[T]` and `Map[K, V]` from the standard library are generic structs like these (see [Collections](22-collections.html)).
@@ -122,19 +122,20 @@ i64 Stack[T].len() => self.items.len
 void Stack[T].free() => self.items.free()
 
 void main() {
-    scoped Stack[str] s
-    s.push("first")
-    s.push("second")
-    top, ok := s.pop()
-    print("{top} {ok} {s.len()}")
-    scoped Stack[i64] nums
-    _, any := nums.pop()
+    // idle connections, the last one put back is used first
+    scoped Stack[str] idle
+    idle.push("10.0.0.11:5432")
+    idle.push("10.0.0.12:5432")
+    conn, ok := idle.pop()
+    print("{conn} {ok}, {idle.len()} left")
+    scoped Stack[i32] freeFds
+    _, any := freeFds.pop()
     print("{any}")
 }
 ```
 
 ```output
-second true 1
+10.0.0.12:5432 true, 1 left
 false
 ```
 

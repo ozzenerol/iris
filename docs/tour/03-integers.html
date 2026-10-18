@@ -131,8 +131,8 @@ try {
     net := ip &amp; mask
     print(<span class="s">&quot;network {net &gt;&gt; 24}.{(net &gt;&gt; 16) &amp; 0xff}.{(net &gt;&gt; 8) &amp; 0xff}.{net &amp; 0xff}&quot;</span>)
     print(<span class="s">&quot;host {ip &amp; ~mask}&quot;</span>)
-    <span class="t">u8</span> flags = <span class="n">0x02</span>          <span class="c">// SYN</span>
-    flags = flags | <span class="n">0x10</span>     <span class="c">// and ACK</span>
+    <span class="t">u8</span> flags = <span class="n">0x02</span>      <span class="c">// SYN</span>
+    flags = flags | <span class="n">0x10</span> <span class="c">// and ACK</span>
     print(<span class="s">&quot;{flags} {flags ^ 0x02} {flags &gt;&gt; 4} {1 &lt;&lt; 10} {-16 &gt;&gt; 2}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>network 192.168.10.0
@@ -145,7 +145,7 @@ next := ttl + <span class="n">10</span> <span class="c">// panic: integer overfl
 <p>The release builds don't check overflow, and the value wraps around: <code>250 + 10</code> in a <code>u8</code> gives <code>4</code>. Dividing by zero stops a debug and a <code>release-safe</code> build; in <code>release-fast</code> it is not checked, and the result can't be relied on.</p>
 <p>Arithmetic happens in the type of the values. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so the sum of two big bytes overflows. Convert first when the result needs more room:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    <span class="t">u8</span> ipHeader = <span class="n">60</span>  <span class="c">// the IHL field, in bytes</span>
+    <span class="t">u8</span> ipHeader = <span class="n">60</span> <span class="c">// the IHL field, in bytes</span>
     <span class="t">u8</span> tcpHeader = <span class="n">60</span>
     <span class="t">u8</span> options = <span class="n">200</span>
     <span class="t">i64</span> total = <span class="t">i64</span>(ipHeader) + <span class="t">i64</span>(tcpHeader) + <span class="t">i64</span>(options)
@@ -174,7 +174,6 @@ next := seq + offset <span class="c">// error: &#x27;+&#x27; can&#x27;t mix u32 
     <span class="t">u8</span> ttl = <span class="n">200</span>
     <span class="t">i64</span> limit = <span class="n">100</span>
     print(<span class="s">&quot;{ttl &gt; limit} {ttl == 200} {limit != 100}&quot;</span>)
-
 }</code></pre>
 <pre class="out"><code>true true false</code></pre>
     <nav class="pager"><a class="prev" href="02-variables.html"><span>Previous</span>Variables</a><a class="next" href="04-floating-point.html"><span>Next</span>Floating point</a></nav>

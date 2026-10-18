@@ -154,8 +154,8 @@ void main() {
     net := ip & mask
     print("network {net >> 24}.{(net >> 16) & 0xff}.{(net >> 8) & 0xff}.{net & 0xff}")
     print("host {ip & ~mask}")
-    u8 flags = 0x02          // SYN
-    flags = flags | 0x10     // and ACK
+    u8 flags = 0x02      // SYN
+    flags = flags | 0x10 // and ACK
     print("{flags} {flags ^ 0x02} {flags >> 4} {1 << 10} {-16 >> 2}")
 }
 ```
@@ -181,7 +181,7 @@ Arithmetic happens in the type of the values. Two `u8` values add up as a `u8`, 
 
 ```iris run
 void main() {
-    u8 ipHeader = 60  // the IHL field, in bytes
+    u8 ipHeader = 60 // the IHL field, in bytes
     u8 tcpHeader = 60
     u8 options = 200
     i64 total = i64(ipHeader) + i64(tcpHeader) + i64(options)
@@ -231,7 +231,6 @@ void main() {
     u8 ttl = 200
     i64 limit = 100
     print("{ttl > limit} {ttl == 200} {limit != 100}")
-
 }
 ```
 

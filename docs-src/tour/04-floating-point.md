@@ -10,10 +10,10 @@ A literal with a point or an exponent is an `f64`:
 
 ```iris run
 void main() {
-    rtt := 1.5         // milliseconds
-    link := 2e10       // bits per second
-    jitter := 2.5e-3   // seconds
-    f32 loss = 0.1     // 10% of packets
+    rtt := 1.5       // milliseconds
+    link := 2e10     // bits per second
+    jitter := 2.5e-3 // seconds
+    f32 loss = 0.1   // 10% of packets
     print("{rtt} {link} {jitter} {loss}")
 }
 ```
@@ -121,7 +121,6 @@ void main() {
     print("{math.floor(2.7)} {math.round(2.5)} {math.trunc(-2.7)}")
     print("{math.abs(-3)} {math.min(4, 9)} {math.max(4, 9)}")
 }
-
 ```
 
 ```output

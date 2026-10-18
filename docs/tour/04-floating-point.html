@@ -52,10 +52,10 @@ try {
 <p><code>f64</code> is a 64-bit floating point number, with about 15 significant digits. <code>f32</code> takes half the room and has about 7. <code>f64</code> is the one to use; <code>f32</code> is for large arrays where the room matters, and for C functions and file formats that use it.</p>
 <p>A literal with a point or an exponent is an <code>f64</code>:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    rtt := <span class="n">1.5</span>         <span class="c">// milliseconds</span>
-    link := <span class="n">2e10</span>       <span class="c">// bits per second</span>
-    jitter := <span class="n">2.5e-3</span>   <span class="c">// seconds</span>
-    <span class="t">f32</span> loss = <span class="n">0.1</span>     <span class="c">// 10% of packets</span>
+    rtt := <span class="n">1.5</span>       <span class="c">// milliseconds</span>
+    link := <span class="n">2e10</span>     <span class="c">// bits per second</span>
+    jitter := <span class="n">2.5e-3</span> <span class="c">// seconds</span>
+    <span class="t">f32</span> loss = <span class="n">0.1</span>   <span class="c">// 10% of packets</span>
     print(<span class="s">&quot;{rtt} {link} {jitter} {loss}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1.5 20000000000 0.0025 0.1</code></pre>
@@ -117,8 +117,7 @@ false true</code></pre>
     print(<span class="s">&quot;{math.log2(65536)} bits for a port, {math.pow(2, 10)} {math.sqrt(2)}&quot;</span>)
     print(<span class="s">&quot;{math.floor(2.7)} {math.round(2.5)} {math.trunc(-2.7)}&quot;</span>)
     print(<span class="s">&quot;{math.abs(-3)} {math.min(4, 9)} {math.max(4, 9)}&quot;</span>)
-}
-</code></pre>
+}</code></pre>
 <pre class="out"><code>srtt 105ms
 3 segments for 4000 bytes
 16 bits for a port, 1024 1.4142135623730951

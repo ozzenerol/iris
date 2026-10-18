@@ -182,7 +182,6 @@ void main() {
     port := 443
     scheme := if port == 443 { "https" } else { "http" }
     print("{scheme}://example.com:{port}")
-
 }
 ```
 

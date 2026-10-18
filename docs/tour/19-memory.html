@@ -54,124 +54,125 @@ try {
 <h2 id="alloc-and-free"><a href="#alloc-and-free">alloc and free</a></h2>
 <p><code>alloc(T, n)</code> gives a slice of <code>n</code> items of type <code>T</code>, all at zero. <code>free</code> takes the slice and gives the memory back:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    n := <span class="n">4</span>
-    <span class="t">f64</span>[] weights = alloc(<span class="t">f64</span>, n)
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..n {
-        weights[i] = <span class="t">f64</span>(i) * <span class="n">0.5</span>
+    size := 4KiB <span class="c">// could come from a setting</span>
+    <span class="t">u8</span>[] buf = alloc(<span class="t">u8</span>, size)
+    <span class="k">for</span> i, b <span class="k">in</span> <span class="s">&quot;PING\r\n&quot;</span> {
+        buf[i] = b
     }
-    print(<span class="s">&quot;{weights[3]} of {weights.len}&quot;</span>)
-    free(weights)
+    print(<span class="s">&quot;{buf[0:4]} in a {buf.len} byte buffer&quot;</span>)
+    free(buf)
 }</code></pre>
-<pre class="out"><code>1.5 of 4</code></pre>
+<pre class="out"><code>PING in a 4096 byte buffer</code></pre>
 <p>The slice can be passed around and stored like any other; whoever holds it last frees it, once. Memory from <code>alloc</code> is all zeros, even for a struct whose fields have defaults.</p>
 <h2 id="defer"><a href="#defer">defer</a></h2>
 <p><code>defer</code> runs a statement when the block it is in ends, however it ends: at the closing brace, at a <code>return</code>, at a <code>break</code> or <code>continue</code>, or when <code>try</code> passes an error up. It puts the cleanup right after the code that needs it:</p>
-<pre class="code run"><code><span class="t">void</span> work(<span class="t">bool</span> early) {
-    print(<span class="s">&quot;open&quot;</span>)
-    <span class="k">defer</span> print(<span class="s">&quot;close&quot;</span>)
-    <span class="k">if</span> early {
-        print(<span class="s">&quot;leaving early&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> serve(<span class="t">bool</span> badRequest) {
+    print(<span class="s">&quot;connection accepted&quot;</span>)
+    <span class="k">defer</span> print(<span class="s">&quot;connection closed&quot;</span>)
+    <span class="k">if</span> badRequest {
+        print(<span class="s">&quot;bad request, leaving early&quot;</span>)
         <span class="k">return</span>
     }
-    print(<span class="s">&quot;working&quot;</span>)
+    print(<span class="s">&quot;request answered&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    work(<span class="k">false</span>)
-    work(<span class="k">true</span>)
+    serve(<span class="k">false</span>)
+    serve(<span class="k">true</span>)
 }</code></pre>
-<pre class="out"><code>open
-working
-close
-open
-leaving early
-close</code></pre>
+<pre class="out"><code>connection accepted
+request answered
+connection closed
+connection accepted
+bad request, leaving early
+connection closed</code></pre>
 <p>Several defers run in the reverse order of their lines, so what was set up last is undone first. A defer in a loop runs at the end of each round, since the round is a block. <code>defer { ... }</code> defers a whole block:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    <span class="k">defer</span> print(<span class="s">&quot;third&quot;</span>)
+    <span class="k">defer</span> print(<span class="s">&quot;socket closed&quot;</span>)
     <span class="k">defer</span> {
-        print(<span class="s">&quot;first&quot;</span>)
-        print(<span class="s">&quot;second&quot;</span>)
+        print(<span class="s">&quot;log flushed&quot;</span>)
+        print(<span class="s">&quot;log closed&quot;</span>)
     }
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
-        <span class="k">defer</span> print(<span class="s">&quot;end of round {i}&quot;</span>)
-        print(<span class="s">&quot;round {i}&quot;</span>)
+        <span class="k">defer</span> print(<span class="s">&quot;buffer {i} freed&quot;</span>)
+        print(<span class="s">&quot;sending buffer {i}&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>round 0
-end of round 0
-round 1
-end of round 1
-first
-second
-third</code></pre>
+<pre class="out"><code>sending buffer 0
+buffer 0 freed
+sending buffer 1
+buffer 1 freed
+log flushed
+log closed
+socket closed</code></pre>
 <p>A deferred statement can't <code>return</code>, <code>break</code> or <code>continue</code> out of the block.</p>
 <h2 id="errdefer"><a href="#errdefer">errdefer</a></h2>
 <p><code>errdefer</code> runs only when the function returns an error. It undoes work that should stay done only if everything succeeds, such as a half-built value:</p>
-<pre class="code run"><code><span class="k">enum</span> SetupError { failed }
+<pre class="code run"><code><span class="k">enum</span> ListenError { inUse }
 
-!<span class="t">void</span> setup(<span class="t">bool</span> failAtEnd) {
-    print(<span class="s">&quot;make the thing&quot;</span>)
-    <span class="k">errdefer</span> print(<span class="s">&quot;undo: remove the thing&quot;</span>)
-    <span class="k">defer</span> print(<span class="s">&quot;tidy up&quot;</span>)
-    <span class="k">if</span> failAtEnd {
-        <span class="k">return</span> error(SetupError.failed, <span class="s">&quot;the last step failed&quot;</span>)
+!<span class="t">void</span> listen(<span class="t">bool</span> portTaken) {
+    print(<span class="s">&quot;socket opened&quot;</span>)
+    <span class="k">errdefer</span> print(<span class="s">&quot;socket closed again&quot;</span>)
+    <span class="k">defer</span> print(<span class="s">&quot;attempt logged&quot;</span>)
+    <span class="k">if</span> portTaken {
+        <span class="k">return</span> error(ListenError.inUse, <span class="s">&quot;port 8080 is taken&quot;</span>)
     }
-    print(<span class="s">&quot;all done&quot;</span>)
+    print(<span class="s">&quot;listening&quot;</span>)
 }
 
 <span class="t">void</span> main() {
-    setup(<span class="k">false</span>) <span class="k">catch</span> e { }
+    listen(<span class="k">false</span>) <span class="k">catch</span> e { }
     print(<span class="s">&quot;--&quot;</span>)
-    setup(<span class="k">true</span>) <span class="k">catch</span> e { }
+    listen(<span class="k">true</span>) <span class="k">catch</span> e { }
 }</code></pre>
-<pre class="out"><code>make the thing
-all done
-tidy up
+<pre class="out"><code>socket opened
+listening
+attempt logged
 --
-make the thing
-tidy up
-undo: remove the thing</code></pre>
+socket opened
+attempt logged
+socket closed again</code></pre>
 <h2 id="scoped"><a href="#scoped">scoped</a></h2>
 <p><code>scoped</code> on a declaration calls the value's <code>free</code> method when the block ends. It is the same as the declaration followed by <code>defer x.free()</code>, in one line:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> name = <span class="t">str</span>.upper(<span class="s">&quot;ada&quot;</span>)
-    <span class="k">scoped</span> List[<span class="t">i64</span>] nums
-    nums.push(<span class="n">1</span>)
-    nums.push(<span class="n">2</span>)
-    print(<span class="s">&quot;{name} {nums.len}&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> method = <span class="t">str</span>.upper(<span class="s">&quot;get&quot;</span>)
+    <span class="k">scoped</span> List[<span class="t">u16</span>] ports
+    ports.push(<span class="n">80</span>)
+    ports.push(<span class="n">443</span>)
+    print(<span class="s">&quot;{method} on {ports.len} ports&quot;</span>)
 }</code></pre>
-<pre class="out"><code>ADA 2</code></pre>
+<pre class="out"><code>GET on 2 ports</code></pre>
 <p>The type can come from the value, as with <code>:=</code>: <code>scoped t := term.table(...)</code>. Any type with a <code>free</code> method that takes nothing works with <code>scoped</code>: <code>String</code>, <code>List</code>, <code>Map</code>, the library's types, and the program's own structs.</p>
 <h2 id="who-frees-what"><a href="#who-frees-what">Who frees what</a></h2>
 <p>A few conventions say who frees each piece of memory, and the standard library follows them throughout:</p>
 <ul><li>A function that returns a <code>String</code>, a <code>List</code>, a <code>Map</code> or a struct with a <code>free</code> method gives the caller a new value, which the caller frees: <code>str.upper</code>, <code>format</code>, <code>fs.readAll</code>, <code>json.encode</code>.</li><li>A <code>str</code> or a slice that a function gives back points into something else: into its argument (<code>str.trim</code>), or into a value that still owns it (<code>list.items()</code>). It is valid as long as that is, and is never freed.</li><li>A <code>List[String]</code>, or a list of structs with <code>free</code>, holds values that must be freed too: <code>freeEach</code> frees each one, then the list.</li><li>A struct that owns memory has a <code>free</code> method that frees it all, and one that only looks at memory owned elsewhere has none.</li></ul>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="k">struct</span> User {
-    <span class="t">String</span> name
-    List[<span class="t">String</span>] tags
+<span class="c">// A peer, and the protocols it offered.</span>
+<span class="k">struct</span> Peer {
+    <span class="t">String</span> host
+    List[<span class="t">String</span>] protocols
 }
 
-<span class="t">void</span> User.free() {
-    self.name.free()
-    self.tags.freeEach()
+<span class="t">void</span> Peer.free() {
+    self.host.free()
+    self.protocols.freeEach()
 }
 
-User makeUser(<span class="t">str</span> name) {
-    User u = User{name: <span class="t">str</span>.upper(name)}
-    u.tags.push(<span class="s">&quot;new&quot;</span>.copy())
-    <span class="k">return</span> u
+Peer makePeer(<span class="t">str</span> host) {
+    Peer p = Peer{host: <span class="t">str</span>.lower(host)}
+    p.protocols.push(<span class="s">&quot;http/1.1&quot;</span>.copy())
+    <span class="k">return</span> p
 }
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> u := makeUser(<span class="s">&quot;ada&quot;</span>)
-    u.tags.push(<span class="s">&quot;admin&quot;</span>.copy())
-    print(<span class="s">&quot;{u.name} has {u.tags.len} tags&quot;</span>)
+    <span class="k">scoped</span> p := makePeer(<span class="s">&quot;API.Example.com&quot;</span>)
+    p.protocols.push(<span class="s">&quot;h2&quot;</span>.copy())
+    print(<span class="s">&quot;{p.host} offers {p.protocols.len} protocols&quot;</span>)
 }</code></pre>
-<pre class="out"><code>ADA has 2 tags</code></pre>
+<pre class="out"><code>api.example.com offers 2 protocols</code></pre>
 <p>Structs marked <code>@json</code>, <code>@env</code> or <code>@flags</code> get a <code>free</code> method made for them, which frees their Strings and slices (see <a href="27-attributes.html">Attributes</a>).</p>
 <h2 id="checks-in-debug-builds"><a href="#checks-in-debug-builds">Checks in debug builds</a></h2>
 <p>A debug build, which <code>iris run</code> makes, stops the program with a message and where it happened when it finds:</p>
