@@ -10,11 +10,11 @@ A literal with a point or an exponent is an `f64`:
 
 ```iris run
 void main() {
-    a := 1.5
-    b := 2e10
-    c := 2.5e-3
-    f32 small = 0.1
-    print("{a} {b} {c} {small}")
+    rtt := 1.5         // milliseconds
+    link := 2e10       // bits per second
+    jitter := 2.5e-3   // seconds
+    f32 loss = 0.1     // 10% of packets
+    print("{rtt} {link} {jitter} {loss}")
 }
 ```
 
@@ -46,21 +46,24 @@ void main() {
 
 ```iris run
 void main() {
-    x := 7.5
-    print("{x + 1} {x * 2} {x / 2} {x % 2}")
+    elapsed := 7.5 // seconds since the server started
+    window := 2.0  // its rate is counted per 2-second window
+    print("{elapsed / window} windows, {elapsed % window}s into the last one")
+    print("{elapsed + 1} {elapsed * 2}")
 }
 ```
 
 ```output
-8.5 15 3.75 1.5
+3.75 windows, 1.5s into the last one
+8.5 15
 ```
 
-An integer literal used with a float becomes a float, so `x + 1` needs no `1.0`. A variable of an integer type doesn't: the two types must be made the same.
+An integer literal used with a float becomes a float, so `elapsed + 1` needs no `1.0`. A variable of an integer type doesn't: the two types must be made the same.
 
 ```iris error
-i64 n = 3
-f64 x = 1.5
-print("{n * x}") // error: '*' can't mix i64 and f64; convert one side, for example f64(...)
+i64 bytes = 3000
+f64 seconds = 1.5
+print("{bytes / seconds}") // error: '/' can't mix i64 and f64; convert one side, for example f64(...)
 ```
 
 Division by zero doesn't stop the program for floats. It gives infinity, or NaN ("not a number") for `0.0 / 0.0`, as the hardware does. NaN is not equal to anything, even itself:
@@ -69,10 +72,10 @@ Division by zero doesn't stop the program for floats. It gives infinity, or NaN 
 import math
 
 void main() {
-    zero := 0.0
-    print("{1.0 / zero} {-1.0 / zero} {zero / zero}")
-    nan := zero / zero
-    print("{nan == nan} {math.isNaN(nan)}")
+    seconds := 0.0 // nothing measured yet
+    print("{1500.0 / seconds} {-1500.0 / seconds} {seconds / seconds}")
+    rate := 0.0 / seconds
+    print("{rate == rate} {math.isNaN(rate)}")
 }
 ```
 
@@ -87,16 +90,16 @@ false true
 
 ```iris run
 void main() {
-    total := 17
-    count := 4
-    average := f64(total) / f64(count)
-    print("{average}")
+    totalMs := 17
+    pings := 4
+    average := f64(totalMs) / f64(pings)
+    print("average rtt {average}ms")
     print("{i64(2.9)} {i64(-2.9)} {u8(65.7)}")
 }
 ```
 
 ```output
-4.25
+average rtt 4.25ms
 2 -2 65
 ```
 
@@ -110,18 +113,22 @@ Converting a float to an integer drops the fraction, toward zero. A value that d
 import math
 
 void main() {
-    r := 2.0
-    print("{math.pi * r * r}")
-    print("{math.sqrt(2)} {math.pow(2, 10)} {math.hypot(3, 4)}")
-    print("{math.floor(2.7)} {math.ceil(2.1)} {math.round(2.5)} {math.trunc(-2.7)}")
+    // the smoothed round trip time TCP keeps: 7/8 of the old value, 1/8 of the new sample
+    srtt := 0.875 * 100.0 + 0.125 * 140.0
+    print("srtt {srtt}ms")
+    print("{math.ceil(4000.0 / 1460)} segments for 4000 bytes")
+    print("{math.log2(65536)} bits for a port, {math.pow(2, 10)} {math.sqrt(2)}")
+    print("{math.floor(2.7)} {math.round(2.5)} {math.trunc(-2.7)}")
     print("{math.abs(-3)} {math.min(4, 9)} {math.max(4, 9)}")
 }
+
 ```
 
 ```output
-12.566370614359172
-1.4142135623730951 1024 5
-2 3 3 -2
+srtt 105ms
+3 segments for 4000 bytes
+16 bits for a port, 1024 1.4142135623730951
+2 3 -2
 3 4 9
 ```
 

@@ -31,16 +31,16 @@ iris build hello.iris
 
 ```iris run
 void main() {
-    name := "Iris"
-    year := 2026
-    print("hello from {name}, in {year}")
-    print("2 + 3 is {2 + 3}")
+    host := "db.internal"
+    port := 5432
+    print("connecting to {host}:{port}")
+    print("{port + 1} is the next port")
 }
 ```
 
 ```output
-hello from Iris, in 2026
-2 + 3 is 5
+connecting to db.internal:5432
+5433 is the next port
 ```
 
 ## main
@@ -59,13 +59,13 @@ The third one lets `main` use `try`, which passes an error up instead of handlin
 import str
 
 !void main() {
-    n := try str.parseInt("42")
-    print("n is {n}")
+    port := try str.parseInt("8080")
+    print("listening on {port}")
 }
 ```
 
 ```output
-n is 42
+listening on 8080
 ```
 
 The [Errors](18-errors.html) chapter covers errors in full.
@@ -88,35 +88,35 @@ A statement ends at the end of its line. There are no semicolons.
 
 ```iris run
 void main() {
-    a := 6
-    b := 7
-    print("{a * b}")
+    packets := 3
+    mtu := 1500
+    print("{packets * mtu} bytes at most")
 }
 ```
 
 ```output
-42
+4500 bytes at most
 ```
 
 A long statement goes on to the next line when the line ends with an operator or a comma, or while a parenthesis or a bracket is still open:
 
 ```iris run
 void main() {
-    price := 120
-    count := 3
-    total := price * count +
-        15 -
-        20
-    print("total {total}")
-    words := ["one",
-        "two", "three"]
-    print("{words.len} words")
+    payload := 1200
+    frames := 3
+    total := payload * frames +
+        14 * frames +
+        20 * frames
+    print("{total} bytes on the wire")
+    hosts := ["10.0.0.1",
+        "10.0.0.2", "10.0.0.3"]
+    print("{hosts.len} hosts")
 }
 ```
 
 ```output
-total 355
-3 words
+3702 bytes on the wire
+3 hosts
 ```
 
 ## Blocks
@@ -125,21 +125,21 @@ A block is a list of statements in braces. `if`, `for`, functions and the other 
 
 ```iris run
 void main() {
-    n := 12
-    if n > 10 {
-        print("big")
+    open := 120
+    if open > 100 {
+        print("too many connections")
     }
-    for i in 0..3 {
-        print("round {i}")
+    for attempt in 0..3 {
+        print("connecting, attempt {attempt}")
     }
 }
 ```
 
 ```output
-big
-round 0
-round 1
-round 2
+too many connections
+connecting, attempt 0
+connecting, attempt 1
+connecting, attempt 2
 ```
 
 The opening brace goes on the same line as the statement it belongs to.
@@ -151,22 +151,22 @@ The opening brace goes on the same line as the statement it belongs to.
 ```iris run
 void main() {
     // this line is a comment
-    x := 1 // and so is the end of this one
+    retries := 5 // and so is the end of this one
     /* this comment
        spans two lines */
-    print("{x}")
+    print("{retries}")
 }
 ```
 
 ```output
-1
+5
 ```
 
 A comment right above a declaration describes it. `iris doc` shows it, and so does an editor when the pointer rests on the name:
 
 ```iris
-// The larger of a and b.
-i64 max(i64 a, i64 b) => if a > b { a } else { b }
+// How long to wait before attempt n, doubling from 100ms.
+Duration backoff(i64 n) => 100ms * (1 << n)
 ```
 
 ## Names

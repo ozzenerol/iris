@@ -8,18 +8,18 @@ A `bool` is `true` or `false`. Comparisons give one, and conditions take one:
 
 ```iris run
 void main() {
-    age := 20
-    adult := age >= 18
-    print("{adult} {age == 21} {age != 21}")
-    if adult {
-        print("can vote")
+    status := 503
+    failed := status >= 500
+    print("{failed} {status == 200} {status != 200}")
+    if failed {
+        print("retrying")
     }
 }
 ```
 
 ```output
 true false true
-can vote
+retrying
 ```
 
 A condition must be a `bool`. A number, a pointer or a string isn't one, so `if count` doesn't compile; the comparison is written out: `if count != 0`, `if p != null`, `if name.len > 0`.
@@ -29,46 +29,46 @@ A condition must be a `bool`. A number, a pointer or a string isn't one, so `if 
 `&&` is true when both sides are, `||` when at least one is, and `!` turns a `bool` around. The right side of `&&` and `||` is only worked out when it is needed:
 
 ```iris run
-bool check(str what, bool value) {
-    print("checking {what}")
-    return value
+bool probe(str host, bool up) {
+    print("probing {host}")
+    return up
 }
 
 void main() {
-    if check("a", false) && check("b", true) {
-        print("both")
+    if probe("primary", false) && probe("replica", true) {
+        print("both databases are up")
     }
-    if check("c", true) || check("d", true) {
-        print("one")
+    if probe("dns1", true) || probe("dns2", true) {
+        print("a resolver is up")
     }
     print("{!true} {!(1 > 2)}")
 }
 ```
 
 ```output
-checking a
-checking c
-one
+probing primary
+probing dns1
+a resolver is up
 false true
 ```
 
-This makes conditions like `p != null && p.len > 0` safe: the second part isn't reached when the first is false.
+This makes conditions like `conn != null && conn.open` safe: the second part isn't reached when the first is false.
 
 They can also be written as words: `and`, `or` and `not`. `and` and `or` are the same as `&&` and `||`. `not` takes everything up to the next `and` or `or`, so `not a == b` is `!(a == b)`, where `!` takes only the value right after it:
 
 ```iris run
 void main() {
-    done := false
-    n := 3
-    if not done and n > 0 {
-        print("working")
+    closed := false
+    pending := 3
+    if not closed and pending > 0 {
+        print("flushing {pending} writes")
     }
-    print("{not n == 4} {done or n == 3}")
+    print("{not pending == 4} {closed or pending == 3}")
 }
 ```
 
 ```output
-working
+flushing 3 writes
 true true
 ```
 
@@ -86,17 +86,17 @@ Which to write is a matter of taste; a project usually picks one. `not` can't go
 Numbers compare by value. `str` and `String` compare by their bytes, `==` and `!=` only. Structs compare field by field with `==` and `!=`, plain enums by value, and pointers by address:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Addr {
+    u32 ip
+    u16 port
 }
 
-enum Color { red, green }
+enum Proto { tcp, udp }
 
 void main() {
-    a := Point{x: 1, y: 2}
-    b := Point{x: 1, y: 2}
-    print("{a == b} {"iris" == "iris"} {Color.red != Color.green}")
+    a := Addr{ip: 0x7f000001, port: 8080}
+    b := Addr{ip: 0x7f000001, port: 8080}
+    print("{a == b} {"GET" == "GET"} {Proto.tcp != Proto.udp}")
     p := &a
     q := &b
     print("{p == q} {p == &a}")
@@ -111,19 +111,19 @@ false true
 `is` can be written for `==`, and `is not` for `!=`. They compare the same way, and the comparison is by value: `a is b` on two structs compares their fields, as `==` does, not whether they are the same variable.
 
 ```iris run
-enum Color { red, green }
+enum Proto { tcp, udp }
 
 void main() {
-    n := 3
-    c := Color.red
-    print("{n is 3} {c is not .green} {"iris" is "iris"}")
-    print("small") if n is not 10
+    status := 404
+    p := Proto.tcp
+    print("{status is 404} {p is not .udp} {"GET" is "GET"}")
+    print("not found") if status is 404
 }
 ```
 
 ```output
 true true true
-small
+not found
 ```
 
 ## All the operators
@@ -159,8 +159,9 @@ Operators on the same level go from left to right. Parentheses group anything di
 void main() {
     print("{2 + 3 * 4} {(2 + 3) * 4}")
     print("{10 - 4 - 3} {2 * 3 % 4}")
-    x := 6
-    print("{x & 1 == 0} {x > 1 && x < 10 || x == 100}")
+    flags := 0x12
+    port := 8080
+    print("{flags & 0x02 != 0} {port > 1023 && port < 49152 || port == 80}")
 }
 ```
 
@@ -170,7 +171,7 @@ void main() {
 true true
 ```
 
-`x & 1 == 0` reads as `(x & 1) == 0`, since `&` binds more tightly than `==`: it tests whether x is even.
+`flags & 0x02 != 0` reads as `(flags & 0x02) != 0`, since `&` binds more tightly than `!=`: it tests whether the SYN bit is set.
 
 ## Conditions as values
 
@@ -178,12 +179,13 @@ true true
 
 ```iris run
 void main() {
-    n := 7
-    kind := if n % 2 == 0 { "even" } else { "odd" }
-    print("{n} is {kind}")
+    port := 443
+    scheme := if port == 443 { "https" } else { "http" }
+    print("{scheme}://example.com:{port}")
+
 }
 ```
 
 ```output
-7 is odd
+https://example.com:443
 ```

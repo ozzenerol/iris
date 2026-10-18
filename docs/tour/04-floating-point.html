@@ -52,11 +52,11 @@ try {
 <p><code>f64</code> is a 64-bit floating point number, with about 15 significant digits. <code>f32</code> takes half the room and has about 7. <code>f64</code> is the one to use; <code>f32</code> is for large arrays where the room matters, and for C functions and file formats that use it.</p>
 <p>A literal with a point or an exponent is an <code>f64</code>:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    a := <span class="n">1.5</span>
-    b := <span class="n">2e10</span>
-    c := <span class="n">2.5e-3</span>
-    <span class="t">f32</span> small = <span class="n">0.1</span>
-    print(<span class="s">&quot;{a} {b} {c} {small}&quot;</span>)
+    rtt := <span class="n">1.5</span>         <span class="c">// milliseconds</span>
+    link := <span class="n">2e10</span>       <span class="c">// bits per second</span>
+    jitter := <span class="n">2.5e-3</span>   <span class="c">// seconds</span>
+    <span class="t">f32</span> loss = <span class="n">0.1</span>     <span class="c">// 10% of packets</span>
+    print(<span class="s">&quot;{rtt} {link} {jitter} {loss}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1.5 20000000000 0.0025 0.1</code></pre>
 <p>There must be a digit on each side of the point: <code>0.5</code>, not <code>.5</code>, and <code>2.0</code>, not <code>2.</code>.</p>
@@ -71,35 +71,38 @@ try {
 <h2 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h2>
 <p><code>+</code>, <code>-</code>, <code>*</code> and <code>/</code> work as on integers. <code>%</code> gives what is left after dividing, with a fraction:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    x := <span class="n">7.5</span>
-    print(<span class="s">&quot;{x + 1} {x * 2} {x / 2} {x % 2}&quot;</span>)
+    elapsed := <span class="n">7.5</span> <span class="c">// seconds since the server started</span>
+    window := <span class="n">2.0</span>  <span class="c">// its rate is counted per 2-second window</span>
+    print(<span class="s">&quot;{elapsed / window} windows, {elapsed % window}s into the last one&quot;</span>)
+    print(<span class="s">&quot;{elapsed + 1} {elapsed * 2}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>8.5 15 3.75 1.5</code></pre>
-<p>An integer literal used with a float becomes a float, so <code>x + 1</code> needs no <code>1.0</code>. A variable of an integer type doesn't: the two types must be made the same.</p>
-<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> n = <span class="n">3</span>
-<span class="t">f64</span> x = <span class="n">1.5</span>
-print(<span class="s">&quot;{n * x}&quot;</span>) <span class="c">// error: &#x27;*&#x27; can&#x27;t mix i64 and f64; convert one side, for example f64(...)</span></code></pre>
+<pre class="out"><code>3.75 windows, 1.5s into the last one
+8.5 15</code></pre>
+<p>An integer literal used with a float becomes a float, so <code>elapsed + 1</code> needs no <code>1.0</code>. A variable of an integer type doesn't: the two types must be made the same.</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> bytes = <span class="n">3000</span>
+<span class="t">f64</span> seconds = <span class="n">1.5</span>
+print(<span class="s">&quot;{bytes / seconds}&quot;</span>) <span class="c">// error: &#x27;/&#x27; can&#x27;t mix i64 and f64; convert one side, for example f64(...)</span></code></pre>
 <p>Division by zero doesn't stop the program for floats. It gives infinity, or NaN ("not a number") for <code>0.0 / 0.0</code>, as the hardware does. NaN is not equal to anything, even itself:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> main() {
-    zero := <span class="n">0.0</span>
-    print(<span class="s">&quot;{1.0 / zero} {-1.0 / zero} {zero / zero}&quot;</span>)
-    nan := zero / zero
-    print(<span class="s">&quot;{nan == nan} {math.isNaN(nan)}&quot;</span>)
+    seconds := <span class="n">0.0</span> <span class="c">// nothing measured yet</span>
+    print(<span class="s">&quot;{1500.0 / seconds} {-1500.0 / seconds} {seconds / seconds}&quot;</span>)
+    rate := <span class="n">0.0</span> / seconds
+    print(<span class="s">&quot;{rate == rate} {math.isNaN(rate)}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>inf -inf nan
 false true</code></pre>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
 <p><code>f32</code> converts to <code>f64</code> on its own. Integers and floats convert only when it is written out, with the type's name:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    total := <span class="n">17</span>
-    count := <span class="n">4</span>
-    average := <span class="t">f64</span>(total) / <span class="t">f64</span>(count)
-    print(<span class="s">&quot;{average}&quot;</span>)
+    totalMs := <span class="n">17</span>
+    pings := <span class="n">4</span>
+    average := <span class="t">f64</span>(totalMs) / <span class="t">f64</span>(pings)
+    print(<span class="s">&quot;average rtt {average}ms&quot;</span>)
     print(<span class="s">&quot;{i64(2.9)} {i64(-2.9)} {u8(65.7)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>4.25
+<pre class="out"><code>average rtt 4.25ms
 2 -2 65</code></pre>
 <p>Converting a float to an integer drops the fraction, toward zero. A value that doesn't fit, infinity and NaN stop a debug build with a message, since there is no integer for them.</p>
 <h2 id="the-math-module"><a href="#the-math-module">The math module</a></h2>
@@ -107,15 +110,19 @@ false true</code></pre>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> main() {
-    r := <span class="n">2.0</span>
-    print(<span class="s">&quot;{math.pi * r * r}&quot;</span>)
-    print(<span class="s">&quot;{math.sqrt(2)} {math.pow(2, 10)} {math.hypot(3, 4)}&quot;</span>)
-    print(<span class="s">&quot;{math.floor(2.7)} {math.ceil(2.1)} {math.round(2.5)} {math.trunc(-2.7)}&quot;</span>)
+    <span class="c">// the smoothed round trip time TCP keeps: 7/8 of the old value, 1/8 of the new sample</span>
+    srtt := <span class="n">0.875</span> * <span class="n">100.0</span> + <span class="n">0.125</span> * <span class="n">140.0</span>
+    print(<span class="s">&quot;srtt {srtt}ms&quot;</span>)
+    print(<span class="s">&quot;{math.ceil(4000.0 / 1460)} segments for 4000 bytes&quot;</span>)
+    print(<span class="s">&quot;{math.log2(65536)} bits for a port, {math.pow(2, 10)} {math.sqrt(2)}&quot;</span>)
+    print(<span class="s">&quot;{math.floor(2.7)} {math.round(2.5)} {math.trunc(-2.7)}&quot;</span>)
     print(<span class="s">&quot;{math.abs(-3)} {math.min(4, 9)} {math.max(4, 9)}&quot;</span>)
-}</code></pre>
-<pre class="out"><code>12.566370614359172
-1.4142135623730951 1024 5
-2 3 3 -2
+}
+</code></pre>
+<pre class="out"><code>srtt 105ms
+3 segments for 4000 bytes
+16 bits for a port, 1024 1.4142135623730951
+2 3 -2
 3 4 9</code></pre>
 <p>The <a href="../std/index.html#math">math</a> page of the library lists them all. <code>str.parseFloat</code> reads a float from text (see <a href="06-text.html">Text</a>).</p>
     <nav class="pager"><a class="prev" href="03-integers.html"><span>Previous</span>Integers</a><a class="next" href="05-booleans-and-operators.html"><span>Next</span>Booleans and operators</a></nav>

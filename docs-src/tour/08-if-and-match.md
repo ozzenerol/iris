@@ -7,30 +7,31 @@ Choosing what runs: `if` for conditions, `match` for picking one of many values.
 `if` runs its block when its condition is true. `else if` adds more conditions, tried in order, and `else` runs when none was true:
 
 ```iris run
-str describe(i64 n) {
-    if n > 100 {
-        return "big"
-    } else if n > 10 {
-        return "medium"
-    } else if n > 0 {
-        return "small"
+// How a ping's round trip time reads, in milliseconds; 0 is no reply.
+str health(i64 ms) {
+    if ms > 500 {
+        return "very slow"
+    } else if ms > 100 {
+        return "slow"
+    } else if ms > 0 {
+        return "ok"
     } else {
-        return "nothing"
+        return "no reply"
     }
 }
 
 void main() {
-    for n in [500, 50, 5, 0] {
-        print("{n}: {describe(n)}")
+    for ms in [800, 150, 12, 0] {
+        print("{ms}ms: {health(ms)}")
     }
 }
 ```
 
 ```output
-500: big
-50: medium
-5: small
-0: nothing
+800ms: very slow
+150ms: slow
+12ms: ok
+0ms: no reply
 ```
 
 The condition is a `bool` and needs no parentheses. The block always has braces. `else` goes on the line of the closing brace before it, or on the next line.
@@ -40,30 +41,29 @@ The condition is a `bool` and needs no parentheses. The block always has braces.
 A short statement can have its condition after it, on the same line: the statement runs only when the condition is true. This suits the checks at the top of a function and in loops:
 
 ```iris run
-i64 sign(i64 n) {
-    return -1 if n < 0
-    return 0 if n == 0
-    return 1
+Duration retryDelay(i64 attempt) {
+    return 0s if attempt == 0
+    return 30s if attempt > 8
+    return 100ms * (1 << attempt)
 }
 
 void main() {
     verbose := true
-    print("{sign(-5)} {sign(0)} {sign(9)}")
-    print("checking") if verbose
-    for i in 0..10 {
-        continue if i % 2 == 0
-        break if i > 6
-        print("odd {i}")
+    print("{retryDelay(0)} {retryDelay(3)} {retryDelay(9)}")
+    print("scanning") if verbose
+    for port in [22, 80, 3000, 8080, 0, 9090] {
+        break if port == 0      // the end of the list
+        continue if port < 1024 // needs root
+        print("trying {port}")
     }
 }
 ```
 
 ```output
--1 0 1
-checking
-odd 1
-odd 3
-odd 5
+0s 800ms 30s
+scanning
+trying 3000
+trying 8080
 ```
 
 `stmt if cond` is the same as `if cond { stmt }`. It works after `return`, `break`, `continue`, an assignment, a call or `spawn`, and takes only a condition. With an `else` after the condition it is a value instead (see below). A declaration can't have one, since the name would only exist when the condition held, and neither can `defer`.
@@ -76,34 +76,34 @@ odd 5
 
 ```iris run
 void main() {
-    temperature := 31
-    feel := if temperature > 30 { "hot" } else if temperature > 15 { "mild" } else { "cold" }
-    print(feel)
+    load := 0.93
+    level := if load > 0.9 { "critical" } else if load > 0.7 { "high" } else { "normal" }
+    print("load {load}: {level}")
 }
 ```
 
 ```output
-hot
+load 0.93: critical
 ```
 
 A branch can hold statements before its value. The value is the last line of the branch:
 
 ```iris run
 void main() {
-    items := 7
-    perPage := 3
-    pages := if items > 0 {
-        full := items / perPage
-        full + (if items % perPage > 0 { 1 } else { 0 })
+    size := 4000
+    mss := 1460
+    segments := if size > 0 {
+        full := size / mss
+        full + (if size % mss > 0 { 1 } else { 0 })
     } else {
         0
     }
-    print("{pages} pages")
+    print("{segments} segments")
 }
 ```
 
 ```output
-3 pages
+3 segments
 ```
 
 All the branches must give values of the same type.
@@ -111,21 +111,21 @@ All the branches must give values of the same type.
 A short choice of a value can be written on one line as `a if cond else b`: `a` when the condition is true, `b` when it isn't. It is the same as `if cond { a } else { b }`, and can be chained:
 
 ```iris run
-str size(i64 n) => "small" if n < 10 else "medium" if n < 100 else "large"
+str sizeClass(i64 bytes) => "small" if bytes < 1KiB else "medium" if bytes < 1MiB else "large"
 
-bool even(i64 n) {
-    return true if n % 2 == 0 else false
+bool retryable(i64 status) {
+    return true if status >= 500 else false
 }
 
 void main() {
-    n := 42
-    half := n / 2 if even(n) else n
-    print("{size(n)} {half} {"even" if even(n) else "odd"}")
+    status := 503
+    wait := 2s if retryable(status) else 0s
+    print("{sizeClass(4096)} {wait} {"retry" if retryable(status) else "give up"}")
 }
 ```
 
 ```output
-medium 21 even
+medium 2s retry
 ```
 
 Without the `else`, `return x if cond` is a condition on the statement: it returns only when the condition holds.
@@ -135,27 +135,27 @@ Without the `else`, `return x if cond` is a condition on the statement: it retur
 `match` compares one value against a list of arms and runs the first one that fits. Only that arm runs; there is no falling through into the next one:
 
 ```iris run
-void run(str command) {
+void reply(str command) {
     match command {
-        "start" => print("starting")
-        "stop", "quit" => print("stopping")
+        "PING" => print("+PONG")
+        "QUIT", "EXIT" => print("+OK bye")
         "" => {}
-        _ => print("unknown command: {command}")
+        _ => print("-ERR unknown command '{command}'")
     }
 }
 
 void main() {
-    run("start")
-    run("quit")
-    run("")
-    run("dance")
+    reply("PING")
+    reply("QUIT")
+    reply("")
+    reply("FLUSH")
 }
 ```
 
 ```output
-starting
-stopping
-unknown command: dance
++PONG
++OK bye
+-ERR unknown command 'FLUSH'
 ```
 
 An arm is the values it takes, `=>`, and what it does: one statement, or a block in braces. `{}` is an arm that does nothing. An arm can list several values, separated by commas. `_` takes every value the arms above it didn't.
@@ -167,11 +167,11 @@ An arm is the values it takes, `=>`, and what it does: one statement, or a block
 An arm can be a range, `low..high`, which takes every value from `low` to `high` with both ends included:
 
 ```iris run
-str grade(i64 score) => match score {
-    90..100 => "A"
-    80..89 => "B"
-    70..79 => "C"
-    _ => "F"
+str portKind(i64 port) => match port {
+    0..1023 => "system"
+    1024..49151 => "registered"
+    49152..65535 => "dynamic"
+    _ => "invalid"
 }
 
 str kind(u8 c) => match c {
@@ -182,19 +182,20 @@ str kind(u8 c) => match c {
 }
 
 void main() {
-    print("{grade(95)} {grade(85)} {grade(42)}")
+    print("{portKind(22)} {portKind(8080)} {portKind(51000)} {portKind(70000)}")
     print("{kind('q')} {kind('7')} {kind(' ')} {kind('#')}")
 }
 ```
 
 ```output
-A B F
+system registered dynamic invalid
 letter digit space other
 ```
 
 ## match as a value
 
-Like `if`, `match` can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a `match` reads well with `=>`, as `grade` above shows:
+Like `if`, `match` can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a `match` reads well with `=>`, as `portKind` above shows:
+
 
 ```iris run
 void main() {

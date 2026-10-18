@@ -8,17 +8,17 @@ A name or an expression in braces inside a string literal is replaced by its val
 
 ```iris run
 void main() {
-    name := "Ada"
-    items := 3
-    price := 4.5
-    print("{name} bought {items} things for {f64(items) * price}")
-    print("{items > 2} {items * 2 + 1}")
+    host := "10.0.0.5"
+    sent := 3
+    rtt := 4.5
+    print("{sent} pings to {host}, {f64(sent) * rtt}ms in all")
+    print("{sent > 2} {sent * 64} bytes")
 }
 ```
 
 ```output
-Ada bought 3 things for 13.5
-true 7
+3 pings to 10.0.0.5, 13.5ms in all
+true 192 bytes
 ```
 
 The compiler checks every value in braces, with its type, as it checks any other expression. A brace on its own is written twice, `{{` and `}}`, and a raw string (`r"..."`) takes braces as they are.
@@ -34,24 +34,24 @@ The compiler checks every value in braces, with its type, as it checks any other
 | `Duration` | in units: `1.5s`, `2m0s`, `250ms` |
 | a plain enum | the value's name: `warn` |
 | a flags enum | the names that are set: `read\|write` |
-| an enum with data | the value's name: `Circle` |
+| an enum with data | the value's name: `Closed` |
 | an error's code | the enum and the value: `NetError.timeout` |
 | a struct with `String format()` | what the method gives |
 
 ```iris run
-enum Level { debug, info, warn }
+enum State { connecting, open, closed }
 
 enum Perm flags { read, write, exec }
 
 void main() {
-    Level l = .warn
+    State s = .open
     Perm p = .read | .write
-    print("{l} {p} {1500ms} {0.25} {false}")
+    print("{s} {p} {1500ms} {0.25} {false}")
 }
 ```
 
 ```output
-warn read|write 1.5s 0.25 false
+open read|write 1.5s 0.25 false
 ```
 
 A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.
@@ -61,31 +61,31 @@ A pointer, an array or a slice of anything but bytes can't be put into text as i
 A struct with a method `String format()` can be put into text. The method gives the text, and the `String` it returns is freed after the statement:
 
 ```iris run
-struct Point {
-    i64 x
-    i64 y
+struct Ip4 {
+    u8[4] b
 }
 
-String Point.format() => format("({self.x}, {self.y})")
+String Ip4.format() => format("{self.b[0]}.{self.b[1]}.{self.b[2]}.{self.b[3]}")
 
-struct Line {
-    Point from
-    Point to
+struct Route {
+    Ip4 dest
+    u8 prefix
+    Ip4 via
 }
 
-String Line.format() => format("{self.from} to {self.to}")
+String Route.format() => format("{self.dest}/{self.prefix} via {self.via}")
 
 void main() {
-    a := Point{x: 1, y: 2}
-    line := Line{from: a, to: Point{x: 4, y: 6}}
-    print("start {a}")
-    print("line {line}")
+    gw := Ip4{b: [192, 168, 1, 1]}
+    r := Route{dest: Ip4{b: [10, 0, 0, 0]}, prefix: 8, via: gw}
+    print("gateway {gw}")
+    print("route {r}")
 }
 ```
 
 ```output
-start (1, 2)
-line (1, 2) to (4, 6)
+gateway 192.168.1.1
+route 10.0.0.0/8 via 192.168.1.1
 ```
 
 ## format
@@ -116,20 +116,20 @@ listening on localhost:8080
 Text with values can be given to any function that takes a `str`. It is built in a temporary `String`, which is freed when the statement ends:
 
 ```iris run
-void shout(str s) {
-    print("{s}!")
+void logLine(str s) {
+    print("[edge-1] {s}")
 }
 
 void main() {
-    n := 3
-    shout("there are {n} of them")
-    shout("plain text")
+    open := 3
+    logLine("{open} connections open")
+    logLine("plain text")
 }
 ```
 
 ```output
-there are 3 of them!
-plain text!
+[edge-1] 3 connections open
+[edge-1] plain text
 ```
 
 A function that returns a new `String`, given straight to a function that takes a `str`, is freed after the statement too:
@@ -138,14 +138,14 @@ A function that returns a new `String`, given straight to a function that takes 
 import str
 
 void main() {
-    print(str.upper("loud"))
-    print(str.repeat("-", 10))
+    print(str.upper("http/1.1 200 ok"))
+    print(str.repeat("-", 15))
 }
 ```
 
 ```output
-LOUD
-----------
+HTTP/1.1 200 OK
+---------------
 ```
 
 Anywhere else, text with values needs `format`, and a `String` from a call needs a variable. The temporary would otherwise be gone before it is used.
@@ -166,18 +166,27 @@ t := str.trim(padded)
 `String.append` adds to the end of a `String`. With `format` for the parts, longer text is built without copying it again and again:
 
 ```iris run
+import io
+
 void main() {
-    scoped String out = "items:".copy()
-    for i in 1..4 {
-        scoped String part = format(" #{i}")
-        out.append(part)
+    scoped String out = "GET / HTTP/1.1\n".copy()
+
+    headers := ["Host", "Accept", "Connection"]
+    values := ["example.com", "*/*", "close"]
+    for i, h in headers {
+        scoped String line = format("{h}: {values[i]}\n")
+        out.append(line)
     }
-    print(out)
+    io.write(out)
 }
 ```
 
 ```output
-items: #1 #2 #3
+GET / HTTP/1.1
+Host: example.com
+Accept: */*
+Connection: close
 ```
+
 
 `str.join` puts a list of parts together with a separator between them (see [Text](06-text.html)).

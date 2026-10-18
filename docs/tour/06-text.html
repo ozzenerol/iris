@@ -51,165 +51,168 @@ try {
 <h2 id="str"><a href="#str">str</a></h2>
 <p>A <code>str</code> is a slice of bytes: a pointer to some text and its length. A string literal is a <code>str</code> that points into the program itself:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    greeting := <span class="s">&quot;hello, world&quot;</span>
-    print(<span class="s">&quot;{greeting.len} bytes&quot;</span>)
-    print(<span class="s">&quot;first byte {greeting[0]}, last {greeting[greeting.len - 1]}&quot;</span>)
+    line := <span class="s">&quot;GET /index.html HTTP/1.1&quot;</span>
+    print(<span class="s">&quot;{line.len} bytes&quot;</span>)
+    print(<span class="s">&quot;first byte {line[0]}, last {line[line.len - 1]}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>12 bytes
-first byte 104, last 100</code></pre>
-<p>Indexing gives a byte, a <code>u8</code>. Every index is checked, so <code>greeting[12]</code> stops a debug build with a message that says where.</p>
+<pre class="out"><code>24 bytes
+first byte 71, last 49</code></pre>
+<p>Indexing gives a byte, a <code>u8</code>. Every index is checked, so <code>line[24]</code> stops a debug build with a message that says where.</p>
 <p>A slice of a <code>str</code>, <code>s[from:to]</code>, is another <code>str</code> that points into the same text. Nothing is copied, so slicing costs nothing whatever the length. Either end can be left out:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    s := <span class="s">&quot;hello, world&quot;</span>
-    print(<span class="s">&quot;[{s[0:5]}] [{s[7:]}] [{s[:5]}] [{s[3:3]}]&quot;</span>)
+    line := <span class="s">&quot;GET /index.html HTTP/1.1&quot;</span>
+    print(<span class="s">&quot;[{line[0:3]}] [{line[4:15]}] [{line[16:]}] [{line[:3]}] [{line[3:3]}]&quot;</span>)
 }</code></pre>
-<pre class="out"><code>[hello] [world] [hello] []</code></pre>
+<pre class="out"><code>[GET] [/index.html] [HTTP/1.1] [GET] []</code></pre>
 <p><code>==</code> and <code>!=</code> compare the bytes of two strings. <code>str.compare</code> puts them in order, giving a number below zero, zero or above zero:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    a := <span class="s">&quot;apple&quot;</span>
-    print(<span class="s">&quot;{a == &quot;</span>apple<span class="s">&quot;} {a != &quot;</span>pear<span class="s">&quot;}&quot;</span>)
-    print(<span class="s">&quot;{str.compare(&quot;</span>apple<span class="s">&quot;, &quot;</span>banana<span class="s">&quot;)} {str.compare(&quot;</span>b<span class="s">&quot;, &quot;</span>a<span class="s">&quot;)} {str.compare(&quot;</span>x<span class="s">&quot;, &quot;</span>x<span class="s">&quot;)}&quot;</span>)
+    method := <span class="s">&quot;POST&quot;</span>
+    print(<span class="s">&quot;{method == &quot;</span>POST<span class="s">&quot;} {method != &quot;</span>GET<span class="s">&quot;}&quot;</span>)
+    print(<span class="s">&quot;{str.compare(&quot;</span>api.lan<span class="s">&quot;, &quot;</span>db.lan<span class="s">&quot;)} {str.compare(&quot;</span>web2<span class="s">&quot;, &quot;</span>web1<span class="s">&quot;)} {str.compare(&quot;</span>x<span class="s">&quot;, &quot;</span>x<span class="s">&quot;)}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true true
--1 1 0</code></pre>
+-3 1 0</code></pre>
 <h2 id="utf-8"><a href="#utf-8">UTF-8</a></h2>
 <p>Text is stored as UTF-8. Letters outside ASCII take more than one byte, so <code>len</code> counts bytes, not letters, and an index can land inside a letter:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    word := <span class="s">&quot;café&quot;</span>
-    print(<span class="s">&quot;{word.len} bytes&quot;</span>)
-    <span class="k">for</span> i, b <span class="k">in</span> word {
+    city := <span class="s">&quot;Köln&quot;</span> <span class="c">// from an X-City header</span>
+    print(<span class="s">&quot;{city.len} bytes&quot;</span>)
+    <span class="k">for</span> i, b <span class="k">in</span> city {
         print(<span class="s">&quot;{i}: {b}&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>5 bytes
-0: 99
-1: 97
-2: 102
-3: 195
-4: 169</code></pre>
-<p><code>é</code> is the two bytes 195 and 169. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for <code>&quot;é&quot;</code> finds it, since no letter's bytes appear inside another's.</p>
+0: 75
+1: 195
+2: 182
+3: 108
+4: 110</code></pre>
+<p><code>ö</code> is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for <code>&quot;ö&quot;</code> finds it, since no letter's bytes appear inside another's.</p>
 <h2 id="string"><a href="#string">String</a></h2>
 <p>A <code>String</code> owns its bytes. It can grow, and it must be freed when it is no longer needed. <code>.copy()</code> makes a <code>String</code> from a <code>str</code>, and <code>append</code> adds to the end:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    <span class="t">String</span> s = <span class="s">&quot;hello&quot;</span>.copy()
-    s.append(<span class="s">&quot;, &quot;</span>)
-    s.append(<span class="s">&quot;world&quot;</span>)
-    print(s)
-    print(<span class="s">&quot;{s.len} bytes&quot;</span>)
-    s.free()
+    <span class="t">String</span> req = <span class="s">&quot;GET &quot;</span>.copy()
+    req.append(<span class="s">&quot;/api/users&quot;</span>)
+    req.append(<span class="s">&quot; HTTP/1.1&quot;</span>)
+    print(req)
+    print(<span class="s">&quot;{req.len} bytes&quot;</span>)
+    req.free()
 }</code></pre>
-<pre class="out"><code>hello, world
-12 bytes</code></pre>
+<pre class="out"><code>GET /api/users HTTP/1.1
+23 bytes</code></pre>
 <p><code>scoped</code> frees it when the block ends, so the <code>free</code> can't be forgotten, whatever way the block is left:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> path = <span class="s">&quot;/usr&quot;</span>.copy()
-    path.append(<span class="s">&quot;/local&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> path = <span class="s">&quot;/var/log&quot;</span>.copy()
+    path.append(<span class="s">&quot;/nginx&quot;</span>)
     print(path)
 }</code></pre>
-<pre class="out"><code>/usr/local</code></pre>
+<pre class="out"><code>/var/log/nginx</code></pre>
 <p>A <code>String</code> can be given wherever a <code>str</code> is wanted: to a function, to <code>==</code>, to slicing. The <code>str</code> points into the <code>String</code>'s bytes, so it is valid while the <code>String</code> is alive and doesn't grow.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> name = <span class="s">&quot;ada lovelace&quot;</span>.copy()
-    <span class="t">str</span> first = name[<span class="n">0</span>:<span class="n">3</span>]
-    print(<span class="s">&quot;{first} {str.contains(name, &quot;</span>love<span class="s">&quot;)} {name == &quot;</span>ada lovelace<span class="s">&quot;}&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="s">&quot;https://api.example.com/v1&quot;</span>.copy()
+    <span class="t">str</span> scheme = url[<span class="n">0</span>:<span class="n">5</span>]
+    print(<span class="s">&quot;{scheme} {str.contains(url, &quot;</span>example<span class="s">&quot;)} {url == &quot;</span>https:<span class="c">//api.example.com/v1&quot;}&quot;)</span>
 }</code></pre>
-<pre class="out"><code>ada true true</code></pre>
+<pre class="out"><code>https true true</code></pre>
 <p>A function that gives back a <code>String</code> gives the caller a new one to free. <code>str.upper</code>, <code>str.replace</code> and <code>format</code> are such functions.</p>
 <h2 id="writing-text-in-the-program"><a href="#writing-text-in-the-program">Writing text in the program</a></h2>
 <p>A literal is written in double quotes. A backslash starts an escape:</p>
 <div class="table"><table><thead><tr><th>Escape</th><th>Is</th></tr></thead><tbody><tr><td><code>\n</code></td><td>a newline</td></tr><tr><td><code>\t</code></td><td>a tab</td></tr><tr><td><code>\r</code></td><td>a carriage return</td></tr><tr><td><code>\0</code></td><td>a zero byte</td></tr><tr><td><code>\\</code></td><td>a backslash</td></tr><tr><td><code>\&quot;</code></td><td>a double quote</td></tr><tr><td><code>\x41</code></td><td>the byte written in two hex digits</td></tr></tbody></table></div>
 <p><code>{</code> and <code>}</code> put a value into the text (see the next chapter), so a brace on its own is written twice: <code>{{</code> and <code>}}</code>.</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;a\ttab, \&quot;quotes\&quot;, a back\\slash, \x41, {{braces}}&quot;</span>)
+    print(<span class="s">&quot;200\tOK, \&quot;quoted\&quot;, C:\\logs, \x41, {{\&quot;ok\&quot;: true}}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>a	tab, &quot;quotes&quot;, a back\slash, A, {braces}</code></pre>
+<pre class="out"><code>200	OK, &quot;quoted&quot;, C:\logs, A, {&quot;ok&quot;: true}</code></pre>
 <p>Three double quotes start text that spans several lines. The text starts on the line after the opening quotes and ends before the line with the closing ones. The indentation every line shares is taken off, so the text can be indented with the code around it:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    query := <span class="s">&quot;&quot;</span>&quot;
-        SELECT name
-        FROM users
-          WHERE active
+    config := <span class="s">&quot;&quot;</span>&quot;
+        services:
+          web:
+            port: <span class="n">8080</span>
         <span class="s">&quot;&quot;</span>&quot;
-    print(query)
+    print(config)
 }</code></pre>
-<pre class="out"><code>SELECT name
-FROM users
-  WHERE active</code></pre>
+<pre class="out"><code>services:
+  web:
+    port: 8080</code></pre>
 <p>In a raw string, <code>r&quot;...&quot;</code>, backslashes and braces are plain characters. It suits Windows paths and regular expressions:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    print(r<span class="s">&quot;C:\tools\iris {not a value}&quot;</span>)
-    print(r<span class="s">&quot;\d+\.\d+&quot;</span>)
+    print(r<span class="s">&quot;C:\logs\{date}.log&quot;</span>)
+    print(r<span class="s">&quot;\d+\.\d+\.\d+\.\d+&quot;</span>)
 }</code></pre>
-<pre class="out"><code>C:\tools\iris {not a value}
-\d+\.\d+</code></pre>
+<pre class="out"><code>C:\logs\{date}.log
+\d+\.\d+\.\d+\.\d+</code></pre>
 <p><code>r&quot;&quot;&quot;...&quot;&quot;&quot;</code> is raw text over several lines, which also takes double quotes as they are. It suits JSON and other text full of quotes and braces:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
     body := r<span class="s">&quot;&quot;</span>&quot;
-        {<span class="s">&quot;name&quot;</span>: <span class="s">&quot;Ada&quot;</span>, <span class="s">&quot;tags&quot;</span>: [<span class="s">&quot;admin&quot;</span>]}
+        {<span class="s">&quot;host&quot;</span>: <span class="s">&quot;10.0.0.5&quot;</span>, <span class="s">&quot;ports&quot;</span>: [<span class="n">22</span>, <span class="n">443</span>]}
         <span class="s">&quot;&quot;</span>&quot;
     print(body)
 }</code></pre>
-<pre class="out"><code>{&quot;name&quot;: &quot;Ada&quot;, &quot;tags&quot;: [&quot;admin&quot;]}</code></pre>
+<pre class="out"><code>{&quot;host&quot;: &quot;10.0.0.5&quot;, &quot;ports&quot;: [22, 443]}</code></pre>
 <h2 id="the-str-module"><a href="#the-str-module">The str module</a></h2>
 <p>The <code>str</code> module has the functions that look at text and make new text. Those that give a <code>str</code> give part of the text they were given, so nothing is copied:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    s := <span class="s">&quot;  key = value  &quot;</span>
-    t := <span class="t">str</span>.trim(s)
-    print(<span class="s">&quot;[{t}] [{str.trimLeft(s)}] [{str.trimRight(s)}]&quot;</span>)
-    key, value, found := <span class="t">str</span>.cut(t, <span class="s">&quot; = &quot;</span>)
-    print(<span class="s">&quot;{key} -&gt; {value} ({found})&quot;</span>)
-    print(<span class="s">&quot;{str.find(t, &quot;</span>=<span class="s">&quot;)} {str.findLast(&quot;</span>a/b/c<span class="s">&quot;, &quot;</span>/<span class="s">&quot;)} {str.contains(t, &quot;</span>val<span class="s">&quot;)}&quot;</span>)
-    print(<span class="s">&quot;{str.startsWith(t, &quot;</span>key<span class="s">&quot;)} {str.endsWith(t, &quot;</span>lue<span class="s">&quot;)} {str.count(&quot;</span>banana<span class="s">&quot;, &quot;</span>an<span class="s">&quot;)}&quot;</span>)
+    raw := <span class="s">&quot;  Content-Type: text/html  &quot;</span>
+    h := <span class="t">str</span>.trim(raw)
+    print(<span class="s">&quot;[{h}] [{str.trimLeft(raw)}] [{str.trimRight(raw)}]&quot;</span>)
+    name, value, found := <span class="t">str</span>.cut(h, <span class="s">&quot;: &quot;</span>)
+    print(<span class="s">&quot;{name} -&gt; {value} ({found})&quot;</span>)
+    print(<span class="s">&quot;{str.find(h, &quot;</span>:<span class="s">&quot;)} {str.findLast(&quot;</span>/api/v1/users<span class="s">&quot;, &quot;</span>/<span class="s">&quot;)} {str.contains(h, &quot;</span>html<span class="s">&quot;)}&quot;</span>)
+    print(<span class="s">&quot;{str.startsWith(h, &quot;</span>Content-<span class="s">&quot;)} {str.endsWith(h, &quot;</span>/html<span class="s">&quot;)} {str.count(&quot;</span><span class="n">10.0</span>.<span class="n">0.1</span><span class="s">&quot;, &quot;</span>.<span class="s">&quot;)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>[key = value] [key = value  ] [  key = value]
-key -&gt; value (true)
-4 3 true
-true true 2</code></pre>
+<pre class="out"><code>[Content-Type: text/html] [Content-Type: text/html  ] [  Content-Type: text/html]
+Content-Type -&gt; text/html (true)
+12 7 true
+true true 3</code></pre>
 <p><code>split</code> cuts text at each separator and <code>fields</code> at each run of spaces, tabs and newlines. Both give a <code>List</code> of <code>str</code>s that point into the text. <code>join</code> puts parts together:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> parts := <span class="t">str</span>.split(<span class="s">&quot;a,b,,c&quot;</span>, <span class="s">&quot;,&quot;</span>)
+    <span class="k">scoped</span> parts := <span class="t">str</span>.split(<span class="s">&quot;GET,/health,,200&quot;</span>, <span class="s">&quot;,&quot;</span>)
     print(<span class="s">&quot;{parts.len} parts, the third is [{parts.at(2)}]&quot;</span>)
-    <span class="k">scoped</span> words := <span class="t">str</span>.fields(<span class="s">&quot;  the quick\tbrown\n fox &quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> joined = <span class="t">str</span>.join(words.items(), <span class="s">&quot;-&quot;</span>)
+    <span class="k">scoped</span> cols := <span class="t">str</span>.fields(<span class="s">&quot;tcp   0  0 0.0.0.0:22\tLISTEN\n&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> joined = <span class="t">str</span>.join(cols.items(), <span class="s">&quot; | &quot;</span>)
     print(joined)
 }</code></pre>
 <pre class="out"><code>4 parts, the third is []
-the-quick-brown-fox</code></pre>
+tcp | 0 | 0 | 0.0.0.0:22 | LISTEN</code></pre>
 <p>The functions that change text give a new <code>String</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> a = <span class="t">str</span>.upper(<span class="s">&quot;Iris&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> b = <span class="t">str</span>.lower(<span class="s">&quot;Iris&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> c = <span class="t">str</span>.replace(<span class="s">&quot;one two two&quot;</span>, <span class="s">&quot;two&quot;</span>, <span class="s">&quot;2&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> d = <span class="t">str</span>.repeat(<span class="s">&quot;ab&quot;</span>, <span class="n">3</span>)
-    print(<span class="s">&quot;{a} {b} {c} {d}&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> a = <span class="t">str</span>.upper(<span class="s">&quot;get&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> b = <span class="t">str</span>.lower(<span class="s">&quot;Content-Length&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> c = <span class="t">str</span>.replace(<span class="s">&quot;/api/v1/users/v1&quot;</span>, <span class="s">&quot;v1&quot;</span>, <span class="s">&quot;v2&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> d = <span class="t">str</span>.repeat(<span class="s">&quot;-&quot;</span>, <span class="n">12</span>)
+    print(<span class="s">&quot;{a} {b} {c}&quot;</span>)
+    print(d)
 }</code></pre>
-<pre class="out"><code>IRIS iris one 2 2 ababab</code></pre>
+<pre class="out"><code>GET content-length /api/v2/users/v2
+------------</code></pre>
 <p><code>upper</code> and <code>lower</code> change ASCII letters only.</p>
 <h2 id="reading-numbers-from-text"><a href="#reading-numbers-from-text">Reading numbers from text</a></h2>
 <p><code>str.parseInt</code> and <code>str.parseFloat</code> read a number and give an error when the text isn't one (errors are covered in <a href="18-errors.html">Errors</a>):</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> main() {
-    n := <span class="t">str</span>.parseInt(<span class="s">&quot;-42&quot;</span>) <span class="k">catch</span> <span class="n">0</span>
-    x := <span class="t">str</span>.parseFloat(<span class="s">&quot;2.5e3&quot;</span>) <span class="k">catch</span> <span class="n">0.0</span>
-    bad := <span class="t">str</span>.parseInt(<span class="s">&quot;12ab&quot;</span>) <span class="k">catch</span> -<span class="n">1</span>
-    print(<span class="s">&quot;{n} {x} {bad}&quot;</span>)
+    port := <span class="t">str</span>.parseInt(<span class="s">&quot;8080&quot;</span>) <span class="k">catch</span> <span class="n">0</span>
+    loss := <span class="t">str</span>.parseFloat(<span class="s">&quot;0.25&quot;</span>) <span class="k">catch</span> <span class="n">0.0</span>
+    bad := <span class="t">str</span>.parseInt(<span class="s">&quot;80a&quot;</span>) <span class="k">catch</span> -<span class="n">1</span>
+    print(<span class="s">&quot;{port} {loss} {bad}&quot;</span>)
+
     _ = <span class="t">str</span>.parseInt(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
         print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
         <span class="n">0</span>
     }
 }</code></pre>
-<pre class="out"><code>-42 2500 -1
+<pre class="out"><code>8080 0.25 -1
 ParseError.empty: no number in an empty text</code></pre>
 <p><code>parseInt</code> takes an optional sign and decimal digits; a number too large for an <code>i64</code> is <code>ParseError.tooBig</code>.</p>
     <nav class="pager"><a class="prev" href="05-booleans-and-operators.html"><span>Previous</span>Booleans and operators</a><a class="next" href="07-values-in-text.html"><span>Next</span>Values in text</a></nav>

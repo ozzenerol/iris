@@ -51,63 +51,63 @@ try {
 <h2 id="bool"><a href="#bool">bool</a></h2>
 <p>A <code>bool</code> is <code>true</code> or <code>false</code>. Comparisons give one, and conditions take one:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    age := <span class="n">20</span>
-    adult := age &gt;= <span class="n">18</span>
-    print(<span class="s">&quot;{adult} {age == 21} {age != 21}&quot;</span>)
-    <span class="k">if</span> adult {
-        print(<span class="s">&quot;can vote&quot;</span>)
+    status := <span class="n">503</span>
+    failed := status &gt;= <span class="n">500</span>
+    print(<span class="s">&quot;{failed} {status == 200} {status != 200}&quot;</span>)
+    <span class="k">if</span> failed {
+        print(<span class="s">&quot;retrying&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>true false true
-can vote</code></pre>
+retrying</code></pre>
 <p>A condition must be a <code>bool</code>. A number, a pointer or a string isn't one, so <code>if count</code> doesn't compile; the comparison is written out: <code>if count != 0</code>, <code>if p != null</code>, <code>if name.len &gt; 0</code>.</p>
 <h2 id="and-or-not"><a href="#and-or-not">And, or, not</a></h2>
 <p><code>&amp;&amp;</code> is true when both sides are, <code>||</code> when at least one is, and <code>!</code> turns a <code>bool</code> around. The right side of <code>&amp;&amp;</code> and <code>||</code> is only worked out when it is needed:</p>
-<pre class="code run"><code><span class="t">bool</span> check(<span class="t">str</span> what, <span class="t">bool</span> value) {
-    print(<span class="s">&quot;checking {what}&quot;</span>)
-    <span class="k">return</span> value
+<pre class="code run"><code><span class="t">bool</span> probe(<span class="t">str</span> host, <span class="t">bool</span> up) {
+    print(<span class="s">&quot;probing {host}&quot;</span>)
+    <span class="k">return</span> up
 }
 
 <span class="t">void</span> main() {
-    <span class="k">if</span> check(<span class="s">&quot;a&quot;</span>, <span class="k">false</span>) &amp;&amp; check(<span class="s">&quot;b&quot;</span>, <span class="k">true</span>) {
-        print(<span class="s">&quot;both&quot;</span>)
+    <span class="k">if</span> probe(<span class="s">&quot;primary&quot;</span>, <span class="k">false</span>) &amp;&amp; probe(<span class="s">&quot;replica&quot;</span>, <span class="k">true</span>) {
+        print(<span class="s">&quot;both databases are up&quot;</span>)
     }
-    <span class="k">if</span> check(<span class="s">&quot;c&quot;</span>, <span class="k">true</span>) || check(<span class="s">&quot;d&quot;</span>, <span class="k">true</span>) {
-        print(<span class="s">&quot;one&quot;</span>)
+    <span class="k">if</span> probe(<span class="s">&quot;dns1&quot;</span>, <span class="k">true</span>) || probe(<span class="s">&quot;dns2&quot;</span>, <span class="k">true</span>) {
+        print(<span class="s">&quot;a resolver is up&quot;</span>)
     }
     print(<span class="s">&quot;{!true} {!(1 &gt; 2)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>checking a
-checking c
-one
+<pre class="out"><code>probing primary
+probing dns1
+a resolver is up
 false true</code></pre>
-<p>This makes conditions like <code>p != null &amp;&amp; p.len &gt; 0</code> safe: the second part isn't reached when the first is false.</p>
+<p>This makes conditions like <code>conn != null &amp;&amp; conn.open</code> safe: the second part isn't reached when the first is false.</p>
 <p>They can also be written as words: <code>and</code>, <code>or</code> and <code>not</code>. <code>and</code> and <code>or</code> are the same as <code>&amp;&amp;</code> and <code>||</code>. <code>not</code> takes everything up to the next <code>and</code> or <code>or</code>, so <code>not a == b</code> is <code>!(a == b)</code>, where <code>!</code> takes only the value right after it:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    done := <span class="k">false</span>
-    n := <span class="n">3</span>
-    <span class="k">if</span> <span class="k">not</span> done <span class="k">and</span> n &gt; <span class="n">0</span> {
-        print(<span class="s">&quot;working&quot;</span>)
+    closed := <span class="k">false</span>
+    pending := <span class="n">3</span>
+    <span class="k">if</span> <span class="k">not</span> closed <span class="k">and</span> pending &gt; <span class="n">0</span> {
+        print(<span class="s">&quot;flushing {pending} writes&quot;</span>)
     }
-    print(<span class="s">&quot;{not n == 4} {done or n == 3}&quot;</span>)
+    print(<span class="s">&quot;{not pending == 4} {closed or pending == 3}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>working
+<pre class="out"><code>flushing 3 writes
 true true</code></pre>
 <p>Which to write is a matter of taste; a project usually picks one. <code>not</code> can't go where only one value fits, as in <code>a == not b</code>; parentheses or <code>!</code> are used there.</p>
 <h2 id="comparing"><a href="#comparing">Comparing</a></h2>
 <div class="table"><table><thead><tr><th>Operator</th><th>True when</th></tr></thead><tbody><tr><td><code>a == b</code></td><td>a and b are equal</td></tr><tr><td><code>a != b</code></td><td>they aren't</td></tr><tr><td><code>a &lt; b</code>, <code>a &lt;= b</code></td><td>a is smaller, or smaller or equal</td></tr><tr><td><code>a &gt; b</code>, <code>a &gt;= b</code></td><td>a is larger, or larger or equal</td></tr></tbody></table></div>
 <p>Numbers compare by value. <code>str</code> and <code>String</code> compare by their bytes, <code>==</code> and <code>!=</code> only. Structs compare field by field with <code>==</code> and <code>!=</code>, plain enums by value, and pointers by address:</p>
-<pre class="code run"><code><span class="k">struct</span> Point {
-    <span class="t">i64</span> x
-    <span class="t">i64</span> y
+<pre class="code run"><code><span class="k">struct</span> Addr {
+    <span class="t">u32</span> ip
+    <span class="t">u16</span> port
 }
 
-<span class="k">enum</span> Color { red, green }
+<span class="k">enum</span> Proto { tcp, udp }
 
 <span class="t">void</span> main() {
-    a := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
-    b := Point{x: <span class="n">1</span>, y: <span class="n">2</span>}
-    print(<span class="s">&quot;{a == b} {&quot;</span>iris<span class="s">&quot; == &quot;</span>iris<span class="s">&quot;} {Color.red != Color.green}&quot;</span>)
+    a := Addr{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
+    b := Addr{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
+    print(<span class="s">&quot;{a == b} {&quot;</span>GET<span class="s">&quot; == &quot;</span>GET<span class="s">&quot;} {Proto.tcp != Proto.udp}&quot;</span>)
     p := &amp;a
     q := &amp;b
     print(<span class="s">&quot;{p == q} {p == &amp;a}&quot;</span>)
@@ -115,16 +115,16 @@ true true</code></pre>
 <pre class="out"><code>true true true
 false true</code></pre>
 <p><code>is</code> can be written for <code>==</code>, and <code>is not</code> for <code>!=</code>. They compare the same way, and the comparison is by value: <code>a is b</code> on two structs compares their fields, as <code>==</code> does, not whether they are the same variable.</p>
-<pre class="code run"><code><span class="k">enum</span> Color { red, green }
+<pre class="code run"><code><span class="k">enum</span> Proto { tcp, udp }
 
 <span class="t">void</span> main() {
-    n := <span class="n">3</span>
-    c := Color.red
-    print(<span class="s">&quot;{n is 3} {c is not .green} {&quot;</span>iris<span class="s">&quot; is &quot;</span>iris<span class="s">&quot;}&quot;</span>)
-    print(<span class="s">&quot;small&quot;</span>) <span class="k">if</span> n <span class="k">is</span> <span class="k">not</span> <span class="n">10</span>
+    status := <span class="n">404</span>
+    p := Proto.tcp
+    print(<span class="s">&quot;{status is 404} {p is not .udp} {&quot;</span>GET<span class="s">&quot; is &quot;</span>GET<span class="s">&quot;}&quot;</span>)
+    print(<span class="s">&quot;not found&quot;</span>) <span class="k">if</span> status <span class="k">is</span> <span class="n">404</span>
 }</code></pre>
 <pre class="out"><code>true true true
-small</code></pre>
+not found</code></pre>
 <h2 id="all-the-operators"><a href="#all-the-operators">All the operators</a></h2>
 <div class="table"><table><thead><tr><th>Operators</th><th>What they do</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~</code></td><td>bits: and, or, exclusive or, each bit flipped</td></tr><tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code>, <code>and or not</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>-x</code></td><td>the negative of x</td></tr><tr><td><code>&amp;x</code>, <code>*p</code></td><td>the address of x, and the value p points to (see <a href="17-pointers.html">Pointers</a>)</td></tr><tr><td><code>a..b</code></td><td>the range from a to before b, in <code>for</code> and slicing; in <code>match</code>, from a to b with both ends</td></tr><tr><td><code>ch &lt;- v</code>, <code>&lt;-ch</code></td><td>sending to a channel and taking from it (see <a href="24-tasks-and-channels.html">Tasks and channels</a>)</td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment, which is a statement</td></tr></tbody></table></div>
 <h2 id="order"><a href="#order">Order</a></h2>
@@ -134,21 +134,23 @@ small</code></pre>
 <pre class="code run"><code><span class="t">void</span> main() {
     print(<span class="s">&quot;{2 + 3 * 4} {(2 + 3) * 4}&quot;</span>)
     print(<span class="s">&quot;{10 - 4 - 3} {2 * 3 % 4}&quot;</span>)
-    x := <span class="n">6</span>
-    print(<span class="s">&quot;{x &amp; 1 == 0} {x &gt; 1 &amp;&amp; x &lt; 10 || x == 100}&quot;</span>)
+    flags := <span class="n">0x12</span>
+    port := <span class="n">8080</span>
+    print(<span class="s">&quot;{flags &amp; 0x02 != 0} {port &gt; 1023 &amp;&amp; port &lt; 49152 || port == 80}&quot;</span>)
 }</code></pre>
 <pre class="out"><code>14 20
 3 2
 true true</code></pre>
-<p><code>x &amp; 1 == 0</code> reads as <code>(x &amp; 1) == 0</code>, since <code>&amp;</code> binds more tightly than <code>==</code>: it tests whether x is even.</p>
+<p><code>flags &amp; 0x02 != 0</code> reads as <code>(flags &amp; 0x02) != 0</code>, since <code>&amp;</code> binds more tightly than <code>!=</code>: it tests whether the SYN bit is set.</p>
 <h2 id="conditions-as-values"><a href="#conditions-as-values">Conditions as values</a></h2>
 <p><code>if</code> and <code>match</code> give values too, which takes the place of the <code>?:</code> operator some languages have (see <a href="08-if-and-match.html">if and match</a>):</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    n := <span class="n">7</span>
-    kind := <span class="k">if</span> n % <span class="n">2</span> == <span class="n">0</span> { <span class="s">&quot;even&quot;</span> } <span class="k">else</span> { <span class="s">&quot;odd&quot;</span> }
-    print(<span class="s">&quot;{n} is {kind}&quot;</span>)
+    port := <span class="n">443</span>
+    scheme := <span class="k">if</span> port == <span class="n">443</span> { <span class="s">&quot;https&quot;</span> } <span class="k">else</span> { <span class="s">&quot;http&quot;</span> }
+    print(<span class="s">&quot;{scheme}://example.com:{port}&quot;</span>)
+
 }</code></pre>
-<pre class="out"><code>7 is odd</code></pre>
+<pre class="out"><code>https://example.com:443</code></pre>
     <nav class="pager"><a class="prev" href="04-floating-point.html"><span>Previous</span>Floating point</a><a class="next" href="06-text.html"><span>Next</span>Text</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>

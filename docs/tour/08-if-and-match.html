@@ -50,118 +50,118 @@ try {
 <p class="lede">Choosing what runs: <code>if</code> for conditions, <code>match</code> for picking one of many values. Both can also give a value.</p>
 <h2 id="if"><a href="#if">if</a></h2>
 <p><code>if</code> runs its block when its condition is true. <code>else if</code> adds more conditions, tried in order, and <code>else</code> runs when none was true:</p>
-<pre class="code run"><code><span class="t">str</span> describe(<span class="t">i64</span> n) {
-    <span class="k">if</span> n &gt; <span class="n">100</span> {
-        <span class="k">return</span> <span class="s">&quot;big&quot;</span>
-    } <span class="k">else</span> <span class="k">if</span> n &gt; <span class="n">10</span> {
-        <span class="k">return</span> <span class="s">&quot;medium&quot;</span>
-    } <span class="k">else</span> <span class="k">if</span> n &gt; <span class="n">0</span> {
-        <span class="k">return</span> <span class="s">&quot;small&quot;</span>
+<pre class="code run"><code><span class="c">// How a ping&#x27;s round trip time reads, in milliseconds; 0 is no reply.</span>
+<span class="t">str</span> health(<span class="t">i64</span> ms) {
+    <span class="k">if</span> ms &gt; <span class="n">500</span> {
+        <span class="k">return</span> <span class="s">&quot;very slow&quot;</span>
+    } <span class="k">else</span> <span class="k">if</span> ms &gt; <span class="n">100</span> {
+        <span class="k">return</span> <span class="s">&quot;slow&quot;</span>
+    } <span class="k">else</span> <span class="k">if</span> ms &gt; <span class="n">0</span> {
+        <span class="k">return</span> <span class="s">&quot;ok&quot;</span>
     } <span class="k">else</span> {
-        <span class="k">return</span> <span class="s">&quot;nothing&quot;</span>
+        <span class="k">return</span> <span class="s">&quot;no reply&quot;</span>
     }
 }
 
 <span class="t">void</span> main() {
-    <span class="k">for</span> n <span class="k">in</span> [<span class="n">500</span>, <span class="n">50</span>, <span class="n">5</span>, <span class="n">0</span>] {
-        print(<span class="s">&quot;{n}: {describe(n)}&quot;</span>)
+    <span class="k">for</span> ms <span class="k">in</span> [<span class="n">800</span>, <span class="n">150</span>, <span class="n">12</span>, <span class="n">0</span>] {
+        print(<span class="s">&quot;{ms}ms: {health(ms)}&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>500: big
-50: medium
-5: small
-0: nothing</code></pre>
+<pre class="out"><code>800ms: very slow
+150ms: slow
+12ms: ok
+0ms: no reply</code></pre>
 <p>The condition is a <code>bool</code> and needs no parentheses. The block always has braces. <code>else</code> goes on the line of the closing brace before it, or on the next line.</p>
 <h2 id="a-condition-after-a-statement"><a href="#a-condition-after-a-statement">A condition after a statement</a></h2>
 <p>A short statement can have its condition after it, on the same line: the statement runs only when the condition is true. This suits the checks at the top of a function and in loops:</p>
-<pre class="code run"><code><span class="t">i64</span> sign(<span class="t">i64</span> n) {
-    <span class="k">return</span> -<span class="n">1</span> <span class="k">if</span> n &lt; <span class="n">0</span>
-    <span class="k">return</span> <span class="n">0</span> <span class="k">if</span> n == <span class="n">0</span>
-    <span class="k">return</span> <span class="n">1</span>
+<pre class="code run"><code><span class="t">Duration</span> retryDelay(<span class="t">i64</span> attempt) {
+    <span class="k">return</span> 0s <span class="k">if</span> attempt == <span class="n">0</span>
+    <span class="k">return</span> 30s <span class="k">if</span> attempt &gt; <span class="n">8</span>
+    <span class="k">return</span> 100ms * (<span class="n">1</span> &lt;&lt; attempt)
 }
 
 <span class="t">void</span> main() {
     verbose := <span class="k">true</span>
-    print(<span class="s">&quot;{sign(-5)} {sign(0)} {sign(9)}&quot;</span>)
-    print(<span class="s">&quot;checking&quot;</span>) <span class="k">if</span> verbose
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">10</span> {
-        <span class="k">continue</span> <span class="k">if</span> i % <span class="n">2</span> == <span class="n">0</span>
-        <span class="k">break</span> <span class="k">if</span> i &gt; <span class="n">6</span>
-        print(<span class="s">&quot;odd {i}&quot;</span>)
+    print(<span class="s">&quot;{retryDelay(0)} {retryDelay(3)} {retryDelay(9)}&quot;</span>)
+    print(<span class="s">&quot;scanning&quot;</span>) <span class="k">if</span> verbose
+    <span class="k">for</span> port <span class="k">in</span> [<span class="n">22</span>, <span class="n">80</span>, <span class="n">3000</span>, <span class="n">8080</span>, <span class="n">0</span>, <span class="n">9090</span>] {
+        <span class="k">break</span> <span class="k">if</span> port == <span class="n">0</span>      <span class="c">// the end of the list</span>
+        <span class="k">continue</span> <span class="k">if</span> port &lt; <span class="n">1024</span> <span class="c">// needs root</span>
+        print(<span class="s">&quot;trying {port}&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>-1 0 1
-checking
-odd 1
-odd 3
-odd 5</code></pre>
+<pre class="out"><code>0s 800ms 30s
+scanning
+trying 3000
+trying 8080</code></pre>
 <p><code>stmt if cond</code> is the same as <code>if cond { stmt }</code>. It works after <code>return</code>, <code>break</code>, <code>continue</code>, an assignment, a call or <code>spawn</code>, and takes only a condition. With an <code>else</code> after the condition it is a value instead (see below). A declaration can't have one, since the name would only exist when the condition held, and neither can <code>defer</code>.</p>
 <p><code>return if</code> followed by a block is still an if that gives a value: <code>return if ok { 1 } else { 2 }</code>.</p>
 <h2 id="if-as-a-value"><a href="#if-as-a-value">if as a value</a></h2>
 <p><code>if</code> can give a value. Each branch ends with the value it gives, without <code>return</code>, and <code>else</code> is required, since there must be a value whichever way it goes:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    temperature := <span class="n">31</span>
-    feel := <span class="k">if</span> temperature &gt; <span class="n">30</span> { <span class="s">&quot;hot&quot;</span> } <span class="k">else</span> <span class="k">if</span> temperature &gt; <span class="n">15</span> { <span class="s">&quot;mild&quot;</span> } <span class="k">else</span> { <span class="s">&quot;cold&quot;</span> }
-    print(feel)
+    load := <span class="n">0.93</span>
+    level := <span class="k">if</span> load &gt; <span class="n">0.9</span> { <span class="s">&quot;critical&quot;</span> } <span class="k">else</span> <span class="k">if</span> load &gt; <span class="n">0.7</span> { <span class="s">&quot;high&quot;</span> } <span class="k">else</span> { <span class="s">&quot;normal&quot;</span> }
+    print(<span class="s">&quot;load {load}: {level}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>hot</code></pre>
+<pre class="out"><code>load 0.93: critical</code></pre>
 <p>A branch can hold statements before its value. The value is the last line of the branch:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
-    items := <span class="n">7</span>
-    perPage := <span class="n">3</span>
-    pages := <span class="k">if</span> items &gt; <span class="n">0</span> {
-        full := items / perPage
-        full + (<span class="k">if</span> items % perPage &gt; <span class="n">0</span> { <span class="n">1</span> } <span class="k">else</span> { <span class="n">0</span> })
+    size := <span class="n">4000</span>
+    mss := <span class="n">1460</span>
+    segments := <span class="k">if</span> size &gt; <span class="n">0</span> {
+        full := size / mss
+        full + (<span class="k">if</span> size % mss &gt; <span class="n">0</span> { <span class="n">1</span> } <span class="k">else</span> { <span class="n">0</span> })
     } <span class="k">else</span> {
         <span class="n">0</span>
     }
-    print(<span class="s">&quot;{pages} pages&quot;</span>)
+    print(<span class="s">&quot;{segments} segments&quot;</span>)
 }</code></pre>
-<pre class="out"><code>3 pages</code></pre>
+<pre class="out"><code>3 segments</code></pre>
 <p>All the branches must give values of the same type.</p>
 <p>A short choice of a value can be written on one line as <code>a if cond else b</code>: <code>a</code> when the condition is true, <code>b</code> when it isn't. It is the same as <code>if cond { a } else { b }</code>, and can be chained:</p>
-<pre class="code run"><code><span class="t">str</span> size(<span class="t">i64</span> n) =&gt; <span class="s">&quot;small&quot;</span> <span class="k">if</span> n &lt; <span class="n">10</span> <span class="k">else</span> <span class="s">&quot;medium&quot;</span> <span class="k">if</span> n &lt; <span class="n">100</span> <span class="k">else</span> <span class="s">&quot;large&quot;</span>
+<pre class="code run"><code><span class="t">str</span> sizeClass(<span class="t">i64</span> bytes) =&gt; <span class="s">&quot;small&quot;</span> <span class="k">if</span> bytes &lt; 1KiB <span class="k">else</span> <span class="s">&quot;medium&quot;</span> <span class="k">if</span> bytes &lt; 1MiB <span class="k">else</span> <span class="s">&quot;large&quot;</span>
 
-<span class="t">bool</span> even(<span class="t">i64</span> n) {
-    <span class="k">return</span> <span class="k">true</span> <span class="k">if</span> n % <span class="n">2</span> == <span class="n">0</span> <span class="k">else</span> <span class="k">false</span>
+<span class="t">bool</span> retryable(<span class="t">i64</span> status) {
+    <span class="k">return</span> <span class="k">true</span> <span class="k">if</span> status &gt;= <span class="n">500</span> <span class="k">else</span> <span class="k">false</span>
 }
 
 <span class="t">void</span> main() {
-    n := <span class="n">42</span>
-    half := n / <span class="n">2</span> <span class="k">if</span> even(n) <span class="k">else</span> n
-    print(<span class="s">&quot;{size(n)} {half} {&quot;</span>even<span class="s">&quot; if even(n) else &quot;</span>odd<span class="s">&quot;}&quot;</span>)
+    status := <span class="n">503</span>
+    wait := 2s <span class="k">if</span> retryable(status) <span class="k">else</span> 0s
+    print(<span class="s">&quot;{sizeClass(4096)} {wait} {&quot;</span>retry<span class="s">&quot; if retryable(status) else &quot;</span>give up<span class="s">&quot;}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>medium 21 even</code></pre>
+<pre class="out"><code>medium 2s retry</code></pre>
 <p>Without the <code>else</code>, <code>return x if cond</code> is a condition on the statement: it returns only when the condition holds.</p>
 <h2 id="match"><a href="#match">match</a></h2>
 <p><code>match</code> compares one value against a list of arms and runs the first one that fits. Only that arm runs; there is no falling through into the next one:</p>
-<pre class="code run"><code><span class="t">void</span> run(<span class="t">str</span> command) {
+<pre class="code run"><code><span class="t">void</span> reply(<span class="t">str</span> command) {
     <span class="k">match</span> command {
-        <span class="s">&quot;start&quot;</span> =&gt; print(<span class="s">&quot;starting&quot;</span>)
-        <span class="s">&quot;stop&quot;</span>, <span class="s">&quot;quit&quot;</span> =&gt; print(<span class="s">&quot;stopping&quot;</span>)
+        <span class="s">&quot;PING&quot;</span> =&gt; print(<span class="s">&quot;+PONG&quot;</span>)
+        <span class="s">&quot;QUIT&quot;</span>, <span class="s">&quot;EXIT&quot;</span> =&gt; print(<span class="s">&quot;+OK bye&quot;</span>)
         <span class="s">&quot;&quot;</span> =&gt; {}
-        _ =&gt; print(<span class="s">&quot;unknown command: {command}&quot;</span>)
+        _ =&gt; print(<span class="s">&quot;-ERR unknown command &#x27;{command}&#x27;&quot;</span>)
     }
 }
 
 <span class="t">void</span> main() {
-    run(<span class="s">&quot;start&quot;</span>)
-    run(<span class="s">&quot;quit&quot;</span>)
-    run(<span class="s">&quot;&quot;</span>)
-    run(<span class="s">&quot;dance&quot;</span>)
+    reply(<span class="s">&quot;PING&quot;</span>)
+    reply(<span class="s">&quot;QUIT&quot;</span>)
+    reply(<span class="s">&quot;&quot;</span>)
+    reply(<span class="s">&quot;FLUSH&quot;</span>)
 }</code></pre>
-<pre class="out"><code>starting
-stopping
-unknown command: dance</code></pre>
+<pre class="out"><code>+PONG
++OK bye
+-ERR unknown command &#x27;FLUSH&#x27;</code></pre>
 <p>An arm is the values it takes, <code>=&gt;</code>, and what it does: one statement, or a block in braces. <code>{}</code> is an arm that does nothing. An arm can list several values, separated by commas. <code>_</code> takes every value the arms above it didn't.</p>
 <p><code>match</code> works on integers, characters, <code>bool</code>, <code>str</code> and enums.</p>
 <h2 id="ranges"><a href="#ranges">Ranges</a></h2>
 <p>An arm can be a range, <code>low..high</code>, which takes every value from <code>low</code> to <code>high</code> with both ends included:</p>
-<pre class="code run"><code><span class="t">str</span> grade(<span class="t">i64</span> score) =&gt; <span class="k">match</span> score {
-    <span class="n">90</span>..<span class="n">100</span> =&gt; <span class="s">&quot;A&quot;</span>
-    <span class="n">80</span>..<span class="n">89</span> =&gt; <span class="s">&quot;B&quot;</span>
-    <span class="n">70</span>..<span class="n">79</span> =&gt; <span class="s">&quot;C&quot;</span>
-    _ =&gt; <span class="s">&quot;F&quot;</span>
+<pre class="code run"><code><span class="t">str</span> portKind(<span class="t">i64</span> port) =&gt; <span class="k">match</span> port {
+    <span class="n">0</span>..<span class="n">1023</span> =&gt; <span class="s">&quot;system&quot;</span>
+    <span class="n">1024</span>..<span class="n">49151</span> =&gt; <span class="s">&quot;registered&quot;</span>
+    <span class="n">49152</span>..<span class="n">65535</span> =&gt; <span class="s">&quot;dynamic&quot;</span>
+    _ =&gt; <span class="s">&quot;invalid&quot;</span>
 }
 
 <span class="t">str</span> kind(<span class="t">u8</span> c) =&gt; <span class="k">match</span> c {
@@ -172,13 +172,13 @@ unknown command: dance</code></pre>
 }
 
 <span class="t">void</span> main() {
-    print(<span class="s">&quot;{grade(95)} {grade(85)} {grade(42)}&quot;</span>)
+    print(<span class="s">&quot;{portKind(22)} {portKind(8080)} {portKind(51000)} {portKind(70000)}&quot;</span>)
     print(<span class="s">&quot;{kind(&#x27;q&#x27;)} {kind(&#x27;7&#x27;)} {kind(&#x27; &#x27;)} {kind(&#x27;#&#x27;)}&quot;</span>)
 }</code></pre>
-<pre class="out"><code>A B F
+<pre class="out"><code>system registered dynamic invalid
 letter digit space other</code></pre>
 <h2 id="match-as-a-value"><a href="#match-as-a-value">match as a value</a></h2>
-<p>Like <code>if</code>, <code>match</code> can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a <code>match</code> reads well with <code>=&gt;</code>, as <code>grade</code> above shows:</p>
+<p>Like <code>if</code>, <code>match</code> can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a <code>match</code> reads well with <code>=&gt;</code>, as <code>portKind</code> above shows:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
     status := <span class="n">404</span>
     text := <span class="k">match</span> status {

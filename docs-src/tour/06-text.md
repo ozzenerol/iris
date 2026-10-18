@@ -8,30 +8,30 @@ A `str` is a slice of bytes: a pointer to some text and its length. A string lit
 
 ```iris run
 void main() {
-    greeting := "hello, world"
-    print("{greeting.len} bytes")
-    print("first byte {greeting[0]}, last {greeting[greeting.len - 1]}")
+    line := "GET /index.html HTTP/1.1"
+    print("{line.len} bytes")
+    print("first byte {line[0]}, last {line[line.len - 1]}")
 }
 ```
 
 ```output
-12 bytes
-first byte 104, last 100
+24 bytes
+first byte 71, last 49
 ```
 
-Indexing gives a byte, a `u8`. Every index is checked, so `greeting[12]` stops a debug build with a message that says where.
+Indexing gives a byte, a `u8`. Every index is checked, so `line[24]` stops a debug build with a message that says where.
 
 A slice of a `str`, `s[from:to]`, is another `str` that points into the same text. Nothing is copied, so slicing costs nothing whatever the length. Either end can be left out:
 
 ```iris run
 void main() {
-    s := "hello, world"
-    print("[{s[0:5]}] [{s[7:]}] [{s[:5]}] [{s[3:3]}]")
+    line := "GET /index.html HTTP/1.1"
+    print("[{line[0:3]}] [{line[4:15]}] [{line[16:]}] [{line[:3]}] [{line[3:3]}]")
 }
 ```
 
 ```output
-[hello] [world] [hello] []
+[GET] [/index.html] [HTTP/1.1] [GET] []
 ```
 
 `==` and `!=` compare the bytes of two strings. `str.compare` puts them in order, giving a number below zero, zero or above zero:
@@ -40,15 +40,15 @@ void main() {
 import str
 
 void main() {
-    a := "apple"
-    print("{a == "apple"} {a != "pear"}")
-    print("{str.compare("apple", "banana")} {str.compare("b", "a")} {str.compare("x", "x")}")
+    method := "POST"
+    print("{method == "POST"} {method != "GET"}")
+    print("{str.compare("api.lan", "db.lan")} {str.compare("web2", "web1")} {str.compare("x", "x")}")
 }
 ```
 
 ```output
 true true
--1 1 0
+-3 1 0
 ```
 
 ## UTF-8
@@ -57,9 +57,9 @@ Text is stored as UTF-8. Letters outside ASCII take more than one byte, so `len`
 
 ```iris run
 void main() {
-    word := "café"
-    print("{word.len} bytes")
-    for i, b in word {
+    city := "Köln" // from an X-City header
+    print("{city.len} bytes")
+    for i, b in city {
         print("{i}: {b}")
     }
 }
@@ -67,14 +67,14 @@ void main() {
 
 ```output
 5 bytes
-0: 99
-1: 97
-2: 102
-3: 195
-4: 169
+0: 75
+1: 195
+2: 182
+3: 108
+4: 110
 ```
 
-`é` is the two bytes 195 and 169. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"é"` finds it, since no letter's bytes appear inside another's.
+`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's.
 
 ## String
 
@@ -82,32 +82,32 @@ A `String` owns its bytes. It can grow, and it must be freed when it is no longe
 
 ```iris run
 void main() {
-    String s = "hello".copy()
-    s.append(", ")
-    s.append("world")
-    print(s)
-    print("{s.len} bytes")
-    s.free()
+    String req = "GET ".copy()
+    req.append("/api/users")
+    req.append(" HTTP/1.1")
+    print(req)
+    print("{req.len} bytes")
+    req.free()
 }
 ```
 
 ```output
-hello, world
-12 bytes
+GET /api/users HTTP/1.1
+23 bytes
 ```
 
 `scoped` frees it when the block ends, so the `free` can't be forgotten, whatever way the block is left:
 
 ```iris run
 void main() {
-    scoped String path = "/usr".copy()
-    path.append("/local")
+    scoped String path = "/var/log".copy()
+    path.append("/nginx")
     print(path)
 }
 ```
 
 ```output
-/usr/local
+/var/log/nginx
 ```
 
 A `String` can be given wherever a `str` is wanted: to a function, to `==`, to slicing. The `str` points into the `String`'s bytes, so it is valid while the `String` is alive and doesn't grow.
@@ -116,14 +116,14 @@ A `String` can be given wherever a `str` is wanted: to a function, to `==`, to s
 import str
 
 void main() {
-    scoped String name = "ada lovelace".copy()
-    str first = name[0:3]
-    print("{first} {str.contains(name, "love")} {name == "ada lovelace"}")
+    scoped String url = "https://api.example.com/v1".copy()
+    str scheme = url[0:5]
+    print("{scheme} {str.contains(url, "example")} {url == "https://api.example.com/v1"}")
 }
 ```
 
 ```output
-ada true true
+https true true
 ```
 
 A function that gives back a `String` gives the caller a new one to free. `str.upper`, `str.replace` and `format` are such functions.
@@ -146,45 +146,45 @@ A literal is written in double quotes. A backslash starts an escape:
 
 ```iris run
 void main() {
-    print("a\ttab, \"quotes\", a back\\slash, \x41, {{braces}}")
+    print("200\tOK, \"quoted\", C:\\logs, \x41, {{\"ok\": true}}")
 }
 ```
 
 ```output
-a	tab, "quotes", a back\slash, A, {braces}
+200	OK, "quoted", C:\logs, A, {"ok": true}
 ```
 
 Three double quotes start text that spans several lines. The text starts on the line after the opening quotes and ends before the line with the closing ones. The indentation every line shares is taken off, so the text can be indented with the code around it:
 
 ```iris run
 void main() {
-    query := """
-        SELECT name
-        FROM users
-          WHERE active
+    config := """
+        services:
+          web:
+            port: 8080
         """
-    print(query)
+    print(config)
 }
 ```
 
 ```output
-SELECT name
-FROM users
-  WHERE active
+services:
+  web:
+    port: 8080
 ```
 
 In a raw string, `r"..."`, backslashes and braces are plain characters. It suits Windows paths and regular expressions:
 
 ```iris run
 void main() {
-    print(r"C:\tools\iris {not a value}")
-    print(r"\d+\.\d+")
+    print(r"C:\logs\{date}.log")
+    print(r"\d+\.\d+\.\d+\.\d+")
 }
 ```
 
 ```output
-C:\tools\iris {not a value}
-\d+\.\d+
+C:\logs\{date}.log
+\d+\.\d+\.\d+\.\d+
 ```
 
 `r"""..."""` is raw text over several lines, which also takes double quotes as they are. It suits JSON and other text full of quotes and braces:
@@ -192,14 +192,14 @@ C:\tools\iris {not a value}
 ```iris run
 void main() {
     body := r"""
-        {"name": "Ada", "tags": ["admin"]}
+        {"host": "10.0.0.5", "ports": [22, 443]}
         """
     print(body)
 }
 ```
 
 ```output
-{"name": "Ada", "tags": ["admin"]}
+{"host": "10.0.0.5", "ports": [22, 443]}
 ```
 
 ## The str module
@@ -210,21 +210,21 @@ The `str` module has the functions that look at text and make new text. Those th
 import str
 
 void main() {
-    s := "  key = value  "
-    t := str.trim(s)
-    print("[{t}] [{str.trimLeft(s)}] [{str.trimRight(s)}]")
-    key, value, found := str.cut(t, " = ")
-    print("{key} -> {value} ({found})")
-    print("{str.find(t, "=")} {str.findLast("a/b/c", "/")} {str.contains(t, "val")}")
-    print("{str.startsWith(t, "key")} {str.endsWith(t, "lue")} {str.count("banana", "an")}")
+    raw := "  Content-Type: text/html  "
+    h := str.trim(raw)
+    print("[{h}] [{str.trimLeft(raw)}] [{str.trimRight(raw)}]")
+    name, value, found := str.cut(h, ": ")
+    print("{name} -> {value} ({found})")
+    print("{str.find(h, ":")} {str.findLast("/api/v1/users", "/")} {str.contains(h, "html")}")
+    print("{str.startsWith(h, "Content-")} {str.endsWith(h, "/html")} {str.count("10.0.0.1", ".")}")
 }
 ```
 
 ```output
-[key = value] [key = value  ] [  key = value]
-key -> value (true)
-4 3 true
-true true 2
+[Content-Type: text/html] [Content-Type: text/html  ] [  Content-Type: text/html]
+Content-Type -> text/html (true)
+12 7 true
+true true 3
 ```
 
 `split` cuts text at each separator and `fields` at each run of spaces, tabs and newlines. Both give a `List` of `str`s that point into the text. `join` puts parts together:
@@ -233,17 +233,17 @@ true true 2
 import str
 
 void main() {
-    scoped parts := str.split("a,b,,c", ",")
+    scoped parts := str.split("GET,/health,,200", ",")
     print("{parts.len} parts, the third is [{parts.at(2)}]")
-    scoped words := str.fields("  the quick\tbrown\n fox ")
-    scoped String joined = str.join(words.items(), "-")
+    scoped cols := str.fields("tcp   0  0 0.0.0.0:22\tLISTEN\n")
+    scoped String joined = str.join(cols.items(), " | ")
     print(joined)
 }
 ```
 
 ```output
 4 parts, the third is []
-the-quick-brown-fox
+tcp | 0 | 0 | 0.0.0.0:22 | LISTEN
 ```
 
 The functions that change text give a new `String`:
@@ -252,16 +252,18 @@ The functions that change text give a new `String`:
 import str
 
 void main() {
-    scoped String a = str.upper("Iris")
-    scoped String b = str.lower("Iris")
-    scoped String c = str.replace("one two two", "two", "2")
-    scoped String d = str.repeat("ab", 3)
-    print("{a} {b} {c} {d}")
+    scoped String a = str.upper("get")
+    scoped String b = str.lower("Content-Length")
+    scoped String c = str.replace("/api/v1/users/v1", "v1", "v2")
+    scoped String d = str.repeat("-", 12)
+    print("{a} {b} {c}")
+    print(d)
 }
 ```
 
 ```output
-IRIS iris one 2 2 ababab
+GET content-length /api/v2/users/v2
+------------
 ```
 
 `upper` and `lower` change ASCII letters only.
@@ -274,10 +276,11 @@ IRIS iris one 2 2 ababab
 import str
 
 void main() {
-    n := str.parseInt("-42") catch 0
-    x := str.parseFloat("2.5e3") catch 0.0
-    bad := str.parseInt("12ab") catch -1
-    print("{n} {x} {bad}")
+    port := str.parseInt("8080") catch 0
+    loss := str.parseFloat("0.25") catch 0.0
+    bad := str.parseInt("80a") catch -1
+    print("{port} {loss} {bad}")
+
     _ = str.parseInt("") catch e {
         print("{e.code}: {e.message}")
         0
@@ -286,7 +289,7 @@ void main() {
 ```
 
 ```output
--42 2500 -1
+8080 0.25 -1
 ParseError.empty: no number in an empty text
 ```
 
