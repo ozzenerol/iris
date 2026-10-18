@@ -76,6 +76,16 @@ try {
 <p>Fields can be numbers, <code>bool</code> (<code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code>, <code>no</code>, <code>on</code>, <code>off</code>), <code>str</code>, <code>String</code>, plain enums by their value's name, and <code>Duration</code> (<code>30s</code>, <code>1500ms</code>, <code>1m30s</code>). The errors are <code>env.EnvError.missing</code> and <code>invalid</code>, with the variable's name in the message:</p>
 <pre class="out"><code>error: EnvError.missing: DATABASE_URL is needed but isn&#x27;t set</code></pre>
 <p>An <code>@env</code> struct gets a <code>free</code> method, which frees its <code>String</code>s, so <code>scoped</code> works on it.</p>
+<p><code>env.loadFile(path)</code> reads a file of <code>KEY=value</code> lines into the environment, so the <code>@env</code> struct can read them. Call it before <code>env.load</code>:</p>
+<pre class="code"><code><span class="k">import</span> env
+
+!<span class="t">void</span> main() {
+    env.loadFile(<span class="s">&quot;.env&quot;</span>) <span class="k">catch</span> e {
+        print(<span class="s">&quot;no settings file: {e.message}&quot;</span>)
+    }
+    <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
+}</code></pre>
+<p>Blank lines and lines starting with <code>#</code> are skipped. A line may start with <code>export </code>, and a value may be wrapped in double or single quotes, which are taken off. A variable that is already set keeps its value, so the environment wins over the file. A line with no <code>=</code> is <code>EnvError.invalid</code>, and a file that can't be read gives the error from <a href="../std/index.html#fs">fs</a>.</p>
 <h2 id="flags"><a href="#flags">@flags</a></h2>
 <p><code>@flags</code> lets <code>flags.parse</code> fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The <a href="30-flags.html">Command-line flags</a> chapter covers it.</p>
 <h2 id="inline"><a href="#inline">@inline</a></h2>

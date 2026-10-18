@@ -1,0 +1,33 @@
+// expect: 127.0.0.1 7000 db true 1m30s
+// expect: EnvError.invalid: true
+// expect: FsError.notFound
+
+import env, fs, os, str
+
+@env("APP")
+struct Settings {
+    str listen = "0.0.0.0"
+    u16 port = 8080
+    str db = "none"
+    bool verbose
+    Duration timeout = 30s
+}
+
+!void main() {
+    dir := os.env("TMPDIR") catch "/tmp"
+    scoped path := str.format("{dir}/iris-env-load-file.env")
+    try fs.writeAll(path, "# settings\nexport APP_LISTEN=\"127.0.0.1\"\n\nAPP_PORT='9001'\nAPP_DB=db\nAPP_VERBOSE=yes\nAPP_TIMEOUT=1m30s\n")
+    try os.setenv("APP_PORT", "7000")
+    try env.loadFile(path)
+    s := try env.load(Settings)
+    print("{s.listen} {s.port} {s.db} {s.verbose} {s.timeout}")
+
+    try fs.writeAll(path, "A=1\nbroken\n")
+    env.loadFile(path) catch e {
+        print("{e.code}: {str.contains(e.message, "line 2: there is no = in it")}")
+    }
+    try fs.remove(path)
+    env.loadFile(path) catch e {
+        print("{e.code}")
+    }
+}

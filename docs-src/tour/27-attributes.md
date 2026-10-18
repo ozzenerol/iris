@@ -57,6 +57,21 @@ error: EnvError.missing: DATABASE_URL is needed but isn't set
 
 An `@env` struct gets a `free` method, which frees its `String`s, so `scoped` works on it.
 
+`env.loadFile(path)` reads a file of `KEY=value` lines into the environment, so the `@env` struct can read them. Call it before `env.load`:
+
+```iris
+import env
+
+!void main() {
+    env.loadFile(".env") catch e {
+        print("no settings file: {e.message}")
+    }
+    scoped s := try env.load(Settings)
+}
+```
+
+Blank lines and lines starting with `#` are skipped. A line may start with `export `, and a value may be wrapped in double or single quotes, which are taken off. A variable that is already set keeps its value, so the environment wins over the file. A line with no `=` is `EnvError.invalid`, and a file that can't be read gives the error from [fs](../std/index.html#fs).
+
 ## @flags
 
 `@flags` lets `flags.parse` fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The [Command-line flags](30-flags.html) chapter covers it.
