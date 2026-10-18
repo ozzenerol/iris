@@ -458,6 +458,10 @@ def guide_tests(iris, only, failures):
                 except (ProcessLookupError, subprocess.TimeoutExpired):
                     os.killpg(server.pid, signal.SIGKILL)
                 server = None
+                # the program itself can outlive the shell that started it by a little
+                deadline = time.time() + 5
+                while time.time() < deadline and port_open(8080):
+                    time.sleep(0.05)
 
         with tempfile.TemporaryDirectory() as top:
             # the reader's folder holds only what the guide makes
