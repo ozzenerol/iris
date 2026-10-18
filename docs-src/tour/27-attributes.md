@@ -62,15 +62,30 @@ An `@env` struct gets a `free` method, which frees its `String`s, so `scoped` wo
 ```iris
 import env
 
+@env("PROXY")
+struct Settings {
+    str listenAddress = "0.0.0.0"
+    u16 port = 8390
+}
+
 !void main() {
     env.loadFile(".env") catch e {
         print("no settings file: {e.message}")
     }
     scoped s := try env.load(Settings)
+    print("{s.listenAddress}:{s.port}")
 }
 ```
 
-Blank lines and lines starting with `#` are skipped. A line may start with `export `, and a value may be wrapped in double or single quotes, which are taken off. A variable that is already set keeps its value, so the environment wins over the file. A line with no `=` is `EnvError.invalid`, and a file that can't be read gives the error from [fs](../std/index.html#fs).
+A `.env` for it:
+
+```shell
+# the proxy
+PROXY_LISTEN_ADDRESS="127.0.0.1"
+PROXY_PORT=9001 # the port it listens on
+```
+
+Blank lines and lines starting with `#` are skipped, and a `#` after a space starts a comment. A line may start with `export `. A value may be wrapped in double or single quotes, which are taken off, and inside them `#` is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no `=`, a name that isn't letters, digits and `_`, or a quote that isn't closed is `EnvError.invalid`, with the file and line in the message. A file that can't be read gives the error from [fs](../std/index.html#fs).
 
 ## @flags
 

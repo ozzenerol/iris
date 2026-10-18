@@ -1,5 +1,11 @@
 // expect: 127.0.0.1 7000 db true 1m30s
-// expect: EnvError.invalid: true
+// expect: [a # b] [c#d] [x=y] [] [crlf]
+// expect: EnvError.invalid: line 2: there is no = in it
+// expect: EnvError.invalid: line 1: '' can't be the name of a variable
+// expect: EnvError.invalid: line 1: 'MY KEY' can't be the name of a variable
+// expect: EnvError.invalid: line 1: '1A' can't be the name of a variable
+// expect: EnvError.invalid: line 1: the quote isn't closed
+// expect: EnvError.invalid: line 1: there is text after the closing quote
 // expect: FsError.notFound
 
 import env, fs, os, str
@@ -13,19 +19,38 @@ struct Settings {
     Duration timeout = 30s
 }
 
+void bad(str path, str text) {
+    fs.writeAll(path, text) catch e {
+        print("{e.message}")
+        return
+    }
+    env.loadFile(path) catch e {
+        _, after, _ := str.cut(e.message, ".env ")
+        print("{e.code}: {after}")
+        return
+    }
+    print("no error")
+}
+
 !void main() {
     dir := os.env("TMPDIR") catch "/tmp"
     scoped path := str.format("{dir}/iris-env-load-file.env")
-    try fs.writeAll(path, "# settings\nexport APP_LISTEN=\"127.0.0.1\"\n\nAPP_PORT='9001'\nAPP_DB=db\nAPP_VERBOSE=yes\nAPP_TIMEOUT=1m30s\n")
+    try fs.writeAll(path, "# settings\nexport APP_LISTEN=\"127.0.0.1\"\n\nAPP_PORT='9001'\nAPP_DB=db # the database\nAPP_VERBOSE=yes\nAPP_TIMEOUT=1m30s\t# how long\n")
     try os.setenv("APP_PORT", "7000")
     try env.loadFile(path)
     s := try env.load(Settings)
     print("{s.listen} {s.port} {s.db} {s.verbose} {s.timeout}")
 
-    try fs.writeAll(path, "A=1\nbroken\n")
-    env.loadFile(path) catch e {
-        print("{e.code}: {str.contains(e.message, "line 2: there is no = in it")}")
-    }
+    try fs.writeAll(path, "T_ONE=\"a # b\" # comment\nT_TWO=c#d\nT_THREE=x=y\nT_FOUR=\nT_FIVE=crlf\r\n")
+    try env.loadFile(path)
+    print("[{try os.env("T_ONE")}] [{try os.env("T_TWO")}] [{try os.env("T_THREE")}] [{try os.env("T_FOUR")}] [{try os.env("T_FIVE")}]")
+
+    bad(path, "A=1\nbroken\n")
+    bad(path, "=x\n")
+    bad(path, "MY KEY=1\n")
+    bad(path, "1A=1\n")
+    bad(path, "B=\"abc\n")
+    bad(path, "B=\"abc\" def\n")
     try fs.remove(path)
     env.loadFile(path) catch e {
         print("{e.code}")
