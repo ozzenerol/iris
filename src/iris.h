@@ -347,6 +347,7 @@ extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64, 
 int64_t typeSizeOf(Type *t);
 int64_t fieldOffset(Type *t, int index);
 bool isJsonStruct(Type *t);
+bool isJsonList(Type *t);
 
 /* What a call does when it isn't a call to a user function. */
 enum {

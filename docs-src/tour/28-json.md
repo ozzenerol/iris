@@ -112,6 +112,54 @@ struct Backend {
 3 ports, the last 8080
 ```
 
+## Lists
+
+A `List` field is a JSON array too. `decode` fills the list, which keeps growing with `push` after, and the struct's `free` frees the list and what is in it. `json.decode(List[T], text)` reads a whole array into a new list, which the caller frees:
+
+```iris run
+import json
+
+@json
+struct Backend {
+    String addr
+    i64 weight = 1
+}
+
+// The upstreams of a reverse proxy.
+@json
+struct Pool {
+    String name
+    List[Backend] backends
+}
+
+!void main() {
+    scoped Pool pool = try json.decode(Pool, r"""
+        {"name": "billing", "backends": [{"addr": "10.0.0.11:8080", "weight": 3}, {"addr": "10.0.0.12:8080"}]}
+        """)
+    pool.backends.push(Backend{addr: "10.0.0.13:8080".copy()})
+    for b in pool.backends {
+        print("{b.addr} weight {b.weight}")
+    }
+    scoped String text = json.encode(pool)
+    print(text)
+
+    ports := try json.decode(List[u16], "[80, 443]")
+    ports.push(8080)
+    print("{ports.len} ports, the last {ports.last()}")
+    ports.free()
+}
+```
+
+```output
+10.0.0.11:8080 weight 3
+10.0.0.12:8080 weight 1
+10.0.0.13:8080 weight 1
+{"name":"billing","backends":[{"addr":"10.0.0.11:8080","weight":3},{"addr":"10.0.0.12:8080","weight":1},{"addr":"10.0.0.13:8080","weight":1}]}
+3 ports, the last 8080
+```
+
+The second backend has no `"weight"`, so it keeps the default, 1.
+
 ## Enums
 
 An enum field is a string in JSON, the name of one of the enum's values. `decode` turns the string back into the value, and a slice of an enum is read from an array of strings. A string that names no value is a `wrongType` error:
@@ -211,7 +259,7 @@ JsonError.missing: the required field "request_id" is missing
 
 ## What a @json struct can hold
 
-Integers, floats, `bool`, `String`, plain enums, other `@json` structs, and slices and arrays of those. Fields of an embedded struct appear as fields of the outer one. A `str` field can be encoded but not decoded, since a `str` can't own the text it would point to; decoded text goes in a `String`.
+Integers, floats, `bool`, `String`, plain enums, other `@json` structs, and slices, arrays and `List`s of those. Fields of an embedded struct appear as fields of the outer one. A `str` field can be encoded but not decoded, since a `str` can't own the text it would point to; decoded text goes in a `String`.
 
 ## Errors
 

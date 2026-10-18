@@ -1172,8 +1172,14 @@ bool isJsonStruct(Type *t) {
     return t->kind == TY_STRUCT && t->decl && (t->decl->flags & F_JSON);
 }
 
+/* A List[T] of std/core, which JSON reads and writes as an array. */
+bool isJsonList(Type *t) {
+    return t->kind == TY_STRUCT && t->generic && t->nargs == 1 && t->generic->module &&
+           strcmp(t->generic->module, "core") == 0 && strcmp(t->generic->name, "List") == 0;
+}
+
 /* What JSON can hold: numbers, bool, text, plain enums, @json structs, and
- * slices and arrays of those. */
+ * slices, arrays and Lists of those. */
 static bool jsonType(Checker *c, Type *t, Node *at, const char *owner) {
     switch (t->kind) {
     case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING:
@@ -1188,6 +1194,7 @@ static bool jsonType(Checker *c, Type *t, Node *at, const char *owner) {
     case TY_SLICE: case TY_ARRAY:
         return isStr(t) || jsonType(c, t->elem, at, owner);
     case TY_STRUCT:
+        if (isJsonList(t)) return jsonType(c, t->args[0], at, owner);
         if (!t->decl || !(t->decl->flags & F_JSON)) {
             if (t->decl && !t->state) resolveStruct(c, t);
             if (t->decl && (t->decl->flags & F_JSON)) return true;
@@ -3988,6 +3995,9 @@ static Type *typeArgument(Checker *c, Node *a) {
     if (a->kind == N_T_SLICE) {
         return resolveType(c, a);
     }
+    if (a->kind == N_INDEX) {
+        return typeFromExpr(c, a, true);
+    }
     error(c, a, "this should be a type's name: json.decode(User, text)");
     return &tyError;
 }
@@ -4001,6 +4011,9 @@ static bool jsonDecodable(Checker *c, Type *t, Node *at) {
     }
     if (t->kind == TY_SLICE || t->kind == TY_ARRAY) {
         return jsonDecodable(c, t->elem, at);
+    }
+    if (isJsonList(t)) {
+        return jsonDecodable(c, t->args[0], at);
     }
     if (isJsonStruct(t)) {
         for (int i = 0; i < t->decl->list.len; i++) {
@@ -4034,7 +4047,7 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         }
         Type *t = checkExpr(c, &e->list.items[0], NULL);
         if (isErr(t)) return setType(e, &tyError);
-        if (t->kind == TY_STRUCT && !isJsonStruct(t)) {
+        if (t->kind == TY_STRUCT && !isJsonStruct(t) && !isJsonList(t)) {
             error(c, e->list.items[0], "%s needs @json to be turned into JSON", t->name);
             return setType(e, &tyError);
         }
@@ -4130,7 +4143,7 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         Type *t = typeArgument(c, e->list.items[0]);
         if (isErr(t)) return setType(e, &tyError);
         if (t->kind == TY_STRUCT) resolveStruct(c, t);
-        if (t->kind == TY_STRUCT && !isJsonStruct(t)) {
+        if (t->kind == TY_STRUCT && !isJsonStruct(t) && !isJsonList(t)) {
             error(c, e->list.items[0], "%s needs @json to be read from JSON", t->name);
             return setType(e, &tyError);
         }

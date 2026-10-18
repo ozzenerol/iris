@@ -2614,7 +2614,7 @@ int64_t iris_cpu_count(void) {
    json.encode, json.decode and the free of @json structs work from a table
    the compiler writes for each type (ir.c, jsonType). */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST };
 
 typedef struct JsonType {
     int32_t kind, size;
@@ -2639,6 +2639,13 @@ typedef struct {
     char *ptr;
     int64_t len;
 } Slice;
+
+/* A List[T] as JSON sees it: its buffer, whose len is the room it has, and
+   how many values are in use. */
+typedef struct {
+    Slice buf;
+    int64_t len;
+} JsonList;
 
 static int64_t readInt(const char *p, int size, bool sign) {
     switch (size) {
@@ -2750,13 +2757,16 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
         iris_string_append(out, "}", 1);
         break;
     }
-    case J_SLICE: case J_ARRAY: {
+    case J_SLICE: case J_ARRAY: case J_LIST: {
         const JsonType *et = t->items;
         const char *base = p;
         int64_t n = t->count;
         if (t->kind == J_SLICE) {
             base = ((const Slice *)p)->ptr;
             n = ((const Slice *)p)->len;
+        } else if (t->kind == J_LIST) {
+            base = ((const JsonList *)p)->buf.ptr;
+            n = ((const JsonList *)p)->len;
         }
         iris_string_append(out, "[", 1);
         for (int64_t i = 0; i < n; i++) {
@@ -2775,7 +2785,7 @@ void iris_json_encode(const JsonType *t, const char *value, IrisString *out) {
 
 static bool jsonOwns(const JsonType *t) {
     switch (t->kind) {
-    case J_STRING: case J_SLICE: return true;
+    case J_STRING: case J_SLICE: case J_LIST: return true;
     case J_ARRAY: return jsonOwns(t->items);
     case J_STRUCT: {
         const JsonField *fs = t->items;
@@ -2817,6 +2827,16 @@ static void jsonFree(const JsonType *t, char *p) {
         free(s->ptr);
         s->ptr = NULL;
         s->len = 0;
+        break;
+    }
+    case J_LIST: {
+        const JsonType *et = t->items;
+        JsonList *l = (JsonList *)p;
+        if (jsonOwns(et)) {
+            for (int64_t i = 0; i < l->len; i++) jsonFree(et, l->buf.ptr + i * et->size);
+        }
+        free(l->buf.ptr);
+        memset(l, 0, sizeof *l);
         break;
     }
     }
@@ -3177,7 +3197,7 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
 
 static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
     const JsonType *et = t->items;
-    bool slice = t->kind == J_SLICE;
+    bool slice = t->kind == J_SLICE || t->kind == J_LIST;
     char *buf = slice ? NULL : p;
     int64_t n = 0, cap = slice ? 0 : t->count;
     if (slice) {
@@ -3228,7 +3248,13 @@ static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
         }
     }
     in->depth--;
-    if (slice) {
+    if (t->kind == J_LIST) {
+        /* the list keeps the room it grew, for the values pushed later */
+        JsonList *l = (JsonList *)p;
+        l->buf.ptr = buf;
+        l->buf.len = cap;
+        l->len = n;
+    } else if (slice) {
         Slice *s = (Slice *)p;
         s->ptr = buf;
         s->len = n;
@@ -3330,7 +3356,7 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
     case J_STRUCT:
         if (*in->p != '{') return jsonExpected(in, "an object");
         return jsonStruct(in, t, p);
-    case J_SLICE: case J_ARRAY:
+    case J_SLICE: case J_ARRAY: case J_LIST:
         if (*in->p != '[') return jsonExpected(in, "an array");
         return jsonList(in, t, p);
     default:

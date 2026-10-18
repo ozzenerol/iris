@@ -1045,7 +1045,7 @@ static void addTemp(IR *ir, const char *slot) {
  * or array points at its element's table; an enum at its values' names,
  * { ptr name, i64 len, i64 value }. */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST };
 
 static void jsonFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n) {
     NodeList *fields = &t->decl->list;
@@ -1126,6 +1126,11 @@ static const char *jsonType(IR *ir, Type *t) {
         break;
     }
     case TY_STRUCT: {
+        if (isJsonList(t)) {
+            kind = J_LIST;
+            items = jsonType(ir, t->args[0]);
+            break;
+        }
         kind = J_STRUCT;
         StrBuf b = {0};
         int n = 0;

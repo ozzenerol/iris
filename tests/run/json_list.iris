@@ -1,0 +1,47 @@
+// expect: edge 2 1 2 0
+// expect: a:1 3
+// expect: b:2 1
+// expect: {"name":"edge","backends":[{"addr":"a:1","weight":3},{"addr":"b:2","weight":1},{"addr":"c:3","weight":1}],"protos":["grpc"],"tags":["x","y"],"empty":[4]}
+// expect: 2 443
+// expect: [80,443]
+// expect: JsonError.wrongType: backends[0].addr: expected a string, found a number
+
+import json
+
+enum Proto { http, grpc }
+
+@json
+struct Backend {
+    String addr
+    i64 weight = 1
+}
+
+@json
+struct Config {
+    String name
+    List[Backend] backends
+    List[Proto] protos
+    List[String] tags
+    List[i64] empty
+}
+
+!void main() {
+    scoped Config c = try json.decode(Config, r"""{"name": "edge", "backends": [{"addr": "a:1", "weight": 3}, {"addr": "b:2"}], "protos": ["grpc"], "tags": ["x", "y"], "empty": []}""")
+    print("{c.name} {c.backends.len} {c.protos.len} {c.tags.len} {c.empty.len}")
+    for b in c.backends {
+        print("{b.addr} {b.weight}")
+    }
+    c.backends.push(Backend{addr: "c:3".copy()})
+    c.empty.push(4)
+    scoped String text = json.encode(c)
+    print(text)
+    list := try json.decode(List[u16], "[80, 443]")
+    print("{list.len} {list.at(1)}")
+    scoped String t2 = json.encode(list)
+    print(t2)
+    list.free()
+    _ = json.decode(Config, r"""{"backends": [{"addr": 1}]}""") catch e {
+        print("{e.code}: {e.message}")
+        Config{}
+    }
+}

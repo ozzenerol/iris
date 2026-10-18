@@ -57,6 +57,8 @@ struct Point {
 3,4
 ```
 
+`json.decode(List[Point], text)` reads it into a `List` instead, and a `List` field of a `@json` struct is read and written as an array the same way.
+
 ## Errors
 
 Decoding fails with a `JsonError`, and the message says where:
