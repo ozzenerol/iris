@@ -49,3 +49,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.43 | `a if cond else b`, a choice of value on one line (`return true if rows == 1 else false`). | released |
 | 0.44 | The Language Tour's examples come from networking and systems work, a guide that builds a TCP chat server, `import c` follows a macro defined as another macro (`AF_INET` on Linux), and a generic used with `Duration` and with `i64` gets an instance for each. | released |
 | 0.45 | `env.loadFile(path)` reads a file of `KEY=value` lines into the environment, so an `@env` struct can be filled from a `.env` file. | released |
+| 0.46 | `env.loadWith(Settings, ".env")` reads a `.env` file when there is one and fills the `@env` struct in one call. | released |
