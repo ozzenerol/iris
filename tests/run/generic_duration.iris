@@ -1,0 +1,27 @@
+// expect: 2920 500ms
+// expect: 1s 1460
+// expect: 2s 3
+// A Duration and an i64 get separate instances, whichever comes first.
+
+T twice[T](T x) => x + x
+
+T first[T](T[] xs) => xs[0]
+
+struct Box[T] {
+    T v
+}
+
+void main() {
+    print("{twice(1460)} {twice(250ms)}")
+    Duration[2] ds = [1s, 2s]
+    i64[2] ns = [1460, 1]
+    print("{first(ds)} {first(ns)}")
+    List[Duration] waits
+    defer waits.free()
+    waits.push(2s)
+    List[i64] sizes
+    defer sizes.free()
+    sizes.push(3)
+    b := Box[Duration]{v: waits.at(0)}
+    print("{b.v} {sizes.at(0)}")
+}

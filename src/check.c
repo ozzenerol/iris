@@ -404,25 +404,33 @@ static Type *tupleOf(Type **elems, int n) {
     return t;
 }
 
-static bool sameType(Type *a, Type *b) {
+/* exact also tells Duration from i64: they are one type to the code, but a
+   generic instance for each prints its values differently */
+static bool sameTypeAs(Type *a, Type *b, bool exact) {
     if (a == b) return true;
     if (a->kind != b->kind) return false;
     switch (a->kind) {
-    case TY_INT: return a->bits == b->bits && a->isSigned == b->isSigned;
+    case TY_INT:
+        if (exact && (a == &tyDuration) != (b == &tyDuration)) return false;
+        return a->bits == b->bits && a->isSigned == b->isSigned;
     case TY_FLOAT: return a->bits == b->bits;
     case TY_PTR: case TY_SLICE: case TY_RESULT: case TY_CHAN: case TY_ATOMIC:
-        return sameType(a->elem, b->elem);
-    case TY_ARRAY: return a->count == b->count && sameType(a->elem, b->elem);
+        return sameTypeAs(a->elem, b->elem, exact);
+    case TY_ARRAY: return a->count == b->count && sameTypeAs(a->elem, b->elem, exact);
     case TY_STRUCT: case TY_ENUM: return a->decl == b->decl;
     case TY_TUPLE: case TY_FUNC:
         if (a->nelems != b->nelems) return false;
-        if (a->kind == TY_FUNC && !sameType(a->elem, b->elem)) return false;
+        if (a->kind == TY_FUNC && !sameTypeAs(a->elem, b->elem, exact)) return false;
         for (int i = 0; i < a->nelems; i++) {
-            if (!sameType(a->elems[i], b->elems[i])) return false;
+            if (!sameTypeAs(a->elems[i], b->elems[i], exact)) return false;
         }
         return true;
     default: return true;
     }
+}
+
+static bool sameType(Type *a, Type *b) {
+    return sameTypeAs(a, b, false);
 }
 
 static void resolveStruct(Checker *c, Type *t);
@@ -1545,7 +1553,7 @@ static Instance *findInstance(Checker *c, Node *generic, Type **args, int n) {
         if (in->generic != generic || in->nargs != n) continue;
         bool same = true;
         for (int i = 0; i < n && same; i++) {
-            same = sameType(in->args[i], args[i]);
+            same = sameTypeAs(in->args[i], args[i], true);
         }
         if (same) return in;
     }
