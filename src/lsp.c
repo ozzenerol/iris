@@ -513,6 +513,138 @@ static char *fileUri(const char *path) {
     return uriOf(realpath(path, full) ? full : path);
 }
 
+/* The names the compiler knows itself have no file. builtin.iris in the
+ * cache shows them, so hover and go to definition have a place to go:
+ * Error, e.code, error(...), print, Mutex.lock... */
+typedef struct {
+    const char *key;        /* Error, Error.code, print */
+    const char *doc;        /* comment lines above the declaration, or a blank line */
+    const char *decl;
+} Builtin;
+
+static const Builtin builtinDecls[] = {
+    {NULL, "// The names Iris knows without an import. The compiler makes them; this\n"
+           "// file only shows them.\n\n", NULL},
+    {"Error", "// What a function that returns !T gives when it fails. catch e { } and\n"
+              "// try pass it on; print(\"{e.message}\") shows it.\n", "struct Error {"},
+    {"Error.code", "    // What went wrong: a value of the enum named in error(...),\n"
+                   "    // compared and matched on as that enum's values.\n", "    error code code"},
+    {"Error.message", "    // What happened, for people: \"no port given\". Empty when error(...)\n"
+                      "    // had no message.\n", "    str message"},
+    {NULL, NULL, "}\n"},
+    {"error", "// Makes an Error from an enum value and, if wanted, a message, which can\n"
+              "// have values in braces: return error(ParseError.empty, \"no port given\")\n",
+     "Error error(enum code, str message)\n"},
+    {"print", "// Writes the text and a new line to standard output. Values go in braces:\n"
+              "// print(\"{n} items\")\n", "void print(str text)\n"},
+    {"format", "// Makes a String from text with values in braces. Free it when done.\n",
+     "String format(str text)\n"},
+    {"panic", "// Stops the program with the message, the file and the line.\n",
+     "@noreturn void panic(str message)\n"},
+    {"alloc", "// n new items of type T, all at zero: u8[] buf = alloc(u8, 4096). Give the\n"
+              "// memory back with free.\n", "T[] alloc(type T, i64 n)\n"},
+    {"free", "// Gives back the memory of a slice or pointer from alloc. A String is\n"
+             "// freed with s.free().\n", "void free(T[] memory)\n"},
+    {"sleep", "// Waits the time: sleep(200ms). Other tasks of the thread keep running.\n",
+     "void sleep(Duration d)\n"},
+    {"after", "// A select arm that runs when nothing came in the time: after(5s) => ...\n",
+     "after(Duration d)\n"},
+    {"expect", "// In a test block: checks the condition and, when it is false, reports the\n"
+               "// file, the line and the message, then goes on.\n",
+     "void expect(bool cond, str message)\n"},
+    {"str", "// Text that is borrowed: a slice of bytes, UTF-8.\n", "type str = u8[]\n"},
+    {"String", "// Text that is owned and can grow. Free it with s.free().\n", "struct String\n"},
+    {"Duration", "// A time in nanoseconds, written 250ms, 2s, 10m, 1h. Prints as 1m30s.\n",
+     "type Duration = i64\n"},
+    {"Mutex", "// Guards data that takes more than one step to change. Can't be copied.\n",
+     "struct Mutex {"},
+    {"Mutex.lock", "    // Takes the lock, waiting while another task holds it.\n", "    void lock()"},
+    {"Mutex.unlock", "    // Gives the lock back. Unlocking a Mutex that isn't locked stops the program.\n",
+     "    void unlock()"},
+    {"Mutex.tryLock", "    // Takes the lock if it is free, and says whether it did.\n", "    bool tryLock()"},
+    {NULL, NULL, "}\n"},
+    {"Thread", "// What thread f(x) gives.\n", "struct Thread {"},
+    {"Thread.join", "    // Waits for the thread to end.\n", "    void join()"},
+    {NULL, NULL, "}\n"},
+    {"Atomic", "// An integer or a bool that threads change safely. Can't be copied.\n", "struct Atomic[T] {"},
+    {"Atomic.load", "    // The value.\n", "    T load()"},
+    {"Atomic.store", "    // Sets it.\n", "    void store(T v)"},
+    {"Atomic.add", "    // Adds n and gives the new value. Not for Atomic[bool].\n", "    T add(T n)"},
+    {"Atomic.sub", "    // Takes away n and gives the new value. Not for Atomic[bool].\n", "    T sub(T n)"},
+    {"Atomic.swap", "    // Sets it and gives the old value.\n", "    T swap(T v)"},
+    {"Atomic.cas", "    // Sets it to new if it is old, and says whether it did.\n", "    bool cas(T old, T new)"},
+    {NULL, NULL, "}\n"},
+};
+
+static void builtinText(StrBuf *b) {
+    for (size_t i = 0; i < sizeof builtinDecls / sizeof builtinDecls[0]; i++) {
+        if (builtinDecls[i].doc) sbPuts(b, builtinDecls[i].doc);
+        if (builtinDecls[i].decl) {
+            sbPuts(b, builtinDecls[i].decl);
+            sbPutc(b, '\n');
+        }
+    }
+}
+
+/* Where builtin.iris is, written there the first time. */
+static void builtinPath(char *path, size_t size) {
+    char dir[4096];
+    stdCacheDir(dir, sizeof dir);
+    snprintf(path, size, "%s/builtin.iris", dir);
+    struct stat st;
+    if (stat(path, &st) == 0) return;
+    for (char *s = path + 1; *s; s++) {
+        if (*s == '/') {
+            *s = 0;
+            mkdir(path, 0755);
+            *s = '/';
+        }
+    }
+    StrBuf b = {0};
+    builtinText(&b);
+    writeText(path, b.buf, b.len);
+    sbFree(&b);
+}
+
+static bool isBuiltinFile(const char *path) {
+    char bp[4200], real[4096], rbp[4096];
+    builtinPath(bp, sizeof bp);
+    return realpath(path, real) && realpath(bp, rbp) && strcmp(real, rbp) == 0;
+}
+
+/* The line of a built-in name in builtin.iris, from 1, and the column of its
+ * name; 0 when there is none. */
+static int builtinLine(const char *key, int *col) {
+    int line = 1;
+    for (size_t i = 0; i < sizeof builtinDecls / sizeof builtinDecls[0]; i++) {
+        for (const char *p = builtinDecls[i].doc; p && *p; p++) line += *p == '\n';
+        if (builtinDecls[i].key && strcmp(builtinDecls[i].key, key) == 0) {
+            const char *dot = strchr(key, '.');
+            const char *name = dot ? dot + 1 : key;
+            const char *d = builtinDecls[i].decl;
+            size_t n = strlen(name);
+            *col = 1;
+            /* the last one: in "error code code" the name is the second */
+            for (const char *p = d; (p = strstr(p, name)); p++) {
+                bool start = p == d || !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
+                bool end = !(isalnum((unsigned char)p[n]) || p[n] == '_');
+                if (start && end) *col = (int)(p - d) + 1;
+            }
+            return line;
+        }
+        for (const char *p = builtinDecls[i].decl; p && *p; p++) line += *p == '\n';
+        line += builtinDecls[i].decl != NULL;
+    }
+    return 0;
+}
+
+static const Builtin *builtinOf(const char *key) {
+    for (size_t i = 0; i < sizeof builtinDecls / sizeof builtinDecls[0]; i++) {
+        if (builtinDecls[i].key && strcmp(builtinDecls[i].key, key) == 0) return &builtinDecls[i];
+    }
+    return NULL;
+}
+
 /* publishDiagnostics for every file with errors, and empty ones for the
  * files that had errors before; then a record of the new list. */
 static void putDiagnostics(StrBuf *out, Program *prog, const char *mainPath) {
@@ -904,8 +1036,70 @@ static Node *declAt(Program *prog, Source *src, int line, int col) {
     return d;
 }
 
+static size_t offsetOf(Source *src, int line, int col);
+
+/* The built-in name under the cursor, as builtinDecls names it: Error, print,
+ * e.code as Error.code, lock.lock() as Mutex.lock; NULL for other names. */
+static const Builtin *builtinAt(Program *prog, Source *src, int line, int col) {
+    if (!src || !src->text) return NULL;
+    size_t at = offsetOf(src, line, col), s = at, e = at;
+    const char *t = src->text;
+    while (s > 0 && (isalnum((unsigned char)t[s - 1]) || t[s - 1] == '_')) s--;
+    while (e < src->len && (isalnum((unsigned char)t[e]) || t[e] == '_')) e++;
+    if (e == s || e - s > 64) return NULL;
+    char word[80];
+    memcpy(word, t + s, e - s);
+    word[e - s] = 0;
+    if (s > 0 && t[s - 1] == '.') {
+        /* a field or method: the type of the value before the dot */
+        Node *parent = NULL;
+        Node *n = prog ? nodeAt(prog, src, line, col, &parent, NULL, true) : NULL;
+        Type *bt = n && n->kind == N_FIELD_ACCESS && n->a ? n->a->type : NULL;
+        if (bt && bt->kind == TY_PTR) bt = bt->elem;
+        const char *tn = !bt ? NULL
+                       : bt->kind == TY_ERRVAL ? "Error"
+                       : bt->kind == TY_MUTEX ? "Mutex"
+                       : bt->kind == TY_THREAD ? "Thread"
+                       : bt->kind == TY_ATOMIC ? "Atomic"
+                       : NULL;
+        if (!tn) return NULL;
+        char key[160];
+        snprintf(key, sizeof key, "%s.%s", tn, word);
+        return builtinOf(key);
+    }
+    return strchr(word, '.') ? NULL : builtinOf(word);
+}
+
 static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
     Node *d = declAt(prog, src, line, col);
+    const Builtin *bi = d ? NULL : builtinAt(prog, src, line, col);
+    if (bi) {
+        StrBuf v = {0};
+        sbPuts(&v, "```iris\n");
+        const char *decl = bi->decl;
+        while (*decl == ' ') decl++;
+        size_t dl = strcspn(decl, "{\n");
+        while (dl && decl[dl - 1] == ' ') dl--;
+        sbPutn(&v, decl, dl);
+        sbPuts(&v, "\n```\n\n");
+        for (const char *p = bi->doc; *p;) {
+            while (*p == ' ') p++;
+            if (p[0] == '/' && p[1] == '/') p += p[2] == ' ' ? 3 : 2;
+            const char *nl = strchr(p, '\n');
+            size_t n = nl ? (size_t)(nl - p) : strlen(p);
+            sbPutn(&v, p, n);
+            sbPutc(&v, '\n');
+            p += n + (nl != NULL);
+        }
+        StrBuf r = {0};
+        sbPuts(&r, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
+        putJsonString(&r, v.buf, v.len);
+        sbPuts(&r, "}}");
+        reply(out, id, r.buf);
+        sbFree(&v);
+        sbFree(&r);
+        return;
+    }
     if (!d) {
         reply(out, id, NULL);
         return;
@@ -929,8 +1123,6 @@ static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int 
     sbFree(&doc);
     sbFree(&r);
 }
-
-static size_t offsetOf(Source *src, int line, int col);
 
 /* A module named by the word under the cursor, as in `import sqlite` or
  * sqlite.open: the file of the module with its name (sqlite/sqlite.iris), or
@@ -978,6 +1170,24 @@ static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line,
                 return;
             }
         }
+    }
+    const Builtin *bi = d ? NULL : builtinAt(prog, src, line, col);
+    if (bi) {
+        char path[4200];
+        builtinPath(path, sizeof path);
+        int bcol = 1, bline = builtinLine(bi->key, &bcol);
+        char *bu = uriOf(path);
+        const char *dot = strchr(bi->key, '.');
+        StrBuf r = {0};
+        sbPuts(&r, "{\"uri\":");
+        putStr(&r, bu);
+        sbPuts(&r, ",\"range\":");
+        putRange(&r, NULL, bline, bcol, (int)strlen(dot ? dot + 1 : bi->key));
+        sbPutc(&r, '}');
+        reply(out, id, r.buf);
+        free(bu);
+        sbFree(&r);
+        return;
     }
     char *u = d && d->src ? fileUri(d->src->path) : NULL;
     if (!u) {
@@ -1495,6 +1705,11 @@ static void handleInChild(J *msg, StrBuf *out) {
         snprintf(viewText, sizeof viewText, "%s%s\n", strcmp(mod, "core") ? "import " : "", strcmp(mod, "core") ? mod : "");
         prog = analyze(viewPath);
         src = sourceOf(prog, std);
+        ndiags = 0;
+    } else if (path && isBuiltinFile(path)) {
+        /* builtin.iris only shows the built-in names: nothing to check */
+        prog = NULL;
+        src = NULL;
         ndiags = 0;
     } else {
         prog = path ? analyze(path) : NULL;

@@ -300,6 +300,8 @@ f64 total(dyn Shape s) => s.area()
         ("an interface after dyn", 25, "Shape", 1, ("main.iris", 3, "Shape")),
         ("a type parameter", 23, "T", 1, ("main.iris", 23, "T]")),
         ("a type parameter in a parameter", 23, "T a", 1, ("main.iris", 23, "T]")),
+        ("print, a built-in", 30, "print", 1, ("builtin.iris", None, "print")),
+        ("an Error's message", 30, "message", 1, ("builtin.iris", None, "message")),
     ]
     for what, line, word, nth, want in cases:
         got = goto(gpath, glines, line, word, nth)
