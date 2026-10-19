@@ -50,46 +50,46 @@ try {
 <p class="lede">A method is a function that belongs to a struct. This chapter covers declaring them, what <code>self</code> is, the conventions for making and freeing values, and methods that make a type work with the rest of the language.</p>
 <h2 id="declaring-a-method"><a href="#declaring-a-method">Declaring a method</a></h2>
 <p>A method is declared like a function, with the struct's name and a dot in front of its name. Inside it, <code>self</code> is a pointer to the value it was called on, and reaches its fields with a dot:</p>
-<pre class="code run"><code><span class="k">struct</span> Server {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Server</span> {
     <span class="t">str</span> name
     <span class="t">i64</span> open
 }
 
-<span class="t">void</span> Server.accepted(<span class="t">i64</span> n) {
-    self.open += n
+<span class="t">void</span> <span class="t">Server</span>.<span class="f">accepted</span>(<span class="t">i64</span> n) {
+    <span class="k">self</span>.open += n
 }
 
-<span class="t">str</span> Server.load() =&gt; <span class="k">if</span> self.open &gt; <span class="n">10</span> { <span class="s">&quot;busy&quot;</span> } <span class="k">else</span> { <span class="s">&quot;quiet&quot;</span> }
+<span class="t">str</span> <span class="t">Server</span>.<span class="f">load</span>() =&gt; <span class="k">if</span> <span class="k">self</span>.open &gt; <span class="n">10</span> { <span class="s">&quot;busy&quot;</span> } <span class="k">else</span> { <span class="s">&quot;quiet&quot;</span> }
 
-<span class="t">void</span> main() {
-    s := Server{name: <span class="s">&quot;edge-1&quot;</span>}
-    s.accepted(<span class="n">4</span>)
-    s.accepted(<span class="n">9</span>)
-    print(<span class="s">&quot;{s.name}: {s.open} open, {s.load()}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Server</span>{name: <span class="s">&quot;edge-1&quot;</span>}
+    s.<span class="f">accepted</span>(<span class="n">4</span>)
+    s.<span class="f">accepted</span>(<span class="n">9</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>s.open<span class="e">}</span><span class="s"> open, </span><span class="e">{</span>s.<span class="f">load</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>edge-1: 13 open, busy</code></pre>
 <p>Since <code>self</code> is a pointer, a method can change the value. Called on a variable, it changes the variable. Called on a value that isn't in a variable, like the result of a function, it works on a copy:</p>
 <pre class="code run"><code><span class="c">// A TCP sender&#x27;s window: the bytes it may send before an acknowledgement.</span>
-<span class="k">struct</span> Window {
+<span class="k">struct</span> <span class="t">Window</span> {
     <span class="t">i64</span> start <span class="c">// the first byte not acknowledged yet</span>
     <span class="t">i64</span> size
 }
 
-Window initial() =&gt; Window{size: <span class="n">1460</span>}
+<span class="t">Window</span> <span class="f">initial</span>() =&gt; <span class="t">Window</span>{size: <span class="n">1460</span>}
 
 <span class="c">// In slow start the window grows by what was acknowledged.</span>
-<span class="t">void</span> Window.ack(<span class="t">i64</span> bytes) {
-    self.start += bytes
-    self.size += bytes
+<span class="t">void</span> <span class="t">Window</span>.<span class="f">ack</span>(<span class="t">i64</span> bytes) {
+    <span class="k">self</span>.start += bytes
+    <span class="k">self</span>.size += bytes
 }
 
-<span class="t">i64</span> Window.end() =&gt; self.start + self.size
+<span class="t">i64</span> <span class="t">Window</span>.<span class="f">end</span>() =&gt; <span class="k">self</span>.start + <span class="k">self</span>.size
 
-<span class="t">void</span> main() {
-    w := Window{start: <span class="n">1000</span>, size: <span class="n">2920</span>}
-    w.ack(<span class="n">1460</span>)
-    print(<span class="s">&quot;may send {w.start} to {w.end()}&quot;</span>)
-    print(<span class="s">&quot;{initial().end()}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    w := <span class="t">Window</span>{start: <span class="n">1000</span>, size: <span class="n">2920</span>}
+    w.<span class="f">ack</span>(<span class="n">1460</span>)
+    <span class="f">print</span>(<span class="s">&quot;may send </span><span class="e">{</span>w.start<span class="e">}</span><span class="s"> to </span><span class="e">{</span>w.<span class="f">end</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">initial</span>().<span class="f">end</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>may send 2460 to 6840
 1460</code></pre>
@@ -97,58 +97,58 @@ Window initial() =&gt; Window{size: <span class="n">1460</span>}
 <p>A method can be declared in any file of the module that declares the struct, and in any order. A struct can't have a method and a field with the same name, and each method name is used once.</p>
 <h2 id="making-and-freeing"><a href="#making-and-freeing">Making and freeing</a></h2>
 <p>By convention, a function named after the type, in lower case, makes a value of it, and a method <code>free</code> gives back what the value holds. <code>scoped</code> calls <code>free</code> when the block ends:</p>
-<pre class="code run"><code><span class="k">struct</span> Buffer {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Buffer</span> {
     <span class="t">u8</span>[] data
     <span class="t">i64</span> used
 }
 
-Buffer buffer(<span class="t">i64</span> size) =&gt; Buffer{data: alloc(<span class="t">u8</span>, size)}
+<span class="t">Buffer</span> <span class="f">buffer</span>(<span class="t">i64</span> size) =&gt; <span class="t">Buffer</span>{data: <span class="f">alloc</span>(<span class="t">u8</span>, size)}
 
-<span class="t">void</span> Buffer.free() {
-    free(self.data)
+<span class="t">void</span> <span class="t">Buffer</span>.<span class="f">free</span>() {
+    <span class="f">free</span>(<span class="k">self</span>.data)
 }
 
-<span class="t">void</span> Buffer.add(<span class="t">str</span> text) {
+<span class="t">void</span> <span class="t">Buffer</span>.<span class="f">add</span>(<span class="t">str</span> text) {
     <span class="k">for</span> b <span class="k">in</span> text {
-        self.data[self.used] = b
-        self.used += <span class="n">1</span>
+        <span class="k">self</span>.data[<span class="k">self</span>.used] = b
+        <span class="k">self</span>.used += <span class="n">1</span>
     }
 }
 
-<span class="t">str</span> Buffer.text() =&gt; self.data[<span class="n">0</span>:self.used]
+<span class="t">str</span> <span class="t">Buffer</span>.<span class="f">text</span>() =&gt; <span class="k">self</span>.data[<span class="n">0</span>:<span class="k">self</span>.used]
 
-<span class="t">void</span> main() {
-    <span class="k">scoped</span> Buffer b = buffer(<span class="n">64</span>)
-    b.add(<span class="s">&quot;HTTP/1.1 &quot;</span>)
-    b.add(<span class="s">&quot;200 OK&quot;</span>)
-    print(<span class="s">&quot;[{b.text()}] {b.used} of {b.data.len}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">Buffer</span> b = <span class="f">buffer</span>(<span class="n">64</span>)
+    b.<span class="f">add</span>(<span class="s">&quot;HTTP/1.1 &quot;</span>)
+    b.<span class="f">add</span>(<span class="s">&quot;200 OK&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>b.<span class="f">text</span>()<span class="e">}</span><span class="s">] </span><span class="e">{</span>b.used<span class="e">}</span><span class="s"> of </span><span class="e">{</span>b.data.len<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[HTTP/1.1 200 OK] 15 of 64</code></pre>
 <p>A method that can fail returns <code>!T</code> like any function, and a function that makes a value and can fail returns <code>!Type</code>.</p>
 <h2 id="methods-the-language-uses"><a href="#methods-the-language-uses">Methods the language uses</a></h2>
 <p>Some method names make a struct work with parts of the language:</p>
 <div class="table"><table><thead><tr><th>Method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code> calls it, and so does <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>the struct's text, when it is put into text with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td>a <code>for</code> loop's values, one round at a time</td></tr></tbody></table></div>
-<pre class="code run"><code><span class="k">struct</span> PortRange {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">PortRange</span> {
     <span class="t">u16</span> first
     <span class="t">u16</span> last
 }
 
-<span class="t">String</span> PortRange.format() =&gt; format(<span class="s">&quot;{self.first}-{self.last}&quot;</span>)
+<span class="t">String</span> <span class="t">PortRange</span>.<span class="f">format</span>() =&gt; <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">self</span>.first<span class="e">}</span><span class="s">-</span><span class="e">{</span><span class="k">self</span>.last<span class="e">}</span><span class="s">&quot;</span>)
 
-(<span class="t">u16</span>, <span class="t">bool</span>) PortRange.next(<span class="t">i64</span> *at) {
-    p := <span class="t">i64</span>(self.first) + *at
-    <span class="k">if</span> p &gt; <span class="t">i64</span>(self.last) {
+(<span class="t">u16</span>, <span class="t">bool</span>) <span class="t">PortRange</span>.<span class="f">next</span>(<span class="t">i64</span> *at) {
+    p := <span class="t">i64</span>(<span class="k">self</span>.first) + *at
+    <span class="k">if</span> p &gt; <span class="t">i64</span>(<span class="k">self</span>.last) {
         <span class="k">return</span> (<span class="n">0</span>, <span class="k">false</span>)
     }
     *at += <span class="n">1</span>
     <span class="k">return</span> (<span class="t">u16</span>(p), <span class="k">true</span>)
 }
 
-<span class="t">void</span> main() {
-    r := PortRange{first: <span class="n">8080</span>, last: <span class="n">8082</span>}
-    print(<span class="s">&quot;scanning {r}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    r := <span class="t">PortRange</span>{first: <span class="n">8080</span>, last: <span class="n">8082</span>}
+    <span class="f">print</span>(<span class="s">&quot;scanning </span><span class="e">{</span>r<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">for</span> port <span class="k">in</span> r {
-        print(<span class="s">&quot;{port}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>scanning 8080-8082
@@ -158,25 +158,25 @@ Buffer buffer(<span class="t">i64</span> size) =&gt; Buffer{data: alloc(<span cl
 <p>Methods with the names an interface lists let the struct be used where that interface is wanted (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="methods-through-embedding"><a href="#methods-through-embedding">Methods through embedding</a></h2>
 <p>The methods of an embedded struct can be called on the outer one, and get the embedded struct as <code>self</code>:</p>
-<pre class="code run"><code><span class="k">struct</span> Logger {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Logger</span> {
     <span class="t">str</span> prefix
 }
 
-<span class="t">void</span> Logger.log(<span class="t">str</span> msg) =&gt; print(<span class="s">&quot;[{self.prefix}] {msg}&quot;</span>)
+<span class="t">void</span> <span class="t">Logger</span>.<span class="f">log</span>(<span class="t">str</span> msg) =&gt; <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span><span class="k">self</span>.prefix<span class="e">}</span><span class="s">] </span><span class="e">{</span>msg<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="k">struct</span> Service {
-    Logger
+<span class="k">struct</span> <span class="t">Service</span> {
+    <span class="t">Logger</span>
     <span class="t">str</span> name
 }
 
-<span class="t">void</span> Service.start() {
-    self.log(<span class="s">&quot;starting {self.name}&quot;</span>)
+<span class="t">void</span> <span class="t">Service</span>.<span class="f">start</span>() {
+    <span class="k">self</span>.<span class="f">log</span>(<span class="s">&quot;starting </span><span class="e">{</span><span class="k">self</span>.name<span class="e">}</span><span class="s">&quot;</span>)
 }
 
-<span class="t">void</span> main() {
-    s := Service{Logger: Logger{prefix: <span class="s">&quot;svc&quot;</span>}, name: <span class="s">&quot;api&quot;</span>}
-    s.start()
-    s.log(<span class="s">&quot;ready&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Service</span>{<span class="t">Logger</span>: <span class="t">Logger</span>{prefix: <span class="s">&quot;svc&quot;</span>}, name: <span class="s">&quot;api&quot;</span>}
+    s.<span class="f">start</span>()
+    s.<span class="f">log</span>(<span class="s">&quot;ready&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[svc] starting api
 [svc] ready</code></pre>

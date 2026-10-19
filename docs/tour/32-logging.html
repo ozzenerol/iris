@@ -52,11 +52,11 @@ try {
 <p><code>io.write(text)</code> writes to standard output without a line break; <code>io.ewrite(text)</code> writes to standard error, and <code>io.eprint(text)</code> does the same with a line break:</p>
 <pre class="code run"><code><span class="k">import</span> io
 
-<span class="t">void</span> main() {
-    io.write(<span class="s">&quot;HTTP/1.1 &quot;</span>)
-    io.write(<span class="s">&quot;200 OK\n&quot;</span>)
-    io.eprint(<span class="s">&quot;this goes to standard error&quot;</span>)
-    print(<span class="s">&quot;Content-Length: 0&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    io.<span class="f">write</span>(<span class="s">&quot;HTTP/1.1 &quot;</span>)
+    io.<span class="f">write</span>(<span class="s">&quot;200 OK</span><span class="e">\n</span><span class="s">&quot;</span>)
+    io.<span class="f">eprint</span>(<span class="s">&quot;this goes to standard error&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;Content-Length: 0&quot;</span>)
 }</code></pre>
 <pre class="out"><code>HTTP/1.1 200 OK
 Content-Length: 0</code></pre>
@@ -65,21 +65,21 @@ Content-Length: 0</code></pre>
 <p><code>io.readLine()</code> gives the next line of standard input as a new <code>String</code>, without its line break, and fails with <code>io.IoError.eof</code> when there is no more. <code>io.readAll()</code> gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this. It prints the client address at the start of each access log line:</p>
 <pre class="code"><code><span class="k">import</span> io, <span class="t">str</span>
 
-!<span class="t">void</span> main() {
+!<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">for</span> {
-        line := io.readLine() <span class="k">catch</span> e {
-            <span class="k">if</span> e.code == io.IoError.eof {
+        line := io.<span class="f">readLine</span>() <span class="k">catch</span> e {
+            <span class="k">if</span> e.code == io.<span class="t">IoError</span>.eof {
                 <span class="k">break</span>
             }
             <span class="k">return</span> e
         }
         n += <span class="n">1</span>
-        ip, _, _ := <span class="t">str</span>.cut(line, <span class="s">&quot; &quot;</span>)
-        print(<span class="s">&quot;{n}: {ip}&quot;</span>)
-        line.free()
+        ip, _, _ := <span class="t">str</span>.<span class="f">cut</span>(line, <span class="s">&quot; &quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s">: </span><span class="e">{</span>ip<span class="e">}</span><span class="s">&quot;</span>)
+        line.<span class="f">free</span>()
     }
-    io.eprint(<span class="s">&quot;{n} lines&quot;</span>)
+    io.<span class="f">eprint</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> lines&quot;</span>)
 }</code></pre>
 <p>Given three lines in a pipe, it prints the addresses numbered, and the count on standard error:</p>
 <pre class="out"><code>$ printf &#x27;10.0.0.5 GET /\n10.0.0.9 GET /login\n10.0.0.5 POST /login\n&#x27; | ./clients
@@ -92,13 +92,13 @@ Content-Length: 0</code></pre>
 <p><code>log.info(message)</code> writes a line to standard error, with the time in UTC and the level. <code>log.debug</code>, <code>log.warn</code> and <code>log.error</code> write at the other levels:</p>
 <pre class="code run"><code><span class="k">import</span> log
 
-<span class="t">void</span> main() {
-    log.info(<span class="s">&quot;starting&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    log.<span class="f">info</span>(<span class="s">&quot;starting&quot;</span>)
     port := <span class="n">8080</span>
-    log.info(<span class="s">&quot;listening on {port}&quot;</span>)
-    log.warn(<span class="s">&quot;no config file, using the defaults&quot;</span>)
-    log.error(<span class="s">&quot;can&#x27;t open the database&quot;</span>)
-    print(<span class="s">&quot;done&quot;</span>)
+    log.<span class="f">info</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
+    log.<span class="f">warn</span>(<span class="s">&quot;no config file, using the defaults&quot;</span>)
+    log.<span class="f">error</span>(<span class="s">&quot;can&#x27;t open the database&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
 <pre class="out"><code>done</code></pre>
 <p>Only <code>done</code> is on standard output. The terminal shows the log lines as well:</p>
@@ -111,12 +111,12 @@ Content-Length: 0</code></pre>
 <p>A line can carry values as fields after the message: a list of names, each with a <code>log.Value</code>, which is <code>.int</code>, <code>.float</code>, <code>.text</code> or <code>.bool</code>. They go after the message as <code>name=value</code>, and text with spaces is put in quotes. Fields are easier for a program to search than values written into the message:</p>
 <pre class="code run"><code><span class="k">import</span> log
 
-<span class="t">void</span> main() {
-    log.showTime(<span class="k">false</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    log.<span class="f">showTime</span>(<span class="k">false</span>)
     peer := <span class="s">&quot;10.0.0.5:51234&quot;</span>
-    log.info(<span class="s">&quot;client connected&quot;</span>, [(<span class="s">&quot;peer&quot;</span>, .text(peer)), (<span class="s">&quot;fd&quot;</span>, .int(<span class="n">7</span>)), (<span class="s">&quot;tls&quot;</span>, .<span class="t">bool</span>(<span class="k">true</span>))])
-    log.warn(<span class="s">&quot;slow request&quot;</span>, [(<span class="s">&quot;path&quot;</span>, .text(<span class="s">&quot;/search&quot;</span>)), (<span class="s">&quot;ms&quot;</span>, .int(<span class="n">950</span>)), (<span class="s">&quot;query&quot;</span>, .text(<span class="s">&quot;status 502&quot;</span>))])
-    print(<span class="s">&quot;done&quot;</span>)
+    log.<span class="f">info</span>(<span class="s">&quot;client connected&quot;</span>, [(<span class="s">&quot;peer&quot;</span>, .<span class="f">text</span>(peer)), (<span class="s">&quot;fd&quot;</span>, .<span class="f">int</span>(<span class="n">7</span>)), (<span class="s">&quot;tls&quot;</span>, .<span class="t">bool</span>(<span class="k">true</span>))])
+    log.<span class="f">warn</span>(<span class="s">&quot;slow request&quot;</span>, [(<span class="s">&quot;path&quot;</span>, .<span class="f">text</span>(<span class="s">&quot;/search&quot;</span>)), (<span class="s">&quot;ms&quot;</span>, .<span class="f">int</span>(<span class="n">950</span>)), (<span class="s">&quot;query&quot;</span>, .<span class="f">text</span>(<span class="s">&quot;status 502&quot;</span>))])
+    <span class="f">print</span>(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
 <pre class="out"><code>done</code></pre>
 <p>Standard error gets:</p>
@@ -129,14 +129,14 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 <p>Lines below the level set with <code>log.setLevel</code> are left out. It starts at <code>info</code>, so <code>log.debug</code> writes nothing until the level is lowered. <code>log.write(level, message)</code> writes at a level held in a variable:</p>
 <pre class="code run"><code><span class="k">import</span> log
 
-<span class="t">void</span> main() {
-    log.debug(<span class="s">&quot;not shown: the level starts at info&quot;</span>)
-    log.setLevel(.debug)
-    log.debug(<span class="s">&quot;shown now&quot;</span>)
-    log.setLevel(.error)
-    log.warn(<span class="s">&quot;not shown&quot;</span>)
-    level := log.Level.error
-    log.write(level, <span class="s">&quot;shown: error is not below error&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    log.<span class="f">debug</span>(<span class="s">&quot;not shown: the level starts at info&quot;</span>)
+    log.<span class="f">setLevel</span>(.debug)
+    log.<span class="f">debug</span>(<span class="s">&quot;shown now&quot;</span>)
+    log.<span class="f">setLevel</span>(.error)
+    log.<span class="f">warn</span>(<span class="s">&quot;not shown&quot;</span>)
+    level := log.<span class="t">Level</span>.error
+    log.<span class="f">write</span>(level, <span class="s">&quot;shown: error is not below error&quot;</span>)
 }</code></pre>
 <p>It prints nothing on standard output. Standard error gets two lines:</p>
 <pre class="out"><code>2026-10-17T09:30:00.250Z DEBUG shown now
@@ -146,11 +146,11 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 <p><code>log.useJson()</code> writes each line as a JSON object, for programs that collect logs and search them. <code>log.useJson(false)</code> goes back to plain lines:</p>
 <pre class="code run"><code><span class="k">import</span> log
 
-<span class="t">void</span> main() {
-    log.useJson()
-    log.info(<span class="s">&quot;client \&quot;edge-1\&quot; connected&quot;</span>)
-    log.useJson(<span class="k">false</span>)
-    log.info(<span class="s">&quot;plain again&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    log.<span class="f">useJson</span>()
+    log.<span class="f">info</span>(<span class="s">&quot;client </span><span class="e">\&quot;</span><span class="s">edge-1</span><span class="e">\&quot;</span><span class="s"> connected&quot;</span>)
+    log.<span class="f">useJson</span>(<span class="k">false</span>)
+    log.<span class="f">info</span>(<span class="s">&quot;plain again&quot;</span>)
 }</code></pre>
 <p>Standard error gets:</p>
 <pre class="out"><code>{&quot;time&quot;: &quot;2026-10-17T09:30:00.250Z&quot;, &quot;level&quot;: &quot;info&quot;, &quot;message&quot;: &quot;client \&quot;edge-1\&quot; connected&quot;}
@@ -160,16 +160,16 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 <p><code>log.toFile(path)</code> writes the lines at the end of a file instead, making it when it isn't there. It fails like <code>fs.openAppend</code> when the file can't be opened (see <a href="29-files.html">Files</a>). <code>log.toStderr()</code> goes back to standard error and closes the file:</p>
 <pre class="code run"><code><span class="k">import</span> fs, log
 
-!<span class="t">void</span> main() {
+!<span class="t">void</span> <span class="f">main</span>() {
     path := <span class="s">&quot;/tmp/iris-tour-app.log&quot;</span>
-    <span class="k">try</span> fs.removeAll(path)
-    log.showTime(<span class="k">false</span>)
-    <span class="k">try</span> log.toFile(path)
-    log.info(<span class="s">&quot;written to the file&quot;</span>, [(<span class="s">&quot;n&quot;</span>, .int(<span class="n">1</span>))])
-    log.toStderr()
-    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
-    print(text)
-    <span class="k">try</span> fs.remove(path)
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(path)
+    log.<span class="f">showTime</span>(<span class="k">false</span>)
+    <span class="k">try</span> log.<span class="f">toFile</span>(path)
+    log.<span class="f">info</span>(<span class="s">&quot;written to the file&quot;</span>, [(<span class="s">&quot;n&quot;</span>, .<span class="f">int</span>(<span class="n">1</span>))])
+    log.<span class="f">toStderr</span>()
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.<span class="f">readAll</span>(path)
+    <span class="f">print</span>(text)
+    <span class="k">try</span> fs.<span class="f">remove</span>(path)
 }</code></pre>
 <pre class="out"><code>INFO written to the file n=1
 </code></pre>

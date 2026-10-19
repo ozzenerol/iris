@@ -51,7 +51,7 @@ try {
 <h2 id="tuples"><a href="#tuples">Tuples</a></h2>
 <p>A tuple type lists types in parentheses: <code>(i64, str)</code>. A function returns one to give back several values, and the caller unpacks it into names right where the call is:</p>
 <pre class="code run"><code><span class="c">// &quot;db.lan:5432&quot; is the host and the port.</span>
-(<span class="t">str</span>, <span class="t">str</span>) hostPort(<span class="t">str</span> addr) {
+(<span class="t">str</span>, <span class="t">str</span>) <span class="f">hostPort</span>(<span class="t">str</span> addr) {
     <span class="k">for</span> i, c <span class="k">in</span> addr {
         <span class="k">if</span> c == <span class="s">&#x27;:&#x27;</span> {
             <span class="k">return</span> (addr[<span class="n">0</span>:i], addr[i + <span class="n">1</span>:])
@@ -60,56 +60,56 @@ try {
     <span class="k">return</span> (addr, <span class="s">&quot;&quot;</span>)
 }
 
-<span class="t">void</span> main() {
-    host, port := hostPort(<span class="s">&quot;db.lan:5432&quot;</span>)
-    print(<span class="s">&quot;host {host}, port {port}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    host, port := <span class="f">hostPort</span>(<span class="s">&quot;db.lan:5432&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;host </span><span class="e">{</span>host<span class="e">}</span><span class="s">, port </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>host db.lan, port 5432</code></pre>
 <p>The values go into new variables with <code>:=</code>, or into existing ones with <code>=</code>. <code>_</code> leaves one out. A tuple can't be kept whole in one variable; values that belong together beyond one call belong in a struct, whose fields have names:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code>pair := hostPort(<span class="s">&quot;db.lan:5432&quot;</span>) <span class="c">// error: this gives 2 values; unpack them into names: a, b := ...</span></code></pre>
+<pre class="code bad"><span class="tag">does not compile</span><code>pair := <span class="f">hostPort</span>(<span class="s">&quot;db.lan:5432&quot;</span>) <span class="c">// error: this gives 2 values; unpack them into names: a, b := ...</span></code></pre>
 <p>Writing several values on the right of <code>:=</code> or <code>=</code> makes a tuple too, so two variables change in one step:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     seq, ack := <span class="n">1000</span>, <span class="n">5000</span>
     seq, ack = ack, seq + <span class="n">1460</span>
-    print(<span class="s">&quot;{seq} {ack}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>seq<span class="e">}</span><span class="s"> </span><span class="e">{</span>ack<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>5000 2460</code></pre>
 <p>Every value on the right is worked out before any variable changes, so <code>seq + 1460</code> uses the old <code>seq</code>.</p>
 <p>Tuples also give the values of a <code>for</code> loop over a type with a <code>next</code> method: <code>(T, bool)</code> for one value a round, <code>(K, V, bool)</code> for two (see <a href="09-loops.html">Loops</a>).</p>
 <h2 id="type-aliases"><a href="#type-aliases">Type aliases</a></h2>
 <p><code>type</code> gives a type another name. The two names mean the same type, so values of one can be used as the other:</p>
-<pre class="code run"><code><span class="k">type</span> Port = <span class="t">u16</span>
-<span class="k">type</span> Handler = <span class="t">void</span>(<span class="t">str</span>)
+<pre class="code run"><code><span class="k">type</span> <span class="t">Port</span> = <span class="t">u16</span>
+<span class="k">type</span> <span class="t">Handler</span> = <span class="t">void</span>(<span class="t">str</span>)
 
-<span class="t">void</span> serve(Port port, Handler h) {
-    h(<span class="s">&quot;listening on {port}&quot;</span>)
+<span class="t">void</span> <span class="f">serve</span>(<span class="t">Port</span> port, <span class="t">Handler</span> h) {
+    <span class="f">h</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }
 
-<span class="t">void</span> say(<span class="t">str</span> s) =&gt; print(s)
+<span class="t">void</span> <span class="f">say</span>(<span class="t">str</span> s) =&gt; <span class="f">print</span>(s)
 
-<span class="t">void</span> main() {
-    Port p = <span class="n">8080</span>
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Port</span> p = <span class="n">8080</span>
     <span class="t">u16</span> same = p
-    serve(p, say)
-    print(<span class="s">&quot;{same}&quot;</span>)
+    <span class="f">serve</span>(p, say)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>same<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>listening on 8080
 8080</code></pre>
 <p>An alias suits a type that is long to write, like a function type, or one that says what a value is for: <code>Port</code> reads better than <code>u16</code> in a signature. It is not a new type: a <code>Port</code> is a <code>u16</code>, with every <code>u16</code> operation.</p>
 <p>A struct with one field is the way to get a type that can't be mixed up with another:</p>
-<pre class="code run"><code><span class="k">struct</span> ConnId {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">ConnId</span> {
     <span class="t">i64</span> v
 }
 
-<span class="k">struct</span> StreamId {
+<span class="k">struct</span> <span class="t">StreamId</span> {
     <span class="t">i64</span> v
 }
 
-<span class="t">void</span> reset(StreamId id) =&gt; print(<span class="s">&quot;resetting stream {id.v}&quot;</span>)
+<span class="t">void</span> <span class="f">reset</span>(<span class="t">StreamId</span> id) =&gt; <span class="f">print</span>(<span class="s">&quot;resetting stream </span><span class="e">{</span>id.v<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="t">void</span> main() {
-    s := StreamId{v: <span class="n">7</span>}
-    reset(s)
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">StreamId</span>{v: <span class="n">7</span>}
+    <span class="f">reset</span>(s)
 }</code></pre>
 <pre class="out"><code>resetting stream 7</code></pre>
 <p>Here <code>reset(ConnId{v: 7})</code> doesn't compile, while two aliases of <code>i64</code> would mix freely.</p>

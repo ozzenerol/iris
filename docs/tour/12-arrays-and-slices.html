@@ -50,11 +50,11 @@ try {
 <p class="lede">An array is a fixed number of values stored one after another. A slice looks at some of them, or at memory from <code>alloc</code>, and knows how many there are. Slices are how most functions take a list of things.</p>
 <h2 id="arrays"><a href="#arrays">Arrays</a></h2>
 <p>An array's type is its item type followed by its size in brackets. A literal lists the items in brackets too:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports = [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>, <span class="n">8080</span>]
     <span class="t">str</span>[<span class="n">2</span>] resolvers = [<span class="s">&quot;1.1.1.1&quot;</span>, <span class="s">&quot;8.8.8.8&quot;</span>]
     <span class="t">u8</span>[<span class="n">16</span>] buffer
-    print(<span class="s">&quot;{ports[0]} {ports[3]} {resolvers[1]} {buffer[15]} {ports.len}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports[<span class="n">3</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>resolvers[<span class="n">1</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>buffer[<span class="n">15</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports.len<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>22 8080 8.8.8.8 0 4</code></pre>
 <p>The size is part of the type and is known when compiling, so <code>ports.len</code> costs nothing. An array declared without a value has every item at zero. A literal must have as many items as the array.</p>
@@ -62,23 +62,23 @@ try {
 <pre class="out"><code>panic: index 3 is out of range for length 3
   at main.iris:4:14 in main</code></pre>
 <p>Arrays are values. Assigning one copies all its items, and so does passing it to a function that takes an array:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span>[<span class="n">4</span>] ip = [<span class="n">10</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">1</span>]
     next := ip
     next[<span class="n">3</span>] = <span class="n">2</span>
-    print(<span class="s">&quot;{ip[3]} {next[3]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ip[<span class="n">3</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>next[<span class="n">3</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1 2</code></pre>
 <p>An array of arrays is written with the sizes one after the other, read from the left: <code>i64[3][2]</code> is two arrays of three <code>i64</code>s each. The first index picks one of the two. Here each of two servers counts its replies in three buckets: fast, slow, failed:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span>[<span class="n">3</span>][<span class="n">2</span>] replies
     replies[<span class="n">1</span>][<span class="n">2</span>] = <span class="n">5</span> <span class="c">// server 1, failed</span>
-    print(<span class="s">&quot;{replies.len} servers, {replies[0].len} buckets, {replies[1][2]} failed on server 1&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>replies.len<span class="e">}</span><span class="s"> servers, </span><span class="e">{</span>replies[<span class="n">0</span>].len<span class="e">}</span><span class="s"> buckets, </span><span class="e">{</span>replies[<span class="n">1</span>][<span class="n">2</span>]<span class="e">}</span><span class="s"> failed on server 1&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2 servers, 3 buckets, 5 failed on server 1</code></pre>
 <h2 id="slices"><a href="#slices">Slices</a></h2>
 <p>A slice, <code>T[]</code>, is a pointer to items and their count. It doesn't own them: they live in an array, in memory from <code>alloc</code>, or anywhere else. An array can be given wherever a slice of its item type is wanted, so a function that takes a slice works with an array of any size:</p>
-<pre class="code run"><code><span class="t">i64</span> total(<span class="t">i64</span>[] sizes) {
+<pre class="code run"><code><span class="t">i64</span> <span class="f">total</span>(<span class="t">i64</span>[] sizes) {
     <span class="t">i64</span> sum
     <span class="k">for</span> s <span class="k">in</span> sizes {
         sum += s
@@ -86,38 +86,38 @@ try {
     <span class="k">return</span> sum
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span>[<span class="n">3</span>] reads = [<span class="n">4096</span>, <span class="n">4096</span>, <span class="n">812</span>]
     <span class="t">i64</span>[<span class="n">5</span>] writes = [<span class="n">100</span>, <span class="n">200</span>, <span class="n">300</span>, <span class="n">400</span>, <span class="n">500</span>]
-    print(<span class="s">&quot;{total(reads)} {total(writes)} {total([1460, 40])}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>(reads)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">total</span>(writes)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">total</span>([<span class="n">1460</span>, <span class="n">40</span>])<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>9004 1500 1500</code></pre>
 <p>A slice looks at the same items as what it came from, so changing an item through it changes the original:</p>
-<pre class="code run"><code><span class="t">void</span> zero(<span class="t">u8</span>[] buf) {
+<pre class="code run"><code><span class="t">void</span> <span class="f">zero</span>(<span class="t">u8</span>[] buf) {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..buf.len {
         buf[i] = <span class="n">0</span>
     }
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// an IPv4 header starts with these; bytes 10 and 11 are its checksum</span>
     <span class="t">u8</span>[<span class="n">12</span>] header = [<span class="n">0x45</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">60</span>, <span class="n">0x1c</span>, <span class="n">0x46</span>, <span class="n">0x40</span>, <span class="n">0</span>, <span class="n">64</span>, <span class="n">6</span>, <span class="n">0xb1</span>, <span class="n">0xe6</span>]
-    zero(header[<span class="n">10</span>:<span class="n">12</span>]) <span class="c">// the checksum is worked out with these at zero</span>
-    print(<span class="s">&quot;{header[9]} {header[10]} {header[11]}&quot;</span>)
+    <span class="f">zero</span>(header[<span class="n">10</span>:<span class="n">12</span>]) <span class="c">// the checksum is worked out with these at zero</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>header[<span class="n">9</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>header[<span class="n">10</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>header[<span class="n">11</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>6 0 0</code></pre>
 <h2 id="slicing"><a href="#slicing">Slicing</a></h2>
 <p><code>a[from:to]</code> takes the items from <code>from</code> up to <code>to - 1</code>, as a slice. Either end can be left out: <code>a[:n]</code> is the first n items and <code>a[n:]</code> all but the first n. Slicing an array, a slice or a <code>str</code> copies nothing:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// a UDP header: source port, destination port, length, checksum, two bytes each</span>
     <span class="t">u8</span>[<span class="n">8</span>] udp = [<span class="n">0x1f</span>, <span class="n">0x90</span>, <span class="n">0x00</span>, <span class="n">0x35</span>, <span class="n">0x00</span>, <span class="n">0x1c</span>, <span class="n">0x00</span>, <span class="n">0x00</span>]
     src := udp[<span class="n">0</span>:<span class="n">2</span>]
-    print(<span class="s">&quot;{src.len} bytes: source port {u16(src[0]) &lt;&lt; 8 | u16(src[1])}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>src.len<span class="e">}</span><span class="s"> bytes: source port </span><span class="e">{</span><span class="t">u16</span>(src[<span class="n">0</span>]) &lt;&lt; <span class="n">8</span> | <span class="t">u16</span>(src[<span class="n">1</span>])<span class="e">}</span><span class="s">&quot;</span>)
     ports := udp[:<span class="n">4</span>]
     rest := udp[<span class="n">4</span>:]
-    print(<span class="s">&quot;{ports.len} {rest.len}, length {rest[1]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>rest.len<span class="e">}</span><span class="s">, length </span><span class="e">{</span>rest[<span class="n">1</span>]<span class="e">}</span><span class="s">&quot;</span>)
     dst := ports[<span class="n">2</span>:]
-    print(<span class="s">&quot;destination port {dst[1]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;destination port </span><span class="e">{</span>dst[<span class="n">1</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2 bytes: source port 8080
 4 4, length 28
@@ -125,37 +125,37 @@ destination port 53</code></pre>
 <p>Both ends are checked: a slice can't reach past the end of what it is taken from, and its start can't be after its end. <code>a[n:n]</code> is an empty slice.</p>
 <p><code>[]</code> is an empty slice of any type, for a parameter with nothing to give:</p>
 <pre class="code run"><code><span class="c">// The protocols a TLS client offers (ALPN).</span>
-<span class="t">void</span> offer(<span class="t">str</span>[] protocols) {
-    print(<span class="s">&quot;{protocols.len} protocols offered&quot;</span>)
+<span class="t">void</span> <span class="f">offer</span>(<span class="t">str</span>[] protocols) {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>protocols.len<span class="e">}</span><span class="s"> protocols offered&quot;</span>)
 }
 
-<span class="t">void</span> main() {
-    offer([])
-    offer([<span class="s">&quot;h2&quot;</span>, <span class="s">&quot;http/1.1&quot;</span>])
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">offer</span>([])
+    <span class="f">offer</span>([<span class="s">&quot;h2&quot;</span>, <span class="s">&quot;http/1.1&quot;</span>])
 }</code></pre>
 <pre class="out"><code>0 protocols offered
 2 protocols offered</code></pre>
 <h2 id="slices-of-new-memory"><a href="#slices-of-new-memory">Slices of new memory</a></h2>
 <p><code>alloc(T, n)</code> gives a slice of <code>n</code> new items of type <code>T</code>, all at zero. <code>free</code> gives the memory back. Between the two, the slice is used like any other:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     clients := <span class="n">5</span> <span class="c">// known only when the program runs</span>
-    <span class="t">i64</span>[] sent = alloc(<span class="t">i64</span>, clients)
-    <span class="k">defer</span> free(sent)
+    <span class="t">i64</span>[] sent = <span class="f">alloc</span>(<span class="t">i64</span>, clients)
+    <span class="k">defer</span> <span class="f">free</span>(sent)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..clients {
         sent[i] = <span class="n">1460</span> * (i + <span class="n">1</span>)
     }
-    print(<span class="s">&quot;client 4 sent {sent[4]} bytes; {sent.len} clients&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;client 4 sent </span><span class="e">{</span>sent[<span class="n">4</span>]<span class="e">}</span><span class="s"> bytes; </span><span class="e">{</span>sent.len<span class="e">}</span><span class="s"> clients&quot;</span>)
 }</code></pre>
 <pre class="out"><code>client 4 sent 7300 bytes; 5 clients</code></pre>
 <p><code>defer</code> frees it when the block ends, on every way out (see <a href="19-memory.html">Memory</a>). A slice from <code>alloc</code> has a fixed length; a list that grows is a <code>List</code> (see <a href="22-collections.html">Collections</a>).</p>
 <h2 id="a-slice-s-parts"><a href="#a-slice-s-parts">A slice's parts</a></h2>
 <p><code>.len</code> is a slice's count of items and <code>.ptr</code> the pointer to its first one, for C functions. A pointer can be sliced with both ends given, <code>p[0:n]</code>, to look at memory that came from C as a slice. That slice isn't checked against anything, since a pointer has no length:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span>[<span class="n">4</span>] ip = [<span class="n">127</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">1</span>]
     s := ip[<span class="n">0</span>:<span class="n">4</span>]
     <span class="t">u8</span> *p = s.ptr <span class="c">// what a C function such as inet_ntop would take</span>
     again := p[<span class="n">0</span>:<span class="n">2</span>]
-    print(<span class="s">&quot;{s.len} {again[0]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>again[<span class="n">0</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4 127</code></pre>
 <h2 id="text-is-a-slice"><a href="#text-is-a-slice">Text is a slice</a></h2>

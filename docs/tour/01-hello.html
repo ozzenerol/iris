@@ -49,8 +49,8 @@ try {
 <h1>A first program</h1>
 <p class="lede">What every Iris program is made of: <code>main</code>, statements, blocks, comments, and the commands that build and run it.</p>
 <h2 id="hello"><a href="#hello">Hello</a></h2>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;hello, world&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;hello, world&quot;</span>)
 }</code></pre>
 <pre class="out"><code>hello, world</code></pre>
 <p>Save the program as <code>hello.iris</code> and run it:</p>
@@ -59,67 +59,67 @@ try {
 <pre class="code"><code>iris build hello.iris
 ./hello</code></pre>
 <p><code>print</code> writes its text and a newline to standard output. Values go into the text in braces:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     host := <span class="s">&quot;db.internal&quot;</span>
     port := <span class="n">5432</span>
-    print(<span class="s">&quot;connecting to {host}:{port}&quot;</span>)
-    print(<span class="s">&quot;{port + 1} is the next port&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;connecting to </span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port + <span class="n">1</span><span class="e">}</span><span class="s"> is the next port&quot;</span>)
 }</code></pre>
 <pre class="out"><code>connecting to db.internal:5432
 5433 is the next port</code></pre>
 <h2 id="main"><a href="#main">main</a></h2>
 <p>A program starts in <code>main</code>, which can be written in three ways:</p>
-<pre class="code"><code><span class="t">void</span> main() { }  <span class="c">// always succeeds: the exit status is 0</span>
-<span class="t">i32</span> main() { }   <span class="c">// returns the exit status itself</span>
-!<span class="t">void</span> main() { } <span class="c">// can fail: an error ends the program with status 1</span></code></pre>
+<pre class="code"><code><span class="t">void</span> <span class="f">main</span>() { }  <span class="c">// always succeeds: the exit status is 0</span>
+<span class="t">i32</span> <span class="f">main</span>() { }   <span class="c">// returns the exit status itself</span>
+!<span class="t">void</span> <span class="f">main</span>() { } <span class="c">// can fail: an error ends the program with status 1</span></code></pre>
 <p>The third one lets <code>main</code> use <code>try</code>, which passes an error up instead of handling it. An error that leaves <code>main</code> is printed with the path it took through the program:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-!<span class="t">void</span> main() {
-    port := <span class="k">try</span> <span class="t">str</span>.parseInt(<span class="s">&quot;8080&quot;</span>)
-    print(<span class="s">&quot;listening on {port}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    port := <span class="k">try</span> <span class="t">str</span>.<span class="f">parseInt</span>(<span class="s">&quot;8080&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>listening on 8080</code></pre>
 <p>The <a href="18-errors.html">Errors</a> chapter covers errors in full.</p>
 <p>The arguments a program was started with come from the <code>os</code> module, and the <code>flags</code> module reads them into a struct (see <a href="30-flags.html">Command-line flags</a>):</p>
 <pre class="code"><code><span class="k">import</span> os
 
-<span class="t">void</span> main() {
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..os.argc() {
-        print(<span class="s">&quot;argument {i}: {os.arg(i)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..os.<span class="f">argc</span>() {
+        <span class="f">print</span>(<span class="s">&quot;argument </span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>os.<span class="f">arg</span>(i)<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <h2 id="statements"><a href="#statements">Statements</a></h2>
 <p>A statement ends at the end of its line. There are no semicolons.</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     packets := <span class="n">3</span>
     mtu := <span class="n">1500</span>
-    print(<span class="s">&quot;{packets * mtu} bytes at most&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>packets * mtu<span class="e">}</span><span class="s"> bytes at most&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4500 bytes at most</code></pre>
 <p>A long statement goes on to the next line when the line ends with an operator or a comma, or while a parenthesis or a bracket is still open:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     payload := <span class="n">1200</span>
     frames := <span class="n">3</span>
     total := payload * frames +
         <span class="n">14</span> * frames +
         <span class="n">20</span> * frames
-    print(<span class="s">&quot;{total} bytes on the wire&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes on the wire&quot;</span>)
     hosts := [<span class="s">&quot;10.0.0.1&quot;</span>,
         <span class="s">&quot;10.0.0.2&quot;</span>, <span class="s">&quot;10.0.0.3&quot;</span>]
-    print(<span class="s">&quot;{hosts.len} hosts&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hosts.len<span class="e">}</span><span class="s"> hosts&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3702 bytes on the wire
 3 hosts</code></pre>
 <h2 id="blocks"><a href="#blocks">Blocks</a></h2>
 <p>A block is a list of statements in braces. <code>if</code>, <code>for</code>, functions and the other statements that hold code always take a block, even for one statement, and their conditions need no parentheses:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     open := <span class="n">120</span>
     <span class="k">if</span> open &gt; <span class="n">100</span> {
-        print(<span class="s">&quot;too many connections&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;too many connections&quot;</span>)
     }
     <span class="k">for</span> attempt <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
-        print(<span class="s">&quot;connecting, attempt {attempt}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;connecting, attempt </span><span class="e">{</span>attempt<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>too many connections
@@ -129,17 +129,17 @@ connecting, attempt 2</code></pre>
 <p>The opening brace goes on the same line as the statement it belongs to.</p>
 <h2 id="comments"><a href="#comments">Comments</a></h2>
 <p><code>//</code> starts a comment that runs to the end of the line. <code>/* */</code> holds a comment that can span lines.</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// this line is a comment</span>
     retries := <span class="n">5</span> <span class="c">// and so is the end of this one</span>
     <span class="c">/* this comment
        spans two lines */</span>
-    print(<span class="s">&quot;{retries}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>retries<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>5</code></pre>
 <p>A comment right above a declaration describes it. <code>iris doc</code> shows it, and so does an editor when the pointer rests on the name:</p>
 <pre class="code"><code><span class="c">// How long to wait before attempt n, doubling from 100ms.</span>
-<span class="t">Duration</span> backoff(<span class="t">i64</span> n) =&gt; 100ms * (<span class="n">1</span> &lt;&lt; n)</code></pre>
+<span class="t">Duration</span> <span class="f">backoff</span>(<span class="t">i64</span> n) =&gt; <span class="n">100ms</span> * (<span class="n">1</span> &lt;&lt; n)</code></pre>
 <h2 id="names"><a href="#names">Names</a></h2>
 <p>Names start with a letter or <code>_</code>, and go on with letters, digits and <code>_</code>. Iris code writes types in <code>UpperCamelCase</code> and everything else in <code>lowerCamelCase</code>: <code>HttpError</code>, <code>readLine</code>, <code>maxBody</code>. Constants may be written in capitals: <code>MAX_CONN</code>.</p>
 <p>The keywords can't be used as names:</p>

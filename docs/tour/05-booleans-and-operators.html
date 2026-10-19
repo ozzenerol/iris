@@ -50,12 +50,12 @@ try {
 <p class="lede">The <code>bool</code> type, the operators that combine and compare values, and the order in which a longer expression is worked out.</p>
 <h2 id="bool"><a href="#bool">bool</a></h2>
 <p>A <code>bool</code> is <code>true</code> or <code>false</code>. Comparisons give one, and conditions take one:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">503</span>
     failed := status &gt;= <span class="n">500</span>
-    print(<span class="s">&quot;{failed} {status == 200} {status != 200}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>failed<span class="e">}</span><span class="s"> </span><span class="e">{</span>status == <span class="n">200</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>status != <span class="n">200</span><span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">if</span> failed {
-        print(<span class="s">&quot;retrying&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;retrying&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>true false true
@@ -63,19 +63,19 @@ retrying</code></pre>
 <p>A condition must be a <code>bool</code>. A number, a pointer or a string isn't one, so <code>if count</code> doesn't compile; the comparison is written out: <code>if count != 0</code>, <code>if p != null</code>, <code>if name.len &gt; 0</code>.</p>
 <h2 id="and-or-not"><a href="#and-or-not">And, or, not</a></h2>
 <p><code>&amp;&amp;</code> is true when both sides are, <code>||</code> when at least one is, and <code>!</code> turns a <code>bool</code> around. The right side of <code>&amp;&amp;</code> and <code>||</code> is only worked out when it is needed:</p>
-<pre class="code run"><code><span class="t">bool</span> probe(<span class="t">str</span> host, <span class="t">bool</span> up) {
-    print(<span class="s">&quot;probing {host}&quot;</span>)
+<pre class="code run"><code><span class="t">bool</span> <span class="f">probe</span>(<span class="t">str</span> host, <span class="t">bool</span> up) {
+    <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">return</span> up
 }
 
-<span class="t">void</span> main() {
-    <span class="k">if</span> probe(<span class="s">&quot;primary&quot;</span>, <span class="k">false</span>) &amp;&amp; probe(<span class="s">&quot;replica&quot;</span>, <span class="k">true</span>) {
-        print(<span class="s">&quot;both databases are up&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">if</span> <span class="f">probe</span>(<span class="s">&quot;primary&quot;</span>, <span class="k">false</span>) &amp;&amp; <span class="f">probe</span>(<span class="s">&quot;replica&quot;</span>, <span class="k">true</span>) {
+        <span class="f">print</span>(<span class="s">&quot;both databases are up&quot;</span>)
     }
-    <span class="k">if</span> probe(<span class="s">&quot;dns1&quot;</span>, <span class="k">true</span>) || probe(<span class="s">&quot;dns2&quot;</span>, <span class="k">true</span>) {
-        print(<span class="s">&quot;a resolver is up&quot;</span>)
+    <span class="k">if</span> <span class="f">probe</span>(<span class="s">&quot;dns1&quot;</span>, <span class="k">true</span>) || <span class="f">probe</span>(<span class="s">&quot;dns2&quot;</span>, <span class="k">true</span>) {
+        <span class="f">print</span>(<span class="s">&quot;a resolver is up&quot;</span>)
     }
-    print(<span class="s">&quot;{!true} {!(1 &gt; 2)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>!<span class="k">true</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>!(<span class="n">1</span> &gt; <span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>probing primary
 probing dns1
@@ -83,13 +83,13 @@ a resolver is up
 false true</code></pre>
 <p>This makes conditions like <code>conn != null &amp;&amp; conn.open</code> safe: the second part isn't reached when the first is false.</p>
 <p>They can also be written as words: <code>and</code>, <code>or</code> and <code>not</code>. <code>and</code> and <code>or</code> are the same as <code>&amp;&amp;</code> and <code>||</code>. <code>not</code> takes everything up to the next <code>and</code> or <code>or</code>, so <code>not a == b</code> is <code>!(a == b)</code>, where <code>!</code> takes only the value right after it:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     closed := <span class="k">false</span>
     pending := <span class="n">3</span>
     <span class="k">if</span> <span class="k">not</span> closed <span class="k">and</span> pending &gt; <span class="n">0</span> {
-        print(<span class="s">&quot;flushing {pending} writes&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;flushing </span><span class="e">{</span>pending<span class="e">}</span><span class="s"> writes&quot;</span>)
     }
-    print(<span class="s">&quot;{not pending == 4} {closed or pending == 3}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">not</span> pending == <span class="n">4</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>closed <span class="k">or</span> pending == <span class="n">3</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>flushing 3 writes
 true true</code></pre>
@@ -97,31 +97,31 @@ true true</code></pre>
 <h2 id="comparing"><a href="#comparing">Comparing</a></h2>
 <div class="table"><table><thead><tr><th>Operator</th><th>True when</th></tr></thead><tbody><tr><td><code>a == b</code></td><td>a and b are equal</td></tr><tr><td><code>a != b</code></td><td>they aren't</td></tr><tr><td><code>a &lt; b</code>, <code>a &lt;= b</code></td><td>a is smaller, or smaller or equal</td></tr><tr><td><code>a &gt; b</code>, <code>a &gt;= b</code></td><td>a is larger, or larger or equal</td></tr></tbody></table></div>
 <p>Numbers compare by value. <code>str</code> and <code>String</code> compare by their bytes, <code>==</code> and <code>!=</code> only. Structs compare field by field with <code>==</code> and <code>!=</code>, plain enums by value, and pointers by address:</p>
-<pre class="code run"><code><span class="k">struct</span> Addr {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Addr</span> {
     <span class="t">u32</span> ip
     <span class="t">u16</span> port
 }
 
-<span class="k">enum</span> Proto { tcp, udp }
+<span class="k">enum</span> <span class="t">Proto</span> { tcp, udp }
 
-<span class="t">void</span> main() {
-    a := Addr{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
-    b := Addr{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
-    print(<span class="s">&quot;{a == b} {&quot;</span>GET<span class="s">&quot; == &quot;</span>GET<span class="s">&quot;} {Proto.tcp != Proto.udp}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    a := <span class="t">Addr</span>{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
+    b := <span class="t">Addr</span>{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a == b<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;GET&quot;</span> == <span class="s">&quot;GET&quot;</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">Proto</span>.tcp != <span class="t">Proto</span>.udp<span class="e">}</span><span class="s">&quot;</span>)
     p := &amp;a
     q := &amp;b
-    print(<span class="s">&quot;{p == q} {p == &amp;a}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p == q<span class="e">}</span><span class="s"> </span><span class="e">{</span>p == &amp;a<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true true true
 false true</code></pre>
 <p><code>is</code> can be written for <code>==</code>, and <code>is not</code> for <code>!=</code>. They compare the same way, and the comparison is by value: <code>a is b</code> on two structs compares their fields, as <code>==</code> does, not whether they are the same variable.</p>
-<pre class="code run"><code><span class="k">enum</span> Proto { tcp, udp }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Proto</span> { tcp, udp }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">404</span>
-    p := Proto.tcp
-    print(<span class="s">&quot;{status is 404} {p is not .udp} {&quot;</span>GET<span class="s">&quot; is &quot;</span>GET<span class="s">&quot;}&quot;</span>)
-    print(<span class="s">&quot;not found&quot;</span>) <span class="k">if</span> status <span class="k">is</span> <span class="n">404</span>
+    p := <span class="t">Proto</span>.tcp
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>status <span class="k">is</span> <span class="n">404</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>p <span class="k">is</span> <span class="k">not</span> .udp<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;GET&quot;</span> <span class="k">is</span> <span class="s">&quot;GET&quot;</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;not found&quot;</span>) <span class="k">if</span> status <span class="k">is</span> <span class="n">404</span>
 }</code></pre>
 <pre class="out"><code>true true true
 not found</code></pre>
@@ -131,12 +131,12 @@ not found</code></pre>
 <p>In a longer expression, some operators bind more tightly than others. From tightest to loosest:</p>
 <ol><li><code>x++</code>, <code>x--</code>, then <code>-x</code>, <code>!x</code>, <code>~x</code>, <code>&amp;x</code>, <code>*p</code>, <code>++x</code>, <code>--x</code> (the ones written before a value)</li><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></li><li><code>not</code></li><li><code>&amp;&amp;</code>, <code>and</code></li><li><code>||</code>, <code>or</code></li></ol>
 <p>Operators on the same level go from left to right. Parentheses group anything differently:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;{2 + 3 * 4} {(2 + 3) * 4}&quot;</span>)
-    print(<span class="s">&quot;{10 - 4 - 3} {2 * 3 % 4}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">2</span> + <span class="n">3</span> * <span class="n">4</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>(<span class="n">2</span> + <span class="n">3</span>) * <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">10</span> - <span class="n">4</span> - <span class="n">3</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">2</span> * <span class="n">3</span> % <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
     flags := <span class="n">0x12</span>
     port := <span class="n">8080</span>
-    print(<span class="s">&quot;{flags &amp; 0x02 != 0} {port &gt; 1023 &amp;&amp; port &lt; 49152 || port == 80}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>flags &amp; <span class="n">0x02</span> != <span class="n">0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>port &gt; <span class="n">1023</span> &amp;&amp; port &lt; <span class="n">49152</span> || port == <span class="n">80</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>14 20
 3 2
@@ -144,10 +144,10 @@ true true</code></pre>
 <p><code>flags &amp; 0x02 != 0</code> reads as <code>(flags &amp; 0x02) != 0</code>, since <code>&amp;</code> binds more tightly than <code>!=</code>: it tests whether the SYN bit is set.</p>
 <h2 id="conditions-as-values"><a href="#conditions-as-values">Conditions as values</a></h2>
 <p><code>if</code> and <code>match</code> give values too, which takes the place of the <code>?:</code> operator some languages have (see <a href="08-if-and-match.html">if and match</a>):</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     port := <span class="n">443</span>
     scheme := <span class="k">if</span> port == <span class="n">443</span> { <span class="s">&quot;https&quot;</span> } <span class="k">else</span> { <span class="s">&quot;http&quot;</span> }
-    print(<span class="s">&quot;{scheme}://example.com:{port}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>scheme<span class="e">}</span><span class="s">://example.com:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>https://example.com:443</code></pre>
     <nav class="pager"><a class="prev" href="04-floating-point.html"><span>Previous</span>Floating point</a><a class="next" href="06-text.html"><span>Next</span>Text</a></nav>

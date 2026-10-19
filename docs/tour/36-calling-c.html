@@ -52,13 +52,13 @@ try {
 <p><code>import c &quot;header.h&quot;</code> reads the header with <code>clang</code> and makes what it declares available under <code>c.</code>:</p>
 <pre class="code run"><code><span class="k">import</span> c <span class="s">&quot;arpa/inet.h&quot;</span>, c <span class="s">&quot;stdio.h&quot;</span>, c <span class="s">&quot;string.h&quot;</span>
 
-<span class="t">void</span> main() {
-    c.puts(<span class="s">&quot;parsing an address\0&quot;</span>.ptr)
+<span class="t">void</span> <span class="f">main</span>() {
+    c.<span class="f">puts</span>(<span class="s">&quot;parsing an address</span><span class="e">\0</span><span class="s">&quot;</span>.ptr)
     <span class="t">u8</span>[<span class="n">4</span>] addr
-    ok := c.inet_pton(c.AF_INET, <span class="s">&quot;192.168.1.10\0&quot;</span>.ptr, &amp;addr[<span class="n">0</span>])
-    print(<span class="s">&quot;{ok}: {addr[0]} {addr[1]} {addr[2]} {addr[3]}&quot;</span>)
-    n := c.strlen(<span class="s">&quot;192.168.1.10\0&quot;</span>.ptr)
-    c.printf(<span class="s">&quot;%s has %ld characters\n\0&quot;</span>.ptr, <span class="s">&quot;192.168.1.10\0&quot;</span>.ptr, n)
+    ok := c.<span class="f">inet_pton</span>(c.AF_INET, <span class="s">&quot;192.168.1.10</span><span class="e">\0</span><span class="s">&quot;</span>.ptr, &amp;addr[<span class="n">0</span>])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ok<span class="e">}</span><span class="s">: </span><span class="e">{</span>addr[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>addr[<span class="n">1</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>addr[<span class="n">2</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>addr[<span class="n">3</span>]<span class="e">}</span><span class="s">&quot;</span>)
+    n := c.<span class="f">strlen</span>(<span class="s">&quot;192.168.1.10</span><span class="e">\0</span><span class="s">&quot;</span>.ptr)
+    c.<span class="f">printf</span>(<span class="s">&quot;%s has %ld characters</span><span class="e">\n</span><span class="e">\0</span><span class="s">&quot;</span>.ptr, <span class="s">&quot;192.168.1.10</span><span class="e">\0</span><span class="s">&quot;</span>.ptr, n)
 }</code></pre>
 <pre class="out"><code>parsing an address
 1: 192 168 1 10
@@ -74,11 +74,11 @@ link sqlite3</code></pre>
 <p>C text ends with a zero byte, and Iris text doesn't: a <code>str</code> knows its length instead. Text given to C needs the zero added, and <code>.ptr</code> gives the pointer: <code>&quot;name\0&quot;.ptr</code>, or a <code>String</code> with <code>&quot;\0&quot;</code> appended. Text that comes back from C is read with a slice of the pointer, up to its zero:</p>
 <pre class="code run"><code><span class="k">import</span> c <span class="s">&quot;stdlib.h&quot;</span>, c <span class="s">&quot;string.h&quot;</span>
 
-<span class="t">void</span> main() {
-    <span class="t">u8</span> *home = c.getenv(<span class="s">&quot;HOME\0&quot;</span>.ptr)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">u8</span> *home = c.<span class="f">getenv</span>(<span class="s">&quot;HOME</span><span class="e">\0</span><span class="s">&quot;</span>.ptr)
     <span class="k">if</span> home != <span class="k">null</span> {
-        s := home[<span class="n">0</span>:c.strlen(home)]
-        print(<span class="s">&quot;HOME is set: {s.len &gt; 0}&quot;</span>)
+        s := home[<span class="n">0</span>:c.<span class="f">strlen</span>(home)]
+        <span class="f">print</span>(<span class="s">&quot;HOME is set: </span><span class="e">{</span>s.len &gt; <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>HOME is set: true</code></pre>
@@ -92,22 +92,22 @@ link sqlite3</code></pre>
 <p>Where C takes a pointer to a function, an Iris function with the same types can be passed. C's <code>void *</code> arguments arrive as <code>u8 *</code>, which converts to the pointer type that is meant:</p>
 <pre class="code run"><code><span class="k">import</span> c <span class="s">&quot;stdlib.h&quot;</span>
 
-<span class="t">i32</span> compare(<span class="t">u8</span> *pa, <span class="t">u8</span> *pb) {
+<span class="t">i32</span> <span class="f">compare</span>(<span class="t">u8</span> *pa, <span class="t">u8</span> *pb) {
     <span class="t">i64</span> *a = pa
     <span class="t">i64</span> *b = pb
     <span class="k">return</span> <span class="k">if</span> *a &lt; *b { -<span class="n">1</span> } <span class="k">else</span> <span class="k">if</span> *a &gt; *b { <span class="n">1</span> } <span class="k">else</span> { <span class="n">0</span> }
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span>[<span class="n">5</span>] rtts = [<span class="n">52</span>, <span class="n">31</span>, <span class="n">90</span>, <span class="n">12</span>, <span class="n">70</span>] <span class="c">// milliseconds</span>
-    c.qsort(&amp;rtts[<span class="n">0</span>], <span class="n">5</span>, <span class="n">8</span>, compare)
-    print(<span class="s">&quot;{rtts[0]} {rtts[1]} {rtts[2]} {rtts[3]} {rtts[4]}&quot;</span>)
+    c.<span class="f">qsort</span>(&amp;rtts[<span class="n">0</span>], <span class="n">5</span>, <span class="n">8</span>, compare)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rtts[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>rtts[<span class="n">1</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>rtts[<span class="n">2</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>rtts[<span class="n">3</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>rtts[<span class="n">4</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>12 31 52 70 90</code></pre>
 <h2 id="called-from-c"><a href="#called-from-c">Called from C</a></h2>
 <p><code>@export</code> makes an Iris function callable from C by its own name, for C code that links with the program or a library that looks callbacks up by name. <code>@export(&quot;name&quot;)</code> gives it another C name:</p>
 <pre class="code"><code><span class="a">@export</span>
-<span class="t">i32</span> onRow(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
+<span class="t">i32</span> <span class="f">onRow</span>(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
     <span class="k">return</span> <span class="n">0</span>
 }</code></pre>
 <p>An exported function takes and gives numbers and pointers, never <code>!T</code>, since C has no way to take an error. The names <code>main</code> and those starting with <code>iris_</code> belong to the runtime.</p>

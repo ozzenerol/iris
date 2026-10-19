@@ -50,63 +50,63 @@ try {
 <p class="lede">A pointer holds the address of a value, so code can read and change the value where it is instead of a copy of it. This chapter covers taking addresses, reading and writing through pointers, <code>null</code>, and the rules that keep pointers valid.</p>
 <h2 id="taking-an-address"><a href="#taking-an-address">Taking an address</a></h2>
 <p><code>&amp;</code> gives the address of a variable, a field or an item. The pointer's type is the value's type with a <code>*</code> after it. <code>*p</code> is the value the pointer points to, for reading and for writing:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span> open = <span class="n">5</span>
     <span class="t">i64</span> *p = &amp;open
-    print(<span class="s">&quot;{*p}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>*p<span class="e">}</span><span class="s">&quot;</span>)
     *p = <span class="n">6</span>
-    print(<span class="s">&quot;{open}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>open<span class="e">}</span><span class="s">&quot;</span>)
     *p += <span class="n">10</span>
-    print(<span class="s">&quot;{open}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>open<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>5
 6
 16</code></pre>
 <p>A pointer can point to a field or an item, as well as to a whole variable:</p>
-<pre class="code run"><code><span class="k">struct</span> Stats {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Stats</span> {
     <span class="t">i64</span> sent
     <span class="t">i64</span> dropped
 }
 
-<span class="t">void</span> main() {
-    s := Stats{sent: <span class="n">100</span>, dropped: <span class="n">2</span>}
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Stats</span>{sent: <span class="n">100</span>, dropped: <span class="n">2</span>}
     <span class="t">i64</span> *d = &amp;s.dropped
     *d += <span class="n">1</span>
     <span class="t">i64</span>[<span class="n">3</span>] perCore = [<span class="n">10</span>, <span class="n">20</span>, <span class="n">30</span>]
     <span class="t">i64</span> *last = &amp;perCore[<span class="n">2</span>]
     *last += <span class="n">5</span>
-    print(<span class="s">&quot;{s.dropped} {perCore[2]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.dropped<span class="e">}</span><span class="s"> </span><span class="e">{</span>perCore[<span class="n">2</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 35</code></pre>
 <h2 id="pointers-to-structs"><a href="#pointers-to-structs">Pointers to structs</a></h2>
 <p>A pointer to a struct reaches the struct's fields and methods with a dot, as the struct itself does: there is no separate operator for it.</p>
-<pre class="code run"><code><span class="k">struct</span> Conn {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Conn</span> {
     <span class="t">str</span> peer
     <span class="t">i64</span> sent
 }
 
-<span class="t">void</span> record(Conn *c, <span class="t">i64</span> bytes) {
+<span class="t">void</span> <span class="f">record</span>(<span class="t">Conn</span> *c, <span class="t">i64</span> bytes) {
     c.sent += bytes
 }
 
-<span class="t">void</span> main() {
-    conn := Conn{peer: <span class="s">&quot;10.0.0.9:51000&quot;</span>, sent: <span class="n">100</span>}
-    record(&amp;conn, <span class="n">1460</span>)
-    Conn *p = &amp;conn
+<span class="t">void</span> <span class="f">main</span>() {
+    conn := <span class="t">Conn</span>{peer: <span class="s">&quot;10.0.0.9:51000&quot;</span>, sent: <span class="n">100</span>}
+    <span class="f">record</span>(&amp;conn, <span class="n">1460</span>)
+    <span class="t">Conn</span> *p = &amp;conn
     p.sent += <span class="n">40</span>
-    print(<span class="s">&quot;{conn.peer}: {conn.sent} bytes&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conn.peer<span class="e">}</span><span class="s">: </span><span class="e">{</span>conn.sent<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.9:51000: 1600 bytes</code></pre>
 <p>This is the usual reason for a pointer parameter: the function changes the caller's value. Methods get <code>self</code> as a pointer for the same reason.</p>
 <h2 id="null"><a href="#null">null</a></h2>
 <p>A pointer can be <code>null</code>: it points to nothing. A pointer variable declared without a value starts as <code>null</code>, and <code>==</code> and <code>!=</code> compare pointers with each other and with <code>null</code>:</p>
 <pre class="code run"><code><span class="c">// A message kept as a chain of buffers, each pointing to the next.</span>
-<span class="k">struct</span> Chunk {
+<span class="k">struct</span> <span class="t">Chunk</span> {
     <span class="t">i64</span> size
-    Chunk *next
+    <span class="t">Chunk</span> *next
 }
 
-<span class="t">i64</span> total(Chunk *c) {
+<span class="t">i64</span> <span class="f">total</span>(<span class="t">Chunk</span> *c) {
     <span class="t">i64</span> sum = <span class="n">0</span>
     <span class="k">for</span> c != <span class="k">null</span> {
         sum += c.size
@@ -115,11 +115,11 @@ try {
     <span class="k">return</span> sum
 }
 
-<span class="t">void</span> main() {
-    tail := Chunk{size: <span class="n">300</span>}
-    mid := Chunk{size: <span class="n">4096</span>, next: &amp;tail}
-    head := Chunk{size: <span class="n">4096</span>, next: &amp;mid}
-    print(<span class="s">&quot;{total(&amp;head)} {total(null)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    tail := <span class="t">Chunk</span>{size: <span class="n">300</span>}
+    mid := <span class="t">Chunk</span>{size: <span class="n">4096</span>, next: &amp;tail}
+    head := <span class="t">Chunk</span>{size: <span class="n">4096</span>, next: &amp;mid}
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>(&amp;head)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">total</span>(<span class="k">null</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8492 0</code></pre>
 <p>Reading or writing through a <code>null</code> pointer is a bug. A debug build stops the program with a message that says where:</p>
@@ -128,34 +128,34 @@ try {
 <h2 id="pointers-stay-valid-only-while-their-value-lives"><a href="#pointers-stay-valid-only-while-their-value-lives">Pointers stay valid only while their value lives</a></h2>
 <p>A pointer to a variable is valid while the variable exists: until the end of its block for a local, for the whole program for a global. A pointer into memory from <code>alloc</code> is valid until it is freed. Using a pointer after that is a bug that a debug build finds and reports (see <a href="19-memory.html">Memory</a>).</p>
 <p>The compiler stops the plain case, a function giving back a pointer or a slice into its own variables:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> *counter() {
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> *<span class="f">counter</span>() {
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">return</span> &amp;n <span class="c">// error: this points into n, which is gone when counter returns; return a copy, or memory from alloc</span>
 }</code></pre>
 <p>A function that needs to give back something that outlives it returns the value itself, or memory from <code>alloc</code> that the caller frees.</p>
 <h2 id="pointers-and-memory"><a href="#pointers-and-memory">Pointers and memory</a></h2>
 <p><code>u8 *</code> is a pointer to bytes, and stands for "a pointer to anything", as C's <code>void *</code> does: any pointer converts to <code>u8 *</code> on its own, and a <code>u8 *</code> converts back to any pointer type. This is how memory is passed to and from C code:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i32</span> fd = <span class="n">3</span>
     <span class="t">u8</span> *any = &amp;fd <span class="c">// what a C function such as setsockopt takes</span>
     <span class="t">i32</span> *back = any
-    print(<span class="s">&quot;{*back}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>*back<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3</code></pre>
 <p>Adding a number to a pointer moves it by that many items, not bytes, as in C:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports = [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>, <span class="n">8080</span>]
     <span class="t">u16</span> *p = &amp;ports[<span class="n">0</span>]
     <span class="t">u16</span> *third = p + <span class="n">2</span>
-    print(<span class="s">&quot;{*third}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>*third<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>443</code></pre>
 <p>A pointer has no length, so the program can't check that <code>p + 2</code> is still inside the array. A slice knows its length and is checked on every index, which is why slices are the usual way to pass a run of items. A pointer can be turned into a slice when the length is known, with <code>p[0:n]</code>, for memory that came from C:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span>[<span class="n">6</span>] mac = [<span class="n">0x00</span>, <span class="n">0x1a</span>, <span class="n">0x2b</span>, <span class="n">0x3c</span>, <span class="n">0x4d</span>, <span class="n">0x5e</span>]
     <span class="t">u8</span> *p = &amp;mac[<span class="n">3</span>] <span class="c">// the last three bytes name the device</span>
     device := p[<span class="n">0</span>:<span class="n">3</span>]
-    print(<span class="s">&quot;{device.len} {device[0]} {device[2]}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>device.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>device[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>device[<span class="n">2</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 60 94</code></pre>
 <p>A pointer to a pointer is written with two stars, <code>T **</code>, and is mostly found in C functions that hand back a pointer through an argument.</p>

@@ -13,43 +13,147 @@ import re
 
 KEYWORDS = set("""
 if else for in match break continue return struct union enum interface type dyn
-pub const comptime when import module try catch defer errdefer scoped spawn select
-chan atomic threadlocal asm test not and or is true false null packed align volatile
+pub const comptime when import try catch defer errdefer scoped spawn select chan
+thread threadlocal asm test not and or is true false null self
 """.split())
 TYPES = set("""
 i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void str String Error
-u16be u32be u64be u16le u32le u64le Duration
+u16be u32be u64be u16le u32le u64le Duration List Map Atomic Mutex Thread
 """.split())
 
-TOKEN = re.compile(r"""
+TOKEN = re.compile(r'''
     (?P<comment>//[^\n]*|/\*.*?\*/)
-  | (?P<string>"(?:\\.|[^"\\\n])*")
+  | (?P<raw>r""".*?"""|r"[^"\n]*")
+  | (?P<string>")
   | (?P<char>'(?:\\.|[^'\\\n])+')
   | (?P<attr>@[A-Za-z_]\w*)
-  | (?P<number>\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b)
+  | (?P<number>\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)
+               (?:ns|us|ms|s|m|h|KiB|MiB|GiB)?\b)
   | (?P<word>[A-Za-z_]\w*)
-""", re.S | re.X | re.M)
+''', re.S | re.X | re.M)
+
+ESCAPE = re.compile(r"\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)")
+
+
+def span(cls, text):
+    return f'<span class="{cls}">{html.escape(text)}</span>'
+
+
+def string_end(code, i):
+    """Where the string that starts at code[i] ends: just past its closing
+    quote. Braces hold code, which may have strings of its own."""
+    triple = code.startswith('"""', i)
+    i += 3 if triple else 1
+    depth = 0
+    while i < len(code):
+        ch = code[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if depth == 0:
+            if triple and code.startswith('"""', i):
+                return i + 3
+            if not triple and (ch == '"' or ch == "\n"):
+                return i + 1 if ch == '"' else i
+            if code.startswith("{{", i) or code.startswith("}}", i):
+                i += 2
+                continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+        elif ch == '"' and depth > 0:
+            i = string_end(code, i)
+            continue
+        i += 1
+    return i
+
+
+def string_html(text):
+    """A string literal: escapes and the {} around values stand out, and
+    the code inside the braces is highlighted as code."""
+    q = 3 if text.startswith('"""') else 1
+    body_end = len(text) - q if text.endswith('"' * q) and len(text) >= 2 * q else len(text)
+    out, plain = [], []
+
+    def flush():
+        if plain:
+            out.append(span("s", "".join(plain)))
+            plain.clear()
+
+    plain.append(text[:q])
+    i = q
+    while i < body_end:
+        if text.startswith("{{", i) or text.startswith("}}", i):
+            flush()
+            out.append(span("e", text[i:i + 2]))
+            i += 2
+            continue
+        m = ESCAPE.match(text, i)
+        if m:
+            flush()
+            out.append(span("e", m.group()))
+            i = m.end()
+            continue
+        if text[i] == "{":
+            j, depth = i + 1, 1
+            while j < body_end and depth:
+                if text[j] == '"':
+                    j = string_end(text, j)
+                    continue
+                depth += {"{": 1, "}": -1}.get(text[j], 0)
+                j += 1
+            flush()
+            inner_end = j - 1 if depth == 0 else j
+            out.append(span("e", "{"))
+            out.append(highlight(text[i + 1:inner_end]))
+            if depth == 0:
+                out.append(span("e", "}"))
+            i = j
+            continue
+        plain.append(text[i])
+        i += 1
+    plain.append(text[body_end:])
+    flush()
+    return "".join(out)
+
+
+def word_class(code, m):
+    text = m.group()
+    if text in KEYWORDS:
+        return "k"
+    if text in TYPES:
+        return "t"
+    rest = code[m.end():m.end() + 1]
+    if rest == "(":
+        return "f"
+    if text[0].isupper() and any(c.islower() for c in text):
+        return "t"
+    return None
 
 
 def highlight(code):
-    """Iris source as HTML with <span class="k|t|s|c|n|a|p"> around tokens"""
-    out, last = [], 0
-    for m in TOKEN.finditer(code):
+    """Iris source as HTML, with <span class="k|t|f|s|e|c|n|a"> around
+    keywords, types, called functions, strings, the escapes and {} in them,
+    comments, numbers and attributes"""
+    out, last, pos = [], 0, 0
+    while True:
+        m = TOKEN.search(code, pos)
+        if not m:
+            break
         out.append(html.escape(code[last:m.start()]))
         text, kind = m.group(), m.lastgroup
-        cls = None
-        if kind == "comment":
-            cls = "c"
-        elif kind in ("string", "char"):
-            cls = "s"
-        elif kind == "number":
-            cls = "n"
-        elif kind == "attr":
-            cls = "a"
+        end = m.end()
+        if kind == "string":
+            end = string_end(code, m.start())
+            out.append(string_html(code[m.start():end]))
         elif kind == "word":
-            cls = "k" if text in KEYWORDS else "t" if text in TYPES else None
-        out.append(f'<span class="{cls}">{html.escape(text)}</span>' if cls else html.escape(text))
-        last = m.end()
+            cls = word_class(code, m)
+            out.append(span(cls, text) if cls else html.escape(text))
+        else:
+            cls = {"comment": "c", "raw": "s", "char": "s", "number": "n", "attr": "a"}[kind]
+            out.append(span(cls, text))
+        last = pos = end
     out.append(html.escape(code[last:]))
     return "".join(out)
 

@@ -54,22 +54,22 @@ try {
 <pre class="code run"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
-<span class="k">struct</span> Settings {
+<span class="k">struct</span> <span class="t">Settings</span> {
     <span class="t">u16</span> port = <span class="n">8080</span>                 <span class="c">// PROXY_PORT</span>
     <span class="t">str</span> upstream = <span class="s">&quot;127.0.0.1:9000&quot;</span> <span class="c">// PROXY_UPSTREAM</span>
-    <span class="t">Duration</span> timeout = 30s          <span class="c">// PROXY_TIMEOUT</span>
+    <span class="t">Duration</span> timeout = <span class="n">30s</span>          <span class="c">// PROXY_TIMEOUT</span>
     <span class="t">bool</span> debug                      <span class="c">// PROXY_DEBUG</span>
 }
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
-    print(<span class="s">&quot;{s.port} -&gt; {s.upstream}, timeout {s.timeout}, debug {s.debug}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> s := <span class="k">try</span> env.<span class="f">load</span>(<span class="t">Settings</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.port<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>s.upstream<span class="e">}</span><span class="s">, timeout </span><span class="e">{</span>s.timeout<span class="e">}</span><span class="s">, debug </span><span class="e">{</span>s.debug<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8080 -&gt; 127.0.0.1:9000, timeout 30s, debug false</code></pre>
 <p>Run with <code>PROXY_PORT=80 PROXY_DEBUG=yes</code>, the same program prints <code>80 -&gt; 127.0.0.1:9000, timeout 30s, debug true</code>. A variable that isn't set leaves the field's default.</p>
 <p><code>@env(&quot;NAME&quot;)</code> on a field gives the variable's whole name, without the prefix, and <code>@env(required)</code> makes a missing variable an error; both can go together:</p>
 <pre class="code"><code><span class="a">@env</span>
-<span class="k">struct</span> Secrets {
+<span class="k">struct</span> <span class="t">Secrets</span> {
     <span class="a">@env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>, required) <span class="t">String</span> db
     <span class="a">@env</span>(required) <span class="t">str</span> apiKey <span class="c">// API_KEY</span>
 }</code></pre>
@@ -80,14 +80,14 @@ try {
 <pre class="code"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
-<span class="k">struct</span> Settings {
+<span class="k">struct</span> <span class="t">Settings</span> {
     <span class="t">str</span> listenAddress = <span class="s">&quot;0.0.0.0&quot;</span>
     <span class="t">u16</span> port = <span class="n">8390</span>
 }
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> s := <span class="k">try</span> env.loadWith(Settings, <span class="s">&quot;.env&quot;</span>)
-    print(<span class="s">&quot;{s.listenAddress}:{s.port}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> s := <span class="k">try</span> env.<span class="f">loadWith</span>(<span class="t">Settings</span>, <span class="s">&quot;.env&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.listenAddress<span class="e">}</span><span class="s">:</span><span class="e">{</span>s.port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p>A <code>.env</code> for it:</p>
 <pre class="code"><code># the proxy
@@ -98,15 +98,15 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
 <pre class="code"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
-<span class="k">struct</span> Settings {
+<span class="k">struct</span> <span class="t">Settings</span> {
     <span class="t">u16</span> port = <span class="n">8390</span>
 }
 
-!<span class="t">void</span> main() {
-    <span class="k">try</span> env.loadFile(<span class="s">&quot;.env.local&quot;</span>)
-    <span class="k">try</span> env.loadFile(<span class="s">&quot;.env&quot;</span>)
-    <span class="k">scoped</span> s := <span class="k">try</span> env.load(Settings)
-    print(<span class="s">&quot;{s.port}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> env.<span class="f">loadFile</span>(<span class="s">&quot;.env.local&quot;</span>)
+    <span class="k">try</span> env.<span class="f">loadFile</span>(<span class="s">&quot;.env&quot;</span>)
+    <span class="k">scoped</span> s := <span class="k">try</span> env.<span class="f">load</span>(<span class="t">Settings</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p>The first file wins for a variable set in both, since a variable that is already set keeps its value.</p>
 <h2 id="flags"><a href="#flags">@flags</a></h2>
@@ -114,17 +114,17 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
 <h2 id="inline"><a href="#inline">@inline</a></h2>
 <p><code>@inline</code> puts the function's code at every place it is called, instead of a call. It suits a tiny function on a path that runs very often:</p>
 <pre class="code run"><code><span class="a">@inline</span>
-<span class="t">u16</span> swap16(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
+<span class="t">u16</span> <span class="f">swap16</span>(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{swap16(8080)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">swap16</span>(<span class="n">8080</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>36895</code></pre>
 <p>The optimiser already inlines small functions on its own in release builds; <code>@inline</code> makes sure of it.</p>
 <h2 id="unchecked"><a href="#unchecked">@unchecked</a></h2>
 <p><code>@unchecked</code> leaves out the checks that debug builds add (indexes, overflow, <code>null</code>) from one function's code, in every build. It is for code that has been measured, whose indexes are known to be in range:</p>
 <pre class="code run"><code><span class="a">@unchecked</span>
-<span class="t">u32</span> checksum(<span class="t">u8</span>[] data) {
+<span class="t">u32</span> <span class="f">checksum</span>(<span class="t">u8</span>[] data) {
     <span class="t">u32</span> sum = <span class="n">0</span>
     <span class="k">for</span> b <span class="k">in</span> data {
         sum = sum * <span class="n">31</span> + <span class="t">u32</span>(b)
@@ -132,8 +132,8 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
     <span class="k">return</span> sum
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{checksum(&quot;</span>GET / HTTP/<span class="n">1.1</span><span class="s">&quot;)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">checksum</span>(<span class="s">&quot;GET / HTTP/1.1&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2574418856</code></pre>
 <p>A mistake in such a function isn't caught: it reads or writes the wrong memory.</p>
@@ -142,21 +142,21 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
 <pre class="code"><code><span class="k">import</span> os, <span class="t">str</span>
 
 <span class="a">@noreturn</span>
-<span class="t">void</span> fail(<span class="t">str</span> msg) {
-    print(<span class="s">&quot;error: {msg}&quot;</span>)
-    os.exit(<span class="n">2</span>)
+<span class="t">void</span> <span class="f">fail</span>(<span class="t">str</span> msg) {
+    <span class="f">print</span>(<span class="s">&quot;error: </span><span class="e">{</span>msg<span class="e">}</span><span class="s">&quot;</span>)
+    os.<span class="f">exit</span>(<span class="n">2</span>)
 }
 
-<span class="t">i64</span> port(<span class="t">str</span> text) {
-    n := <span class="t">str</span>.parseInt(text) <span class="k">catch</span> e {
-        fail(<span class="s">&quot;the port {text}: {e.message}&quot;</span>)
+<span class="t">i64</span> <span class="f">port</span>(<span class="t">str</span> text) {
+    n := <span class="t">str</span>.<span class="f">parseInt</span>(text) <span class="k">catch</span> e {
+        <span class="f">fail</span>(<span class="s">&quot;the port </span><span class="e">{</span>text<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">return</span> n
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{port(&quot;</span><span class="n">8080</span><span class="s">&quot;)}&quot;</span>)
-    print(<span class="s">&quot;{port(&quot;</span>http<span class="s">&quot;)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">port</span>(<span class="s">&quot;8080&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">port</span>(<span class="s">&quot;http&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8080
 error: the port http: &#x27;http&#x27; is not a number</code></pre>
@@ -165,7 +165,7 @@ error: the port http: &#x27;http&#x27; is not a number</code></pre>
 <h2 id="export"><a href="#export">@export</a></h2>
 <p><code>@export</code> makes a function callable from C by its name, for a library that calls back into Iris code. <code>@export(&quot;name&quot;)</code> gives it another C name. An exported function takes and gives numbers and pointers, never <code>!T</code>, since C has no way to take an error (see <a href="36-calling-c.html">Calling C</a>):</p>
 <pre class="code"><code><span class="a">@export</span>
-<span class="t">i32</span> onRow(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
+<span class="t">i32</span> <span class="f">onRow</span>(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
     <span class="k">return</span> <span class="n">0</span>
 }</code></pre>
     <nav class="pager"><a class="prev" href="26-compile-time.html"><span>Previous</span>Compile time</a><a class="next" href="28-json.html"><span>Next</span>JSON</a></nav>

@@ -70,62 +70,62 @@ cd chat</code></pre>
 <pre class="code"><code><span class="k">import</span> net</code></pre>
 <p><code>handle</code> serves one client. A <code>net.Conn</code> is one connection. <code>readLine</code> waits for the next line the client sends and gives it without its line break. The 1024 is a limit: a longer line fails with <code>NetError.tooLong</code>, so a client can't make the server keep an endless line. <code>readLine</code> also fails when the client goes away, which ends the loop. <code>write</code> sends text back. <code>defer c.close()</code> closes the connection however <code>handle</code> ends. A client that sends <code>/quit</code> gets <code>bye</code> and is let go.</p>
 <p>The line <code>readLine</code> gives is a <code>String</code>, which owns its memory, so <code>handle</code> frees it once it has used it. <code>&quot;{line}\n&quot;</code> puts the line into text with a line break after it. Text with values given straight to a function is freed when the statement ends (see <a href="../tour/07-values-in-text.html">Values in text</a>).</p>
-<pre class="code"><code><span class="t">void</span> handle(net.Conn c) {
-    <span class="k">defer</span> c.close()
+<pre class="code"><code><span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">return</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
-            c.write(<span class="s">&quot;bye\n&quot;</span>) <span class="k">catch</span> e { }
+            line.<span class="f">free</span>()
+            c.<span class="f">write</span>(<span class="s">&quot;bye</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
             <span class="k">return</span>
         }
-        c.write(<span class="s">&quot;{line}\n&quot;</span>) <span class="k">catch</span> e {
-            line.free()
+        c.<span class="f">write</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+            line.<span class="f">free</span>()
             <span class="k">return</span>
         }
-        line.free()
+        line.<span class="f">free</span>()
     }
 }</code></pre>
 <p><code>main</code> listens on port 8080 with <code>net.listen</code>. <code>accept</code> waits for the next client and gives its connection. <code>spawn handle(conn)</code> starts <code>handle</code> as a new task and goes back to <code>accept</code> at once, without waiting for it. Each client has a task of its own, so one client that is slow to type doesn't hold up the others. While a task waits for its client, the other tasks run. The <a href="../tour/24-tasks-and-channels.html">Tasks and channels</a> chapter explains how they take turns.</p>
-<pre class="code"><code>!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
     <span class="k">for</span> {
-        conn := <span class="k">try</span> ln.accept()
-        <span class="k">spawn</span> handle(conn)
+        conn := <span class="k">try</span> ln.<span class="f">accept</span>()
+        <span class="k">spawn</span> <span class="f">handle</span>(conn)
     }
 }</code></pre>
 <details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// chat: a TCP chat server. Each line a client sends goes to everyone.</span>
 
 <span class="k">import</span> net
 
-<span class="t">void</span> handle(net.Conn c) {
-    <span class="k">defer</span> c.close()
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">return</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
-            c.write(<span class="s">&quot;bye\n&quot;</span>) <span class="k">catch</span> e { }
+            line.<span class="f">free</span>()
+            c.<span class="f">write</span>(<span class="s">&quot;bye</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
             <span class="k">return</span>
         }
-        c.write(<span class="s">&quot;{line}\n&quot;</span>) <span class="k">catch</span> e {
-            line.free()
+        c.<span class="f">write</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+            line.<span class="f">free</span>()
             <span class="k">return</span>
         }
-        line.free()
+        line.<span class="f">free</span>()
     }
 }
 
-!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
     <span class="k">for</span> {
-        conn := <span class="k">try</span> ln.accept()
-        <span class="k">spawn</span> handle(conn)
+        conn := <span class="k">try</span> ln.<span class="f">accept</span>()
+        <span class="k">spawn</span> <span class="f">handle</span>(conn)
     }
 }</code></pre></details>
 <p>Start the server in the first terminal. It keeps running, serving clients:</p>
@@ -152,31 +152,31 @@ bye</code></pre>
 <p>A channel carries values of one type from one task to another. <code>chan[T](n)</code> makes one with room for n values. <code>ch &lt;- v</code> puts a value in, waiting while the channel is full, and <code>&lt;-ch</code> takes the next one out, waiting while it is empty.</p>
 <p>An <code>Event</code> is what a client's task tells the hub. It is an enum with data: each value carries what the hub needs. A client joins with its id, its name and the channel its lines go out on. It says a line, asks who is online, or leaves. The <a href="../tour/15-enums.html">Enums</a> chapter has more on enums with data.</p>
 <pre class="code"><code><span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
 }</code></pre>
 <p><code>Client</code> is a client as the hub sees it: its id, its name, and its channel. The hub sends a client its lines as <code>String</code>s on that channel.</p>
 <pre class="code"><code><span class="c">// A client, as the hub sees it.</span>
-<span class="k">struct</span> Client {
+<span class="k">struct</span> <span class="t">Client</span> {
     <span class="t">i64</span> id
     <span class="t">String</span> name
     <span class="k">chan</span>[<span class="t">String</span>] out
 }</code></pre>
 <p><code>broadcast</code> sends a line to every client except one, the one it came from. Each client gets its own <code>String</code> from <code>format</code>, since a <code>String</code> sent on a channel belongs to whoever takes it out. <code>find</code> gives the place of a client in the list. <code>farewell</code> sends a client its last line and then an empty <code>String</code>, which tells the client's writer to stop. Every real line ends with <code>\n</code>, so an empty one can't be mistaken for one.</p>
 <pre class="code"><code><span class="c">// Sends text to every client but the one with id skip.</span>
-<span class="t">void</span> broadcast(List[Client] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
-    <span class="k">for</span> c <span class="k">in</span> clients.items() {
+<span class="t">void</span> <span class="f">broadcast</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
+    <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id != skip {
-            c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
+            c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         }
     }
 }</code></pre>
 <pre class="code"><code><span class="c">// The index of the client with id, or -1.</span>
-<span class="t">i64</span> find(List[Client] *clients, <span class="t">i64</span> id) {
-    <span class="k">for</span> i, c <span class="k">in</span> clients.items() {
+<span class="t">i64</span> <span class="f">find</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">i64</span> id) {
+    <span class="k">for</span> i, c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id == id {
             <span class="k">return</span> i
         }
@@ -184,107 +184,107 @@ bye</code></pre>
     <span class="k">return</span> -<span class="n">1</span>
 }</code></pre>
 <pre class="code"><code><span class="c">// Sends a client its last line, then the empty String that ends its writer.</span>
-<span class="t">void</span> farewell(Client c, <span class="t">str</span> text) {
-    c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
-    c.out &lt;- <span class="s">&quot;&quot;</span>.copy()
+<span class="t">void</span> <span class="f">farewell</span>(<span class="t">Client</span> c, <span class="t">str</span> text) {
+    c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    c.out &lt;- <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
 }</code></pre>
 <p><code>hub</code> waits for the next event and does what it says. <code>match</code> takes the event apart: each arm names a kind of event and gives names to its data. A new client is told who is online, and the others are told it joined. A line goes to everyone else with the sender's name in front. <code>/who</code> lists the names to the client that asked. A client that leaves is taken out of the list, gets <code>bye</code>, and the others are told. The hub takes over each <code>String</code> it is sent, and frees it once it is done with it. A client's name is freed when the client leaves.</p>
-<pre class="code"><code><span class="t">void</span> hub(<span class="k">chan</span>[Event] events) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<pre class="code"><code><span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
-                out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
+                out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
-                farewell(c, <span class="s">&quot;bye&quot;</span>)
-                broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
-                c.name.free()
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
+                <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
+                c.name.<span class="f">free</span>()
             }
         }
     }
 }</code></pre>
 <p>Each client now has two tasks. The task that reads its lines is <code>handle</code>. The one that writes to it is <code>writer</code>, which takes <code>String</code>s from the client's channel and writes them, until the empty one. If a write fails because the client has gone, it goes on taking lines without writing them, so the hub never waits on a full channel. When it stops, it sends <code>true</code> on <code>finished</code>.</p>
-<pre class="code"><code><span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<pre class="code"><code><span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
     finished &lt;- <span class="k">true</span>
 }</code></pre>
 <p><code>handle</code> asks for a name, makes the client's channels, and starts its writer. It sends the hub <code>Join</code> and then sends each line, or <code>Who</code> for <code>/who</code>. At the end, after <code>/quit</code> or when the client goes away, it sends <code>Leave</code>. The hub then sends the writer its last line and the empty <code>String</code>. <code>handle</code> waits for <code>finished</code> before it closes the connection, so the writer is done with it first. The <code>String</code>s for the name and each line are sent to the hub, which frees them.</p>
 <p><code>finished</code> has room for one value, so the writer never waits for <code>handle</code> to take it. The client's channel has room for 64 lines, so the hub can pass on lines while a client is slow to read them.</p>
-<pre class="code"><code><span class="t">void</span> handle(net.Conn c, <span class="t">i64</span> id, <span class="k">chan</span>[Event] events) {
-    <span class="k">defer</span> c.close()
-    c.write(<span class="s">&quot;your name?\n&quot;</span>) <span class="k">catch</span> e {
+<pre class="code"><code><span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c, <span class="t">i64</span> id, <span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;your name?</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
-    name := c.readLine(<span class="n">64</span>) <span class="k">catch</span> e {
+    name := c.<span class="f">readLine</span>(<span class="n">64</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
     out := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">64</span>)
     finished := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> writer(c, out, finished)
-    events &lt;- .Join(id, name, out)
+    <span class="k">spawn</span> <span class="f">writer</span>(c, out, finished)
+    events &lt;- .<span class="f">Join</span>(id, name, out)
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
+            line.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/who&quot;</span> {
-            line.free()
-            events &lt;- .Who(id)
+            line.<span class="f">free</span>()
+            events &lt;- .<span class="f">Who</span>(id)
             <span class="k">continue</span>
         }
-        events &lt;- .Say(id, line)
+        events &lt;- .<span class="f">Say</span>(id, line)
     }
-    events &lt;- .Leave(id)
+    events &lt;- .<span class="f">Leave</span>(id)
     _ = &lt;-finished
 }</code></pre>
 <p><code>main</code> makes the channel of events and starts the hub as a task. Then it accepts clients and gives each an id, counting from 1:</p>
-<pre class="code"><code>!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
-    <span class="k">spawn</span> hub(events)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
+    <span class="k">spawn</span> <span class="f">hub</span>(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
     <span class="t">i64</span> id = <span class="n">0</span>
     <span class="k">for</span> {
-        conn := <span class="k">try</span> ln.accept()
+        conn := <span class="k">try</span> ln.<span class="f">accept</span>()
         id += <span class="n">1</span>
-        <span class="k">spawn</span> handle(conn, id, events)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }</code></pre>
 <details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// chat: a TCP chat server. Each line a client sends goes to everyone.</span>
@@ -292,32 +292,32 @@ bye</code></pre>
 <span class="k">import</span> net
 
 <span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
 }
 
 <span class="c">// A client, as the hub sees it.</span>
-<span class="k">struct</span> Client {
+<span class="k">struct</span> <span class="t">Client</span> {
     <span class="t">i64</span> id
     <span class="t">String</span> name
     <span class="k">chan</span>[<span class="t">String</span>] out
 }
 
 <span class="c">// Sends text to every client but the one with id skip.</span>
-<span class="t">void</span> broadcast(List[Client] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
-    <span class="k">for</span> c <span class="k">in</span> clients.items() {
+<span class="t">void</span> <span class="f">broadcast</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
+    <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id != skip {
-            c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
+            c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         }
     }
 }
 
 <span class="c">// The index of the client with id, or -1.</span>
-<span class="t">i64</span> find(List[Client] *clients, <span class="t">i64</span> id) {
-    <span class="k">for</span> i, c <span class="k">in</span> clients.items() {
+<span class="t">i64</span> <span class="f">find</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">i64</span> id) {
+    <span class="k">for</span> i, c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id == id {
             <span class="k">return</span> i
         }
@@ -326,106 +326,106 @@ bye</code></pre>
 }
 
 <span class="c">// Sends a client its last line, then the empty String that ends its writer.</span>
-<span class="t">void</span> farewell(Client c, <span class="t">str</span> text) {
-    c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
-    c.out &lt;- <span class="s">&quot;&quot;</span>.copy()
+<span class="t">void</span> <span class="f">farewell</span>(<span class="t">Client</span> c, <span class="t">str</span> text) {
+    c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    c.out &lt;- <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
 }
 
-<span class="t">void</span> hub(<span class="k">chan</span>[Event] events) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
-                out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
+                out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
-                farewell(c, <span class="s">&quot;bye&quot;</span>)
-                broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
-                c.name.free()
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
+                <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
+                c.name.<span class="f">free</span>()
             }
         }
     }
 }
 
-<span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
     finished &lt;- <span class="k">true</span>
 }
 
-<span class="t">void</span> handle(net.Conn c, <span class="t">i64</span> id, <span class="k">chan</span>[Event] events) {
-    <span class="k">defer</span> c.close()
-    c.write(<span class="s">&quot;your name?\n&quot;</span>) <span class="k">catch</span> e {
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c, <span class="t">i64</span> id, <span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;your name?</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
-    name := c.readLine(<span class="n">64</span>) <span class="k">catch</span> e {
+    name := c.<span class="f">readLine</span>(<span class="n">64</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
     out := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">64</span>)
     finished := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> writer(c, out, finished)
-    events &lt;- .Join(id, name, out)
+    <span class="k">spawn</span> <span class="f">writer</span>(c, out, finished)
+    events &lt;- .<span class="f">Join</span>(id, name, out)
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
+            line.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/who&quot;</span> {
-            line.free()
-            events &lt;- .Who(id)
+            line.<span class="f">free</span>()
+            events &lt;- .<span class="f">Who</span>(id)
             <span class="k">continue</span>
         }
-        events &lt;- .Say(id, line)
+        events &lt;- .<span class="f">Say</span>(id, line)
     }
-    events &lt;- .Leave(id)
+    events &lt;- .<span class="f">Leave</span>(id)
     _ = &lt;-finished
 }
 
-!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
-    <span class="k">spawn</span> hub(events)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
+    <span class="k">spawn</span> <span class="f">hub</span>(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
     <span class="t">i64</span> id = <span class="n">0</span>
     <span class="k">for</span> {
-        conn := <span class="k">try</span> ln.accept()
+        conn := <span class="k">try</span> ln.<span class="f">accept</span>()
         id += <span class="n">1</span>
-        <span class="k">spawn</span> handle(conn, id, events)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }</code></pre></details>
 <p>Start the server:</p>
@@ -451,59 +451,59 @@ bye</code></pre>
 <p>All the tasks so far run on one thread, on one CPU core. They take turns, so the server never does two things at the same moment. Now several threads accept connections, each with its own tasks, so clients are served on several cores at once. The <a href="../tour/25-threads.html">Threads</a> chapter has the details.</p>
 <p>Several threads can wait in <code>accept</code> on the same listener; each connection goes to one of them. The tasks a thread starts stay on that thread, so each client's <code>handle</code> and <code>writer</code> run on the thread that accepted it. Channels work between threads as they do between tasks, so the hub is unchanged.</p>
 <p>The client ids now come from several threads at once. Two threads that add 1 to the same plain variable at the same moment can both read the old value, and give two clients the same id. An <code>Atomic</code> can be changed from any thread safely. <code>accepted.add(1)</code> adds 1 and gives the new value, which is the client's id and also the number of connections since the server started:</p>
-<pre class="code"><code>Atomic[<span class="t">i64</span>] accepted</code></pre>
+<pre class="code"><code><span class="t">Atomic</span>[<span class="t">i64</span>] accepted</code></pre>
 <p><code>acceptLoop</code> is the accept loop from <code>main</code>, in a function of its own so that each thread can run it. It takes its ids from <code>accepted</code>:</p>
-<pre class="code"><code><span class="t">void</span> acceptLoop(net.Listener ln, <span class="k">chan</span>[Event] events) {
+<pre class="code"><code><span class="t">void</span> <span class="f">acceptLoop</span>(net.<span class="t">Listener</span> ln, <span class="k">chan</span>[<span class="t">Event</span>] events) {
     <span class="k">for</span> {
-        conn := ln.accept() <span class="k">catch</span> e {
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
-        id := accepted.add(<span class="n">1</span>)
-        <span class="k">spawn</span> handle(conn, id, events)
+        id := accepted.<span class="f">add</span>(<span class="n">1</span>)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }</code></pre>
 <p><code>thread acceptLoop(ln, events)</code> starts a new thread running <code>acceptLoop</code>. <code>main</code> starts four, then runs the hub itself. The hub's thread never accepts, so it only passes messages on:</p>
-<pre class="code"><code>!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
-        thread acceptLoop(ln, events)
+        <span class="k">thread</span> <span class="f">acceptLoop</span>(ln, events)
     }
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
-    hub(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
+    <span class="f">hub</span>(events)
 }</code></pre>
 <p><code>/who</code> now says how many connections there have been. <code>accepted.load()</code> reads the count, from the hub's thread. This is the whole hub with that one line changed:</p>
-<pre class="code"><code><span class="t">void</span> hub(<span class="k">chan</span>[Event] events) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<pre class="code"><code><span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
-                out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
+                out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}. {accepted.load()} connections so far\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="s">. </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections so far</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
-                farewell(c, <span class="s">&quot;bye&quot;</span>)
-                broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
-                c.name.free()
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
+                <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
+                c.name.<span class="f">free</span>()
             }
         }
     }
@@ -513,34 +513,34 @@ bye</code></pre>
 <span class="k">import</span> net
 
 <span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
 }
 
 <span class="c">// A client, as the hub sees it.</span>
-<span class="k">struct</span> Client {
+<span class="k">struct</span> <span class="t">Client</span> {
     <span class="t">i64</span> id
     <span class="t">String</span> name
     <span class="k">chan</span>[<span class="t">String</span>] out
 }
 
-Atomic[<span class="t">i64</span>] accepted
+<span class="t">Atomic</span>[<span class="t">i64</span>] accepted
 
 <span class="c">// Sends text to every client but the one with id skip.</span>
-<span class="t">void</span> broadcast(List[Client] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
-    <span class="k">for</span> c <span class="k">in</span> clients.items() {
+<span class="t">void</span> <span class="f">broadcast</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
+    <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id != skip {
-            c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
+            c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         }
     }
 }
 
 <span class="c">// The index of the client with id, or -1.</span>
-<span class="t">i64</span> find(List[Client] *clients, <span class="t">i64</span> id) {
-    <span class="k">for</span> i, c <span class="k">in</span> clients.items() {
+<span class="t">i64</span> <span class="f">find</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">i64</span> id) {
+    <span class="k">for</span> i, c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id == id {
             <span class="k">return</span> i
         }
@@ -549,114 +549,114 @@ Atomic[<span class="t">i64</span>] accepted
 }
 
 <span class="c">// Sends a client its last line, then the empty String that ends its writer.</span>
-<span class="t">void</span> farewell(Client c, <span class="t">str</span> text) {
-    c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
-    c.out &lt;- <span class="s">&quot;&quot;</span>.copy()
+<span class="t">void</span> <span class="f">farewell</span>(<span class="t">Client</span> c, <span class="t">str</span> text) {
+    c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    c.out &lt;- <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
 }
 
-<span class="t">void</span> hub(<span class="k">chan</span>[Event] events) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
-                out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
+                out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}. {accepted.load()} connections so far\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="s">. </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections so far</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
-                farewell(c, <span class="s">&quot;bye&quot;</span>)
-                broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
-                c.name.free()
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
+                <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
+                c.name.<span class="f">free</span>()
             }
         }
     }
 }
 
-<span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
     finished &lt;- <span class="k">true</span>
 }
 
-<span class="t">void</span> handle(net.Conn c, <span class="t">i64</span> id, <span class="k">chan</span>[Event] events) {
-    <span class="k">defer</span> c.close()
-    c.write(<span class="s">&quot;your name?\n&quot;</span>) <span class="k">catch</span> e {
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c, <span class="t">i64</span> id, <span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;your name?</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
-    name := c.readLine(<span class="n">64</span>) <span class="k">catch</span> e {
+    name := c.<span class="f">readLine</span>(<span class="n">64</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
     out := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">64</span>)
     finished := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> writer(c, out, finished)
-    events &lt;- .Join(id, name, out)
+    <span class="k">spawn</span> <span class="f">writer</span>(c, out, finished)
+    events &lt;- .<span class="f">Join</span>(id, name, out)
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
+            line.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/who&quot;</span> {
-            line.free()
-            events &lt;- .Who(id)
+            line.<span class="f">free</span>()
+            events &lt;- .<span class="f">Who</span>(id)
             <span class="k">continue</span>
         }
-        events &lt;- .Say(id, line)
+        events &lt;- .<span class="f">Say</span>(id, line)
     }
-    events &lt;- .Leave(id)
+    events &lt;- .<span class="f">Leave</span>(id)
     _ = &lt;-finished
 }
 
-<span class="t">void</span> acceptLoop(net.Listener ln, <span class="k">chan</span>[Event] events) {
+<span class="t">void</span> <span class="f">acceptLoop</span>(net.<span class="t">Listener</span> ln, <span class="k">chan</span>[<span class="t">Event</span>] events) {
     <span class="k">for</span> {
-        conn := ln.accept() <span class="k">catch</span> e {
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
-        id := accepted.add(<span class="n">1</span>)
-        <span class="k">spawn</span> handle(conn, id, events)
+        id := accepted.<span class="f">add</span>(<span class="n">1</span>)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }
 
-!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
-        thread acceptLoop(ln, events)
+        <span class="k">thread</span> <span class="f">acceptLoop</span>(ln, events)
     }
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
-    hub(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
+    <span class="f">hub</span>(events)
 }</code></pre></details>
 <pre class="code"><code>iris run main.iris</code></pre>
 <p>The same two clients as before. bob's <code>/who</code> now also says how many connections the server has had. The count is of every connection since the server started, so it depends on how many you have made: 2 when these are the first.</p>
@@ -681,63 +681,63 @@ bye</code></pre>
 <pre class="code"><code><span class="k">import</span> net, signal</code></pre>
 <p>The hub gets one more event, <code>Stop</code>:</p>
 <pre class="code"><code><span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
-    Stop
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
+    <span class="t">Stop</span>
 }</code></pre>
 <p><code>signal.watch</code> stops Ctrl-C and the other stop signals from ending the program, and <code>signal.wait</code> waits for one. <code>stopOnSignal</code> waits in a task of its own and sends the hub <code>Stop</code> when a signal comes:</p>
-<pre class="code"><code><span class="t">void</span> stopOnSignal(<span class="k">chan</span>[Event] events) {
-    s := signal.wait()
-    print(<span class="s">&quot;{s}: stopping&quot;</span>)
-    events &lt;- .Stop
+<pre class="code"><code><span class="t">void</span> <span class="f">stopOnSignal</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    s := signal.<span class="f">wait</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s">: stopping&quot;</span>)
+    events &lt;- .<span class="t">Stop</span>
 }</code></pre>
 <p>When <code>Stop</code> comes, the hub sends each client its last line, <code>the server is stopping</code>, and remembers that it is stopping. From then on a client that leaves gets no <code>bye</code>, and one that joins is told the server is stopping at once. When the last client has left, the hub sends <code>true</code> on <code>done</code> and returns:</p>
-<pre class="code"><code><span class="t">void</span> hub(<span class="k">chan</span>[Event] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<pre class="code"><code><span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="t">bool</span> stopping
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
                 <span class="k">if</span> stopping {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 } <span class="k">else</span> {
-                    out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+                    out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
                 }
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}. {accepted.load()} connections so far\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="s">. </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections so far</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
                 <span class="k">if</span> !stopping {
-                    farewell(c, <span class="s">&quot;bye&quot;</span>)
-                    broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                    <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
                 }
-                c.name.free()
+                c.name.<span class="f">free</span>()
             }
-            Stop =&gt; {
+            <span class="t">Stop</span> =&gt; {
                 stopping = <span class="k">true</span>
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 }
             }
         }
@@ -748,73 +748,73 @@ bye</code></pre>
     }
 }</code></pre>
 <p>A client that is stopped by the server is still waiting in <code>readLine</code> in its <code>handle</code> task. After its last line, <code>writer</code> calls <code>c.interrupt()</code>, which wakes it as if the client had gone away. <code>handle</code> then sends <code>Leave</code> and closes the connection as usual:</p>
-<pre class="code"><code><span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<pre class="code"><code><span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
-    c.interrupt()
+    c.<span class="f">interrupt</span>()
     finished &lt;- <span class="k">true</span>
 }</code></pre>
 <p><code>main</code> starts the hub as a task again, and waits for it on <code>done</code>. That channel has no buffer, so the hub's <code>done &lt;- true</code> waits until <code>main</code> takes it. When <code>main</code> returns, the program ends:</p>
-<pre class="code"><code>!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
     done := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">0</span>)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
-        thread acceptLoop(ln, events)
+        <span class="k">thread</span> <span class="f">acceptLoop</span>(ln, events)
     }
-    signal.watch()
-    <span class="k">spawn</span> stopOnSignal(events)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
-    <span class="k">spawn</span> hub(events, done)
+    signal.<span class="f">watch</span>()
+    <span class="k">spawn</span> <span class="f">stopOnSignal</span>(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
+    <span class="k">spawn</span> <span class="f">hub</span>(events, done)
     _ = &lt;-done
-    print(<span class="s">&quot;stopped&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;stopped&quot;</span>)
 }</code></pre>
 <details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// chat: a TCP chat server. Each line a client sends goes to everyone.</span>
 
 <span class="k">import</span> net, signal
 
 <span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
-    Stop
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
+    <span class="t">Stop</span>
 }
 
 <span class="c">// A client, as the hub sees it.</span>
-<span class="k">struct</span> Client {
+<span class="k">struct</span> <span class="t">Client</span> {
     <span class="t">i64</span> id
     <span class="t">String</span> name
     <span class="k">chan</span>[<span class="t">String</span>] out
 }
 
-Atomic[<span class="t">i64</span>] accepted
+<span class="t">Atomic</span>[<span class="t">i64</span>] accepted
 
 <span class="c">// Sends text to every client but the one with id skip.</span>
-<span class="t">void</span> broadcast(List[Client] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
-    <span class="k">for</span> c <span class="k">in</span> clients.items() {
+<span class="t">void</span> <span class="f">broadcast</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
+    <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id != skip {
-            c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
+            c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         }
     }
 }
 
 <span class="c">// The index of the client with id, or -1.</span>
-<span class="t">i64</span> find(List[Client] *clients, <span class="t">i64</span> id) {
-    <span class="k">for</span> i, c <span class="k">in</span> clients.items() {
+<span class="t">i64</span> <span class="f">find</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">i64</span> id) {
+    <span class="k">for</span> i, c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id == id {
             <span class="k">return</span> i
         }
@@ -823,54 +823,54 @@ Atomic[<span class="t">i64</span>] accepted
 }
 
 <span class="c">// Sends a client its last line, then the empty String that ends its writer.</span>
-<span class="t">void</span> farewell(Client c, <span class="t">str</span> text) {
-    c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
-    c.out &lt;- <span class="s">&quot;&quot;</span>.copy()
+<span class="t">void</span> <span class="f">farewell</span>(<span class="t">Client</span> c, <span class="t">str</span> text) {
+    c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    c.out &lt;- <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
 }
 
-<span class="t">void</span> hub(<span class="k">chan</span>[Event] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="t">bool</span> stopping
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
                 <span class="k">if</span> stopping {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 } <span class="k">else</span> {
-                    out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+                    out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
                 }
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}. {accepted.load()} connections so far\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="s">. </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections so far</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
                 <span class="k">if</span> !stopping {
-                    farewell(c, <span class="s">&quot;bye&quot;</span>)
-                    broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                    <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
                 }
-                c.name.free()
+                c.name.<span class="f">free</span>()
             }
-            Stop =&gt; {
+            <span class="t">Stop</span> =&gt; {
                 stopping = <span class="k">true</span>
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 }
             }
         }
@@ -881,85 +881,85 @@ Atomic[<span class="t">i64</span>] accepted
     }
 }
 
-<span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
-    c.interrupt()
+    c.<span class="f">interrupt</span>()
     finished &lt;- <span class="k">true</span>
 }
 
-<span class="t">void</span> handle(net.Conn c, <span class="t">i64</span> id, <span class="k">chan</span>[Event] events) {
-    <span class="k">defer</span> c.close()
-    c.write(<span class="s">&quot;your name?\n&quot;</span>) <span class="k">catch</span> e {
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c, <span class="t">i64</span> id, <span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;your name?</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
-    name := c.readLine(<span class="n">64</span>) <span class="k">catch</span> e {
+    name := c.<span class="f">readLine</span>(<span class="n">64</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
     out := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">64</span>)
     finished := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> writer(c, out, finished)
-    events &lt;- .Join(id, name, out)
+    <span class="k">spawn</span> <span class="f">writer</span>(c, out, finished)
+    events &lt;- .<span class="f">Join</span>(id, name, out)
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
+            line.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/who&quot;</span> {
-            line.free()
-            events &lt;- .Who(id)
+            line.<span class="f">free</span>()
+            events &lt;- .<span class="f">Who</span>(id)
             <span class="k">continue</span>
         }
-        events &lt;- .Say(id, line)
+        events &lt;- .<span class="f">Say</span>(id, line)
     }
-    events &lt;- .Leave(id)
+    events &lt;- .<span class="f">Leave</span>(id)
     _ = &lt;-finished
 }
 
-<span class="t">void</span> acceptLoop(net.Listener ln, <span class="k">chan</span>[Event] events) {
+<span class="t">void</span> <span class="f">acceptLoop</span>(net.<span class="t">Listener</span> ln, <span class="k">chan</span>[<span class="t">Event</span>] events) {
     <span class="k">for</span> {
-        conn := ln.accept() <span class="k">catch</span> e {
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
-        id := accepted.add(<span class="n">1</span>)
-        <span class="k">spawn</span> handle(conn, id, events)
+        id := accepted.<span class="f">add</span>(<span class="n">1</span>)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }
 
-<span class="t">void</span> stopOnSignal(<span class="k">chan</span>[Event] events) {
-    s := signal.wait()
-    print(<span class="s">&quot;{s}: stopping&quot;</span>)
-    events &lt;- .Stop
+<span class="t">void</span> <span class="f">stopOnSignal</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    s := signal.<span class="f">wait</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s">: stopping&quot;</span>)
+    events &lt;- .<span class="t">Stop</span>
 }
 
-!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
     done := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">0</span>)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
-        thread acceptLoop(ln, events)
+        <span class="k">thread</span> <span class="f">acceptLoop</span>(ln, events)
     }
-    signal.watch()
-    <span class="k">spawn</span> stopOnSignal(events)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
-    <span class="k">spawn</span> hub(events, done)
+    signal.<span class="f">watch</span>()
+    <span class="k">spawn</span> <span class="f">stopOnSignal</span>(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
+    <span class="k">spawn</span> <span class="f">hub</span>(events, done)
     _ = &lt;-done
-    print(<span class="s">&quot;stopped&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;stopped&quot;</span>)
 }</code></pre></details>
 <p>This time, build the program with <code>iris build</code> and start what it makes, <code>./chat</code>. It has a name of its own, so the next command can find it:</p>
 <pre class="code"><code>iris build main.iris -o chat
@@ -983,35 +983,35 @@ stopped</code></pre>
 <span class="k">import</span> net, signal
 
 <span class="c">// What the clients&#x27; tasks tell the hub.</span>
-<span class="k">enum</span> Event {
-    Join(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
-    Say(<span class="t">i64</span> id, <span class="t">String</span> text)
-    Who(<span class="t">i64</span> id)
-    Leave(<span class="t">i64</span> id)
-    Stop
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Join</span>(<span class="t">i64</span> id, <span class="t">String</span> name, <span class="k">chan</span>[<span class="t">String</span>] out)
+    <span class="f">Say</span>(<span class="t">i64</span> id, <span class="t">String</span> text)
+    <span class="f">Who</span>(<span class="t">i64</span> id)
+    <span class="f">Leave</span>(<span class="t">i64</span> id)
+    <span class="t">Stop</span>
 }
 
 <span class="c">// A client, as the hub sees it.</span>
-<span class="k">struct</span> Client {
+<span class="k">struct</span> <span class="t">Client</span> {
     <span class="t">i64</span> id
     <span class="t">String</span> name
     <span class="k">chan</span>[<span class="t">String</span>] out
 }
 
-Atomic[<span class="t">i64</span>] accepted
+<span class="t">Atomic</span>[<span class="t">i64</span>] accepted
 
 <span class="c">// Sends text to every client but the one with id skip.</span>
-<span class="t">void</span> broadcast(List[Client] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
-    <span class="k">for</span> c <span class="k">in</span> clients.items() {
+<span class="t">void</span> <span class="f">broadcast</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">str</span> text, <span class="t">i64</span> skip) {
+    <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id != skip {
-            c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
+            c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         }
     }
 }
 
 <span class="c">// The index of the client with id, or -1.</span>
-<span class="t">i64</span> find(List[Client] *clients, <span class="t">i64</span> id) {
-    <span class="k">for</span> i, c <span class="k">in</span> clients.items() {
+<span class="t">i64</span> <span class="f">find</span>(<span class="t">List</span>[<span class="t">Client</span>] *clients, <span class="t">i64</span> id) {
+    <span class="k">for</span> i, c <span class="k">in</span> clients.<span class="f">items</span>() {
         <span class="k">if</span> c.id == id {
             <span class="k">return</span> i
         }
@@ -1020,54 +1020,54 @@ Atomic[<span class="t">i64</span>] accepted
 }
 
 <span class="c">// Sends a client its last line, then the empty String that ends its writer.</span>
-<span class="t">void</span> farewell(Client c, <span class="t">str</span> text) {
-    c.out &lt;- format(<span class="s">&quot;{text}\n&quot;</span>)
-    c.out &lt;- <span class="s">&quot;&quot;</span>.copy()
+<span class="t">void</span> <span class="f">farewell</span>(<span class="t">Client</span> c, <span class="t">str</span> text) {
+    c.out &lt;- <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    c.out &lt;- <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
 }
 
-<span class="t">void</span> hub(<span class="k">chan</span>[Event] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
-    List[Client] clients
-    <span class="k">defer</span> clients.free()
+<span class="t">void</span> <span class="f">hub</span>(<span class="k">chan</span>[<span class="t">Event</span>] events, <span class="k">chan</span>[<span class="t">bool</span>] done) {
+    <span class="t">List</span>[<span class="t">Client</span>] clients
+    <span class="k">defer</span> clients.<span class="f">free</span>()
     <span class="t">bool</span> stopping
     <span class="k">for</span> {
         e := &lt;-events
         <span class="k">match</span> e {
-            Join(id, name, out) =&gt; {
-                broadcast(&amp;clients, <span class="s">&quot;* {name} joined&quot;</span>, id)
-                c := Client{id: id, name: name, out: out}
-                clients.push(c)
+            <span class="f">Join</span>(id, name, out) =&gt; {
+                <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>name<span class="e">}</span><span class="s"> joined&quot;</span>, id)
+                c := <span class="t">Client</span>{id: id, name: name, out: out}
+                clients.<span class="f">push</span>(c)
                 <span class="k">if</span> stopping {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 } <span class="k">else</span> {
-                    out &lt;- format(<span class="s">&quot;welcome, {name}. {clients.len} online\n&quot;</span>)
+                    out &lt;- <span class="f">format</span>(<span class="s">&quot;welcome, </span><span class="e">{</span>name<span class="e">}</span><span class="s">. </span><span class="e">{</span>clients.len<span class="e">}</span><span class="s"> online</span><span class="e">\n</span><span class="s">&quot;</span>)
                 }
             }
-            Say(id, text) =&gt; {
-                <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{clients.at(find(&amp;clients, id)).name}: {text}&quot;</span>)
-                broadcast(&amp;clients, line, id)
-                text.free()
+            <span class="f">Say</span>(id, text) =&gt; {
+                <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).name<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+                <span class="f">broadcast</span>(&amp;clients, line, id)
+                text.<span class="f">free</span>()
             }
-            Who(id) =&gt; {
+            <span class="f">Who</span>(id) =&gt; {
                 <span class="t">String</span> names
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    names.append(<span class="s">&quot; &quot;</span>)
-                    names.append(c.name)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    names.<span class="f">append</span>(<span class="s">&quot; &quot;</span>)
+                    names.<span class="f">append</span>(c.name)
                 }
-                clients.at(find(&amp;clients, id)).out &lt;- format(<span class="s">&quot;online:{names}. {accepted.load()} connections so far\n&quot;</span>)
-                names.free()
+                clients.<span class="f">at</span>(<span class="f">find</span>(&amp;clients, id)).out &lt;- <span class="f">format</span>(<span class="s">&quot;online:</span><span class="e">{</span>names<span class="e">}</span><span class="s">. </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections so far</span><span class="e">\n</span><span class="s">&quot;</span>)
+                names.<span class="f">free</span>()
             }
-            Leave(id) =&gt; {
-                c := clients.remove(find(&amp;clients, id))
+            <span class="f">Leave</span>(id) =&gt; {
+                c := clients.<span class="f">remove</span>(<span class="f">find</span>(&amp;clients, id))
                 <span class="k">if</span> !stopping {
-                    farewell(c, <span class="s">&quot;bye&quot;</span>)
-                    broadcast(&amp;clients, <span class="s">&quot;* {c.name} left&quot;</span>, id)
+                    <span class="f">farewell</span>(c, <span class="s">&quot;bye&quot;</span>)
+                    <span class="f">broadcast</span>(&amp;clients, <span class="s">&quot;* </span><span class="e">{</span>c.name<span class="e">}</span><span class="s"> left&quot;</span>, id)
                 }
-                c.name.free()
+                c.name.<span class="f">free</span>()
             }
-            Stop =&gt; {
+            <span class="t">Stop</span> =&gt; {
                 stopping = <span class="k">true</span>
-                <span class="k">for</span> c <span class="k">in</span> clients.items() {
-                    farewell(c, <span class="s">&quot;the server is stopping&quot;</span>)
+                <span class="k">for</span> c <span class="k">in</span> clients.<span class="f">items</span>() {
+                    <span class="f">farewell</span>(c, <span class="s">&quot;the server is stopping&quot;</span>)
                 }
             }
         }
@@ -1078,85 +1078,85 @@ Atomic[<span class="t">i64</span>] accepted
     }
 }
 
-<span class="t">void</span> writer(net.Conn c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
+<span class="t">void</span> <span class="f">writer</span>(net.<span class="t">Conn</span> c, <span class="k">chan</span>[<span class="t">String</span>] out, <span class="k">chan</span>[<span class="t">bool</span>] finished) {
     <span class="t">bool</span> failed
     <span class="k">for</span> {
         msg := &lt;-out
         <span class="k">if</span> msg.len == <span class="n">0</span> {
-            msg.free()
+            msg.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> !failed {
-            c.write(msg) <span class="k">catch</span> e {
+            c.<span class="f">write</span>(msg) <span class="k">catch</span> e {
                 failed = <span class="k">true</span>
             }
         }
-        msg.free()
+        msg.<span class="f">free</span>()
     }
-    c.interrupt()
+    c.<span class="f">interrupt</span>()
     finished &lt;- <span class="k">true</span>
 }
 
-<span class="t">void</span> handle(net.Conn c, <span class="t">i64</span> id, <span class="k">chan</span>[Event] events) {
-    <span class="k">defer</span> c.close()
-    c.write(<span class="s">&quot;your name?\n&quot;</span>) <span class="k">catch</span> e {
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c, <span class="t">i64</span> id, <span class="k">chan</span>[<span class="t">Event</span>] events) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;your name?</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
-    name := c.readLine(<span class="n">64</span>) <span class="k">catch</span> e {
+    name := c.<span class="f">readLine</span>(<span class="n">64</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
     out := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">64</span>)
     finished := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
-    <span class="k">spawn</span> writer(c, out, finished)
-    events &lt;- .Join(id, name, out)
+    <span class="k">spawn</span> <span class="f">writer</span>(c, out, finished)
+    events &lt;- .<span class="f">Join</span>(id, name, out)
     <span class="k">for</span> {
-        line := c.readLine(<span class="n">1024</span>) <span class="k">catch</span> e {
+        line := c.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/quit&quot;</span> {
-            line.free()
+            line.<span class="f">free</span>()
             <span class="k">break</span>
         }
         <span class="k">if</span> line == <span class="s">&quot;/who&quot;</span> {
-            line.free()
-            events &lt;- .Who(id)
+            line.<span class="f">free</span>()
+            events &lt;- .<span class="f">Who</span>(id)
             <span class="k">continue</span>
         }
-        events &lt;- .Say(id, line)
+        events &lt;- .<span class="f">Say</span>(id, line)
     }
-    events &lt;- .Leave(id)
+    events &lt;- .<span class="f">Leave</span>(id)
     _ = &lt;-finished
 }
 
-<span class="t">void</span> acceptLoop(net.Listener ln, <span class="k">chan</span>[Event] events) {
+<span class="t">void</span> <span class="f">acceptLoop</span>(net.<span class="t">Listener</span> ln, <span class="k">chan</span>[<span class="t">Event</span>] events) {
     <span class="k">for</span> {
-        conn := ln.accept() <span class="k">catch</span> e {
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
-        id := accepted.add(<span class="n">1</span>)
-        <span class="k">spawn</span> handle(conn, id, events)
+        id := accepted.<span class="f">add</span>(<span class="n">1</span>)
+        <span class="k">spawn</span> <span class="f">handle</span>(conn, id, events)
     }
 }
 
-<span class="t">void</span> stopOnSignal(<span class="k">chan</span>[Event] events) {
-    s := signal.wait()
-    print(<span class="s">&quot;{s}: stopping&quot;</span>)
-    events &lt;- .Stop
+<span class="t">void</span> <span class="f">stopOnSignal</span>(<span class="k">chan</span>[<span class="t">Event</span>] events) {
+    s := signal.<span class="f">wait</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s">: stopping&quot;</span>)
+    events &lt;- .<span class="t">Stop</span>
 }
 
-!<span class="t">void</span> main() {
-    ln := <span class="k">try</span> net.listen(<span class="n">8080</span>)
-    events := <span class="k">chan</span>[Event](<span class="n">256</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">8080</span>)
+    events := <span class="k">chan</span>[<span class="t">Event</span>](<span class="n">256</span>)
     done := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">0</span>)
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
-        thread acceptLoop(ln, events)
+        <span class="k">thread</span> <span class="f">acceptLoop</span>(ln, events)
     }
-    signal.watch()
-    <span class="k">spawn</span> stopOnSignal(events)
-    print(<span class="s">&quot;listening on 8080&quot;</span>)
-    <span class="k">spawn</span> hub(events, done)
+    signal.<span class="f">watch</span>()
+    <span class="k">spawn</span> <span class="f">stopOnSignal</span>(events)
+    <span class="f">print</span>(<span class="s">&quot;listening on 8080&quot;</span>)
+    <span class="k">spawn</span> <span class="f">hub</span>(events, done)
     _ = &lt;-done
-    print(<span class="s">&quot;stopped&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;stopped&quot;</span>)
 }</code></pre>
 <h2 id="next"><a href="#next">Next</a></h2>
 <p>The server uses each way Iris has to do several things at once:</p>

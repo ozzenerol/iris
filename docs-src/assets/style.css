@@ -13,6 +13,8 @@
   --hl-s: #2f7d32;
   --hl-c: #7c828c;
   --hl-n: #b4570d;
+  --hl-f: #0e7480;
+  --hl-e: #a3367a;
   --bad: #b3261e;
   --sans: "Public Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -22,13 +24,13 @@
   :root:not([data-theme="light"]) {
     --bg: #15171a; --fg: #e6e7ea; --muted: #9aa0a9; --line: #2a2d33; --code-bg: #1d2024;
     --accent: #7aa7ec; --hl-k: #c79be0; --hl-t: #7aa7ec; --hl-s: #8fc98f; --hl-c: #7d838c;
-    --hl-n: #e3a46a; --bad: #f08a80; color-scheme: dark;
+    --hl-n: #e3a46a; --hl-f: #6cc6cf; --hl-e: #e88cc4; --bad: #f08a80; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #15171a; --fg: #e6e7ea; --muted: #9aa0a9; --line: #2a2d33; --code-bg: #1d2024;
   --accent: #7aa7ec; --hl-k: #c79be0; --hl-t: #7aa7ec; --hl-s: #8fc98f; --hl-c: #7d838c;
-  --hl-n: #e3a46a; --bad: #f08a80; color-scheme: dark;
+  --hl-n: #e3a46a; --hl-f: #6cc6cf; --hl-e: #e88cc4; --bad: #f08a80; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -95,6 +97,8 @@ pre .tag { position: absolute; top: 6px; right: 8px; font-family: var(--sans); f
 .c { color: var(--hl-c); font-style: italic; }
 .n { color: var(--hl-n); }
 .a { color: var(--hl-n); }
+.f { color: var(--hl-f); }
+.e { color: var(--hl-e); }
 .p { color: var(--hl-k); }
 
 /* ---- prose: chapters and plain pages ---- */

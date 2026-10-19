@@ -50,27 +50,27 @@ try {
 <p class="lede">An enum is a type with a fixed list of values. Plain enums name choices and codes; flag enums hold any set of their values at once; and the values of an enum with data each carry fields of their own.</p>
 <h2 id="plain-enums"><a href="#plain-enums">Plain enums</a></h2>
 <p>An enum lists its values in braces:</p>
-<pre class="code run"><code><span class="k">enum</span> Level { debug, info, warn, error }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Level</span> { debug, info, warn, error }
 
-<span class="t">void</span> main() {
-    Level l = Level.warn
-    print(<span class="s">&quot;level {l}&quot;</span>)
-    <span class="k">if</span> l == Level.warn {
-        print(<span class="s">&quot;watch out&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Level</span> l = <span class="t">Level</span>.warn
+    <span class="f">print</span>(<span class="s">&quot;level </span><span class="e">{</span>l<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">if</span> l == <span class="t">Level</span>.warn {
+        <span class="f">print</span>(<span class="s">&quot;watch out&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>level warn
 watch out</code></pre>
 <p>A value is written with its enum's name in front: <code>Level.warn</code>. Where the type is known from the place it goes (a typed variable, a parameter, a comparison with a value of the enum, a <code>match</code> arm), the name can be left out, keeping just the dot:</p>
-<pre class="code run"><code><span class="k">enum</span> Level { debug, info, warn, error }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Level</span> { debug, info, warn, error }
 
-<span class="t">void</span> log(Level level, <span class="t">str</span> msg) =&gt; print(<span class="s">&quot;[{level}] {msg}&quot;</span>)
+<span class="t">void</span> <span class="f">log</span>(<span class="t">Level</span> level, <span class="t">str</span> msg) =&gt; <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>level<span class="e">}</span><span class="s">] </span><span class="e">{</span>msg<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="t">void</span> main() {
-    Level l = .info
-    log(.error, <span class="s">&quot;disk full&quot;</span>)
-    log(l, <span class="s">&quot;started&quot;</span>)
-    print(<span class="s">&quot;{l == .info}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Level</span> l = .info
+    <span class="f">log</span>(.error, <span class="s">&quot;disk full&quot;</span>)
+    <span class="f">log</span>(l, <span class="s">&quot;started&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>l == .info<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[error] disk full
 [info] started
@@ -78,54 +78,54 @@ true</code></pre>
 <p>An enum printed in text writes its value's name. <code>.name</code> gives the name as a <code>str</code>.</p>
 <h2 id="numbers"><a href="#numbers">Numbers</a></h2>
 <p>Each value is a number, starting at 0 and going up by one. A value can be given its own number, and the ones after it go on from there. <code>.value</code> gives the number as an <code>i64</code>:</p>
-<pre class="code run"><code><span class="k">enum</span> Status { ok = <span class="n">200</span>, created, notFound = <span class="n">404</span>, error = <span class="n">500</span> }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Status</span> { ok = <span class="n">200</span>, created, notFound = <span class="n">404</span>, error = <span class="n">500</span> }
 
-<span class="t">void</span> main() {
-    s := Status.created
-    print(<span class="s">&quot;{s} is {s.value}&quot;</span>)
-    print(<span class="s">&quot;{Status.notFound.value} {Status.error.name}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Status</span>.created
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> is </span><span class="e">{</span>s.value<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">Status</span>.notFound.value<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">Status</span>.error.name<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>created is 201
 404 error</code></pre>
 <p>The numbers fit in an <code>i32</code>. Numbers don't turn into enum values on their own: the program says which value a number means, with a <code>match</code>:</p>
-<pre class="code run"><code><span class="k">enum</span> Status { ok = <span class="n">200</span>, notFound = <span class="n">404</span>, error = <span class="n">500</span> }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Status</span> { ok = <span class="n">200</span>, notFound = <span class="n">404</span>, error = <span class="n">500</span> }
 
-Status statusOf(<span class="t">i64</span> code) =&gt; <span class="k">match</span> code {
+<span class="t">Status</span> <span class="f">statusOf</span>(<span class="t">i64</span> code) =&gt; <span class="k">match</span> code {
     <span class="n">200</span> =&gt; .ok
     <span class="n">404</span> =&gt; .notFound
     _ =&gt; .error
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{statusOf(404)} {statusOf(301)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">statusOf</span>(<span class="n">404</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">statusOf</span>(<span class="n">301</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>notFound error</code></pre>
 <h2 id="match-on-an-enum"><a href="#match-on-an-enum">match on an enum</a></h2>
 <p>A <code>match</code> on an enum must have an arm for each value, or a <code>_</code> arm, so adding a value later shows every place that has to handle it:</p>
-<pre class="code run"><code><span class="k">enum</span> Level { debug, info, warn, error }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Level</span> { debug, info, warn, error }
 
-<span class="t">str</span> color(Level l) =&gt; <span class="k">match</span> l {
+<span class="t">str</span> <span class="f">color</span>(<span class="t">Level</span> l) =&gt; <span class="k">match</span> l {
     .debug, .info =&gt; <span class="s">&quot;gray&quot;</span>
     .warn =&gt; <span class="s">&quot;yellow&quot;</span>
     .error =&gt; <span class="s">&quot;red&quot;</span>
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{color(.info)} {color(.error)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">color</span>(.info)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">color</span>(.error)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>gray red</code></pre>
 <h2 id="flags"><a href="#flags">Flags</a></h2>
 <p>An enum marked <code>flags</code> gives its values powers of two, so a value of it can hold any of them together. <code>|</code> joins them, <code>&amp;</code> keeps what two have in common, <code>~</code> turns every one around, and <code>has</code> says whether one is there:</p>
-<pre class="code run"><code><span class="k">enum</span> Perm flags { read, write, exec }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Perm</span> flags { read, write, exec }
 
-<span class="t">void</span> main() {
-    Perm p = .read | .write
-    print(<span class="s">&quot;{p} has write: {p.has(.write)}, exec: {p.has(.exec)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Perm</span> p = .read | .write
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p<span class="e">}</span><span class="s"> has write: </span><span class="e">{</span>p.<span class="f">has</span>(.write)<span class="e">}</span><span class="s">, exec: </span><span class="e">{</span>p.<span class="f">has</span>(.exec)<span class="e">}</span><span class="s">&quot;</span>)
     p = p | .exec
-    noWrite := p &amp; ~Perm.write
-    print(<span class="s">&quot;{p} -&gt; {noWrite}&quot;</span>)
-    Perm none
-    print(<span class="s">&quot;[{none}] {none.value} {p.value}&quot;</span>)
+    noWrite := p &amp; ~<span class="t">Perm</span>.write
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>noWrite<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="t">Perm</span> none
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>none<span class="e">}</span><span class="s">] </span><span class="e">{</span>none.value<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.value<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>read|write has write: true, exec: false
 read|write|exec -&gt; read|exec
@@ -133,29 +133,29 @@ read|write|exec -&gt; read|exec
 <p>A flags value prints the names of the values that are set, joined by <code>|</code>. A flags enum can have up to 31 values.</p>
 <h2 id="enums-with-data"><a href="#enums-with-data">Enums with data</a></h2>
 <p>A value of an enum can carry data, written like a function's parameters after its name:</p>
-<pre class="code"><code><span class="k">enum</span> Frame {
-    Data(<span class="t">i64</span> stream, <span class="t">i64</span> size)
-    Ping(<span class="t">u64</span> payload)
-    Close
+<pre class="code"><code><span class="k">enum</span> <span class="t">Frame</span> {
+    <span class="f">Data</span>(<span class="t">i64</span> stream, <span class="t">i64</span> size)
+    <span class="f">Ping</span>(<span class="t">u64</span> payload)
+    <span class="t">Close</span>
 }</code></pre>
 <p>A value is made by calling it like a function, and taken apart with <code>match</code>. Each arm names a value and gives names to its data, which the arm then uses:</p>
 <pre class="code run"><code><span class="c">// The frames of a protocol, each with a 9-byte header.</span>
-<span class="k">enum</span> Frame {
-    Data(<span class="t">i64</span> stream, <span class="t">i64</span> size)
-    Ping(<span class="t">u64</span> payload)
-    Close
+<span class="k">enum</span> <span class="t">Frame</span> {
+    <span class="f">Data</span>(<span class="t">i64</span> stream, <span class="t">i64</span> size)
+    <span class="f">Ping</span>(<span class="t">u64</span> payload)
+    <span class="t">Close</span>
 }
 
-<span class="t">i64</span> wireSize(Frame f) =&gt; <span class="k">match</span> f {
-    Data(stream, size) =&gt; <span class="n">9</span> + size
-    Ping(payload) =&gt; <span class="n">9</span> + <span class="n">8</span>
-    Close =&gt; <span class="n">9</span>
+<span class="t">i64</span> <span class="f">wireSize</span>(<span class="t">Frame</span> f) =&gt; <span class="k">match</span> f {
+    <span class="f">Data</span>(stream, size) =&gt; <span class="n">9</span> + size
+    <span class="f">Ping</span>(payload) =&gt; <span class="n">9</span> + <span class="n">8</span>
+    <span class="t">Close</span> =&gt; <span class="n">9</span>
 }
 
-<span class="t">void</span> main() {
-    Frame[<span class="n">3</span>] frames = [Frame.Data(<span class="n">1</span>, <span class="n">1200</span>), .Ping(<span class="n">42</span>), .Close]
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Frame</span>[<span class="n">3</span>] frames = [<span class="t">Frame</span>.<span class="f">Data</span>(<span class="n">1</span>, <span class="n">1200</span>), .<span class="f">Ping</span>(<span class="n">42</span>), .<span class="t">Close</span>]
     <span class="k">for</span> f <span class="k">in</span> frames {
-        print(<span class="s">&quot;{f}: {wireSize(f)} bytes&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f<span class="e">}</span><span class="s">: </span><span class="e">{</span><span class="f">wireSize</span>(f)<span class="e">}</span><span class="s"> bytes&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>Data: 1209 bytes
@@ -163,24 +163,24 @@ Ping: 17 bytes
 Close: 9 bytes</code></pre>
 <p>A name in an arm can be <code>_</code> for data that isn't needed, and a value's name on its own takes it whatever its data. A value prints as its name:</p>
 <pre class="code run"><code><span class="c">// What a poller reports about a socket.</span>
-<span class="k">enum</span> Event {
-    Readable(<span class="t">i32</span> fd, <span class="t">i64</span> bytes)
-    Writable(<span class="t">i32</span> fd)
-    Hangup(<span class="t">i32</span> fd)
+<span class="k">enum</span> <span class="t">Event</span> {
+    <span class="f">Readable</span>(<span class="t">i32</span> fd, <span class="t">i64</span> bytes)
+    <span class="f">Writable</span>(<span class="t">i32</span> fd)
+    <span class="f">Hangup</span>(<span class="t">i32</span> fd)
 }
 
-<span class="t">void</span> handle(Event e) {
+<span class="t">void</span> <span class="f">handle</span>(<span class="t">Event</span> e) {
     <span class="k">match</span> e {
-        Readable(fd, _) =&gt; print(<span class="s">&quot;fd {fd} has data&quot;</span>)
-        Writable(fd) =&gt; print(<span class="s">&quot;fd {fd} can be written&quot;</span>)
-        Hangup =&gt; print(<span class="s">&quot;a peer went away&quot;</span>)
+        <span class="f">Readable</span>(fd, _) =&gt; <span class="f">print</span>(<span class="s">&quot;fd </span><span class="e">{</span>fd<span class="e">}</span><span class="s"> has data&quot;</span>)
+        <span class="f">Writable</span>(fd) =&gt; <span class="f">print</span>(<span class="s">&quot;fd </span><span class="e">{</span>fd<span class="e">}</span><span class="s"> can be written&quot;</span>)
+        <span class="t">Hangup</span> =&gt; <span class="f">print</span>(<span class="s">&quot;a peer went away&quot;</span>)
     }
 }
 
-<span class="t">void</span> main() {
-    handle(.Readable(<span class="n">5</span>, <span class="n">512</span>))
-    handle(.Writable(<span class="n">6</span>))
-    handle(Event.Hangup(<span class="n">5</span>))
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">handle</span>(.<span class="f">Readable</span>(<span class="n">5</span>, <span class="n">512</span>))
+    <span class="f">handle</span>(.<span class="f">Writable</span>(<span class="n">6</span>))
+    <span class="f">handle</span>(<span class="t">Event</span>.<span class="f">Hangup</span>(<span class="n">5</span>))
 }</code></pre>
 <pre class="out"><code>fd 5 has data
 fd 6 can be written
@@ -188,20 +188,20 @@ a peer went away</code></pre>
 <p>The data is part of the value, which is copied as a whole like a struct. Values of an enum with data can't be compared with <code>==</code>, since their data may differ; <code>match</code> is the way to look at them.</p>
 <h2 id="errors-are-enums"><a href="#errors-are-enums">Errors are enums</a></h2>
 <p>The code of an error is a value of a plain enum. A module lists what can go wrong with it as an enum, and the caller matches on it (see <a href="18-errors.html">Errors</a>):</p>
-<pre class="code run"><code><span class="k">enum</span> ConfigError { missing, invalid }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">ConfigError</span> { missing, invalid }
 
-!<span class="t">i64</span> port(<span class="t">str</span> text) {
+!<span class="t">i64</span> <span class="f">port</span>(<span class="t">str</span> text) {
     <span class="k">if</span> text.len == <span class="n">0</span> {
-        <span class="k">return</span> error(ConfigError.missing, <span class="s">&quot;no port given&quot;</span>)
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">ConfigError</span>.missing, <span class="s">&quot;no port given&quot;</span>)
     }
     <span class="k">return</span> <span class="n">8080</span>
 }
 
-<span class="t">void</span> main() {
-    _ = port(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
+<span class="t">void</span> <span class="f">main</span>() {
+    _ = <span class="f">port</span>(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
         <span class="k">match</span> e.code {
-            ConfigError.missing =&gt; print(<span class="s">&quot;using the default&quot;</span>)
-            _ =&gt; print(<span class="s">&quot;other: {e.message}&quot;</span>)
+            <span class="t">ConfigError</span>.missing =&gt; <span class="f">print</span>(<span class="s">&quot;using the default&quot;</span>)
+            _ =&gt; <span class="f">print</span>(<span class="s">&quot;other: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         }
         <span class="n">0</span>
     }

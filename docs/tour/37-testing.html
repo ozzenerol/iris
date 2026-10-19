@@ -51,41 +51,41 @@ try {
 <h2 id="test-blocks"><a href="#test-blocks">test blocks</a></h2>
 <p>A <code>test</code> block has a name in quotes and a body, and can go in any file of a module, at the top level:</p>
 <pre class="code"><code><span class="c">// A 16-bit number in network byte order.</span>
-<span class="t">u16</span> swap16(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
+<span class="t">u16</span> <span class="f">swap16</span>(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
 <span class="k">test</span> <span class="s">&quot;swap16&quot;</span> {
-    expect(swap16(<span class="n">0x1F90</span>) == <span class="n">0x901F</span>)
-    expect(swap16(swap16(<span class="n">8080</span>)) == <span class="n">8080</span>, <span class="s">&quot;swapping twice gives {swap16(swap16(8080))}&quot;</span>)
+    <span class="f">expect</span>(<span class="f">swap16</span>(<span class="n">0x1F90</span>) == <span class="n">0x901F</span>)
+    <span class="f">expect</span>(<span class="f">swap16</span>(<span class="f">swap16</span>(<span class="n">8080</span>)) == <span class="n">8080</span>, <span class="s">&quot;swapping twice gives </span><span class="e">{</span><span class="f">swap16</span>(<span class="f">swap16</span>(<span class="n">8080</span>))<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p>A test is a function the compiler makes from the block. It sees everything in its module, including names that aren't <code>pub</code>, so a test can check a module's inner parts. <code>iris run</code> and <code>iris build</code> leave tests out of the program; <code>iris check</code> checks them like the rest of the code.</p>
 <h2 id="expect"><a href="#expect">expect</a></h2>
 <p><code>expect(cond)</code> checks a condition. When it is false, the test fails, with the file and line of the check, and goes on to its end, so one run shows every failed check. A second argument is a message to show, which can have values in braces:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;parse a port&quot;</span> {
-    n := <span class="k">try</span> parsePort(<span class="s">&quot;8080&quot;</span>)
-    expect(n == <span class="n">8080</span>)
-    expect(n &gt; <span class="n">0</span> &amp;&amp; n &lt; <span class="n">65536</span>, <span class="s">&quot;port {n} out of range&quot;</span>)
+    n := <span class="k">try</span> <span class="f">parsePort</span>(<span class="s">&quot;8080&quot;</span>)
+    <span class="f">expect</span>(n == <span class="n">8080</span>)
+    <span class="f">expect</span>(n &gt; <span class="n">0</span> &amp;&amp; n &lt; <span class="n">65536</span>, <span class="s">&quot;port </span><span class="e">{</span>n<span class="e">}</span><span class="s"> out of range&quot;</span>)
 }</code></pre>
 <p><code>expect</code> can be used only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:</p>
-<pre class="code"><code><span class="t">String</span> checkConfig(Config c) {
+<pre class="code"><code><span class="t">String</span> <span class="f">checkConfig</span>(<span class="t">Config</span> c) {
     <span class="k">if</span> c.upstream.len == <span class="n">0</span> {
-        <span class="k">return</span> format(<span class="s">&quot;the config has no upstream&quot;</span>)
+        <span class="k">return</span> <span class="f">format</span>(<span class="s">&quot;the config has no upstream&quot;</span>)
     }
-    <span class="k">return</span> format(<span class="s">&quot;&quot;</span>)
+    <span class="k">return</span> <span class="f">format</span>(<span class="s">&quot;&quot;</span>)
 }
 
 <span class="k">test</span> <span class="s">&quot;config&quot;</span> {
-    <span class="k">scoped</span> <span class="t">String</span> problem = checkConfig(load())
-    expect(problem.len == <span class="n">0</span>, problem)
+    <span class="k">scoped</span> <span class="t">String</span> problem = <span class="f">checkConfig</span>(<span class="f">load</span>())
+    <span class="f">expect</span>(problem.len == <span class="n">0</span>, problem)
 }</code></pre>
 <h2 id="errors-in-tests"><a href="#errors-in-tests">Errors in tests</a></h2>
 <p>A test can use <code>try</code>: an error that leaves the test fails it, and the output shows the error and its trace. A test that checks that something fails uses <code>catch</code>:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;a bad port fails&quot;</span> {
     <span class="t">bool</span> failed = <span class="k">false</span>
-    _ = parsePort(<span class="s">&quot;x&quot;</span>) <span class="k">catch</span> e {
-        failed = e.code == <span class="t">str</span>.ParseError.notNumber
+    _ = <span class="f">parsePort</span>(<span class="s">&quot;x&quot;</span>) <span class="k">catch</span> e {
+        failed = e.code == <span class="t">str</span>.<span class="t">ParseError</span>.notNumber
         <span class="n">0</span>
     }
-    expect(failed, <span class="s">&quot;parsePort(\&quot;x\&quot;) should fail with notNumber&quot;</span>)
+    <span class="f">expect</span>(failed, <span class="s">&quot;parsePort(</span><span class="e">\&quot;</span><span class="s">x</span><span class="e">\&quot;</span><span class="s">) should fail with notNumber&quot;</span>)
 }</code></pre>
 <p>A panic in a test, an index out of range or an overflow, stops the whole run with its message, as it would stop the program.</p>
 <h2 id="iris-test"><a href="#iris-test">iris test</a></h2>
@@ -105,11 +105,11 @@ FAIL a bad port
 <h2 id="tests-that-need-more"><a href="#tests-that-need-more">Tests that need more</a></h2>
 <p>A test that needs files, a network server or a database makes them itself, and cleans up with <code>defer</code>. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;the server answers&quot;</span> {
-    ln := <span class="k">try</span> net.listen(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
-    <span class="k">spawn</span> serve(ln)
-    <span class="k">scoped</span> <span class="t">String</span> url = format(<span class="s">&quot;http://127.0.0.1:{ln.port}/health&quot;</span>)
-    <span class="k">scoped</span> http.Reply r = <span class="k">try</span> http.get(url)
-    expect(r.status == <span class="n">200</span>, <span class="s">&quot;status {r.status}&quot;</span>)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(ln)
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/health&quot;</span>)
+    <span class="k">scoped</span> http.<span class="t">Reply</span> r = <span class="k">try</span> http.<span class="f">get</span>(url)
+    <span class="f">expect</span>(r.status == <span class="n">200</span>, <span class="s">&quot;status </span><span class="e">{</span>r.status<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
     <nav class="pager"><a class="prev" href="36-calling-c.html"><span>Previous</span>Calling C</a><a class="next" href="38-tools.html"><span>Next</span>Tools</a></nav>
   </article>

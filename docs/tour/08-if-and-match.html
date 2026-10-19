@@ -51,7 +51,7 @@ try {
 <h2 id="if"><a href="#if">if</a></h2>
 <p><code>if</code> runs its block when its condition is true. <code>else if</code> adds more conditions, tried in order, and <code>else</code> runs when none was true:</p>
 <pre class="code run"><code><span class="c">// How a ping&#x27;s round trip time reads, in milliseconds; 0 is no reply.</span>
-<span class="t">str</span> health(<span class="t">i64</span> ms) {
+<span class="t">str</span> <span class="f">health</span>(<span class="t">i64</span> ms) {
     <span class="k">if</span> ms &gt; <span class="n">500</span> {
         <span class="k">return</span> <span class="s">&quot;very slow&quot;</span>
     } <span class="k">else</span> <span class="k">if</span> ms &gt; <span class="n">100</span> {
@@ -63,9 +63,9 @@ try {
     }
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> ms <span class="k">in</span> [<span class="n">800</span>, <span class="n">150</span>, <span class="n">12</span>, <span class="n">0</span>] {
-        print(<span class="s">&quot;{ms}ms: {health(ms)}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ms<span class="e">}</span><span class="s">ms: </span><span class="e">{</span><span class="f">health</span>(ms)<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>800ms: very slow
@@ -75,20 +75,20 @@ try {
 <p>The condition is a <code>bool</code> and needs no parentheses. The block always has braces. <code>else</code> goes on the line of the closing brace before it, or on the next line.</p>
 <h2 id="a-condition-after-a-statement"><a href="#a-condition-after-a-statement">A condition after a statement</a></h2>
 <p>A short statement can have its condition after it, on the same line: the statement runs only when the condition is true. This suits the checks at the top of a function and in loops:</p>
-<pre class="code run"><code><span class="t">Duration</span> retryDelay(<span class="t">i64</span> attempt) {
-    <span class="k">return</span> 0s <span class="k">if</span> attempt == <span class="n">0</span>
-    <span class="k">return</span> 30s <span class="k">if</span> attempt &gt; <span class="n">8</span>
-    <span class="k">return</span> 100ms * (<span class="n">1</span> &lt;&lt; attempt)
+<pre class="code run"><code><span class="t">Duration</span> <span class="f">retryDelay</span>(<span class="t">i64</span> attempt) {
+    <span class="k">return</span> <span class="n">0s</span> <span class="k">if</span> attempt == <span class="n">0</span>
+    <span class="k">return</span> <span class="n">30s</span> <span class="k">if</span> attempt &gt; <span class="n">8</span>
+    <span class="k">return</span> <span class="n">100ms</span> * (<span class="n">1</span> &lt;&lt; attempt)
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     verbose := <span class="k">true</span>
-    print(<span class="s">&quot;{retryDelay(0)} {retryDelay(3)} {retryDelay(9)}&quot;</span>)
-    print(<span class="s">&quot;scanning&quot;</span>) <span class="k">if</span> verbose
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">retryDelay</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">retryDelay</span>(<span class="n">3</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">retryDelay</span>(<span class="n">9</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;scanning&quot;</span>) <span class="k">if</span> verbose
     <span class="k">for</span> port <span class="k">in</span> [<span class="n">22</span>, <span class="n">80</span>, <span class="n">3000</span>, <span class="n">8080</span>, <span class="n">0</span>, <span class="n">9090</span>] {
         <span class="k">break</span> <span class="k">if</span> port == <span class="n">0</span>      <span class="c">// the end of the list</span>
         <span class="k">continue</span> <span class="k">if</span> port &lt; <span class="n">1024</span> <span class="c">// needs root</span>
-        print(<span class="s">&quot;trying {port}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;trying </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>0s 800ms 30s
@@ -99,14 +99,14 @@ trying 8080</code></pre>
 <p><code>return if</code> followed by a block is still an if that gives a value: <code>return if ok { 1 } else { 2 }</code>.</p>
 <h2 id="if-as-a-value"><a href="#if-as-a-value">if as a value</a></h2>
 <p><code>if</code> can give a value. Each branch ends with the value it gives, without <code>return</code>, and <code>else</code> is required, since there must be a value whichever way it goes:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     load := <span class="n">0.93</span>
     level := <span class="k">if</span> load &gt; <span class="n">0.9</span> { <span class="s">&quot;critical&quot;</span> } <span class="k">else</span> <span class="k">if</span> load &gt; <span class="n">0.7</span> { <span class="s">&quot;high&quot;</span> } <span class="k">else</span> { <span class="s">&quot;normal&quot;</span> }
-    print(<span class="s">&quot;load {load}: {level}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;load </span><span class="e">{</span>load<span class="e">}</span><span class="s">: </span><span class="e">{</span>level<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>load 0.93: critical</code></pre>
 <p>A branch can hold statements before its value. The value is the last line of the branch:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     size := <span class="n">4000</span>
     mss := <span class="n">1460</span>
     segments := <span class="k">if</span> size &gt; <span class="n">0</span> {
@@ -115,40 +115,40 @@ trying 8080</code></pre>
     } <span class="k">else</span> {
         <span class="n">0</span>
     }
-    print(<span class="s">&quot;{segments} segments&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>segments<span class="e">}</span><span class="s"> segments&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 segments</code></pre>
 <p>All the branches must give values of the same type.</p>
 <p>A short choice of a value can be written on one line as <code>a if cond else b</code>: <code>a</code> when the condition is true, <code>b</code> when it isn't. It is the same as <code>if cond { a } else { b }</code>, and can be chained:</p>
-<pre class="code run"><code><span class="t">str</span> sizeClass(<span class="t">i64</span> bytes) =&gt; <span class="s">&quot;small&quot;</span> <span class="k">if</span> bytes &lt; 1KiB <span class="k">else</span> <span class="s">&quot;medium&quot;</span> <span class="k">if</span> bytes &lt; 1MiB <span class="k">else</span> <span class="s">&quot;large&quot;</span>
+<pre class="code run"><code><span class="t">str</span> <span class="f">sizeClass</span>(<span class="t">i64</span> bytes) =&gt; <span class="s">&quot;small&quot;</span> <span class="k">if</span> bytes &lt; <span class="n">1KiB</span> <span class="k">else</span> <span class="s">&quot;medium&quot;</span> <span class="k">if</span> bytes &lt; <span class="n">1MiB</span> <span class="k">else</span> <span class="s">&quot;large&quot;</span>
 
-<span class="t">bool</span> retryable(<span class="t">i64</span> status) {
+<span class="t">bool</span> <span class="f">retryable</span>(<span class="t">i64</span> status) {
     <span class="k">return</span> <span class="k">true</span> <span class="k">if</span> status &gt;= <span class="n">500</span> <span class="k">else</span> <span class="k">false</span>
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">503</span>
-    wait := 2s <span class="k">if</span> retryable(status) <span class="k">else</span> 0s
-    print(<span class="s">&quot;{sizeClass(4096)} {wait} {&quot;</span>retry<span class="s">&quot; if retryable(status) else &quot;</span>give up<span class="s">&quot;}&quot;</span>)
+    wait := <span class="n">2s</span> <span class="k">if</span> <span class="f">retryable</span>(status) <span class="k">else</span> <span class="n">0s</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">sizeClass</span>(<span class="n">4096</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>wait<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;retry&quot;</span> <span class="k">if</span> <span class="f">retryable</span>(status) <span class="k">else</span> <span class="s">&quot;give up&quot;</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>medium 2s retry</code></pre>
 <p>Without the <code>else</code>, <code>return x if cond</code> is a condition on the statement: it returns only when the condition holds.</p>
 <h2 id="match"><a href="#match">match</a></h2>
 <p><code>match</code> compares one value against a list of arms and runs the first one that fits. Only that arm runs; there is no falling through into the next one:</p>
-<pre class="code run"><code><span class="t">void</span> reply(<span class="t">str</span> command) {
+<pre class="code run"><code><span class="t">void</span> <span class="f">reply</span>(<span class="t">str</span> command) {
     <span class="k">match</span> command {
-        <span class="s">&quot;PING&quot;</span> =&gt; print(<span class="s">&quot;+PONG&quot;</span>)
-        <span class="s">&quot;QUIT&quot;</span>, <span class="s">&quot;EXIT&quot;</span> =&gt; print(<span class="s">&quot;+OK bye&quot;</span>)
+        <span class="s">&quot;PING&quot;</span> =&gt; <span class="f">print</span>(<span class="s">&quot;+PONG&quot;</span>)
+        <span class="s">&quot;QUIT&quot;</span>, <span class="s">&quot;EXIT&quot;</span> =&gt; <span class="f">print</span>(<span class="s">&quot;+OK bye&quot;</span>)
         <span class="s">&quot;&quot;</span> =&gt; {}
-        _ =&gt; print(<span class="s">&quot;-ERR unknown command &#x27;{command}&#x27;&quot;</span>)
+        _ =&gt; <span class="f">print</span>(<span class="s">&quot;-ERR unknown command &#x27;</span><span class="e">{</span>command<span class="e">}</span><span class="s">&#x27;&quot;</span>)
     }
 }
 
-<span class="t">void</span> main() {
-    reply(<span class="s">&quot;PING&quot;</span>)
-    reply(<span class="s">&quot;QUIT&quot;</span>)
-    reply(<span class="s">&quot;&quot;</span>)
-    reply(<span class="s">&quot;FLUSH&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">reply</span>(<span class="s">&quot;PING&quot;</span>)
+    <span class="f">reply</span>(<span class="s">&quot;QUIT&quot;</span>)
+    <span class="f">reply</span>(<span class="s">&quot;&quot;</span>)
+    <span class="f">reply</span>(<span class="s">&quot;FLUSH&quot;</span>)
 }</code></pre>
 <pre class="out"><code>+PONG
 +OK bye
@@ -157,29 +157,29 @@ trying 8080</code></pre>
 <p><code>match</code> works on integers, characters, <code>bool</code>, <code>str</code> and enums.</p>
 <h2 id="ranges"><a href="#ranges">Ranges</a></h2>
 <p>An arm can be a range, <code>low..high</code>, which takes every value from <code>low</code> to <code>high</code> with both ends included:</p>
-<pre class="code run"><code><span class="t">str</span> portKind(<span class="t">i64</span> port) =&gt; <span class="k">match</span> port {
+<pre class="code run"><code><span class="t">str</span> <span class="f">portKind</span>(<span class="t">i64</span> port) =&gt; <span class="k">match</span> port {
     <span class="n">0</span>..<span class="n">1023</span> =&gt; <span class="s">&quot;system&quot;</span>
     <span class="n">1024</span>..<span class="n">49151</span> =&gt; <span class="s">&quot;registered&quot;</span>
     <span class="n">49152</span>..<span class="n">65535</span> =&gt; <span class="s">&quot;dynamic&quot;</span>
     _ =&gt; <span class="s">&quot;invalid&quot;</span>
 }
 
-<span class="t">str</span> kind(<span class="t">u8</span> c) =&gt; <span class="k">match</span> c {
+<span class="t">str</span> <span class="f">kind</span>(<span class="t">u8</span> c) =&gt; <span class="k">match</span> c {
     <span class="s">&#x27;a&#x27;</span>..<span class="s">&#x27;z&#x27;</span>, <span class="s">&#x27;A&#x27;</span>..<span class="s">&#x27;Z&#x27;</span> =&gt; <span class="s">&quot;letter&quot;</span>
     <span class="s">&#x27;0&#x27;</span>..<span class="s">&#x27;9&#x27;</span> =&gt; <span class="s">&quot;digit&quot;</span>
     <span class="s">&#x27; &#x27;</span>, <span class="s">&#x27;\t&#x27;</span>, <span class="s">&#x27;\n&#x27;</span> =&gt; <span class="s">&quot;space&quot;</span>
     _ =&gt; <span class="s">&quot;other&quot;</span>
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{portKind(22)} {portKind(8080)} {portKind(51000)} {portKind(70000)}&quot;</span>)
-    print(<span class="s">&quot;{kind(&#x27;q&#x27;)} {kind(&#x27;7&#x27;)} {kind(&#x27; &#x27;)} {kind(&#x27;#&#x27;)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">portKind</span>(<span class="n">22</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">portKind</span>(<span class="n">8080</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">portKind</span>(<span class="n">51000</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">portKind</span>(<span class="n">70000</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">kind</span>(<span class="s">&#x27;q&#x27;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">kind</span>(<span class="s">&#x27;7&#x27;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">kind</span>(<span class="s">&#x27; &#x27;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">kind</span>(<span class="s">&#x27;#&#x27;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>system registered dynamic invalid
 letter digit space other</code></pre>
 <h2 id="match-as-a-value"><a href="#match-as-a-value">match as a value</a></h2>
 <p>Like <code>if</code>, <code>match</code> can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a <code>match</code> reads well with <code>=&gt;</code>, as <code>portKind</code> above shows:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">404</span>
     text := <span class="k">match</span> status {
         <span class="n">200</span>..<span class="n">299</span> =&gt; <span class="s">&quot;ok&quot;</span>
@@ -187,28 +187,28 @@ letter digit space other</code></pre>
         <span class="n">404</span> =&gt; <span class="s">&quot;not found&quot;</span>
         _ =&gt; <span class="s">&quot;error&quot;</span>
     }
-    print(<span class="s">&quot;{status}: {text}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>status<span class="e">}</span><span class="s">: </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>404: not found</code></pre>
 <h2 id="every-value-has-an-arm"><a href="#every-value-has-an-arm">Every value has an arm</a></h2>
 <p>On an enum, a <code>match</code> must have an arm for every value, or a <code>_</code> arm. A missing value is a compile error, so adding a value to an enum shows every <code>match</code> that has to deal with it:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code><span class="k">enum</span> Mode { read, write, append }
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="k">enum</span> <span class="t">Mode</span> { read, write, append }
 
 <span class="k">match</span> m {
-    .read =&gt; open()
-    .write =&gt; create()
+    .read =&gt; <span class="f">open</span>()
+    .write =&gt; <span class="f">create</span>()
 } <span class="c">// error: this match has no arm for Mode.append; add it or a &#x27;_&#x27; arm</span></code></pre>
 <p>On integers and text, where the values can't all be listed, a <code>match</code> that gives a value needs a <code>_</code> arm.</p>
-<pre class="code run"><code><span class="k">enum</span> Mode { read, write, append }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">Mode</span> { read, write, append }
 
-<span class="t">str</span> flag(Mode m) =&gt; <span class="k">match</span> m {
+<span class="t">str</span> <span class="f">flag</span>(<span class="t">Mode</span> m) =&gt; <span class="k">match</span> m {
     .read =&gt; <span class="s">&quot;r&quot;</span>
     .write =&gt; <span class="s">&quot;w&quot;</span>
     .append =&gt; <span class="s">&quot;a&quot;</span>
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{flag(.read)}{flag(.append)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">flag</span>(.read)<span class="e">}</span><span class="e">{</span><span class="f">flag</span>(.append)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>ra</code></pre>
 <p>The enum's values are written with a dot, <code>.read</code>, since the type is known from the value being matched. The <a href="15-enums.html">Enums</a> chapter shows how <code>match</code> takes apart enum values that carry data.</p>

@@ -52,10 +52,10 @@ try {
 <p><code>os.argc()</code> gives how many arguments the program got, counting its own name, and <code>os.arg(i)</code> gives one of them as a <code>str</code>. Argument 0 is the program's name, and past the end <code>os.arg</code> gives <code>&quot;&quot;</code>:</p>
 <pre class="code"><code><span class="k">import</span> os
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;this is {os.arg(0)}, with {os.argc() - 1} arguments&quot;</span>)
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..os.argc() {
-        print(<span class="s">&quot;argument {i}: {os.arg(i)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;this is </span><span class="e">{</span>os.<span class="f">arg</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">, with </span><span class="e">{</span>os.<span class="f">argc</span>() - <span class="n">1</span><span class="e">}</span><span class="s"> arguments&quot;</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..os.<span class="f">argc</span>() {
+        <span class="f">print</span>(<span class="s">&quot;argument </span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>os.<span class="f">arg</span>(i)<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <p><code>./show a &quot;b c&quot;</code> prints:</p>
@@ -67,24 +67,24 @@ argument 2: b c</code></pre>
 <p>A program that ends normally has status 0. When <code>main</code> gives <code>!void</code> and ends with an error, the program prints it and ends with status 1. <code>os.exit(code)</code> ends the program at once, with any status; <code>defer</code> blocks don't run:</p>
 <pre class="code"><code><span class="k">import</span> os
 
-<span class="t">void</span> main() {
-    <span class="k">if</span> os.argc() &lt; <span class="n">2</span> {
-        print(<span class="s">&quot;usage: probe &lt;host&gt;&quot;</span>)
-        os.exit(<span class="n">2</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">if</span> os.<span class="f">argc</span>() &lt; <span class="n">2</span> {
+        <span class="f">print</span>(<span class="s">&quot;usage: probe &lt;host&gt;&quot;</span>)
+        os.<span class="f">exit</span>(<span class="n">2</span>)
     }
-    print(<span class="s">&quot;probing {os.arg(1)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>os.<span class="f">arg</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <h2 id="environment-variables"><a href="#environment-variables">Environment variables</a></h2>
 <p><code>os.env(name)</code> gives a variable's value as a <code>!str</code>. A variable that isn't set is the error <code>OsError.notSet</code>, so <code>catch</code> gives a default:</p>
 <pre class="code run"><code><span class="k">import</span> os
 
-<span class="t">void</span> main() {
-    path := os.env(<span class="s">&quot;PATH&quot;</span>) <span class="k">catch</span> <span class="s">&quot;&quot;</span>
-    print(<span class="s">&quot;PATH is set: {path.len &gt; 0}&quot;</span>)
-    upstream := os.env(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;127.0.0.1:9000&quot;</span>
-    print(<span class="s">&quot;the upstream is {upstream}&quot;</span>)
-    _ = os.env(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> err {
-        print(<span class="s">&quot;{err.code}: {err.message}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    path := os.<span class="f">env</span>(<span class="s">&quot;PATH&quot;</span>) <span class="k">catch</span> <span class="s">&quot;&quot;</span>
+    <span class="f">print</span>(<span class="s">&quot;PATH is set: </span><span class="e">{</span>path.len &gt; <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+    upstream := os.<span class="f">env</span>(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;127.0.0.1:9000&quot;</span>
+    <span class="f">print</span>(<span class="s">&quot;the upstream is </span><span class="e">{</span>upstream<span class="e">}</span><span class="s">&quot;</span>)
+    _ = os.<span class="f">env</span>(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> err {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>err.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>err.message<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>
     }
 }</code></pre>
@@ -94,13 +94,13 @@ OsError.notSet: IRIS_TOUR_UPSTREAM is not set</code></pre>
 <p><code>os.setenv(name, value)</code> sets a variable, for the program and the programs it runs from then on, and <code>os.unsetenv(name)</code> removes one. A name that can't be one, empty or with <code>=</code> in it, fails with <code>OsError.invalid</code>:</p>
 <pre class="code run"><code><span class="k">import</span> os, process, <span class="t">str</span>
 
-!<span class="t">void</span> main() {
-    <span class="k">try</span> os.setenv(<span class="s">&quot;UPSTREAM&quot;</span>, <span class="s">&quot;10.0.0.11:9000&quot;</span>)
-    print(<span class="k">try</span> os.env(<span class="s">&quot;UPSTREAM&quot;</span>))
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo $UPSTREAM&quot;</span>])
-    print(<span class="s">&quot;sh sees: {str.trim(out.stdout)}&quot;</span>)
-    <span class="k">try</span> os.unsetenv(<span class="s">&quot;UPSTREAM&quot;</span>)
-    print(os.env(<span class="s">&quot;UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;not set&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> os.<span class="f">setenv</span>(<span class="s">&quot;UPSTREAM&quot;</span>, <span class="s">&quot;10.0.0.11:9000&quot;</span>)
+    <span class="f">print</span>(<span class="k">try</span> os.<span class="f">env</span>(<span class="s">&quot;UPSTREAM&quot;</span>))
+    <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo $UPSTREAM&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;sh sees: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(out.stdout)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">try</span> os.<span class="f">unsetenv</span>(<span class="s">&quot;UPSTREAM&quot;</span>)
+    <span class="f">print</span>(os.<span class="f">env</span>(<span class="s">&quot;UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;not set&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.11:9000
 sh sees: 10.0.0.11:9000
@@ -111,10 +111,10 @@ not set</code></pre>
 <p><code>process.run(argv)</code> runs a program and waits for it to end. <code>argv[0]</code> is the program, found on <code>PATH</code> when it has no <code>/</code>, and the rest are its arguments, given as they are: there is no shell in between, so spaces and quotes need no escaping. It gives an <code>Output</code> with what the program wrote and its exit status:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;echo&quot;</span>, <span class="s">&quot;listening on&quot;</span>, <span class="s">&quot;8080&quot;</span>])
-    print(<span class="s">&quot;status {out.status}, ok {out.ok()}&quot;</span>)
-    print(<span class="s">&quot;it printed: {str.trim(out.stdout)}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;echo&quot;</span>, <span class="s">&quot;listening on&quot;</span>, <span class="s">&quot;8080&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;status </span><span class="e">{</span>out.status<span class="e">}</span><span class="s">, ok </span><span class="e">{</span>out.<span class="f">ok</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;it printed: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(out.stdout)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>status 0, ok true
 it printed: listening on 8080</code></pre>
@@ -122,12 +122,12 @@ it printed: listening on 8080</code></pre>
 <p>A program that ends with a status other than 0 is no error: <code>status</code> says how it ended. <code>run</code> fails only when the program can't be started, with <code>ProcessError.notFound</code> when it isn't there:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo oops &gt;&amp;2; exit 3&quot;</span>])
-    print(<span class="s">&quot;status {out.status}, ok {out.ok()}, stderr: {str.trim(out.stderr)}&quot;</span>)
-    _ = process.run([<span class="s">&quot;no-such-program&quot;</span>]) <span class="k">catch</span> err {
-        print(<span class="s">&quot;{err.code}: {err.message}&quot;</span>)
-        process.Output{}
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo oops &gt;&amp;2; exit 3&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;status </span><span class="e">{</span>out.status<span class="e">}</span><span class="s">, ok </span><span class="e">{</span>out.<span class="f">ok</span>()<span class="e">}</span><span class="s">, stderr: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(out.stderr)<span class="e">}</span><span class="s">&quot;</span>)
+    _ = process.<span class="f">run</span>([<span class="s">&quot;no-such-program&quot;</span>]) <span class="k">catch</span> err {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>err.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>err.message<span class="e">}</span><span class="s">&quot;</span>)
+        process.<span class="t">Output</span>{}
     }
 }</code></pre>
 <pre class="out"><code>status 3, ok false, stderr: oops
@@ -137,11 +137,11 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
 <p>The second argument to <code>run</code> is given to the program on its standard input:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sort&quot;</span>, <span class="s">&quot;-u&quot;</span>], <span class="s">&quot;10.0.0.9\n10.0.0.5\n10.0.0.9\n10.0.0.7\n&quot;</span>)
-    print(<span class="t">str</span>.trim(out.stdout))
-    <span class="k">scoped</span> count := <span class="k">try</span> process.run([<span class="s">&quot;wc&quot;</span>, <span class="s">&quot;-l&quot;</span>], <span class="s">&quot;GET /\nGET /login\nPOST /login\n&quot;</span>)
-    print(<span class="s">&quot;{str.trim(count.stdout)} requests&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sort&quot;</span>, <span class="s">&quot;-u&quot;</span>], <span class="s">&quot;10.0.0.9</span><span class="e">\n</span><span class="s">10.0.0.5</span><span class="e">\n</span><span class="s">10.0.0.9</span><span class="e">\n</span><span class="s">10.0.0.7</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="t">str</span>.<span class="f">trim</span>(out.stdout))
+    <span class="k">scoped</span> count := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;wc&quot;</span>, <span class="s">&quot;-l&quot;</span>], <span class="s">&quot;GET /</span><span class="e">\n</span><span class="s">GET /login</span><span class="e">\n</span><span class="s">POST /login</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(count.stdout)<span class="e">}</span><span class="s"> requests&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.5
 10.0.0.7
@@ -152,26 +152,26 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
 <p>Ctrl-C sends a program the signal <code>interrupt</code>, and systemd and Docker send <code>terminate</code> when they stop it. By default either one ends the program at once. <code>signal.wait()</code> waits for one instead and gives it as a <code>signal.Signal</code>, so the program can finish what it was doing first:</p>
 <pre class="code run"><code><span class="k">import</span> process, signal
 
-!<span class="t">void</span> main() {
-    signal.watch()
+!<span class="t">void</span> <span class="f">main</span>() {
+    signal.<span class="f">watch</span>()
     <span class="c">// stands in for Ctrl-C: sh sends terminate to this program, its parent</span>
-    <span class="k">scoped</span> out := <span class="k">try</span> process.run([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;kill -TERM $PPID&quot;</span>])
-    s := signal.wait()
-    print(<span class="s">&quot;got {s}, saving and stopping&quot;</span>)
+    <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;kill -TERM $PPID&quot;</span>])
+    s := signal.<span class="f">wait</span>()
+    <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, saving and stopping&quot;</span>)
 }</code></pre>
 <pre class="out"><code>got terminate, saving and stopping</code></pre>
 <p><code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> from then on, instead of ending the program; <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals: <code>hangup</code> (SIGHUP) is what many programs take as "read your settings again".</p>
 <p>A server waits for the signal in its own task, while the other tasks serve:</p>
 <pre class="code"><code><span class="k">import</span> signal
 
-<span class="t">void</span> serve() {
+<span class="t">void</span> <span class="f">serve</span>() {
     <span class="c">// answers requests until the program ends</span>
 }
 
-<span class="t">void</span> main() {
-    <span class="k">spawn</span> serve()
-    s := signal.wait()
-    print(<span class="s">&quot;got {s}, stopping&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">spawn</span> <span class="f">serve</span>()
+    s := signal.<span class="f">wait</span>()
+    <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, stopping&quot;</span>)
     <span class="c">// close connections, flush files, then return</span>
 }</code></pre>
 <p>When <code>main</code> returns, the program ends, and the other tasks with it.</p>

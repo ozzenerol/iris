@@ -50,7 +50,7 @@ try {
 <p class="lede"><code>for</code> is the only loop, and it has four forms: forever, while a condition holds, over a range of numbers, and over the items of something. <code>break</code> and <code>continue</code> change its course.</p>
 <h2 id="forever"><a href="#forever">Forever</a></h2>
 <p><code>for</code> with nothing after it runs until a <code>break</code> or a <code>return</code> leaves it:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     remaining := <span class="n">10000</span> <span class="c">// bytes of the body still to read</span>
     reads := <span class="n">0</span>
     <span class="k">for</span> {
@@ -61,17 +61,17 @@ try {
             <span class="k">break</span>
         }
     }
-    print(<span class="s">&quot;{reads} reads&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reads<span class="e">}</span><span class="s"> reads&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 reads</code></pre>
 <p>A server's accept loop is the usual place for it: it runs as long as the program does.</p>
 <h2 id="while-a-condition-holds"><a href="#while-a-condition-holds">While a condition holds</a></h2>
 <p><code>for</code> with a condition runs while the condition is true. It is checked before each round, so the loop may not run at all:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    delay := 100ms
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    delay := <span class="n">100ms</span>
     attempt := <span class="n">1</span>
-    <span class="k">for</span> delay &lt; 5s {
-        print(<span class="s">&quot;attempt {attempt}, then wait {delay}&quot;</span>)
+    <span class="k">for</span> delay &lt; <span class="n">5s</span> {
+        <span class="f">print</span>(<span class="s">&quot;attempt </span><span class="e">{</span>attempt<span class="e">}</span><span class="s">, then wait </span><span class="e">{</span>delay<span class="e">}</span><span class="s">&quot;</span>)
         delay *= <span class="n">2</span>
         attempt += <span class="n">1</span>
     }
@@ -84,15 +84,15 @@ attempt 5, then wait 1.6s
 attempt 6, then wait 3.2s</code></pre>
 <h2 id="over-a-range"><a href="#over-a-range">Over a range</a></h2>
 <p><code>for i in a..b</code> counts from <code>a</code> up to <code>b - 1</code>. The range's ends are worked out once, before the first round, so changing them in the loop doesn't change how many rounds there are. A range whose end isn't above its start runs no rounds:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
-        print(<span class="s">&quot;starting worker {i}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;starting worker </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">for</span> i <span class="k">in</span> <span class="n">3</span>..<span class="n">3</span> {
-        print(<span class="s">&quot;never&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;never&quot;</span>)
     }
     <span class="k">for</span> port <span class="k">in</span> <span class="n">8080</span>..<span class="n">8083</span> {
-        print(<span class="s">&quot;listening on {port}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>starting worker 0
@@ -102,11 +102,11 @@ listening on 8080
 listening on 8081
 listening on 8082</code></pre>
 <p><code>i</code> is a new variable for each round, and it belongs to the loop. A range counts up by one; a loop that goes another way uses a condition:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    left := 10s
-    <span class="k">for</span> left &gt; 0s {
-        print(<span class="s">&quot;stopping in {left}&quot;</span>)
-        left -= 4s
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    left := <span class="n">10s</span>
+    <span class="k">for</span> left &gt; <span class="n">0s</span> {
+        <span class="f">print</span>(<span class="s">&quot;stopping in </span><span class="e">{</span>left<span class="e">}</span><span class="s">&quot;</span>)
+        left -= <span class="n">4s</span>
     }
 }</code></pre>
 <pre class="out"><code>stopping in 10s
@@ -114,16 +114,16 @@ stopping in 6s
 stopping in 2s</code></pre>
 <h2 id="over-items"><a href="#over-items">Over items</a></h2>
 <p><code>for x in items</code> goes over the items of an array, a slice, a <code>str</code> (its bytes), a <code>List</code> or a <code>Map</code>. With two names, an array, a slice or a <code>str</code> gives each item's index first:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports = [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>, <span class="n">8080</span>]
     <span class="k">for</span> p <span class="k">in</span> ports {
-        print(<span class="s">&quot;{p}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">for</span> i, p <span class="k">in</span> ports[<span class="n">1</span>:<span class="n">3</span>] {
-        print(<span class="s">&quot;{i}: {p}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">for</span> i, b <span class="k">in</span> <span class="s">&quot;OK&quot;</span> {
-        print(<span class="s">&quot;byte {i} is {b}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;byte </span><span class="e">{</span>i<span class="e">}</span><span class="s"> is </span><span class="e">{</span>b<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>22
@@ -135,16 +135,16 @@ stopping in 2s</code></pre>
 byte 0 is 79
 byte 1 is 75</code></pre>
 <p>A <code>List</code> gives its values. Its <code>items()</code> is a slice of them, which takes the form with an index:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    List[<span class="t">str</span>] upstreams
-    <span class="k">defer</span> upstreams.free()
-    upstreams.push(<span class="s">&quot;10.0.0.11:8080&quot;</span>)
-    upstreams.push(<span class="s">&quot;10.0.0.12:8080&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">str</span>] upstreams
+    <span class="k">defer</span> upstreams.<span class="f">free</span>()
+    upstreams.<span class="f">push</span>(<span class="s">&quot;10.0.0.11:8080&quot;</span>)
+    upstreams.<span class="f">push</span>(<span class="s">&quot;10.0.0.12:8080&quot;</span>)
     <span class="k">for</span> u <span class="k">in</span> upstreams {
-        print(u)
+        <span class="f">print</span>(u)
     }
-    <span class="k">for</span> i, u <span class="k">in</span> upstreams.items() {
-        print(<span class="s">&quot;{i}: {u}&quot;</span>)
+    <span class="k">for</span> i, u <span class="k">in</span> upstreams.<span class="f">items</span>() {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>u<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>10.0.0.11:8080
@@ -152,15 +152,15 @@ byte 1 is 75</code></pre>
 0: 10.0.0.11:8080
 1: 10.0.0.12:8080</code></pre>
 <p>A <code>Map</code> gives each key and its value, in no particular order. <code>_</code> leaves out what isn't needed:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    Map[<span class="t">str</span>, <span class="t">i64</span>] hits
-    <span class="k">defer</span> hits.free()
-    hits.set(<span class="s">&quot;/health&quot;</span>, <span class="n">3</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] hits
+    <span class="k">defer</span> hits.<span class="f">free</span>()
+    hits.<span class="f">set</span>(<span class="s">&quot;/health&quot;</span>, <span class="n">3</span>)
     <span class="k">for</span> path, count <span class="k">in</span> hits {
-        print(<span class="s">&quot;{path}: {count}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">for</span> path, _ <span class="k">in</span> hits {
-        print(<span class="s">&quot;served {path}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;served </span><span class="e">{</span>path<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>/health: 3
@@ -168,7 +168,7 @@ served /health</code></pre>
 <p>The items are copies: changing <code>x</code> in <code>for x in items</code> doesn't change the item. To change them, go over the indexes: <code>for i in 0..items.len { items[i] += 1 }</code>.</p>
 <h2 id="break-and-continue"><a href="#break-and-continue">break and continue</a></h2>
 <p><code>break</code> leaves the loop at once. <code>continue</code> ends this round and goes on with the next:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// the status of each request in a log; 0 marks the end</span>
     <span class="k">for</span> status <span class="k">in</span> [<span class="n">200</span>, <span class="n">200</span>, <span class="n">500</span>, <span class="n">404</span>, <span class="n">200</span>, <span class="n">0</span>, <span class="n">503</span>] {
         <span class="k">if</span> status == <span class="n">200</span> {
@@ -177,24 +177,24 @@ served /health</code></pre>
         <span class="k">if</span> status == <span class="n">0</span> {
             <span class="k">break</span>
         }
-        print(<span class="s">&quot;failed with {status}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;failed with </span><span class="e">{</span>status<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>failed with 500
 failed with 404</code></pre>
 <h2 id="labels"><a href="#labels">Labels</a></h2>
 <p>A label in front of a loop, <code>name:</code>, lets <code>break</code> and <code>continue</code> in a loop inside it act on the outer one:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     down := <span class="s">&quot;10.0.0.1&quot;</span>
     probe: <span class="k">for</span> host <span class="k">in</span> [<span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>, <span class="s">&quot;10.0.0.3&quot;</span>] {
         <span class="k">for</span> port <span class="k">in</span> [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>] {
             <span class="k">if</span> host == down {
-                print(<span class="s">&quot;{host} is down&quot;</span>)
+                <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s"> is down&quot;</span>)
                 <span class="k">continue</span> probe
             }
-            print(<span class="s">&quot;probing {host}:{port}&quot;</span>)
+            <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
             <span class="k">if</span> host == <span class="s">&quot;10.0.0.2&quot;</span> &amp;&amp; port == <span class="n">80</span> {
-                print(<span class="s">&quot;web server at {host}&quot;</span>)
+                <span class="f">print</span>(<span class="s">&quot;web server at </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
                 <span class="k">break</span> probe
             }
         }
@@ -207,30 +207,30 @@ web server at 10.0.0.2</code></pre>
 <h2 id="making-a-type-a-loop-can-go-over"><a href="#making-a-type-a-loop-can-go-over">Making a type a loop can go over</a></h2>
 <p>Any struct can be gone over with <code>for</code>, by giving it a method <code>next(i64 *at)</code> that gives the next value and a <code>bool</code>, which is false when there are no more. <code>at</code> starts at 0 for each loop, and the method moves it on:</p>
 <pre class="code run"><code><span class="c">// The lines of a text, without their line breaks.</span>
-<span class="k">struct</span> Lines {
+<span class="k">struct</span> <span class="t">Lines</span> {
     <span class="t">str</span> text
 }
 
-(<span class="t">str</span>, <span class="t">bool</span>) Lines.next(<span class="t">i64</span> *at) {
-    <span class="k">if</span> *at &gt;= self.text.len {
+(<span class="t">str</span>, <span class="t">bool</span>) <span class="t">Lines</span>.<span class="f">next</span>(<span class="t">i64</span> *at) {
+    <span class="k">if</span> *at &gt;= <span class="k">self</span>.text.len {
         <span class="k">return</span> (<span class="s">&quot;&quot;</span>, <span class="k">false</span>)
     }
     start := *at
     end := start
-    <span class="k">for</span> end &lt; self.text.len &amp;&amp; self.text[end] != <span class="s">&#x27;\n&#x27;</span> {
+    <span class="k">for</span> end &lt; <span class="k">self</span>.text.len &amp;&amp; <span class="k">self</span>.text[end] != <span class="s">&#x27;\n&#x27;</span> {
         end += <span class="n">1</span>
     }
     *at = end + <span class="n">1</span>
-    <span class="k">return</span> (self.text[start:end], <span class="k">true</span>)
+    <span class="k">return</span> (<span class="k">self</span>.text[start:end], <span class="k">true</span>)
 }
 
-<span class="t">void</span> main() {
-    req := Lines{text: <span class="s">&quot;GET / HTTP/1.1\nHost: example.com\nAccept: */*&quot;</span>}
+<span class="t">void</span> <span class="f">main</span>() {
+    req := <span class="t">Lines</span>{text: <span class="s">&quot;GET / HTTP/1.1</span><span class="e">\n</span><span class="s">Host: example.com</span><span class="e">\n</span><span class="s">Accept: */*&quot;</span>}
     <span class="k">for</span> line <span class="k">in</span> req {
-        print(<span class="s">&quot;[{line}]&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>line<span class="e">}</span><span class="s">]&quot;</span>)
     }
-    <span class="k">for</span> cmd <span class="k">in</span> (Lines{text: <span class="s">&quot;PING\nQUIT&quot;</span>}) {
-        print(<span class="s">&quot;command {cmd}&quot;</span>)
+    <span class="k">for</span> cmd <span class="k">in</span> (<span class="t">Lines</span>{text: <span class="s">&quot;PING</span><span class="e">\n</span><span class="s">QUIT&quot;</span>}) {
+        <span class="f">print</span>(<span class="s">&quot;command </span><span class="e">{</span>cmd<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>[GET / HTTP/1.1]

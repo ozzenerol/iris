@@ -20,20 +20,89 @@
 
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-  var KW = /^(if|else|for|in|match|break|continue|return|struct|enum|interface|type|dyn|pub|const|comptime|when|import|try|catch|defer|errdefer|scoped|spawn|select|chan|thread|threadlocal|test|not|and|or|is|true|false|null)$/;
-  var TY = /^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|void|str|String|Error|Duration|List|Map|Atomic|Mutex)$/;
+  var KW = /^(if|else|for|in|match|break|continue|return|struct|union|enum|interface|type|dyn|pub|const|comptime|when|import|try|catch|defer|errdefer|scoped|spawn|select|chan|thread|threadlocal|asm|test|not|and|or|is|true|false|null|self)$/;
+  var TY = /^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|void|str|String|Error|Duration|List|Map|Atomic|Mutex|Thread|u16be|u32be|u64be|u16le|u32le|u64le)$/;
+  function span(cls, t) { return '<span class="' + cls + '">' + esc(t) + "</span>"; }
+
+  /* where the string starting at code[i] ends; braces hold code, which may
+     have strings of its own */
+  function stringEnd(code, i) {
+    var triple = code.substr(i, 3) === '"""';
+    i += triple ? 3 : 1;
+    var depth = 0;
+    while (i < code.length) {
+      var ch = code[i];
+      if (ch === "\\") { i += 2; continue; }
+      if (depth === 0) {
+        if (triple && code.substr(i, 3) === '"""') return i + 3;
+        if (!triple && ch === '"') return i + 1;
+        if (!triple && ch === "\n") return i;
+        if (code.substr(i, 2) === "{{" || code.substr(i, 2) === "}}") { i += 2; continue; }
+      }
+      if (ch === "{") depth++;
+      else if (ch === "}" && depth > 0) depth--;
+      else if (ch === '"' && depth > 0) { i = stringEnd(code, i); continue; }
+      i++;
+    }
+    return i;
+  }
+
+  /* a string: escapes and the {} around values stand out, and the code in
+     the braces is highlighted as code */
+  function stringHtml(t) {
+    var q = t.substr(0, 3) === '"""' ? 3 : 1;
+    var close = q === 3 ? '"""' : '"';
+    var bodyEnd = t.length >= 2 * q && t.substr(t.length - q) === close ? t.length - q : t.length;
+    var out = "", plain = t.slice(0, q), i = q, m;
+    var escRe = /\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|.)/y;
+    function flush() { if (plain) { out += span("s", plain); plain = ""; } }
+    while (i < bodyEnd) {
+      var two = t.substr(i, 2);
+      if (two === "{{" || two === "}}") { flush(); out += span("e", two); i += 2; continue; }
+      escRe.lastIndex = i;
+      if (t[i] === "\\" && (m = escRe.exec(t))) { flush(); out += span("e", m[0]); i = escRe.lastIndex; continue; }
+      if (t[i] === "{") {
+        var j = i + 1, depth = 1;
+        while (j < bodyEnd && depth) {
+          if (t[j] === '"') { j = stringEnd(t, j); continue; }
+          if (t[j] === "{") depth++;
+          else if (t[j] === "}") depth--;
+          j++;
+        }
+        flush();
+        out += span("e", "{") + hl(t.slice(i + 1, depth === 0 ? j - 1 : j));
+        if (depth === 0) out += span("e", "}");
+        i = j;
+        continue;
+      }
+      plain += t[i];
+      i++;
+    }
+    plain += t.slice(bodyEnd);
+    flush();
+    return out;
+  }
+
   function hl(code) {
-    var re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\\n])*")|('(?:\\.|[^'\\\n])+')|(@[A-Za-z_]\w*)|(\b(?:0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d+)?)\b)|([A-Za-z_]\w*)/g;
+    var re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(r"""[\s\S]*?"""|r"[^"\n]*")|(")|('(?:\\.|[^'\\\n])+')|(@[A-Za-z_]\w*)|(\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)(?:ns|us|ms|s|m|h|KiB|MiB|GiB)?\b)|([A-Za-z_]\w*)/g;
     var out = "", last = 0, m;
     while ((m = re.exec(code))) {
       out += esc(code.slice(last, m.index));
-      var t = esc(m[0]);
-      if (m[1]) out += '<span class="c">' + t + "</span>";
-      else if (m[2] || m[3]) out += '<span class="s">' + t + "</span>";
-      else if (m[4] || m[5]) out += '<span class="n">' + t + "</span>";
-      else if (KW.test(m[0])) out += '<span class="k">' + t + "</span>";
-      else if (TY.test(m[0])) out += '<span class="t">' + t + "</span>";
-      else out += t;
+      var t = m[0];
+      if (m[1]) out += span("c", t);
+      else if (m[2] || m[4]) out += span("s", t);
+      else if (m[3]) {
+        var end = stringEnd(code, m.index);
+        out += stringHtml(code.slice(m.index, end));
+        re.lastIndex = end;
+      }
+      else if (m[5]) out += span("a", t);
+      else if (m[6]) out += span("n", t);
+      else if (KW.test(t)) out += span("k", t);
+      else if (TY.test(t)) out += span("t", t);
+      else if (code[re.lastIndex] === "(") out += span("f", t);
+      else if (/^[A-Z]/.test(t) && /[a-z]/.test(t)) out += span("t", t);
+      else out += esc(t);
       last = re.lastIndex;
     }
     return out + esc(code.slice(last));

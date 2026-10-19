@@ -50,61 +50,61 @@ try {
 <p class="lede">Putting values into text with braces, the <code>format</code> function that keeps the result, and how the temporary text is freed for you.</p>
 <h2 id="braces"><a href="#braces">Braces</a></h2>
 <p>A name or an expression in braces inside a string literal is replaced by its value, written as text:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     host := <span class="s">&quot;10.0.0.5&quot;</span>
     sent := <span class="n">3</span>
     rtt := <span class="n">4.5</span>
-    print(<span class="s">&quot;{sent} pings to {host}, {f64(sent) * rtt}ms in all&quot;</span>)
-    print(<span class="s">&quot;{sent &gt; 2} {sent * 64} bytes&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>sent<span class="e">}</span><span class="s"> pings to </span><span class="e">{</span>host<span class="e">}</span><span class="s">, </span><span class="e">{</span><span class="t">f64</span>(sent) * rtt<span class="e">}</span><span class="s">ms in all&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>sent &gt; <span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>sent * <span class="n">64</span><span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 pings to 10.0.0.5, 13.5ms in all
 true 192 bytes</code></pre>
 <p>The compiler checks every value in braces, with its type, as it checks any other expression. A brace on its own is written twice, <code>{{</code> and <code>}}</code>, and a raw string (<code>r&quot;...&quot;</code>) takes braces as they are.</p>
 <h2 id="what-can-be-put-into-text"><a href="#what-can-be-put-into-text">What can be put into text</a></h2>
 <div class="table"><table><thead><tr><th>Type</th><th>Written as</th></tr></thead><tbody><tr><td>integers</td><td>in decimal: <code>42</code>, <code>-7</code></td></tr><tr><td><code>f32</code>, <code>f64</code></td><td>the fewest digits that read back as the same number: <code>0.1</code>, <code>2.5e-8</code></td></tr><tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr><tr><td><code>str</code>, <code>String</code></td><td>the text itself</td></tr><tr><td><code>Duration</code></td><td>in units: <code>1.5s</code>, <code>2m0s</code>, <code>250ms</code></td></tr><tr><td>a plain enum</td><td>the value's name: <code>warn</code></td></tr><tr><td>a flags enum</td><td>the names that are set: <code>read|write</code></td></tr><tr><td>an enum with data</td><td>the value's name: <code>Closed</code></td></tr><tr><td>an error's code</td><td>the enum and the value: <code>NetError.timeout</code></td></tr><tr><td>a struct with <code>String format()</code></td><td>what the method gives</td></tr></tbody></table></div>
-<pre class="code run"><code><span class="k">enum</span> State { connecting, open, closed }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">State</span> { connecting, open, closed }
 
-<span class="k">enum</span> Perm flags { read, write, exec }
+<span class="k">enum</span> <span class="t">Perm</span> flags { read, write, exec }
 
-<span class="t">void</span> main() {
-    State s = .open
-    Perm p = .read | .write
-    print(<span class="s">&quot;{s} {p} {1500ms} {0.25} {false}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">State</span> s = .open
+    <span class="t">Perm</span> p = .read | .write
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> </span><span class="e">{</span>p<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1500ms</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">0.25</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="k">false</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>open read|write 1.5s 0.25 false</code></pre>
 <p>A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.</p>
 <h2 id="a-struct-s-own-text"><a href="#a-struct-s-own-text">A struct's own text</a></h2>
 <p>A struct with a method <code>String format()</code> can be put into text. The method gives the text, and the <code>String</code> it returns is freed after the statement:</p>
-<pre class="code run"><code><span class="k">struct</span> Ip4 {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Ip4</span> {
     <span class="t">u8</span>[<span class="n">4</span>] b
 }
 
-<span class="t">String</span> Ip4.format() =&gt; format(<span class="s">&quot;{self.b[0]}.{self.b[1]}.{self.b[2]}.{self.b[3]}&quot;</span>)
+<span class="t">String</span> <span class="t">Ip4</span>.<span class="f">format</span>() =&gt; <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">self</span>.b[<span class="n">0</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span><span class="k">self</span>.b[<span class="n">1</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span><span class="k">self</span>.b[<span class="n">2</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span><span class="k">self</span>.b[<span class="n">3</span>]<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="k">struct</span> Route {
-    Ip4 dest
+<span class="k">struct</span> <span class="t">Route</span> {
+    <span class="t">Ip4</span> dest
     <span class="t">u8</span> prefix
-    Ip4 via
+    <span class="t">Ip4</span> via
 }
 
-<span class="t">String</span> Route.format() =&gt; format(<span class="s">&quot;{self.dest}/{self.prefix} via {self.via}&quot;</span>)
+<span class="t">String</span> <span class="t">Route</span>.<span class="f">format</span>() =&gt; <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">self</span>.dest<span class="e">}</span><span class="s">/</span><span class="e">{</span><span class="k">self</span>.prefix<span class="e">}</span><span class="s"> via </span><span class="e">{</span><span class="k">self</span>.via<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="t">void</span> main() {
-    gw := Ip4{b: [<span class="n">192</span>, <span class="n">168</span>, <span class="n">1</span>, <span class="n">1</span>]}
-    r := Route{dest: Ip4{b: [<span class="n">10</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>]}, prefix: <span class="n">8</span>, via: gw}
-    print(<span class="s">&quot;gateway {gw}&quot;</span>)
-    print(<span class="s">&quot;route {r}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    gw := <span class="t">Ip4</span>{b: [<span class="n">192</span>, <span class="n">168</span>, <span class="n">1</span>, <span class="n">1</span>]}
+    r := <span class="t">Route</span>{dest: <span class="t">Ip4</span>{b: [<span class="n">10</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>]}, prefix: <span class="n">8</span>, via: gw}
+    <span class="f">print</span>(<span class="s">&quot;gateway </span><span class="e">{</span>gw<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;route </span><span class="e">{</span>r<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>gateway 192.168.1.1
 route 10.0.0.0/8 via 192.168.1.1</code></pre>
 <h2 id="format"><a href="#format">format</a></h2>
 <p><code>print</code> writes text with values to standard output. <code>format</code> builds the same text and gives it as a new <code>String</code>, which the caller frees:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     host := <span class="s">&quot;localhost&quot;</span>
     port := <span class="n">8080</span>
-    <span class="k">scoped</span> <span class="t">String</span> address = format(<span class="s">&quot;{host}:{port}&quot;</span>)
-    print(<span class="s">&quot;listening on {address}&quot;</span>)
-    print(<span class="s">&quot;{address.len} bytes&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> address = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;listening on </span><span class="e">{</span>address<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>address.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>listening on localhost:8080
 14 bytes</code></pre>
@@ -112,45 +112,45 @@ route 10.0.0.0/8 via 192.168.1.1</code></pre>
 <p><code>panic</code> takes the same text, and <code>io.eprint</code> writes it to standard error with a newline. <code>io.write</code> writes to standard output without one.</p>
 <h2 id="text-passed-straight-to-a-function"><a href="#text-passed-straight-to-a-function">Text passed straight to a function</a></h2>
 <p>Text with values can be given to any function that takes a <code>str</code>. It is built in a temporary <code>String</code>, which is freed when the statement ends:</p>
-<pre class="code run"><code><span class="t">void</span> logLine(<span class="t">str</span> s) {
-    print(<span class="s">&quot;[edge-1] {s}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">logLine</span>(<span class="t">str</span> s) {
+    <span class="f">print</span>(<span class="s">&quot;[edge-1] </span><span class="e">{</span>s<span class="e">}</span><span class="s">&quot;</span>)
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     open := <span class="n">3</span>
-    logLine(<span class="s">&quot;{open} connections open&quot;</span>)
-    logLine(<span class="s">&quot;plain text&quot;</span>)
+    <span class="f">logLine</span>(<span class="s">&quot;</span><span class="e">{</span>open<span class="e">}</span><span class="s"> connections open&quot;</span>)
+    <span class="f">logLine</span>(<span class="s">&quot;plain text&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[edge-1] 3 connections open
 [edge-1] plain text</code></pre>
 <p>A function that returns a new <code>String</code>, given straight to a function that takes a <code>str</code>, is freed after the statement too:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">void</span> main() {
-    print(<span class="t">str</span>.upper(<span class="s">&quot;http/1.1 200 ok&quot;</span>))
-    print(<span class="t">str</span>.repeat(<span class="s">&quot;-&quot;</span>, <span class="n">15</span>))
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="t">str</span>.<span class="f">upper</span>(<span class="s">&quot;http/1.1 200 ok&quot;</span>))
+    <span class="f">print</span>(<span class="t">str</span>.<span class="f">repeat</span>(<span class="s">&quot;-&quot;</span>, <span class="n">15</span>))
 }</code></pre>
 <pre class="out"><code>HTTP/1.1 200 OK
 ---------------</code></pre>
 <p>Anywhere else, text with values needs <code>format</code>, and a <code>String</code> from a call needs a variable. The temporary would otherwise be gone before it is used.</p>
 <p>A call that gives back a <code>str</code>, a slice or a pointer may give back part of what it was given. When that is a temporary, the result would point into text that is freed at the end of the statement, so the compiler doesn't allow it:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code>t := <span class="t">str</span>.trim(<span class="s">&quot;  {name}  &quot;</span>) <span class="c">// error: this text is freed when the statement ends, and the call gives back a str that may point into it</span></code></pre>
-<pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> padded = format(<span class="s">&quot;  {name}  &quot;</span>)
-t := <span class="t">str</span>.trim(padded)</code></pre>
+<pre class="code bad"><span class="tag">does not compile</span><code>t := <span class="t">str</span>.<span class="f">trim</span>(<span class="s">&quot;  </span><span class="e">{</span>name<span class="e">}</span><span class="s">  &quot;</span>) <span class="c">// error: this text is freed when the statement ends, and the call gives back a str that may point into it</span></code></pre>
+<pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> padded = <span class="f">format</span>(<span class="s">&quot;  </span><span class="e">{</span>name<span class="e">}</span><span class="s">  &quot;</span>)
+t := <span class="t">str</span>.<span class="f">trim</span>(padded)</code></pre>
 <h2 id="building-text-a-part-at-a-time"><a href="#building-text-a-part-at-a-time">Building text a part at a time</a></h2>
 <p><code>String.append</code> adds to the end of a <code>String</code>. With <code>format</code> for the parts, longer text is built without copying it again and again:</p>
 <pre class="code run"><code><span class="k">import</span> io
 
-<span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> out = <span class="s">&quot;GET / HTTP/1.1\n&quot;</span>.copy()
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> out = <span class="s">&quot;GET / HTTP/1.1</span><span class="e">\n</span><span class="s">&quot;</span>.<span class="f">copy</span>()
 
     headers := [<span class="s">&quot;Host&quot;</span>, <span class="s">&quot;Accept&quot;</span>, <span class="s">&quot;Connection&quot;</span>]
     values := [<span class="s">&quot;example.com&quot;</span>, <span class="s">&quot;*/*&quot;</span>, <span class="s">&quot;close&quot;</span>]
     <span class="k">for</span> i, h <span class="k">in</span> headers {
-        <span class="k">scoped</span> <span class="t">String</span> line = format(<span class="s">&quot;{h}: {values[i]}\n&quot;</span>)
-        out.append(line)
+        <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>h<span class="e">}</span><span class="s">: </span><span class="e">{</span>values[i]<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
+        out.<span class="f">append</span>(line)
     }
-    io.write(out)
+    io.<span class="f">write</span>(out)
 }</code></pre>
 <pre class="out"><code>GET / HTTP/1.1
 Host: example.com

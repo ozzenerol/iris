@@ -52,11 +52,11 @@ try {
 <p>A <code>time.Time</code> is a moment: the nanoseconds since 1970-01-01 00:00 UTC, and the time zone it is shown in. <code>time.now()</code> gives the current moment, in UTC. <code>time.unix(seconds)</code> gives the moment that many seconds after 1970, and <code>unix()</code> and <code>unixMs()</code> give the seconds and milliseconds back:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    t := time.unix(<span class="n">1700000000</span>)
-    print(<span class="s">&quot;{t} is {t.unixMs()} ms after 1970&quot;</span>)
-    now := time.now()
-    print(<span class="s">&quot;now is later: {now.after(t)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    t := time.<span class="f">unix</span>(<span class="n">1700000000</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t<span class="e">}</span><span class="s"> is </span><span class="e">{</span>t.<span class="f">unixMs</span>()<span class="e">}</span><span class="s"> ms after 1970&quot;</span>)
+    now := time.<span class="f">now</span>()
+    <span class="f">print</span>(<span class="s">&quot;now is later: </span><span class="e">{</span>now.<span class="f">after</span>(t)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2023-11-14T22:13:20Z is 1700000000000 ms after 1970
 now is later: true</code></pre>
@@ -65,12 +65,12 @@ now is later: true</code></pre>
 <p><code>time.date(year, month, day)</code> makes a moment in UTC, with the month from 1 to 12; the hour, minute and second can follow and are 0 when left out. <code>year()</code>, <code>month()</code>, <code>day()</code>, <code>hour()</code>, <code>minute()</code>, <code>second()</code>, <code>nanosecond()</code> and <code>weekday()</code> give the parts back. A day past the end of its month goes on into the next one, and a month past 12 into the next year:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    t := time.date(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
-    print(<span class="s">&quot;{t.year()}-{t.month()}-{t.day()} {t.hour()}:{t.minute()}, a {t.weekday()}&quot;</span>)
-    leap := time.date(<span class="n">2026</span>, <span class="n">2</span>, <span class="n">29</span>)
-    print(<span class="s">&quot;{leap.month()}/{leap.day()}&quot;</span>)
-    print(<span class="s">&quot;{time.date(2026, 14, 1)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">year</span>()<span class="e">}</span><span class="s">-</span><span class="e">{</span>t.<span class="f">month</span>()<span class="e">}</span><span class="s">-</span><span class="e">{</span>t.<span class="f">day</span>()<span class="e">}</span><span class="s"> </span><span class="e">{</span>t.<span class="f">hour</span>()<span class="e">}</span><span class="s">:</span><span class="e">{</span>t.<span class="f">minute</span>()<span class="e">}</span><span class="s">, a </span><span class="e">{</span>t.<span class="f">weekday</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    leap := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">2</span>, <span class="n">29</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>leap.<span class="f">month</span>()<span class="e">}</span><span class="s">/</span><span class="e">{</span>leap.<span class="f">day</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">14</span>, <span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2026-10-17 9:30, a saturday
 3/1
@@ -80,14 +80,14 @@ now is later: true</code></pre>
 <p><code>add(d)</code> gives the moment a <code>Duration</code> later, or earlier when <code>d</code> is negative. <code>sub(other)</code> gives the <code>Duration</code> between two moments, and <code>before</code> and <code>after</code> compare them:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    start := time.date(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
-    end := start.add(36h + 15m)
-    print(<span class="s">&quot;{end.day()} at {end.hour()}:{end.minute()}&quot;</span>)
-    print(<span class="s">&quot;{end.sub(start)} later, {start.sub(end)} the other way&quot;</span>)
-    print(<span class="s">&quot;{start.before(end)} {start.after(end)}&quot;</span>)
-    yesterday := start.add(-24h)
-    print(<span class="s">&quot;yesterday was the {yesterday.day()}th&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    start := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
+    end := start.<span class="f">add</span>(<span class="n">36h</span> + <span class="n">15m</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>end.<span class="f">day</span>()<span class="e">}</span><span class="s"> at </span><span class="e">{</span>end.<span class="f">hour</span>()<span class="e">}</span><span class="s">:</span><span class="e">{</span>end.<span class="f">minute</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>end.<span class="f">sub</span>(start)<span class="e">}</span><span class="s"> later, </span><span class="e">{</span>start.<span class="f">sub</span>(end)<span class="e">}</span><span class="s"> the other way&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>start.<span class="f">before</span>(end)<span class="e">}</span><span class="s"> </span><span class="e">{</span>start.<span class="f">after</span>(end)<span class="e">}</span><span class="s">&quot;</span>)
+    yesterday := start.<span class="f">add</span>(-<span class="n">24h</span>)
+    <span class="f">print</span>(<span class="s">&quot;yesterday was the </span><span class="e">{</span>yesterday.<span class="f">day</span>()<span class="e">}</span><span class="s">th&quot;</span>)
 }</code></pre>
 <pre class="out"><code>18 at 21:45
 36h15m0s later, -36h15m0s the other way
@@ -96,13 +96,13 @@ yesterday was the 16th</code></pre>
 <p>A day is always <code>24h</code> here: <code>add</code> counts time, not dates on a calendar. <code>addDays(n)</code>, <code>addMonths(n)</code> and <code>addYears(n)</code> move on the calendar instead, keeping the time of day. A day the new month doesn't have becomes its last, so January 31 and a month is February 28:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    t := time.date(<span class="n">2026</span>, <span class="n">1</span>, <span class="n">31</span>, <span class="n">9</span>, <span class="n">30</span>)
-    print(<span class="s">&quot;{t.addDays(30)}&quot;</span>)
-    print(<span class="s">&quot;{t.addMonths(1)}&quot;</span>)
-    print(<span class="s">&quot;{t.addMonths(-2)}&quot;</span>)
-    leap := time.date(<span class="n">2024</span>, <span class="n">2</span>, <span class="n">29</span>)
-    print(<span class="s">&quot;{leap.addYears(1)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">1</span>, <span class="n">31</span>, <span class="n">9</span>, <span class="n">30</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addDays</span>(<span class="n">30</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addMonths</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addMonths</span>(-<span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    leap := time.<span class="f">date</span>(<span class="n">2024</span>, <span class="n">2</span>, <span class="n">29</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>leap.<span class="f">addYears</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2026-03-02T09:30:00Z
 2026-02-28T09:30:00Z
@@ -113,16 +113,16 @@ yesterday was the 16th</code></pre>
 <p><code>iso()</code> writes a moment in ISO 8601, the form most programs read, with the fraction of a second when there is one. <code>dateText()</code> writes only the date. <code>format(layout)</code> writes it with a layout made of <code>YYYY</code>, <code>MM</code>, <code>DD</code>, <code>hh</code>, <code>mm</code>, <code>ss</code>, <code>SSS</code> (milliseconds) and <code>Z</code> (the offset, <code>Z</code> for UTC); other characters are copied. <code>format()</code> with no layout is <code>iso()</code>, and is what <code>{t}</code> uses:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    t := time.date(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">5</span>).add(250ms)
-    <span class="k">scoped</span> <span class="t">String</span> iso = t.iso()
-    <span class="k">scoped</span> <span class="t">String</span> day = t.dateText()
-    <span class="k">scoped</span> <span class="t">String</span> eu = t.format(<span class="s">&quot;DD/MM/YYYY hh:mm&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> log = t.format(<span class="s">&quot;hh:mm:ss.SSS Z&quot;</span>)
-    print(iso)
-    print(day)
-    print(eu)
-    print(log)
+<span class="t">void</span> <span class="f">main</span>() {
+    t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">5</span>).<span class="f">add</span>(<span class="n">250ms</span>)
+    <span class="k">scoped</span> <span class="t">String</span> iso = t.<span class="f">iso</span>()
+    <span class="k">scoped</span> <span class="t">String</span> day = t.<span class="f">dateText</span>()
+    <span class="k">scoped</span> <span class="t">String</span> eu = t.<span class="f">format</span>(<span class="s">&quot;DD/MM/YYYY hh:mm&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> log = t.<span class="f">format</span>(<span class="s">&quot;hh:mm:ss.SSS Z&quot;</span>)
+    <span class="f">print</span>(iso)
+    <span class="f">print</span>(day)
+    <span class="f">print</span>(eu)
+    <span class="f">print</span>(log)
 }</code></pre>
 <pre class="out"><code>2026-10-17T09:05:00.25Z
 2026-10-17
@@ -132,14 +132,14 @@ yesterday was the 16th</code></pre>
 <p>A moment is the same moment in every time zone; the zone only changes how it is shown. <code>local()</code> shows it in the computer's time zone, <code>utc()</code> in UTC, and <code>withOffset(seconds)</code> with an offset in seconds east of UTC. The parts and the text follow the zone:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    t := time.date(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
-    rome := t.withOffset(<span class="n">2</span> * <span class="n">3600</span>)
-    <span class="k">scoped</span> <span class="t">String</span> a = rome.iso()
-    print(<span class="s">&quot;{a}, hour {rome.hour()}&quot;</span>)
-    print(<span class="s">&quot;same moment: {rome.unix() == t.unix()}&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> back = rome.utc().iso()
-    print(back)
+<span class="t">void</span> <span class="f">main</span>() {
+    t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
+    rome := t.<span class="f">withOffset</span>(<span class="n">2</span> * <span class="n">3600</span>)
+    <span class="k">scoped</span> <span class="t">String</span> a = rome.<span class="f">iso</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a<span class="e">}</span><span class="s">, hour </span><span class="e">{</span>rome.<span class="f">hour</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;same moment: </span><span class="e">{</span>rome.<span class="f">unix</span>() == t.<span class="f">unix</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> back = rome.<span class="f">utc</span>().<span class="f">iso</span>()
+    <span class="f">print</span>(back)
 }</code></pre>
 <pre class="out"><code>2026-10-17T11:30:00+02:00, hour 11
 same moment: true
@@ -148,16 +148,16 @@ same moment: true
 <p><code>time.parse(text)</code> reads ISO 8601: a date, a date and time with <code>T</code> or a space between them, seconds with a fraction, and an offset (<code>Z</code>, <code>+02:00</code> or <code>+0200</code>). Without an offset it is UTC, and the moment it gives is shown with the offset it read. Text it can't read gives a <code>time.TimeError.invalid</code>, with a message that says why:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-!<span class="t">void</span> main() {
-    t := <span class="k">try</span> time.parse(<span class="s">&quot;2026-10-17 11:30:00.250+02:00&quot;</span>)
-    <span class="k">scoped</span> <span class="t">String</span> u = t.utc().iso()
-    print(u)
-    d := <span class="k">try</span> time.parse(<span class="s">&quot;2026-10-17&quot;</span>)
-    print(<span class="s">&quot;{d.weekday()}&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    t := <span class="k">try</span> time.<span class="f">parse</span>(<span class="s">&quot;2026-10-17 11:30:00.250+02:00&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> u = t.<span class="f">utc</span>().<span class="f">iso</span>()
+    <span class="f">print</span>(u)
+    d := <span class="k">try</span> time.<span class="f">parse</span>(<span class="s">&quot;2026-10-17&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>d.<span class="f">weekday</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">for</span> text <span class="k">in</span> [<span class="s">&quot;2026-13-01&quot;</span>, <span class="s">&quot;2026-02-30&quot;</span>, <span class="s">&quot;2026-10-1x&quot;</span>] {
-        _ = time.parse(text) <span class="k">catch</span> e {
-            print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
-            time.Time{}
+        _ = time.<span class="f">parse</span>(text) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            time.<span class="t">Time</span>{}
         }
     }
 }</code></pre>
@@ -171,13 +171,13 @@ TimeError.invalid: &#x27;2026-10-1x&#x27; has &#x27;x&#x27; where a digit should
 <p><code>time.parseDuration(text)</code> reads a <code>Duration</code> as it is written in Iris and in its output: <code>1m30s</code>, <code>250ms</code>, <code>1.5h</code>. A number alone is seconds. It suits durations from a settings file or a database; flags and <code>@env</code> fields read them already (see <a href="30-flags.html#types">Command-line flags</a>):</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> text <span class="k">in</span> [<span class="s">&quot;1m30s&quot;</span>, <span class="s">&quot;250ms&quot;</span>, <span class="s">&quot;1.5h&quot;</span>, <span class="s">&quot;30&quot;</span>, <span class="s">&quot;1m30&quot;</span>, <span class="s">&quot;soon&quot;</span>] {
-        d := time.parseDuration(text) <span class="k">catch</span> e {
-            print(e.message)
+        d := time.<span class="f">parseDuration</span>(text) <span class="k">catch</span> e {
+            <span class="f">print</span>(e.message)
             <span class="k">continue</span>
         }
-        print(<span class="s">&quot;{text} is {d}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="s"> is </span><span class="e">{</span>d<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>1m30s is 1m30s
@@ -190,12 +190,12 @@ TimeError.invalid: &#x27;2026-10-1x&#x27; has &#x27;x&#x27; where a digit should
 <p><code>time.now()</code> follows the computer's clock, which can jump when the clock is set. To measure how long something takes, <code>time.clock()</code> reads a clock that only goes forward; the difference of two readings is a <code>Duration</code>:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    start := time.clock()
-    sleep(20ms)
-    took := time.clock() - start
-    print(<span class="s">&quot;took at least 20ms: {took &gt;= 20ms}&quot;</span>)
-    print(<span class="s">&quot;took under a second: {took &lt; 1s}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    start := time.<span class="f">clock</span>()
+    <span class="f">sleep</span>(<span class="n">20ms</span>)
+    took := time.<span class="f">clock</span>() - start
+    <span class="f">print</span>(<span class="s">&quot;took at least 20ms: </span><span class="e">{</span>took &gt;= <span class="n">20ms</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;took under a second: </span><span class="e">{</span>took &lt; <span class="n">1s</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>took at least 20ms: true
 took under a second: true</code></pre>
@@ -205,16 +205,16 @@ took under a second: true</code></pre>
 <p>To do something at a steady rate, like a health check every few seconds, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait:</p>
 <pre class="code run"><code><span class="k">import</span> time
 
-<span class="t">void</span> main() {
-    start := time.clock()
+<span class="t">void</span> <span class="f">main</span>() {
+    start := time.<span class="f">clock</span>()
     next := start
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
-        next += 10ms
-        sleep(next - time.clock())
-        print(<span class="s">&quot;health check {i}&quot;</span>)
+        next += <span class="n">10ms</span>
+        <span class="f">sleep</span>(next - time.<span class="f">clock</span>())
+        <span class="f">print</span>(<span class="s">&quot;health check </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
     }
-    took := time.clock() - start
-    print(<span class="s">&quot;three checks in at least 30ms: {took &gt;= 30ms}&quot;</span>)
+    took := time.<span class="f">clock</span>() - start
+    <span class="f">print</span>(<span class="s">&quot;three checks in at least 30ms: </span><span class="e">{</span>took &gt;= <span class="n">30ms</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>health check 1
 health check 2

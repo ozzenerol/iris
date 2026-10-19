@@ -50,14 +50,14 @@ try {
 <p class="lede">Work the compiler does while it builds the program: constants, values worked out by running code before the program exists, and code that is kept or left out by the platform it is built for. There is no preprocessor and no macros; all of this is ordinary Iris.</p>
 <h2 id="const"><a href="#const">const</a></h2>
 <p>A <code>const</code> is a value worked out when compiling, from numbers, text, other constants and operators on them:</p>
-<pre class="code run"><code><span class="k">const</span> KiB = <span class="n">1024</span>
-<span class="k">const</span> MAX_FRAME = <span class="n">16</span> * KiB
+<pre class="code run"><code><span class="k">const</span> <span class="t">KiB</span> = <span class="n">1024</span>
+<span class="k">const</span> MAX_FRAME = <span class="n">16</span> * <span class="t">KiB</span>
 <span class="k">const</span> HEADER = <span class="n">9</span>
 <span class="k">const</span> MAX_PAYLOAD = MAX_FRAME - HEADER
 <span class="k">const</span> NAME = <span class="s">&quot;edge&quot;</span>
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{NAME}: frames up to {MAX_FRAME} bytes, {MAX_PAYLOAD} of payload&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>NAME<span class="e">}</span><span class="s">: frames up to </span><span class="e">{</span>MAX_FRAME<span class="e">}</span><span class="s"> bytes, </span><span class="e">{</span>MAX_PAYLOAD<span class="e">}</span><span class="s"> of payload&quot;</span>)
 }</code></pre>
 <pre class="out"><code>edge: frames up to 16384 bytes, 16375 of payload</code></pre>
 <p>Text with values in braces can be a constant too, when every value is a constant number, <code>bool</code> or text. The text is put together when compiling, and the constant is a <code>str</code>. The text can be written as it is, or given to <code>format</code> or <code>str.format</code>:</p>
@@ -65,12 +65,12 @@ try {
 
 <span class="k">const</span> HOST = <span class="s">&quot;api.example.com&quot;</span>
 <span class="k">const</span> VERSION = <span class="n">2</span>
-<span class="k">const</span> BASE = <span class="t">str</span>.format(<span class="s">&quot;https://{HOST}/v{VERSION}&quot;</span>)
-<span class="k">const</span> AGENT = <span class="s">&quot;edge/{VERSION} (+https://{HOST})&quot;</span>
+<span class="k">const</span> BASE = <span class="t">str</span>.<span class="f">format</span>(<span class="s">&quot;https://</span><span class="e">{</span>HOST<span class="e">}</span><span class="s">/v</span><span class="e">{</span>VERSION<span class="e">}</span><span class="s">&quot;</span>)
+<span class="k">const</span> AGENT = <span class="s">&quot;edge/</span><span class="e">{</span>VERSION<span class="e">}</span><span class="s"> (+https://</span><span class="e">{</span>HOST<span class="e">}</span><span class="s">)&quot;</span>
 
-<span class="t">void</span> main() {
-    print(BASE)
-    print(AGENT)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(BASE)
+    <span class="f">print</span>(AGENT)
 }</code></pre>
 <pre class="out"><code>https://api.example.com/v2
 edge/2 (+https://api.example.com)</code></pre>
@@ -80,14 +80,14 @@ edge/2 (+https://api.example.com)</code></pre>
 
 <span class="t">i64</span>[WORKERS] busy <span class="c">// jobs in hand, for each worker</span>
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     busy[WORKERS - <span class="n">1</span>] = <span class="n">7</span>
-    print(<span class="s">&quot;{busy.len} workers, the last has {busy[3]} jobs&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>busy.len<span class="e">}</span><span class="s"> workers, the last has </span><span class="e">{</span>busy[<span class="n">3</span>]<span class="e">}</span><span class="s"> jobs&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4 workers, the last has 7 jobs</code></pre>
 <h2 id="comptime"><a href="#comptime">comptime</a></h2>
 <p><code>comptime</code> runs a function while compiling and puts its result into the program, as a constant. The function is ordinary Iris, with loops, <code>List</code>s and the standard library:</p>
-<pre class="code run"><code><span class="t">u32</span>[<span class="n">256</span>] makeCrcTable() {
+<pre class="code run"><code><span class="t">u32</span>[<span class="n">256</span>] <span class="f">makeCrcTable</span>() {
     <span class="t">u32</span>[<span class="n">256</span>] table
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">256</span> {
         <span class="t">u32</span> c = <span class="t">u32</span>(i)
@@ -99,9 +99,9 @@ edge/2 (+https://api.example.com)</code></pre>
     <span class="k">return</span> table
 }
 
-<span class="k">const</span> CRC_TABLE = <span class="k">comptime</span> makeCrcTable()
+<span class="k">const</span> CRC_TABLE = <span class="k">comptime</span> <span class="f">makeCrcTable</span>()
 
-<span class="t">u32</span> crc32(<span class="t">str</span> data) {
+<span class="t">u32</span> <span class="f">crc32</span>(<span class="t">str</span> data) {
     <span class="t">u32</span> c = <span class="n">0xffffffff</span>
     <span class="k">for</span> b <span class="k">in</span> data {
         c = CRC_TABLE[(c ^ <span class="t">u32</span>(b)) &amp; <span class="n">0xff</span>] ^ (c &gt;&gt; <span class="n">8</span>)
@@ -109,8 +109,8 @@ edge/2 (+https://api.example.com)</code></pre>
     <span class="k">return</span> c ^ <span class="n">0xffffffff</span>
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{crc32(&quot;</span>hello<span class="s">&quot;)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">crc32</span>(<span class="s">&quot;hello&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>907060870</code></pre>
 <p>The table is worked out once, when building, and is part of the program's read-only memory: running the program costs nothing for it. <code>comptime</code> goes in a <code>const</code> at the top of a file, and takes the whole expression after it.</p>
@@ -126,14 +126,14 @@ edge/2 (+https://api.example.com)</code></pre>
     <span class="k">const</span> OS_NAME = <span class="s">&quot;macOS&quot;</span>
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">when</span> mode == .debug {
-        print(<span class="s">&quot;a debug build&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;a debug build&quot;</span>)
     } <span class="k">else</span> {
-        print(<span class="s">&quot;a release build&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;a release build&quot;</span>)
     }
     <span class="k">when</span> arch == .x86_64 || arch == .arm64 {
-        print(<span class="s">&quot;64-bit, on {if OS_NAME.len &gt; 0 { &quot;</span>a known system<span class="s">&quot; } else { &quot;</span>?<span class="s">&quot; }}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;64-bit, on </span><span class="e">{</span><span class="k">if</span> OS_NAME.len &gt; <span class="n">0</span> { <span class="s">&quot;a known system&quot;</span> } <span class="k">else</span> { <span class="s">&quot;?&quot;</span> }<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>a debug build

@@ -51,56 +51,56 @@ try {
 <h2 id="f64-and-f32"><a href="#f64-and-f32">f64 and f32</a></h2>
 <p><code>f64</code> is a 64-bit floating point number, with about 15 significant digits. <code>f32</code> takes half the room and has about 7. <code>f64</code> is the one to use; <code>f32</code> is for large arrays where the room matters, and for C functions and file formats that use it.</p>
 <p>A literal with a point or an exponent is an <code>f64</code>:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     rtt := <span class="n">1.5</span>       <span class="c">// milliseconds</span>
     link := <span class="n">2e10</span>     <span class="c">// bits per second</span>
     jitter := <span class="n">2.5e-3</span> <span class="c">// seconds</span>
     <span class="t">f32</span> loss = <span class="n">0.1</span>   <span class="c">// 10% of packets</span>
-    print(<span class="s">&quot;{rtt} {link} {jitter} {loss}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rtt<span class="e">}</span><span class="s"> </span><span class="e">{</span>link<span class="e">}</span><span class="s"> </span><span class="e">{</span>jitter<span class="e">}</span><span class="s"> </span><span class="e">{</span>loss<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1.5 20000000000 0.0025 0.1</code></pre>
 <p>There must be a digit on each side of the point: <code>0.5</code>, not <code>.5</code>, and <code>2.0</code>, not <code>2.</code>.</p>
 <h2 id="printing"><a href="#printing">Printing</a></h2>
 <p>A float prints in the fewest digits that read back as the same number, so <code>0.1</code> prints as <code>0.1</code> even though the number stored is a little off from a tenth. Very large and very small numbers use an exponent:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;{0.1 + 0.2} {1.0 / 3}&quot;</span>)
-    print(<span class="s">&quot;{1e21} {1e-7} {100.0} {-2.5}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">0.1</span> + <span class="n">0.2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1.0</span> / <span class="n">3</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">1e21</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1e-7</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">100.0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">2.5</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>0.30000000000000004 0.3333333333333333
 1e+21 1e-7 100 -2.5</code></pre>
 <h2 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h2>
 <p><code>+</code>, <code>-</code>, <code>*</code> and <code>/</code> work as on integers. <code>%</code> gives what is left after dividing, with a fraction:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     elapsed := <span class="n">7.5</span> <span class="c">// seconds since the server started</span>
     window := <span class="n">2.0</span>  <span class="c">// its rate is counted per 2-second window</span>
-    print(<span class="s">&quot;{elapsed / window} windows, {elapsed % window}s into the last one&quot;</span>)
-    print(<span class="s">&quot;{elapsed + 1} {elapsed * 2}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>elapsed / window<span class="e">}</span><span class="s"> windows, </span><span class="e">{</span>elapsed % window<span class="e">}</span><span class="s">s into the last one&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>elapsed + <span class="n">1</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>elapsed * <span class="n">2</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3.75 windows, 1.5s into the last one
 8.5 15</code></pre>
 <p>An integer literal used with a float becomes a float, so <code>elapsed + 1</code> needs no <code>1.0</code>. A variable of an integer type doesn't: the two types must be made the same.</p>
 <pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> bytes = <span class="n">3000</span>
 <span class="t">f64</span> seconds = <span class="n">1.5</span>
-print(<span class="s">&quot;{bytes / seconds}&quot;</span>) <span class="c">// error: &#x27;/&#x27; can&#x27;t mix i64 and f64; convert one side, for example f64(...)</span></code></pre>
+<span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes / seconds<span class="e">}</span><span class="s">&quot;</span>) <span class="c">// error: &#x27;/&#x27; can&#x27;t mix i64 and f64; convert one side, for example f64(...)</span></code></pre>
 <p>Division by zero doesn't stop the program for floats. It gives infinity, or NaN ("not a number") for <code>0.0 / 0.0</code>, as the hardware does. NaN is not equal to anything, even itself:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     seconds := <span class="n">0.0</span> <span class="c">// nothing measured yet</span>
-    print(<span class="s">&quot;{1500.0 / seconds} {-1500.0 / seconds} {seconds / seconds}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">1500.0</span> / seconds<span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">1500.0</span> / seconds<span class="e">}</span><span class="s"> </span><span class="e">{</span>seconds / seconds<span class="e">}</span><span class="s">&quot;</span>)
     rate := <span class="n">0.0</span> / seconds
-    print(<span class="s">&quot;{rate == rate} {math.isNaN(rate)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rate == rate<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">isNaN</span>(rate)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>inf -inf nan
 false true</code></pre>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
 <p><code>f32</code> converts to <code>f64</code> on its own. Integers and floats convert only when it is written out, with the type's name:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     totalMs := <span class="n">17</span>
     pings := <span class="n">4</span>
     average := <span class="t">f64</span>(totalMs) / <span class="t">f64</span>(pings)
-    print(<span class="s">&quot;average rtt {average}ms&quot;</span>)
-    print(<span class="s">&quot;{i64(2.9)} {i64(-2.9)} {u8(65.7)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;average rtt </span><span class="e">{</span>average<span class="e">}</span><span class="s">ms&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">i64</span>(<span class="n">2.9</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">i64</span>(-<span class="n">2.9</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">u8</span>(<span class="n">65.7</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>average rtt 4.25ms
 2 -2 65</code></pre>
@@ -109,14 +109,14 @@ false true</code></pre>
 <p><code>math</code> has the usual functions and constants. All of them take and give <code>f64</code>:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// the smoothed round trip time TCP keeps: 7/8 of the old value, 1/8 of the new sample</span>
     srtt := <span class="n">0.875</span> * <span class="n">100.0</span> + <span class="n">0.125</span> * <span class="n">140.0</span>
-    print(<span class="s">&quot;srtt {srtt}ms&quot;</span>)
-    print(<span class="s">&quot;{math.ceil(4000.0 / 1460)} segments for 4000 bytes&quot;</span>)
-    print(<span class="s">&quot;{math.log2(65536)} bits for a port, {math.pow(2, 10)} {math.sqrt(2)}&quot;</span>)
-    print(<span class="s">&quot;{math.floor(2.7)} {math.round(2.5)} {math.trunc(-2.7)}&quot;</span>)
-    print(<span class="s">&quot;{math.abs(-3)} {math.min(4, 9)} {math.max(4, 9)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;srtt </span><span class="e">{</span>srtt<span class="e">}</span><span class="s">ms&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">ceil</span>(<span class="n">4000.0</span> / <span class="n">1460</span>)<span class="e">}</span><span class="s"> segments for 4000 bytes&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">log2</span>(<span class="n">65536</span>)<span class="e">}</span><span class="s"> bits for a port, </span><span class="e">{</span>math.<span class="f">pow</span>(<span class="n">2</span>, <span class="n">10</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">sqrt</span>(<span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">floor</span>(<span class="n">2.7</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">round</span>(<span class="n">2.5</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">trunc</span>(-<span class="n">2.7</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">abs</span>(-<span class="n">3</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">min</span>(<span class="n">4</span>, <span class="n">9</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">max</span>(<span class="n">4</span>, <span class="n">9</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>srtt 105ms
 3 segments for 4000 bytes

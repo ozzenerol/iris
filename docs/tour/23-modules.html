@@ -73,29 +73,29 @@ iris mod init github.com/me/proxy</code></pre>
 <pre class="code"><code><span class="k">import</span> fs, <span class="t">str</span>
 <span class="k">import</span> <span class="s">&quot;upstream&quot;</span>, <span class="s">&quot;upstream/probe&quot;</span>
 
-!<span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(<span class="s">&quot;upstreams.txt&quot;</span>)
-    servers := <span class="k">try</span> upstream.parse(text)
-    <span class="k">try</span> probe.check(servers)
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;upstreams.txt&quot;</span>)
+    servers := <span class="k">try</span> upstream.<span class="f">parse</span>(text)
+    <span class="k">try</span> probe.<span class="f">check</span>(servers)
 }</code></pre>
 <p>A quoted path's module is used by its last part: <code>&quot;upstream/probe&quot;</code> is <code>probe</code>. Imports go at the top of each file that uses them, and only that file sees them. Two modules can't import each other, directly or through others: the program says which one depends on which.</p>
 <p>A file's own names can't be the same as the name of a module it imports. A module's names are used with its name in front, so names in different modules never clash: <code>upstream.parse</code> and <code>json.parse</code> are two different functions.</p>
 <h2 id="pub"><a href="#pub">pub</a></h2>
 <p>A module's names are its own unless they are marked <code>pub</code>. Other modules can use only those:</p>
 <pre class="code"><code><span class="c">// upstream/upstream.iris</span>
-<span class="k">pub</span> <span class="k">struct</span> Server {
+<span class="k">pub</span> <span class="k">struct</span> <span class="t">Server</span> {
     <span class="k">pub</span> <span class="t">str</span> addr
     <span class="k">pub</span> <span class="t">i64</span> weight
     <span class="t">i64</span> failures <span class="c">// only upstream&#x27;s code can read or set it</span>
 }
 
-<span class="k">pub</span> !List[Server] parse(<span class="t">str</span> text) {
-    List[Server] servers
+<span class="k">pub</span> !<span class="t">List</span>[<span class="t">Server</span>] <span class="f">parse</span>(<span class="t">str</span> text) {
+    <span class="t">List</span>[<span class="t">Server</span>] servers
     <span class="k">return</span> servers
 }
 
 <span class="c">// only upstream&#x27;s code can call it</span>
-<span class="t">i64</span> weightOf(<span class="t">str</span> line) =&gt; line.len</code></pre>
+<span class="t">i64</span> <span class="f">weightOf</span>(<span class="t">str</span> line) =&gt; line.len</code></pre>
 <p>A <code>pub</code> struct's fields and methods are visible outside only when they are marked <code>pub</code> themselves, which keeps a struct's insides free to change. All the values of a <code>pub</code> enum are visible. Using a name that isn't <code>pub</code> is an error that says so:</p>
 <pre class="out"><code>main.iris:11: the field failures of Server isn&#x27;t pub, so only its own module can use it
 main.iris:12: upstream.weightOf isn&#x27;t pub, so only its own module can use it</code></pre>
@@ -103,12 +103,12 @@ main.iris:12: upstream.weightOf isn&#x27;t pub, so only its own module can use i
 <p>The modules of the standard library are imported by name: <code>import http, json, log</code>. <code>List</code> and <code>Map</code> come from <code>core</code>, which every module sees without an import. The <a href="../std/index.html">Library</a> has every module, with each of its types and functions and what its comments say. A quick look at one:</p>
 <pre class="code run"><code><span class="k">import</span> path, <span class="t">str</span>, time
 
-<span class="t">void</span> main() {
-    <span class="k">scoped</span> <span class="t">String</span> p = path.join(<span class="s">&quot;/var/log&quot;</span>, <span class="s">&quot;proxy.log&quot;</span>)
-    print(<span class="s">&quot;{path.base(p)} in {path.dir(p)}, extension {path.ext(p)}&quot;</span>)
-    print(<span class="s">&quot;{str.startsWith(p, &quot;</span>/var<span class="s">&quot;)}&quot;</span>)
-    start := time.clock()
-    print(<span class="s">&quot;{time.clock() - start &lt; 1s}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> p = path.<span class="f">join</span>(<span class="s">&quot;/var/log&quot;</span>, <span class="s">&quot;proxy.log&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path.<span class="f">base</span>(p)<span class="e">}</span><span class="s"> in </span><span class="e">{</span>path.<span class="f">dir</span>(p)<span class="e">}</span><span class="s">, extension </span><span class="e">{</span>path.<span class="f">ext</span>(p)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">str</span>.<span class="f">startsWith</span>(p, <span class="s">&quot;/var&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    start := time.<span class="f">clock</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>time.<span class="f">clock</span>() - start &lt; <span class="n">1s</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>proxy.log in /var/log, extension .log
 true
@@ -117,8 +117,8 @@ true</code></pre>
 <p>A package is a module from another project, imported by its repository's address:</p>
 <pre class="code"><code><span class="k">import</span> <span class="s">&quot;github.com/someone/backoff&quot;</span>
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{backoff.delay(3)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>backoff.<span class="f">delay</span>(<span class="n">3</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p><code>iris get</code> downloads a package at a version, which is a tag in its repository, and writes it into <code>iris.mod</code>:</p>
 <pre class="code"><code>iris get github.com/someone/backoff@v1.2.0</code></pre>

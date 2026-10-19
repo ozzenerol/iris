@@ -50,32 +50,32 @@ try {
 <p class="lede">A function that can fail says so in its type, and gives either its result or an error. The caller must do something with the error: pass it up with <code>try</code>, or handle it with <code>catch</code>. Nothing can be ignored by accident. This chapter covers making errors, passing them on, handling them, the trace a program prints when one reaches the end of <code>main</code>, and <code>panic</code> for bugs.</p>
 <h2 id="a-function-that-can-fail"><a href="#a-function-that-can-fail">A function that can fail</a></h2>
 <p>A return type written <code>!T</code> means the function gives a <code>T</code> or an error. <code>return error(code, message)</code> gives an error; any other <code>return</code> gives the value:</p>
-<pre class="code run"><code><span class="k">enum</span> ParseError { empty, notNumber, tooBig }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">ParseError</span> { empty, notNumber, tooBig }
 
-!<span class="t">u16</span> parsePort(<span class="t">str</span> text) {
+!<span class="t">u16</span> <span class="f">parsePort</span>(<span class="t">str</span> text) {
     <span class="k">if</span> text.len == <span class="n">0</span> {
-        <span class="k">return</span> error(ParseError.empty, <span class="s">&quot;no port given&quot;</span>)
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.empty, <span class="s">&quot;no port given&quot;</span>)
     }
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">for</span> c <span class="k">in</span> text {
         <span class="k">if</span> c &lt; <span class="s">&#x27;0&#x27;</span> || c &gt; <span class="s">&#x27;9&#x27;</span> {
-            <span class="k">return</span> error(ParseError.notNumber, <span class="s">&quot;&#x27;{text}&#x27; isn&#x27;t a number&quot;</span>)
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.notNumber, <span class="s">&quot;&#x27;</span><span class="e">{</span>text<span class="e">}</span><span class="s">&#x27; isn&#x27;t a number&quot;</span>)
         }
         n = n * <span class="n">10</span> + <span class="t">i64</span>(c - <span class="s">&#x27;0&#x27;</span>)
         <span class="k">if</span> n &gt; <span class="n">65535</span> {
-            <span class="k">return</span> error(ParseError.tooBig, <span class="s">&quot;{text} is above 65535&quot;</span>)
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.tooBig, <span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="s"> is above 65535&quot;</span>)
         }
     }
     <span class="k">return</span> <span class="t">u16</span>(n)
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> t <span class="k">in</span> [<span class="s">&quot;8080&quot;</span>, <span class="s">&quot;&quot;</span>, <span class="s">&quot;80a&quot;</span>, <span class="s">&quot;99999&quot;</span>] {
-        p := parsePort(t) <span class="k">catch</span> e {
-            print(<span class="s">&quot;{e.code}: {e.message}&quot;</span>)
+        p := <span class="f">parsePort</span>(t) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
             <span class="k">continue</span>
         }
-        print(<span class="s">&quot;port {p}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;port </span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>port 8080
@@ -91,15 +91,15 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="c">// The number of bytes in a Range header&#x27;s &quot;from-to&quot;.</span>
-!<span class="t">i64</span> rangeSize(<span class="t">str</span> from, <span class="t">str</span> to) {
-    a := <span class="k">try</span> <span class="t">str</span>.parseInt(from)
-    b := <span class="k">try</span> <span class="t">str</span>.parseInt(to)
+!<span class="t">i64</span> <span class="f">rangeSize</span>(<span class="t">str</span> from, <span class="t">str</span> to) {
+    a := <span class="k">try</span> <span class="t">str</span>.<span class="f">parseInt</span>(from)
+    b := <span class="k">try</span> <span class="t">str</span>.<span class="f">parseInt</span>(to)
     <span class="k">return</span> b - a + <span class="n">1</span>
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{rangeSize(&quot;</span><span class="n">0</span><span class="s">&quot;, &quot;</span><span class="n">499</span><span class="s">&quot;) catch -1}&quot;</span>)
-    print(<span class="s">&quot;{rangeSize(&quot;</span><span class="n">500</span><span class="s">&quot;, &quot;</span>end<span class="s">&quot;) catch -1}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">rangeSize</span>(<span class="s">&quot;0&quot;</span>, <span class="s">&quot;499&quot;</span>) <span class="k">catch</span> -<span class="n">1</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">rangeSize</span>(<span class="s">&quot;500&quot;</span>, <span class="s">&quot;end&quot;</span>) <span class="k">catch</span> -<span class="n">1</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>500
 -1</code></pre>
@@ -108,9 +108,9 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <p><code>catch</code> handles the error where the call is. A value after it is used when the call fails:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">void</span> main() {
-    port := <span class="t">str</span>.parseInt(<span class="s">&quot;abc&quot;</span>) <span class="k">catch</span> <span class="n">8080</span>
-    print(<span class="s">&quot;{port}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    port := <span class="t">str</span>.<span class="f">parseInt</span>(<span class="s">&quot;abc&quot;</span>) <span class="k">catch</span> <span class="n">8080</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8080</code></pre>
 <p>The value after <code>catch</code> is one value: a name, a literal, a call, or an expression in parentheses. The rest of the line applies to the result: <code>parse(s) catch 0 + 1</code> adds one to whichever value it gets.</p>
@@ -118,35 +118,35 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <p><code>catch e { ... }</code> runs the block when the call fails, with the error in <code>e</code>. When the call gives a value, the block's last line is the value to use instead; the block can also leave with <code>return</code>, <code>break</code> or <code>continue</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">i64</span> portOr(<span class="t">str</span> s, <span class="t">i64</span> fallback) {
-    n := <span class="t">str</span>.parseInt(s) <span class="k">catch</span> e {
-        print(<span class="s">&quot;can&#x27;t read the port &#x27;{s}&#x27;: {e.message}&quot;</span>)
+<span class="t">i64</span> <span class="f">portOr</span>(<span class="t">str</span> s, <span class="t">i64</span> fallback) {
+    n := <span class="t">str</span>.<span class="f">parseInt</span>(s) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;can&#x27;t read the port &#x27;</span><span class="e">{</span>s<span class="e">}</span><span class="s">&#x27;: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         fallback
     }
     <span class="k">return</span> n
 }
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{portOr(&quot;</span><span class="n">8443</span><span class="s">&quot;, 443)}&quot;</span>)
-    print(<span class="s">&quot;{portOr(&quot;</span>https<span class="s">&quot;, 443)}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">portOr</span>(<span class="s">&quot;8443&quot;</span>, <span class="n">443</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">portOr</span>(<span class="s">&quot;https&quot;</span>, <span class="n">443</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8443
 can&#x27;t read the port &#x27;https&#x27;: &#x27;https&#x27; is not a number
 443</code></pre>
 <p>For a function that gives no value, the block is just what to do; it can also be empty, to drop the error on purpose:</p>
-<pre class="code run"><code><span class="k">enum</span> LogError { full }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">LogError</span> { full }
 
-!<span class="t">void</span> flush(<span class="t">bool</span> roomLeft) {
+!<span class="t">void</span> <span class="f">flush</span>(<span class="t">bool</span> roomLeft) {
     <span class="k">if</span> !roomLeft {
-        <span class="k">return</span> error(LogError.full, <span class="s">&quot;the disk is full&quot;</span>)
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">LogError</span>.full, <span class="s">&quot;the disk is full&quot;</span>)
     }
-    print(<span class="s">&quot;log flushed&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;log flushed&quot;</span>)
 }
 
-<span class="t">void</span> main() {
-    flush(<span class="k">true</span>) <span class="k">catch</span> e { }
-    flush(<span class="k">false</span>) <span class="k">catch</span> e {
-        print(<span class="s">&quot;log not flushed: {e.message}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">flush</span>(<span class="k">true</span>) <span class="k">catch</span> e { }
+    <span class="f">flush</span>(<span class="k">false</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;log not flushed: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>log flushed
@@ -154,30 +154,30 @@ log not flushed: the disk is full</code></pre>
 <p>The error's message stays the same for the whole block, even when code in the block makes and handles errors of its own.</p>
 <h2 id="deciding-by-the-code"><a href="#deciding-by-the-code">Deciding by the code</a></h2>
 <p><code>catch e match e.code</code> picks what to do by the error's code. Each arm gives a value or leaves:</p>
-<pre class="code run"><code><span class="k">enum</span> FetchError { notFound, timeout, refused }
+<pre class="code run"><code><span class="k">enum</span> <span class="t">FetchError</span> { notFound, timeout, refused }
 
-!<span class="t">str</span> fetch(<span class="t">str</span> what) {
+!<span class="t">str</span> <span class="f">fetch</span>(<span class="t">str</span> what) {
     <span class="k">if</span> what == <span class="s">&quot;old&quot;</span> {
-        <span class="k">return</span> error(FetchError.notFound, <span class="s">&quot;{what} is gone&quot;</span>)
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">FetchError</span>.notFound, <span class="s">&quot;</span><span class="e">{</span>what<span class="e">}</span><span class="s"> is gone&quot;</span>)
     }
     <span class="k">if</span> what == <span class="s">&quot;slow&quot;</span> {
-        <span class="k">return</span> error(FetchError.timeout, <span class="s">&quot;{what} took too long&quot;</span>)
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">FetchError</span>.timeout, <span class="s">&quot;</span><span class="e">{</span>what<span class="e">}</span><span class="s"> took too long&quot;</span>)
     }
     <span class="k">return</span> <span class="s">&quot;the content&quot;</span>
 }
 
-<span class="t">str</span> fetchOr(<span class="t">str</span> what) {
-    s := fetch(what) <span class="k">catch</span> e <span class="k">match</span> e.code {
-        FetchError.notFound =&gt; <span class="s">&quot;(nothing)&quot;</span>
-        FetchError.timeout =&gt; <span class="s">&quot;(try later)&quot;</span>
+<span class="t">str</span> <span class="f">fetchOr</span>(<span class="t">str</span> what) {
+    s := <span class="f">fetch</span>(what) <span class="k">catch</span> e <span class="k">match</span> e.code {
+        <span class="t">FetchError</span>.notFound =&gt; <span class="s">&quot;(nothing)&quot;</span>
+        <span class="t">FetchError</span>.timeout =&gt; <span class="s">&quot;(try later)&quot;</span>
         _ =&gt; <span class="s">&quot;(error)&quot;</span>
     }
     <span class="k">return</span> s
 }
 
-<span class="t">void</span> main() {
-    print(fetchOr(<span class="s">&quot;old&quot;</span>))
-    print(fetchOr(<span class="s">&quot;slow&quot;</span>))
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="f">fetchOr</span>(<span class="s">&quot;old&quot;</span>))
+    <span class="f">print</span>(<span class="f">fetchOr</span>(<span class="s">&quot;slow&quot;</span>))
 }</code></pre>
 <pre class="out"><code>(nothing)
 (try later)</code></pre>
@@ -185,29 +185,29 @@ log not flushed: the disk is full</code></pre>
 <p>A caught error can be returned as it is with <code>return e</code>, or turned into a new one with the same code and a longer message, which tells the reader what was being done:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="k">enum</span> ConfigError { invalid }
+<span class="k">enum</span> <span class="t">ConfigError</span> { invalid }
 
-!<span class="t">i64</span> readTimeout(<span class="t">str</span> text) {
-    n := <span class="t">str</span>.parseInt(text) <span class="k">catch</span> e {
-        <span class="k">return</span> error(e.code, <span class="s">&quot;reading the timeout: {e.message}&quot;</span>)
+!<span class="t">i64</span> <span class="f">readTimeout</span>(<span class="t">str</span> text) {
+    n := <span class="t">str</span>.<span class="f">parseInt</span>(text) <span class="k">catch</span> e {
+        <span class="k">return</span> <span class="f">error</span>(e.code, <span class="s">&quot;reading the timeout: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">return</span> n
 }
 
-!<span class="t">i64</span> readRetries(<span class="t">str</span> text) {
-    n := <span class="t">str</span>.parseInt(text) <span class="k">catch</span> e {
+!<span class="t">i64</span> <span class="f">readRetries</span>(<span class="t">str</span> text) {
+    n := <span class="t">str</span>.<span class="f">parseInt</span>(text) <span class="k">catch</span> e {
         <span class="k">return</span> e
     }
     <span class="k">return</span> n
 }
 
-<span class="t">void</span> main() {
-    _ = readTimeout(<span class="s">&quot;ten&quot;</span>) <span class="k">catch</span> e {
-        print(e.message)
+<span class="t">void</span> <span class="f">main</span>() {
+    _ = <span class="f">readTimeout</span>(<span class="s">&quot;ten&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(e.message)
         <span class="n">0</span>
     }
-    _ = readRetries(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
-        print(<span class="s">&quot;{e.code}&quot;</span>)
+    _ = <span class="f">readRetries</span>(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="n">0</span>
     }
 }</code></pre>
@@ -216,20 +216,20 @@ ParseError.empty</code></pre>
 <p><code>error(e.code)</code> makes a new error with another error's code.</p>
 <h2 id="errors-can-t-be-ignored"><a href="#errors-can-t-be-ignored">Errors can't be ignored</a></h2>
 <p>Calling a function that can fail without <code>try</code> or <code>catch</code> is a compile error. To drop an error on purpose, the call is assigned to <code>_</code>:</p>
-<pre class="code bad"><span class="tag">does not compile</span><code>save(data)     <span class="c">// error: the error from save is not handled; use try, catch or _ =</span>
-_ = save(data) <span class="c">// the error is dropped, and so is the value</span></code></pre>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="f">save</span>(data)     <span class="c">// error: the error from save is not handled; use try, catch or _ =</span>
+_ = <span class="f">save</span>(data) <span class="c">// the error is dropped, and so is the value</span></code></pre>
 <h2 id="errors-in-main"><a href="#errors-in-main">Errors in main</a></h2>
 <p>When <code>main</code> is <code>!void</code>, an error that reaches its end is printed with its code, its message, and the trace: where it was made, and each <code>try</code> or <code>return e</code> that passed it on. The program exits with status 1:</p>
 <pre class="code"><code><span class="k">import</span> fs
 
-!<span class="t">i64</span> configSize(<span class="t">str</span> path) {
-    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.readAll(path)
+!<span class="t">i64</span> <span class="f">configSize</span>(<span class="t">str</span> path) {
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.<span class="f">readAll</span>(path)
     <span class="k">return</span> text.len
 }
 
-!<span class="t">void</span> main() {
-    n := <span class="k">try</span> configSize(<span class="s">&quot;app.conf&quot;</span>)
-    print(<span class="s">&quot;{n} bytes&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    n := <span class="k">try</span> <span class="f">configSize</span>(<span class="s">&quot;app.conf&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>error: FsError.notFound: app.conf: no such file
   at fsError     std/fs/fs.iris:18
@@ -239,9 +239,9 @@ _ = save(data) <span class="c">// the error is dropped, and so is the value</spa
 <p>A message holds up to 1024 bytes, and a trace up to 64 steps.</p>
 <h2 id="bugs-panic"><a href="#bugs-panic">Bugs: panic</a></h2>
 <p><code>!T</code> is for things that can go wrong in a correct program: a missing file, a closed connection, bad input. A bug is different: an index past the end, an integer that overflows, a <code>null</code> pointer used. The program stops at once, with a message and where it happened, and exits with status 2. <code>panic</code> does the same for a state the program should never be in:</p>
-<pre class="code"><code><span class="t">void</span> setLevel(<span class="t">i64</span> level) {
+<pre class="code"><code><span class="t">void</span> <span class="f">setLevel</span>(<span class="t">i64</span> level) {
     <span class="k">if</span> level &lt; <span class="n">0</span> || level &gt; <span class="n">3</span> {
-        panic(<span class="s">&quot;level {level} is outside 0..3&quot;</span>)
+        <span class="f">panic</span>(<span class="s">&quot;level </span><span class="e">{</span>level<span class="e">}</span><span class="s"> is outside 0..3&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>panic: level 7 is outside 0..3

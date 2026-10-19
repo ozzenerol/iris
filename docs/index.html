@@ -47,15 +47,15 @@ try {
 <p class="lede">Iris is a compiled language for servers, network tools and command-line programs. It has no garbage collector: memory is freed by the program, with <code>defer</code> and <code>scoped</code> to make that hard to forget. Errors are values that must be handled, every index is checked, and tasks and channels let one thread do many things at once. The compiler is written in C and produces native code through LLVM.</p>
 <pre class="code run"><code><span class="k">import</span> http
 
-<span class="t">void</span> hello(http.Request *req, http.Response *res) {
-    res.text(<span class="s">&quot;hello, {req.param(&quot;</span>name<span class="s">&quot;)}\n&quot;</span>)
+<span class="t">void</span> <span class="f">hello</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    res.<span class="f">text</span>(<span class="s">&quot;hello, </span><span class="e">{</span>req.<span class="f">param</span>(<span class="s">&quot;name&quot;</span>)<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
 }
 
-!<span class="t">void</span> main() {
-    http.Router r
-    <span class="k">defer</span> r.free()
-    r.get(<span class="s">&quot;/hello/:name&quot;</span>, hello)
-    print(<span class="s">&quot;routes ready&quot;</span>)
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">get</span>(<span class="s">&quot;/hello/:name&quot;</span>, hello)
+    <span class="f">print</span>(<span class="s">&quot;routes ready&quot;</span>)
 }</code></pre>
 <pre class="out"><code>routes ready</code></pre>
 <p>With <code>try r.serve(8080)</code> at the end, that is a web server on every CPU core, with HTTP/1.1 and HTTP/2.</p>
@@ -66,8 +66,8 @@ try {
 <pre class="code"><code>./build-and-install.sh</code></pre>
 <p>That builds <code>iris</code> on every core and installs it in <code>/usr/local/bin</code>, asking for your password only for the copy. <code>--prefix ~/.local</code> installs it in your home folder instead, <code>--test</code> runs the tests first, and <code>--help</code> lists the rest. <code>iris version</code> checks it worked.</p>
 <h2 id="a-first-program"><a href="#a-first-program">A first program</a></h2>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;hello, world&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;hello, world&quot;</span>)
 }</code></pre>
 <pre class="out"><code>hello, world</code></pre>
 <p>Save it as <code>hello.iris</code>, and run it with <code>iris run hello.iris</code>. The <a href="tour/01-hello.html">first chapter</a> of the tour goes on from there.</p>

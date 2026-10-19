@@ -50,102 +50,102 @@ try {
 <p class="lede">An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as <code>dyn</code> values, worked out when the program runs.</p>
 <h2 id="declaring-an-interface"><a href="#declaring-an-interface">Declaring an interface</a></h2>
 <p>An interface lists the methods a type must have, with their types:</p>
-<pre class="code"><code><span class="k">interface</span> Link {
-    <span class="t">i64</span> mtu()
-    <span class="t">String</span> format()
+<pre class="code"><code><span class="k">interface</span> <span class="t">Link</span> {
+    <span class="t">i64</span> <span class="f">mtu</span>()
+    <span class="t">String</span> <span class="f">format</span>()
 }</code></pre>
 <p>Any struct with an <code>mtu</code> method that takes nothing and gives an <code>i64</code>, and a <code>format</code> method that gives a <code>String</code>, has <code>Link</code>. Only structs have methods, so only structs have interfaces.</p>
 <h2 id="bounds"><a href="#bounds">Bounds</a></h2>
 <p>A type parameter written <code>T: Link</code> takes only types that have <code>Link</code>, and the generic code can then call its methods:</p>
 <pre class="code run"><code><span class="c">// A network link, and the largest packet it carries.</span>
-<span class="k">interface</span> Link {
-    <span class="t">i64</span> mtu()
+<span class="k">interface</span> <span class="t">Link</span> {
+    <span class="t">i64</span> <span class="f">mtu</span>()
 }
 
-<span class="k">struct</span> Ethernet {
+<span class="k">struct</span> <span class="t">Ethernet</span> {
     <span class="t">bool</span> jumbo
 }
 
-<span class="t">i64</span> Ethernet.mtu() =&gt; <span class="k">if</span> self.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
+<span class="t">i64</span> <span class="t">Ethernet</span>.<span class="f">mtu</span>() =&gt; <span class="k">if</span> <span class="k">self</span>.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
 
-<span class="k">struct</span> Tunnel {
+<span class="k">struct</span> <span class="t">Tunnel</span> {
     <span class="t">i64</span> overhead
 }
 
-<span class="t">i64</span> Tunnel.mtu() =&gt; <span class="n">1500</span> - self.overhead
+<span class="t">i64</span> <span class="t">Tunnel</span>.<span class="f">mtu</span>() =&gt; <span class="n">1500</span> - <span class="k">self</span>.overhead
 
-T roomier[T: Link](T a, T b) =&gt; <span class="k">if</span> a.mtu() &gt;= b.mtu() { a } <span class="k">else</span> { b }
+T roomier[T: <span class="t">Link</span>](T a, T b) =&gt; <span class="k">if</span> a.<span class="f">mtu</span>() &gt;= b.<span class="f">mtu</span>() { a } <span class="k">else</span> { b }
 
 <span class="c">// The TCP payload a packet on the link can carry.</span>
-<span class="t">i64</span> payload[T: Link](T l) =&gt; l.mtu() - <span class="n">40</span>
+<span class="t">i64</span> payload[T: <span class="t">Link</span>](T l) =&gt; l.<span class="f">mtu</span>() - <span class="n">40</span>
 
-<span class="t">void</span> main() {
-    big := roomier(Ethernet{}, Ethernet{jumbo: <span class="k">true</span>})
-    print(<span class="s">&quot;{big.jumbo} {payload(Tunnel{overhead: 80})}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    big := <span class="f">roomier</span>(<span class="t">Ethernet</span>{}, <span class="t">Ethernet</span>{jumbo: <span class="k">true</span>})
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>big.jumbo<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">payload</span>(<span class="t">Tunnel</span>{overhead: <span class="n">80</span>})<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true 1380</code></pre>
 <p>A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.</p>
 <h2 id="self"><a href="#self">Self</a></h2>
 <p>In an interface, <code>Self</code> stands for the type that has the interface. It lets a method take or give a value of the same type:</p>
-<pre class="code run"><code><span class="k">interface</span> Ordered {
-    <span class="t">i64</span> compare(Self other)
+<pre class="code run"><code><span class="k">interface</span> <span class="t">Ordered</span> {
+    <span class="t">i64</span> <span class="f">compare</span>(<span class="t">Self</span> other)
 }
 
-<span class="k">struct</span> Version {
+<span class="k">struct</span> <span class="t">Version</span> {
     <span class="t">i64</span> major
     <span class="t">i64</span> minor
 }
 
-<span class="t">i64</span> Version.compare(Version other) {
-    <span class="k">if</span> self.major != other.major {
-        <span class="k">return</span> self.major - other.major
+<span class="t">i64</span> <span class="t">Version</span>.<span class="f">compare</span>(<span class="t">Version</span> other) {
+    <span class="k">if</span> <span class="k">self</span>.major != other.major {
+        <span class="k">return</span> <span class="k">self</span>.major - other.major
     }
-    <span class="k">return</span> self.minor - other.minor
+    <span class="k">return</span> <span class="k">self</span>.minor - other.minor
 }
 
-T max[T: Ordered](T a, T b) =&gt; <span class="k">if</span> a.compare(b) &gt;= <span class="n">0</span> { a } <span class="k">else</span> { b }
+T max[T: <span class="t">Ordered</span>](T a, T b) =&gt; <span class="k">if</span> a.<span class="f">compare</span>(b) &gt;= <span class="n">0</span> { a } <span class="k">else</span> { b }
 
-<span class="t">void</span> main() {
-    v := max(Version{major: <span class="n">1</span>, minor: <span class="n">2</span>}, Version{major: <span class="n">1</span>, minor: <span class="n">5</span>})
-    print(<span class="s">&quot;{v.major}.{v.minor}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    v := <span class="f">max</span>(<span class="t">Version</span>{major: <span class="n">1</span>, minor: <span class="n">2</span>}, <span class="t">Version</span>{major: <span class="n">1</span>, minor: <span class="n">5</span>})
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>v.major<span class="e">}</span><span class="s">.</span><span class="e">{</span>v.minor<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1.5</code></pre>
 <h2 id="dyn"><a href="#dyn">dyn</a></h2>
 <p>A <code>dyn Link</code> value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things. Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:</p>
-<pre class="code run"><code><span class="k">interface</span> Link {
-    <span class="t">i64</span> mtu()
-    <span class="t">str</span> name()
+<pre class="code run"><code><span class="k">interface</span> <span class="t">Link</span> {
+    <span class="t">i64</span> <span class="f">mtu</span>()
+    <span class="t">str</span> <span class="f">name</span>()
 }
 
-<span class="k">struct</span> Ethernet {
+<span class="k">struct</span> <span class="t">Ethernet</span> {
     <span class="t">bool</span> jumbo
 }
 
-<span class="t">i64</span> Ethernet.mtu() =&gt; <span class="k">if</span> self.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
-<span class="t">str</span> Ethernet.name() =&gt; <span class="s">&quot;ethernet&quot;</span>
+<span class="t">i64</span> <span class="t">Ethernet</span>.<span class="f">mtu</span>() =&gt; <span class="k">if</span> <span class="k">self</span>.jumbo { <span class="n">9000</span> } <span class="k">else</span> { <span class="n">1500</span> }
+<span class="t">str</span> <span class="t">Ethernet</span>.<span class="f">name</span>() =&gt; <span class="s">&quot;ethernet&quot;</span>
 
-<span class="k">struct</span> Tunnel {
+<span class="k">struct</span> <span class="t">Tunnel</span> {
     <span class="t">i64</span> overhead
 }
 
-<span class="t">i64</span> Tunnel.mtu() =&gt; <span class="n">1500</span> - self.overhead
-<span class="t">str</span> Tunnel.name() =&gt; <span class="s">&quot;tunnel&quot;</span>
+<span class="t">i64</span> <span class="t">Tunnel</span>.<span class="f">mtu</span>() =&gt; <span class="n">1500</span> - <span class="k">self</span>.overhead
+<span class="t">str</span> <span class="t">Tunnel</span>.<span class="f">name</span>() =&gt; <span class="s">&quot;tunnel&quot;</span>
 
-<span class="t">void</span> describe(<span class="k">dyn</span> Link l) =&gt; print(<span class="s">&quot;{l.name()} carries {l.mtu()} bytes&quot;</span>)
+<span class="t">void</span> <span class="f">describe</span>(<span class="k">dyn</span> <span class="t">Link</span> l) =&gt; <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>l.<span class="f">name</span>()<span class="e">}</span><span class="s"> carries </span><span class="e">{</span>l.<span class="f">mtu</span>()<span class="e">}</span><span class="s"> bytes&quot;</span>)
 
-<span class="t">void</span> main() {
-    lan := Ethernet{jumbo: <span class="k">true</span>}
-    vpn := Tunnel{overhead: <span class="n">80</span>}
-    describe(&amp;vpn)
-    List[<span class="k">dyn</span> Link] path
-    <span class="k">defer</span> path.free()
-    path.push(&amp;lan)
-    path.push(&amp;vpn)
+<span class="t">void</span> <span class="f">main</span>() {
+    lan := <span class="t">Ethernet</span>{jumbo: <span class="k">true</span>}
+    vpn := <span class="t">Tunnel</span>{overhead: <span class="n">80</span>}
+    <span class="f">describe</span>(&amp;vpn)
+    <span class="t">List</span>[<span class="k">dyn</span> <span class="t">Link</span>] path
+    <span class="k">defer</span> path.<span class="f">free</span>()
+    path.<span class="f">push</span>(&amp;lan)
+    path.<span class="f">push</span>(&amp;vpn)
     <span class="t">i64</span> pmtu = <span class="n">65535</span>
     <span class="k">for</span> l <span class="k">in</span> path {
-        pmtu = l.mtu() <span class="k">if</span> l.mtu() &lt; pmtu
+        pmtu = l.<span class="f">mtu</span>() <span class="k">if</span> l.<span class="f">mtu</span>() &lt; pmtu
     }
-    print(<span class="s">&quot;{path.len} links, path MTU {pmtu}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path.len<span class="e">}</span><span class="s"> links, path MTU </span><span class="e">{</span>pmtu<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>tunnel carries 1420 bytes
 2 links, path MTU 1420</code></pre>

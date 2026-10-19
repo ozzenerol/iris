@@ -50,48 +50,48 @@ try {
 <p class="lede"><code>List</code> keeps values in order and grows as values are added; <code>Map</code> keeps a value for each key. Both are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.</p>
 <h2 id="list"><a href="#list">List</a></h2>
 <p>A <code>List[T]</code> holds values of type <code>T</code> in order. A new list is empty and needs no setup; <code>free</code> gives its memory back:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    List[<span class="t">str</span>] hosts
-    <span class="k">defer</span> hosts.free()
-    hosts.push(<span class="s">&quot;10.0.0.1&quot;</span>)
-    hosts.push(<span class="s">&quot;10.0.0.2&quot;</span>)
-    hosts.push(<span class="s">&quot;10.0.0.3&quot;</span>)
-    print(<span class="s">&quot;{hosts.len} hosts: {hosts.at(0)} ... {hosts.last()}&quot;</span>)
-    hosts.set(<span class="n">1</span>, <span class="s">&quot;10.0.0.9&quot;</span>)
-    print(<span class="s">&quot;{hosts.at(1)}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">str</span>] hosts
+    <span class="k">defer</span> hosts.<span class="f">free</span>()
+    hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.1&quot;</span>)
+    hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.2&quot;</span>)
+    hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.3&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hosts.len<span class="e">}</span><span class="s"> hosts: </span><span class="e">{</span>hosts.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> ... </span><span class="e">{</span>hosts.<span class="f">last</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    hosts.<span class="f">set</span>(<span class="n">1</span>, <span class="s">&quot;10.0.0.9&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hosts.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 hosts: 10.0.0.1 ... 10.0.0.3
 10.0.0.9</code></pre>
 <p><code>len</code> is the number of values. <code>at(i)</code> gives the value at index i, from 0, and <code>set(i, v)</code> replaces it. An index outside the list stops the program, as with slices.</p>
 <h2 id="adding-and-taking-out"><a href="#adding-and-taking-out">Adding and taking out</a></h2>
 <p><code>push</code> adds at the end and <code>pop</code> takes the last value off and gives it. <code>insert(i, v)</code> and <code>remove(i)</code> work anywhere in the list, moving the values after it:</p>
-<pre class="code run"><code><span class="t">void</span> show(List[<span class="t">u16</span>] *ports) {
-    <span class="t">String</span> s = <span class="s">&quot;[&quot;</span>.copy()
-    <span class="k">for</span> i, p <span class="k">in</span> ports.items() {
-        <span class="k">scoped</span> <span class="t">String</span> part = format(<span class="s">&quot;{if i &gt; 0 { &quot;</span> <span class="s">&quot; } else { &quot;</span><span class="s">&quot; }}{p}&quot;</span>)
-        s.append(part)
+<pre class="code run"><code><span class="t">void</span> <span class="f">show</span>(<span class="t">List</span>[<span class="t">u16</span>] *ports) {
+    <span class="t">String</span> s = <span class="s">&quot;[&quot;</span>.<span class="f">copy</span>()
+    <span class="k">for</span> i, p <span class="k">in</span> ports.<span class="f">items</span>() {
+        <span class="k">scoped</span> <span class="t">String</span> part = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">if</span> i &gt; <span class="n">0</span> { <span class="s">&quot; &quot;</span> } <span class="k">else</span> { <span class="s">&quot;&quot;</span> }<span class="e">}</span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
+        s.<span class="f">append</span>(part)
     }
-    s.append(<span class="s">&quot;]&quot;</span>)
-    print(s)
-    s.free()
+    s.<span class="f">append</span>(<span class="s">&quot;]&quot;</span>)
+    <span class="f">print</span>(s)
+    s.<span class="f">free</span>()
 }
 
-<span class="t">void</span> main() {
-    List[<span class="t">u16</span>] ports
-    <span class="k">defer</span> ports.free()
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">u16</span>] ports
+    <span class="k">defer</span> ports.<span class="f">free</span>()
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">5</span> {
-        ports.push(<span class="t">u16</span>(<span class="n">8080</span> + i))
+        ports.<span class="f">push</span>(<span class="t">u16</span>(<span class="n">8080</span> + i))
     }
-    show(&amp;ports)
-    last := ports.pop()
-    ports.insert(<span class="n">0</span>, <span class="n">22</span>)
-    gone := ports.remove(<span class="n">2</span>)
-    print(<span class="s">&quot;popped {last}, removed {gone}&quot;</span>)
-    show(&amp;ports)
-    ports.reverse()
-    show(&amp;ports)
-    ports.clear()
-    print(<span class="s">&quot;{ports.len} after clear&quot;</span>)
+    <span class="f">show</span>(&amp;ports)
+    last := ports.<span class="f">pop</span>()
+    ports.<span class="f">insert</span>(<span class="n">0</span>, <span class="n">22</span>)
+    gone := ports.<span class="f">remove</span>(<span class="n">2</span>)
+    <span class="f">print</span>(<span class="s">&quot;popped </span><span class="e">{</span>last<span class="e">}</span><span class="s">, removed </span><span class="e">{</span>gone<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">show</span>(&amp;ports)
+    ports.<span class="f">reverse</span>()
+    <span class="f">show</span>(&amp;ports)
+    ports.<span class="f">clear</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports.len<span class="e">}</span><span class="s"> after clear&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[8080 8081 8082 8083 8084]
 popped 8084, removed 8081
@@ -102,28 +102,28 @@ popped 8084, removed 8081
 <h2 id="searching-and-sorting"><a href="#searching-and-sorting">Searching and sorting</a></h2>
 <p><code>contains(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> where (-1 when it isn't). They compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
 <p><code>sort(less)</code> sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:</p>
-<pre class="code run"><code><span class="k">struct</span> Upstream {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Upstream</span> {
     <span class="t">str</span> addr
     <span class="t">Duration</span> latency
 }
 
-<span class="t">bool</span> faster(Upstream a, Upstream b) =&gt; a.latency &lt; b.latency
+<span class="t">bool</span> <span class="f">faster</span>(<span class="t">Upstream</span> a, <span class="t">Upstream</span> b) =&gt; a.latency &lt; b.latency
 
-<span class="t">void</span> main() {
-    List[Upstream] ups
-    <span class="k">defer</span> ups.free()
-    ups.push(Upstream{addr: <span class="s">&quot;10.0.0.11:8080&quot;</span>, latency: 36ms})
-    ups.push(Upstream{addr: <span class="s">&quot;10.0.0.12:8080&quot;</span>, latency: 4ms})
-    ups.push(Upstream{addr: <span class="s">&quot;10.0.0.13:8080&quot;</span>, latency: 12ms})
-    ups.sort(faster)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">Upstream</span>] ups
+    <span class="k">defer</span> ups.<span class="f">free</span>()
+    ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.11:8080&quot;</span>, latency: <span class="n">36ms</span>})
+    ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.12:8080&quot;</span>, latency: <span class="n">4ms</span>})
+    ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.13:8080&quot;</span>, latency: <span class="n">12ms</span>})
+    ups.<span class="f">sort</span>(faster)
     <span class="k">for</span> u <span class="k">in</span> ups {
-        print(<span class="s">&quot;{u.addr} {u.latency}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>u.addr<span class="e">}</span><span class="s"> </span><span class="e">{</span>u.latency<span class="e">}</span><span class="s">&quot;</span>)
     }
-    List[<span class="t">str</span>] protocols
-    <span class="k">defer</span> protocols.free()
-    protocols.push(<span class="s">&quot;http/1.1&quot;</span>)
-    protocols.push(<span class="s">&quot;h2&quot;</span>)
-    print(<span class="s">&quot;{protocols.contains(&quot;</span>h2<span class="s">&quot;)} {protocols.indexOf(&quot;</span>http/<span class="n">1.1</span><span class="s">&quot;)} {protocols.indexOf(&quot;</span>h3<span class="s">&quot;)}&quot;</span>)
+    <span class="t">List</span>[<span class="t">str</span>] protocols
+    <span class="k">defer</span> protocols.<span class="f">free</span>()
+    protocols.<span class="f">push</span>(<span class="s">&quot;http/1.1&quot;</span>)
+    protocols.<span class="f">push</span>(<span class="s">&quot;h2&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>protocols.<span class="f">contains</span>(<span class="s">&quot;h2&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;http/1.1&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;h3&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.12:8080 4ms
 10.0.0.13:8080 12ms
@@ -131,7 +131,7 @@ popped 8084, removed 8081
 true 0 -1</code></pre>
 <h2 id="the-values-as-a-slice"><a href="#the-values-as-a-slice">The values as a slice</a></h2>
 <p><code>items()</code> gives the list's values as a slice, without copying: to pass to a function that takes a slice, or for a loop with indexes. The slice points into the list, so it is valid until the list next grows or is freed:</p>
-<pre class="code run"><code><span class="t">i64</span> total(<span class="t">i64</span>[] sizes) {
+<pre class="code run"><code><span class="t">i64</span> <span class="f">total</span>(<span class="t">i64</span>[] sizes) {
     <span class="t">i64</span> sum
     <span class="k">for</span> s <span class="k">in</span> sizes {
         sum += s
@@ -139,28 +139,28 @@ true 0 -1</code></pre>
     <span class="k">return</span> sum
 }
 
-<span class="t">void</span> main() {
-    List[<span class="t">i64</span>] reads
-    <span class="k">defer</span> reads.free()
-    reads.push(<span class="n">4096</span>)
-    reads.push(<span class="n">1200</span>)
-    print(<span class="s">&quot;{total(reads.items())} bytes read&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">i64</span>] reads
+    <span class="k">defer</span> reads.<span class="f">free</span>()
+    reads.<span class="f">push</span>(<span class="n">4096</span>)
+    reads.<span class="f">push</span>(<span class="n">1200</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>(reads.<span class="f">items</span>())<span class="e">}</span><span class="s"> bytes read&quot;</span>)
 }</code></pre>
 <pre class="out"><code>5296 bytes read</code></pre>
 <h2 id="map"><a href="#map">Map</a></h2>
 <p>A <code>Map[K, V]</code> keeps a value for each key. <code>set</code> adds a key or replaces its value, and <code>get</code> gives the value and whether the key was there:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// open connections for each client address</span>
-    Map[<span class="t">str</span>, <span class="t">i64</span>] conns
-    <span class="k">defer</span> conns.free()
-    conns.set(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">3</span>)
-    conns.set(<span class="s">&quot;10.0.0.9&quot;</span>, <span class="n">1</span>)
-    conns.set(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">4</span>)
-    n, found := conns.get(<span class="s">&quot;10.0.0.5&quot;</span>)
-    print(<span class="s">&quot;{n} {found} {conns.len}&quot;</span>)
-    _, there := conns.get(<span class="s">&quot;10.0.0.7&quot;</span>)
-    print(<span class="s">&quot;{there} {conns.getOr(&quot;</span><span class="n">10.0</span>.<span class="n">0.7</span><span class="s">&quot;, 0)} {conns.has(&quot;</span><span class="n">10.0</span>.<span class="n">0.9</span><span class="s">&quot;)}&quot;</span>)
-    print(<span class="s">&quot;{conns.remove(&quot;</span><span class="n">10.0</span>.<span class="n">0.9</span><span class="s">&quot;)} {conns.remove(&quot;</span><span class="n">10.0</span>.<span class="n">0.9</span><span class="s">&quot;)} {conns.len}&quot;</span>)
+    <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] conns
+    <span class="k">defer</span> conns.<span class="f">free</span>()
+    conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">3</span>)
+    conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.9&quot;</span>, <span class="n">1</span>)
+    conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">4</span>)
+    n, found := conns.<span class="f">get</span>(<span class="s">&quot;10.0.0.5&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> </span><span class="e">{</span>found<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.len<span class="e">}</span><span class="s">&quot;</span>)
+    _, there := conns.<span class="f">get</span>(<span class="s">&quot;10.0.0.7&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>there<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">getOr</span>(<span class="s">&quot;10.0.0.7&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">has</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conns.<span class="f">remove</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">remove</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.len<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4 true 2
 false 0 true
@@ -169,17 +169,17 @@ true false 1</code></pre>
 <p>Keys can be integers, <code>bool</code>, enums, pointers or <code>str</code>. A <code>str</code> key is copied into the map, so the text it came from can change or go away. A map's keys come in no particular order.</p>
 <h2 id="going-over-a-map"><a href="#going-over-a-map">Going over a map</a></h2>
 <p>A loop over a map gives each key and its value:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    Map[<span class="t">str</span>, <span class="t">i64</span>] hits
-    <span class="k">defer</span> hits.free()
-    hits.set(<span class="s">&quot;/health&quot;</span>, <span class="n">4</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] hits
+    <span class="k">defer</span> hits.<span class="f">free</span>()
+    hits.<span class="f">set</span>(<span class="s">&quot;/health&quot;</span>, <span class="n">4</span>)
     total := <span class="n">0</span>
     <span class="k">for</span> path, count <span class="k">in</span> hits {
-        print(<span class="s">&quot;{path}: {count}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s">&quot;</span>)
         total += count
     }
-    <span class="k">scoped</span> List[<span class="t">str</span>] paths = hits.keys()
-    print(<span class="s">&quot;{paths.len} paths, {total} requests&quot;</span>)
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] paths = hits.<span class="f">keys</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>paths.len<span class="e">}</span><span class="s"> paths, </span><span class="e">{</span>total<span class="e">}</span><span class="s"> requests&quot;</span>)
 }</code></pre>
 <pre class="out"><code>/health: 4
 1 paths, 4 requests</code></pre>
@@ -188,28 +188,28 @@ true false 1</code></pre>
 <p>An access log has a line for each request, with the client's address first. A map counts the lines of each address, and the sorted keys print them in order:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">bool</span> before(<span class="t">str</span> a, <span class="t">str</span> b) =&gt; <span class="t">str</span>.compare(a, b) &lt; <span class="n">0</span>
+<span class="t">bool</span> <span class="f">before</span>(<span class="t">str</span> a, <span class="t">str</span> b) =&gt; <span class="t">str</span>.<span class="f">compare</span>(a, b) &lt; <span class="n">0</span>
 
-<span class="t">void</span> main() {
-    log := <span class="s">&quot;&quot;</span>&quot;
-        <span class="n">10.0</span>.<span class="n">0.5</span> GET / <span class="n">200</span>
-        <span class="n">10.0</span>.<span class="n">0.9</span> GET /login <span class="n">200</span>
-        <span class="n">10.0</span>.<span class="n">0.5</span> POST /login <span class="n">302</span>
-        <span class="n">10.0</span>.<span class="n">0.7</span> GET / <span class="n">200</span>
-        <span class="n">10.0</span>.<span class="n">0.5</span> GET /admin <span class="n">403</span>
-        <span class="s">&quot;&quot;</span>&quot;
-    Map[<span class="t">str</span>, <span class="t">i64</span>] counts
-    <span class="k">defer</span> counts.free()
-    <span class="k">scoped</span> List[<span class="t">str</span>] lines = <span class="t">str</span>.split(log, <span class="s">&quot;\n&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    log := <span class="s">&quot;&quot;&quot;
+        10.0.0.5 GET / 200
+        10.0.0.9 GET /login 200
+        10.0.0.5 POST /login 302
+        10.0.0.7 GET / 200
+        10.0.0.5 GET /admin 403
+        &quot;&quot;&quot;</span>
+    <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] counts
+    <span class="k">defer</span> counts.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] lines = <span class="t">str</span>.<span class="f">split</span>(log, <span class="s">&quot;</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="k">for</span> line <span class="k">in</span> lines {
-        ip, _, found := <span class="t">str</span>.cut(line, <span class="s">&quot; &quot;</span>)
+        ip, _, found := <span class="t">str</span>.<span class="f">cut</span>(line, <span class="s">&quot; &quot;</span>)
         <span class="k">continue</span> <span class="k">if</span> !found
-        counts.set(ip, counts.getOr(ip, <span class="n">0</span>) + <span class="n">1</span>)
+        counts.<span class="f">set</span>(ip, counts.<span class="f">getOr</span>(ip, <span class="n">0</span>) + <span class="n">1</span>)
     }
-    <span class="k">scoped</span> List[<span class="t">str</span>] ips = counts.keys()
-    ips.sort(before)
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] ips = counts.<span class="f">keys</span>()
+    ips.<span class="f">sort</span>(before)
     <span class="k">for</span> ip <span class="k">in</span> ips {
-        print(<span class="s">&quot;{ip} {counts.getOr(ip, 0)}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ip<span class="e">}</span><span class="s"> </span><span class="e">{</span>counts.<span class="f">getOr</span>(ip, <span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>10.0.0.5 3
@@ -219,25 +219,25 @@ true false 1</code></pre>
 <p>A list or a map holds its values themselves. When the values own memory, like <code>String</code>s or structs with a <code>free</code> method, something must free them before the list goes. <code>freeEach</code> frees each value, then the list:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">void</span> main() {
-    List[<span class="t">String</span>] headers
-    <span class="k">defer</span> headers.freeEach()
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">List</span>[<span class="t">String</span>] headers
+    <span class="k">defer</span> headers.<span class="f">freeEach</span>()
     <span class="k">for</span> h <span class="k">in</span> [<span class="s">&quot;Content-Type&quot;</span>, <span class="s">&quot;X-Request-Id&quot;</span>] {
-        headers.push(<span class="t">str</span>.lower(h))
+        headers.<span class="f">push</span>(<span class="t">str</span>.<span class="f">lower</span>(h))
     }
-    print(<span class="s">&quot;{headers.at(0)} {headers.at(1)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>headers.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>headers.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>content-type x-request-id</code></pre>
 <p><code>at</code> and the loop give the list's own values: a <code>String</code> from <code>list.at(i)</code> belongs to the list, and is freed by <code>freeEach</code>, not by the caller. A map with values that own memory frees them in a loop before its own <code>free</code>:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    Map[<span class="t">i64</span>, <span class="t">String</span>] reasons
-    <span class="k">defer</span> reasons.free()
-    reasons.set(<span class="n">200</span>, <span class="s">&quot;OK&quot;</span>.copy())
-    reasons.set(<span class="n">404</span>, <span class="s">&quot;Not Found&quot;</span>.copy())
-    text, _ := reasons.get(<span class="n">404</span>)
-    print(<span class="s">&quot;{reasons.len} reasons, 404 is {text}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Map</span>[<span class="t">i64</span>, <span class="t">String</span>] reasons
+    <span class="k">defer</span> reasons.<span class="f">free</span>()
+    reasons.<span class="f">set</span>(<span class="n">200</span>, <span class="s">&quot;OK&quot;</span>.<span class="f">copy</span>())
+    reasons.<span class="f">set</span>(<span class="n">404</span>, <span class="s">&quot;Not Found&quot;</span>.<span class="f">copy</span>())
+    text, _ := reasons.<span class="f">get</span>(<span class="n">404</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reasons.len<span class="e">}</span><span class="s"> reasons, 404 is </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">for</span> _, v <span class="k">in</span> reasons {
-        v.free()
+        v.<span class="f">free</span>()
     }
 }</code></pre>
 <pre class="out"><code>2 reasons, 404 is Not Found</code></pre>

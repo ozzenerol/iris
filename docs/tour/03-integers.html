@@ -52,88 +52,88 @@ try {
 <div class="table"><table><thead><tr><th>Type</th><th>Bytes</th><th>Smallest</th><th>Largest</th></tr></thead><tbody><tr><td><code>i8</code></td><td>1</td><td>-128</td><td>127</td></tr><tr><td><code>i16</code></td><td>2</td><td>-32768</td><td>32767</td></tr><tr><td><code>i32</code></td><td>4</td><td>-2147483648</td><td>2147483647</td></tr><tr><td><code>i64</code></td><td>8</td><td>-9223372036854775808</td><td>9223372036854775807</td></tr><tr><td><code>u8</code></td><td>1</td><td>0</td><td>255</td></tr><tr><td><code>u16</code></td><td>2</td><td>0</td><td>65535</td></tr><tr><td><code>u32</code></td><td>4</td><td>0</td><td>4294967295</td></tr><tr><td><code>u64</code></td><td>8</td><td>0</td><td>18446744073709551615</td></tr></tbody></table></div>
 <p><code>i64</code> is the integer to use unless there is a reason for another: it is the type a number gets by default, and the type of lengths and indexes. <code>u8</code> is a byte; text is made of them. The others suit data with a fixed layout, like a file format or a network protocol, and C functions that take them.</p>
 <p>Each type knows its limits as <code>min</code> and <code>max</code>:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;{i8.min} {i8.max}&quot;</span>)
-    print(<span class="s">&quot;{u16.max} {i32.max}&quot;</span>)
-    print(<span class="s">&quot;{i64.max} {u64.max}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">i8</span>.min<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">i8</span>.max<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">u16</span>.max<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">i32</span>.max<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">i64</span>.max<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">u64</span>.max<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>-128 127
 65535 2147483647
 9223372036854775807 18446744073709551615</code></pre>
 <h2 id="literals"><a href="#literals">Literals</a></h2>
 <p>A number can be written in decimal, hexadecimal (<code>0x</code>), binary (<code>0b</code>) or octal (<code>0o</code>). <code>_</code> can go between digits to make long numbers easier to read; it has no meaning of its own:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     mtu := <span class="n">1_500</span>
     ethertype := <span class="n">0x0800</span>   <span class="c">// IPv4</span>
     mask := <span class="n">0xFF_FF_FF_00</span> <span class="c">// 255.255.255.0</span>
     flags := <span class="n">0b0001_0010</span>  <span class="c">// SYN and ACK</span>
     mode := 0o644         <span class="c">// rw-r--r--</span>
-    print(<span class="s">&quot;{mtu} {ethertype} {mask} {flags} {mode}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>mtu<span class="e">}</span><span class="s"> </span><span class="e">{</span>ethertype<span class="e">}</span><span class="s"> </span><span class="e">{</span>mask<span class="e">}</span><span class="s"> </span><span class="e">{</span>flags<span class="e">}</span><span class="s"> </span><span class="e">{</span>mode<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1500 2048 4294967040 18 420</code></pre>
 <p>A character in single quotes is the number of its byte, a <code>u8</code>:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span> cr = <span class="s">&#x27;\r&#x27;</span>
     status := <span class="s">&quot;503&quot;</span>
     first := status[<span class="n">0</span>] - <span class="s">&#x27;0&#x27;</span> <span class="c">// 5: a server error</span>
-    print(<span class="s">&quot;{cr} {&#x27;\n&#x27;} {first}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>cr<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&#x27;\n&#x27;</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>first<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>13 10 5</code></pre>
 <p>The escapes inside quotes are <code>\n</code> (newline), <code>\t</code> (tab), <code>\r</code> (carriage return), <code>\0</code> (zero), <code>\\</code>, <code>\&#x27;</code>, <code>\&quot;</code> and <code>\x41</code> (the byte written in two hex digits).</p>
 <p>A literal has no type of its own until it is used. With nothing to go by, it is an <code>i64</code>. Given to a typed variable, a parameter or an operator with a typed value on the other side, it takes that type, as long as it fits:</p>
-<pre class="code run"><code><span class="t">void</span> setTtl(<span class="t">u8</span> ttl) {
-    print(<span class="s">&quot;ttl {ttl}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">setTtl</span>(<span class="t">u8</span> ttl) {
+    <span class="f">print</span>(<span class="s">&quot;ttl </span><span class="e">{</span>ttl<span class="e">}</span><span class="s">&quot;</span>)
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span> port = <span class="n">8080</span>
-    setTtl(<span class="n">64</span>)
+    <span class="f">setTtl</span>(<span class="n">64</span>)
     <span class="t">i32</span> offset = -<span class="n">40</span>
-    print(<span class="s">&quot;{port + 1} {offset * 2}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port + <span class="n">1</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>offset * <span class="n">2</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>ttl 64
 8081 -80</code></pre>
 <p>A literal that doesn't fit is a compile error, so <code>setTtl(256)</code> doesn't compile.</p>
 <h2 id="units"><a href="#units">Units</a></h2>
 <p>A number can carry a unit. A duration is a number of nanoseconds, with the type <code>Duration</code>: <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code> and <code>h</code>. A size is a plain integer: <code>KiB</code>, <code>MiB</code> and <code>GiB</code> multiply by 1024, 1024 squared and 1024 cubed:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    timeout := 90s
-    poll := 250ms
-    print(<span class="s">&quot;{timeout} {poll} {i64(poll)}&quot;</span>)
-    buf := 64KiB
-    print(<span class="s">&quot;{buf} bytes&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    timeout := <span class="n">90s</span>
+    poll := <span class="n">250ms</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>timeout<span class="e">}</span><span class="s"> </span><span class="e">{</span>poll<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">i64</span>(poll)<span class="e">}</span><span class="s">&quot;</span>)
+    buf := <span class="n">64KiB</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>buf<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1m30s 250ms 250000000
 65536 bytes</code></pre>
 <p>A literal has one unit; <code>90s</code> or <code>1m + 30s</code> both make a minute and a half. A <code>Duration</code> prints in its units, and <code>i64(d)</code> gives its nanoseconds. Durations add and subtract, and multiply and divide by plain numbers. Dividing one duration by another gives a plain number, how many times the second fits in the first:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    timeout := 1m + 30s
-    print(<span class="s">&quot;{timeout} {timeout * 2} {timeout / 4}&quot;</span>)
-    print(<span class="s">&quot;{timeout / 1s} seconds, {timeout / 250ms} polls&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    timeout := <span class="n">1m</span> + <span class="n">30s</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>timeout<span class="e">}</span><span class="s"> </span><span class="e">{</span>timeout * <span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>timeout / <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>timeout / <span class="n">1s</span><span class="e">}</span><span class="s"> seconds, </span><span class="e">{</span>timeout / <span class="n">250ms</span><span class="e">}</span><span class="s"> polls&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1m30s 3m0s 22.5s
 90 seconds, 360 polls</code></pre>
 <p>The <a href="../std/index.html#time">time</a> module has the time of day, dates and a clock.</p>
 <h2 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h2>
 <p><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>%</code> work on two values of the same integer type and give that type. Division drops the fraction, toward zero, and <code>%</code> gives what is left, with the sign of the left side:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
-    print(<span class="s">&quot;{7 / 2} {-7 / 2} {7 % 3} {-7 % 3}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">7</span> / <span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">7</span> / <span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">7</span> % <span class="n">3</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">7</span> % <span class="n">3</span><span class="e">}</span><span class="s">&quot;</span>)
     size := <span class="n">4000</span>
     mss := <span class="n">1460</span>
-    print(<span class="s">&quot;{size / mss} full segments and {size % mss} bytes left&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>size / mss<span class="e">}</span><span class="s"> full segments and </span><span class="e">{</span>size % mss<span class="e">}</span><span class="s"> bytes left&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 -3 1 -1
 2 full segments and 1080 bytes left</code></pre>
 <p>The bit operators are <code>&amp;</code> (and), <code>|</code> (or), <code>^</code> (exclusive or), <code>~</code> (each bit flipped), and the shifts <code>&lt;&lt;</code> and <code>&gt;&gt;</code>. Shifting a signed value right keeps its sign:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u32</span> ip = <span class="n">0xC0A8_0A2A</span>   <span class="c">// 192.168.10.42</span>
     <span class="t">u32</span> mask = <span class="n">0xFFFF_FF00</span> <span class="c">// a /24 network</span>
     net := ip &amp; mask
-    print(<span class="s">&quot;network {net &gt;&gt; 24}.{(net &gt;&gt; 16) &amp; 0xff}.{(net &gt;&gt; 8) &amp; 0xff}.{net &amp; 0xff}&quot;</span>)
-    print(<span class="s">&quot;host {ip &amp; ~mask}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;network </span><span class="e">{</span>net &gt;&gt; <span class="n">24</span><span class="e">}</span><span class="s">.</span><span class="e">{</span>(net &gt;&gt; <span class="n">16</span>) &amp; <span class="n">0xff</span><span class="e">}</span><span class="s">.</span><span class="e">{</span>(net &gt;&gt; <span class="n">8</span>) &amp; <span class="n">0xff</span><span class="e">}</span><span class="s">.</span><span class="e">{</span>net &amp; <span class="n">0xff</span><span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;host </span><span class="e">{</span>ip &amp; ~mask<span class="e">}</span><span class="s">&quot;</span>)
     <span class="t">u8</span> flags = <span class="n">0x02</span>      <span class="c">// SYN</span>
     flags = flags | <span class="n">0x10</span> <span class="c">// and ACK</span>
-    print(<span class="s">&quot;{flags} {flags ^ 0x02} {flags &gt;&gt; 4} {1 &lt;&lt; 10} {-16 &gt;&gt; 2}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>flags<span class="e">}</span><span class="s"> </span><span class="e">{</span>flags ^ <span class="n">0x02</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>flags &gt;&gt; <span class="n">4</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1</span> &lt;&lt; <span class="n">10</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">16</span> &gt;&gt; <span class="n">2</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>network 192.168.10.0
 host 42
@@ -144,23 +144,23 @@ host 42
 next := ttl + <span class="n">10</span> <span class="c">// panic: integer overflow</span></code></pre>
 <p>The release builds don't check overflow, and the value wraps around: <code>250 + 10</code> in a <code>u8</code> gives <code>4</code>. Dividing by zero stops a debug and a <code>release-safe</code> build; in <code>release-fast</code> it is not checked, and the result can't be relied on.</p>
 <p>Arithmetic happens in the type of the values. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so the sum of two big bytes overflows. Convert first when the result needs more room:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span> ipHeader = <span class="n">60</span> <span class="c">// the IHL field, in bytes</span>
     <span class="t">u8</span> tcpHeader = <span class="n">60</span>
     <span class="t">u8</span> options = <span class="n">200</span>
     <span class="t">i64</span> total = <span class="t">i64</span>(ipHeader) + <span class="t">i64</span>(tcpHeader) + <span class="t">i64</span>(options)
-    print(<span class="s">&quot;{total} bytes of headers&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes of headers&quot;</span>)
 }</code></pre>
 <pre class="out"><code>320 bytes of headers</code></pre>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
 <p>A value converts to another integer type on its own when that type holds every value it could have: <code>u8</code> to <code>u16</code>, <code>i32</code> to <code>i64</code>, <code>u32</code> to <code>i64</code>. Every other conversion is written out, with the type's name used like a function:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span> port = <span class="n">8080</span>
     <span class="t">i64</span> wide = port <span class="c">// on its own: every u16 fits in an i64</span>
     <span class="t">i64</span> ttl = <span class="n">64</span>
     <span class="t">u8</span> byte = <span class="t">u8</span>(ttl) <span class="c">// written out: an i64 may not fit</span>
     <span class="t">u64</span> sent = <span class="t">u64</span>(wide) * <span class="n">1000</span>
-    print(<span class="s">&quot;{wide} {byte} {sent}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>wide<span class="e">}</span><span class="s"> </span><span class="e">{</span>byte<span class="e">}</span><span class="s"> </span><span class="e">{</span>sent<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8080 64 8080000</code></pre>
 <p>A conversion that can lose the value is checked: in a debug build, <code>u8(300)</code> with a value known only when the program runs stops it with a message. A signed value never converts on its own to an unsigned type, since a negative number has no unsigned value.</p>
@@ -170,10 +170,10 @@ next := ttl + <span class="n">10</span> <span class="c">// panic: integer overfl
 next := seq + offset <span class="c">// error: &#x27;+&#x27; can&#x27;t mix u32 and i32; convert one side</span></code></pre>
 <h2 id="comparing"><a href="#comparing">Comparing</a></h2>
 <p><code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> compare two integers and give a <code>bool</code>. They follow the same rule as arithmetic: both sides of one type, or one that converts to the other.</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span> ttl = <span class="n">200</span>
     <span class="t">i64</span> limit = <span class="n">100</span>
-    print(<span class="s">&quot;{ttl &gt; limit} {ttl == 200} {limit != 100}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ttl &gt; limit<span class="e">}</span><span class="s"> </span><span class="e">{</span>ttl == <span class="n">200</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>limit != <span class="n">100</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true true false</code></pre>
     <nav class="pager"><a class="prev" href="02-variables.html"><span>Previous</span>Variables</a><a class="next" href="04-floating-point.html"><span>Next</span>Floating point</a></nav>

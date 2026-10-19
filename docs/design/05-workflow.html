@@ -62,13 +62,13 @@ make test-debug   # runs the tests with iris-debug</code></pre>
 <p>An error test lists each expected error as a comment with its line number:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code><span class="c">// error: 4: this string has no closing quote</span>
 
-<span class="t">void</span> main() {
-    print(&quot;hello)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;hello)</span>
 }</code></pre>
 <p>A run test says what the program prints:</p>
 <pre class="code"><code><span class="c">// expect: 7</span>
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{3 + 4}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">3</span> + <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p>Every <code>iris</code> code block in <code>docs-src/</code> must also parse. A block marked <code>iris error</code> is skipped.</p>
 <p>After changing the parser on purpose, <code>python3 tools/run_tests.py --update</code> rewrites the <code>.tree</code> files. Check the diff before committing.</p>

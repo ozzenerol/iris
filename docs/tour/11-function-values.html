@@ -51,47 +51,47 @@ try {
 <h2 id="function-types"><a href="#function-types">Function types</a></h2>
 <p>The type of a function is written as its return type followed by its parameter types in parentheses: <code>i64(i64, i64)</code> is a function that takes two <code>i64</code>s and gives one. A function's name, used without calling it, is a value of that type:</p>
 <pre class="code run"><code><span class="c">// Two ways to pick which of n servers gets request number r.</span>
-<span class="t">i64</span> roundRobin(<span class="t">i64</span> r, <span class="t">i64</span> n) =&gt; r % n
-<span class="t">i64</span> firstOnly(<span class="t">i64</span> r, <span class="t">i64</span> n) =&gt; <span class="n">0</span>
+<span class="t">i64</span> <span class="f">roundRobin</span>(<span class="t">i64</span> r, <span class="t">i64</span> n) =&gt; r % n
+<span class="t">i64</span> <span class="f">firstOnly</span>(<span class="t">i64</span> r, <span class="t">i64</span> n) =&gt; <span class="n">0</span>
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span>(<span class="t">i64</span>, <span class="t">i64</span>) pick = roundRobin
-    print(<span class="s">&quot;request 7 goes to server {pick(7, 3)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;request 7 goes to server </span><span class="e">{</span><span class="f">pick</span>(<span class="n">7</span>, <span class="n">3</span>)<span class="e">}</span><span class="s">&quot;</span>)
     pick = firstOnly
-    print(<span class="s">&quot;request 7 goes to server {pick(7, 3)}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;request 7 goes to server </span><span class="e">{</span><span class="f">pick</span>(<span class="n">7</span>, <span class="n">3</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>request 7 goes to server 1
 request 7 goes to server 0</code></pre>
 <h2 id="passing-a-function"><a href="#passing-a-function">Passing a function</a></h2>
 <p>A parameter can take a function, so a function can leave part of its work to the caller:</p>
 <pre class="code run"><code><span class="c">// Calls attempt until it succeeds, at most times times.</span>
-<span class="t">bool</span> retry(<span class="t">bool</span>(<span class="t">i64</span>) attempt, <span class="t">i64</span> times) {
+<span class="t">bool</span> <span class="f">retry</span>(<span class="t">bool</span>(<span class="t">i64</span>) attempt, <span class="t">i64</span> times) {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..times + <span class="n">1</span> {
-        <span class="k">if</span> attempt(i) {
+        <span class="k">if</span> <span class="f">attempt</span>(i) {
             <span class="k">return</span> <span class="k">true</span>
         }
     }
     <span class="k">return</span> <span class="k">false</span>
 }
 
-<span class="t">bool</span> flaky(<span class="t">i64</span> n) {
-    print(<span class="s">&quot;connecting, try {n}&quot;</span>)
+<span class="t">bool</span> <span class="f">flaky</span>(<span class="t">i64</span> n) {
+    <span class="f">print</span>(<span class="s">&quot;connecting, try </span><span class="e">{</span>n<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">return</span> n == <span class="n">3</span>
 }
 
-<span class="t">bool</span> dead(<span class="t">i64</span> n) =&gt; <span class="k">false</span>
+<span class="t">bool</span> <span class="f">dead</span>(<span class="t">i64</span> n) =&gt; <span class="k">false</span>
 
-<span class="t">void</span> each(<span class="t">str</span>[] hosts, <span class="t">void</span>(<span class="t">str</span>) visit) {
+<span class="t">void</span> <span class="f">each</span>(<span class="t">str</span>[] hosts, <span class="t">void</span>(<span class="t">str</span>) visit) {
     <span class="k">for</span> h <span class="k">in</span> hosts {
-        visit(h)
+        <span class="f">visit</span>(h)
     }
 }
 
-<span class="t">void</span> ping(<span class="t">str</span> host) =&gt; print(<span class="s">&quot;ping {host}&quot;</span>)
+<span class="t">void</span> <span class="f">ping</span>(<span class="t">str</span> host) =&gt; <span class="f">print</span>(<span class="s">&quot;ping </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{retry(flaky, 5)} {retry(dead, 2)}&quot;</span>)
-    each([<span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>], ping)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">retry</span>(flaky, <span class="n">5</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">retry</span>(dead, <span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">each</span>([<span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>], ping)
 }</code></pre>
 <pre class="out"><code>connecting, try 1
 connecting, try 2
@@ -104,17 +104,17 @@ ping 10.0.0.2</code></pre>
 <h2 id="type-aliases-for-functions"><a href="#type-aliases-for-functions">Type aliases for functions</a></h2>
 <p>A function type is easier to read with a name. <code>type</code> gives one:</p>
 <pre class="code run"><code><span class="c">// Takes a request body and gives the status of the reply.</span>
-<span class="k">type</span> Handler = <span class="t">i64</span>(<span class="t">str</span>)
+<span class="k">type</span> <span class="t">Handler</span> = <span class="t">i64</span>(<span class="t">str</span>)
 
-<span class="t">i64</span> health(<span class="t">str</span> body) =&gt; <span class="n">200</span>
-<span class="t">i64</span> create(<span class="t">str</span> body) =&gt; <span class="k">if</span> body.len &gt; <span class="n">0</span> { <span class="n">201</span> } <span class="k">else</span> { <span class="n">400</span> }
-<span class="t">i64</span> gone(<span class="t">str</span> body) =&gt; <span class="n">410</span>
+<span class="t">i64</span> <span class="f">health</span>(<span class="t">str</span> body) =&gt; <span class="n">200</span>
+<span class="t">i64</span> <span class="f">create</span>(<span class="t">str</span> body) =&gt; <span class="k">if</span> body.len &gt; <span class="n">0</span> { <span class="n">201</span> } <span class="k">else</span> { <span class="n">400</span> }
+<span class="t">i64</span> <span class="f">gone</span>(<span class="t">str</span> body) =&gt; <span class="n">410</span>
 
-<span class="t">void</span> main() {
-    Handler[<span class="n">3</span>] routes = [health, create, gone]
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Handler</span>[<span class="n">3</span>] routes = [health, create, gone]
     <span class="t">str</span>[<span class="n">3</span>] paths = [<span class="s">&quot;GET /health&quot;</span>, <span class="s">&quot;POST /users&quot;</span>, <span class="s">&quot;GET /old&quot;</span>]
     <span class="k">for</span> i, h <span class="k">in</span> routes {
-        print(<span class="s">&quot;{paths[i]}: {h(&quot;</span>name=ada<span class="s">&quot;)}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>paths[i]<span class="e">}</span><span class="s">: </span><span class="e">{</span><span class="f">h</span>(<span class="s">&quot;name=ada&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>GET /health: 200
@@ -123,32 +123,32 @@ GET /old: 410</code></pre>
 <h2 id="in-structs"><a href="#in-structs">In structs</a></h2>
 <p>A field can hold a function, which is called with the field's name like a method:</p>
 <pre class="code run"><code><span class="c">// A command typed at a server&#x27;s admin console.</span>
-<span class="k">struct</span> Command {
+<span class="k">struct</span> <span class="t">Command</span> {
     <span class="t">str</span> name
     <span class="t">void</span>(<span class="t">str</span>) run
 }
 
-<span class="t">void</span> stats(<span class="t">str</span> name) =&gt; print(<span class="s">&quot;{name}: 12 connections open&quot;</span>)
-<span class="t">void</span> reload(<span class="t">str</span> name) =&gt; print(<span class="s">&quot;{name}: config read again&quot;</span>)
+<span class="t">void</span> <span class="f">stats</span>(<span class="t">str</span> name) =&gt; <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s">: 12 connections open&quot;</span>)
+<span class="t">void</span> <span class="f">reload</span>(<span class="t">str</span> name) =&gt; <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s">: config read again&quot;</span>)
 
-<span class="t">void</span> main() {
-    Command[<span class="n">2</span>] commands = [Command{name: <span class="s">&quot;stats&quot;</span>, run: stats}, Command{name: <span class="s">&quot;reload&quot;</span>, run: reload}]
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Command</span>[<span class="n">2</span>] commands = [<span class="t">Command</span>{name: <span class="s">&quot;stats&quot;</span>, run: stats}, <span class="t">Command</span>{name: <span class="s">&quot;reload&quot;</span>, run: reload}]
     <span class="k">for</span> c <span class="k">in</span> commands {
-        c.run(c.name)
+        c.<span class="f">run</span>(c.name)
     }
 }</code></pre>
 <pre class="out"><code>stats: 12 connections open
 reload: config read again</code></pre>
 <h2 id="null-and-comparing"><a href="#null-and-comparing">null and comparing</a></h2>
 <p>A function value is <code>null</code> until it is set, and can be compared with <code>==</code> and <code>!=</code>, against <code>null</code> or another function. Calling a <code>null</code> one stops a debug build with a message:</p>
-<pre class="code run"><code><span class="t">void</span> logClose(<span class="t">str</span> peer) =&gt; print(<span class="s">&quot;closed {peer}&quot;</span>)
+<pre class="code run"><code><span class="t">void</span> <span class="f">logClose</span>(<span class="t">str</span> peer) =&gt; <span class="f">print</span>(<span class="s">&quot;closed </span><span class="e">{</span>peer<span class="e">}</span><span class="s">&quot;</span>)
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">void</span>(<span class="t">str</span>) onClose
-    print(<span class="s">&quot;{onClose == null}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>onClose == <span class="k">null</span><span class="e">}</span><span class="s">&quot;</span>)
     onClose = logClose
-    print(<span class="s">&quot;{onClose == null} {onClose == logClose}&quot;</span>)
-    onClose(<span class="s">&quot;10.0.0.5:51234&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>onClose == <span class="k">null</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>onClose == logClose<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">onClose</span>(<span class="s">&quot;10.0.0.5:51234&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true
 false true
@@ -157,30 +157,30 @@ closed 10.0.0.5:51234</code></pre>
 <p>A call through a function value passes its arguments by position. Defaults and names belong to the declaration, so they don't carry over to the value: every argument is given.</p>
 <p>A function that can fail has a type that starts with <code>!</code>, as its declaration does: <code>!i64(str)</code>. A function that returns <code>void</code> can be given where one returning <code>!void</code> is wanted, since never failing is one way of not failing. This is how an HTTP route can take a plain handler or one that uses <code>try</code>:</p>
 <pre class="code run"><code><span class="c">// A check run on each request, given its size in bytes.</span>
-<span class="k">type</span> Check = !<span class="t">void</span>(<span class="t">i64</span>)
+<span class="k">type</span> <span class="t">Check</span> = !<span class="t">void</span>(<span class="t">i64</span>)
 
-<span class="k">enum</span> LimitError { tooBig }
+<span class="k">enum</span> <span class="t">LimitError</span> { tooBig }
 
-!<span class="t">void</span> limit(<span class="t">i64</span> size) {
-    <span class="k">if</span> size &gt; 1MiB {
-        <span class="k">return</span> error(LimitError.tooBig, <span class="s">&quot;{size} bytes is over the limit&quot;</span>)
+!<span class="t">void</span> <span class="f">limit</span>(<span class="t">i64</span> size) {
+    <span class="k">if</span> size &gt; <span class="n">1MiB</span> {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">LimitError</span>.tooBig, <span class="s">&quot;</span><span class="e">{</span>size<span class="e">}</span><span class="s"> bytes is over the limit&quot;</span>)
     }
-    print(<span class="s">&quot;{size} bytes is fine&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>size<span class="e">}</span><span class="s"> bytes is fine&quot;</span>)
 }
 
-<span class="t">void</span> logSize(<span class="t">i64</span> size) =&gt; print(<span class="s">&quot;request of {size} bytes&quot;</span>)
+<span class="t">void</span> <span class="f">logSize</span>(<span class="t">i64</span> size) =&gt; <span class="f">print</span>(<span class="s">&quot;request of </span><span class="e">{</span>size<span class="e">}</span><span class="s"> bytes&quot;</span>)
 
-!<span class="t">void</span> runAll(Check[] checks, <span class="t">i64</span> size) {
+!<span class="t">void</span> <span class="f">runAll</span>(<span class="t">Check</span>[] checks, <span class="t">i64</span> size) {
     <span class="k">for</span> c <span class="k">in</span> checks {
-        <span class="k">try</span> c(size)
+        <span class="k">try</span> <span class="f">c</span>(size)
     }
 }
 
-<span class="t">void</span> main() {
-    Check[<span class="n">2</span>] checks = [logSize, limit]
-    runAll(checks, <span class="n">4096</span>) <span class="k">catch</span> e { }
-    runAll(checks, 5MiB) <span class="k">catch</span> e {
-        print(<span class="s">&quot;rejected: {e.message}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Check</span>[<span class="n">2</span>] checks = [logSize, limit]
+    <span class="f">runAll</span>(checks, <span class="n">4096</span>) <span class="k">catch</span> e { }
+    <span class="f">runAll</span>(checks, <span class="n">5MiB</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;rejected: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>request of 4096 bytes

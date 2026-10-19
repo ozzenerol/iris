@@ -50,49 +50,49 @@ try {
 <p class="lede">Declaring variables, giving them values, and where each one can be used.</p>
 <h2 id="declaring-with"><a href="#declaring-with">Declaring with :=</a></h2>
 <p><code>:=</code> declares a new variable and gives it a value. The variable's type is the value's type:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     port := <span class="n">8080</span>      <span class="c">// i64</span>
     loss := <span class="n">0.25</span>      <span class="c">// f64</span>
     tls := <span class="k">true</span>       <span class="c">// bool</span>
     host := <span class="s">&quot;api.lan&quot;</span> <span class="c">// str</span>
-    timeout := 1500ms <span class="c">// Duration</span>
-    print(<span class="s">&quot;{host}:{port} tls={tls} loss={loss} timeout={timeout}&quot;</span>)
+    timeout := <span class="n">1500ms</span> <span class="c">// Duration</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s"> tls=</span><span class="e">{</span>tls<span class="e">}</span><span class="s"> loss=</span><span class="e">{</span>loss<span class="e">}</span><span class="s"> timeout=</span><span class="e">{</span>timeout<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>api.lan:8080 tls=true loss=0.25 timeout=1.5s</code></pre>
 <p>A whole number with no other type to go by is an <code>i64</code>, and a number with a point or an exponent is an <code>f64</code>.</p>
 <h2 id="declaring-with-a-type"><a href="#declaring-with-a-type">Declaring with a type</a></h2>
 <p>A declaration can also name the type, followed by the variable and its value. This is the way to get a type other than the one the value would give:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span> ttl = <span class="n">64</span>
     <span class="t">i32</span> fd = -<span class="n">1</span>
     <span class="t">f32</span> load = <span class="n">1.5</span>
     <span class="t">str</span> method = <span class="s">&quot;GET&quot;</span>
-    print(<span class="s">&quot;{method} ttl={ttl} fd={fd} load={load}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>method<span class="e">}</span><span class="s"> ttl=</span><span class="e">{</span>ttl<span class="e">}</span><span class="s"> fd=</span><span class="e">{</span>fd<span class="e">}</span><span class="s"> load=</span><span class="e">{</span>load<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>GET ttl=64 fd=-1 load=1.5</code></pre>
 <p>A number given to a typed variable must fit in it. The compiler checks this:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code><span class="t">u8</span> ttl = <span class="n">300</span> <span class="c">// error: 300 doesn&#x27;t fit in u8</span></code></pre>
 <h2 id="zero-values"><a href="#zero-values">Zero values</a></h2>
 <p>A variable declared without a value starts at zero: <code>0</code> for numbers, <code>false</code> for <code>bool</code>, <code>&quot;&quot;</code> for <code>str</code>, <code>null</code> for pointers, and every field and item at zero for structs and arrays.</p>
-<pre class="code run"><code><span class="k">struct</span> Endpoint {
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Endpoint</span> {
     <span class="t">str</span> host
     <span class="t">u16</span> port
 }
 
-<span class="t">void</span> main() {
+<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span> sent
     <span class="t">bool</span> closed
     <span class="t">str</span> peer
     <span class="t">f64</span> rtt
     <span class="t">i64</span>[<span class="n">3</span>] retries
-    Endpoint e
-    print(<span class="s">&quot;[{sent}] [{closed}] [{peer}] [{rtt}] [{retries[0]} {retries[2]}] [{e.host}:{e.port}]&quot;</span>)
+    <span class="t">Endpoint</span> e
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>sent<span class="e">}</span><span class="s">] [</span><span class="e">{</span>closed<span class="e">}</span><span class="s">] [</span><span class="e">{</span>peer<span class="e">}</span><span class="s">] [</span><span class="e">{</span>rtt<span class="e">}</span><span class="s">] [</span><span class="e">{</span>retries[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>retries[<span class="n">2</span>]<span class="e">}</span><span class="s">] [</span><span class="e">{</span>e.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>e.port<span class="e">}</span><span class="s">]&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[0] [false] [] [0] [0 0] [:0]</code></pre>
 <p>A struct whose fields have defaults starts with those defaults instead (see <a href="13-structs.html">Structs</a>). Every variable starts with a known value, so reading one before giving it a value is never undefined.</p>
 <h2 id="assignment"><a href="#assignment">Assignment</a></h2>
 <p><code>=</code> gives a variable a new value of the same type. The operators that change a variable in place are written with <code>=</code> after them:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     window := <span class="n">4096</span>
     window = <span class="n">8192</span>
     window += <span class="n">1460</span> <span class="c">// 9652</span>
@@ -100,39 +100,39 @@ try {
     window *= <span class="n">2</span>    <span class="c">// 18000</span>
     window /= <span class="n">3</span>    <span class="c">// 6000</span>
     window %= <span class="n">1460</span> <span class="c">// 160</span>
-    print(<span class="s">&quot;window {window}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;window </span><span class="e">{</span>window<span class="e">}</span><span class="s">&quot;</span>)
     flags := <span class="n">0x02</span> <span class="c">// SYN</span>
     flags &lt;&lt;= <span class="n">3</span>   <span class="c">// 16, the ACK bit</span>
     flags |= <span class="n">0x02</span> <span class="c">// 18, SYN and ACK</span>
-    print(<span class="s">&quot;flags {flags}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;flags </span><span class="e">{</span>flags<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>window 160
 flags 18</code></pre>
 <p>Assignment is a statement: it gives no value, so it can't sit inside an expression or a condition.</p>
 <h2 id="adding-and-taking-one"><a href="#adding-and-taking-one">Adding and taking one</a></h2>
 <p><code>n++</code> adds one to <code>n</code> and <code>n--</code> takes one away. Both can be used as a value: <code>n++</code> gives the value from before the change, and <code>++n</code> the one after it. That makes <code>n++</code> handy for filling an array from the front:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports
     count := <span class="n">0</span>
     ports[count++] = <span class="n">22</span>
     ports[count++] = <span class="n">80</span>
     ports[count++] = <span class="n">443</span>
-    print(<span class="s">&quot;{ports[0]} {ports[1]} {ports[2]}, count {count}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports[<span class="n">1</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports[<span class="n">2</span>]<span class="e">}</span><span class="s">, count </span><span class="e">{</span>count<span class="e">}</span><span class="s">&quot;</span>)
     retries := <span class="n">3</span>
-    print(<span class="s">&quot;{retries--} then {retries}, {--retries} then {retries}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>retries--<span class="e">}</span><span class="s"> then </span><span class="e">{</span>retries<span class="e">}</span><span class="s">, </span><span class="e">{</span>--retries<span class="e">}</span><span class="s"> then </span><span class="e">{</span>retries<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>22 80 443, count 3
 3 then 2, 1 then 1</code></pre>
 <p>They work on integers, floats and pointers (a pointer moves by one item), in variables, fields and array items, and they check for overflow as <code>+=</code> does. In an assignment the value on the right is worked out first and then the place, so <code>a[i] = i++</code> stores the old <code>i</code> at the new index.</p>
 <h2 id="several-at-once"><a href="#several-at-once">Several at once</a></h2>
 <p>Several variables can be declared or assigned in one statement, with the names on the left and the values on the right. Every value is worked out before any variable changes, so two variables can swap without a third:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     src, dst := <span class="n">49152</span>, <span class="n">443</span>
-    print(<span class="s">&quot;{src} -&gt; {dst}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>src<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>dst<span class="e">}</span><span class="s">&quot;</span>)
     src, dst = dst, src
-    print(<span class="s">&quot;{src} -&gt; {dst}, the reply&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>src<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>dst<span class="e">}</span><span class="s">, the reply&quot;</span>)
     host, port := <span class="s">&quot;10.0.0.7&quot;</span>, <span class="n">22</span>
-    print(<span class="s">&quot;ssh {host} -p {port}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;ssh </span><span class="e">{</span>host<span class="e">}</span><span class="s"> -p </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>49152 -&gt; 443
 443 -&gt; 49152, the reply
@@ -140,21 +140,21 @@ ssh 10.0.0.7 -p 22</code></pre>
 <p>The same form takes the several values a function returns (see <a href="10-functions.html">Functions</a>). <code>_</code> stands for a value that isn't wanted:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="t">void</span> main() {
-    user, _, found := <span class="t">str</span>.cut(<span class="s">&quot;deploy@10.0.0.5&quot;</span>, <span class="s">&quot;@&quot;</span>)
-    print(<span class="s">&quot;{user} {found}&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    user, _, found := <span class="t">str</span>.<span class="f">cut</span>(<span class="s">&quot;deploy@10.0.0.5&quot;</span>, <span class="s">&quot;@&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>user<span class="e">}</span><span class="s"> </span><span class="e">{</span>found<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>deploy true</code></pre>
 <h2 id="scope"><a href="#scope">Scope</a></h2>
 <p>A variable can be used from its declaration to the end of the block it is declared in. A block inside it can use it too:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     payloads := [<span class="n">512</span>, <span class="n">1460</span>, <span class="n">88</span>]
     total := <span class="n">0</span>
     <span class="k">for</span> p <span class="k">in</span> payloads {
         frame := p + <span class="n">40</span> <span class="c">// only inside the loop&#x27;s block</span>
         total += frame
     }
-    print(<span class="s">&quot;{total} bytes&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2180 bytes</code></pre>
 <p>A name can't be declared again while it is still visible, in the same block or in a block inside it. This keeps every name meaning one thing within a function:</p>
@@ -163,14 +163,14 @@ ssh 10.0.0.7 -p 22</code></pre>
     x := <span class="n">2</span> <span class="c">// error: x is already declared on line 1</span>
 }</code></pre>
 <p>Two blocks side by side can each have their own variable with the same name, since neither sees the other:</p>
-<pre class="code run"><code><span class="t">void</span> main() {
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
         port := <span class="n">8080</span> + i
-        print(<span class="s">&quot;web {port}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;web </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">1</span> {
         port := <span class="n">9090</span>
-        print(<span class="s">&quot;metrics {port}&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;metrics </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>web 8080
@@ -181,14 +181,14 @@ metrics 9090</code></pre>
 <pre class="code run"><code><span class="t">i64</span> requests
 <span class="t">str</span> server = <span class="s">&quot;edge-1&quot;</span>
 
-<span class="t">void</span> handled() {
+<span class="t">void</span> <span class="f">handled</span>() {
     requests += <span class="n">1</span>
-    print(<span class="s">&quot;{server}: request {requests}&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>server<span class="e">}</span><span class="s">: request </span><span class="e">{</span>requests<span class="e">}</span><span class="s">&quot;</span>)
 }
 
-<span class="t">void</span> main() {
-    handled()
-    handled()
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">handled</span>()
+    <span class="f">handled</span>()
 }</code></pre>
 <pre class="out"><code>edge-1: request 1
 edge-1: request 2</code></pre>
@@ -197,14 +197,14 @@ edge-1: request 2</code></pre>
 <p>Globals are shared by every task of the program. A global that several threads change at the same time needs an <code>Atomic</code> or a <code>Mutex</code>, and <code>threadlocal</code> gives each thread its own copy (see <a href="25-threads.html">Threads</a>).</p>
 <h2 id="constants"><a href="#constants">Constants</a></h2>
 <p><code>const</code> gives a name to a value that never changes. The value is worked out when compiling, from numbers, text and other constants:</p>
-<pre class="code run"><code><span class="k">const</span> KiB = <span class="n">1024</span>
-<span class="k">const</span> BUFFER = <span class="n">64</span> * KiB
+<pre class="code run"><code><span class="k">const</span> <span class="t">KiB</span> = <span class="n">1024</span>
+<span class="k">const</span> BUFFER = <span class="n">64</span> * <span class="t">KiB</span>
 <span class="k">const</span> HOST = <span class="s">&quot;0.0.0.0&quot;</span>
 <span class="k">const</span> PORT = <span class="n">8080</span>
 <span class="k">const</span> LOSS_ALARM = <span class="n">0.05</span>
 
-<span class="t">void</span> main() {
-    print(<span class="s">&quot;{HOST}:{PORT}, {BUFFER} byte buffers, alarm at {LOSS_ALARM} loss&quot;</span>)
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>HOST<span class="e">}</span><span class="s">:</span><span class="e">{</span>PORT<span class="e">}</span><span class="s">, </span><span class="e">{</span>BUFFER<span class="e">}</span><span class="s"> byte buffers, alarm at </span><span class="e">{</span>LOSS_ALARM<span class="e">}</span><span class="s"> loss&quot;</span>)
 }</code></pre>
 <pre class="out"><code>0.0.0.0:8080, 65536 byte buffers, alarm at 0.05 loss</code></pre>
 <p>A constant has no address and takes no memory: each use is the value itself. An integer constant takes the type the place it is used needs, as long as the value fits, so <code>const TTL = 64</code> can be given to a <code>u8</code> and to an <code>i64</code>.</p>
