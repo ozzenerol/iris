@@ -51,6 +51,7 @@ static void loadError(Loader *L, Node *at, const char *fmt, const char *arg) {
 }
 
 const char *(*gReadHook)(const char *path, size_t *len);
+int (*gFolderHook)(const char *dir, const char **names, int max);
 
 static char *readWhole(Arena *a, const char *path, size_t *len) {
     if (gReadHook) {
@@ -135,6 +136,16 @@ static void readFolder(Loader *L, Module *m, const char *dir, Node *at) {
         }
     }
     closedir(d);
+    if (gFolderHook) {
+        /* files open in the editor that aren't on disk yet */
+        const char *open[256];
+        int k = gFolderHook(dir, open, 256);
+        for (int i = 0; i < k && n < 1024; i++) {
+            bool seen = false;
+            for (int j = 0; j < n && !seen; j++) seen = strcmp(names[j], open[i]) == 0;
+            if (!seen) names[n++] = arenaStrndup(L->arena, open[i], strlen(open[i]));
+        }
+    }
     qsort(names, (size_t)n, sizeof names[0], cmpStr);
     if (n == 0) {
         loadError(L, at, "the folder %s has no .iris files", dir);
@@ -423,7 +434,8 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
         L.includes[L.nincludes++] = includes[i];
     }
     bool dir = isDir(path);
-    if (!dir && !isFile(path)) {
+    size_t openLen;
+    if (!dir && !isFile(path) && !(gReadHook && gReadHook(path, &openLen))) {
         fprintf(stderr, "iris: can't open %s\n", path);
         return NULL;
     }

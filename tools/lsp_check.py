@@ -203,6 +203,133 @@ def main():
     check("definition of a method's receiver: %r" % (where(8, 7),), where(8, 7) == (["cli", "service.iris"], 2))
     check("definition of a field in a literal: %r" % (where(6, 38),), where(6, 38) == (["cli", "service.iris"], 3))
 
+    # every kind of name: builtins of std, a call with errors, methods, generics,
+    # match arms, loop and catch variables, a file not saved yet, and a std file
+    # opened by go to definition
+    gproj = tempfile.mkdtemp()
+    os.makedirs(os.path.join(gproj, "models"))
+    gfiles = {
+        "iris.mod": "module example.com/probe\n",
+        "models/models.iris": ("pub enum Role { admin, member }\n\n@json\npub struct User {\n    pub String name\n"
+                               "    pub Role role\n}\n\npub i64 User.score() => self.name.len\n"),
+        "main.iris": """import fs, json, flags
+import "models"
+
+interface Shape {
+    f64 area()
+}
+
+struct Square {
+    f64 side
+}
+
+f64 Square.area() => self.side * self.side
+
+@json
+struct Bad {
+    str name
+}
+
+@flags("probe")
+struct Options {
+    u16 port = 8080
+}
+
+T biggest[T](T a, T b) => a if a > b else b
+
+f64 total(dyn Shape s) => s.area()
+
+!void main() {
+    text := r"{}"
+    b := json.decode(Bad, text) catch e {
+        print("{e.message}")
+        return
+    }
+    u := try json.decode(models.User, text)
+    o := flags.parse(Options)
+    List[i64] xs = List[i64]{}
+    xs.push(biggest(u.score(), 2))
+    for x in xs {
+        print("{x} {o.port}")
+    }
+    match u.role {
+        .admin => print("admin")
+        .member => print(json.encode(u))
+    }
+}
+""",
+    }
+    for name, text in gfiles.items():
+        with open(os.path.join(gproj, name), "w") as f:
+            f.write(text)
+    gpath = os.path.join(gproj, "main.iris")
+    glines = gfiles["main.iris"].split("\n")
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": "file://" + gpath, "languageId": "iris", "version": 1,
+                                                       "text": gfiles["main.iris"]}})
+
+    def goto(path, lines, line, word, nth=1):
+        col = -1
+        for _ in range(nth):
+            col = lines[line].index(word, col + 1)
+        g = c.request("textDocument/definition", {"textDocument": {"uri": "file://" + path},
+                                                  "position": {"line": line, "character": col}})
+        loc = g and g["result"]
+        if not loc:
+            return None
+        start = loc["range"]["start"]
+        with open(loc["uri"][7:]) as f:
+            target = f.read().split("\n")[start["line"]]
+        return loc["uri"].rsplit("/", 1)[-1], start["line"], target[start["character"]:].split("(")[0].split(" ")[0]
+
+    cases = [
+        ("json.decode in a call with errors", 29, "decode", 1, ("json.iris", None, "decode")),
+        ("an argument after the error", 29, "text", 1, ("main.iris", 28, "text")),
+        ("the catch variable", 29, "e {", 1, ("main.iris", 29, "e")),
+        ("a use of the catch variable", 30, "e.", 1, ("main.iris", 29, "e")),
+        ("a module's type as a value", 33, "User", 1, ("models.iris", 3, "User")),
+        ("flags.parse", 34, "parse", 1, ("flags.iris", None, "parse")),
+        ("json.encode", 42, "encode", 1, ("json.iris", None, "encode")),
+        ("List in a type", 35, "List", 1, ("list.iris", None, "List[T]")),
+        ("List in a value", 35, "List", 2, ("list.iris", None, "List[T]")),
+        ("a generic method", 36, "push", 1, ("list.iris", None, "push")),
+        ("a generic function", 36, "biggest", 1, ("main.iris", 23, "biggest[T]")),
+        ("a method of another module", 36, "score", 1, ("models.iris", 8, "score")),
+        ("a loop variable", 37, "x", 1, ("main.iris", 37, "x")),
+        ("a match arm", 41, "admin", 1, ("models.iris", 0, "admin,")),
+        ("a method's name where it is declared", 11, "area", 1, ("main.iris", 11, "area")),
+        ("an interface after dyn", 25, "Shape", 1, ("main.iris", 3, "Shape")),
+        ("a type parameter", 23, "T", 1, ("main.iris", 23, "T]")),
+        ("a type parameter in a parameter", 23, "T a", 1, ("main.iris", 23, "T]")),
+    ]
+    for what, line, word, nth, want in cases:
+        got = goto(gpath, glines, line, word, nth)
+        ok = got and got[0] == want[0] and (want[1] is None or got[1] == want[1]) and got[2] == want[2]
+        check("definition of %s: %r" % (what, got), ok)
+
+    # a file not saved yet, in the project
+    npath = os.path.join(gproj, "models", "extra.iris")
+    ntext = "pub i64 twice(User u) => u.score() * 2\n"
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": "file://" + npath, "languageId": "iris", "version": 1,
+                                                       "text": ntext}})
+    got = goto(npath, ntext.split("\n"), 0, "User")
+    check("definition in a file not saved yet: %r" % (got,), got and got[0] == "models.iris" and got[1] == 3)
+
+    # a std file opened by go to definition: its names resolve and it has no errors
+    loc = c.request("textDocument/definition", {"textDocument": {"uri": "file://" + gpath},
+                                                "position": {"line": 29, "character": glines[29].index("decode")}})
+    jpath = loc["result"]["uri"][7:]
+    with open(jpath) as f:
+        jtext = f.read()
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": "file://" + jpath, "languageId": "iris", "version": 1,
+                                                       "text": jtext}})
+    jlines = jtext.split("\n")
+    jline = next(i for i, l in enumerate(jlines) if "rawDecode(table" in l)
+    got = goto(jpath, jlines, jline, "rawDecode")
+    check("definition inside a std file: %r" % (got,), got and got[0] == "json.iris" and got[2] == "rawDecode")
+    c.notify("textDocument/didSave", {"textDocument": {"uri": "file://" + jpath}})
+    sym = c.request("textDocument/documentSymbol", {"textDocument": {"uri": "file://" + jpath}})
+    check("symbols of a std file: %r" % (sym and len(sym["result"]),), sym and len(sym["result"]) > 3)
+
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)
     c.notify("exit", None)

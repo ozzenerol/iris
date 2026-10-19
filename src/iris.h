@@ -47,6 +47,8 @@ extern int gErrors;
 extern void (*gDiagHook)(Source *src, int line, int col, const char *msg);
 /* when set, source files are read through it first (the language server's open documents) */
 extern const char *(*gReadHook)(const char *path, size_t *len);
+/* when set, the names of the .iris files open in a folder, also those not saved yet */
+extern int (*gFolderHook)(const char *dir, const char **names, int max);
 const char *stdSource(const char *path);
 int stdModuleNames(const char **out, int max);
 bool stdModuleExists(const char *name);

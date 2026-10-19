@@ -316,7 +316,15 @@ static bool samePath(const char *a, const char *b) {
     return strcmp(x, y) == 0;
 }
 
+/* A program made up to look at one std module: import json. */
+static const char *viewPath = "/iris-lsp/std-view.iris";
+static char viewText[256];
+
 static const char *readDoc(const char *path, size_t *len) {
+    if (viewText[0] && strcmp(path, viewPath) == 0) {
+        *len = strlen(viewText);
+        return viewText;
+    }
     for (int i = 0; i < ndocs; i++) {
         if (samePath(docs[i].path, path)) {
             *len = docs[i].len;
@@ -324,6 +332,23 @@ static const char *readDoc(const char *path, size_t *len) {
         }
     }
     return NULL;
+}
+
+/* The .iris files open in a folder, saved or not. */
+static int docsIn(const char *dir, const char **names, int max) {
+    int n = 0;
+    for (int i = 0; i < ndocs && n < max; i++) {
+        const char *path = docs[i].path, *slash = strrchr(path, '/');
+        size_t len = strlen(path);
+        if (!slash || len < 5 || strcmp(path + len - 5, ".iris") != 0 || slash[1] == '.') continue;
+        char d[4096];
+        size_t dl = slash == path ? 1 : (size_t)(slash - path);
+        if (dl >= sizeof d) continue;
+        memcpy(d, path, dl);
+        d[dl] = 0;
+        if (samePath(d, dir)) names[n++] = slash + 1;
+    }
+    return n;
 }
 
 /* ---------------------------------------------------------------- positions */
@@ -405,6 +430,7 @@ static Arena gA;
 static Program *analyze(const char *path) {
     gDiagHook = collect;
     gReadHook = readDoc;
+    gFolderHook = docsIn;
     gTesting = gWithTests = true;     /* no main needed; tests are checked */
     gComptime = 1;                      /* comptime values stand in as zeros, as in the helper */
     gErrors = 0;
@@ -427,16 +453,32 @@ static Source *sourceOf(Program *prog, const char *path) {
 }
 
 /* Where a standard library file can be opened: a copy in the cache. */
+static void stdCacheDir(char *dir, size_t size) {
+    const char *base = getenv("XDG_CACHE_HOME");
+    if (base && *base) {
+        snprintf(dir, size, "%s/iris/std-%s", base, IRIS_VERSION);
+    } else {
+        snprintf(dir, size, "%s/.cache/iris/std-%s", getenv("HOME") ? getenv("HOME") : "/tmp", IRIS_VERSION);
+    }
+}
+
+/* A copy in the cache as the compiler names it, std/json/json.iris, or NULL. */
+static char *stdPathOf(const char *path) {
+    char dir[4096], real[4096], rdir[4096];
+    stdCacheDir(dir, sizeof dir);
+    if (!realpath(dir, rdir) || !realpath(path, real)) return NULL;
+    size_t n = strlen(rdir);
+    if (strncmp(real, rdir, n) != 0 || real[n] != '/') return NULL;
+    char std[4200];
+    snprintf(std, sizeof std, "std/%s", real + n + 1);
+    return stdSource(std) ? strdup(std) : NULL;
+}
+
 static char *stdCopy(const char *path) {
     const char *text = stdSource(path);
     if (!text) return NULL;
-    const char *base = getenv("XDG_CACHE_HOME");
     char dir[4096];
-    if (base && *base) {
-        snprintf(dir, sizeof dir, "%s/iris/std-%s", base, IRIS_VERSION);
-    } else {
-        snprintf(dir, sizeof dir, "%s/.cache/iris/std-%s", getenv("HOME") ? getenv("HOME") : "/tmp", IRIS_VERSION);
-    }
+    stdCacheDir(dir, sizeof dir);
     char full[4200];
     snprintf(full, sizeof full, "%s/%s", dir, path + 4);
     struct stat st;
@@ -543,47 +585,92 @@ typedef struct {
     int line, col;
     Node *best;         /* the name under the cursor */
     Node *parent;
+    Node *func;         /* the function it is in */
 } Find;
+
+/* The length of a name as written: a checked copy of a generic is named
+ * biggest[i64], written biggest. */
+static int writtenLen(const char *name) {
+    const char *b = name ? strchr(name, '[') : NULL;
+    return name ? (int)(b ? (size_t)(b - name) : strlen(name)) : 0;
+}
 
 static int nameLen(Node *n) {
     const char *dot = n->name ? strrchr(n->name, '.') : NULL;
-    return n->name ? (int)strlen(dot ? dot + 1 : n->name) : 0;
+    return n->name ? writtenLen(dot ? dot + 1 : n->name) : 0;
 }
 
-static void walk(Find *f, Node *n, Node *parent) {
+/* The column of a method's name in its declaration: area in Square.area. */
+static int methodNameCol(Source *src, Node *fn) {
+    if (!src || !src->text || !fn->name) return fn->col;
+    const char *ls = lineStartOf(src->text, src->len, fn->line), *end = src->text + src->len;
+    size_t n = (size_t)writtenLen(fn->name);
+    int depth = 0;
+    for (const char *p = ls + fn->col - 1; p < end && *p != '\n' && *p != '('; p++) {
+        if (*p == '[') depth++;
+        if (*p == ']') depth--;
+        if (*p == '.' && depth == 0 && (size_t)(end - p - 1) >= n && strncmp(p + 1, fn->name, n) == 0) {
+            return (int)(p + 1 - ls) + 1;
+        }
+    }
+    return fn->col;
+}
+
+/* Where a name is written on its line, from col on: the e of catch e, whose
+ * node sits at the catch. */
+static int wordCol(Source *src, int line, int col, const char *name) {
+    if (!src || !src->text || !name) return col;
+    const char *ls = lineStartOf(src->text, src->len, line), *end = src->text + src->len;
+    size_t n = (size_t)writtenLen(name);
+    for (const char *p = ls + col - 1; p + n <= end && *p != '\n'; p++) {
+        if (strncmp(p, name, n) != 0) continue;
+        if (p > ls && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) continue;
+        if (p + n < end && (isalnum((unsigned char)p[n]) || p[n] == '_')) continue;
+        return (int)(p - ls) + 1;
+    }
+    return col;
+}
+
+static void walk(Find *f, Node *n, Node *parent, Node *fn) {
     if (!n) return;
     /* self is written as the receiver's type, Service.add: the type is what's there */
     if (n->src == f->src && n->line == f->line && n->name && !(n->kind == N_PARAM && (n->flags & F_SELF)) &&
         (n->kind == N_IDENT || n->kind == N_FIELD_ACCESS || n->kind == N_FUNC || n->kind == N_STRUCT ||
          n->kind == N_ENUM || n->kind == N_CONST || n->kind == N_VAR || n->kind == N_PARAM || n->kind == N_FIELD ||
          n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME ||
-         n->kind == N_FIELD_INIT)) {
+         n->kind == N_FIELD_INIT || n->kind == N_ENUM_DOT || n->kind == N_TYPE_PARAM)) {
         int start = n->col, len = nameLen(n);
         const char *dot = n->kind == N_T_NAME ? strrchr(n->name, '.') : NULL;
         if (dot) start += (int)(dot + 1 - n->name);     /* sqlite.Db: the Db */
+        if (n->kind == N_FUNC && (n->b || (n->flags & F_INSTANCE))) start = methodNameCol(f->src, n);
+        if (n->kind == N_ENUM_DOT) len++;               /* .admin, from the dot */
+        if (parent && parent->kind == N_CATCH && parent->d == n) start = wordCol(f->src, n->line, n->col + 5, n->name);
         if (f->col >= start && f->col < start + len) {
             f->best = n;
             f->parent = parent;
+            f->func = fn;
         }
     }
-    walk(f, n->a, n);
-    walk(f, n->b, n);
-    walk(f, n->c, n);
-    walk(f, n->d, n);
-    for (int i = 0; i < n->list.len; i++) walk(f, n->list.items[i], n);
-    for (int i = 0; i < n->list2.len; i++) walk(f, n->list2.items[i], n);
+    if (n->kind == N_FUNC) fn = n;
+    walk(f, n->a, n, fn);
+    walk(f, n->b, n, fn);
+    walk(f, n->c, n, fn);
+    walk(f, n->d, n, fn);
+    for (int i = 0; i < n->list.len; i++) walk(f, n->list.items[i], n, fn);
+    for (int i = 0; i < n->list2.len; i++) walk(f, n->list2.items[i], n, fn);
 }
 
-static Node *nodeAt(Program *prog, Source *src, int line, int col, Node **parent) {
-    Find f = {src, line, col, NULL, NULL};
+static Node *nodeAt(Program *prog, Source *src, int line, int col, Node **parent, Node **func, bool copies) {
+    Find f = {src, line, col, NULL, NULL, NULL};
     for (Module *m = prog->modules; m; m = m->next) {
         for (int i = 0; i < m->files.len; i++) {
             Node *file = m->files.items[i];
-            if (file->src == src) walk(&f, file, NULL);
+            if (file->src == src) walk(&f, file, NULL, NULL);
         }
     }
-    for (int i = 0; i < prog->instances.len; i++) walk(&f, prog->instances.items[i], NULL);
+    for (int i = 0; copies && i < prog->instances.len; i++) walk(&f, prog->instances.items[i], NULL, NULL);
     if (parent) *parent = f.parent;
+    if (func) *func = f.func;
     return f.best;
 }
 
@@ -597,6 +684,22 @@ static Node *declOf(Node *n, Node *parent) {
             return parent->type->decl;      /* Point{...} */
         }
         if (parent && parent->kind == N_DEFINE && n->type) return n;    /* p := ... */
+        if (parent && parent->kind == N_CATCH && parent->d == n) return n;  /* catch e */
+        if (parent && parent->kind == N_FOR) {
+            for (int i = 0; i < parent->list.len; i++) {
+                if (parent->list.items[i] == n) return n;               /* for x in xs */
+            }
+        }
+        return NULL;
+    case N_ENUM_DOT:
+        /* .admin, where the enum is known from the other side */
+        if (n->type && n->type->kind == TY_ENUM && n->type->decl) {
+            Node *e = n->type->decl;
+            for (int i = 0; i < e->list.len; i++) {
+                Node *m = e->list.items[i];
+                if (m->name && strcmp(m->name, n->name) == 0) return m;
+            }
+        }
         return NULL;
     case N_T_NAME:
         return n->type && n->type->decl ? n->type->decl : NULL;
@@ -615,25 +718,62 @@ static Node *declOf(Node *n, Node *parent) {
     }
 }
 
-/* A type named where a value goes, as in flags.parse(Options) or
- * json.decode(User[], text): the module's declaration of that name. */
-static Node *typeNamed(Program *prog, Source *src, Node *n) {
-    if (!prog || n->kind != N_IDENT || !n->name) return NULL;
-    for (Module *m = prog->modules; m; m = m->next) {
-        bool here = false;
-        for (int f = 0; f < m->files.len && !here; f++) here = m->files.items[f]->src == src;
-        if (!here) continue;
-        for (int f = 0; f < m->files.len; f++) {
-            Node *file = m->files.items[f];
-            for (int i = 0; i < file->list.len; i++) {
-                Node *d = file->list.items[i];
-                bool isType = d->kind == N_STRUCT || d->kind == N_ENUM ||
-                              d->kind == N_INTERFACE || d->kind == N_TYPEDEF;
-                if (isType && d->name && strcmp(d->name, n->name) == 0) return d;
-            }
+/* The type declared with this name in a module. */
+static Node *typeIn(Module *m, const char *name, size_t len) {
+    for (int f = 0; m && f < m->files.len; f++) {
+        Node *file = m->files.items[f];
+        for (int i = 0; i < file->list.len; i++) {
+            Node *d = file->list.items[i];
+            bool isType = d->kind == N_STRUCT || d->kind == N_ENUM || d->kind == N_INTERFACE || d->kind == N_TYPEDEF;
+            if (isType && d->name && strlen(d->name) == len && strncmp(d->name, name, len) == 0) return d;
         }
     }
     return NULL;
+}
+
+/* A type by its name where the checker left no link: one passed as a value
+ * (flags.parse(Options), json.decode(models.User, text)), the parts of
+ * List[i64] and dyn Shape, and a function's type parameters. */
+static Node *typeNamed(Program *prog, Source *src, Node *n, Node *fn) {
+    if (!prog || !n->name) return NULL;
+    if (n->kind != N_IDENT && n->kind != N_T_NAME && n->kind != N_FIELD_ACCESS) return NULL;
+    char full[256];
+    const char *name = n->name;
+    if (n->kind == N_FIELD_ACCESS) {
+        if (!n->a || n->a->kind != N_IDENT || !n->a->name) return NULL;
+        snprintf(full, sizeof full, "%s.%s", n->a->name, n->name);
+        name = full;
+    }
+    const char *dot = strrchr(name, '.');
+    if (dot) {
+        for (Module *m = prog->modules; m; m = m->next) {
+            if (m != prog->main && strlen(m->name) == (size_t)(dot - name) && strncmp(m->name, name, dot - name) == 0) {
+                return typeIn(m, dot + 1, strlen(dot + 1));
+            }
+        }
+        return NULL;
+    }
+    if (fn) {
+        for (int i = 0; i < fn->list2.len; i++) {
+            Node *tp = fn->list2.items[i];
+            if (tp->name && strcmp(tp->name, name) == 0) return tp;
+        }
+        if (fn->b && fn->b->kind == N_T_GENERIC) {
+            /* List[T].push: the receiver's T */
+            for (int i = 0; i < fn->b->list.len; i++) {
+                Node *tp = fn->b->list.items[i];
+                if (tp != n && tp->name && strcmp(tp->name, name) == 0) return tp;
+            }
+        }
+    }
+    for (Module *m = prog->modules; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            if (m->files.items[f]->src != src) continue;
+            Node *d = typeIn(m, name, strlen(name));
+            if (d) return d;
+        }
+    }
+    return typeIn(prog->core, name, strlen(name));
 }
 
 static void putTypeName(StrBuf *b, Type *t) {
@@ -749,11 +889,23 @@ static void reply(StrBuf *out, J *id, const char *result) {
     sbFree(&b);
 }
 
+/* The declaration of the name under the cursor. The checked copies of
+ * generic functions come first, since names in their bodies are linked
+ * there; then the code as written, for its type parameters. */
+static Node *declAt(Program *prog, Source *src, int line, int col) {
+    if (!prog || !src) return NULL;
+    Node *d = NULL;
+    for (int pass = 0; pass < 2 && !d; pass++) {
+        Node *parent = NULL, *fn = NULL;
+        Node *n = nodeAt(prog, src, line, col, &parent, &fn, pass == 0);
+        d = n ? declOf(n, parent) : NULL;
+        if (n && !d) d = typeNamed(prog, src, n, fn);
+    }
+    return d;
+}
+
 static void hover(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
-    Node *parent = NULL;
-    Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
-    Node *d = n ? declOf(n, parent) : NULL;
-    if (n && !d) d = typeNamed(prog, src, n);
+    Node *d = declAt(prog, src, line, col);
     if (!d) {
         reply(out, id, NULL);
         return;
@@ -810,10 +962,7 @@ static Node *moduleFileAt(Program *prog, Source *src, int line, int col) {
 }
 
 static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
-    Node *parent = NULL;
-    Node *n = prog && src ? nodeAt(prog, src, line, col, &parent) : NULL;
-    Node *d = n ? declOf(n, parent) : NULL;
-    if (n && !d) d = typeNamed(prog, src, n);
+    Node *d = declAt(prog, src, line, col);
     if (!d || d->kind == N_IMPORT) {
         Node *file = moduleFileAt(prog, src, line, col);
         if (file && file->src) {
@@ -844,7 +993,10 @@ static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line,
     sbPuts(&r, "{\"uri\":");
     putStr(&r, u);
     sbPuts(&r, ",\"range\":");
-    putRange(&r, shown.text ? &shown : NULL, d->line, d->col, d->name ? (int)strlen(d->name) : 1);
+    int dcol = d->kind == N_FUNC && (d->b || (d->flags & F_INSTANCE)) && shown.text ? methodNameCol(&shown, d)
+             : d->kind == N_IDENT && shown.text ? wordCol(&shown, d->line, d->col, d->name)
+             : d->col;
+    putRange(&r, shown.text ? &shown : NULL, d->line, dcol, d->name ? writtenLen(d->name) : 1);
     sbPutc(&r, '}');
     reply(out, id, r.buf);
     free(u);
@@ -949,7 +1101,7 @@ static void completion(StrBuf *out, J *id, Program *prog, Source *src, const cha
             if (p > ls && (isalnum((unsigned char)p[-1]) || p[-1] == '_' || p[-1] == '.')) continue;
             if (p + wl < le && (isalnum((unsigned char)p[wl]) || p[wl] == '_')) continue;
             Node *parent;
-            Node *n = nodeAt(prog, src, l, (int)(p - ls) + 1, &parent);
+            Node *n = nodeAt(prog, src, l, (int)(p - ls) + 1, &parent, NULL, true);
             if (n && n->type && n->type->kind != TY_ERROR) best = n;
         }
     }
@@ -1332,8 +1484,23 @@ static void handleInChild(J *msg, StrBuf *out) {
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
     if (gLenient && doc) closeOpen(doc);
-    Program *prog = path ? analyze(path) : NULL;
-    Source *src = path ? sourceOf(prog, path) : NULL;
+    char *std = path ? stdPathOf(path) : NULL;
+    Program *prog;
+    Source *src;
+    if (std) {
+        /* a std file opened by go to definition: its module as the compiler
+         * loads it, which can use @extern; std files are never reported */
+        char mod[128] = "";
+        sscanf(std + 4, "%127[^/]", mod);
+        snprintf(viewText, sizeof viewText, "%s%s\n", strcmp(mod, "core") ? "import " : "", strcmp(mod, "core") ? mod : "");
+        prog = analyze(viewPath);
+        src = sourceOf(prog, std);
+        ndiags = 0;
+    } else {
+        prog = path ? analyze(path) : NULL;
+        src = path ? sourceOf(prog, path) : NULL;
+    }
+    free(std);
     int col = doc ? byteCol(doc->text, doc->len, line, character) : character + 1;
     if (strcmp(method, "textDocument/hover") == 0) {
         hover(out, id, prog, src, line, col);

@@ -4254,6 +4254,24 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
     return setType(e, &tyError);
 }
 
+/* The value arguments an intrinsic didn't get to before an error, so the
+ * editor still finds what their names stand for. Type names are left. */
+static void checkLeftArgs(Checker *c, Node *e) {
+    for (int i = 0; i < e->list.len; i++) {
+        Node **a = &e->list.items[i];
+        if ((*a)->kind == N_NAMED_ARG) a = &(*a)->a;
+        if ((*a)->type || (*a)->kind == N_T_SLICE || (*a)->kind == N_INDEX) continue;
+        if ((*a)->kind == N_IDENT) {
+            Node *d = lookup(c, (*a)->name);
+            if (!d || d->kind == N_STRUCT || d->kind == N_ENUM || d->kind == N_INTERFACE ||
+                d->kind == N_TYPEDEF || d->kind == N_IMPORT) {
+                continue;
+            }
+        }
+        checkExpr(c, a, NULL);
+    }
+}
+
 static Type *checkCall(Checker *c, Node *e, Type *expected) {
     Node *callee = e->a;
     if (callee->kind == N_FIELD_ACCESS && callee->a->kind == N_IDENT) {
@@ -4304,7 +4322,10 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         d = NULL;
     }
     if (d && d->kind == N_FUNC && (d->flags & F_INTRINSIC)) {
-        return checkIntrinsic(c, e, d);
+        callee->ref = d;    /* go to definition and hover, also when the call is wrong */
+        Type *t = checkIntrinsic(c, e, d);
+        if (isErr(t)) checkLeftArgs(c, e);
+        return t;
     }
 
     if (!d && isBuiltinName(name)) {
