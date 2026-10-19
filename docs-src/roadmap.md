@@ -54,3 +54,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.48 | The functions of `str` are methods of `str` and `String` with no import: `path.startsWith("/api")`, `line.trim()`, `"8080".parseInt()`. The editor offers them after a dot. | released |
 | 0.49 | `Conn.remoteAddr()` and `Conn.localAddr()` say who is on each side of a connection, and `req.remote` is the address an HTTP request came from. `fd()` gives a socket's file descriptor for socket options. | released |
 | 0.50 | `n++`, `n--`, `++n` and `--n`, usable as values: `ports[count++] = 443`. | released |
+| 0.50.1 | Go to definition and hover work on `Error`, `e.code`, `e.message`, `error`, `print` and the other built-in names. | released |
