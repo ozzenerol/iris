@@ -90,13 +90,13 @@ str reason(i32 code) => match code {
 
 // A socket that accepts connections.
 pub struct Listener {
-    i32 fd
+    i32 sock
     pub u16 port
 }
 
 // A connection. Reads go through a buffer, so lines can be read one at a time.
 pub struct Conn {
-    i32 fd
+    i32 sock
     u8[] buf
     i64 start
     i64 end
@@ -114,7 +114,7 @@ i64 Conn.rawRead(u8[] buf) {
     if self.tls != null {
         return rawTlsRead(self.tls, buf.ptr, buf.len, self.timeout)
     }
-    return rawRead(self.fd, buf.ptr, buf.len, self.timeout)
+    return rawRead(self.sock, buf.ptr, buf.len, self.timeout)
 }
 
 // Listens on port (0 picks a free one; see .port) on host ("" for all
@@ -125,25 +125,29 @@ pub !Listener listen(u16 port, str host = "", bool shared = false) {
     if fd < 0 {
         return error(netCode(err), "listening on port {port}: {reason(err)}")
     }
-    return Listener{fd: fd, port: u16(rawPort(fd))}
+    return Listener{sock: fd, port: u16(rawPort(fd))}
 }
 
 // Waits for the next connection, for at most timeout when it isn't 0.
 pub !Conn Listener.accept(Duration timeout = 0s) {
     i32 err
-    fd := rawAccept(self.fd, &err, timeout)
+    fd := rawAccept(self.sock, &err, timeout)
     if fd < 0 {
         return error(netCode(err), "accepting a connection: {reason(err)}")
     }
-    return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+    return Conn{sock: fd, buf: alloc(u8, 16KiB)}
 }
 
+// The listener's file descriptor, for socket options and calls through
+// import c. Accepting on it or closing it directly breaks the listener.
+pub i32 Listener.fd() => self.sock
+
 // Stops listening and closes the socket.
-pub void Listener.close() => rawClose(self.fd)
+pub void Listener.close() => rawClose(self.sock)
 
 // Wakes a task that waits in accept, which then fails: for stopping a
 // server.
-pub void Listener.interrupt() => rawShutdown(self.fd)
+pub void Listener.interrupt() => rawShutdown(self.sock)
 
 // Connects to host:port, waiting at most timeout when it isn't 0. host is
 // a name or an IP. Each of the name's addresses is tried in turn until one
@@ -158,7 +162,7 @@ pub !Conn dial(str host, u16 port, Duration timeout = 0s) {
         if fd < 0 {
             return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
         }
-        return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+        return Conn{sock: fd, buf: alloc(u8, 16KiB)}
     }
     defer addrs.free()
     i32 err = 4
@@ -173,7 +177,7 @@ pub !Conn dial(str host, u16 port, Duration timeout = 0s) {
         }
         fd := rawDialIp(&a.ip[0], i64(port), &err, left)
         if fd >= 0 {
-            return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+            return Conn{sock: fd, buf: alloc(u8, 16KiB)}
         }
     }
     return error(netCode(err), "connecting to {host}:{port}: {reason(err)}")
@@ -187,7 +191,7 @@ pub !Conn dialAddr(Addr addr, Duration timeout = 0s) {
         scoped String where = addr.format()
         return error(netCode(err), "connecting to {where}: {reason(err)}")
     }
-    return Conn{fd: fd, buf: alloc(u8, 16KiB)}
+    return Conn{sock: fd, buf: alloc(u8, 16KiB)}
 }
 
 // Reads into buf: the number of bytes, 0 when the other side has closed.
@@ -280,17 +284,42 @@ pub !void Conn.write(str data) {
     code := if self.tls != null {
         rawTlsWrite(self.tls, data.ptr, data.len, self.timeout)
     } else {
-        rawWrite(self.fd, data.ptr, data.len, self.timeout)
+        rawWrite(self.sock, data.ptr, data.len, self.timeout)
     }
     if code != 0 {
         return error(netCode(code), "writing: {reason(code)}")
     }
 }
 
+// The address of the other side: the client on a server, the server on a
+// client. All zeros once the connection is gone.
+pub Addr Conn.remoteAddr() {
+    Addr a
+    i64 port
+    rawRemote(self.sock, &a.ip[0], &port)
+    a.port = u16(port)
+    return a
+}
+
+// The address of this side of the connection.
+pub Addr Conn.localAddr() {
+    Addr a
+    i64 port
+    rawLocal(self.sock, &a.ip[0], &port)
+    a.port = u16(port)
+    return a
+}
+
+// The connection's file descriptor, for socket options and calls through
+// import c. It belongs to the event loop and doesn't block: reading,
+// writing or closing it directly, or making it blocking, breaks the
+// connection and can stall every task on the thread.
+pub i32 Conn.fd() => self.sock
+
 // Ends the connection's reads and writes from another task: a task that
 // waits on it wakes up as if the other side had closed. close still has to
 // be called.
-pub void Conn.interrupt() => rawShutdown(self.fd)
+pub void Conn.interrupt() => rawShutdown(self.sock)
 
 // Closes the connection.
 pub void Conn.close() {
@@ -298,7 +327,7 @@ pub void Conn.close() {
         rawTlsClose(self.tls)
         self.tls = null
     }
-    rawClose(self.fd)
+    rawClose(self.sock)
     if self.buf.len > 0 {
         free(self.buf)
         self.buf = alloc(u8, 0)
@@ -321,7 +350,7 @@ pub !Conn dialTls(str host, u16 port, str ca = "") {
 // protocols are offered to the server with ALPN, each with its length in
 // front: "\x02h2\x08http/1.1"; protocol() says which one it took.
 pub !void Conn.startTls(str host, str ca = "", str protocols = "") {
-    ssl := rawTlsConnect(self.fd, host.ptr, host.len, ca.ptr, ca.len, protocols.ptr, protocols.len)
+    ssl := rawTlsConnect(self.sock, host.ptr, host.len, ca.ptr, ca.len, protocols.ptr, protocols.len)
     if ssl == null {
         return error(NetError.tls, "{host}: {tlsMessage()}")
     }
@@ -363,7 +392,7 @@ pub void TlsConfig.free() {
 
 // Starts TLS as the server on an accepted connection.
 pub !void Conn.acceptTls(TlsConfig *config) {
-    ssl := rawTlsAccept(config.ctx, self.fd, self.timeout)
+    ssl := rawTlsAccept(config.ctx, self.sock, self.timeout)
     if ssl == null {
         return error(NetError.tls, tlsMessage())
     }

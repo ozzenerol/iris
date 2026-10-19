@@ -133,6 +133,7 @@ A path no pattern has gets 404, with the text `not found` and a newline, which `
 | `req.header("Authorization")` | a header, by its name in any case |
 | `req.protocol` | `"HTTP/1.1"` or `"HTTP/2"` |
 | `req.received` | when it came in, by `time.clock()` |
+| `req.remote` | who sent it, a `net.Addr`: `req.remote.ipText()` and `req.remote.port` |
 
 ## Answers
 

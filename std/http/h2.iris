@@ -455,6 +455,7 @@ struct Reader {
     Limits limits
     Watch *watch
     Queue *jobs
+    net.Addr remote
     Decoder headers
     Map[i64, Incoming] open
     i64 last   // the highest stream the client opened
@@ -678,6 +679,7 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
         return
     }
     Incoming fresh
+    fresh.req.remote = self.remote
     code := fillRequest(&fresh.req, &names, &values, &fresh.length)
     if code != E_NONE {
         fresh.req.free()
@@ -858,7 +860,7 @@ void Reader.dataFrame(Frame *f) {
 
 // Serves HTTP/2 on a connection whose preface was read already, until the
 // client goes away.
-void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w) {
+void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr remote) {
     Queue q
     q.ch = chan[Out](64)
     jobs := &q
@@ -866,7 +868,7 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w) {
     Writer writer = Writer{conn: conn, jobs: jobs, inFlight: &inFlight, window: 65535, initial: 65535, maxFrame: 16384}
     done := chan[bool](0)
     spawn runWriter(&writer, done)
-    Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, inFlight: &inFlight,
+    Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, remote: remote, inFlight: &inFlight,
         headers: decoder(4096)}
     // our settings: how many requests at once, a larger window for request
     // bodies, and no server push

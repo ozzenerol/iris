@@ -12,6 +12,9 @@ i64 rawUdpRecv(i32 fd, u8 *buf, i64 len, u8 *ip, i64 *port, i64 timeout)
 @extern("iris_sock_local")
 void rawLocal(i32 fd, u8 *ip, i64 *port)
 
+@extern("iris_sock_remote")
+void rawRemote(i32 fd, u8 *ip, i64 *port)
+
 @extern("iris_net_dial_ip")
 i32 rawDialIp(u8 *ip, i64 port, i32 *err, i64 timeout)
 
@@ -128,7 +131,7 @@ pub !Addr parseAddr(str text, u16 port = 0) {
 
 // A UDP socket. Each read and write sends or gets one datagram.
 pub struct Udp {
-    i32 fd
+    i32 sock
     i32 family
     bool connected
     Duration timeout
@@ -156,7 +159,7 @@ pub !Udp listenUdp(u16 port = 0, str host = "") {
     if fd < 0 {
         return error(netCode(err), "opening UDP port {port}: {reason(err)}")
     }
-    return Udp{fd: fd, family: family}
+    return Udp{sock: fd, family: family}
 }
 
 // A UDP socket that sends to addr and only reads what comes from it.
@@ -168,7 +171,7 @@ pub !Udp dialUdp(Addr addr) {
         scoped String where = addr.format()
         return error(netCode(err), "connecting to {where}: {reason(err)}")
     }
-    return Udp{fd: fd, family: family, connected: true}
+    return Udp{sock: fd, family: family, connected: true}
 }
 
 !void udpFail(i32 code, str doing) {
@@ -180,7 +183,7 @@ pub !Udp dialUdp(Addr addr) {
 
 // Sends data as one datagram to addr.
 pub !void Udp.sendTo(str data, Addr addr) {
-    code := rawUdpSend(self.fd, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port), self.timeout)
+    code := rawUdpSend(self.sock, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port), self.timeout)
     if code != 0 {
         scoped String where = addr.format()
         try udpFail(code, "sending to {where}")
@@ -189,7 +192,7 @@ pub !void Udp.sendTo(str data, Addr addr) {
 
 // Sends data as one datagram to where a dialUdp socket is connected.
 pub !void Udp.send(str data) {
-    code := rawUdpSend(self.fd, self.family, data.ptr, data.len, null, 0, self.timeout)
+    code := rawUdpSend(self.sock, self.family, data.ptr, data.len, null, 0, self.timeout)
     if code != 0 {
         try udpFail(code, "sending")
     }
@@ -200,7 +203,7 @@ pub !void Udp.send(str data) {
 pub !(i64, Addr) Udp.readFrom(u8[] buf) {
     Addr from
     i64 port
-    n := rawUdpRecv(self.fd, buf.ptr, buf.len, &from.ip[0], &port, self.timeout)
+    n := rawUdpRecv(self.sock, buf.ptr, buf.len, &from.ip[0], &port, self.timeout)
     if n < 0 {
         code := i32(-n)
         try udpFail(code, "reading a datagram")
@@ -219,10 +222,14 @@ pub !i64 Udp.read(u8[] buf) {
 pub Addr Udp.localAddr() {
     Addr a
     i64 port
-    rawLocal(self.fd, &a.ip[0], &port)
+    rawLocal(self.sock, &a.ip[0], &port)
     a.port = u16(port)
     return a
 }
 
+// The socket's file descriptor, for socket options and calls through
+// import c. Reading, writing or closing it directly breaks the socket.
+pub i32 Udp.fd() => self.sock
+
 // Closes the socket.
-pub void Udp.close() => rawClose(self.fd)
+pub void Udp.close() => rawClose(self.sock)

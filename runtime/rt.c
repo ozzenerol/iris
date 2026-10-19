@@ -2377,6 +2377,15 @@ void iris_sock_local(int fd, uint8_t *ip, int64_t *port) {
     if (getsockname(fd, (struct sockaddr *)&ss, &sl) == 0) fromSockaddr(&ss, ip, port);
 }
 
+/* Who a connected socket is connected to: all zeros once it is gone. */
+void iris_sock_remote(int fd, uint8_t *ip, int64_t *port) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    memset(ip, 0, 16);
+    *port = 0;
+    if (getpeername(fd, (struct sockaddr *)&ss, &sl) == 0) fromSockaddr(&ss, ip, port);
+}
+
 /* A TCP connection to an address. */
 int iris_net_dial_ip(const uint8_t *ip, int64_t port, int *err, int64_t timeout) {
     int fam = isMapped(ip) ? AF_INET : AF_INET6;

@@ -50,7 +50,7 @@ Each connection gets a task of its own, so a handler can wait for a database or 
 
 ## What a request holds
 
-`req.method`, `req.path` and `req.body` are the request's parts. `req.route()` is the path without its query, `req.query("page")` a value from the query, and `req.header("Authorization")` a header, by its name in any case.
+`req.method`, `req.path` and `req.body` are the request's parts. `req.route()` is the path without its query, `req.query("page")` a value from the query, and `req.header("Authorization")` a header, by its name in any case. `req.remote` is the address the request came from, a `net.Addr`. Behind a proxy it is the proxy's, and the client's is in a header such as `X-Forwarded-For`.
 
 ## Checks and logging
 

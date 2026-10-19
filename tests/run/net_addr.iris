@@ -1,0 +1,60 @@
+// expect: server sees 127.0.0.1, port matches: true
+// expect: client sees 127.0.0.1, port matches: true
+// expect: fds: true true
+// expect: HTTP/1.1 from 127.0.0.1 true
+// expect: HTTP/2 from 127.0.0.1 true
+
+import http, net
+
+void handle(net.Conn c) {
+    defer c.close()
+    scoped String port = c.readLine() catch e {
+        return
+    }
+    who := c.remoteAddr()
+    scoped String ip = who.ipText()
+    scoped String seen = format("{who.port}")
+    c.write("server sees {ip}, port matches: {seen == port}\n") catch e { }
+}
+
+void whoAmI(http.Request *req, http.Response *res) {
+    scoped String ip = req.remote.ipText()
+    res.text("{req.protocol} from {ip} {req.remote.port > 0}")
+}
+
+void serveHttp(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    c := try net.dial("127.0.0.1", ln.port)
+    s := try ln.accept()
+    spawn handle(s)
+    try c.write("{c.localAddr().port}\n")
+    scoped String line = try c.readLine()
+    print(line)
+    peer := c.remoteAddr()
+    scoped String ip = peer.ipText()
+    print("client sees {ip}, port matches: {peer.port == ln.port}")
+    print("fds: {c.fd() > 2} {ln.fd() > 2}")
+    c.close()
+    ln.close()
+
+    http.Router r
+    defer r.free()
+    r.get("/", whoAmI)
+    hl := try net.listen(0, "127.0.0.1")
+    spawn serveHttp(&r, hl)
+    scoped String url = format("http://127.0.0.1:{hl.port}/")
+    http.Client one
+    defer one.close()
+    scoped http.Reply a = try one.get(url)
+    print(a.body)
+    http.Client two
+    two.priorKnowledge = true
+    defer two.close()
+    scoped http.Reply b = try two.get(url)
+    print(b.body)
+    r.shutdown()
+}

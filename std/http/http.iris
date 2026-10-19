@@ -24,6 +24,9 @@ pub struct Request {
     pub String body
     // "HTTP/1.1" or "HTTP/2"
     pub str protocol
+    // who sent the request: the client's address and port, or the
+    // proxy's when there is one in front
+    pub net.Addr remote
     String[] names
     String[] values
     i64 count
@@ -327,6 +330,7 @@ void unwatch(Watch *w) {
 void serveConn(net.Conn conn, Target target) {
     defer conn.close()
     limits := target.limits
+    remote := conn.remoteAddr()
     Watch w = Watch{conn: &conn, last: time.clock()}
     watch(&w, &limits, target.router)
     defer unwatch(&w)
@@ -339,7 +343,7 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if preface == PREFACE {
-                serveH2(&conn, target, limits, &w)
+                serveH2(&conn, target, limits, &w, remote)
             } else {
                 scoped String bye = goawayFrame(0, E_PROTOCOL)
                 conn.write(bye) catch e { }
@@ -352,6 +356,7 @@ void serveConn(net.Conn conn, Target target) {
             return
         }
         Request req
+        req.remote = remote
         more := readRequest(&conn, &req, &limits) catch e {
             req.free()
             if e.code == net.NetError.tooLong {
@@ -375,7 +380,7 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if rest == "SM\r\n\r\n" {
-                serveH2(&conn, target, limits, &w)
+                serveH2(&conn, target, limits, &w, remote)
             }
             return
         }

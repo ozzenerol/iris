@@ -46,6 +46,31 @@ echo: hello | echo: again
 
 Port 0 lets the system pick a free port, which `ln.port` then holds. A host of `""` listens on every address. Calls wait as any wait in a task does: other tasks run until data comes.
 
+## Who is connected
+
+`remoteAddr` gives the address of the other side of a connection, the client on a server, and `localAddr` this side's. Both are an `Addr`, with `ipText` and `port`:
+
+```iris run
+import net
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    s := try ln.accept()
+    defer s.close()
+    client := s.remoteAddr()
+    scoped String ip = client.ipText()
+    print("{ip} {client.port == c.localAddr().port}")
+}
+```
+
+```output
+127.0.0.1 true
+```
+
+`fd` gives a connection's file descriptor, for socket options and calls through `import c`. The event loop owns it, so reading, writing or closing it directly breaks the connection.
+
 ## Timeouts and errors
 
 `setTimeout` sets how long each read or write on a connection may wait; past it, the call fails with `NetError.timeout`. `dial` takes a timeout for connecting. A connection to a port where nothing listens fails with `NetError.refused`:
