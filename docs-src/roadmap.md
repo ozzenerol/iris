@@ -52,3 +52,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.46 | `env.loadWith(Settings, ".env")` reads a `.env` file when there is one and fills the `@env` struct in one call. | released |
 | 0.47 | A `List` field of a `@json` struct is read and written as a JSON array, and `json.decode(List[T], text)` reads an array into a new list. | released |
 | 0.48 | The functions of `str` are methods of `str` and `String` with no import: `path.startsWith("/api")`, `line.trim()`, `"8080".parseInt()`. The editor offers them after a dot. | released |
+| 0.49 | `Conn.remoteAddr()` and `Conn.localAddr()` say who is on each side of a connection, and `req.remote` is the address an HTTP request came from. `fd()` gives a socket's file descriptor for socket options. | released |
