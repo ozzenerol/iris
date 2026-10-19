@@ -20,6 +20,11 @@ void f(i64[] xs, str s) {
     z := *ptr
     w := &z
     first[i64](1, 2)
+    i++
+    ++i
+    a[i++] = - -i
+    k := i-- - 1
+    m := -i++
     c := chan[i64](8)
     asm {
         nop

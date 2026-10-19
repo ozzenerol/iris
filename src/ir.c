@@ -2145,6 +2145,15 @@ static Val emitExpr(IR *ir, Node *e) {
     }
     case N_CONVERT:
         return emitConvert(ir, e);
+    case N_INCDEC: {
+        Type *t = e->type;
+        const char *addr = emitAddr(ir, e->a);
+        Val old = load(ir, addr, t);
+        Val one = val(t->kind == TY_FLOAT ? "1.0" : "1", t->kind == TY_PTR ? &tyI64 : t);
+        Val now = emitArith(ir, e, e->op == P_INC ? P_PLUS : P_MINUS, old, one);
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), now.s, addr);
+        return e->flags & F_POSTFIX ? old : now;
+    }
     case N_UNARY: {
         if (e->op == P_AMP) {
             return val(emitAddr(ir, e->a), e->type);

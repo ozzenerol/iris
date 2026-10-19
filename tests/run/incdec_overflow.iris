@@ -1,0 +1,6 @@
+// panic: integer overflow
+
+void main() {
+    u8 b = 255
+    b++
+}

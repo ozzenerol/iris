@@ -1,0 +1,61 @@
+// expect: 10 20 30 counter=3
+// expect: 5 6 7 7 7 5
+// expect: 3
+// expect: 255 2.5
+// expect: 0 0 1
+// expect: 5 1
+// expect: b
+// expect: next 0 1 2
+
+struct Point {
+    i64 x
+}
+
+struct Ids {
+    i64 last
+}
+
+i64 Ids.next() => self.last++
+
+void main() {
+    i64[5] a
+    i64 counter = 0
+    a[counter++] = 10
+    a[counter++] = 20
+    a[counter++] = 30
+    print("{a[0]} {a[1]} {a[2]} counter={counter}")
+
+    i := 5
+    print("{i++} {i} {++i} {i} {i--} {--i}")
+
+    Point p
+    p.x++
+    ++p.x
+    pp := &p
+    pp.x++
+    print("{p.x}")
+
+    u8 b = 254
+    b++
+    f64 f = 1.5
+    f++
+    print("{b} {f}")
+
+    // the value first, then the place
+    i64 z = 0
+    i64[3] c
+    c[z] = z++
+    print("{c[0]} {c[1]} {z}")
+
+    i64[3] q
+    i64 k = 0
+    q[k++] += 5
+    print("{q[0]} {k}")
+
+    u8 *s = "abc".ptr
+    s++
+    print("{s[0:1]}")
+
+    Ids ids
+    print("next {ids.next()} {ids.next()} {ids.next()}")
+}

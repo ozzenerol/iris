@@ -50,6 +50,15 @@ static bool endsOperand(TokKind k) {
     }
 }
 
+/* Whether toks[i] ends an operand: a postfix ++ or -- does, x++. */
+static bool endsOperandAt(const Token *toks, int i) {
+    TokKind k = toks[i].kind;
+    if (k == P_INC || k == P_DEC) {
+        return i > 0 && toks[i - 1].kind != T_NEWLINE && endsOperandAt(toks, i - 1);
+    }
+    return endsOperand(k);
+}
+
 static bool isBinary(TokKind k) {
     switch (k) {
     case P_DEFINE: case P_ASSIGN: case P_EQ: case P_NE: case P_LT: case P_LE: case P_GT: case P_GE:
@@ -67,7 +76,8 @@ static bool isBinary(TokKind k) {
 /* An operator that can also be unary is unary after something that isn't
  * the end of an operand: -x, !ok, &v, *p, <-ch, ~bits. */
 static bool canBeUnary(TokKind k) {
-    return k == P_MINUS || k == P_BANG || k == P_AMP || k == P_STAR || k == P_LARROW || k == P_TILDE;
+    return k == P_MINUS || k == P_BANG || k == P_AMP || k == P_STAR || k == P_LARROW || k == P_TILDE || k == P_INC ||
+           k == P_DEC;
 }
 
 static bool isUnaryAt(const Token *toks, int i, int prev) {
@@ -78,7 +88,7 @@ static bool isUnaryAt(const Token *toks, int i, int prev) {
     if (i > 0 && toks[i - 1].kind == T_NEWLINE) {
         return canBeUnary(k);           /* at the start of a statement */
     }
-    return canBeUnary(k) && (prev < 0 || !endsOperand(toks[prev].kind));
+    return canBeUnary(k) && (prev < 0 || !endsOperandAt(toks, prev));
 }
 
 /* Whether the source had blank space between two tokens. */
@@ -92,7 +102,7 @@ static bool isKeyword(TokKind k) {
 
 /* A * in a pointer type, written the Iris way: u8 *p, Request *. */
 static bool pointerStar(const Token *toks, int i, int prev) {
-    if (prev < 0 || !endsOperand(toks[prev].kind)) {
+    if (prev < 0 || !endsOperandAt(toks, prev)) {
         return false;
     }
     const Token *s = &toks[i], *n = &toks[i + 1];
@@ -118,6 +128,13 @@ static bool spaceBetween(const Token *toks, int prev, int i, bool inBrackets) {
     }
     if (pk == P_ELLIPSIS) {
         return true;
+    }
+    char last = a->s[a->len - 1];
+    if ((last == '-' || last == '+') && b->s[0] == last && pk != T_STRING && pk != T_CHAR) {
+        return true;                            /* - -x, which would read as --x */
+    }
+    if ((k == P_INC || k == P_DEC) && i == prev + 1 && endsOperandAt(toks, prev)) {
+        return false;                           /* x++ */
     }
     if (k == P_DOT) {
         /* .read, .{x: 1}: a value of a type worked out from the context */

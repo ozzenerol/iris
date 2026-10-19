@@ -1,0 +1,15 @@
+// error: 10: '++' needs a number or a pointer, not str
+// error: 11: N is a constant and can't change
+// error: 12: this can't be assigned to
+// error: 14: '--' needs a number or a pointer, not bool
+
+const i64 N = 3
+
+void main() {
+    s := "hi"
+    s++
+    N++
+    5++
+    bool b = true
+    b--
+}

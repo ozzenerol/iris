@@ -102,6 +102,30 @@ flags 18
 
 Assignment is a statement: it gives no value, so it can't sit inside an expression or a condition.
 
+## Adding and taking one
+
+`n++` adds one to `n` and `n--` takes one away. Both can be used as a value: `n++` gives the value from before the change, and `++n` the one after it. That makes `n++` handy for filling an array from the front:
+
+```iris run
+void main() {
+    u16[4] ports
+    count := 0
+    ports[count++] = 22
+    ports[count++] = 80
+    ports[count++] = 443
+    print("{ports[0]} {ports[1]} {ports[2]}, count {count}")
+    retries := 3
+    print("{retries--} then {retries}, {--retries} then {retries}")
+}
+```
+
+```output
+22 80 443, count 3
+3 then 2, 1 then 1
+```
+
+They work on integers, floats and pointers (a pointer moves by one item), in variables, fields and array items, and they check for overflow as `+=` does. In an assignment the value on the right is worked out first and then the place, so `a[i] = i++` stores the old `i` at the new index.
+
 ## Several at once
 
 Several variables can be declared or assigned in one statement, with the names on the left and the values on the right. Every value is worked out before any variable changes, so two variables can swap without a third:

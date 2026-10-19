@@ -416,6 +416,11 @@ static void printNode(Node *n, int depth, const char *label) {
         line(depth, label, b.buf);
         child(n->a, d, NULL);
         break;
+    case N_INCDEC:
+        sbPrintf(&b, "%s %s", n->flags & F_POSTFIX ? "postfix" : "prefix", tokName(n->op));
+        line(depth, label, b.buf);
+        child(n->a, d, NULL);
+        break;
     case N_BINARY:
         sbPrintf(&b, "binary %s", tokName(n->op));
         line(depth, label, b.buf);

@@ -1,0 +1,27 @@
+file
+  func main
+    ret: void
+    body: block
+      postfix ++
+        name i
+      prefix --
+        name j
+      assign =
+        target: index
+          of: name a
+          postfix ++
+            name n
+        value: unary -
+          postfix --
+            name k
+      define x
+        value: binary +
+          prefix ++
+            unary *
+              name p
+          postfix ++
+            field .r
+              name q
+      unary -
+        unary -
+          name y

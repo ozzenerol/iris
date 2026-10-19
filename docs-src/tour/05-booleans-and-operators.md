@@ -136,6 +136,7 @@ not found
 | `== != < <= > >=`, `is`, `is not` | comparison |
 | `&& \|\| !`, `and or not` | and, or, not, on `bool` |
 | `-x` | the negative of x |
+| `x++ x-- ++x --x` | add or take one, giving the value from before or after (see [Variables](02-variables.html)) |
 | `&x`, `*p` | the address of x, and the value p points to (see [Pointers](17-pointers.html)) |
 | `a..b` | the range from a to before b, in `for` and slicing; in `match`, from a to b with both ends |
 | `ch <- v`, `<-ch` | sending to a channel and taking from it (see [Tasks and channels](24-tasks-and-channels.html)) |
@@ -145,7 +146,7 @@ not found
 
 In a longer expression, some operators bind more tightly than others. From tightest to loosest:
 
-1. `-x`, `!x`, `~x`, `&x`, `*p` (the ones written before a value)
+1. `x++`, `x--`, then `-x`, `!x`, `~x`, `&x`, `*p`, `++x`, `--x` (the ones written before a value)
 2. `* / % << >> &`
 3. `+ - | ^`
 4. `== != < <= > >=`, `is`, `is not`

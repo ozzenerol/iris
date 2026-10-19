@@ -47,7 +47,7 @@ static bool endsStatement(TokKind k) {
     case T_IDENT: case T_INT: case T_FLOAT: case T_STRING: case T_STRING3:
     case T_RSTRING: case T_CHAR: case T_ASM_BODY: case P_RPAREN:
     case P_RBRACK: case P_RBRACE: case K_RETURN: case K_BREAK:
-    case K_CONTINUE: case K_TRUE: case K_FALSE: case K_NULL:
+    case K_CONTINUE: case K_TRUE: case K_FALSE: case K_NULL: case P_INC: case P_DEC:
         return true;
     default:
         return false;
@@ -124,6 +124,7 @@ static const struct {
     {"<<=", P_SHL_ASSIGN}, {">>=", P_SHR_ASSIGN}, {"...", P_ELLIPSIS},
     {"..", P_DOTDOT}, {":=", P_DEFINE}, {"==", P_EQ}, {"!=", P_NE},
     {"<=", P_LE}, {">=", P_GE}, {"<<", P_SHL}, {">>", P_SHR},
+    {"++", P_INC}, {"--", P_DEC},
     {"+=", P_PLUS_ASSIGN}, {"-=", P_MINUS_ASSIGN}, {"*=", P_STAR_ASSIGN},
     {"/=", P_SLASH_ASSIGN}, {"%=", P_PERCENT_ASSIGN}, {"&=", P_AMP_ASSIGN},
     {"&&", P_ANDAND}, {"|=", P_PIPE_ASSIGN}, {"||", P_OROR},

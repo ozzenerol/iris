@@ -76,6 +76,7 @@ These are suggestions. They are used in the examples on these pages until they a
 | `when` tests `os`, `arch` and `mode`. Only the chosen branch is checked. | Platform code can use names that exist only on that platform. |
 | The value after `catch` is one operand: `f() catch 0 != 5` is `(f() catch 0) != 5`. | The fallback is almost always one value, and comparisons read as expected. |
 | A call that gets temporary text or a temporary String can't return a `str`, slice or pointer. | The result could point into memory freed at the end of the statement. |
+| `x++` and `x--` are values: the one from before the change; `++x` and `--x` give the one after. | `a[n++] = v` fills an array in one line, as it does in C. |
 | Copying a `Mutex`, an `Atomic` or a struct that holds one is an error. | A copy would be a second lock that guards nothing. |
 | `iris fmt` works on tokens and has no settings. Where spacing is ambiguous it keeps what was written. | One layout for everyone, and comments and strings can't be damaged. |
 | `expect` reports a failure and the test goes on; an error from `try` ends the test. | One run shows every failed check of a test. |

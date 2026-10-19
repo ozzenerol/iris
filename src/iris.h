@@ -87,7 +87,8 @@ void verrorAt(Source *src, int line, int col, const char *fmt, va_list ap);
     X(P_AMP_ASSIGN, "&=") X(P_ANDAND, "&&") X(P_PIPE, "|")                 \
     X(P_PIPE_ASSIGN, "|=") X(P_OROR, "||") X(P_CARET, "^")                 \
     X(P_CARET_ASSIGN, "^=") X(P_TILDE, "~") X(P_BANG, "!")                 \
-    X(P_ARROW, "=>") X(P_LARROW, "<-") X(P_AT, "@")
+    X(P_ARROW, "=>") X(P_LARROW, "<-") X(P_AT, "@")                 \
+    X(P_INC, "++") X(P_DEC, "--")
 
 typedef enum {
 #define X(k, s) k,
@@ -129,6 +130,7 @@ typedef enum {
     N_UNARY, N_BINARY, N_CALL, N_NAMED_ARG, N_INDEX, N_SLICE, N_FIELD_ACCESS,
     N_ENUM_DOT, N_STRUCT_LIT, N_FIELD_INIT, N_ARRAY_LIT, N_TUPLE, N_TRY,
     N_CATCH, N_COMPTIME, N_CHAN_MAKE, N_THREAD,
+    N_INCDEC,               /* ++x, x++, --x, x--: a: the place; op: P_INC or P_DEC; flags F_POSTFIX */
     /* added by the checker */
     N_CONVERT,              /* a: the value; type: the target; flags F_EXPLICIT */
     N_SELF_PARAM            /* the implicit self parameter of a method */
@@ -164,6 +166,7 @@ enum {
     F_CLI = 1 << 27,        /* a struct with @flags */
     F_REST = 1 << 28,       /* a T... parameter: the arguments left over, as a T[] */
     F_NORETURN = 1 << 29,   /* @noreturn: a call to the function never comes back, like panic */
+    F_POSTFIX = 1 << 30,    /* x++ and x--: the value is the one before the change */
 };
 
 typedef struct Node Node;

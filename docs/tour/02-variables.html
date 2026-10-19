@@ -109,6 +109,21 @@ try {
 <pre class="out"><code>window 160
 flags 18</code></pre>
 <p>Assignment is a statement: it gives no value, so it can't sit inside an expression or a condition.</p>
+<h2 id="adding-and-taking-one"><a href="#adding-and-taking-one">Adding and taking one</a></h2>
+<p><code>n++</code> adds one to <code>n</code> and <code>n--</code> takes one away. Both can be used as a value: <code>n++</code> gives the value from before the change, and <code>++n</code> the one after it. That makes <code>n++</code> handy for filling an array from the front:</p>
+<pre class="code run"><code><span class="t">void</span> main() {
+    <span class="t">u16</span>[<span class="n">4</span>] ports
+    count := <span class="n">0</span>
+    ports[count++] = <span class="n">22</span>
+    ports[count++] = <span class="n">80</span>
+    ports[count++] = <span class="n">443</span>
+    print(<span class="s">&quot;{ports[0]} {ports[1]} {ports[2]}, count {count}&quot;</span>)
+    retries := <span class="n">3</span>
+    print(<span class="s">&quot;{retries--} then {retries}, {--retries} then {retries}&quot;</span>)
+}</code></pre>
+<pre class="out"><code>22 80 443, count 3
+3 then 2, 1 then 1</code></pre>
+<p>They work on integers, floats and pointers (a pointer moves by one item), in variables, fields and array items, and they check for overflow as <code>+=</code> does. In an assignment the value on the right is worked out first and then the place, so <code>a[i] = i++</code> stores the old <code>i</code> at the new index.</p>
 <h2 id="several-at-once"><a href="#several-at-once">Several at once</a></h2>
 <p>Several variables can be declared or assigned in one statement, with the names on the left and the values on the right. Every value is worked out before any variable changes, so two variables can swap without a third:</p>
 <pre class="code run"><code><span class="t">void</span> main() {
@@ -196,7 +211,7 @@ edge-1: request 2</code></pre>
     <nav class="pager"><a class="prev" href="01-hello.html"><span>Previous</span>A first program</a><a class="next" href="03-integers.html"><span>Next</span>Integers</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-with">Declaring with :=</a></li><li><a href="#declaring-with-a-type">Declaring with a type</a></li><li><a href="#zero-values">Zero values</a></li><li><a href="#assignment">Assignment</a></li><li><a href="#several-at-once">Several at once</a></li><li><a href="#scope">Scope</a></li><li><a href="#globals">Globals</a></li><li><a href="#constants">Constants</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-with">Declaring with :=</a></li><li><a href="#declaring-with-a-type">Declaring with a type</a></li><li><a href="#zero-values">Zero values</a></li><li><a href="#assignment">Assignment</a></li><li><a href="#adding-and-taking-one">Adding and taking one</a></li><li><a href="#several-at-once">Several at once</a></li><li><a href="#scope">Scope</a></li><li><a href="#globals">Globals</a></li><li><a href="#constants">Constants</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

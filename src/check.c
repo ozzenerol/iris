@@ -147,6 +147,7 @@ struct Instance {
 };
 
 static void checkStmt(Checker *c, Node *s);
+static bool assignable(Checker *c, Node *target);
 
 static void error(Checker *c, Node *at, const char *fmt, ...) {
     va_list ap;
@@ -3158,6 +3159,17 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         return checkTry(c, e);
     case N_CATCH:
         return checkCatch(c, e, expected);
+    case N_INCDEC: {
+        Type *t = checkExpr(c, &e->a, NULL);
+        if (isErr(t) || !assignable(c, e->a)) {
+            return setType(e, &tyError);
+        }
+        if (!isInt(t) && !isFloat(t) && t->kind != TY_PTR) {
+            error(c, e, "'%s' needs a number or a pointer, not %s", tokName(e->op), t->name);
+            return setType(e, &tyError);
+        }
+        return setType(e, t);
+    }
     case N_ENUM_DOT: {
         if (!expected || expected->kind != TY_ENUM) {
             error(c, e, "the enum of .%s can't be worked out here; write the enum's name before the dot", e->name);
@@ -5207,7 +5219,8 @@ static void checkStmt(Checker *c, Node *s) {
         if (x->kind == N_THREAD) {
             x->ival = 1;            /* nobody joins it: it frees itself */
         }
-        bool used = x->kind == N_CALL || x->kind == N_THREAD || (x->kind == N_BINARY && x->op == P_LARROW) ||
+        bool used = x->kind == N_CALL || x->kind == N_THREAD || x->kind == N_INCDEC ||
+                    (x->kind == N_BINARY && x->op == P_LARROW) ||
                     ((x->kind == N_TRY || x->kind == N_CATCH) &&
                                           (x->type == &tyVoid || x->type->kind == TY_NORETURN));
         if (!used && (x->kind == N_TRY || x->kind == N_CATCH) && !isErr(x->type)) {

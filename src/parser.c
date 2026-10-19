@@ -905,6 +905,13 @@ static Node *parsePostfix(Parser *p) {
             }
             expect(p, P_RBRACK);
             p->noStructLit = saved;
+        } else if (t->kind == P_INC || t->kind == P_DEC) {
+            next(p);
+            Node *n = node(p, N_INCDEC, t);
+            n->op = t->kind;
+            n->flags |= F_POSTFIX;
+            n->a = e;
+            e = n;
         } else if (t->kind == P_DOT) {
             next(p);
             Token *name = expectIdent(p, "a field or method name after '.'");
@@ -937,6 +944,13 @@ static Node *parseUnaryInner(Parser *p) {
     case P_MINUS: case P_BANG: case P_TILDE: case P_AMP: case P_STAR: case P_LARROW: {
         next(p);
         Node *n = node(p, N_UNARY, t);
+        n->op = t->kind;
+        n->a = parseUnary(p);
+        return n;
+    }
+    case P_INC: case P_DEC: {
+        next(p);
+        Node *n = node(p, N_INCDEC, t);
         n->op = t->kind;
         n->a = parseUnary(p);
         return n;
