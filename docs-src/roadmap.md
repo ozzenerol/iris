@@ -62,3 +62,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.54 | `crypto.sha512`, `hmacSha512`, `hkdfSha256`, and Ed25519 signatures with `ed25519Public`, `ed25519Sign` and `ed25519Verify`. | released |
 | 0.54.1 | A program's output goes out whenever it waits, so a stopped server's output isn't lost when it goes to a file or a pipe. | released |
 | 0.55 | `u64(p)` and `i64(p)` give a pointer's address, and `sizeof` and `alloc` take array types: `sizeof(Entry[4])`. | released |
+| 0.56 | Methods with type parameters of their own, `Batch[T].map[U](U(T) f)`, with the types worked out from each call. | released |
