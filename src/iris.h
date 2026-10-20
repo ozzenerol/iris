@@ -270,6 +270,8 @@ typedef struct {
     NodeList instances;     /* filled by the checker: copies of generics */
     const char *links[64];  /* C libraries to link: link lines in iris.mod */
     int nlinks;
+    const char *csources[64];   /* .c files in the program's folders, compiled with it */
+    int ncsources;
     NodeList tests;         /* iris test: the functions the test blocks became */
     Module *core;           /* std/core: its names are seen by every module */
     Module *text;           /* std/str: its functions are also methods of str and String */

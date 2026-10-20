@@ -184,13 +184,6 @@ static void notDeclared(Checker *c, Node *at, const char *name) {
     error(c, at, "%s is not declared", name);
 }
 
-static void notYet(Checker *c, Node *at, const char *what, const char *version) {
-    /* "generic types are", "this expression is", "enums whose values carry data are" */
-    const char *sp = strchr(what, ' ');
-    bool firstPlural = sp && sp > what && sp[-1] == 's' && strncmp(what, "this ", 5) != 0;
-    bool plural = what[strlen(what) - 1] == 's' || strstr(what, " and ") || firstPlural;
-    error(c, at, "%s %s not supported yet (planned for %s)", what, plural ? "are" : "is", version);
-}
 
 static Scope *pushScope(Checker *c, bool function) {
     Scope *s = arenaAlloc(c->arena, sizeof(Scope));
@@ -1043,7 +1036,7 @@ static Type *resolveType(Checker *c, Node *t) {
         return funcOf(ret, params, t->list.len);
     }
     default:
-        notYet(c, t, "this kind of type", "a later version");
+        error(c, t, "this is not a type");
         return &tyError;
     }
 }
@@ -3538,7 +3531,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             error(c, e, "this is a type, not a value");
             return setType(e, &tyError);
         }
-        notYet(c, e, "this expression", "a later version");
+        error(c, e, "this is not a value");
         return setType(e, &tyError);
     }
 }
@@ -5823,10 +5816,10 @@ static void checkStmt(Checker *c, Node *s) {
         return;
     }
     case N_ASM:
-        notYet(c, s, "assembly", "a later version");
+        error(c, s, "Iris has no inline assembly; put it in a .c file next to the program and call it with import c");
         return;
     default:
-        notYet(c, s, "this statement", "a later version");
+        error(c, s, "this is not a statement");
         return;
     }
 }
@@ -6448,9 +6441,6 @@ bool checkProgram(Arena *a, Program *prog) {
                     if (d->list.len == 1) {
                         declareGlobal(&c, g, d->list.items[0], d->list.items[0]->name);
                     }
-                    break;
-                case N_WHEN:
-                    notYet(&c, d, "when", "a later version");
                     break;
                 default:
                     error(&c, d, "this can't appear outside a function");

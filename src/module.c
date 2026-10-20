@@ -15,6 +15,7 @@
 #include "iris.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,12 @@ static void readFolder(Loader *L, Module *m, const char *dir, Node *at) {
         size_t len = strlen(e->d_name);
         if (len > 5 && strcmp(e->d_name + len - 5, ".iris") == 0 && e->d_name[0] != '.') {
             names[n++] = arenaStrndup(L->arena, e->d_name, len);
+        } else if (len > 2 && strcmp(e->d_name + len - 2, ".c") == 0 && e->d_name[0] != '.' &&
+                   L->prog->ncsources < 64) {
+            /* C files of the module are compiled with the program */
+            char full[PATH_MAX];
+            char *c = join(L->arena, dir, e->d_name);
+            L->prog->csources[L->prog->ncsources++] = realpath(c, full) ? arenaStrndup(L->arena, full, strlen(full)) : c;
         }
     }
     closedir(d);

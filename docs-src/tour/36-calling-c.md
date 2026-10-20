@@ -127,3 +127,36 @@ Memory from C's `malloc` is freed with C's `free` (`c.free_`), and memory from I
 ## The standard library and C
 
 Parts of the standard library are made this way: TLS calls OpenSSL, `sqlite` calls SQLite, and `compress` calls zlib, each loaded the first time a program uses it. A program that needs another C library uses `import c` the same way.
+
+## C files of the program
+
+A `.c` file in a project's folder is compiled with the program and linked into it. Its header is imported with `import c` like any other, so a small piece of C sits next to the Iris code that uses it:
+
+```c
+// bits.h
+#include <stdint.h>
+
+int64_t bits_set(uint64_t v);
+```
+
+```c
+// bits.c
+#include "bits.h"
+
+int64_t bits_set(uint64_t v) {
+    return __builtin_popcountll(v);
+}
+```
+
+```iris
+// main.iris
+import c "bits.h"
+
+void main() {
+    print("{c.bits_set(0xff)}")
+}
+```
+
+`iris run .` in the folder prints `8`. The C files are built with the same mode as the program, so a debug build checks their memory too.
+
+`asm` is a reserved word, and Iris has no inline assembly. Code that needs a particular instruction goes in a C file, with C's `asm` there.

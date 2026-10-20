@@ -1,0 +1,9 @@
+// expect: 8 64 0
+// expect: true
+
+import c "bits.h"
+
+void main() {
+    print("{c.bits_set(0xff)} {c.bits_set(0xffffffffffffffff)} {c.bits_set(0)}")
+    print("{c.bits_mix(1, 2) == c.bits_mix(2, 1)}")
+}

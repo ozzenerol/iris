@@ -138,9 +138,10 @@ static bool runComptime(Arena *a, const char *path, const char **includes, int n
         snprintf(exe, sizeof exe, "%s/program", dir);
         snprintf(outPath, sizeof outPath, "%s/comptime.out", dir);
         snprintf(errPath, sizeof errPath, "%s/comptime.err", dir);
-        const char *links[128];
+        const char *links[256];
         int n = 0;
         for (int k = 0; k < helper->nlinks; k++) links[n++] = helper->links[k];
+        for (int k = 0; k < helper->ncsources; k++) links[n++] = helper->csources[k];
         ok = compileIR(ir, exe, MODE_DEBUG, dir, links, n);
     }
     gTarget = saved;
@@ -232,8 +233,8 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     if (!cc || !*cc) {
         cc = "clang";
     }
-    char *args[200];
-    char linkArgs[128][300];
+    char *args[320];
+    char linkArgs[256][300];
     int n = 0;
     args[n++] = (char *)cc;
     args[n++] = mode == MODE_DEBUG ? "-O0" : "-O2";
@@ -258,7 +259,12 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     args[n++] = rtPath;
     args[n++] = "-o";
     args[n++] = (char *)out;
-    for (int i = 0; i < nlinks && i < 128; i++) {
+    for (int i = 0; i < nlinks && i < 256; i++) {
+        size_t ln = strlen(links[i]);
+        if (ln > 2 && strcmp(links[i] + ln - 2, ".c") == 0) {
+            args[n++] = (char *)links[i];       /* a C file of the program */
+            continue;
+        }
         snprintf(linkArgs[i], sizeof linkArgs[i], "-l%s", links[i]);
         args[n++] = linkArgs[i];
     }
@@ -408,10 +414,11 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         rc = 0;
         goto done;
     }
-    const char *allLinks[128];
+    const char *allLinks[256];
     int nAll = 0;
     for (int k = 0; k < prog->nlinks; k++) allLinks[nAll++] = prog->links[k];
     for (int k = 0; k < nlinks; k++) allLinks[nAll++] = links[k];
+    for (int k = 0; k < prog->ncsources; k++) allLinks[nAll++] = prog->csources[k];
     char dir[4096];
     if (!makeTempDir(dir, sizeof dir)) {
         goto done;

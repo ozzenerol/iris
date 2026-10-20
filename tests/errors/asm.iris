@@ -1,0 +1,9 @@
+// error: 5: Iris has no inline assembly; put it in a .c file next to the program and call it with import c
+
+void main() {
+    i64 x = 1
+    asm {
+        nop
+    }
+    print("{x}")
+}

@@ -115,10 +115,30 @@ link sqlite3</code></pre>
 <p>Memory from C's <code>malloc</code> is freed with C's <code>free</code> (<code>c.free_</code>), and memory from Iris's <code>alloc</code> with Iris's <code>free</code>; the two don't mix. A C function that keeps a pointer it was given expects the memory to stay: give it memory from <code>alloc</code>, or a global, not a local variable's address.</p>
 <h2 id="the-standard-library-and-c"><a href="#the-standard-library-and-c">The standard library and C</a></h2>
 <p>Parts of the standard library are made this way: TLS calls OpenSSL, <code>sqlite</code> calls SQLite, and <code>compress</code> calls zlib, each loaded the first time a program uses it. A program that needs another C library uses <code>import c</code> the same way.</p>
+<h2 id="c-files-of-the-program"><a href="#c-files-of-the-program">C files of the program</a></h2>
+<p>A <code>.c</code> file in a project's folder is compiled with the program and linked into it. Its header is imported with <code>import c</code> like any other, so a small piece of C sits next to the Iris code that uses it:</p>
+<pre class="code"><code>// bits.h
+#include &lt;stdint.h&gt;
+
+int64_t bits_set(uint64_t v);</code></pre>
+<pre class="code"><code>// bits.c
+#include &quot;bits.h&quot;
+
+int64_t bits_set(uint64_t v) {
+    return __builtin_popcountll(v);
+}</code></pre>
+<pre class="code"><code><span class="c">// main.iris</span>
+<span class="k">import</span> c <span class="s">&quot;bits.h&quot;</span>
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.<span class="f">bits_set</span>(<span class="n">0xff</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<p><code>iris run .</code> in the folder prints <code>8</code>. The C files are built with the same mode as the program, so a debug build checks their memory too.</p>
+<p><code>asm</code> is a reserved word, and Iris has no inline assembly. Code that needs a particular instruction goes in a C file, with C's <code>asm</code> there.</p>
     <nav class="pager"><a class="prev" href="35-processes.html"><span>Previous</span>Programs and the environment</a><a class="next" href="37-testing.html"><span>Next</span>Testing</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#import-c">import c</a></li><li><a href="#text-at-the-border">Text at the border</a></li><li><a href="#types">Types</a></li><li><a href="#callbacks">Callbacks</a></li><li><a href="#called-from-c">Called from C</a></li><li><a href="#memory-at-the-border">Memory at the border</a></li><li><a href="#the-standard-library-and-c">The standard library and C</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#import-c">import c</a></li><li><a href="#text-at-the-border">Text at the border</a></li><li><a href="#types">Types</a></li><li><a href="#callbacks">Callbacks</a></li><li><a href="#called-from-c">Called from C</a></li><li><a href="#memory-at-the-border">Memory at the border</a></li><li><a href="#the-standard-library-and-c">The standard library and C</a></li><li><a href="#c-files-of-the-program">C files of the program</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
