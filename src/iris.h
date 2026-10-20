@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.57.0"
+#define IRIS_VERSION "0.58.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
