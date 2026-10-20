@@ -57,3 +57,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.50.1 | Go to definition and hover work on `Error`, `e.code`, `e.message`, `error`, `print` and the other built-in names. | released |
 | 0.51 | `packed` structs, `align(n)`, bitfields (`u8 version: 4`), fields in network byte order (`u16be`, `u32be`, `u64be`), and `sizeof(T)`, so a protocol header is read straight from the bytes. | released |
 | 0.51.1 | An unknown attribute says which ones the declaration takes, and `void *` says to use `u8 *`. | released |
+| 0.52 | `Arena`: memory for many values that are freed together, with `a.alloc(T, n)`, `a.copy(text)`, `reset` and `free`. | released |
