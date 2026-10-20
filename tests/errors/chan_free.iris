@@ -1,0 +1,7 @@
+void main() {
+    c := chan[i64](1)
+    c.free(1)
+    c.close()
+}
+// error: 3: free takes no arguments
+// error: 4: chan[i64] has no method close

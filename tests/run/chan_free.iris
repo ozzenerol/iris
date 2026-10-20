@@ -1,0 +1,47 @@
+// expect: got 3
+// expect: done 45
+// expect: scoped 7
+
+struct Box {
+    chan[i64] ch
+}
+
+void sum(chan[i64] jobs, chan[i64] out) {
+    i64 total
+    for i in 0..10 {
+        total += <-jobs
+    }
+    out <- total
+}
+
+void main() {
+    a := chan[i64](4)
+    a <- 3
+    print("got {<-a}")
+    a.free()
+
+    jobs := chan[i64](0)
+    out := chan[i64](1)
+    spawn sum(jobs, out)
+    for i in 0..10 {
+        jobs <- i
+    }
+    print("done {<-out}")
+    jobs.free()
+    out.free()
+
+    for i in 0..1000 {
+        scoped chan[i64] s = chan[i64](16)
+        s <- 7
+        if i == 999 {
+            print("scoped {<-s}")
+        }
+    }
+
+    b := Box{ch: chan[i64](1)}
+    p := &b
+    p.ch.free()
+
+    chan[i64] never
+    never.free()
+}

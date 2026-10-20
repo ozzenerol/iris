@@ -1,0 +1,12 @@
+// panic: a channel was freed while a task was waiting on it
+
+void wait(chan[i64] c) {
+    _ = <-c
+}
+
+void main() {
+    c := chan[i64](1)
+    spawn wait(c)
+    sleep(10ms)
+    c.free()
+}

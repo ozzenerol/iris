@@ -81,6 +81,26 @@ Values come out in the order they went in. A channel is a value that refers to t
 
 A value sent on a channel is copied into it. A `String` or another value that owns memory is handed over that way: the task that takes it frees it. Above, `serve` sends each line it read, and `main` frees it.
 
+## Freeing a channel
+
+`ch.free()` gives back a channel's memory. Free it once no task uses it anymore. Values still in it are not freed, so take out any that own memory first. Freeing a channel that a task is waiting on stops the program with a panic. A channel that holds no queue yet (a `chan[T]` variable never given one) frees as nothing. `scoped` works too:
+
+```iris run
+void main() {
+    for i in 0..3 {
+        scoped chan[i64] ch = chan[i64](1)
+        ch <- i * 10
+        print("took {<-ch}")
+    }
+}
+```
+
+```output
+took 0
+took 10
+took 20
+```
+
 ## No buffer
 
 A channel made with room for 0 values has no buffer: `ch <- v` waits until another task takes the value, which goes straight from one to the other. Both sides know the hand-over happened, which makes it a way for tasks to wait for each other. Here `main` waits until the server is listening before it connects:

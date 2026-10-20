@@ -3885,7 +3885,7 @@ static bool checkStarted(Checker *c, Node **callp, const char *word, const char 
 static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
     Node *recv = e->a->a;
     Type *base = t->kind == TY_PTR ? t->elem : t;
-    if (t->kind != TY_PTR && base->kind != TY_THREAD && !addressable(recv)) {
+    if (t->kind != TY_PTR && base->kind != TY_THREAD && base->kind != TY_CHAN && !addressable(recv)) {
         error(c, recv, "%s must be called on a variable, a field or through a pointer", name);
         return setType(e, &tyError);
     }
@@ -3895,6 +3895,7 @@ static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
         {TY_ATOMIC, "swap", BI_ATOMIC_SWAP, 1}, {TY_ATOMIC, "cas", BI_ATOMIC_CAS, 2},
         {TY_MUTEX, "lock", BI_MUTEX_LOCK, 0}, {TY_MUTEX, "unlock", BI_MUTEX_UNLOCK, 0},
         {TY_MUTEX, "tryLock", BI_MUTEX_TRY_LOCK, 0}, {TY_THREAD, "join", BI_THREAD_JOIN, 0},
+        {TY_CHAN, "free", BI_CHAN_FREE, 0},
     };
     for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
         if ((int)base->kind != methods[i].kind || strcmp(methods[i].name, name) != 0) continue;
@@ -4034,7 +4035,7 @@ static Type *checkMethodCall(Checker *c, Node *e) {
 
     {
         Type *base = t->kind == TY_PTR ? t->elem : t;
-        if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD) {
+        if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD || base->kind == TY_CHAN) {
             return checkSyncMethod(c, e, t, name);
         }
         bool generatedFree = isJsonStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & (F_ENV | F_CLI)));
@@ -5322,7 +5323,7 @@ static void checkLocalVar(Checker *c, Node *s) {
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
         Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
-        if (t->kind == TY_STRING || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & (F_ENV | F_CLI)))))) {
+        if (t->kind == TY_STRING || t->kind == TY_CHAN || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & (F_ENV | F_CLI)))))) {
             s->ref = NULL;              /* freed by the runtime */
         } else if (!m) {
             error(c, s, "scoped needs a type with a free method; %s has none", t->name);

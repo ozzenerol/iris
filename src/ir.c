@@ -1343,14 +1343,19 @@ static Val emitSync(IR *ir, Node *e) {
     Node *recv = e->a->a;
     Type *rt = recv->type;
     Type *base = rt->kind == TY_PTR ? rt->elem : rt;
-    if (e->builtin == BI_THREAD_JOIN) {
+    if (e->builtin == BI_THREAD_JOIN || e->builtin == BI_CHAN_FREE) {
         Val h = emitExpr(ir, recv);
         if (rt->kind == TY_PTR) {
             const char *l = tmp(ir);
             ins(ir, "%s = load ptr, ptr %s", l, h.s);
             h.s = l;
         }
-        ins(ir, "call void @iris_thread_join(ptr %s)", h.s);
+        if (e->builtin == BI_CHAN_FREE) {
+            ins(ir, "call void @iris_chan_free(ptr %s, ptr %s, i32 %d, i32 %d, ptr %s)", h.s, ir->fileStr, e->line, e->col,
+                fnName(ir));
+        } else {
+            ins(ir, "call void @iris_thread_join(ptr %s)", h.s);
+        }
         return val("", &tyVoid);
     }
     const char *addr = rt->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
@@ -1569,7 +1574,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
     case BI_ATOMIC_LOAD: case BI_ATOMIC_STORE: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB:
     case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS:
     case BI_MUTEX_LOCK: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK:
-    case BI_THREAD_JOIN:
+    case BI_THREAD_JOIN: case BI_CHAN_FREE:
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
@@ -1997,6 +2002,11 @@ static void runFrame(IR *ir, DeferFrame *f, bool isError) {
             /* a scoped variable: call its free */
             if (d->type->kind == TY_STRING) {
                 ins(ir, "call void @iris_string_free(ptr %s)", d->ir);
+            } else if (d->type->kind == TY_CHAN) {
+                const char *l = tmp(ir);
+                ins(ir, "%s = load ptr, ptr %s", l, d->ir);
+                ins(ir, "call void @iris_chan_free(ptr %s, ptr %s, i32 %d, i32 %d, ptr %s)", l, ir->fileStr, d->line, d->col,
+                    fnName(ir));
             } else if (!d->ref) {
                 ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, d->type), d->ir);
             } else {
@@ -3672,6 +3682,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare ptr @iris_chan_new(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_chan_send(ptr, ptr)\n"
            "declare void @iris_chan_recv(ptr, ptr)\n"
+           "declare void @iris_chan_free(ptr, ptr, i32, i32, ptr)\n"
            "declare i64 @iris_select(i64, ptr, ptr, i64)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");

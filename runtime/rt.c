@@ -2117,6 +2117,21 @@ void iris_chan_recv(Chan *c, void *out) {
     spinUnlock(&c->lock);
 }
 
+/* Frees the channel. Values still in it are not freed. A channel
+   something waits on can't be freed; one never made is nothing to free. */
+void iris_chan_free(Chan *c, const char *file, int line, int col, const char *fn) {
+    if (!c) return;
+    spinLock(&c->lock);
+    bool waiting = c->recvWaiters || c->sendWaiters;
+    spinUnlock(&c->lock);
+    if (waiting) {
+        static const char msg[] = "a channel was freed while a task was waiting on it";
+        stop(msg, sizeof msg - 1, file, line, col, fn);
+    }
+    free(c->buf);
+    free(c);
+}
+
 /* select: takes a value from the first of chans that has one, or returns
  * n when timeout (ns, -1 for none) runs out first. */
 int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
