@@ -677,7 +677,7 @@ static Type *enumType(Checker *c, Node *decl) {
         t->ir = sbFinish(&b, c->arena);
     }
     if (decl->attrs.len) {
-        notYet(c, decl->attrs.items[0], "attributes", "a later version");
+        error(c, decl->attrs.items[0], "@%s isn't an attribute of an enum; an enum takes none", decl->attrs.items[0]->name);
     }
     if (t->isFlags && t->hasData) {
         error(c, decl, "a flag enum's values can't carry data");
@@ -893,7 +893,7 @@ static Type *resolveType(Checker *c, Node *t) {
         Type *e = resolveType(c, t->a);
         if (isErr(e)) return e;
         if (e == &tyVoid) {
-            notYet(c, t, "void pointers", "a later version");
+            error(c, t, "a pointer to anything is u8 *: every pointer converts to it, and it converts back to any pointer");
             return &tyError;
         }
         return ptrTo(e);
@@ -1280,7 +1280,7 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
         return;
     }
     if (strcmp(at->name, "json") != 0) {
-        notYet(c, at, "attributes", "a later version");
+        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @env(...) or @flag(...)", at->name);
         return;
     }
     if (!(d->flags & F_JSON)) {
@@ -1475,7 +1475,7 @@ static void resolveStruct(Checker *c, Type *t) {
                 error(c, at, "@env on a struct takes nothing, or a prefix for the names in quotes: @env(\"APP\")");
             }
         } else {
-            notYet(c, at, "attributes", "a later version");
+            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @env or @flags", at->name);
         }
     }
     for (int i = 0; i < d->list.len; i++) {
@@ -2870,7 +2870,7 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
 static Type *checkIndex(Checker *c, Node *e) {
     Type *t = checkExpr(c, &e->a, NULL);
     if (e->list.len != 1) {
-        notYet(c, e, "generic types", "0.6");
+        error(c, e, "an index is one value: a[i]");
         return setType(e, &tyError);
     }
     Type *ti = checkExpr(c, &e->list.items[0], NULL);
@@ -5829,7 +5829,7 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
                    strncmp(f->src->path, "std/", 4) == 0) {
             f->flags |= F_INTRINSIC;    /* the compiler makes calls to it */
         } else {
-            notYet(c, at, "attributes", "a later version");
+            error(c, at, "@%s isn't an attribute of a function; a function takes @extern, @export, @inline, @unchecked or @noreturn", at->name);
         }
     }
     if (!f->c && !f->d && !(f->flags & (F_EXTERN | F_INTRINSIC)) && !f->b) {

@@ -1,0 +1,20 @@
+// error: 6: @foo isn't an attribute of a constant; a constant takes none
+// error: 9: @bar isn't an attribute of a global; a global takes none
+// error: 12: @baz isn't an attribute of an interface; an interface takes none
+// error: 17: @q isn't an attribute of a type alias; a type alias takes none
+
+@foo
+const X = 1
+
+@bar
+i64 g
+
+@baz
+interface I {
+    i64 f()
+}
+
+@q
+type T = i64
+
+void main() { }

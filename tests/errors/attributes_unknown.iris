@@ -1,0 +1,22 @@
+// error: 8: @foo isn't an attribute of an enum; an enum takes none
+// error: 11: @bar isn't an attribute of a struct; a struct takes @json, @env or @flags
+// error: 13: @baz isn't an attribute of a field; a field takes @json(...), @env(...) or @flag(...)
+// error: 16: @qux isn't an attribute of a function; a function takes @extern, @export, @inline, @unchecked or @noreturn
+// error: 17: a pointer to anything is u8 *: every pointer converts to it, and it converts back to any pointer
+// error: 21: an index is one value: a[i]
+
+@foo
+enum Color { red }
+
+@bar
+struct S {
+    @baz i64 x
+}
+
+@qux
+void f(void *p) { }
+
+void main() {
+    i64[3] a
+    x := a[1, 2]
+}

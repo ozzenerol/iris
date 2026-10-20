@@ -1605,6 +1605,14 @@ static void parseParams(Parser *p, NodeList *out) {
 
 /* The rest of a function after its return type: the name (Type.name for a
  * method), type parameters, parameters, and the body. */
+/* Declarations that take no attributes say so for the first one. */
+static void noAttrs(Parser *p, NodeList attrs, const char *what) {
+    if (attrs.len) {
+        Node *a = attrs.items[0];
+        errorAt(p->src, a->line, a->col, "@%s isn't an attribute of %s; %s takes none", a->name, what, what);
+    }
+}
+
 static Node *parseFuncRest(Parser *p, Node *ret, NodeList attrs, unsigned flags, bool needBody) {
     Token *name = expectIdent(p, "a function name");
     Node *f = node(p, N_FUNC, name);
@@ -1888,7 +1896,7 @@ static Node *parseTopLevel(Parser *p) {
         expect(p, P_ASSIGN);
         c->b = parseExpr(p);
         c->flags = flags;
-        c->attrs = attrs;
+        noAttrs(p, attrs, "a constant");
         return c;
     }
     case K_TYPE: {
@@ -1899,6 +1907,7 @@ static Node *parseTopLevel(Parser *p) {
         expect(p, P_ASSIGN);
         td->a = parseType(p);
         td->flags = flags;
+        noAttrs(p, attrs, "a type alias");
         return td;
     }
     case K_STRUCT:
@@ -1906,8 +1915,10 @@ static Node *parseTopLevel(Parser *p) {
     case K_ENUM:
         return parseEnum(p, attrs, flags);
     case K_INTERFACE:
-        return parseInterface(p, attrs, flags);
+        noAttrs(p, attrs, "an interface");
+        return parseInterface(p, (NodeList){0}, flags);
     case K_TEST: {
+        noAttrs(p, attrs, "a test");
         next(p);
         Token *name = peek(p);
         if (name->kind != T_STRING) {
@@ -1920,12 +1931,13 @@ static Node *parseTopLevel(Parser *p) {
         return ts;
     }
     case K_WHEN:
+        noAttrs(p, attrs, "a when block");
         return parseWhen(p, true);
     case K_THREADLOCAL: {
         next(p);
         Node *type = parseType(p);
         Node *v = parseVarRest(p, type, flags | F_THREADLOCAL);
-        v->attrs = attrs;
+        noAttrs(p, attrs, "a global");
         return v;
     }
     default:
@@ -1933,6 +1945,7 @@ static Node *parseTopLevel(Parser *p) {
     }
 
     if (t->kind == T_IDENT && peekAt(p, 1)->kind == P_DEFINE) {
+        noAttrs(p, attrs, "a global");
         Node *d = parseSimpleStmt(p, true);
         d->flags |= flags;
         return d;
@@ -1947,7 +1960,7 @@ static Node *parseTopLevel(Parser *p) {
             }
             if (k == P_ASSIGN || k == T_NEWLINE || k == T_EOF || k == P_RBRACE) {
                 Node *v = parseVarRest(p, type, flags);
-                v->attrs = attrs;
+                noAttrs(p, attrs, "a global");
                 return v;
             }
         }
