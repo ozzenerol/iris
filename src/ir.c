@@ -1436,6 +1436,17 @@ static Val emitBuiltin(IR *ir, Node *e) {
         ins(ir, "%s = load %%String, ptr %s", r, slot);
         return val(r, &tyString);
     }
+    case BI_ARENA_ALLOC: {
+        Type *t = e->list.items[0]->type;
+        Val a = emitExpr(ir, e->b);
+        nullCheck(ir, a.s, e);
+        const char *size = sizeOf(ir, t);
+        Val n = emitExpr(ir, e->list.items[1]);
+        const char *p = tmp(ir);
+        ins(ir, "%s = call ptr @iris_arena_alloc(ptr %s, i64 %s, i64 %s, i64 %lld, ptr %s, i32 %d, i32 %d, ptr %s)", p,
+            a.s, size, n.s, (long long)typeAlignOf(t), ir->fileStr, e->line, e->col, fnName(ir));
+        return makeSlice(ir, p, n.s, e->type);
+    }
     case BI_ALLOC: {
         Type *t = e->list.items[0]->type;
         const char *size = sizeOf(ir, t);
@@ -3614,6 +3625,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"
+           "declare ptr @iris_arena_alloc(ptr, i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"
            "declare void @iris_string_free(ptr)\n"
            "declare void @iris_panic(ptr, i32, i32, ptr) noreturn\n"

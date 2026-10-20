@@ -1,0 +1,10 @@
+// stderr: use-after-poison
+
+void main() {
+    Arena a
+    defer a.free()
+    xs := a.alloc(i64, 4)
+    xs[1] = 5
+    a.reset()
+    print("{xs[1]}")
+}

@@ -953,6 +953,127 @@ void __sanitizer_start_switch_fiber(void **fake_stack_save, const void *bottom, 
 void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_old, size_t *size_old);
 #endif
 
+/* ---------------------------------------------------------------- std: core Arena */
+
+/* An Arena gives out memory from blocks it gets from malloc and frees them
+ * all at once. Each block starts with this header; what it gives out
+ * follows. In debug builds the memory not given out is poisoned, so
+ * AddressSanitizer reports a use after reset or free. */
+typedef struct ArenaBlock {
+    struct ArenaBlock *next;
+    size_t cap;
+} ArenaBlock;
+
+typedef struct {
+    int64_t blockSize;
+    ArenaBlock *blocks;
+    uint8_t *at, *end;
+    int64_t given;
+} IrisArena;
+
+#ifdef IRIS_ASAN
+void __asan_poison_memory_region(void const volatile *addr, size_t size);
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#define POISON(p, n) __asan_poison_memory_region((p), (n))
+#define UNPOISON(p, n) __asan_unpoison_memory_region((p), (n))
+#else
+#define POISON(p, n) ((void)(p), (void)(n))
+#define UNPOISON(p, n) ((void)(p), (void)(n))
+#endif
+
+static uint8_t *blockData(ArenaBlock *b) { return (uint8_t *)(b + 1); }
+
+static ArenaBlock *newBlock(size_t cap) {
+    ArenaBlock *b = malloc(sizeof(ArenaBlock) + cap);
+    if (!b) {
+        outOfMemory();
+    }
+    b->next = NULL;
+    b->cap = cap;
+    POISON(blockData(b), cap);
+    return b;
+}
+
+void *iris_arena_alloc(IrisArena *a, int64_t size, int64_t count, int64_t align, const char *file, int line,
+                       int col, const char *fn) {
+    if (count < 0) {
+        char msg[96];
+        int n = snprintf(msg, sizeof msg, "alloc of %lld items", (long long)count);
+        stop(msg, (size_t)n, file, line, col, fn);
+    }
+    if (count == 0) {
+        return NULL;
+    }
+    if (size > 0 && count > INT64_MAX / size) {
+        stop("alloc size overflows", 20, file, line, col, fn);
+    }
+    size_t n = (size_t)count * (size_t)(size ? size : 1);
+    size_t al = align > 0 ? (size_t)align : 1;
+    size_t bs = a->blockSize > 0 ? (size_t)a->blockSize : 64 * 1024;
+    uintptr_t p = ((uintptr_t)a->at + al - 1) & ~(uintptr_t)(al - 1);
+    if (!a->at || p + n > (uintptr_t)a->end) {
+        if (n + al > bs / 4) {
+            /* a big one gets a block of its own, and the current block stays */
+            ArenaBlock *b = newBlock(n + al);
+            if (a->blocks) {
+                b->next = a->blocks->next;
+                a->blocks->next = b;
+            } else {
+                a->blocks = b;
+            }
+            p = ((uintptr_t)blockData(b) + al - 1) & ~(uintptr_t)(al - 1);
+            UNPOISON((void *)p, n);
+            memset((void *)p, 0, n);
+            a->given += (int64_t)n;
+            return (void *)p;
+        }
+        ArenaBlock *b = newBlock(bs);
+        b->next = a->blocks;
+        a->blocks = b;
+        a->at = blockData(b);
+        a->end = a->at + bs;
+        p = ((uintptr_t)a->at + al - 1) & ~(uintptr_t)(al - 1);
+    }
+    a->at = (uint8_t *)(p + n);
+    UNPOISON((void *)p, n);
+    memset((void *)p, 0, n);
+    a->given += (int64_t)n;
+    return (void *)p;
+}
+
+/* Everything given out is given back; the block in use is kept for more. */
+void iris_arena_reset(IrisArena *a) {
+    ArenaBlock *keep = NULL;
+    for (ArenaBlock *b = a->blocks, *next; b; b = next) {
+        next = b->next;
+        if (!keep && a->at && a->at >= blockData(b) && a->at <= blockData(b) + b->cap) {
+            keep = b;
+            continue;
+        }
+        free(b);
+    }
+    a->blocks = keep;
+    a->given = 0;
+    if (keep) {
+        keep->next = NULL;
+        a->at = blockData(keep);
+        a->end = a->at + keep->cap;
+        POISON(blockData(keep), keep->cap);
+    } else {
+        a->at = a->end = NULL;
+    }
+}
+
+void iris_arena_free(IrisArena *a) {
+    for (ArenaBlock *b = a->blocks, *next; b; b = next) {
+        next = b->next;
+        free(b);
+    }
+    a->blocks = NULL;
+    a->at = a->end = NULL;
+    a->given = 0;
+}
+
 #ifdef __APPLE__
 #define SYM(x) "_" #x
 #else

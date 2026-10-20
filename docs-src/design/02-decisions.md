@@ -141,7 +141,7 @@ These are suggestions. They are used in the examples on these pages until they a
 | Returning a pointer or slice into a function's own variables is an error. | The memory is gone once the function returns. |
 | A global can't be set from another global. | Globals are set before `main` in no fixed order across modules. |
 | A library page shows the module's comment, then its intro page with examples. | The comment says what the module is; the intro shows it in use. |
-| Memory comes from one general allocator, the C library's. Allocators that a call can be given, like an arena, are planned. | One way to free everything keeps the first versions simple. |
+| Memory comes from the C library's allocator, or from an `Arena` that frees many values at once. An arena is not passed to `String`, `List` or the library; they keep using the heap. | One way to free each kind of value keeps ownership easy to follow. |
 
 ## Not in Iris
 

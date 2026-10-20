@@ -55,13 +55,6 @@ static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &ty
                                &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue,
                                &tyDuration, &tyMutex, &tyThread};
 
-/* types that exist in the language but not in this version yet */
-static const struct {
-    const char *name, *version;
-} laterTypes[] = {
-    {"Arena", "a later version"},
-};
-
 bool gTesting, gWithTests;
 
 /* ---------------------------------------------------------------- target */
@@ -464,6 +457,7 @@ static Type *structType(Checker *c, Node *decl) {
 }
 
 static Type *resolveType(Checker *c, Node *t);
+static Type *checkArenaAlloc(Checker *c, Node *e, Node *recv);
 static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool);
 
 /* Sizes and alignments, by the same rules as C on 64-bit machines. They
@@ -837,12 +831,6 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
     if (!report) {
         return NULL;
     }
-    for (size_t i = 0; i < sizeof laterTypes / sizeof laterTypes[0]; i++) {
-        if (strcmp(laterTypes[i].name, name) == 0) {
-            error(c, at, "the type %s is not supported yet (planned for %s)", name, laterTypes[i].version);
-            return &tyError;
-        }
-    }
     if (d) {
         error(c, at, "%s is not a type", name);
     } else {
@@ -1095,7 +1083,7 @@ static Node *convertNode(Checker *c, Node *e, Type *to, bool explicit) {
     return n;
 }
 
-/* The Mutex or Atomic a value holds, if any. */
+/* The Mutex, Atomic or Arena a value holds, if any. */
 static Type *syncInside(Type *t) {
     switch (t->kind) {
     case TY_MUTEX: case TY_ATOMIC:
@@ -1104,6 +1092,9 @@ static Type *syncInside(Type *t) {
         return syncInside(t->elem);
     case TY_STRUCT:
         if (!t->decl) return NULL;
+        if (t->decl->module && strcmp(t->decl->module, "core") == 0 && strcmp(t->decl->name, "Arena") == 0) {
+            return t;               /* a copy would free its blocks a second time */
+        }
         for (int i = 0; i < t->decl->list.len; i++) {
             Type *ft = t->decl->list.items[i]->type;
             Type *in = ft ? syncInside(ft) : NULL;
@@ -1117,8 +1108,9 @@ static Type *syncInside(Type *t) {
 
 static bool addressable(Node *e);
 
-/* Copying a Mutex or an Atomic makes a second one that guards nothing:
- * reading one out of a variable, a field or an element is an error. */
+/* Copying a Mutex or an Atomic makes a second one that guards nothing,
+ * and a copy of an Arena would give back its memory twice: reading one out
+ * of a variable, a field or an element is an error. */
 static bool noCopy(Checker *c, Node *e) {
     Type *in = e->type ? syncInside(e->type) : NULL;
     if (!in || !addressable(e)) {
@@ -1127,7 +1119,8 @@ static bool noCopy(Checker *c, Node *e) {
     if (in == e->type) {
         error(c, e, "this %s can't be copied; use a pointer to it: &...", in->name);
     } else {
-        error(c, e, "this %s holds a %s, so it can't be copied; use a pointer to it: &...", e->type->name, in->name);
+        error(c, e, "this %s holds %s %s, so it can't be copied; use a pointer to it: &...", e->type->name,
+              strchr("AEIOU", in->name[0]) ? "an" : "a", in->name);
     }
     return false;
 }
@@ -3848,6 +3841,12 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     Node *recv = callee->a;
     const char *name = callee->name;
 
+    Type *rt = t->kind == TY_PTR ? t->elem : t;
+    if (strcmp(name, "alloc") == 0 && rt->kind == TY_STRUCT && rt->decl && rt->decl->module &&
+        strcmp(rt->decl->module, "core") == 0 && strcmp(rt->decl->name, "Arena") == 0) {
+        return checkArenaAlloc(c, e, recv);
+    }
+
     /* built-in methods of str and String */
     if ((isStr(t) || t->kind == TY_STRING) && strcmp(name, "copy") == 0) {
         if (e->list.len) {
@@ -4039,6 +4038,29 @@ static Type *checkAlloc(Checker *c, Node *e) {
         }
     }
     return setType(e, sliceOf(t));
+}
+
+/* arena.alloc(T, n): like alloc, from the arena's memory */
+static Type *checkArenaAlloc(Checker *c, Node *e, Node *recv) {
+    if (recv->type->kind != TY_PTR) {
+        if (!addressable(recv)) {
+            error(c, recv, "the arena must be a variable or a field, so its memory stays put");
+            return setType(e, &tyError);
+        }
+        Node *addr = like(c, N_UNARY, recv);
+        addr->op = P_AMP;
+        addr->a = recv;
+        addr->type = ptrTo(recv->type);
+        recv = addr;
+    }
+    if (e->list.len != 2 || e->list.items[0]->kind == N_NAMED_ARG || e->list.items[1]->kind == N_NAMED_ARG) {
+        error(c, e, "alloc takes a type and a count: arena.alloc(u8, 4096)");
+        return setType(e, &tyError);
+    }
+    Type *t = checkAlloc(c, e);
+    e->builtin = BI_ARENA_ALLOC;
+    e->b = recv;
+    return t;
 }
 
 /* sizeof(T): the bytes a T takes, padding included, known when compiling. */

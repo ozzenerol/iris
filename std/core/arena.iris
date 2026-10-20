@@ -1,0 +1,38 @@
+// Memory for many values that are freed together, like the parts of one
+// request. a.alloc(T, n) gives n items of T, all at zero, as alloc does.
+// They are not freed one by one: reset gives back everything at once and
+// keeps a block to give out again, and free gives back all of it. The
+// arena gets its memory from the heap in blocks of blockSize bytes; a
+// value bigger than a quarter of that gets a block of its own.
+pub struct Arena {
+    pub i64 blockSize = 64KiB
+    u8 *blocks
+    u8 *at
+    u8 *end
+    i64 given
+}
+
+@extern("iris_arena_reset")
+void arenaReset(Arena *a)
+
+@extern("iris_arena_free")
+void arenaFree(Arena *a)
+
+// Gives back everything the arena gave out, and keeps one block for more.
+// What it gave out before must not be used after this.
+pub void Arena.reset() => arenaReset(self)
+
+// Gives back all the arena's memory.
+pub void Arena.free() => arenaFree(self)
+
+// The bytes given out since the arena was made or reset.
+pub i64 Arena.used() => self.given
+
+// A copy of the text in the arena's memory.
+pub str Arena.copy(str text) {
+    u8[] bytes = self.alloc(u8, text.len)
+    for i, b in text {
+        bytes[i] = b
+    }
+    return bytes
+}

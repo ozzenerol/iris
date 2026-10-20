@@ -1,3 +1,3 @@
-// The names every program has without an import: List and Map, and the
-// built-in functions print, format, alloc, free, sleep, after, panic and
-// the others.
+// The names every program has without an import: List, Map and Arena,
+// and the built-in functions print, format, alloc, free, sizeof, sleep,
+// after, panic and the others.

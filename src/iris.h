@@ -389,6 +389,7 @@ enum {
     BI_TABLE_OF,
     BI_ENV_LOAD,
     BI_FLAGS_PARSE,
+    BI_ARENA_ALLOC,         /* arena.alloc(T, n): b is a pointer to the Arena */
 };
 
 /* Checks the program and fills in types. Returns false after errors. */

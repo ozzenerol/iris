@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Memory - Iris</title>
-<meta name="description" content="Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, alloc and free, the statements that make freeing hard to forget (defer, errdefer and scoped), who frees what, and the checks that catch mistakes.">
+<meta name="description" content="Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, alloc and free, the statements that make freeing hard to forget (defer, errdefer and scoped), arenas, who frees what, and the checks that catch mistakes.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -47,7 +47,7 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html" class="on"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-files.html"><span class="num">29</span>Files</a></li><li><a href="30-flags.html"><span class="num">30</span>Command-line flags</a></li><li><a href="31-time.html"><span class="num">31</span>Time</a></li><li><a href="32-logging.html"><span class="num">32</span>Input, output and logging</a></li><li><a href="33-http.html"><span class="num">33</span>HTTP</a></li><li><a href="34-sqlite.html"><span class="num">34</span>SQLite</a></li><li><a href="35-processes.html"><span class="num">35</span>Programs and the environment</a></li><li><a href="36-calling-c.html"><span class="num">36</span>Calling C</a></li><li><a href="37-testing.html"><span class="num">37</span>Testing</a></li><li><a href="38-tools.html"><span class="num">38</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Memory</h1>
-<p class="lede">Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, <code>alloc</code> and <code>free</code>, the statements that make freeing hard to forget (<code>defer</code>, <code>errdefer</code> and <code>scoped</code>), who frees what, and the checks that catch mistakes.</p>
+<p class="lede">Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, <code>alloc</code> and <code>free</code>, the statements that make freeing hard to forget (<code>defer</code>, <code>errdefer</code> and <code>scoped</code>), arenas, who frees what, and the checks that catch mistakes.</p>
 <h2 id="where-values-live"><a href="#where-values-live">Where values live</a></h2>
 <p>Most values need no thought. Numbers, structs and arrays in variables live in their function's frame and go away when it returns; globals live as long as the program. Copying such a value copies it whole.</p>
 <p>Memory that must outlive a function, or whose size is known only when the program runs, comes from the heap: <code>alloc</code> asks for it, and <code>free</code> gives it back. <code>String</code>, <code>List</code> and <code>Map</code> keep their contents on the heap too, which is why they have a <code>free</code> method.</p>
@@ -145,6 +145,34 @@ socket closed again</code></pre>
 }</code></pre>
 <pre class="out"><code>GET on 2 ports</code></pre>
 <p>The type can come from the value, as with <code>:=</code>: <code>scoped t := term.table(...)</code>. Any type with a <code>free</code> method that takes nothing works with <code>scoped</code>: <code>String</code>, <code>List</code>, <code>Map</code>, the library's types, and the program's own structs.</p>
+<h2 id="arenas"><a href="#arenas">Arenas</a></h2>
+<p>An <code>Arena</code> gives out memory for many values that are freed together, like everything one request needs. <code>a.alloc(T, n)</code> gives <code>n</code> items of <code>T</code>, all at zero, as <code>alloc</code> does. They are never freed one by one. <code>a.reset()</code> gives back everything at once and keeps a block of memory to give out again, and <code>a.free()</code> gives back all of it. <code>a.copy(text)</code> puts a copy of some text in the arena:</p>
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Header</span> {
+    <span class="t">str</span> name
+    <span class="t">str</span> value
+}
+
+<span class="t">i64</span> <span class="f">handle</span>(<span class="t">Arena</span> *mem, <span class="t">str</span>[] lines) {
+    <span class="t">Header</span>[] headers = mem.<span class="f">alloc</span>(<span class="t">Header</span>, lines.len)
+    <span class="k">for</span> i, line <span class="k">in</span> lines {
+        name, value, _ := line.<span class="f">cut</span>(<span class="s">&quot;: &quot;</span>)
+        headers[i] = .{name: mem.<span class="f">copy</span>(name), value: mem.<span class="f">copy</span>(value)}
+    }
+    <span class="k">return</span> headers.len
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">Arena</span> mem
+    requests := [[<span class="s">&quot;Host: example.com&quot;</span>, <span class="s">&quot;Accept: */*&quot;</span>], [<span class="s">&quot;Host: api.lan&quot;</span>, <span class="s">&quot;Accept: text/html&quot;</span>]]
+    <span class="k">for</span> r <span class="k">in</span> requests {
+        n := <span class="f">handle</span>(&amp;mem, r)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> headers in </span><span class="e">{</span>mem.<span class="f">used</span>()<span class="e">}</span><span class="s"> bytes&quot;</span>)
+        mem.<span class="f">reset</span>()
+    }
+}</code></pre>
+<pre class="out"><code>2 headers in 88 bytes
+2 headers in 90 bytes</code></pre>
+<p>The arena gets memory from the heap in blocks of <code>blockSize</code> bytes, 64 KiB unless the literal sets another: <code>Arena{blockSize: 1MiB}</code>. A value bigger than a quarter of a block gets a block of its own. An arena can't be copied, since the copy would give its memory back a second time; functions take a pointer to it. Memory from an arena is never passed to <code>free</code>, and is not used after <code>reset</code> or <code>free</code>. A debug build reports a use after either.</p>
 <h2 id="who-frees-what"><a href="#who-frees-what">Who frees what</a></h2>
 <p>A few conventions say who frees each piece of memory, and the standard library follows them throughout:</p>
 <ul><li>A function that returns a <code>String</code>, a <code>List</code>, a <code>Map</code> or a struct with a <code>free</code> method gives the caller a new value, which the caller frees: <code>str.upper</code>, <code>format</code>, <code>fs.readAll</code>, <code>json.encode</code>.</li><li>A <code>str</code> or a slice that a function gives back points into something else: into its argument (<code>str.trim</code>), or into a value that still owns it (<code>list.items()</code>). It is valid as long as that is, and is never freed.</li><li>A <code>List[String]</code>, or a list of structs with <code>free</code>, holds values that must be freed too: <code>freeEach</code> frees each one, then the list.</li><li>A struct that owns memory has a <code>free</code> method that frees it all, and one that only looks at memory owned elsewhere has none.</li></ul>
@@ -194,7 +222,7 @@ WRITE of size 1 at 0x502000000010 thread T0
     <nav class="pager"><a class="prev" href="18-errors.html"><span>Previous</span>Errors</a><a class="next" href="20-generics.html"><span>Next</span>Generics</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#where-values-live">Where values live</a></li><li><a href="#alloc-and-free">alloc and free</a></li><li><a href="#defer">defer</a></li><li><a href="#errdefer">errdefer</a></li><li><a href="#scoped">scoped</a></li><li><a href="#who-frees-what">Who frees what</a></li><li><a href="#checks-in-debug-builds">Checks in debug builds</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#where-values-live">Where values live</a></li><li><a href="#alloc-and-free">alloc and free</a></li><li><a href="#defer">defer</a></li><li><a href="#errdefer">errdefer</a></li><li><a href="#scoped">scoped</a></li><li><a href="#arenas">Arenas</a></li><li><a href="#who-frees-what">Who frees what</a></li><li><a href="#checks-in-debug-builds">Checks in debug builds</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

@@ -1,0 +1,17 @@
+// error: 13: this Arena can't be copied; use a pointer to it: &...
+// error: 14: this Conn holds an Arena, so it can't be copied; use a pointer to it: &...
+// error: 15: alloc takes a type and a count: arena.alloc(u8, 4096)
+// error: 16: the arena must be a variable or a field, so its memory stays put
+
+struct Conn {
+    Arena mem
+}
+
+void main() {
+    Arena a
+    c := Conn{}
+    b := a
+    d := c
+    _ = a.alloc(u8)
+    _ = Arena{}.alloc(u8, 1)
+}

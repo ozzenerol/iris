@@ -1,0 +1,31 @@
+// expect: 0 request 7 2 5295
+// expect: 1 request 7 2 5295
+// expect: 2 request 7 2 5295
+// expect: 0 3
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+struct Big align(64) {
+    i64 v
+}
+
+void main() {
+    Arena a = .{blockSize: 1KiB}
+    defer a.free()
+    for round in 0..3 {
+        ps := a.alloc(Point, 10)
+        ps[9].x = round
+        name := a.copy("request")
+        big := a.alloc(u8, 5000)
+        big[4999] = 7
+        bs := a.alloc(Big, 2)
+        print("{ps[9].x} {name} {big[4999]} {bs.len} {a.used()}")
+        a.reset()
+    }
+    scoped b := Arena{}
+    x := b.alloc(i64, 3)
+    print("{x[0]} {x.len}")
+}

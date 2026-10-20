@@ -1,6 +1,6 @@
 # Memory
 
-Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, `alloc` and `free`, the statements that make freeing hard to forget (`defer`, `errdefer` and `scoped`), who frees what, and the checks that catch mistakes.
+Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, `alloc` and `free`, the statements that make freeing hard to forget (`defer`, `errdefer` and `scoped`), arenas, who frees what, and the checks that catch mistakes.
 
 ## Where values live
 
@@ -143,6 +143,43 @@ GET on 2 ports
 ```
 
 The type can come from the value, as with `:=`: `scoped t := term.table(...)`. Any type with a `free` method that takes nothing works with `scoped`: `String`, `List`, `Map`, the library's types, and the program's own structs.
+
+## Arenas
+
+An `Arena` gives out memory for many values that are freed together, like everything one request needs. `a.alloc(T, n)` gives `n` items of `T`, all at zero, as `alloc` does. They are never freed one by one. `a.reset()` gives back everything at once and keeps a block of memory to give out again, and `a.free()` gives back all of it. `a.copy(text)` puts a copy of some text in the arena:
+
+```iris run
+struct Header {
+    str name
+    str value
+}
+
+i64 handle(Arena *mem, str[] lines) {
+    Header[] headers = mem.alloc(Header, lines.len)
+    for i, line in lines {
+        name, value, _ := line.cut(": ")
+        headers[i] = .{name: mem.copy(name), value: mem.copy(value)}
+    }
+    return headers.len
+}
+
+void main() {
+    scoped Arena mem
+    requests := [["Host: example.com", "Accept: */*"], ["Host: api.lan", "Accept: text/html"]]
+    for r in requests {
+        n := handle(&mem, r)
+        print("{n} headers in {mem.used()} bytes")
+        mem.reset()
+    }
+}
+```
+
+```output
+2 headers in 88 bytes
+2 headers in 90 bytes
+```
+
+The arena gets memory from the heap in blocks of `blockSize` bytes, 64 KiB unless the literal sets another: `Arena{blockSize: 1MiB}`. A value bigger than a quarter of a block gets a block of its own. An arena can't be copied, since the copy would give its memory back a second time; functions take a pointer to it. Memory from an arena is never passed to `free`, and is not used after `reset` or `free`. A debug build reports a use after either.
 
 ## Who frees what
 
