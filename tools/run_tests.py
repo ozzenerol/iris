@@ -423,10 +423,19 @@ def output_mismatch(want, got):
 
 
 def port_open(port):
+    """Whether a program has the port: a TCP server listening on it, or a
+    UDP socket bound to it"""
     import socket
     with socket.socket() as s:
         s.settimeout(0.2)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            return True
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+        try:
+            u.bind(("0.0.0.0", port))
+        except OSError:
+            return True
+    return False
 
 
 def guide_tests(iris, only, failures):
@@ -442,10 +451,12 @@ def guide_tests(iris, only, failures):
         name = "guides/" + os.path.basename(path)[:-3]
         if only and not any(o in name or o in "guides" for o in only):
             continue
-        if not shutil.which("curl"):
-            failures.append((name, "curl isn't installed"))
-            continue
         blocks = markdown.convert(open(path).read())[4]
+        tries = " ".join(code for info, code, _ in blocks if info == "shell try")
+        missing = [t for t in ("curl", "nc", "dig") if re.search(r"\b%s\b" % t, tries) and not shutil.which(t)]
+        if missing:
+            failures.append((name, "%s isn't installed" % " and ".join(missing)))
+            continue
         server = None
         last_step = None
 

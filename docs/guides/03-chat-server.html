@@ -44,7 +44,7 @@ try {
 </header>
 <div class="doc">
   <button class="side-toggle" type="button" data-side="chapters" data-text="Guides" data-label="the chapter list" aria-expanded="true">&#8249; Guides</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html"><span class="num">2</span>Build a command-line tool</a></li><li><a href="03-chat-server.html" class="on"><span class="num">3</span>Build a TCP chat server</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html"><span class="num">2</span>Build a command-line tool</a></li><li><a href="03-chat-server.html" class="on"><span class="num">3</span>Build a TCP chat server</a></li><li><a href="04-dns-server.html"><span class="num">4</span>Build a DNS server</a></li></ol></aside>
   <article class="prose">
 <h1>Build a TCP chat server</h1>
 <p class="lede">This guide builds <code>chat</code> from an empty folder: a server that people connect to over TCP, give a name, and then talk. Each line one of them types goes to everyone else. It uses the three ways Iris does several things at once. A task for each connection waits on that client and nothing else. Channels carry messages between the tasks. Threads accept connections on several CPU cores at the same time. Each step ends with a program that runs, and the commands to try it.</p>
@@ -1165,7 +1165,7 @@ stopped</code></pre>
 <pre class="code"><code>iris build --mode=release-safe main.iris -o chat
 ./chat</code></pre>
 <p>Some ways to go on: <code>c.setTimeout(10m)</code> in <code>handle</code> lets a client go once it has said nothing for ten minutes, and <code>select</code> with an <code>after</code> arm lets the hub do something every so often. The <a href="../std/index.html#net">net library page</a> has timeouts and TLS. The <a href="../tour/24-tasks-and-channels.html">Tasks and channels</a> and <a href="../tour/25-threads.html">Threads</a> chapters cover <code>select</code>, <code>Mutex</code> and <code>threadlocal</code>.</p>
-    <nav class="pager"><a class="prev" href="02-cli.html"><span>Previous</span>Build a command-line tool</a></nav>
+    <nav class="pager"><a class="prev" href="02-cli.html"><span>Previous</span>Build a command-line tool</a><a class="next" href="04-dns-server.html"><span>Next</span>Build a DNS server</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
   <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#before-you-start">Before you start</a></li><li><a href="#a-task-for-each-connection">A task for each connection</a></li><li><a href="#a-hub-that-passes-the-messages-on">A hub that passes the messages on</a></li><li><a href="#threads-that-accept">Threads that accept</a></li><li><a href="#stopping-cleanly">Stopping cleanly</a></li><li><a href="#the-whole-program">The whole program</a></li><li><a href="#next">Next</a></li></ul></aside>

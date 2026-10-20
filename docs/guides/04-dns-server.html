@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build a DNS server - Iris</title>
+<meta name="description" content="This guide builds dns from an empty folder: a DNS server for the names of a small network. A program asks it for web.lan and gets the addresses back. It shows how a program reads and writes a binary protocol. The header of a DNS message is a packed struct with its fields in network byte order and some of them a few bits wide, so the program reads the bytes that came in as they are, with no parsing by hand. The server speaks UDP. Each step ends with a program that runs, and the commands to try it.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html" class="on">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.54.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Guides" data-label="the chapter list" aria-expanded="true">&#8249; Guides</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html"><span class="num">2</span>Build a command-line tool</a></li><li><a href="03-chat-server.html"><span class="num">3</span>Build a TCP chat server</a></li><li><a href="04-dns-server.html" class="on"><span class="num">4</span>Build a DNS server</a></li></ol></aside>
+  <article class="prose">
+<h1>Build a DNS server</h1>
+<p class="lede">This guide builds <code>dns</code> from an empty folder: a DNS server for the names of a small network. A program asks it for <code>web.lan</code> and gets the addresses back. It shows how a program reads and writes a binary protocol. The header of a DNS message is a <code>packed</code> struct with its fields in network byte order and some of them a few bits wide, so the program reads the bytes that came in as they are, with no parsing by hand. The server speaks UDP. Each step ends with a program that runs, and the commands to try it.</p>
+<p>When it is finished, asking it looks like this:</p>
+<pre class="out"><code>$ dig @127.0.0.1 -p 8080 +short web.lan
+10.0.0.5
+10.0.0.6</code></pre>
+<h2 id="before-you-start"><a href="#before-you-start">Before you start</a></h2>
+<p>You need three things:</p>
+<ul><li>Iris. <code>iris version</code> prints its version.</li><li><code>dig</code>, which asks DNS servers questions. macOS has it. On Debian and Ubuntu, <code>sudo apt install bind9-dnsutils</code> installs it. <code>command -v dig</code> prints where it is.</li><li><code>nc</code> (netcat), to send the server a message that isn't a query. macOS has it. On Debian and Ubuntu, <code>sudo apt install netcat-openbsd</code> installs it. <code>command -v nc</code> prints where it is.</li></ul>
+<p>Make a folder for the server and go into it:</p>
+<pre class="code"><code>mkdir dns
+cd dns</code></pre>
+<p>Everything in this guide happens in this folder. The program is one file, <code>main.iris</code>, which each step changes. You'll use two terminals: one runs the server, and the other asks it questions.</p>
+<p>DNS servers usually listen on port 53, which only root can use. This one listens on 8080, and <code>dig</code> is told the port with <code>-p 8080</code>.</p>
+<h2 id="reading-a-query"><a href="#reading-a-query">Reading a query</a></h2>
+<p>The first version reads each query, prints the name it asks for, and answers that the name doesn't exist. That is already a whole DNS server, one that knows no names.</p>
+<p>Create <code>main.iris</code>. The <code>net</code> module has UDP:</p>
+<pre class="code"><code><span class="c">// dns: a DNS server for the names of a small network.</span></code></pre>
+<pre class="code"><code><span class="k">import</span> net</code></pre>
+<p>A DNS message starts with a header of 12 bytes (<a href="https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1">RFC 1035</a> draws it). <code>Header</code> has the same fields in the same order. <code>packed</code> keeps them right after each other, with no bytes between. <code>u16be</code> is a 16-bit number kept with its high byte first, as the network sends it. Reading a <code>u16be</code> field gives a plain <code>u16</code>, and setting one turns the bytes around for you. The second pair of bytes holds eight values of a few bits each. A field with <code>: n</code> after its name is n bits wide, and the first of them takes the highest bits, as in the drawing. The <a href="../tour/13-structs.html">Structs</a> chapter has the rules.</p>
+<pre class="code"><code><span class="c">// The 12 bytes at the start of every DNS message (RFC 1035, 4.1.1).</span>
+<span class="k">struct</span> <span class="t">Header</span> packed {
+    <span class="t">u16be</span> id
+    <span class="t">u16be</span> response: <span class="n">1</span>
+    <span class="t">u16be</span> opcode: <span class="n">4</span>
+    <span class="t">u16be</span> authoritative: <span class="n">1</span>
+    <span class="t">u16be</span> truncated: <span class="n">1</span>
+    <span class="t">u16be</span> recursionWanted: <span class="n">1</span>
+    <span class="t">u16be</span> recursionAvailable: <span class="n">1</span>
+    <span class="t">u16be</span> zero: <span class="n">3</span>
+    <span class="t">u16be</span> rcode: <span class="n">4</span>
+    <span class="t">u16be</span> questions
+    <span class="t">u16be</span> answers
+    <span class="t">u16be</span> authorities
+    <span class="t">u16be</span> additionals
+}</code></pre>
+<p>After the header comes the question. It is a name and then two numbers, its type and its class. <code>QuestionEnd</code> is those two numbers. Its first field is <code>kind</code>, since <code>type</code> is a word Iris keeps for itself. Type 1 asks for IPv4 addresses.</p>
+<pre class="code"><code><span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}</code></pre>
+<p>A message from the network can be anything, so reading one can fail. <code>DnsError</code> says how. The <a href="../tour/18-errors.html">Errors</a> chapter explains <code>!T</code>, <code>error</code> and <code>catch</code>.</p>
+<pre class="code"><code><span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+}</code></pre>
+<p><code>Question</code> is the question as the server uses it. The name is a <code>String</code> the question owns, so <code>Question</code> has a <code>free</code> method that frees it. <code>end</code> is where the question ends in the message. The answer repeats the question, so it needs to know.</p>
+<pre class="code"><code><span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}
+
+<span class="t">void</span> <span class="t">Question</span>.<span class="f">free</span>() =&gt; <span class="k">self</span>.name.<span class="f">free</span>()</code></pre>
+<p><code>readQuestion</code> reads the name, which comes as labels. Each label is a length byte and that many bytes, and a zero ends the name: <code>3 web 3 lan 0</code> is <code>web.lan</code>. Every length is checked against the end of the message before anything is read, so a short or broken message gives an error. <code>errdefer</code> frees the name when the function gives an error, since nothing else will.</p>
+<p><code>sizeof(Header)</code> is 12, the bytes the header takes. After the name, <code>msg[at:at + sizeof(QuestionEnd)].ptr</code> is a pointer to the next four bytes. A <code>u8 *</code> converts to any pointer, so it becomes a <code>QuestionEnd *</code>, and <code>e.kind</code> reads the type from the bytes as they are.</p>
+<pre class="code"><code><span class="c">// Reads the question that follows the header. A name is a run of labels,</span>
+<span class="c">// each a length byte and that many bytes, ended by a zero.</span>
+!<span class="t">Question</span> <span class="f">readQuestion</span>(<span class="t">u8</span>[] msg) {
+    <span class="t">Question</span> q
+    <span class="k">errdefer</span> q.name.<span class="f">free</span>()
+    at := <span class="f">sizeof</span>(<span class="t">Header</span>)
+    <span class="k">for</span> {
+        <span class="k">if</span> at &gt;= msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the name runs past the end&quot;</span>)
+        }
+        n := <span class="t">i64</span>(msg[at])
+        at++
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> n &gt; <span class="n">63</span> || at + n &gt; msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badName, <span class="s">&quot;a label is too long&quot;</span>)
+        }
+        <span class="k">if</span> q.name.len &gt; <span class="n">0</span> {
+            q.name.<span class="f">append</span>(<span class="s">&quot;.&quot;</span>)
+        }
+        q.name.<span class="f">append</span>(msg[at:at + n])
+        at += n
+    }
+    <span class="k">if</span> at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>) &gt; msg.len {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the question has no type&quot;</span>)
+    }
+    <span class="t">QuestionEnd</span> *e = msg[at:at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)].ptr
+    q.kind = e.kind
+    q.end = at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)
+    <span class="k">return</span> q
+}</code></pre>
+<p><code>answer</code> handles one query. It checks the message is at least a header long, and <code>Header *h = msg.ptr</code> reads it in place. The reply starts as a copy of the header. It keeps the query's <code>id</code>, so the asker knows which question it answers. <code>response</code> says it is an answer, <code>authoritative</code> that this server is the one in charge of the name, and <code>rcode</code> 3 says the name doesn't exist. Then <code>&amp;reply</code> is a pointer to the reply's bytes, and <code>bytes[0:sizeof(Header)]</code> is the header as 12 bytes. The question follows, copied from the query, and <code>sendTo</code> sends it all back to whoever asked. <code>scoped</code> frees the question and the reply when <code>answer</code> ends.</p>
+<pre class="code"><code><span class="c">// The answer to one query: for now, that no name exists.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="n">3</span>
+    reply.answers = <span class="n">0</span>
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    reply.questions = <span class="n">1</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}</code></pre>
+<p><code>main</code> opens UDP port 8080 with <code>net.listenUdp</code>. Each <code>readFrom</code> waits for one datagram, puts it in <code>buf</code> and gives its length and who sent it. A query that can't be read is printed and dropped, and the server goes on with the next one. The <a href="../std/index.html#net">net library page</a> has the rest of UDP.</p>
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre>
+<details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// dns: a DNS server for the names of a small network.</span>
+
+<span class="k">import</span> net
+
+<span class="c">// The 12 bytes at the start of every DNS message (RFC 1035, 4.1.1).</span>
+<span class="k">struct</span> <span class="t">Header</span> packed {
+    <span class="t">u16be</span> id
+    <span class="t">u16be</span> response: <span class="n">1</span>
+    <span class="t">u16be</span> opcode: <span class="n">4</span>
+    <span class="t">u16be</span> authoritative: <span class="n">1</span>
+    <span class="t">u16be</span> truncated: <span class="n">1</span>
+    <span class="t">u16be</span> recursionWanted: <span class="n">1</span>
+    <span class="t">u16be</span> recursionAvailable: <span class="n">1</span>
+    <span class="t">u16be</span> zero: <span class="n">3</span>
+    <span class="t">u16be</span> rcode: <span class="n">4</span>
+    <span class="t">u16be</span> questions
+    <span class="t">u16be</span> answers
+    <span class="t">u16be</span> authorities
+    <span class="t">u16be</span> additionals
+}
+
+<span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}
+
+<span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+}
+
+<span class="c">// The question of a query: the name asked for, its type, and where the</span>
+<span class="c">// question ends in the message.</span>
+<span class="k">struct</span> <span class="t">Question</span> {
+    <span class="t">String</span> name
+    <span class="t">u16</span> kind
+    <span class="t">i64</span> end
+}
+
+<span class="t">void</span> <span class="t">Question</span>.<span class="f">free</span>() =&gt; <span class="k">self</span>.name.<span class="f">free</span>()
+
+<span class="c">// Reads the question that follows the header. A name is a run of labels,</span>
+<span class="c">// each a length byte and that many bytes, ended by a zero.</span>
+!<span class="t">Question</span> <span class="f">readQuestion</span>(<span class="t">u8</span>[] msg) {
+    <span class="t">Question</span> q
+    <span class="k">errdefer</span> q.name.<span class="f">free</span>()
+    at := <span class="f">sizeof</span>(<span class="t">Header</span>)
+    <span class="k">for</span> {
+        <span class="k">if</span> at &gt;= msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the name runs past the end&quot;</span>)
+        }
+        n := <span class="t">i64</span>(msg[at])
+        at++
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> n &gt; <span class="n">63</span> || at + n &gt; msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badName, <span class="s">&quot;a label is too long&quot;</span>)
+        }
+        <span class="k">if</span> q.name.len &gt; <span class="n">0</span> {
+            q.name.<span class="f">append</span>(<span class="s">&quot;.&quot;</span>)
+        }
+        q.name.<span class="f">append</span>(msg[at:at + n])
+        at += n
+    }
+    <span class="k">if</span> at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>) &gt; msg.len {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the question has no type&quot;</span>)
+    }
+    <span class="t">QuestionEnd</span> *e = msg[at:at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)].ptr
+    q.kind = e.kind
+    q.end = at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)
+    <span class="k">return</span> q
+}
+
+<span class="c">// The answer to one query: for now, that no name exists.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="n">3</span>
+    reply.answers = <span class="n">0</span>
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    reply.questions = <span class="n">1</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre></details>
+<p>Start the server in the first terminal. It keeps running, answering queries:</p>
+<pre class="code"><code>iris run main.iris</code></pre>
+<p>In the second terminal, ask it for <code>web.lan</code>. <code>dig</code> prints the whole answer, and <code>grep -o</code> picks out the status from it:</p>
+<pre class="code"><code>dig @127.0.0.1 -p 8080 web.lan | grep -o &#x27;status: [A-Z]*&#x27;</code></pre>
+<pre class="out"><code>status: NXDOMAIN</code></pre>
+<p>NXDOMAIN means there is no such name. The first terminal shows what was asked:</p>
+<pre class="out"><code>answering on 8080
+web.lan type 1</code></pre>
+<p>A message too short to be a query is dropped. <code>nc -u</code> sends some bytes over UDP:</p>
+<pre class="code"><code>printf &#x27;hi&#x27; | nc -u -w1 127.0.0.1 8080</code></pre>
+<p>The server prints <code>dropped a query: 2 bytes is shorter than a header</code> and goes on.</p>
+<p>Stop the server with Ctrl-C in the first terminal. Do this at the end of every step, and start it again with the new code at the next.</p>
+<h2 id="answering-with-addresses"><a href="#answering-with-addresses">Answering with addresses</a></h2>
+<p>Now the server gets a list of names and their addresses, and answers with them. Each address in an answer is a record. Before the address come five numbers (<a href="https://www.rfc-editor.org/rfc/rfc1035#section-4.1.3">RFC 1035, 4.1.3</a>), and <code>Record</code> is those numbers, packed like the header. <code>ttl</code> is how many seconds the asker may keep the answer, and <code>length</code> how many bytes the address takes. <code>name</code> says which name the record is for. The name is in the question already, so <code>name</code> points at it instead of writing it again.</p>
+<pre class="code"><code><span class="c">// What follows the name in an answer, before the address (RFC 1035, 4.1.3).</span>
+<span class="k">struct</span> <span class="t">Record</span> packed {
+    <span class="t">u16be</span> name
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+    <span class="t">u32be</span> ttl
+    <span class="t">u16be</span> length
+}</code></pre>
+<p>A <code>Host</code> is a name and one of its addresses. A <code>net.Addr</code> holds an IPv4 or an IPv6 address. A name with several addresses has several hosts.</p>
+<pre class="code"><code><span class="c">// A name and one of its addresses.</span>
+<span class="k">struct</span> <span class="t">Host</span> {
+    <span class="t">str</span> name
+    net.<span class="t">Addr</span> addr
+}</code></pre>
+<p><code>A</code> and <code>AAAA</code> are the types of a query for IPv4 and for IPv6 addresses:</p>
+<pre class="code"><code><span class="k">const</span> A = <span class="n">1</span>
+<span class="k">const</span> AAAA = <span class="n">28</span></code></pre>
+<p><code>answer</code> now takes the hosts, as a pointer to the list, and goes over them. For each host with the name asked for, it adds a record when the address is of the type asked for. <code>host.addr.isV4()</code> says which kind it is. A <code>net.Addr</code> keeps an IPv4 address in its last 4 bytes, so <code>ip[12:16]</code> is the address to send. A name that is there but has no address of that type gets an answer with no records, and only a name that isn't there at all gets NXDOMAIN. <code>0xc00c</code> is a pointer to byte 12, where the question's name starts: the top two bits say it is a pointer. The header says how many records follow.</p>
+<pre class="code"><code><span class="c">// Answers a query: an A query gets the name&#x27;s IPv4 addresses and an AAAA</span>
+<span class="c">// query its IPv6 ones. A name that isn&#x27;t there gets NXDOMAIN.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from, <span class="t">List</span>[<span class="t">Host</span>] *zone) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="k">scoped</span> <span class="t">String</span> records
+    <span class="t">i64</span> count = <span class="n">0</span>
+    <span class="t">bool</span> known = <span class="k">false</span>
+    <span class="k">for</span> host <span class="k">in</span> zone.<span class="f">items</span>() {
+        <span class="k">if</span> host.name != q.name {
+            <span class="k">continue</span>
+        }
+        known = <span class="k">true</span>
+        v4 := host.addr.<span class="f">isV4</span>()
+        <span class="k">if</span> (q.kind == A &amp;&amp; v4) || (q.kind == AAAA &amp;&amp; !v4) {
+            ip := <span class="k">if</span> v4 { host.addr.ip[<span class="n">12</span>:<span class="n">16</span>] } <span class="k">else</span> { host.addr.ip[<span class="n">0</span>:<span class="n">16</span>] }
+            <span class="c">// 0xc00c points at the name in the question, 12 bytes in</span>
+            <span class="t">Record</span> r = .{name: <span class="n">0xc00c</span>, kind: q.kind, class: <span class="n">1</span>, ttl: <span class="n">300</span>, length: <span class="t">u16</span>(ip.len)}
+            <span class="t">u8</span> *rb = &amp;r
+            records.<span class="f">append</span>(rb[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Record</span>)])
+            records.<span class="f">append</span>(ip)
+            count++
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s"> found&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="k">if</span> known { <span class="n">0</span> } <span class="k">else</span> { <span class="n">3</span> }
+    reply.questions = <span class="n">1</span>
+    reply.answers = <span class="t">u16</span>(count)
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    out.<span class="f">append</span>(records)
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}</code></pre>
+<p><code>main</code> makes the list. <code>net.ip</code> reads an address written as text, and gives an error for text that isn't one.</p>
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">Host</span>] zone
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.5&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.6&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;fd00::5&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;nas.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.20&quot;</span>)})
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from, &amp;zone) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre>
+<details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// dns: a DNS server for the names of a small network.</span>
+
+<span class="k">import</span> net
+
+<span class="c">// The 12 bytes at the start of every DNS message (RFC 1035, 4.1.1).</span>
+<span class="k">struct</span> <span class="t">Header</span> packed {
+    <span class="t">u16be</span> id
+    <span class="t">u16be</span> response: <span class="n">1</span>
+    <span class="t">u16be</span> opcode: <span class="n">4</span>
+    <span class="t">u16be</span> authoritative: <span class="n">1</span>
+    <span class="t">u16be</span> truncated: <span class="n">1</span>
+    <span class="t">u16be</span> recursionWanted: <span class="n">1</span>
+    <span class="t">u16be</span> recursionAvailable: <span class="n">1</span>
+    <span class="t">u16be</span> zero: <span class="n">3</span>
+    <span class="t">u16be</span> rcode: <span class="n">4</span>
+    <span class="t">u16be</span> questions
+    <span class="t">u16be</span> answers
+    <span class="t">u16be</span> authorities
+    <span class="t">u16be</span> additionals
+}
+
+<span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}
+
+<span class="c">// What follows the name in an answer, before the address (RFC 1035, 4.1.3).</span>
+<span class="k">struct</span> <span class="t">Record</span> packed {
+    <span class="t">u16be</span> name
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+    <span class="t">u32be</span> ttl
+    <span class="t">u16be</span> length
+}
+
+<span class="c">// A name and one of its addresses.</span>
+<span class="k">struct</span> <span class="t">Host</span> {
+    <span class="t">str</span> name
+    net.<span class="t">Addr</span> addr
+}
+
+<span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+}
+
+<span class="c">// The question of a query: the name asked for, its type, and where the</span>
+<span class="c">// question ends in the message.</span>
+<span class="k">struct</span> <span class="t">Question</span> {
+    <span class="t">String</span> name
+    <span class="t">u16</span> kind
+    <span class="t">i64</span> end
+}
+
+<span class="t">void</span> <span class="t">Question</span>.<span class="f">free</span>() =&gt; <span class="k">self</span>.name.<span class="f">free</span>()
+
+<span class="c">// Reads the question that follows the header. A name is a run of labels,</span>
+<span class="c">// each a length byte and that many bytes, ended by a zero.</span>
+!<span class="t">Question</span> <span class="f">readQuestion</span>(<span class="t">u8</span>[] msg) {
+    <span class="t">Question</span> q
+    <span class="k">errdefer</span> q.name.<span class="f">free</span>()
+    at := <span class="f">sizeof</span>(<span class="t">Header</span>)
+    <span class="k">for</span> {
+        <span class="k">if</span> at &gt;= msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the name runs past the end&quot;</span>)
+        }
+        n := <span class="t">i64</span>(msg[at])
+        at++
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> n &gt; <span class="n">63</span> || at + n &gt; msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badName, <span class="s">&quot;a label is too long&quot;</span>)
+        }
+        <span class="k">if</span> q.name.len &gt; <span class="n">0</span> {
+            q.name.<span class="f">append</span>(<span class="s">&quot;.&quot;</span>)
+        }
+        q.name.<span class="f">append</span>(msg[at:at + n])
+        at += n
+    }
+    <span class="k">if</span> at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>) &gt; msg.len {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the question has no type&quot;</span>)
+    }
+    <span class="t">QuestionEnd</span> *e = msg[at:at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)].ptr
+    q.kind = e.kind
+    q.end = at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)
+    <span class="k">return</span> q
+}
+
+<span class="k">const</span> A = <span class="n">1</span>
+<span class="k">const</span> AAAA = <span class="n">28</span>
+
+<span class="c">// Answers a query: an A query gets the name&#x27;s IPv4 addresses and an AAAA</span>
+<span class="c">// query its IPv6 ones. A name that isn&#x27;t there gets NXDOMAIN.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from, <span class="t">List</span>[<span class="t">Host</span>] *zone) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="k">scoped</span> <span class="t">String</span> records
+    <span class="t">i64</span> count = <span class="n">0</span>
+    <span class="t">bool</span> known = <span class="k">false</span>
+    <span class="k">for</span> host <span class="k">in</span> zone.<span class="f">items</span>() {
+        <span class="k">if</span> host.name != q.name {
+            <span class="k">continue</span>
+        }
+        known = <span class="k">true</span>
+        v4 := host.addr.<span class="f">isV4</span>()
+        <span class="k">if</span> (q.kind == A &amp;&amp; v4) || (q.kind == AAAA &amp;&amp; !v4) {
+            ip := <span class="k">if</span> v4 { host.addr.ip[<span class="n">12</span>:<span class="n">16</span>] } <span class="k">else</span> { host.addr.ip[<span class="n">0</span>:<span class="n">16</span>] }
+            <span class="c">// 0xc00c points at the name in the question, 12 bytes in</span>
+            <span class="t">Record</span> r = .{name: <span class="n">0xc00c</span>, kind: q.kind, class: <span class="n">1</span>, ttl: <span class="n">300</span>, length: <span class="t">u16</span>(ip.len)}
+            <span class="t">u8</span> *rb = &amp;r
+            records.<span class="f">append</span>(rb[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Record</span>)])
+            records.<span class="f">append</span>(ip)
+            count++
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s"> found&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="k">if</span> known { <span class="n">0</span> } <span class="k">else</span> { <span class="n">3</span> }
+    reply.questions = <span class="n">1</span>
+    reply.answers = <span class="t">u16</span>(count)
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    out.<span class="f">append</span>(records)
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">Host</span>] zone
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.5&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.6&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;web.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;fd00::5&quot;</span>)})
+    zone.<span class="f">push</span>(.{name: <span class="s">&quot;nas.lan&quot;</span>, addr: <span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;10.0.0.20&quot;</span>)})
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from, &amp;zone) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre></details>
+<p>Start the server:</p>
+<pre class="code"><code>iris run main.iris</code></pre>
+<p>Ask for the IPv4 addresses of <code>web.lan</code>, then its IPv6 one. <code>+short</code> makes <code>dig</code> print only the addresses:</p>
+<pre class="code"><code>dig @127.0.0.1 -p 8080 +short web.lan
+dig @127.0.0.1 -p 8080 +short web.lan AAAA</code></pre>
+<pre class="out"><code>10.0.0.5
+10.0.0.6
+fd00::5</code></pre>
+<p>A name that isn't in the list still gets NXDOMAIN:</p>
+<pre class="code"><code>dig @127.0.0.1 -p 8080 db.lan | grep -o &#x27;status: [A-Z]*&#x27;</code></pre>
+<pre class="out"><code>status: NXDOMAIN</code></pre>
+<h2 id="names-from-a-file"><a href="#names-from-a-file">Names from a file</a></h2>
+<p>The names are in the code, so changing one means building the server again. Now they come from a file, <code>zone.txt</code>, read when the server starts. Make it in the second terminal. <code>cat &gt; zone.txt</code> writes what follows, up to <code>EOF</code>, into the file:</p>
+<pre class="code"><code>cat &gt; zone.txt &lt;&lt;&#x27;EOF&#x27;
+# the names of the home network
+web.lan     10.0.0.5
+web.lan     10.0.0.6
+web.lan     fd00::5
+NAS.lan     10.0.0.20
+printer.lan 10.0.0.30   # by the door
+EOF</code></pre>
+<p>Each line is a name and an address, and <code>#</code> starts a comment. Names in DNS are the same in any case, so <code>NAS.lan</code> and <code>nas.lan</code> are one name. The server keeps every name in small letters, and puts the name of each question in small letters too.</p>
+<p><code>loadZone</code> reads the file's text into hosts. <code>split</code> gives its lines, <code>cut</code> takes off a comment, and <code>fields</code> gives the words of what is left. A line with no words is skipped. A line that isn't a name and an address gives an error that says which line. The hosts' names point into the text, so the text has to stay as long as the hosts do. The <a href="../tour/06-text.html">Text</a> chapter has <code>split</code>, <code>cut</code> and <code>fields</code>.</p>
+<pre class="code"><code><span class="c">// Reads the zone: a name and an address on each line, and # starts a</span>
+<span class="c">// comment. A name with several addresses is on several lines.</span>
+!<span class="t">List</span>[<span class="t">Host</span>] <span class="f">loadZone</span>(<span class="t">str</span> text) {
+    <span class="t">List</span>[<span class="t">Host</span>] zone
+    <span class="k">errdefer</span> zone.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] lines = text.<span class="f">split</span>(<span class="s">&quot;</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">for</span> i, raw <span class="k">in</span> lines.<span class="f">items</span>() {
+        line, _, _ := raw.<span class="f">cut</span>(<span class="s">&quot;#&quot;</span>)
+        <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] parts = line.<span class="f">fields</span>()
+        <span class="k">if</span> parts.len == <span class="n">0</span> {
+            <span class="k">continue</span>
+        }
+        <span class="k">if</span> parts.len != <span class="n">2</span> {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: write a name and an address&quot;</span>)
+        }
+        addr := net.<span class="f">ip</span>(parts.<span class="f">at</span>(<span class="n">1</span>)) <span class="k">catch</span> e {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+        zone.<span class="f">push</span>(.{name: parts.<span class="f">at</span>(<span class="n">0</span>), addr: addr})
+    }
+    <span class="k">return</span> zone
+}</code></pre>
+<p>The <code>import</code> line gets <code>fs</code>, which reads files:</p>
+<pre class="code"><code><span class="k">import</span> fs, net</code></pre>
+<p><code>DnsError</code> gets <code>badZone</code>, for a line <code>loadZone</code> can't read:</p>
+<pre class="code"><code><span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+    badZone
+}</code></pre>
+<p><code>answer</code> puts the question's name in small letters with <code>lower</code>, and looks for that name in the hosts.</p>
+<pre class="code"><code><span class="c">// Answers a query: an A query gets the name&#x27;s IPv4 addresses and an AAAA</span>
+<span class="c">// query its IPv6 ones. A name that isn&#x27;t there gets NXDOMAIN.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from, <span class="t">List</span>[<span class="t">Host</span>] *zone) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="c">// names are the same in any case: WEB.lan is web.lan</span>
+    <span class="k">scoped</span> <span class="t">String</span> name = q.name.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">String</span> records
+    <span class="t">i64</span> count = <span class="n">0</span>
+    <span class="t">bool</span> known = <span class="k">false</span>
+    <span class="k">for</span> host <span class="k">in</span> zone.<span class="f">items</span>() {
+        <span class="k">if</span> host.name != name {
+            <span class="k">continue</span>
+        }
+        known = <span class="k">true</span>
+        v4 := host.addr.<span class="f">isV4</span>()
+        <span class="k">if</span> (q.kind == A &amp;&amp; v4) || (q.kind == AAAA &amp;&amp; !v4) {
+            ip := <span class="k">if</span> v4 { host.addr.ip[<span class="n">12</span>:<span class="n">16</span>] } <span class="k">else</span> { host.addr.ip[<span class="n">0</span>:<span class="n">16</span>] }
+            <span class="c">// 0xc00c points at the name in the question, 12 bytes in</span>
+            <span class="t">Record</span> r = .{name: <span class="n">0xc00c</span>, kind: q.kind, class: <span class="n">1</span>, ttl: <span class="n">300</span>, length: <span class="t">u16</span>(ip.len)}
+            <span class="t">u8</span> *rb = &amp;r
+            records.<span class="f">append</span>(rb[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Record</span>)])
+            records.<span class="f">append</span>(ip)
+            count++
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s"> found&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="k">if</span> known { <span class="n">0</span> } <span class="k">else</span> { <span class="n">3</span> }
+    reply.questions = <span class="n">1</span>
+    reply.answers = <span class="t">u16</span>(count)
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    out.<span class="f">append</span>(records)
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}</code></pre>
+<p><code>main</code> reads the file with <code>fs.readAll</code>, puts it in small letters, and gives the text to <code>loadZone</code>. Both texts are <code>scoped</code>, so they stay until <code>main</code> ends, as long as the server runs. A missing file or a bad line stops the server before it starts, with a message that says why.</p>
+<pre class="code"><code>!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> file = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;zone.txt&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> text = file.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">Host</span>] zone = <span class="k">try</span> <span class="f">loadZone</span>(text)
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>zone.len<span class="e">}</span><span class="s"> addresses, answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from, &amp;zone) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre>
+<details class="step-file"><summary>main.iris after this step</summary><pre class="code"><code><span class="c">// dns: a DNS server for the names of a small network, kept in zone.txt.</span>
+
+<span class="k">import</span> fs, net
+
+<span class="c">// The 12 bytes at the start of every DNS message (RFC 1035, 4.1.1).</span>
+<span class="k">struct</span> <span class="t">Header</span> packed {
+    <span class="t">u16be</span> id
+    <span class="t">u16be</span> response: <span class="n">1</span>
+    <span class="t">u16be</span> opcode: <span class="n">4</span>
+    <span class="t">u16be</span> authoritative: <span class="n">1</span>
+    <span class="t">u16be</span> truncated: <span class="n">1</span>
+    <span class="t">u16be</span> recursionWanted: <span class="n">1</span>
+    <span class="t">u16be</span> recursionAvailable: <span class="n">1</span>
+    <span class="t">u16be</span> zero: <span class="n">3</span>
+    <span class="t">u16be</span> rcode: <span class="n">4</span>
+    <span class="t">u16be</span> questions
+    <span class="t">u16be</span> answers
+    <span class="t">u16be</span> authorities
+    <span class="t">u16be</span> additionals
+}
+
+<span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}
+
+<span class="c">// What follows the name in an answer, before the address (RFC 1035, 4.1.3).</span>
+<span class="k">struct</span> <span class="t">Record</span> packed {
+    <span class="t">u16be</span> name
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+    <span class="t">u32be</span> ttl
+    <span class="t">u16be</span> length
+}
+
+<span class="c">// A name and one of its addresses.</span>
+<span class="k">struct</span> <span class="t">Host</span> {
+    <span class="t">str</span> name
+    net.<span class="t">Addr</span> addr
+}
+
+<span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+    badZone
+}
+
+<span class="c">// The question of a query: the name asked for, its type, and where the</span>
+<span class="c">// question ends in the message.</span>
+<span class="k">struct</span> <span class="t">Question</span> {
+    <span class="t">String</span> name
+    <span class="t">u16</span> kind
+    <span class="t">i64</span> end
+}
+
+<span class="t">void</span> <span class="t">Question</span>.<span class="f">free</span>() =&gt; <span class="k">self</span>.name.<span class="f">free</span>()
+
+<span class="c">// Reads the question that follows the header. A name is a run of labels,</span>
+<span class="c">// each a length byte and that many bytes, ended by a zero.</span>
+!<span class="t">Question</span> <span class="f">readQuestion</span>(<span class="t">u8</span>[] msg) {
+    <span class="t">Question</span> q
+    <span class="k">errdefer</span> q.name.<span class="f">free</span>()
+    at := <span class="f">sizeof</span>(<span class="t">Header</span>)
+    <span class="k">for</span> {
+        <span class="k">if</span> at &gt;= msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the name runs past the end&quot;</span>)
+        }
+        n := <span class="t">i64</span>(msg[at])
+        at++
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> n &gt; <span class="n">63</span> || at + n &gt; msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badName, <span class="s">&quot;a label is too long&quot;</span>)
+        }
+        <span class="k">if</span> q.name.len &gt; <span class="n">0</span> {
+            q.name.<span class="f">append</span>(<span class="s">&quot;.&quot;</span>)
+        }
+        q.name.<span class="f">append</span>(msg[at:at + n])
+        at += n
+    }
+    <span class="k">if</span> at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>) &gt; msg.len {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the question has no type&quot;</span>)
+    }
+    <span class="t">QuestionEnd</span> *e = msg[at:at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)].ptr
+    q.kind = e.kind
+    q.end = at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)
+    <span class="k">return</span> q
+}
+
+<span class="c">// Reads the zone: a name and an address on each line, and # starts a</span>
+<span class="c">// comment. A name with several addresses is on several lines.</span>
+!<span class="t">List</span>[<span class="t">Host</span>] <span class="f">loadZone</span>(<span class="t">str</span> text) {
+    <span class="t">List</span>[<span class="t">Host</span>] zone
+    <span class="k">errdefer</span> zone.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] lines = text.<span class="f">split</span>(<span class="s">&quot;</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">for</span> i, raw <span class="k">in</span> lines.<span class="f">items</span>() {
+        line, _, _ := raw.<span class="f">cut</span>(<span class="s">&quot;#&quot;</span>)
+        <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] parts = line.<span class="f">fields</span>()
+        <span class="k">if</span> parts.len == <span class="n">0</span> {
+            <span class="k">continue</span>
+        }
+        <span class="k">if</span> parts.len != <span class="n">2</span> {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: write a name and an address&quot;</span>)
+        }
+        addr := net.<span class="f">ip</span>(parts.<span class="f">at</span>(<span class="n">1</span>)) <span class="k">catch</span> e {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+        zone.<span class="f">push</span>(.{name: parts.<span class="f">at</span>(<span class="n">0</span>), addr: addr})
+    }
+    <span class="k">return</span> zone
+}
+
+<span class="k">const</span> A = <span class="n">1</span>
+<span class="k">const</span> AAAA = <span class="n">28</span>
+
+<span class="c">// Answers a query: an A query gets the name&#x27;s IPv4 addresses and an AAAA</span>
+<span class="c">// query its IPv6 ones. A name that isn&#x27;t there gets NXDOMAIN.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from, <span class="t">List</span>[<span class="t">Host</span>] *zone) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="c">// names are the same in any case: WEB.lan is web.lan</span>
+    <span class="k">scoped</span> <span class="t">String</span> name = q.name.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">String</span> records
+    <span class="t">i64</span> count = <span class="n">0</span>
+    <span class="t">bool</span> known = <span class="k">false</span>
+    <span class="k">for</span> host <span class="k">in</span> zone.<span class="f">items</span>() {
+        <span class="k">if</span> host.name != name {
+            <span class="k">continue</span>
+        }
+        known = <span class="k">true</span>
+        v4 := host.addr.<span class="f">isV4</span>()
+        <span class="k">if</span> (q.kind == A &amp;&amp; v4) || (q.kind == AAAA &amp;&amp; !v4) {
+            ip := <span class="k">if</span> v4 { host.addr.ip[<span class="n">12</span>:<span class="n">16</span>] } <span class="k">else</span> { host.addr.ip[<span class="n">0</span>:<span class="n">16</span>] }
+            <span class="c">// 0xc00c points at the name in the question, 12 bytes in</span>
+            <span class="t">Record</span> r = .{name: <span class="n">0xc00c</span>, kind: q.kind, class: <span class="n">1</span>, ttl: <span class="n">300</span>, length: <span class="t">u16</span>(ip.len)}
+            <span class="t">u8</span> *rb = &amp;r
+            records.<span class="f">append</span>(rb[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Record</span>)])
+            records.<span class="f">append</span>(ip)
+            count++
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s"> found&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="k">if</span> known { <span class="n">0</span> } <span class="k">else</span> { <span class="n">3</span> }
+    reply.questions = <span class="n">1</span>
+    reply.answers = <span class="t">u16</span>(count)
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    out.<span class="f">append</span>(records)
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> file = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;zone.txt&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> text = file.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">Host</span>] zone = <span class="k">try</span> <span class="f">loadZone</span>(text)
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>zone.len<span class="e">}</span><span class="s"> addresses, answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from, &amp;zone) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre></details>
+<p>Start the server:</p>
+<pre class="code"><code>iris run main.iris</code></pre>
+<p>The first terminal says how many addresses it read:</p>
+<pre class="out"><code>5 addresses, answering on 8080</code></pre>
+<p>Ask for names in any case:</p>
+<pre class="code"><code>dig @127.0.0.1 -p 8080 +short WEB.lan
+dig @127.0.0.1 -p 8080 +short nas.LAN
+dig @127.0.0.1 -p 8080 +short printer.lan</code></pre>
+<pre class="out"><code>10.0.0.5
+10.0.0.6
+10.0.0.20
+10.0.0.30</code></pre>
+<p><code>printer.lan</code> has no IPv6 address, so an AAAA query gets no records, and its status says the name is there:</p>
+<pre class="code"><code>dig @127.0.0.1 -p 8080 printer.lan AAAA | grep -o &#x27;status: [A-Z]*&#x27;
+dig @127.0.0.1 -p 8080 +short printer.lan AAAA</code></pre>
+<pre class="out"><code>status: NOERROR</code></pre>
+<p>To change a name, edit <code>zone.txt</code> and start the server again.</p>
+<h2 id="the-whole-program"><a href="#the-whole-program">The whole program</a></h2>
+<pre class="code"><code><span class="c">// dns: a DNS server for the names of a small network, kept in zone.txt.</span>
+
+<span class="k">import</span> fs, net
+
+<span class="c">// The 12 bytes at the start of every DNS message (RFC 1035, 4.1.1).</span>
+<span class="k">struct</span> <span class="t">Header</span> packed {
+    <span class="t">u16be</span> id
+    <span class="t">u16be</span> response: <span class="n">1</span>
+    <span class="t">u16be</span> opcode: <span class="n">4</span>
+    <span class="t">u16be</span> authoritative: <span class="n">1</span>
+    <span class="t">u16be</span> truncated: <span class="n">1</span>
+    <span class="t">u16be</span> recursionWanted: <span class="n">1</span>
+    <span class="t">u16be</span> recursionAvailable: <span class="n">1</span>
+    <span class="t">u16be</span> zero: <span class="n">3</span>
+    <span class="t">u16be</span> rcode: <span class="n">4</span>
+    <span class="t">u16be</span> questions
+    <span class="t">u16be</span> answers
+    <span class="t">u16be</span> authorities
+    <span class="t">u16be</span> additionals
+}
+
+<span class="c">// What follows the name in a question.</span>
+<span class="k">struct</span> <span class="t">QuestionEnd</span> packed {
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+}
+
+<span class="c">// What follows the name in an answer, before the address (RFC 1035, 4.1.3).</span>
+<span class="k">struct</span> <span class="t">Record</span> packed {
+    <span class="t">u16be</span> name
+    <span class="t">u16be</span> kind
+    <span class="t">u16be</span> class
+    <span class="t">u32be</span> ttl
+    <span class="t">u16be</span> length
+}
+
+<span class="c">// A name and one of its addresses.</span>
+<span class="k">struct</span> <span class="t">Host</span> {
+    <span class="t">str</span> name
+    net.<span class="t">Addr</span> addr
+}
+
+<span class="k">enum</span> <span class="t">DnsError</span> {
+    short
+    badName
+    badZone
+}
+
+<span class="c">// The question of a query: the name asked for, its type, and where the</span>
+<span class="c">// question ends in the message.</span>
+<span class="k">struct</span> <span class="t">Question</span> {
+    <span class="t">String</span> name
+    <span class="t">u16</span> kind
+    <span class="t">i64</span> end
+}
+
+<span class="t">void</span> <span class="t">Question</span>.<span class="f">free</span>() =&gt; <span class="k">self</span>.name.<span class="f">free</span>()
+
+<span class="c">// Reads the question that follows the header. A name is a run of labels,</span>
+<span class="c">// each a length byte and that many bytes, ended by a zero.</span>
+!<span class="t">Question</span> <span class="f">readQuestion</span>(<span class="t">u8</span>[] msg) {
+    <span class="t">Question</span> q
+    <span class="k">errdefer</span> q.name.<span class="f">free</span>()
+    at := <span class="f">sizeof</span>(<span class="t">Header</span>)
+    <span class="k">for</span> {
+        <span class="k">if</span> at &gt;= msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the name runs past the end&quot;</span>)
+        }
+        n := <span class="t">i64</span>(msg[at])
+        at++
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> n &gt; <span class="n">63</span> || at + n &gt; msg.len {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badName, <span class="s">&quot;a label is too long&quot;</span>)
+        }
+        <span class="k">if</span> q.name.len &gt; <span class="n">0</span> {
+            q.name.<span class="f">append</span>(<span class="s">&quot;.&quot;</span>)
+        }
+        q.name.<span class="f">append</span>(msg[at:at + n])
+        at += n
+    }
+    <span class="k">if</span> at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>) &gt; msg.len {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;the question has no type&quot;</span>)
+    }
+    <span class="t">QuestionEnd</span> *e = msg[at:at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)].ptr
+    q.kind = e.kind
+    q.end = at + <span class="f">sizeof</span>(<span class="t">QuestionEnd</span>)
+    <span class="k">return</span> q
+}
+
+<span class="c">// Reads the zone: a name and an address on each line, and # starts a</span>
+<span class="c">// comment. A name with several addresses is on several lines.</span>
+!<span class="t">List</span>[<span class="t">Host</span>] <span class="f">loadZone</span>(<span class="t">str</span> text) {
+    <span class="t">List</span>[<span class="t">Host</span>] zone
+    <span class="k">errdefer</span> zone.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] lines = text.<span class="f">split</span>(<span class="s">&quot;</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">for</span> i, raw <span class="k">in</span> lines.<span class="f">items</span>() {
+        line, _, _ := raw.<span class="f">cut</span>(<span class="s">&quot;#&quot;</span>)
+        <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] parts = line.<span class="f">fields</span>()
+        <span class="k">if</span> parts.len == <span class="n">0</span> {
+            <span class="k">continue</span>
+        }
+        <span class="k">if</span> parts.len != <span class="n">2</span> {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: write a name and an address&quot;</span>)
+        }
+        addr := net.<span class="f">ip</span>(parts.<span class="f">at</span>(<span class="n">1</span>)) <span class="k">catch</span> e {
+            <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.badZone, <span class="s">&quot;line </span><span class="e">{</span>i + <span class="n">1</span><span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+        zone.<span class="f">push</span>(.{name: parts.<span class="f">at</span>(<span class="n">0</span>), addr: addr})
+    }
+    <span class="k">return</span> zone
+}
+
+<span class="k">const</span> A = <span class="n">1</span>
+<span class="k">const</span> AAAA = <span class="n">28</span>
+
+<span class="c">// Answers a query: an A query gets the name&#x27;s IPv4 addresses and an AAAA</span>
+<span class="c">// query its IPv6 ones. A name that isn&#x27;t there gets NXDOMAIN.</span>
+!<span class="t">void</span> <span class="f">answer</span>(net.<span class="t">Udp</span> *sock, <span class="t">u8</span>[] msg, net.<span class="t">Addr</span> from, <span class="t">List</span>[<span class="t">Host</span>] *zone) {
+    <span class="k">if</span> msg.len &lt; <span class="f">sizeof</span>(<span class="t">Header</span>) {
+        <span class="k">return</span> <span class="f">error</span>(<span class="t">DnsError</span>.short, <span class="s">&quot;</span><span class="e">{</span>msg.len<span class="e">}</span><span class="s"> bytes is shorter than a header&quot;</span>)
+    }
+    <span class="t">Header</span> *h = msg.ptr
+    <span class="k">scoped</span> q := <span class="k">try</span> <span class="f">readQuestion</span>(msg)
+    <span class="c">// names are the same in any case: WEB.lan is web.lan</span>
+    <span class="k">scoped</span> <span class="t">String</span> name = q.name.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">String</span> records
+    <span class="t">i64</span> count = <span class="n">0</span>
+    <span class="t">bool</span> known = <span class="k">false</span>
+    <span class="k">for</span> host <span class="k">in</span> zone.<span class="f">items</span>() {
+        <span class="k">if</span> host.name != name {
+            <span class="k">continue</span>
+        }
+        known = <span class="k">true</span>
+        v4 := host.addr.<span class="f">isV4</span>()
+        <span class="k">if</span> (q.kind == A &amp;&amp; v4) || (q.kind == AAAA &amp;&amp; !v4) {
+            ip := <span class="k">if</span> v4 { host.addr.ip[<span class="n">12</span>:<span class="n">16</span>] } <span class="k">else</span> { host.addr.ip[<span class="n">0</span>:<span class="n">16</span>] }
+            <span class="c">// 0xc00c points at the name in the question, 12 bytes in</span>
+            <span class="t">Record</span> r = .{name: <span class="n">0xc00c</span>, kind: q.kind, class: <span class="n">1</span>, ttl: <span class="n">300</span>, length: <span class="t">u16</span>(ip.len)}
+            <span class="t">u8</span> *rb = &amp;r
+            records.<span class="f">append</span>(rb[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Record</span>)])
+            records.<span class="f">append</span>(ip)
+            count++
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.name<span class="e">}</span><span class="s"> type </span><span class="e">{</span>q.kind<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s"> found&quot;</span>)
+    <span class="t">Header</span> reply = *h
+    reply.response = <span class="n">1</span>
+    reply.authoritative = <span class="n">1</span>
+    reply.recursionAvailable = <span class="n">0</span>
+    reply.rcode = <span class="k">if</span> known { <span class="n">0</span> } <span class="k">else</span> { <span class="n">3</span> }
+    reply.questions = <span class="n">1</span>
+    reply.answers = <span class="t">u16</span>(count)
+    reply.authorities = <span class="n">0</span>
+    reply.additionals = <span class="n">0</span>
+    <span class="t">u8</span> *bytes = &amp;reply
+    <span class="k">scoped</span> <span class="t">String</span> out
+    out.<span class="f">append</span>(bytes[<span class="n">0</span>:<span class="f">sizeof</span>(<span class="t">Header</span>)])
+    out.<span class="f">append</span>(msg[<span class="f">sizeof</span>(<span class="t">Header</span>):q.end])
+    out.<span class="f">append</span>(records)
+    <span class="k">try</span> sock.<span class="f">sendTo</span>(out, from)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> file = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;zone.txt&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> text = file.<span class="f">lower</span>()
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">Host</span>] zone = <span class="k">try</span> <span class="f">loadZone</span>(text)
+    sock := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">8080</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>zone.len<span class="e">}</span><span class="s"> addresses, answering on 8080&quot;</span>)
+    <span class="t">u8</span>[<span class="n">512</span>] buf
+    <span class="k">for</span> {
+        n, from := <span class="k">try</span> sock.<span class="f">readFrom</span>(buf[<span class="n">0</span>:<span class="n">512</span>])
+        <span class="f">answer</span>(&amp;sock, buf[<span class="n">0</span>:n], from, &amp;zone) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;dropped a query: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre>
+<h2 id="next"><a href="#next">Next</a></h2>
+<p>The server reads and writes DNS messages as bytes, without parsing them by hand:</p>
+<ul><li><code>packed</code> structs that match the header and records byte for byte, with <code>u16be</code> and <code>u32be</code> fields in network byte order and bitfields for the flags.</li><li>A pointer to the bytes that came in, read as a <code>Header *</code> or a <code>QuestionEnd *</code>, with every length checked against the end of the message first.</li><li>UDP with <code>net.listenUdp</code>, <code>readFrom</code> and <code>sendTo</code>.</li></ul>
+<p>To run it for real, build it once with optimisations and start the program it makes:</p>
+<pre class="code"><code>iris build --mode=release-safe main.iris -o dns
+./dns</code></pre>
+<p>Some ways to go on: a <code>CNAME</code> record, whose data is another name, lets one name stand for another. A name the zone doesn't have could be passed on to another server with <code>net.dialUdp</code>, and its answer sent back. Reading <code>zone.txt</code> again on a signal, with the <code>signal</code> module, lets the names change while the server runs. The <a href="../tour/13-structs.html">Structs</a> chapter covers <code>packed</code>, bitfields and <code>align</code>, and the <a href="../std/index.html#net">net library page</a> the rest of UDP.</p>
+    <nav class="pager"><a class="prev" href="03-chat-server.html"><span>Previous</span>Build a TCP chat server</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#before-you-start">Before you start</a></li><li><a href="#reading-a-query">Reading a query</a></li><li><a href="#answering-with-addresses">Answering with addresses</a></li><li><a href="#names-from-a-file">Names from a file</a></li><li><a href="#the-whole-program">The whole program</a></li><li><a href="#next">Next</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.54.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>
