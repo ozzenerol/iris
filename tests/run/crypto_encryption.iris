@@ -1,0 +1,71 @@
+// expect: 8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a
+// expect: de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f
+// expect: 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742 true
+// expect: CryptoError.badKey CryptoError.badKey
+// expect: d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691
+// expect: true
+// expect: CryptoError.tampered CryptoError.tampered CryptoError.tampered
+
+import crypto, hex
+
+!void main() {
+    // RFC 7748, 6.1
+    scoped String alice = try hex.decode("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    scoped String bob = try hex.decode("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+    u8[32] alicePub = crypto.x25519Public(alice)
+    u8[32] bobPub = crypto.x25519Public(bob)
+    scoped String ah = hex.encode(alicePub[0:32])
+    scoped String bh = hex.encode(bobPub[0:32])
+    print(ah)
+    print(bh)
+    u8[32] s1 = try crypto.x25519(alice, bobPub[0:32])
+    u8[32] s2 = try crypto.x25519(bob, alicePub[0:32])
+    scoped String sh = hex.encode(s1[0:32])
+    print("{sh} {crypto.equal(s1[0:32], s2[0:32])}")
+    u8[32] zero
+    scoped List[String] codes
+    _ = crypto.x25519(alice, zero[0:32]) catch e {
+        codes.push(format("{e.code}"))
+        zero
+    }
+    _ = crypto.x25519(alice, "short") catch e {
+        codes.push(format("{e.code}"))
+        zero
+    }
+    print("{codes.at(0)} {codes.at(1)}")
+
+    // RFC 8439, 2.8.2
+    u8[32] key
+    for i in 0..32 {
+        key[i] = u8(0x80 + i)
+    }
+    scoped String nonce = try hex.decode("070000004041424344454647")
+    scoped String extra = try hex.decode("50515253c0c1c2c3c4c5c6c7")
+    text := "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    scoped String sealed = crypto.seal(key[0:32], nonce, text, extra)
+    scoped String sealedHex = hex.encode(sealed)
+    print(sealedHex)
+    scoped String back = try crypto.unseal(key[0:32], nonce, sealed, extra)
+    print("{back == text}")
+
+    scoped String changed = sealed.copy()
+    u8 *p = changed.ptr
+    bytes := p[0:changed.len]
+    bytes[3] ^= 0x10
+    scoped String a = crypto.unseal(key[0:32], nonce, changed, extra) catch e {
+        codes.push(format("{e.code}"))
+        format("")
+    }
+    scoped String b = crypto.unseal(key[0:32], nonce, sealed, "other") catch e {
+        codes.push(format("{e.code}"))
+        format("")
+    }
+    scoped String c = crypto.unseal(key[0:32], nonce, sealed[0:10], extra) catch e {
+        codes.push(format("{e.code}"))
+        format("")
+    }
+    print("{codes.at(2)} {codes.at(3)} {codes.at(4)}")
+    for code in codes.items() {
+        code.free()
+    }
+}

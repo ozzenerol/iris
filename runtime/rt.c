@@ -4795,6 +4795,280 @@ int iris_ed25519_verify(const unsigned char *pub, const char *msg, int64_t len, 
     return iris_const_equal((const char *)sig, 32, (const char *)t, 32);
 }
 
+/* X25519 key exchange (RFC 7748), with the field arithmetic of Ed25519
+   above. Gives 0 when the result is all zeros: the peer's key was one of
+   the few points that give away nothing secret. */
+int iris_x25519(const unsigned char *scalar, const unsigned char *point, unsigned char *out) {
+    static const Fe f121665 = {0xdb41, 1};
+    unsigned char z[32];
+    memcpy(z, scalar, 32);
+    z[31] = (unsigned char)((z[31] & 127) | 64);
+    z[0] &= 248;
+    Fe x, a, b, c, d, e, f;
+    feUnpack(x, point);
+    feCopy(b, x);
+    feCopy(a, fe1);
+    feCopy(c, fe0);
+    feCopy(d, fe1);
+    for (int i = 254; i >= 0; i--) {
+        int r = (z[i >> 3] >> (i & 7)) & 1;
+        feSwap(a, b, r);
+        feSwap(c, d, r);
+        feAdd(e, a, c);
+        feSub(a, a, c);
+        feAdd(c, b, d);
+        feSub(b, b, d);
+        feMul(d, e, e);
+        feMul(f, a, a);
+        feMul(a, c, a);
+        feMul(c, b, e);
+        feAdd(e, a, c);
+        feSub(a, a, c);
+        feMul(b, a, a);
+        feSub(c, d, f);
+        feMul(a, c, f121665);
+        feAdd(a, a, d);
+        feMul(c, c, a);
+        feMul(a, d, f);
+        feMul(d, b, x);
+        feMul(b, e, e);
+        feSwap(a, b, r);
+        feSwap(c, d, r);
+    }
+    feInvert(c, c);
+    feMul(a, a, c);
+    fePack(out, a);
+    unsigned char any = 0;
+    for (int i = 0; i < 32; i++) any |= out[i];
+    return any != 0;
+}
+
+void iris_x25519_public(const unsigned char *scalar, unsigned char *out) {
+    static const unsigned char base[32] = {9};
+    iris_x25519(scalar, base, out);
+}
+
+/* ChaCha20 (RFC 8439, 2.3): one 64-byte block of key stream. */
+static uint32_t le32(const unsigned char *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+#define ROL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+#define QROUND(a, b, c, d) \
+    a += b; d ^= a; d = ROL32(d, 16); \
+    c += d; b ^= c; b = ROL32(b, 12); \
+    a += b; d ^= a; d = ROL32(d, 8); \
+    c += d; b ^= c; b = ROL32(b, 7)
+
+static void chachaBlock(const unsigned char key[32], uint32_t counter, const unsigned char nonce[12],
+                        unsigned char out[64]) {
+    uint32_t s[16], x[16];
+    s[0] = 0x61707865;
+    s[1] = 0x3320646e;
+    s[2] = 0x79622d32;
+    s[3] = 0x6b206574;
+    for (int i = 0; i < 8; i++) s[4 + i] = le32(key + 4 * i);
+    s[12] = counter;
+    for (int i = 0; i < 3; i++) s[13 + i] = le32(nonce + 4 * i);
+    memcpy(x, s, sizeof s);
+    for (int i = 0; i < 10; i++) {
+        QROUND(x[0], x[4], x[8], x[12]);
+        QROUND(x[1], x[5], x[9], x[13]);
+        QROUND(x[2], x[6], x[10], x[14]);
+        QROUND(x[3], x[7], x[11], x[15]);
+        QROUND(x[0], x[5], x[10], x[15]);
+        QROUND(x[1], x[6], x[11], x[12]);
+        QROUND(x[2], x[7], x[8], x[13]);
+        QROUND(x[3], x[4], x[9], x[14]);
+    }
+    for (int i = 0; i < 16; i++) {
+        uint32_t v = x[i] + s[i];
+        out[4 * i] = (unsigned char)v;
+        out[4 * i + 1] = (unsigned char)(v >> 8);
+        out[4 * i + 2] = (unsigned char)(v >> 16);
+        out[4 * i + 3] = (unsigned char)(v >> 24);
+    }
+}
+
+/* data XOR the key stream from block counter on */
+static void chachaXor(const unsigned char key[32], uint32_t counter, const unsigned char nonce[12],
+                      const unsigned char *in, unsigned char *out, size_t n) {
+    unsigned char block[64];
+    for (size_t at = 0; at < n; at += 64) {
+        chachaBlock(key, counter++, nonce, block);
+        size_t take = n - at < 64 ? n - at : 64;
+        for (size_t i = 0; i < take; i++) out[at + i] = in[at + i] ^ block[i];
+    }
+}
+
+/* Poly1305 (RFC 8439, 2.5), with 44-bit limbs. */
+static uint64_t le64(const unsigned char *p) { return (uint64_t)le32(p) | (uint64_t)le32(p + 4) << 32; }
+
+typedef struct {
+    uint64_t r[3], h[3], pad[2];
+} Poly1305;
+
+static void polyInit(Poly1305 *p, const unsigned char key[32]) {
+    uint64_t t0 = le64(key), t1 = le64(key + 8);
+    p->r[0] = t0 & 0xffc0fffffffULL;
+    p->r[1] = ((t0 >> 44) | (t1 << 20)) & 0xfffffc0ffffULL;
+    p->r[2] = (t1 >> 24) & 0x00ffffffc0fULL;
+    p->h[0] = p->h[1] = p->h[2] = 0;
+    p->pad[0] = le64(key + 16);
+    p->pad[1] = le64(key + 24);
+}
+
+/* one 16-byte block; a last short one comes padded with its 1 already */
+static void polyBlock(Poly1305 *p, const unsigned char m[16], uint64_t hibit) {
+    typedef unsigned __int128 u128;
+    uint64_t r0 = p->r[0], r1 = p->r[1], r2 = p->r[2];
+    uint64_t s1 = r1 * (5 << 2), s2 = r2 * (5 << 2);
+    uint64_t h0 = p->h[0], h1 = p->h[1], h2 = p->h[2];
+    uint64_t t0 = le64(m), t1 = le64(m + 8);
+    h0 += t0 & 0xfffffffffffULL;
+    h1 += ((t0 >> 44) | (t1 << 20)) & 0xfffffffffffULL;
+    h2 += ((t1 >> 24) & 0x3ffffffffffULL) | hibit;
+    u128 d0 = (u128)h0 * r0 + (u128)h1 * s2 + (u128)h2 * s1;
+    u128 d1 = (u128)h0 * r1 + (u128)h1 * r0 + (u128)h2 * s2;
+    u128 d2 = (u128)h0 * r2 + (u128)h1 * r1 + (u128)h2 * r0;
+    uint64_t c = (uint64_t)(d0 >> 44);
+    h0 = (uint64_t)d0 & 0xfffffffffffULL;
+    d1 += c;
+    c = (uint64_t)(d1 >> 44);
+    h1 = (uint64_t)d1 & 0xfffffffffffULL;
+    d2 += c;
+    c = (uint64_t)(d2 >> 42);
+    h2 = (uint64_t)d2 & 0x3ffffffffffULL;
+    h0 += c * 5;
+    c = h0 >> 44;
+    h0 &= 0xfffffffffffULL;
+    h1 += c;
+    p->h[0] = h0;
+    p->h[1] = h1;
+    p->h[2] = h2;
+}
+
+/* the data in 16-byte blocks, the last one padded with zeros (the AEAD's way) */
+static void polyPadded(Poly1305 *p, const unsigned char *m, size_t n) {
+    while (n >= 16) {
+        polyBlock(p, m, 1ULL << 40);
+        m += 16;
+        n -= 16;
+    }
+    if (n) {
+        unsigned char last[16] = {0};
+        memcpy(last, m, n);
+        polyBlock(p, last, 1ULL << 40);
+    }
+}
+
+static void polyFinish(Poly1305 *p, unsigned char mac[16]) {
+    uint64_t h0 = p->h[0], h1 = p->h[1], h2 = p->h[2], c, g0, g1, g2;
+    c = h1 >> 44;
+    h1 &= 0xfffffffffffULL;
+    h2 += c;
+    c = h2 >> 42;
+    h2 &= 0x3ffffffffffULL;
+    h0 += c * 5;
+    c = h0 >> 44;
+    h0 &= 0xfffffffffffULL;
+    h1 += c;
+    c = h1 >> 44;
+    h1 &= 0xfffffffffffULL;
+    h2 += c;
+    c = h2 >> 42;
+    h2 &= 0x3ffffffffffULL;
+    h0 += c * 5;
+    c = h0 >> 44;
+    h0 &= 0xfffffffffffULL;
+    h1 += c;
+    /* h - p, used when it doesn't go below zero */
+    g0 = h0 + 5;
+    c = g0 >> 44;
+    g0 &= 0xfffffffffffULL;
+    g1 = h1 + c;
+    c = g1 >> 44;
+    g1 &= 0xfffffffffffULL;
+    g2 = h2 + c - (1ULL << 42);
+    c = (g2 >> 63) - 1;
+    g0 &= c;
+    g1 &= c;
+    g2 &= c;
+    c = ~c;
+    h0 = (h0 & c) | g0;
+    h1 = (h1 & c) | g1;
+    h2 = (h2 & c) | g2;
+    uint64_t t0 = p->pad[0], t1 = p->pad[1];
+    h0 += t0 & 0xfffffffffffULL;
+    c = h0 >> 44;
+    h0 &= 0xfffffffffffULL;
+    h1 += (((t0 >> 44) | (t1 << 20)) & 0xfffffffffffULL) + c;
+    c = h1 >> 44;
+    h1 &= 0xfffffffffffULL;
+    h2 += ((t1 >> 24) & 0x3ffffffffffULL) + c;
+    h2 &= 0x3ffffffffffULL;
+    h0 = h0 | (h1 << 44);
+    h1 = (h1 >> 20) | (h2 << 24);
+    for (int i = 0; i < 8; i++) {
+        mac[i] = (unsigned char)(h0 >> (8 * i));
+        mac[8 + i] = (unsigned char)(h1 >> (8 * i));
+    }
+}
+
+/* the AEAD's tag over the extra data and the sealed text (RFC 8439, 2.8) */
+static void aeadTag(const unsigned char key[32], const unsigned char nonce[12], const unsigned char *aad,
+                    size_t aadLen, const unsigned char *ct, size_t ctLen, unsigned char tag[16]) {
+    unsigned char block[64];
+    chachaBlock(key, 0, nonce, block);
+    Poly1305 p;
+    polyInit(&p, block);
+    polyPadded(&p, aad, aadLen);
+    polyPadded(&p, ct, ctLen);
+    unsigned char lens[16];
+    for (int i = 0; i < 8; i++) {
+        lens[i] = (unsigned char)((uint64_t)aadLen >> (8 * i));
+        lens[8 + i] = (unsigned char)((uint64_t)ctLen >> (8 * i));
+    }
+    polyBlock(&p, lens, 1ULL << 40);
+    polyFinish(&p, tag);
+}
+
+/* ChaCha20-Poly1305: the data sealed, then its 16-byte tag, added to out */
+void iris_chacha_seal(const unsigned char *key, const unsigned char *nonce, const unsigned char *data, int64_t len,
+                      const unsigned char *aad, int64_t aadLen, IrisString *out) {
+    unsigned char *ct = malloc((size_t)len + 16);
+    if (!ct) {
+        outOfMemory();
+    }
+    chachaXor(key, 1, nonce, data, ct, (size_t)len);
+    aeadTag(key, nonce, aad, (size_t)aadLen, ct, (size_t)len, ct + len);
+    iris_string_append(out, (const char *)ct, len + 16);
+    free(ct);
+}
+
+/* Opens what seal made: 1 and the data added to out, or 0 when the tag
+   doesn't match, and then out gets nothing. */
+int iris_chacha_open(const unsigned char *key, const unsigned char *nonce, const unsigned char *sealed, int64_t len,
+                     const unsigned char *aad, int64_t aadLen, IrisString *out) {
+    if (len < 16) {
+        return 0;
+    }
+    size_t n = (size_t)len - 16;
+    unsigned char tag[16];
+    aeadTag(key, nonce, aad, (size_t)aadLen, sealed, n, tag);
+    if (!iris_const_equal((const char *)tag, 16, (const char *)sealed + n, 16)) {
+        return 0;
+    }
+    unsigned char *pt = malloc(n ? n : 1);
+    if (!pt) {
+        outOfMemory();
+    }
+    chachaXor(key, 1, nonce, sealed, pt, n);
+    iris_string_append(out, (const char *)pt, (int64_t)n);
+    free(pt);
+    return 1;
+}
+
 /* xoshiro256** (Blackman and Vigna): fast, not for secrets. The thread's
    own generator is seeded from the system on first use. */
 static uint64_t rotl64(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }

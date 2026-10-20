@@ -45,4 +45,56 @@ true
 false
 ```
 
+## Encryption
+
+`seal` hides data with ChaCha20-Poly1305, using a 32-byte key and a 12-byte nonce, and adds a 16-byte tag. `unseal` gives the data back, or `CryptoError.tampered` when a byte was changed or the key is another one. A nonce must never be used twice with the same key: count messages, or take each nonce from `random.bytes`. `extra` is data that goes along unhidden but is checked too, like a header:
+
+```iris run
+import crypto, random
+
+!void main() {
+    u8[32] key
+    u8[12] nonce
+    random.bytes(key[0:32])
+    random.bytes(nonce[0:12])
+    scoped String box = crypto.seal(key[0:32], nonce[0:12], "db password: hunter2", extra: "v1")
+    scoped String back = try crypto.unseal(key[0:32], nonce[0:12], box, extra: "v1")
+    print("{box.len} bytes sealed, back: {back}")
+    scoped String wrong = crypto.unseal(key[0:32], nonce[0:12], box, extra: "v2") catch e {
+        print("{e.code}")
+        return
+    }
+}
+```
+
+```output
+36 bytes sealed, back: db password: hunter2
+CryptoError.tampered
+```
+
+## Agreeing on a key
+
+X25519 lets two sides agree on a secret over a network anyone can read. Each makes a 32-byte secret with `random.bytes` and sends the other `x25519Public` of it. `x25519` with its own secret and the other side's public key gives both the same 32 bytes. `hkdfSha256` turns them into keys for `seal`:
+
+```iris run
+import crypto, random
+
+!void main() {
+    u8[32] client
+    u8[32] server
+    random.bytes(client[0:32])
+    random.bytes(server[0:32])
+    u8[32] clientPub = crypto.x25519Public(client[0:32])
+    u8[32] serverPub = crypto.x25519Public(server[0:32])
+    u8[32] a = try crypto.x25519(client[0:32], serverPub[0:32])
+    u8[32] b = try crypto.x25519(server[0:32], clientPub[0:32])
+    scoped String key = crypto.hkdfSha256(a[0:32], "", "chat v1 key")
+    print("same secret: {crypto.equal(a[0:32], b[0:32])}, key of {key.len} bytes")
+}
+```
+
+```output
+same secret: true, key of 32 bytes
+```
+
 These run in the program itself and take the same time whatever the secret is. SHA-1 and MD5 are here for older protocols only.

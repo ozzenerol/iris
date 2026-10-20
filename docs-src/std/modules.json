@@ -15,7 +15,7 @@
       {"name": "hex", "title": "Hex", "summary": "Bytes as hexadecimal digits, and back."},
       {"name": "url", "title": "URLs", "summary": "Taking URLs apart, and the %XX encoding of their parts."},
       {"name": "compress", "title": "Compression", "summary": "Deflate in the gzip, zlib and raw formats."},
-      {"name": "crypto", "title": "Hashes and signatures", "summary": "SHA-256, SHA-512, HMAC, HKDF, PBKDF2, Ed25519 signatures, SHA-1, MD5 and a constant-time compare."}
+      {"name": "crypto", "title": "Cryptography", "summary": "SHA-256, SHA-512, HMAC, HKDF, PBKDF2, Ed25519 signatures, X25519, ChaCha20-Poly1305, SHA-1, MD5 and a constant-time compare."}
     ]},
     {"title": "System", "modules": [
       {"name": "io", "title": "Standard input and output", "summary": "Lines from standard input, and writing to standard output and error."},
