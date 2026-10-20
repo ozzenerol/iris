@@ -1,0 +1,7 @@
+// panic: an Ed25519 seed is 32 bytes, not 5
+
+import crypto
+
+void main() {
+    _ = crypto.ed25519Sign("short", "hello")
+}

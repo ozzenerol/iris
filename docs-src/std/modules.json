@@ -1,7 +1,7 @@
 {
   "groups": [
     {"title": "Core", "modules": [
-      {"name": "core", "title": "Collections", "summary": "List and Map, which every program has without an import."},
+      {"name": "core", "title": "Collections", "summary": "List, Map, Set and Arena, which every program has without an import."},
       {"name": "str", "title": "Text", "summary": "Searching, cutting, trimming and changing text, and reading numbers from it."},
       {"name": "math", "title": "Maths", "summary": "Constants and functions on floating point numbers."},
       {"name": "random", "title": "Random numbers", "summary": "Numbers and bytes from the system's random source, and seeded generators."},
@@ -15,7 +15,7 @@
       {"name": "hex", "title": "Hex", "summary": "Bytes as hexadecimal digits, and back."},
       {"name": "url", "title": "URLs", "summary": "Taking URLs apart, and the %XX encoding of their parts."},
       {"name": "compress", "title": "Compression", "summary": "Deflate in the gzip, zlib and raw formats."},
-      {"name": "crypto", "title": "Hashes", "summary": "SHA-256, HMAC, PBKDF2, SHA-1, MD5 and a constant-time compare."}
+      {"name": "crypto", "title": "Hashes and signatures", "summary": "SHA-256, SHA-512, HMAC, HKDF, PBKDF2, Ed25519 signatures, SHA-1, MD5 and a constant-time compare."}
     ]},
     {"title": "System", "modules": [
       {"name": "io", "title": "Standard input and output", "summary": "Lines from standard input, and writing to standard output and error."},
