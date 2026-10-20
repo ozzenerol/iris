@@ -1,0 +1,48 @@
+// expect: true true false 2
+// expect: true false
+// expect: true false 1
+// expect: 10.0.0.9
+// expect: 3 3
+// expect: 0 false
+// expect: 4 4
+
+enum Proto { tcp, udp, icmp }
+
+void main() {
+    Set[str] seen
+    defer seen.free()
+    n := 5
+    addr := format("10.0.0.{n}")
+    print("{seen.add(addr)} {seen.add("10.0.0.9")} {seen.add("10.0.0.5")} {seen.len}")
+    addr.free()
+    print("{seen.has("10.0.0.5")} {seen.has("10.0.0.7")}")
+    print("{seen.remove("10.0.0.5")} {seen.remove("10.0.0.5")} {seen.len}")
+    for a in seen {
+        print(a)
+    }
+
+    Set[u16] ports
+    defer ports.free()
+    for p in [80, 443, 80, 8080, 443] {
+        _ = ports.add(u16(p))
+    }
+    scoped List[u16] list = ports.values()
+    print("{ports.len} {list.len}")
+    ports.clear()
+    print("{ports.len} {ports.has(80)}")
+
+    Set[Proto] protos
+    defer protos.free()
+    _ = protos.add(.tcp)
+    _ = protos.add(.udp)
+    Set[i64] big
+    defer big.free()
+    for i in 0..1000 {
+        _ = big.add(i % 250)
+    }
+    total := 0
+    for _ in big {
+        total += 1
+    }
+    print("{protos.len + 2} {(total - 250) + 4}")
+}

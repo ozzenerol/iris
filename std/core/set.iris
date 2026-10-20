@@ -1,0 +1,49 @@
+// A set of values, each kept once. Values can be integers, bool, enums,
+// pointers or str; a str is copied, so the set keeps its own. A new Set
+// is empty; free gives its memory back.
+pub struct Set[T] {
+    Map[T, bool] m
+    pub i64 len
+}
+
+// Adds v; false when it was there already.
+pub bool Set[T].add(T v) {
+    if self.m.has(v) {
+        return false
+    }
+    self.m.set(v, true)
+    self.len = self.m.len
+    return true
+}
+
+// Whether v is there.
+pub bool Set[T].has(T v) => self.m.has(v)
+
+// Takes v out; false when it wasn't there.
+pub bool Set[T].remove(T v) {
+    gone := self.m.remove(v)
+    self.len = self.m.len
+    return gone
+}
+
+// Takes every value out and keeps the memory.
+pub void Set[T].clear() {
+    self.m.clear()
+    self.len = 0
+}
+
+// Gives the set's memory back; the set is empty after.
+pub void Set[T].free() {
+    self.m.free()
+    self.len = 0
+}
+
+// The values, in no particular order, as a new List. A str points into
+// the set's own copy, valid until it is removed.
+pub List[T] Set[T].values() => self.m.keys()
+
+// for v in set, in no particular order
+pub (T, bool) Set[T].next(i64 *at) {
+    v, _, more := self.m.next(at)
+    return (v, more)
+}

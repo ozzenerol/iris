@@ -990,14 +990,16 @@ static Type *resolveType(Checker *c, Node *t) {
             args[i] = resolveType(c, t->list.items[i]);
             if (isErr(args[i])) return args[i];
         }
-        if (d->module && strcmp(d->module, "core") == 0 && strcmp(d->name, "Map") == 0 && t->list.len >= 1) {
-            /* said here, where the map is declared, not inside Map's code */
+        bool isSet = d->module && strcmp(d->module, "core") == 0 && strcmp(d->name, "Set") == 0;
+        if (d->module && strcmp(d->module, "core") == 0 && (strcmp(d->name, "Map") == 0 || isSet) && t->list.len >= 1) {
+            /* said here, where the map or set is declared, not inside its code */
             Type *k = args[0];
             bool ok = k->kind == TY_INT || k->kind == TY_BOOL || k->kind == TY_PTR || isStr(k) ||
                       (k->kind == TY_ENUM && !k->hasData);
             if (!ok) {
-                error(c, t->list.items[0], "a Map's keys can be integers, bool, enums, pointers or str, not %s%s",
-                      k->name, k->kind == TY_STRING ? " (use str: the map keeps its own copy)" : "");
+                error(c, t->list.items[0], "a %s can be integers, bool, enums, pointers or str, not %s%s",
+                      isSet ? "Set's values" : "Map's keys", k->name,
+                      k->kind == TY_STRING ? (isSet ? " (use str: the set keeps its own copy)" : " (use str: the map keeps its own copy)") : "");
                 return &tyError;
             }
         }

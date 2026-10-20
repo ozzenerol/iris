@@ -9,7 +9,7 @@ syn keyword irisOperator not and or is
 syn keyword irisStructure struct union enum interface type dyn chan threadlocal
 syn keyword irisType void bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 str String Error Duration
 syn keyword irisType u16be u32be u64be i16be i32be i64be
-syn keyword irisType Mutex Thread Atomic List Map
+syn keyword irisType Mutex Thread Atomic List Map Set Arena
 syn keyword irisBoolean true false
 syn keyword irisConstant null
 syn keyword irisSelf self

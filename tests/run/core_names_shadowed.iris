@@ -1,0 +1,15 @@
+// expect: 1 2
+
+struct Set {
+    i64 x
+}
+
+struct Arena {
+    i64 y
+}
+
+void main() {
+    s := Set{x: 1}
+    a := Arena{y: 2}
+    print("{s.x} {a.y}")
+}

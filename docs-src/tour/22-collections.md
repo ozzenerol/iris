@@ -1,6 +1,6 @@
 # Collections
 
-`List` keeps values in order and grows as values are added; `Map` keeps a value for each key. Both are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.
+`List` keeps values in order and grows as values are added; `Map` keeps a value for each key, and `Set` keeps each value once. All three are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.
 
 ## List
 
@@ -191,6 +191,35 @@ void main() {
 ```
 
 For a stable order, the keys go into a list, which is sorted.
+
+## Set
+
+A `Set[T]` keeps each value once. `add` puts a value in and gives false when it was there already, `has` says whether a value is there, and `remove` takes it out. A loop over a set gives each value, in no particular order:
+
+```iris run
+void main() {
+    Set[str] blocked
+    defer blocked.free()
+    for addr in ["10.0.0.5", "10.0.0.9", "10.0.0.5"] {
+        if !blocked.add(addr) {
+            print("{addr} is blocked already")
+        }
+    }
+    print("{blocked.len} blocked, {blocked.has("10.0.0.9")} {blocked.has("10.0.0.7")}")
+    _ = blocked.remove("10.0.0.9")
+    for addr in blocked {
+        print("still blocked: {addr}")
+    }
+}
+```
+
+```output
+10.0.0.5 is blocked already
+2 blocked, true false
+still blocked: 10.0.0.5
+```
+
+A set's values follow the rules of a map's keys: integers, `bool`, enums, pointers or `str`, and a `str` is copied into the set. `values()` gives them as a new `List`, which the caller frees. `clear` takes every value out and keeps the memory.
 
 ## Requests per client
 
