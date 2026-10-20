@@ -438,7 +438,7 @@ def port_open(port):
     return False
 
 
-def guide_tests(iris, only, failures):
+def guide_tests(iris, only, failures, skipped):
     """Each guide, step by step in one folder, as docs-src/guides/README.md says"""
     import signal
     import time
@@ -452,8 +452,11 @@ def guide_tests(iris, only, failures):
         if only and not any(o in name or o in "guides" for o in only):
             continue
         blocks = markdown.convert(open(path).read())[4]
+        if any(info == "shell start" for info, _, _ in blocks) and port_open(8080):
+            skipped.append("%s (another program has port 8080)" % name)
+            continue
         tries = " ".join(code for info, code, _ in blocks if info == "shell try")
-        missing = [t for t in ("curl", "nc", "dig") if re.search(r"\b%s\b" % t, tries) and not shutil.which(t)]
+        missing = [t for t in ("curl", "nc", "dig", "pkill") if re.search(r"\b%s\b" % t, tries) and not shutil.which(t)]
         if missing:
             failures.append((name, "%s isn't installed" % " and ".join(missing)))
             continue
@@ -583,7 +586,7 @@ def main():
     total += mod_init_test(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += doc_tests(args.iris, args.only, failures)
-    total += guide_tests(args.iris, args.only, failures)
+    total += guide_tests(args.iris, args.only, failures, skipped)
     total += std_tests(args.iris, args.only, failures)
     total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")
     total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")
