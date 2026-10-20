@@ -1695,11 +1695,11 @@ static Node *parseStruct(Parser *p, NodeList attrs, unsigned flags) {
             f = node(p, N_FIELD, fname);
             f->name = tokText(p, fname);
             f->a = type;
-            if (accept(p, P_ASSIGN)) {
-                f->b = parseExpr(p);
-            }
             if (accept(p, P_COLON)) {
                 f->c = parseExpr(p);
+            }
+            if (accept(p, P_ASSIGN)) {
+                f->b = parseExpr(p);
             }
         }
         f->attrs = fattrs;

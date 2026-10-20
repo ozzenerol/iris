@@ -21,7 +21,7 @@
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
   var KW = /^(if|else|for|in|match|break|continue|return|struct|union|enum|interface|type|dyn|pub|const|comptime|when|import|try|catch|defer|errdefer|scoped|spawn|select|chan|thread|threadlocal|asm|test|not|and|or|is|true|false|null|self)$/;
-  var TY = /^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|void|str|String|Error|Duration|List|Map|Atomic|Mutex|Thread|u16be|u32be|u64be|u16le|u32le|u64le)$/;
+  var TY = /^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|void|str|String|Error|Duration|List|Map|Atomic|Mutex|Thread|u16be|u32be|u64be|i16be|i32be|i64be)$/;
   function span(cls, t) { return '<span class="' + cls + '">' + esc(t) + "</span>"; }
 
   /* where the string starting at code[i] ends; braces hold code, which may

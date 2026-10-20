@@ -1,0 +1,51 @@
+// error: 18: a bitfield is an integer, not bool
+// error: 19: a u8 bitfield is 1 to 8 bits wide, not 9
+// error: 20: a bitfield's width is a whole number known when compiling: u8 flags: 3
+// error: 21: 16 doesn't fit in the 4 bits of small, which hold 0 to 15
+// error: 24: align takes a power of two from 1 to 4096, not 3
+// error: 30: a field of a @json struct can't be a bitfield or in network byte order
+// error: 33: u16be can only be the type of a struct field: it is a u16 kept in network byte order, and reads as a u16
+// error: 34: u32be can only be the type of a struct field: it is a u32 kept in network byte order, and reads as a u32
+// error: 45: a bitfield shares its bytes with the fields next to it, so it has no address; copy it out first
+// error: 46: a field in network byte order has no address; copy it out first
+// error: 47: a field of a packed struct may not be aligned, so it has no address; copy it out first
+// error: 48: -5 doesn't fit in u8
+// error: 49: sizeof takes a type: sizeof(Header)
+
+i64 width() => 3
+
+struct Bad {
+    bool on : 1
+    u8 wide : 9
+    u8 odd : width()
+    u8 small : 4 = 16
+}
+
+struct Odd align(3) {
+    i64 x
+}
+
+@json
+struct Wire {
+    u16be port
+}
+
+u16be global
+void take(u32be x) { }
+
+struct Header packed {
+    u8 flag : 1
+    u16be port
+    u32 seq
+    u8 kind
+}
+
+void main() {
+    Header h
+    a := &h.flag
+    b := &h.port
+    c := &h.seq
+    d := Bad{small: -5}
+    e := sizeof(1)
+    k := &h.kind
+}

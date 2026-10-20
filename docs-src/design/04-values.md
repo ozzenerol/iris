@@ -34,7 +34,7 @@ String  =  { u8 *ptr, i64 len, i64 cap }
 
 ## Structs
 
-Fields are stored in the order they are written, with the same padding as C. A struct can be passed to and from C as it is. `packed` removes the padding and `align(n)` sets the alignment.
+Fields are stored in the order they are written, with the same padding as C. A struct can be passed to and from C as it is. `packed` removes the padding and `align(n)` raises the alignment. A run of bitfields shares one integer of their type, the first in its highest bits. `u16be`, `u32be` and `u64be` (and the signed ones) are only field types: they read as plain integers and keep the bytes in network order.
 
 ## Enums
 

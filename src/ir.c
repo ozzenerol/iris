@@ -253,7 +253,8 @@ static const char *cString(IR *ir, const char *s) { return stringConst(ir, s, st
 
 static const char *allocaFor(IR *ir, Type *t, const char *hint) {
     const char *name = fmt(ir, "%%v.%s.%d", hint, ++ir->vars);
-    sbPrintf(&ir->allocas, "  %s = alloca %s\n", name, llType(ir, t));
+    int64_t align = typeAlignOf(t);
+    sbPrintf(&ir->allocas, "  %s = alloca %s%s\n", name, llType(ir, t), align > 8 ? fmt(ir, ", align %lld", (long long)align) : "");
     return name;
 }
 
@@ -269,12 +270,20 @@ static const char *tempStringSlot(IR *ir, const char *hint) {
 static int dbgType(IR *ir, Type *t);
 
 /* A struct-like debug type: name, size and members (name, type, offset). */
-static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n) {
+static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n, Node **fields) {
     for (int i = 0; i < n; i++) {
         int mt = dbgType(ir, types[i]);
         int m = ir->metaId++;
-        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %lld, offset: %lld)\n",
-                 m, names[i], mt, (long long)typeSizeOf(types[i]) * 8, (long long)offs[i] * 8);
+        Node *f = fields ? fields[i] : NULL;
+        if (f && f->bitWidth) {
+            int low = types[i]->bigEndian ? types[i]->bits - f->bitOff - f->bitWidth : f->bitOff;
+            sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %d, "
+                                "offset: %lld, flags: DIFlagBitField, extraData: i64 %lld)\n",
+                     m, names[i], mt, f->bitWidth, (long long)offs[i] * 8 + low, (long long)offs[i] * 8);
+        } else {
+            sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %lld, offset: %lld)\n",
+                     m, names[i], mt, (long long)typeSizeOf(types[i]) * 8, (long long)offs[i] * 8);
+        }
         sbPrintf(b, "%s!%d", i ? ", " : "", m);
     }
 }
@@ -337,7 +346,7 @@ static int dbgType(IR *ir, Type *t) {
         Type *types[3] = {pt, &tyI64, &tyI64};
         int64_t offs[3] = {0, 8, 16};
         StrBuf b = {0};
-        dbgMembers(ir, &b, names, types, offs, t->kind == TY_STRING ? 3 : 2);
+        dbgMembers(ir, &b, names, types, offs, t->kind == TY_STRING ? 3 : 2, NULL);
         sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
                  id, name, bits, b.buf);
         sbFree(&b);
@@ -355,7 +364,7 @@ static int dbgType(IR *ir, Type *t) {
             offs[i] = fieldOffset(t, i);
         }
         StrBuf b = {0};
-        dbgMembers(ir, &b, names, types, offs, n);
+        dbgMembers(ir, &b, names, types, offs, n, fs->items);
         sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
                  id, name, bits, b.buf ? b.buf : "");
         sbFree(&b);
@@ -510,6 +519,8 @@ static bool hasDefaults(Type *t);
 static const char *constValue(IR *ir, Node *v, Type *t);
 static const char *emitSpawn(IR *ir, Node *call, bool thread);
 static const char *emitAddr(IR *ir, Node *e);
+static Node *fieldNode(Type *st, int index);
+static Val structGet(IR *ir, Type *st, const char *agg, int index);
 static void emitStmt(IR *ir, Node *s);
 static void emitBlock(IR *ir, Node *b);
 static Val emitIf(IR *ir, Node *n, bool wantValue);
@@ -840,11 +851,8 @@ static const char *emitEq(IR *ir, Val a, Val b) {
         const char *acc = "true";
         NodeList *fields = &t->decl->list;
         for (int i = 0; i < fields->len; i++) {
-            Type *ft = fields->items[i]->type;
-            const char *fa = tmp(ir), *fb = tmp(ir);
-            ins(ir, "%s = extractvalue %s %s, %d", fa, t->ir, a.s, i);
-            ins(ir, "%s = extractvalue %s %s, %d", fb, t->ir, b.s, i);
-            const char *eq = emitEq(ir, val(fa, ft), val(fb, ft));
+            Val fa = structGet(ir, t, a.s, i), fb = structGet(ir, t, b.s, i);
+            const char *eq = emitEq(ir, fa, fb);
             const char *both = tmp(ir);
             ins(ir, "%s = and i1 %s, %s", both, acc, eq);
             acc = both;
@@ -1433,6 +1441,11 @@ static Val emitBuiltin(IR *ir, Node *e) {
         const char *size = sizeOf(ir, t);
         Val n = emitExpr(ir, e->list.items[1]);
         const char *p = tmp(ir);
+        if (typeAlignOf(t) > 16) {
+            ins(ir, "%s = call ptr @iris_alloc_aligned(i64 %s, i64 %s, i64 %lld, ptr %s, i32 %d, i32 %d, ptr %s)", p,
+                size, n.s, (long long)typeAlignOf(t), ir->fileStr, e->line, e->col, fnName(ir));
+            return makeSlice(ir, p, n.s, e->type);
+        }
         ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", p, size, n.s,
             ir->fileStr, e->line, e->col, fnName(ir));
         return makeSlice(ir, p, n.s, e->type);
@@ -1758,7 +1771,7 @@ static const char *emitAddr(IR *ir, Node *e) {
             base = spill(ir, emitExpr(ir, e->a));
         }
         const char *r = tmp(ir);
-        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", r, st->ir, base, (int)e->ival);
+        ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 %d", r, st->ir, base, fieldNode(st, (int)e->ival)->slot);
         return r;
     }
     case N_INDEX: {
@@ -1795,6 +1808,150 @@ static Val load(IR *ir, const char *addr, Type *t) {
     const char *r = tmp(ir);
     ins(ir, "%s = load %s, ptr %s", r, llType(ir, t), addr);
     return val(r, t);
+}
+
+/* ---------------------------------------------------------------- struct fields */
+
+/* A field whose LLVM element isn't simply its value: a bitfield, or an
+ * integer kept in network byte order. */
+static bool oddField(Node *f) {
+    return f->bitWidth || (f->type && f->type->bigEndian);
+}
+
+static Node *fieldNode(Type *st, int index) { return st->decl->list.items[index]; }
+
+static const char *bswap(IR *ir, const char *v, Type *t) {
+    const char *r = tmp(ir);
+    ins(ir, "%s = call %s @llvm.bswap.%s(%s %s)", r, llType(ir, t), llType(ir, t), llType(ir, t), v);
+    return r;
+}
+
+/* The value of field f from its LLVM element, as it is in memory. */
+static const char *fieldFromUnit(IR *ir, Node *f, const char *unit) {
+    Type *t = f->type;
+    const char *ty = llType(ir, t);
+    if (t->bigEndian) {
+        unit = bswap(ir, unit, t);
+    }
+    if (!f->bitWidth) {
+        return unit;
+    }
+    const char *a = tmp(ir), *r = tmp(ir);
+    ins(ir, "%s = shl %s %s, %d", a, ty, unit, t->bits - f->bitOff - f->bitWidth);
+    ins(ir, "%s = %s %s %s, %d", r, t->isSigned ? "ashr" : "lshr", ty, a, t->bits - f->bitWidth);
+    return r;
+}
+
+/* Field f's LLVM element with v put in; old is the element before, which a
+ * bitfield shares with the fields next to it. */
+static const char *fieldIntoUnit(IR *ir, Node *f, const char *old, Val v, Node *at) {
+    Type *t = f->type;
+    const char *ty = llType(ir, t);
+    const char *x = v.s;
+    if (f->bitWidth) {
+        if (checks(ir) && f->bitWidth < t->bits) {
+            const char *tr = tmp(ir), *back = tmp(ir), *bad = tmp(ir);
+            ins(ir, "%s = trunc %s %s to i%d", tr, ty, x, f->bitWidth);
+            ins(ir, "%s = %s i%d %s to %s", back, t->isSigned ? "sext" : "zext", f->bitWidth, tr, ty);
+            ins(ir, "%s = icmp ne %s %s, %s", bad, ty, back, x);
+            char msg[160];
+            snprintf(msg, sizeof msg, "the value doesn't fit in the %d bit%s of %s", f->bitWidth,
+                     f->bitWidth == 1 ? "" : "s", f->name);
+            failIf(ir, bad, at, fmt(ir, "%s", msg));
+        }
+        uint64_t mask = f->bitWidth == 64 ? ~0ull : (1ull << f->bitWidth) - 1;
+        const char *cur = t->bigEndian ? bswap(ir, old, t) : old;
+        const char *m = tmp(ir), *sh = tmp(ir), *clr = tmp(ir), *r = tmp(ir);
+        ins(ir, "%s = and %s %s, %s", m, ty, x, intConst(ir, (int64_t)mask, t));
+        ins(ir, "%s = shl %s %s, %d", sh, ty, m, f->bitOff);
+        ins(ir, "%s = and %s %s, %s", clr, ty, cur, intConst(ir, (int64_t)~(mask << f->bitOff), t));
+        ins(ir, "%s = or %s %s, %s", r, ty, clr, sh);
+        x = r;
+    }
+    return t->bigEndian ? bswap(ir, x, t) : x;
+}
+
+/* Field index of a struct value. */
+static Val structGet(IR *ir, Type *st, const char *agg, int index) {
+    Node *f = fieldNode(st, index);
+    const char *r = tmp(ir);
+    ins(ir, "%s = extractvalue %s %s, %d", r, st->ir, agg, f->slot);
+    Type *vt = f->type->bigEndian ? f->type->plain : f->type;
+    return val(oddField(f) ? fieldFromUnit(ir, f, r) : r, vt);
+}
+
+/* A struct value with field index set to v. */
+static const char *structSet(IR *ir, Type *st, const char *agg, int index, Val v, Node *at) {
+    Node *f = fieldNode(st, index);
+    const char *x = v.s;
+    if (oddField(f)) {
+        const char *old = NULL;
+        if (f->bitWidth) {
+            old = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, %d", old, st->ir, agg, f->slot);
+        }
+        x = fieldIntoUnit(ir, f, old, v, at);
+    }
+    const char *r = tmp(ir);
+    ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, st->ir, agg, llType(ir, f->type), x, f->slot);
+    return r;
+}
+
+/* A place in memory: its address, and when it is an odd field, which. A
+ * place inside a packed struct may not be aligned. */
+typedef struct {
+    const char *addr;
+    Node *field;
+    Type *type;
+    const char *align;
+} Place;
+
+static bool unaligned(Node *e) {
+    if (e->kind == N_FIELD_ACCESS && e->ref && e->a->type) {
+        Type *bt = e->a->type;
+        if (bt->kind == TY_PTR) {
+            return bt->elem->kind == TY_STRUCT && (bt->elem->decl->flags & F_PACKED);
+        }
+        return (bt->kind == TY_STRUCT && (bt->decl->flags & F_PACKED)) || unaligned(e->a);
+    }
+    if (e->kind == N_INDEX && e->a->type && e->a->type->kind == TY_ARRAY) {
+        return unaligned(e->a);
+    }
+    return false;
+}
+
+static Place emitPlace(IR *ir, Node *e) {
+    Place p = {0};
+    p.type = e->type;
+    p.align = unaligned(e) ? ", align 1" : "";
+    if (e->kind == N_FIELD_ACCESS && e->ref && (e->ref->kind == N_FIELD || e->ref->kind == N_EMBED) &&
+        oddField(e->ref)) {
+        p.field = e->ref;
+    }
+    p.addr = emitAddr(ir, e);
+    return p;
+}
+
+static Val placeLoad(IR *ir, Place p) {
+    const char *r = tmp(ir);
+    Type *t = p.field ? p.field->type : p.type;
+    ins(ir, "%s = load %s, ptr %s%s", r, llType(ir, t), p.addr, p.align);
+    return val(p.field ? fieldFromUnit(ir, p.field, r) : r, p.type);
+}
+
+static void placeStore(IR *ir, Place p, Val v, Node *at) {
+    if (!p.field) {
+        ins(ir, "store %s %s, ptr %s%s", llType(ir, p.type), v.s, p.addr, p.align);
+        return;
+    }
+    Type *t = p.field->type;
+    const char *old = NULL;
+    if (p.field->bitWidth) {
+        old = tmp(ir);
+        ins(ir, "%s = load %s, ptr %s%s", old, llType(ir, t), p.addr, p.align);
+    }
+    const char *x = fieldIntoUnit(ir, p.field, old, v, at);
+    ins(ir, "store %s %s, ptr %s%s", llType(ir, t), x, p.addr, p.align);
 }
 
 /* Frees the temporary Strings made since mark. */
@@ -2037,17 +2194,11 @@ static Val emitStructLit(IR *ir, Node *e) {
         if (!value) {
             if (f->type && hasDefaults(f->type)) {
                 /* a struct inside, left out: with its own defaults */
-                const char *r = tmp(ir);
-                ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, t->ir, acc, llType(ir, f->type),
-                    constValue(ir, NULL, f->type), i);
-                acc = r;
+                acc = structSet(ir, t, acc, i, val(constValue(ir, NULL, f->type), f->type), e);
             }
             continue;
         }
-        Val v = emitExpr(ir, value);
-        const char *r = tmp(ir);
-        ins(ir, "%s = insertvalue %s %s, %s %s, %d", r, t->ir, acc, llType(ir, f->type), v.s, i);
-        acc = r;
+        acc = structSet(ir, t, acc, i, emitExpr(ir, value), value);
     }
     return val(acc, t);
 }
@@ -2147,11 +2298,11 @@ static Val emitExpr(IR *ir, Node *e) {
         return emitConvert(ir, e);
     case N_INCDEC: {
         Type *t = e->type;
-        const char *addr = emitAddr(ir, e->a);
-        Val old = load(ir, addr, t);
+        Place place = emitPlace(ir, e->a);
+        Val old = placeLoad(ir, place);
         Val one = val(t->kind == TY_FLOAT ? "1.0" : "1", t->kind == TY_PTR ? &tyI64 : t);
         Val now = emitArith(ir, e, e->op == P_INC ? P_PLUS : P_MINUS, old, one);
-        ins(ir, "store %s %s, ptr %s", llType(ir, t), now.s, addr);
+        placeStore(ir, place, now, e);
         return e->flags & F_POSTFIX ? old : now;
     }
     case N_UNARY: {
@@ -2227,15 +2378,13 @@ static Val emitExpr(IR *ir, Node *e) {
             return val(r, e->builtin == 2 ? e->type : &tyI64);
         }
         if (irAddressable(e)) {
-            return load(ir, emitAddr(ir, e), e->type);
+            return placeLoad(ir, emitPlace(ir, e));
         }
         Val a = emitExpr(ir, e->a);
-        const char *r = tmp(ir);
-        ins(ir, "%s = extractvalue %s %s, %d", r, a.t->ir, a.s, (int)e->ival);
-        return val(r, e->type);
+        return structGet(ir, a.t, a.s, (int)e->ival);
     }
     case N_INDEX:
-        return load(ir, emitAddr(ir, e), e->type);
+        return placeLoad(ir, emitPlace(ir, e));
     case N_SLICE:
         return emitSlice(ir, e);
     case N_STRUCT_LIT:
@@ -2601,8 +2750,7 @@ static void emitAssign(IR *ir, Node *s) {
             if (t->kind == N_IDENT && strcmp(t->name, "_") == 0) {
                 continue;
             }
-            const char *addr = emitAddr(ir, t);
-            ins(ir, "store %s %s, ptr %s", llType(ir, t->type), vals[i], addr);
+            placeStore(ir, emitPlace(ir, t), val(vals[i], t->type), s);
         }
         return;
     }
@@ -2614,12 +2762,11 @@ static void emitAssign(IR *ir, Node *s) {
     Type *t = target->type;
     if (s->op == P_ASSIGN) {
         Val v = emitExpr(ir, s->b);
-        const char *addr = emitAddr(ir, target);
-        ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, addr);
+        placeStore(ir, emitPlace(ir, target), v, s);
         return;
     }
-    const char *addr = emitAddr(ir, target);
-    Val a = load(ir, addr, t);
+    Place place = emitPlace(ir, target);
+    Val a = placeLoad(ir, place);
     Val b = emitExpr(ir, s->b);
     Val r;
     switch (s->op) {
@@ -2637,7 +2784,7 @@ static void emitAssign(IR *ir, Node *s) {
         r = val(x, t);
     }
     }
-    ins(ir, "store %s %s, ptr %s", llType(ir, t), r.s, addr);
+    placeStore(ir, place, r, s);
 }
 
 /* spawn f(a, b): the arguments are worked out now and kept on the heap; a
@@ -3060,6 +3207,66 @@ static bool hasDefaults(Type *t) {
     return false;
 }
 
+static const char *constValue(IR *ir, Node *v, Type *t);
+
+static uint64_t swapBytes(uint64_t v, int bits) {
+    return bits == 16 ? __builtin_bswap16((uint16_t)v) : bits == 32 ? __builtin_bswap32((uint32_t)v)
+                                                                    : __builtin_bswap64(v);
+}
+
+/* A struct constant: each field's value from lit, else its default. The
+ * bitfields that share an element are put together, and integers in
+ * network byte order have their bytes swapped. */
+static const char *structConst(IR *ir, Type *t, Node *lit) {
+    NodeList *fields = &t->decl->list;
+    const char **parts = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(t->nslots + 1));
+    uint64_t *bits = arenaAlloc(ir->arena, sizeof(uint64_t) * (size_t)(t->nslots + 1));
+    for (int i = 0; i < fields->len; i++) {
+        Node *f = fields->items[i];
+        Node *fv = f->kind == N_FIELD ? f->b : NULL;
+        if (lit) {
+            for (int j = 0; j < lit->list.len; j++) {
+                if (lit->list.items[j]->ref == f) {
+                    fv = lit->list.items[j]->a;
+                }
+            }
+        }
+        if (!oddField(f)) {
+            parts[f->slot] = constValue(ir, fv, f->type);
+            continue;
+        }
+        uint64_t x = fv ? (uint64_t)fv->cval : 0;
+        if (f->bitWidth) {
+            uint64_t mask = f->bitWidth == 64 ? ~0ull : (1ull << f->bitWidth) - 1;
+            x = bits[f->slot] | ((x & mask) << f->bitOff);
+        }
+        bits[f->slot] = x;
+        parts[f->slot] = "";
+    }
+    StrBuf b = {0};
+    bool packed = (t->decl->flags & F_PACKED) != 0;
+    sbPuts(&b, packed ? "<{ " : "{ ");
+    for (int i = 0; i < t->nslots; i++) {
+        Type *st = t->slots[i];
+        if (!st) {
+            sbPrintf(&b, "%s[%lld x i8] zeroinitializer", i ? ", " : "", (long long)t->padBytes[i]);
+        } else if (parts[i] && !*parts[i]) {
+            uint64_t x = st->bigEndian ? swapBytes(bits[i], st->bits) : bits[i];
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, st), intConst(ir, (int64_t)x, st));
+        } else {
+            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, st), parts[i] ? parts[i] : "zeroinitializer");
+        }
+    }
+    sbPuts(&b, packed ? " }>" : " }");
+    return sbFinish(&b, ir->arena);
+}
+
+/* ", align n" for a global of a type align(n) raised. */
+static const char *globalAlign(IR *ir, Type *t) {
+    int64_t a = typeAlignOf(t);
+    return a > 8 ? fmt(ir, ", align %lld", (long long)a) : "";
+}
+
 /* A global's starting value, as an LLVM constant; with no value, the
  * type's defaults. */
 static const char *constValue(IR *ir, Node *v, Type *t) {
@@ -3083,16 +3290,7 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
         v = v->ref->b;
     }
     if (!v) {
-        StrBuf b = {0};
-        sbPuts(&b, "{ ");
-        NodeList *fields = &t->decl->list;
-        for (int i = 0; i < fields->len; i++) {
-            Node *f = fields->items[i];
-            Node *fv = f->kind == N_FIELD ? f->b : NULL;
-            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, f->type), constValue(ir, fv, f->type));
-        }
-        sbPuts(&b, " }");
-        return sbFinish(&b, ir->arena);
+        return structConst(ir, t, NULL);
     }
     switch (t->kind) {
     case TY_SLICE: {
@@ -3113,26 +3311,8 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
             return fmt(ir, "%lld", (long long)(int32_t)(m ? m->cval : v->cval));
         }
         return "zeroinitializer";
-    case TY_STRUCT: {
-        StrBuf b = {0};
-        sbPuts(&b, "{ ");
-        NodeList *fields = &t->decl->list;
-        for (int i = 0; i < fields->len; i++) {
-            Node *f = fields->items[i];
-            Node *fv = f->kind == N_FIELD ? f->b : NULL;
-            if (v->kind == N_STRUCT_LIT) {
-                for (int j = 0; j < v->list.len; j++) {
-                    if (v->list.items[j]->ref == f) {
-                        fv = v->list.items[j]->a;
-                    }
-                }
-            }
-            sbPrintf(&b, "%s%s %s", i ? ", " : "", llType(ir, f->type), constValue(ir, fv, f->type));
-        }
-        sbPuts(&b, " }");
-        char *s = sbFinish(&b, ir->arena);
-        return s;
-    }
+    case TY_STRUCT:
+        return structConst(ir, t, v->kind == N_STRUCT_LIT ? v : NULL);
     case TY_ARRAY: {
         if (v->kind != N_ARRAY_LIT) {
             return "zeroinitializer";
@@ -3247,11 +3427,17 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
         if (d->kind == N_STRUCT && d->type) {
-            sbPrintf(&types, "%s = type { ", d->type->ir);
-            for (int j = 0; j < d->list.len; j++) {
-                sbPrintf(&types, "%s%s", j ? ", " : "", llType(&ir, d->list.items[j]->type));
+            Type *st = d->type;
+            bool packed = (d->flags & F_PACKED) != 0;
+            sbPrintf(&types, "%s = type %s ", st->ir, packed ? "<{" : "{");
+            for (int j = 0; j < st->nslots; j++) {
+                if (st->slots[j]) {
+                    sbPrintf(&types, "%s%s", j ? ", " : "", llType(&ir, st->slots[j]));
+                } else {
+                    sbPrintf(&types, "%s[%lld x i8]", j ? ", " : "", (long long)st->padBytes[j]);
+                }
             }
-            sbPuts(&types, d->list.len ? " }\n" : "}\n");
+            sbPuts(&types, st->nslots ? (packed ? " }>\n" : " }\n") : (packed ? "}>\n" : "}\n"));
         }
     }
     NodeList externs = {0};         /* C functions declared, by name */
@@ -3297,15 +3483,15 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
             }
         } else if (d->kind == N_VAR) {
             d->ir = fmt(&ir, "@\"g.%s.%s\"", mod, d->name);
-            sbPrintf(&ir.head, "%s = internal %s%s %s %s\n", d->ir,
+            sbPrintf(&ir.head, "%s = internal %s%s %s %s%s\n", d->ir,
                      d->flags & F_THREADLOCAL ? "thread_local " : "",
                      (d->flags & F_READONLY) && gComptime == 2 ? "constant" : "global", llType(&ir, d->type),
-                     constValue(&ir, d->b, d->type));
+                     constValue(&ir, d->b, d->type), globalAlign(&ir, d->type));
         } else if (d->kind == N_DEFINE) {
             Node *id = d->list.items[0];
             id->ir = fmt(&ir, "@\"g.%s.%s\"", mod, id->name);
-            sbPrintf(&ir.head, "%s = internal global %s %s\n", id->ir, llType(&ir, id->type),
-                     constValue(&ir, d->b, id->type));
+            sbPrintf(&ir.head, "%s = internal global %s %s%s\n", id->ir, llType(&ir, id->type),
+                     constValue(&ir, d->b, id->type), globalAlign(&ir, id->type));
         }
     }
     NodeList textUsed = {0};
@@ -3427,6 +3613,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
+           "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"
            "declare void @iris_string_free(ptr)\n"
            "declare void @iris_panic(ptr, i32, i32, ptr) noreturn\n"

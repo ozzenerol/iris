@@ -1,0 +1,100 @@
+// expect: 20 4 5 60 7238 2 0 64 6 45542
+// expect: 192.168.0.1
+// expect: 5 220 31 255 63
+// expect: 4 7 4660 1
+// expect: 64 128 64
+// expect: -2 7 1
+// expect: 3 -16
+// expect: 3 1 7 0
+// expect: true false
+// expect: 4 5 64 9 18
+// expect: 4 6
+// expect: 0 7
+
+struct Ipv4 packed {
+    u8 version: 4
+    u8 ihl: 4
+    u8 tos
+    u16be length
+    u16be id
+    u16be flags: 3
+    u16be fragment: 13
+    u8 ttl
+    u8 protocol
+    u16be checksum
+    u8[4] src
+    u8[4] dst
+}
+
+struct Counter align(64) {
+    i64 hits
+}
+
+struct Pair {
+    u8 tag
+    Counter c
+}
+
+struct Signed {
+    i8 a: 3
+    i8 b: 5
+}
+
+struct Mode {
+    u8 read: 1 = 1
+    u8 write: 1
+    u8 level: 3 = 3
+    u32 rest
+}
+
+struct Defaults packed {
+    u8 version: 4 = 4
+    u8 ihl: 4 = 5
+    u8 ttl = 64
+    u16be port = 0x0912
+}
+
+Defaults global
+
+void main() {
+    u8[20] raw = [0x45, 0, 0, 60, 0x1c, 0x46, 0x40, 0, 64, 6, 0xb1, 0xe6, 192, 168, 0, 1, 10, 0, 0, 7]
+    Ipv4 *h = raw[0:20].ptr
+    print("{sizeof(Ipv4)} {h.version} {h.ihl} {h.length} {h.id} {h.flags} {h.fragment} {h.ttl} {h.protocol} {h.checksum}")
+    print("{h.src[0]}.{h.src[1]}.{h.src[2]}.{h.src[3]}")
+    h.ttl--
+    h.length = 1500
+    h.flags = 0
+    h.fragment = 8191
+    print("{raw[2]} {raw[3]} {raw[6]} {raw[7]} {raw[8]}")
+
+    Ipv4 x = .{version: 4, ihl: 5, ttl: 1, length: 0x1234}
+    x.ihl += 2
+    print("{x.version} {x.ihl} {x.length} {x.ttl}")
+
+    Counter[2] cs
+    cs[1].hits = 5
+    print("{sizeof(Counter)} {sizeof(Pair)} {sizeof(Pair) - sizeof(Counter)}")
+
+    s := Signed{a: -2, b: 7}
+    print("{s.a} {s.b} {sizeof(Signed)}")
+    s.a = 3
+    s.b = -16
+    print("{s.a} {s.b}")
+
+    Mode m
+    m.write++
+    m.level = m.level * 2 + 1
+    print("{m.level & 3} {m.write} {m.level} {m.rest}")
+    Mode n = .{write: 1, level: 7}
+    Mode o = .{write: 1, level: 3}
+    print("{m == n} {m == o}")
+
+    g := &global
+    u8 *bp = g
+    u8[] bytes = bp[0:sizeof(Defaults)]
+    print("{global.version} {global.ihl} {global.ttl} {bytes[2]} {bytes[3]}")
+    d := Defaults{}
+    d.ihl++
+    print("{d.version} {d.ihl}")
+    print("{h.fragment - 8191} {7}")
+}

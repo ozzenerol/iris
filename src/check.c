@@ -41,6 +41,16 @@ Type tyErrCode = {.kind = TY_ERRCODE, .name = "error code"};
 Type tyMutex = {.kind = TY_MUTEX, .name = "Mutex"};
 Type tyThread = {.kind = TY_THREAD, .name = "Thread"};
 
+Type tyU16be = {.kind = TY_INT, .bits = 16, .name = "u16be", .bigEndian = true, .plain = &tyU16};
+Type tyU32be = {.kind = TY_INT, .bits = 32, .name = "u32be", .bigEndian = true, .plain = &tyU32};
+Type tyU64be = {.kind = TY_INT, .bits = 64, .name = "u64be", .bigEndian = true, .plain = &tyU64};
+Type tyI16be = {.kind = TY_INT, .bits = 16, .isSigned = true, .name = "i16be", .bigEndian = true, .plain = &tyI16};
+Type tyI32be = {.kind = TY_INT, .bits = 32, .isSigned = true, .name = "i32be", .bigEndian = true, .plain = &tyI32};
+Type tyI64be = {.kind = TY_INT, .bits = 64, .isSigned = true, .name = "i64be", .bigEndian = true, .plain = &tyI64};
+
+/* integers in network byte order: only the type of a struct field */
+static Type *bigEndianTypes[] = {&tyU16be, &tyU32be, &tyU64be, &tyI16be, &tyI32be, &tyI64be};
+
 static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &tyU32,
                                &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue,
                                &tyDuration, &tyMutex, &tyThread};
@@ -122,6 +132,7 @@ typedef struct {
     bool allowResult;       /* the next expression may be a !T call: try, catch, _ = */
     int enumKinds;          /* enums numbered so far */
     bool inDefer;           /* checking the statement of a defer */
+    bool fieldType;         /* resolveType: the whole type of a struct field, where u16be can be */
     /* generics */
     struct Instance *instances;
     NodeList *instOut;      /* instances for the IR writer: the file's list2 */
@@ -475,6 +486,7 @@ static int64_t typeSize(Type *t) {
     case TY_RESULT:
         return t->elem->kind == TY_VOID ? 8 : ((typeSize(t->elem) + 7) / 8) * 8 + 8;
     case TY_STRUCT: case TY_TUPLE: {
+        if (t->laidOut) return t->size;
         int64_t off = 0, align = 1;
         int n = t->kind == TY_TUPLE ? t->nelems : t->decl->list.len;
         for (int i = 0; i < n; i++) {
@@ -498,11 +510,13 @@ static int64_t typeAlign(Type *t) {
     case TY_ARRAY: return typeAlign(t->elem);
     case TY_ENUM: return t->hasData ? 8 : 4;
     case TY_STRUCT: case TY_TUPLE: {
+        if (t->laidOut) return t->align;
         int64_t align = 1;
         int n = t->kind == TY_TUPLE ? t->nelems : t->decl->list.len;
         for (int i = 0; i < n; i++) {
             Type *ft = t->kind == TY_TUPLE ? t->elems[i] : t->decl->list.items[i]->type;
-            if (ft && typeAlign(ft) > align) align = typeAlign(ft);
+            int64_t x = ft ? typeAlign(ft) : 1;
+            if (x > align) align = x;
         }
         return align;
     }
@@ -514,8 +528,117 @@ int64_t typeSizeOf(Type *t) {
     return typeSize(t);
 }
 
+int64_t typeAlignOf(Type *t) {
+    return typeAlign(t);
+}
+
+/* The alignment LLVM gives a type, which align(n) doesn't raise. */
+static int64_t llvmAlign(Type *t) {
+    if (t->kind == TY_ARRAY) return llvmAlign(t->elem);
+    if (t->kind != TY_STRUCT || !t->laidOut) return typeAlign(t);
+    if (t->decl->flags & F_PACKED) return 1;
+    int64_t a = 1;
+    for (int i = 0; i < t->nslots; i++) {
+        int64_t x = t->slots[i] ? llvmAlign(t->slots[i]) : 1;
+        if (x > a) a = x;
+    }
+    return a;
+}
+
+/* The type a field's value has: u16be reads as u16. */
+static Type *valueType(Type *t) {
+    return t && t->bigEndian ? t->plain : t;
+}
+
+/* A value known when compiling must fit in the bits of its bitfield. */
+static void checkBitfieldValue(Checker *c, Node *field, Node *v) {
+    if (!field->bitWidth || !v->isConst || !v->type || v->type->kind != TY_INT) {
+        return;
+    }
+    int w = field->bitWidth;
+    int64_t lo = 0, hi = w == 64 ? INT64_MAX : (int64_t)((1ull << w) - 1);
+    if (field->type->isSigned) {
+        lo = w == 64 ? INT64_MIN : -(int64_t)(1ull << (w - 1));
+        hi = w == 64 ? INT64_MAX : (int64_t)(1ull << (w - 1)) - 1;
+    }
+    int bits = field->type->bits;
+    bool inType = field->type->isSigned || v->cval >= 0;
+    if (bits < 64) {
+        int64_t tlo = field->type->isSigned ? -(int64_t)(1ull << (bits - 1)) : 0;
+        int64_t thi = field->type->isSigned ? (int64_t)(1ull << (bits - 1)) - 1 : (int64_t)((1ull << bits) - 1);
+        inType = v->cval >= tlo && v->cval <= thi;
+    }
+    if (inType && (v->cval < lo || v->cval > hi)) {
+        error(c, v, "%lld doesn't fit in the %d bit%s of %s, which hold %lld to %lld", (long long)v->cval, w,
+              w == 1 ? "" : "s", field->name, (long long)lo, (long long)hi);
+    }
+}
+
+/* Lays out a struct's fields: where each starts and which LLVM element
+ * holds it. A packed struct has no padding. Bitfields next to each other
+ * share one integer while their bits fit, the first in its highest bits.
+ * align(n) raises the alignment; padding elements keep LLVM's layout the
+ * same as this one. */
+static void layoutStruct(Checker *c, Type *t) {
+    Node *d = t->decl;
+    bool packed = (d->flags & F_PACKED) != 0;
+    int n = d->list.len;
+    t->slots = arenaAlloc(c->arena, sizeof(Type *) * (size_t)(2 * n + 1));
+    t->padBytes = arenaAlloc(c->arena, sizeof(int64_t) * (size_t)(2 * n + 1));
+    t->nslots = 0;
+    int64_t off = 0, align = 1, llAlign = 1;
+    Node *unit = NULL;              /* the bitfield whose integer has room left */
+    int used = 0;
+    for (int i = 0; i < n; i++) {
+        Node *f = d->list.items[i];
+        Type *ft = f->type && !isErr(f->type) ? f->type : &tyU8;
+        Type *inner = ft;
+        while (inner->kind == TY_ARRAY) inner = inner->elem;
+        if (inner->kind == TY_STRUCT && !inner->laidOut) {
+            ft = &tyU8;                 /* it contains itself: reported already */
+        }
+        if (f->bitWidth && unit && unit->type->bits == ft->bits && unit->type->bigEndian == ft->bigEndian &&
+            used + f->bitWidth <= ft->bits) {
+            used += f->bitWidth;
+            f->slot = unit->slot;
+            f->offset = unit->offset;
+            f->bitOff = ft->bits - used;
+            continue;
+        }
+        unit = f->bitWidth ? f : NULL;
+        used = f->bitWidth;
+        f->bitOff = f->bitWidth ? ft->bits - used : 0;
+        int64_t a = packed ? 1 : typeAlign(ft);
+        int64_t la = packed ? 1 : llvmAlign(ft);
+        int64_t at = (off + a - 1) / a * a;
+        if (at != (off + la - 1) / la * la) {
+            t->slots[t->nslots] = NULL;
+            t->padBytes[t->nslots++] = at - off;
+        }
+        off = at;
+        f->offset = off;
+        f->slot = t->nslots;
+        t->slots[t->nslots++] = ft;
+        off += typeSize(ft);
+        if (a > align) align = a;
+        if (la > llAlign) llAlign = la;
+    }
+    if ((int64_t)d->ival > align) {
+        align = (int64_t)d->ival;
+    }
+    int64_t size = (off + align - 1) / align * align;
+    if (size != (off + llAlign - 1) / llAlign * llAlign) {
+        t->slots[t->nslots] = NULL;
+        t->padBytes[t->nslots++] = size - off;
+    }
+    t->size = size;
+    t->align = align;
+    t->laidOut = true;
+}
+
 /* Where field `index` of struct t starts, by the same rules as typeSize. */
 int64_t fieldOffset(Type *t, int index) {
+    if (t->laidOut) return t->decl->list.items[index]->offset;
     int64_t off = 0;
     for (int i = 0; i <= index; i++) {
         Type *ft = t->decl->list.items[i]->type;
@@ -729,11 +852,24 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
 }
 
 static Type *resolveType(Checker *c, Node *t) {
+    bool fieldType = c->fieldType;
+    c->fieldType = false;
     if (!t) {
         return &tyError;
     }
     switch (t->kind) {
     case N_T_NAME:
+        for (size_t i = 0; i < sizeof bigEndianTypes / sizeof bigEndianTypes[0]; i++) {
+            Type *be = bigEndianTypes[i];
+            if (strcmp(be->name, t->name) == 0 && !lookup(c, t->name)) {
+                if (!fieldType) {
+                    error(c, t, "%s can only be the type of a struct field: it is a %s kept in network byte order, and reads as a %s",
+                          be->name, be->plain->name, be->plain->name);
+                    return &tyError;
+                }
+                return t->type = be;
+            }
+        }
         if (strchr(t->name, '.') && !lookup(c, t->name)) {
             /* mod.Type: say what is wrong with it */
             const char *dot = strchr(t->name, '.');
@@ -1311,11 +1447,16 @@ static void resolveStruct(Checker *c, Type *t) {
     const char *savedModule = c->module;
     c->scope = t->scope ? (Scope *)t->scope : (Scope *)d->scope;
     c->module = d->module;
-    if (d->flags & F_PACKED) {
-        notYet(c, d, "packed structs", "a later version");
-    }
     if (d->a) {
-        notYet(c, d->a, "align", "a later version");
+        int64_t n;
+        bool isBool;
+        if (!evalConst(c, d->a, &n, &isBool) || isBool) {
+            error(c, d->a, "align takes a whole number known when compiling: align(64)");
+        } else if (n < 1 || n > 4096 || (n & (n - 1))) {
+            error(c, d->a, "align takes a power of two from 1 to 4096, not %lld", (long long)n);
+        } else {
+            d->ival = (uint64_t)n;
+        }
     }
     for (int i = 0; i < d->attrs.len; i++) {
         Node *at = d->attrs.items[i];
@@ -1339,6 +1480,7 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     for (int i = 0; i < d->list.len; i++) {
         Node *f = d->list.items[i];
+        c->fieldType = true;
         Type *ft = resolveType(c, f->a);
         if (ft == &tyVoid) {
             error(c, f, "a field can't be void");
@@ -1355,8 +1497,19 @@ static void resolveStruct(Checker *c, Type *t) {
             }
             f->name = isErr(ft) ? "?" : ft->name;
         }
-        if (f->c) {
-            notYet(c, f->c, "bitfields", "a later version");
+        f->bitWidth = 0;
+        if (f->c && !isErr(ft)) {
+            int64_t w;
+            bool isBool;
+            if (ft->kind != TY_INT || ft == &tyDuration) {
+                error(c, f->a, "a bitfield is an integer, not %s", ft->name);
+            } else if (!evalConst(c, f->c, &w, &isBool) || isBool) {
+                error(c, f->c, "a bitfield's width is a whole number known when compiling: u8 flags: 3");
+            } else if (w < 1 || w > ft->bits) {
+                error(c, f->c, "a %s bitfield is 1 to %d bits wide, not %lld", ft->name, ft->bits, (long long)w);
+            } else {
+                f->bitWidth = (int)w;
+            }
         }
         for (int k = 0; k < f->attrs.len; k++) {
             checkFieldAttr(c, d, f, f->attrs.items[k]);
@@ -1371,6 +1524,16 @@ static void resolveStruct(Checker *c, Type *t) {
     c->scope = saved;
     c->module = savedModule;
     t->state = 2;
+    layoutStruct(c, t);
+    if (d->flags & (F_JSON | F_ENV | F_CLI)) {
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            if (f->bitWidth || (f->type && f->type->bigEndian)) {
+                error(c, f, "a field of a @%s struct can't be a bitfield or in network byte order",
+                      d->flags & F_JSON ? "json" : d->flags & F_ENV ? "env" : "flags");
+            }
+        }
+    }
     if (d->flags & F_JSON) {
         checkJsonFields(c, t, d);
     }
@@ -1525,7 +1688,7 @@ static Node *fieldStep(Checker *c, Node *base, Node *field, Node *at) {
     f->ref = field;
     Type *bt = base->type->kind == TY_PTR ? base->type->elem : base->type;
     f->ival = (uint64_t)fieldIndex(bt->decl, field);
-    f->type = field->type;
+    f->type = valueType(field->type);
     return f;
 }
 
@@ -2375,6 +2538,26 @@ static bool addressable(Node *e) {
     }
 }
 
+/* Why a field has no address of its own, or NULL when it has one. */
+static const char *whyNoAddress(Node *e) {
+    if (e->kind != N_FIELD_ACCESS || !e->ref || (e->ref->kind != N_FIELD && e->ref->kind != N_EMBED) ||
+        !e->ref->type || !e->a->type) {
+        return NULL;
+    }
+    Node *f = e->ref;
+    Type *st = e->a->type->kind == TY_PTR ? e->a->type->elem : e->a->type;
+    if (f->bitWidth) {
+        return "a bitfield shares its bytes with the fields next to it, so it has no address; copy it out first";
+    }
+    if (f->type->bigEndian) {
+        return "a field in network byte order has no address; copy it out first";
+    }
+    if (st->kind == TY_STRUCT && (st->decl->flags & F_PACKED) && typeAlign(f->type) > 1) {
+        return "a field of a packed struct may not be aligned, so it has no address; copy it out first";
+    }
+    return NULL;
+}
+
 static bool isComparable(Type *t) {
     switch (t->kind) {
     case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_PTR: case TY_NULL: case TY_ERRCODE: case TY_FUNC:
@@ -2681,7 +2864,7 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         error(c, e, "the field %s of %s isn't pub, so only its own module can use it", e->name, owner->name);
     }
     (void)expected;
-    return setType(e, path[n - 1]->type);
+    return setType(e, valueType(path[n - 1]->type));
 }
 
 static Type *checkIndex(Checker *c, Node *e) {
@@ -2824,10 +3007,11 @@ static Type *checkStructLit(Checker *c, Node *e, Type *expected) {
         if (d->module && c->module && strcmp(d->module, c->module) != 0 && !(field->flags & F_PUB)) {
             error(c, init, "the field %s of %s isn't pub, so only its own module can set it", init->name, t->name);
         }
-        checkExpr(c, &init->a, field->type);
+        checkExpr(c, &init->a, valueType(field->type));
         char what[96];
         snprintf(what, sizeof what, "the value for %s", init->name);
-        coerce(c, &init->a, field->type, what);
+        coerce(c, &init->a, valueType(field->type), what);
+        checkBitfieldValue(c, field, init->a);
     }
     return setType(e, t);
 }
@@ -2967,7 +3151,7 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         if (!d) {
             if (strcmp(e->name, "print") == 0 || strcmp(e->name, "panic") == 0 ||
                 strcmp(e->name, "format") == 0 || strcmp(e->name, "alloc") == 0 ||
-                strcmp(e->name, "free") == 0) {
+                strcmp(e->name, "free") == 0 || strcmp(e->name, "sizeof") == 0) {
                 error(c, e, "%s can only be called", e->name);
             } else if (typeFromName(c, e->name, e, false)) {
                 error(c, e, "%s is a type, not a value", e->name);
@@ -3075,6 +3259,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
                 } else {
                     error(c, e, "only a variable, a field or an element has an address");
                 }
+                return setType(e, &tyError);
+            }
+            if (whyNoAddress(e->a)) {
+                error(c, e, "%s", whyNoAddress(e->a));
                 return setType(e, &tyError);
             }
             return setType(e, ptrTo(t));
@@ -3238,7 +3426,8 @@ static Type *intTypeNamed(const char *name) {
 static bool isBuiltinName(const char *name) {
     return strcmp(name, "print") == 0 || strcmp(name, "panic") == 0 || strcmp(name, "format") == 0 ||
            strcmp(name, "alloc") == 0 || strcmp(name, "free") == 0 || strcmp(name, "error") == 0 ||
-           strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0 || strcmp(name, "expect") == 0;
+           strcmp(name, "sleep") == 0 || strcmp(name, "after") == 0 || strcmp(name, "expect") == 0 ||
+           strcmp(name, "sizeof") == 0;
 }
 
 static bool printable(Type *t) {
@@ -3796,6 +3985,9 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         recv = fieldStep(c, recv, path[i], callee);
     }
     if (recv->type->kind != TY_PTR) {
+        if (whyNoAddress(recv)) {
+            error(c, recv, "%s", whyNoAddress(recv));
+        }
         if (!addressable(recv)) {
             /* a temporary: the IR writer stores it first */
             recv->flags |= F_EXPLICIT;
@@ -3847,6 +4039,27 @@ static Type *checkAlloc(Checker *c, Node *e) {
         }
     }
     return setType(e, sliceOf(t));
+}
+
+/* sizeof(T): the bytes a T takes, padding included, known when compiling. */
+static Type *checkSizeof(Checker *c, Node *e) {
+    if (e->list.len != 1 || e->list.items[0]->kind == N_NAMED_ARG ||
+        (e->list.items[0]->kind != N_IDENT && e->list.items[0]->kind != N_INDEX)) {
+        error(c, e, "sizeof takes a type: sizeof(Header)");
+        return setType(e, &tyError);
+    }
+    Node *tn = e->list.items[0];
+    Type *t = typeFromExpr(c, tn, true);
+    if (isErr(t)) return setType(e, t);
+    if (t == &tyVoid) {
+        error(c, tn, "void has no size");
+        return setType(e, &tyError);
+    }
+    resolveStruct(c, t);
+    tn->type = t;
+    e->isConst = true;
+    e->cval = typeSize(t);
+    return setType(e, &tyI64);
 }
 
 static Type *checkTry(Checker *c, Node *e) {
@@ -4343,6 +4556,9 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
     if (!d && isBuiltinName(name)) {
         if (strcmp(name, "alloc") == 0) {
             return checkAlloc(c, e);
+        }
+        if (strcmp(name, "sizeof") == 0) {
+            return checkSizeof(c, e);
         }
         if (strcmp(name, "expect") == 0) {
             /* expect(cond) or expect(cond, "text"): in a test, a failure is reported and the test goes on */
@@ -6157,7 +6373,8 @@ bool checkProgram(Arena *a, Program *prog) {
         for (int j = 0; j < d->list.len; j++) {
             Node *f = d->list.items[j];
             if (f->kind == N_FIELD && f->b && f->type) {
-                checkGlobalValue(&c, &f->b, f->type);
+                checkGlobalValue(&c, &f->b, valueType(f->type));
+                checkBitfieldValue(&c, f, f->b);
             }
         }
     }
@@ -6223,7 +6440,8 @@ bool checkProgram(Arena *a, Program *prog) {
             if (f->kind == N_FIELD && f->b && f->type) {
                 c.scope = d->type->scope;
                 c.module = d->module;
-                checkGlobalValue(&c, &f->b, f->type);
+                checkGlobalValue(&c, &f->b, valueType(f->type));
+                checkBitfieldValue(&c, f, f->b);
             }
         }
     }

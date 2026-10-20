@@ -1,0 +1,14 @@
+// expect: 7
+// panic: the value doesn't fit in the 3 bits of level
+
+struct Mode {
+    u8 read : 1
+    u8 level : 3
+}
+
+void main() {
+    Mode m
+    m.level = 7
+    print("{m.level}")
+    m.level++
+}

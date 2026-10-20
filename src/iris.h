@@ -203,6 +203,10 @@ struct Node {
     const char *ir;         /* the IR writer's name for a variable or function */
     void *scope;            /* top-level declarations: the checker's scope for their names */
     const char *module;     /* top-level declarations: the module's name, "main" for the program */
+    /* struct fields, filled in by the checker's layout */
+    int slot;               /* the LLVM element that holds the field */
+    int bitOff, bitWidth;   /* bitfields: the lowest bit and how many bits; bitWidth 0 otherwise */
+    int64_t offset;         /* where the field (or its bitfield's unit) starts, in bytes */
 };
 
 Node *newNode(Arena *a, NodeKind kind, int line, int col);
@@ -347,11 +351,20 @@ struct Type {
     Type **args;            /* ... and the types it was made with */
     int nargs;
     void *scope;            /* instances: the checker's scope with the type parameters */
+    bool bigEndian;         /* u16be, u32be, u64be, i16be...: an integer kept in network byte order */
+    Type *plain;            /* ... and the integer it reads as */
+    /* structs, once laid out: size, alignment and the LLVM elements, padding included */
+    bool laidOut;
+    int64_t size, align;
+    Type **slots;           /* NULL: padding of padBytes[i] bytes */
+    int64_t *padBytes;
+    int nslots;
 };
 
 extern Type tyError, tyVoid, tyNoreturn, tyBool, tyNull, tyStr, tyString, tyErrorValue, tyErrCode;
 extern Type tyI8, tyI16, tyI32, tyI64, tyU8, tyU16, tyU32, tyU64, tyF32, tyF64, tyDuration, tyMutex, tyThread;
 int64_t typeSizeOf(Type *t);
+int64_t typeAlignOf(Type *t);
 int64_t fieldOffset(Type *t, int index);
 bool isJsonStruct(Type *t);
 bool isJsonList(Type *t);

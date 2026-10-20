@@ -415,6 +415,29 @@ void *iris_alloc(int64_t size, int64_t count, const char *file, int line, int co
     return p;
 }
 
+/* alloc of a type whose align(n) is more than malloc gives */
+void *iris_alloc_aligned(int64_t size, int64_t count, int64_t align, const char *file, int line, int col,
+                         const char *fn) {
+    if (count < 0) {
+        char msg[96];
+        int n = snprintf(msg, sizeof msg, "alloc of %lld items", (long long)count);
+        stop(msg, (size_t)n, file, line, col, fn);
+    }
+    if (count == 0) {
+        return NULL;
+    }
+    if (size > 0 && count > INT64_MAX / size) {
+        stop("alloc size overflows", 20, file, line, col, fn);
+    }
+    void *p = NULL;
+    size_t total = (size_t)count * (size_t)(size ? size : 1);
+    if (posix_memalign(&p, (size_t)align, total) != 0) {
+        outOfMemory();
+    }
+    memset(p, 0, total);
+    return p;
+}
+
 void iris_panic(const char *file, int line, int col, const char *fn) {
     stop(panicBuf, panicLen, file, line, col, fn);
 }

@@ -1,6 +1,6 @@
 # Structs
 
-A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, and embedding one struct in another.
+A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, embedding one struct in another, and how a struct's fields are laid out in memory.
 
 ## Declaring a struct
 
@@ -224,6 +224,104 @@ fd 3 sends hello
 The embedded struct is a field named after its type, so it can also be reached and set as a whole: `c.Socket`. A method called through the outer struct gets a pointer to the embedded one as its `self`.
 
 Embedding is how one type reuses another; there is no inheritance. When the outer struct has a field or method of the same name, its own one is used.
+
+## Layout in memory
+
+Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. `sizeof(T)` gives the bytes a `T` takes, padding included:
+
+```iris run
+struct Entry {
+    u8 kind
+    u32 addr
+    u16 port
+}
+
+void main() {
+    print("{sizeof(Entry)} {sizeof(u32)}")
+}
+```
+
+```output
+12 4
+```
+
+A struct marked `packed` has no padding: each field starts right after the one before. That makes it match a format that is laid out byte by byte, such as a protocol header. Network protocols put the high byte of a number first. A field of type `u16be`, `u32be` or `u64be` (and `i16be`, `i32be`, `i64be`) is kept that way in memory. It reads and is set as a plain `u16`, `u32` or `u64`, and the bytes are turned around on the way.
+
+A field with `: n` after its name is a bitfield of `n` bits. Bitfields next to each other share one integer of their type while their bits fit, and the first one takes the highest bits. That is the order in which protocol headers are drawn.
+
+Together these read a header straight from the bytes that came in. `u8 *` converts to any pointer, so a pointer to the bytes becomes a pointer to the header:
+
+```iris run
+struct Ipv4 packed {
+    u8 version: 4
+    u8 ihl: 4
+    u8 tos
+    u16be length
+    u16be id
+    u16be flags: 3
+    u16be fragment: 13
+    u8 ttl
+    u8 protocol
+    u16be checksum
+    u8[4] src
+    u8[4] dst
+}
+
+void main() {
+    u8[20] packet = [0x45, 0, 0, 60, 0x1c, 0x46, 0x40, 0, 64, 6, 0xb1, 0xe6, 192, 168, 0, 1, 10, 0, 0, 7]
+    Ipv4 *ip = packet[0:20].ptr
+    print("IPv{ip.version}, {ip.ihl * 4} byte header, {ip.length} bytes, ttl {ip.ttl}, protocol {ip.protocol}")
+    print("from {ip.src[0]}.{ip.src[1]}.{ip.src[2]}.{ip.src[3]}, flags {ip.flags}")
+    ip.ttl--
+    ip.length = 1500
+    print("{sizeof(Ipv4)} bytes, now {packet[2]} {packet[3]} {packet[8]}")
+}
+```
+
+```output
+IPv4, 20 byte header, 60 bytes, ttl 64, protocol 6
+from 192.168.0.1, flags 2
+20 bytes, now 5 220 63
+```
+
+A bitfield, a field in network byte order and an unaligned field of a packed struct have no address of their own, so `&ip.length` doesn't compile; copy the value out first. A value known when compiling must fit in a bitfield's bits. A debug build checks the others when the program runs:
+
+```iris run
+struct Flags {
+    u8 syn: 1
+    u8 ack: 1
+    u8 window: 6 = 32
+}
+
+void main() {
+    Flags f = .{syn: 1}
+    f.ack = 1
+    f.window += 31
+    print("{f.syn} {f.ack} {f.window} {sizeof(Flags)}")
+}
+```
+
+```output
+1 1 63 1
+```
+
+`align(n)` makes a struct start at a multiple of `n` bytes, and its size a multiple of `n` too. Counters that different threads change are kept on separate 64-byte cache lines this way, so one thread's writes don't slow the others down. Variables, globals and memory from `alloc` all get the alignment:
+
+```iris run
+struct Counter align(64) {
+    i64 hits
+}
+
+void main() {
+    Counter[4] perThread
+    perThread[1].hits += 1
+    print("{sizeof(Counter)} {sizeof(Counter) * 4}")
+}
+```
+
+```output
+64 256
+```
 
 ## Visible to other modules
 

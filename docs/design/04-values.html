@@ -62,7 +62,7 @@ try {
 <h2 id="arrays"><a href="#arrays">Arrays</a></h2>
 <p><code>u8[512]</code> is 512 bytes in a row, with no length stored. When an array is passed to a function, it becomes a slice.</p>
 <h2 id="structs"><a href="#structs">Structs</a></h2>
-<p>Fields are stored in the order they are written, with the same padding as C. A struct can be passed to and from C as it is. <code>packed</code> removes the padding and <code>align(n)</code> sets the alignment.</p>
+<p>Fields are stored in the order they are written, with the same padding as C. A struct can be passed to and from C as it is. <code>packed</code> removes the padding and <code>align(n)</code> raises the alignment. A run of bitfields shares one integer of their type, the first in its highest bits. <code>u16be</code>, <code>u32be</code> and <code>u64be</code> (and the signed ones) are only field types: they read as plain integers and keep the bytes in network order.</p>
 <h2 id="enums"><a href="#enums">Enums</a></h2>
 <p>A plain enum is a 32-bit integer, like a C enum.</p>
 <p>An enum whose values carry data is a tag followed by room for the largest value's data:</p>

@@ -543,6 +543,8 @@ static const Builtin builtinDecls[] = {
      "@noreturn void panic(str message)\n"},
     {"alloc", "// n new items of type T, all at zero: u8[] buf = alloc(u8, 4096). Give the\n"
               "// memory back with free.\n", "T[] alloc(type T, i64 n)\n"},
+    {"sizeof", "// The bytes a value of type T takes, padding included, known when compiling:\n"
+               "// sizeof(Header).\n", "i64 sizeof(type T)\n"},
     {"free", "// Gives back the memory of a slice or pointer from alloc. A String is\n"
              "// freed with s.free().\n", "void free(T[] memory)\n"},
     {"sleep", "// Waits the time: sleep(200ms). Other tasks of the thread keep running.\n",
@@ -1548,7 +1550,7 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
             if (m->isStd && m->name && strcmp(m->name, "core") == 0) moduleNames(&it, m, false);
         }
     }
-    static const char *builtins[] = {"print", "format", "panic", "error", "alloc", "free", "sleep", "after", "expect"};
+    static const char *builtins[] = {"print", "format", "panic", "error", "alloc", "free", "sizeof", "sleep", "after", "expect"};
     for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) addItem(&it, builtins[i], 3, "built-in");
     static const char *types[] = {"void", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
                                   "str", "String", "Error", "Duration", "Mutex", "Thread", "Atomic"};

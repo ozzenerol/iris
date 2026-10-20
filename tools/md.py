@@ -18,7 +18,7 @@ thread threadlocal asm test not and or is true false null self
 """.split())
 TYPES = set("""
 i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void str String Error
-u16be u32be u64be u16le u32le u64le Duration List Map Atomic Mutex Thread
+u16be u32be u64be i16be i32be i64be Duration List Map Atomic Mutex Thread
 """.split())
 
 TOKEN = re.compile(r'''
