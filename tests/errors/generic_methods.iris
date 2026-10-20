@@ -1,0 +1,17 @@
+// error: 15: the type U of Box.make can't be worked out from the arguments; a method's own types come from what it is given
+// error: 16: Box has no method nothing
+
+struct Box {
+    i64 v
+}
+
+U Box.make[U]() {
+    U x
+    return x
+}
+
+void main() {
+    b := Box{}
+    x := b.make()
+    b.nothing()
+}

@@ -1,0 +1,51 @@
+// expect: line 1: 5
+// expect: line 2: text
+// expect: line 3: 2.5
+// expect: 2 b
+// expect: line 4: 7
+// expect: 2 4 one many 2
+
+struct Log {
+    i64 lines
+}
+
+void Log.show[T](T value) {
+    self.lines++
+    print("line {self.lines}: {value}")
+}
+
+T Log.pick[T](T a, T b) => if self.lines % 2 == 0 { a } else { b }
+
+i64 double(i64 x) => x * 2
+str name(i64 x) => if x == 1 { "one" } else { "many" }
+
+struct Bag[T] {
+    List[T] items
+}
+
+void Bag[T].free() => self.items.free()
+
+Bag[U] Bag[T].map[U](U(T) f) {
+    Bag[U] out
+    for x in self.items.items() {
+        out.items.push(f(x))
+    }
+    return out
+}
+
+void main() {
+    Log l
+    l.show(5)
+    l.show("text")
+    l.show(2.5)
+    print("{l.pick(1, 2)} {l.pick("a", "b")}")
+    scoped Bag[i64] xs
+    xs.items.push(1)
+    xs.items.push(2)
+    scoped Bag[i64] ds = xs.map(double)
+    scoped Bag[str] ns = xs.map(name)
+    scoped Bag[str] again = xs.map(name)
+    lp := &l
+    lp.show(7)
+    print("{ds.items.at(0)} {ds.items.at(1)} {ns.items.at(0)} {ns.items.at(1)} {again.items.len}")
+}

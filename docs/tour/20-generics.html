@@ -147,12 +147,58 @@ T twice[T](T x) =&gt; x + x
 <pre class="out"><code>10.0.0.12:5432 true, 1 left
 false</code></pre>
 <p>A method is checked for a set of types only when the program uses it with them. A method can need more of its types than the others do, and the struct still works with types that only the other methods suit. <code>List[T].contains</code> compares values with <code>==</code>; a list of a struct that can't be compared works until <code>contains</code> is called on it.</p>
+<h2 id="methods-with-types-of-their-own"><a href="#methods-with-types-of-their-own">Methods with types of their own</a></h2>
+<p>A method can have type parameters of its own, written after its name, as a generic function's are. Its types are worked out from the arguments of each call:</p>
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Metrics</span> {
+    <span class="t">i64</span> reported
+}
+
+<span class="t">void</span> <span class="t">Metrics</span>.report[T](<span class="t">str</span> name, T value) {
+    <span class="k">self</span>.reported++
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s"> = </span><span class="e">{</span>value<span class="e">}</span><span class="s">&quot;</span>)
+}
+
+<span class="k">struct</span> <span class="t">Batch</span>[T] {
+    <span class="t">List</span>[T] items
+}
+
+<span class="t">void</span> <span class="t">Batch</span>[T].<span class="f">free</span>() =&gt; <span class="k">self</span>.items.<span class="f">free</span>()
+
+<span class="c">// A new batch with f applied to each item.</span>
+<span class="t">Batch</span>[U] <span class="t">Batch</span>[T].map[U](<span class="f">U</span>(T) f) {
+    <span class="t">Batch</span>[U] out
+    <span class="k">for</span> x <span class="k">in</span> <span class="k">self</span>.items.<span class="f">items</span>() {
+        out.items.<span class="f">push</span>(<span class="f">f</span>(x))
+    }
+    <span class="k">return</span> out
+}
+
+<span class="t">i64</span> <span class="f">kib</span>(<span class="t">i64</span> bytes) =&gt; bytes / <span class="n">1024</span>
+<span class="t">bool</span> <span class="f">big</span>(<span class="t">i64</span> bytes) =&gt; bytes &gt; <span class="n">1MiB</span>
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Metrics</span> m
+    m.<span class="f">report</span>(<span class="s">&quot;open connections&quot;</span>, <span class="n">12</span>)
+    m.<span class="f">report</span>(<span class="s">&quot;load&quot;</span>, <span class="n">0.75</span>)
+    m.<span class="f">report</span>(<span class="s">&quot;region&quot;</span>, <span class="s">&quot;eu-west&quot;</span>)
+    <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">i64</span>] sizes
+    sizes.items.<span class="f">push</span>(<span class="n">4096</span>)
+    sizes.items.<span class="f">push</span>(<span class="n">3MiB</span>)
+    <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">i64</span>] k = sizes.<span class="f">map</span>(kib)
+    <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">bool</span>] b = sizes.<span class="f">map</span>(big)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>k.items.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> KiB, </span><span class="e">{</span>b.items.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.items.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">, </span><span class="e">{</span>m.reported<span class="e">}</span><span class="s"> reported&quot;</span>)
+}</code></pre>
+<pre class="out"><code>open connections = 12
+load = 0.75
+region = eu-west
+3072 KiB, false true, 3 reported</code></pre>
+<p>Every type of such a method must show up in its parameters, so that a call says what it is. A method like <code>U Box.make[U]()</code> can't be called, since nothing in <code>b.make()</code> gives <code>U</code>; a generic function is the way to write that one.</p>
 <h2 id="how-generics-are-compiled"><a href="#how-generics-are-compiled">How generics are compiled</a></h2>
 <p>Each generic function and struct is compiled once for each set of types it is used with. The copy for <code>i64</code> works on <code>i64</code>s directly, with no boxing and no lookups when the program runs, so it is as fast as code written by hand for that type. The cost is in compiling: each set of types adds a copy of the code.</p>
     <nav class="pager"><a class="prev" href="19-memory.html"><span>Previous</span>Memory</a><a class="next" href="21-interfaces.html"><span>Next</span>Interfaces</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#generic-functions">Generic functions</a></li><li><a href="#working-out-the-types">Working out the types</a></li><li><a href="#what-a-generic-function-may-do">What a generic function may do</a></li><li><a href="#generic-structs">Generic structs</a></li><li><a href="#methods-of-generic-structs">Methods of generic structs</a></li><li><a href="#how-generics-are-compiled">How generics are compiled</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#generic-functions">Generic functions</a></li><li><a href="#working-out-the-types">Working out the types</a></li><li><a href="#what-a-generic-function-may-do">What a generic function may do</a></li><li><a href="#generic-structs">Generic structs</a></li><li><a href="#methods-of-generic-structs">Methods of generic structs</a></li><li><a href="#methods-with-types-of-their-own">Methods with types of their own</a></li><li><a href="#how-generics-are-compiled">How generics are compiled</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

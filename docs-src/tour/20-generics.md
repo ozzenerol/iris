@@ -141,6 +141,61 @@ false
 
 A method is checked for a set of types only when the program uses it with them. A method can need more of its types than the others do, and the struct still works with types that only the other methods suit. `List[T].contains` compares values with `==`; a list of a struct that can't be compared works until `contains` is called on it.
 
+## Methods with types of their own
+
+A method can have type parameters of its own, written after its name, as a generic function's are. Its types are worked out from the arguments of each call:
+
+```iris run
+struct Metrics {
+    i64 reported
+}
+
+void Metrics.report[T](str name, T value) {
+    self.reported++
+    print("{name} = {value}")
+}
+
+struct Batch[T] {
+    List[T] items
+}
+
+void Batch[T].free() => self.items.free()
+
+// A new batch with f applied to each item.
+Batch[U] Batch[T].map[U](U(T) f) {
+    Batch[U] out
+    for x in self.items.items() {
+        out.items.push(f(x))
+    }
+    return out
+}
+
+i64 kib(i64 bytes) => bytes / 1024
+bool big(i64 bytes) => bytes > 1MiB
+
+void main() {
+    Metrics m
+    m.report("open connections", 12)
+    m.report("load", 0.75)
+    m.report("region", "eu-west")
+    scoped Batch[i64] sizes
+    sizes.items.push(4096)
+    sizes.items.push(3MiB)
+    scoped Batch[i64] k = sizes.map(kib)
+    scoped Batch[bool] b = sizes.map(big)
+    print("{k.items.at(1)} KiB, {b.items.at(0)} {b.items.at(1)}, {m.reported} reported")
+}
+```
+
+```output
+open connections = 12
+load = 0.75
+region = eu-west
+3072 KiB, false true, 3 reported
+```
+
+Every type of such a method must show up in its parameters, so that a call says what it is. A method like `U Box.make[U]()` can't be called, since nothing in `b.make()` gives `U`; a generic function is the way to write that one.
+
 ## How generics are compiled
 
 Each generic function and struct is compiled once for each set of types it is used with. The copy for `i64` works on `i64`s directly, with no boxing and no lookups when the program runs, so it is as fast as code written by hand for that type. The cost is in compiling: each set of types adds a copy of the code.

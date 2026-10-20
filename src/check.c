@@ -1878,6 +1878,14 @@ static void instantiateMethods(Checker *c, Type *t) {
         copy->b = NULL;
         copy->flags |= F_INSTANCE;
         Scope *s = paramScope(c, g, &g->b->list, t->args);
+        if (g->list2.len) {
+            /* types of its own too: a copy for each call's types, made from this one */
+            copy->scope = s;
+            copy->module = g->module;
+            copy->state = 4;
+            listPush(c->arena, &t->methods, copy);
+            continue;
+        }
         Scope *saved = c->scope;
         const char *savedModule = c->module;
         c->scope = s;
@@ -1888,6 +1896,99 @@ static void instantiateMethods(Checker *c, Type *t) {
         c->module = savedModule;
         copy->flags |= F_LAZY;      /* the body waits until the method is used */
     }
+}
+
+static Type *checkExpr(Checker *c, Node **slot, Type *expected);
+static bool checkTempText(Checker *c, Node **slot, Type *want);
+static void infer(Node *tn, Type *actual, NodeList *params, Type **out);
+
+/* A method with type parameters of its own, for the types its arguments
+ * give: a copy of it for those types, checked like a generic function's.
+ * st is the struct it is called on. */
+static Node *instantiateMethod(Checker *c, Node *e, Node *m, Type *st) {
+    int n = m->list2.len;
+    Type *args[16] = {0};
+    if (n > 16) {
+        error(c, e, "too many type parameters");
+        return NULL;
+    }
+    bool bad = false;
+    for (int i = 0; i < e->list.len; i++) {
+        Node *arg = e->list.items[i];
+        Node **slot = arg->kind == N_NAMED_ARG ? &arg->a : &e->list.items[i];
+        if (checkTempText(c, slot, &tyStr)) {
+            continue;
+        }
+        if (isErr(checkExpr(c, slot, NULL))) bad = true;
+    }
+    if (bad) return NULL;
+    int pos = 0;
+    for (int i = 0; i < e->list.len; i++) {
+        Node *arg = e->list.items[i];
+        if (arg->kind == N_NAMED_ARG) {
+            for (int j = 0; j < m->list.len; j++) {
+                if (strcmp(m->list.items[j]->name, arg->name) == 0) infer(m->list.items[j]->a, arg->a->type, &m->list2, args);
+            }
+        } else if (pos < m->list.len) {
+            Node *param = m->list.items[pos];
+            if (param->flags & F_REST) {
+                infer(param->a->a, arg->type, &m->list2, args);
+            } else {
+                pos++;
+                infer(param->a, arg->type, &m->list2, args);
+            }
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        if (!args[i]) {
+            error(c, e, "the type %s of %s.%s can't be worked out from the arguments; a method's own types come from what it is given",
+                  m->list2.items[i]->name, st->name, m->name);
+            return NULL;
+        }
+    }
+    Instance *in = findInstance(c, m, args, n);
+    if (in) {
+        return in->fn;
+    }
+    if (c->instDepth > 64 || c->instGen > 64) {
+        error(c, e, "generic methods call each other with ever new types");
+        return NULL;
+    }
+    if (!checkBounds(c, &m->list2, args, e)) {
+        return NULL;
+    }
+    in = newInstance(c, m, args, n);
+    Node *copy = cloneNode(c->arena, m);
+    copy->list2 = (NodeList){0};
+    copy->b = NULL;
+    copy->name = instanceName(c, m->name, args, n);
+    copy->flags |= F_INSTANCE;
+    in->fn = copy;
+    Scope *s = paramScope(c, m, &m->list2, args);
+    Scope *saved = c->scope;
+    const char *savedModule = c->module;
+    c->scope = s;
+    c->module = m->module;
+    copy->scope = s;
+    c->instDepth++;
+    int before = gErrors;
+    checkSignature(c, copy, st);
+    c->instDepth--;
+    c->scope = saved;
+    c->module = savedModule;
+    /* checkSignature lists it with the struct's methods; it is called through m */
+    for (int i = 0; i < st->methods.len; i++) {
+        if (st->methods.items[i] == copy) {
+            st->methods.items[i] = st->methods.items[--st->methods.len];
+            break;
+        }
+    }
+    if (gErrors != before) {
+        return NULL;
+    }
+    queueBody(c, copy, s, e);
+    listPush(c->arena, c->instOut, copy);
+    return copy;
 }
 
 /* max[i64]: a copy of the generic function with T = i64. */
@@ -1947,6 +2048,14 @@ static void infer(Node *tn, Type *actual, NodeList *params, Type **out) {
         return;
     case N_T_ARRAY:
         if (actual->kind == TY_ARRAY) infer(tn->a, actual->elem, params, out);
+        return;
+    case N_T_FUNC:
+        if (actual->kind == TY_FUNC) {
+            infer(tn->a, actual->elem, params, out);
+            for (int i = 0; i < tn->list.len && i < actual->nelems; i++) {
+                infer(tn->list.items[i], actual->elems[i], params, out);
+            }
+        }
         return;
     case N_T_GENERIC:
         if (actual->kind == TY_STRUCT && actual->generic && tn->a->kind == N_T_NAME &&
@@ -4028,9 +4137,16 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     if (!visible(c, m)) {
         error(c, callee, "the method %s of %s isn't pub, so only its own module can call it", name, st->name);
     }
+    bool checked = false;
+    if (m->list2.len) {
+        m = instantiateMethod(c, e, m, recv->type->elem);
+        if (!m) return setType(e, &tyError);
+        callee->ref = m;
+        checked = true;
+    }
     NodeList args = {0};
     listPush(c->arena, &args, recv);
-    checkArgs(c, e, m, &e->list, 1, &args, false);
+    checkArgs(c, e, m, &e->list, 1, &args, checked);
     e->list = args;
     e->ref = m;
     return setType(e, m->type);
@@ -5905,9 +6021,6 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
     int first = 0;
     if (f->b || recv) {
         /* a method: self, a pointer to the receiver, comes first */
-        if (f->list2.len) {
-            notYet(c, f, "methods with type parameters of their own", "a later version");
-        }
         Type *rt = recv ? recv : resolveType(c, f->b);
         Node *self = like(c, N_PARAM, f);
         self->name = "self";
