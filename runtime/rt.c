@@ -1650,6 +1650,11 @@ static void pollEvents(void) {
         exit(2);
     }
     bool block = waitingIo > 0 || threads > 1;
+    if (timeout != 0) {
+        /* the program waits: what it printed goes out now, so a server's
+           output is there even when it is stopped with a signal */
+        fflush(stdout);
+    }
 #ifdef __linux__
     if (block && useRing()) {
         ringEnter(true, timeout);
