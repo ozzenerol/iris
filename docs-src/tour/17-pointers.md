@@ -177,4 +177,23 @@ void main() {
 3 60 94
 ```
 
+`u64(p)` gives the address a pointer holds, as a number, and so does `i64(p)`. It shows where a value sits in memory, for checking alignment or for passing an address to C as a number:
+
+```iris run
+struct Slot align(64) {
+    i64 hits
+}
+
+void main() {
+    Slot[2] slots
+    u64 a = u64(&slots[0])
+    u64 b = u64(&slots[1])
+    print("{b - a} apart, {a % 64} past a 64-byte line")
+}
+```
+
+```output
+64 apart, 0 past a 64-byte line
+```
+
 A pointer to a pointer is written with two stars, `T **`, and is mostly found in C functions that hand back a pointer through an argument.

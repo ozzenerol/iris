@@ -1,0 +1,26 @@
+// expect: 64 256 16
+// expect: 0 0
+// expect: 8 true
+// expect: 3 2
+
+struct Counter align(64) {
+    i64 hits
+}
+
+const SLOTS = 4
+
+void main() {
+    print("{sizeof(Counter)} {sizeof(Counter[SLOTS])} {sizeof(u32[4])}")
+    Counter[2] cs
+    hc := alloc(Counter, 3)
+    defer free(hc)
+    print("{u64(&cs[1]) % 64} {u64(&hc[2]) % 64}")
+    i64[4] xs
+    gap := i64(&xs[1]) - i64(&xs[0])
+    u8 *none = null
+    print("{gap} {u64(none) == 0}")
+    rows := alloc(u8[16], 3)
+    defer free(rows)
+    rows[2][15] = 9
+    print("{rows.len} {sizeof(u8[16]) / 8}")
+}

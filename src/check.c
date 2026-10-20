@@ -2005,6 +2005,31 @@ static Type *typeFromExpr(Checker *c, Node *e, bool report) {
             return instantiateStruct(c, d, args, e->list.len, e);
         }
     }
+    if (e->kind == N_INDEX && e->list.len == 1) {
+        /* an array type: Counter[4], or u8[SIZE] with a constant */
+        Type *elem = typeFromExpr(c, e->a, false);
+        Node *n = e->list.items[0];
+        int64_t count;
+        bool isBool;
+        if (elem && !isErr(elem) && elem != &tyVoid) {
+            if (!evalConst(c, n, &count, &isBool) || isBool) {
+                if (report) {
+                    error(c, n, "an array's size must be an integer constant");
+                    return &tyError;
+                }
+                return NULL;
+            }
+            if (count < 1 || count > (1 << 30)) {
+                if (report) {
+                    error(c, n, "an array's size must be between 1 and %u", 1u << 30);
+                    return &tyError;
+                }
+                return NULL;
+            }
+            resolveStruct(c, elem);
+            return arrayOf(elem, count);
+        }
+    }
     if (report) {
         error(c, e, "this is not a type");
         return &tyError;
@@ -4680,6 +4705,19 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         }
         Type *t = checkExpr(c, &e->list.items[0], NULL);
         if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_PTR) {
+            /* the address, as a number: for alignment, hashing and C */
+            if (conv != &tyU64 && conv != &tyI64) {
+                error(c, e, "a pointer converts to u64 or i64, which hold any address, not to %s", name);
+                return setType(e, &tyError);
+            }
+            Node *n = convertNode(c, e->list.items[0], conv, true);
+            int line = e->line, col = e->col;
+            *e = *n;
+            e->line = line;
+            e->col = col;
+            return conv;
+        }
         if (!isNumber(t)) {
             error(c, e->list.items[0], "%s(...) converts numbers, not %s", name, t->name);
             return setType(e, &tyError);

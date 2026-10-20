@@ -1,0 +1,9 @@
+// error: 7: a pointer converts to u64 or i64, which hold any address, not to u32
+// error: 8: an array's size must be an integer constant
+
+void main() {
+    i64 x
+    n := 3
+    a := u32(&x)
+    b := sizeof(u8[n])
+}

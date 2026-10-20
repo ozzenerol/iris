@@ -207,7 +207,7 @@ true</code></pre>
 <p>The embedded struct is a field named after its type, so it can also be reached and set as a whole: <code>c.Socket</code>. A method called through the outer struct gets a pointer to the embedded one as its <code>self</code>.</p>
 <p>Embedding is how one type reuses another; there is no inheritance. When the outer struct has a field or method of the same name, its own one is used.</p>
 <h2 id="layout-in-memory"><a href="#layout-in-memory">Layout in memory</a></h2>
-<p>Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. <code>sizeof(T)</code> gives the bytes a <code>T</code> takes, padding included:</p>
+<p>Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. <code>sizeof(T)</code> gives the bytes a <code>T</code> takes, padding included. <code>T</code> can be an array type too, <code>sizeof(Entry[4])</code>:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Entry</span> {
     <span class="t">u8</span> kind
     <span class="t">u32</span> addr

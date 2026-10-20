@@ -158,6 +158,18 @@ try {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>device.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>device[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>device[<span class="n">2</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 60 94</code></pre>
+<p><code>u64(p)</code> gives the address a pointer holds, as a number, and so does <code>i64(p)</code>. It shows where a value sits in memory, for checking alignment or for passing an address to C as a number:</p>
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Slot</span> <span class="f">align</span>(<span class="n">64</span>) {
+    <span class="t">i64</span> hits
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Slot</span>[<span class="n">2</span>] slots
+    <span class="t">u64</span> a = <span class="t">u64</span>(&amp;slots[<span class="n">0</span>])
+    <span class="t">u64</span> b = <span class="t">u64</span>(&amp;slots[<span class="n">1</span>])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>b - a<span class="e">}</span><span class="s"> apart, </span><span class="e">{</span>a % <span class="n">64</span><span class="e">}</span><span class="s"> past a 64-byte line&quot;</span>)
+}</code></pre>
+<pre class="out"><code>64 apart, 0 past a 64-byte line</code></pre>
 <p>A pointer to a pointer is written with two stars, <code>T **</code>, and is mostly found in C functions that hand back a pointer through an argument.</p>
     <nav class="pager"><a class="prev" href="16-tuples-and-aliases.html"><span>Previous</span>Tuples and type aliases</a><a class="next" href="18-errors.html"><span>Next</span>Errors</a></nav>
   </article>

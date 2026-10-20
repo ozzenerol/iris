@@ -607,6 +607,12 @@ static const char *vtable(IR *ir, Type *st, Node *iface) {
 
 static Val emitConvert(IR *ir, Node *e) {
     Type *to = e->type, *from = e->a->type;
+    if (from->kind == TY_PTR && to->kind == TY_INT) {
+        Val v = emitExpr(ir, e->a);
+        const char *r = tmp(ir);
+        ins(ir, "%s = ptrtoint ptr %s to i64", r, v.s);
+        return val(r, to);
+    }
     if (to->kind == TY_FUNC && from->kind == TY_FUNC) {
         /* a void function used as a !void one: a wrapper that returns no error */
         Node *fn = e->a->ref;

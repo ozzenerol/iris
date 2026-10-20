@@ -227,7 +227,7 @@ Embedding is how one type reuses another; there is no inheritance. When the oute
 
 ## Layout in memory
 
-Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. `sizeof(T)` gives the bytes a `T` takes, padding included:
+Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. `sizeof(T)` gives the bytes a `T` takes, padding included. `T` can be an array type too, `sizeof(Entry[4])`:
 
 ```iris run
 struct Entry {
