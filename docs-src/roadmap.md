@@ -66,3 +66,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.57 | Encryption: X25519 key agreement with `x25519Public` and `x25519`, and ChaCha20-Poly1305 with `seal` and `unseal`. | released |
 | 0.58 | A program's `.c` files are compiled and linked with it, and `asm` says to put assembly in one. | released |
 | 0.59 | `ch.free()` frees a channel, and `scoped` works on channels. | released |
+| 0.60 | The `dns` module reads and writes DNS messages, and the DNS server guide uses it. | released |

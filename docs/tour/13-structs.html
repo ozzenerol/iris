@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.59.0</span>
+    <span class="ver">v0.60.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -248,7 +248,6 @@ true</code></pre>
 <pre class="out"><code>IPv4, 20 byte header, 60 bytes, ttl 64, protocol 6
 from 192.168.0.1, flags 2
 20 bytes, now 5 220 63</code></pre>
-<p>The <a href="../guides/04-dns-server.html">DNS server guide</a> reads and writes a whole protocol this way.</p>
 <p>A bitfield, a field in network byte order and an unaligned field of a packed struct have no address of their own, so <code>&amp;ip.length</code> doesn't compile; copy the value out first. A value known when compiling must fit in a bitfield's bits. A debug build checks the others when the program runs:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Flags</span> {
     <span class="t">u8</span> syn: <span class="n">1</span>
@@ -287,7 +286,7 @@ from 192.168.0.1, flags 2
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.59.0</span>
+    <span>Iris v0.60.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>
