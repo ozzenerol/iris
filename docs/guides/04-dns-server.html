@@ -44,7 +44,7 @@ try {
 </header>
 <div class="doc">
   <button class="side-toggle" type="button" data-side="chapters" data-text="Guides" data-label="the chapter list" aria-expanded="true">&#8249; Guides</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html"><span class="num">2</span>Build a command-line tool</a></li><li><a href="03-chat-server.html"><span class="num">3</span>Build a TCP chat server</a></li><li><a href="04-dns-server.html" class="on"><span class="num">4</span>Build a DNS server</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters"><h4>Guides</h4><ol><li><a href="01-rest-api.html"><span class="num">1</span>Build a REST API</a></li><li><a href="02-cli.html"><span class="num">2</span>Build a command-line tool</a></li><li><a href="03-chat-server.html"><span class="num">3</span>Build a TCP chat server</a></li><li><a href="04-dns-server.html" class="on"><span class="num">4</span>Build a DNS server</a></li><li><a href="05-udp-counters.html"><span class="num">5</span>Build a UDP counter server</a></li></ol></aside>
   <article class="prose">
 <h1>Build a DNS server</h1>
 <p class="lede">This guide builds <code>dns</code> from an empty folder: a DNS server for the names of a small network. A program asks it for <code>web.lan</code> and gets the addresses back. The <a href="../std/index.html#dns">dns module</a> reads the bytes of each query into a message and writes the reply back as bytes, so the program works with names, kinds and addresses. The server speaks UDP. Each step ends with a program that runs, and the commands to try it.</p>
@@ -513,7 +513,7 @@ dig @127.0.0.1 -p 8080 +short printer.lan AAAA</code></pre>
 <pre class="code"><code>iris build --mode=release-safe main.iris -o dns
 ./dns</code></pre>
 <p>Some ways to go on: a <code>cname</code> record, whose <code>target</code> is another name, lets one name stand for another. A name the zone doesn't have could be passed on to another server with <code>net.dialUdp</code>, and its answer sent back as it came. Reading <code>zone.txt</code> again on a signal, with the <code>signal</code> module, lets the names change while the server runs. The <a href="../std/index.html#dns">dns library page</a> lists every kind of record and its fields, and the <a href="../std/index.html#net">net library page</a> the rest of UDP.</p>
-    <nav class="pager"><a class="prev" href="03-chat-server.html"><span>Previous</span>Build a TCP chat server</a></nav>
+    <nav class="pager"><a class="prev" href="03-chat-server.html"><span>Previous</span>Build a TCP chat server</a><a class="next" href="05-udp-counters.html"><span>Next</span>Build a UDP counter server</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
   <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#before-you-start">Before you start</a></li><li><a href="#reading-a-query">Reading a query</a></li><li><a href="#answering-with-addresses">Answering with addresses</a></li><li><a href="#names-from-a-file">Names from a file</a></li><li><a href="#the-whole-program">The whole program</a></li><li><a href="#next">Next</a></li></ul></aside>
