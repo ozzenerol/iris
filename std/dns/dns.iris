@@ -1,0 +1,622 @@
+// DNS messages: reading the bytes of a query or a reply into a Message,
+// and writing a Message as bytes, with its names compressed. A resolver
+// that asks servers is net.lookup and net.query.
+
+import str
+
+// What parse and encode fail with: short for a message that ends too soon,
+// broken for one whose parts don't fit together, and badName for a name
+// that can't be written (an empty label, or one longer than 63 bytes).
+pub enum DnsError { short, broken, badName }
+
+// The kinds of record, with their numbers. other is any kind without a
+// name here; its number is in the record's code.
+pub enum Type { a = 1, ns = 2, cname = 5, soa = 6, ptr = 12, mx = 15, txt = 16, aaaa = 28, srv = 33, opt = 41, any = 255, other = 0 }
+
+// The kind with this number: other when it has no name here.
+pub Type typeOf(i64 code) => match code {
+    1 => Type.a,
+    2 => Type.ns,
+    5 => Type.cname,
+    6 => Type.soa,
+    12 => Type.ptr,
+    15 => Type.mx,
+    16 => Type.txt,
+    28 => Type.aaaa,
+    33 => Type.srv,
+    41 => Type.opt,
+    255 => Type.any,
+    _ => Type.other,
+}
+
+// The flags and counts at the start of a message. rcode is 0 for no error,
+// 1 for a malformed query, 2 for a server failure, 3 for a name that isn't
+// there, 4 for a kind of query the server doesn't do and 5 for refused.
+pub struct Header {
+    pub u16 id
+    pub bool response
+    pub i64 opcode
+    pub bool authoritative
+    pub bool truncated
+    pub bool recursionWanted
+    pub bool recursionAvailable
+    pub bool authenticData
+    pub bool checkingDisabled
+    pub i64 rcode
+}
+
+// A question: the name asked about and the kind of record wanted.
+pub struct Question {
+    pub String name
+    pub Type kind
+    // the kind's number, which is what is written when kind is other
+    pub u16 code
+    // 1 for the internet
+    pub u16 class = 1
+}
+
+// Frees the question's name.
+pub void Question.free() => self.name.free()
+
+// One record. Which fields hold its data depends on its kind.
+pub struct Record {
+    pub String name
+    pub Type kind
+    // the kind's number, which is what is written when kind is other
+    pub u16 code
+    // 1 for the internet; opt keeps the largest UDP message here
+    pub u16 class = 1
+    pub Duration ttl
+    // a and aaaa: the address, an IPv4 one as ::ffff:a.b.c.d, the same as
+    // the ip of a net.Addr
+    pub u8[16] ip
+    // ns, cname, ptr, mx and srv: the host; soa: the primary server
+    pub String target
+    // txt: the text, its strings joined
+    pub String text
+    // mx: the preference; srv: the priority and the weight
+    pub i64 priority
+    pub i64 weight
+    // srv: the port
+    pub u16 port
+    // soa: the mailbox of whoever runs the zone, the serial, and how long
+    // to wait to refresh, between retries, before the zone expires, and how
+    // long to remember that a name isn't there
+    pub String mailbox
+    pub i64 serial
+    pub Duration refresh
+    pub Duration retry
+    pub Duration expire
+    pub Duration minimum
+    // opt and other: the data as it is
+    pub String data
+}
+
+// Frees the record's name and data.
+pub void Record.free() {
+    self.name.free()
+    self.target.free()
+    self.text.free()
+    self.mailbox.free()
+    self.data.free()
+}
+
+// A whole message: a header and four lists of what follows it.
+pub struct Message {
+    pub Header header
+    pub List[Question] questions
+    pub List[Record] answers
+    pub List[Record] authorities
+    pub List[Record] additionals
+}
+
+// Frees the message's questions and records.
+pub void Message.free() {
+    for q in self.questions {
+        q.free()
+    }
+    self.questions.free()
+    freeRecords(&self.answers)
+    freeRecords(&self.authorities)
+    freeRecords(&self.additionals)
+}
+
+void freeRecords(List[Record] *list) {
+    for r in list.items() {
+        r.free()
+    }
+    list.free()
+}
+
+// A query for the records of a kind for name, with recursion wanted.
+pub Message query(u16 id, str name, Type kind) {
+    Message m
+    m.header.id = id
+    m.header.recursionWanted = true
+    m.questions.push(Question{name: name.copy(), kind: kind, code: u16(kind.value)})
+    return m
+}
+
+// The start of a reply to the query m: its id, opcode and questions, with
+// response set. The caller adds the records and sets rcode.
+pub Message Message.reply() {
+    Message r
+    r.header.id = self.header.id
+    r.header.response = true
+    r.header.opcode = self.header.opcode
+    r.header.recursionWanted = self.header.recursionWanted
+    r.header.checkingDisabled = self.header.checkingDisabled
+    for q in self.questions {
+        r.questions.push(Question{name: q.name.copy(), kind: q.kind, code: q.code, class: q.class})
+    }
+    return r
+}
+
+// ------------------------------------------------------------ reading
+
+i64 u16At(str m, i64 i) => i64(m[i]) << 8 | i64(m[i + 1])
+
+i64 u32At(str m, i64 i) => u16At(m, i) << 16 | u16At(m, i + 2)
+
+// Reads the name at m[i] into out, following compression pointers; where
+// the name ends in m.
+!i64 readName(str m, i64 i, String *out) {
+    i64 end = -1
+    jumps := 0
+    for {
+        if i >= m.len {
+            return error(DnsError.short, "a name runs past the end")
+        }
+        n := i64(m[i])
+        if n == 0 {
+            return if end >= 0 { end } else { i + 1 }
+        }
+        if n & 0xc0 == 0xc0 {
+            if i + 1 >= m.len {
+                return error(DnsError.short, "a name runs past the end")
+            }
+            if jumps > 64 {
+                return error(DnsError.broken, "a name's pointers go round in a circle")
+            }
+            if end < 0 {
+                end = i + 2
+            }
+            i = (n & 0x3f) << 8 | i64(m[i + 1])
+            jumps += 1
+            continue
+        }
+        if n & 0xc0 != 0 {
+            return error(DnsError.broken, "a label of a kind that isn't used")
+        }
+        if i + 1 + n > m.len {
+            return error(DnsError.short, "a name runs past the end")
+        }
+        if out.len > 0 {
+            out.append(".")
+        }
+        out.append(m[i + 1:i + 1 + n])
+        i += 1 + n
+    }
+}
+
+// Reads a name that has to end at end, the end of a record's data.
+!void nameIn(str m, i64 i, i64 end, String *out) {
+    after := try readName(m, i, out)
+    if after > end {
+        return error(DnsError.broken, "a name runs past its record")
+    }
+}
+
+!Record readRecord(str m, i64 *at) {
+    Record r
+    errdefer r.free()
+    i := try readName(m, *at, &r.name)
+    if i + 10 > m.len {
+        return error(DnsError.short, "a record runs past the end")
+    }
+    r.code = u16(u16At(m, i))
+    r.kind = typeOf(r.code)
+    r.class = u16(u16At(m, i + 2))
+    r.ttl = Duration(u32At(m, i + 4)) * 1s
+    size := u16At(m, i + 8)
+    data := i + 10
+    end := data + size
+    if end > m.len {
+        return error(DnsError.short, "a record's data runs past the end")
+    }
+    *at = end
+    match r.kind {
+        .a => {
+            if size != 4 {
+                return error(DnsError.broken, "an A record of {size} bytes")
+            }
+            r.ip[10] = 0xff
+            r.ip[11] = 0xff
+            for b in 0..4 {
+                r.ip[12 + b] = m[data + b]
+            }
+        },
+        .aaaa => {
+            if size != 16 {
+                return error(DnsError.broken, "an AAAA record of {size} bytes")
+            }
+            for b in 0..16 {
+                r.ip[b] = m[data + b]
+            }
+        },
+        .ns, .cname, .ptr => try nameIn(m, data, end, &r.target),
+        .mx => {
+            if size < 3 {
+                return error(DnsError.broken, "an MX record of {size} bytes")
+            }
+            r.priority = u16At(m, data)
+            try nameIn(m, data + 2, end, &r.target)
+        },
+        .srv => {
+            if size < 7 {
+                return error(DnsError.broken, "an SRV record of {size} bytes")
+            }
+            r.priority = u16At(m, data)
+            r.weight = u16At(m, data + 2)
+            r.port = u16(u16At(m, data + 4))
+            try nameIn(m, data + 6, end, &r.target)
+        },
+        .soa => {
+            j := try readName(m, data, &r.target)
+            j = try readName(m, j, &r.mailbox)
+            if j + 20 != end {
+                return error(DnsError.broken, "an SOA record that doesn't add up")
+            }
+            r.serial = u32At(m, j)
+            r.refresh = Duration(u32At(m, j + 4)) * 1s
+            r.retry = Duration(u32At(m, j + 8)) * 1s
+            r.expire = Duration(u32At(m, j + 12)) * 1s
+            r.minimum = Duration(u32At(m, j + 16)) * 1s
+        },
+        .txt => {
+            j := data
+            for j < end {
+                n := i64(m[j])
+                if j + 1 + n > end {
+                    return error(DnsError.broken, "a TXT string runs past its record")
+                }
+                r.text.append(m[j + 1:j + 1 + n])
+                j += 1 + n
+            }
+        },
+        _ => r.data.append(m[data:end]),
+    }
+    return r
+}
+
+!void readRecords(str m, i64 *at, i64 count, List[Record] *out) {
+    for k in 0..count {
+        out.push(try readRecord(m, at))
+    }
+}
+
+// The message in bytes, as it comes from the network.
+pub !Message parse(str bytes) {
+    if bytes.len < 12 {
+        return error(DnsError.short, "{bytes.len} bytes is shorter than a header")
+    }
+    Message m
+    errdefer m.free()
+    h := &m.header
+    h.id = u16(u16At(bytes, 0))
+    flags := u16At(bytes, 2)
+    h.response = flags & 0x8000 != 0
+    h.opcode = flags >> 11 & 0xf
+    h.authoritative = flags & 0x0400 != 0
+    h.truncated = flags & 0x0200 != 0
+    h.recursionWanted = flags & 0x0100 != 0
+    h.recursionAvailable = flags & 0x0080 != 0
+    h.authenticData = flags & 0x0020 != 0
+    h.checkingDisabled = flags & 0x0010 != 0
+    h.rcode = flags & 0xf
+    i64 at = 12
+    for k in 0..u16At(bytes, 4) {
+        Question q
+        at = readName(bytes, at, &q.name) catch e {
+            q.free()
+            return e
+        }
+        if at + 4 > bytes.len {
+            q.free()
+            return error(DnsError.short, "a question runs past the end")
+        }
+        q.code = u16(u16At(bytes, at))
+        q.kind = typeOf(q.code)
+        q.class = u16(u16At(bytes, at + 2))
+        at += 4
+        m.questions.push(q)
+    }
+    try readRecords(bytes, &at, u16At(bytes, 6), &m.answers)
+    try readRecords(bytes, &at, u16At(bytes, 8), &m.authorities)
+    try readRecords(bytes, &at, u16At(bytes, 10), &m.additionals)
+    return m
+}
+
+// ------------------------------------------------------------ writing
+
+void put16(String *out, i64 v) {
+    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:2])
+}
+
+void put32(String *out, i64 v) {
+    put16(out, v >> 16 & 0xffff)
+    put16(out, v & 0xffff)
+}
+
+void setU16(String *out, i64 i, i64 v) {
+    out.ptr[0:out.len][i] = u8(v >> 8 & 0xff)
+    out.ptr[0:out.len][i + 1] = u8(v & 0xff)
+}
+
+i64 seconds(Duration d) => if d <= 0s { 0 } else { i64(d / 1s) }
+
+// Where the names written so far are, so that a name seen again is a
+// pointer to the first one. The keys are the names in lower case, which
+// is how DNS compares them.
+struct Writer {
+    String out
+    Map[str, i64] seen
+}
+
+void Writer.free() => self.seen.free()
+
+!void Writer.name(str name) {
+    str rest = name
+    if str.endsWith(rest, ".") {
+        rest = rest[0:rest.len - 1]
+    }
+    for rest.len > 0 {
+        scoped String key = str.lower(rest)
+        at, found := self.seen.get(key)
+        if found {
+            put16(&self.out, 0xc000 | at)
+            return
+        }
+        // only the first 16 KiB can be pointed at
+        if self.out.len < 0x4000 {
+            self.seen.set(key, self.out.len)
+        }
+        label, after, _ := str.cut(rest, ".")
+        if label.len == 0 || label.len > 63 {
+            return error(DnsError.badName, "'{name}' can't be written as a DNS name")
+        }
+        u8[1] n = [u8(label.len)]
+        self.out.append(n[0:1])
+        self.out.append(label)
+        rest = after
+    }
+    self.out.append("\x00")
+}
+
+!void Writer.record(Record *r) {
+    try self.name(r.name)
+    put16(&self.out, if r.kind == .other { i64(r.code) } else { r.kind.value })
+    put16(&self.out, i64(r.class))
+    put32(&self.out, seconds(r.ttl))
+    sizeAt := self.out.len
+    put16(&self.out, 0)
+    match r.kind {
+        .a => self.out.append(r.ip[12:16]),
+        .aaaa => self.out.append(r.ip[0:16]),
+        .ns, .cname, .ptr => try self.name(r.target),
+        .mx => {
+            put16(&self.out, r.priority)
+            try self.name(r.target)
+        },
+        .srv => {
+            put16(&self.out, r.priority)
+            put16(&self.out, r.weight)
+            put16(&self.out, i64(r.port))
+            // the target of an SRV record isn't compressed (RFC 2782)
+            try self.plainName(r.target)
+        },
+        .soa => {
+            try self.name(r.target)
+            try self.name(r.mailbox)
+            put32(&self.out, r.serial)
+            put32(&self.out, seconds(r.refresh))
+            put32(&self.out, seconds(r.retry))
+            put32(&self.out, seconds(r.expire))
+            put32(&self.out, seconds(r.minimum))
+        },
+        .txt => {
+            // strings of up to 255 bytes; empty text is one empty string
+            i64 i = 0
+            for {
+                n := if r.text.len - i > 255 { 255 } else { r.text.len - i }
+                u8[1] b = [u8(n)]
+                self.out.append(b[0:1])
+                self.out.append(r.text[i:i + n])
+                i += n
+                if i >= r.text.len {
+                    break
+                }
+            }
+        },
+        _ => self.out.append(r.data),
+    }
+    size := self.out.len - sizeAt - 2
+    if size > 0xffff {
+        return error(DnsError.broken, "a record's data is longer than 65535 bytes")
+    }
+    setU16(&self.out, sizeAt, size)
+}
+
+!void Writer.plainName(str name) {
+    str rest = name
+    if str.endsWith(rest, ".") {
+        rest = rest[0:rest.len - 1]
+    }
+    for rest.len > 0 {
+        label, after, _ := str.cut(rest, ".")
+        if label.len == 0 || label.len > 63 {
+            return error(DnsError.badName, "'{name}' can't be written as a DNS name")
+        }
+        u8[1] n = [u8(label.len)]
+        self.out.append(n[0:1])
+        self.out.append(label)
+        rest = after
+    }
+    self.out.append("\x00")
+}
+
+// The message as bytes to send.
+pub !String Message.encode() {
+    Writer w
+    defer w.free()
+    errdefer w.out.free()
+    h := &self.header
+    put16(&w.out, i64(h.id))
+    i64 flags = (h.opcode & 0xf) << 11 | (h.rcode & 0xf)
+    if h.response {
+        flags |= 0x8000
+    }
+    if h.authoritative {
+        flags |= 0x0400
+    }
+    if h.truncated {
+        flags |= 0x0200
+    }
+    if h.recursionWanted {
+        flags |= 0x0100
+    }
+    if h.recursionAvailable {
+        flags |= 0x0080
+    }
+    if h.authenticData {
+        flags |= 0x0020
+    }
+    if h.checkingDisabled {
+        flags |= 0x0010
+    }
+    put16(&w.out, flags)
+    put16(&w.out, self.questions.len)
+    put16(&w.out, self.answers.len)
+    put16(&w.out, self.authorities.len)
+    put16(&w.out, self.additionals.len)
+    for q in self.questions {
+        try w.name(q.name)
+        put16(&w.out, if q.kind == .other { i64(q.code) } else { q.kind.value })
+        put16(&w.out, i64(q.class))
+    }
+    for r in self.answers {
+        try w.record(&r)
+    }
+    for r in self.authorities {
+        try w.record(&r)
+    }
+    for r in self.additionals {
+        try w.record(&r)
+    }
+    return w.out
+}
+
+// ------------------------------------------------------------ tests
+
+i64 hexDigit(u8 c) => if c >= 'a' { i64(c - 'a') + 10 } else { i64(c - '0') }
+
+String unhex(str h) {
+    String out
+    i := 0
+    for i + 1 < h.len {
+        u8[1] b = [u8(hexDigit(h[i]) * 16 + hexDigit(h[i + 1]))]
+        out.append(b[0:1])
+        i += 2
+    }
+    return out
+}
+
+// Whether parsing bytes fails with want.
+bool fails(str bytes, DnsError want) {
+    scoped m := parse(bytes) catch e {
+        return e.code == want
+    }
+    return false
+}
+
+// Whether writing name fails with badName.
+bool badName(str name) {
+    scoped q := query(1, name, .a)
+    scoped String bytes = q.encode() catch e {
+        return e.code == DnsError.badName
+    }
+    return false
+}
+
+test "a reply with compressed names" {
+    // example.com A: two answers that point back at the question's name
+    scoped String bytes = unhex("123481800001000200000000076578616d706c6503636f6d0000010001c00c000100010000012c00045db8d822c00c000100010000012c00045db8d823")
+    scoped m := try parse(bytes)
+    expect(m.header.id == 0x1234 && m.header.response && m.header.recursionAvailable && m.header.rcode == 0)
+    expect(m.questions.len == 1 && m.questions.at(0).name == "example.com" && m.questions.at(0).kind == .a)
+    expect(m.answers.len == 2 && m.answers.at(1).name == "example.com" && m.answers.at(1).ttl == 300s)
+    expect(m.answers.at(0).ip[12] == 93 && m.answers.at(1).ip[15] == 35 && m.answers.at(0).ip[10] == 0xff)
+}
+
+test "every kind round trips" {
+    scoped q := query(99, "example.com", .any)
+    scoped m := q.reply()
+    m.header.authoritative = true
+    Record a = .{name: "example.com".copy(), kind: .a, ttl: 60s}
+    a.ip[10] = 0xff
+    a.ip[11] = 0xff
+    a.ip[12] = 192
+    a.ip[15] = 1
+    m.answers.push(a)
+    Record six = .{name: "Example.COM".copy(), kind: .aaaa, ttl: 60s}
+    six.ip[0] = 0x20
+    six.ip[15] = 1
+    m.answers.push(six)
+    m.answers.push(.{name: "www.example.com".copy(), kind: .cname, target: "example.com".copy()})
+    m.answers.push(.{name: "example.com".copy(), kind: .mx, priority: 10, target: "mail.example.com".copy()})
+    m.answers.push(.{name: "_sip._udp.example.com".copy(), kind: .srv, priority: 1, weight: 5, port: 5060, target: "sip.example.com".copy()})
+    String long
+    for i in 0..300 {
+        long.append("x")
+    }
+    m.answers.push(.{name: "example.com".copy(), kind: .txt, text: long})
+    m.authorities.push(.{name: "example.com".copy(), kind: .soa, ttl: 1h, target: "ns1.example.com".copy(),
+        mailbox: "admin.example.com".copy(), serial: 2026102101, refresh: 2h, retry: 30m, expire: 168h, minimum: 5m})
+    m.additionals.push(.{name: "".copy(), kind: .opt, class: 1232})
+    m.additionals.push(.{name: "example.com".copy(), kind: .other, code: 99, data: "\x01\x02".copy()})
+    scoped String bytes = try m.encode()
+    scoped back := try parse(bytes)
+    expect(back.header.id == 99 && back.header.response && back.header.authoritative && back.header.recursionWanted)
+    expect(back.questions.at(0).kind == .any && back.answers.len == 6 && back.authorities.len == 1 && back.additionals.len == 2)
+    expect(back.answers.at(0).ip[12] == 192 && back.answers.at(0).ttl == 60s && back.answers.at(1).ip[0] == 0x20)
+    expect(back.answers.at(2).target == "example.com" && back.answers.at(3).priority == 10 && back.answers.at(3).target == "mail.example.com")
+    s := back.answers.at(4)
+    expect(s.priority == 1 && s.weight == 5 && s.port == 5060 && s.target == "sip.example.com")
+    expect(back.answers.at(5).text.len == 300)
+    soa := back.authorities.at(0)
+    expect(soa.target == "ns1.example.com" && soa.mailbox == "admin.example.com" && soa.serial == 2026102101)
+    expect(soa.refresh == 2h && soa.retry == 30m && soa.expire == 168h && soa.minimum == 5m)
+    expect(back.additionals.at(0).kind == .opt && back.additionals.at(0).class == 1232 && back.additionals.at(0).name.len == 0)
+    o := back.additionals.at(1)
+    expect(o.kind == .other && o.code == 99 && o.data == "\x01\x02")
+    // example.com is written once, and again only in the SRV target, which
+    // is never compressed; every other copy of it is a pointer
+    expect(str.count(bytes, "example") == 2, "names are compressed")
+}
+
+test "broken messages" {
+    scoped String tiny = unhex("1234")
+    expect(fails(tiny, .short))
+    // a name that points at itself
+    scoped String loop = unhex("123401000001000000000000c00c00010001")
+    expect(fails(loop, .broken))
+    // an A record with 3 bytes of data
+    scoped String odd = unhex("1234818000000001000000000000010001000000000003010203")
+    expect(fails(odd, .broken))
+    // a record that says there is more than there is
+    scoped String cut = unhex("12348180000000010000000000000100010000000000040102")
+    expect(fails(cut, .short))
+    expect(badName("a..b"))
+    expect(!badName("example.com."))
+}

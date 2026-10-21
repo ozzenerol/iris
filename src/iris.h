@@ -203,6 +203,8 @@ struct Node {
     const char *ir;         /* the IR writer's name for a variable or function */
     void *scope;            /* top-level declarations: the checker's scope for their names */
     const char *module;     /* top-level declarations: the module's name, "main" for the program */
+    int inst;               /* generic instances: a number of their own, so that List[Record] of
+                             * two modules' Records get different IR names */
     /* struct fields, filled in by the checker's layout */
     int slot;               /* the LLVM element that holds the field */
     int bitOff, bitWidth;   /* bitfields: the lowest bit and how many bits; bitWidth 0 otherwise */

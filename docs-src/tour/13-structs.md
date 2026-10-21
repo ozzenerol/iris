@@ -284,8 +284,6 @@ from 192.168.0.1, flags 2
 20 bytes, now 5 220 63
 ```
 
-The [DNS server guide](../guides/04-dns-server.html) reads and writes a whole protocol this way.
-
 A bitfield, a field in network byte order and an unaligned field of a packed struct have no address of their own, so `&ip.length` doesn't compile; copy the value out first. A value known when compiling must fit in a bitfield's bits. A debug build checks the others when the program runs:
 
 ```iris run

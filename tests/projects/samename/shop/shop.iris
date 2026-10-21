@@ -1,0 +1,12 @@
+pub struct Item {
+    pub str name
+    pub i64 price
+}
+
+pub List[Item] stock() {
+    List[Item] out
+    out.push(.{name: "pen", price: 3})
+    return out
+}
+
+pub T first[T](List[T] *l) => l.at(0)

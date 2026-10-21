@@ -31,7 +31,8 @@
     ]},
     {"title": "Network", "modules": [
       {"name": "net", "title": "Networking", "summary": "TCP, UDP, TLS, addresses and looking up names."},
-      {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."}
+      {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."},
+      {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."}
     ]},
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},

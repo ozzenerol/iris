@@ -1,0 +1,24 @@
+// expect: pen 3
+// expect: 7 true
+// expect: pen 7
+
+// Two modules with a struct of the same name, each in a List and a
+// generic function of its own.
+
+import "shop"
+
+struct Item {
+    i64 id
+    bool sold
+}
+
+!void main() {
+    scoped List[shop.Item] theirs = shop.stock()
+    scoped List[Item] mine
+    mine.push(.{id: 7, sold: true})
+    a := shop.first(&theirs)
+    b := shop.first(&mine)
+    print("{a.name} {a.price}")
+    print("{b.id} {b.sold}")
+    print("{theirs.at(0).name} {mine.at(0).id}")
+}

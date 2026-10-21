@@ -2,7 +2,7 @@
 // call, so the other tasks keep running. It reads /etc/resolv.conf for the
 // servers and /etc/hosts for names it knows already.
 
-import fs, random, str, time
+import dns, fs, random, str, time
 
 // The kinds of DNS record query can ask for.
 pub enum RecordType { a, ns, cname, soa, ptr, mx, txt, aaaa, srv }
@@ -193,194 +193,66 @@ void Resolver.readHosts(str path) {
 
 // ------------------------------------------------------------ messages
 
-void putU16(String *out, i64 v) {
-    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
-    out.append(b[0:2])
+dns.Type wireType(RecordType t) => match t {
+    .a => dns.Type.a,
+    .ns => dns.Type.ns,
+    .cname => dns.Type.cname,
+    .soa => dns.Type.soa,
+    .ptr => dns.Type.ptr,
+    .mx => dns.Type.mx,
+    .txt => dns.Type.txt,
+    .aaaa => dns.Type.aaaa,
+    .srv => dns.Type.srv,
 }
 
 // A query for name: a random id, recursion wanted, and room for answers
 // up to 1232 bytes over UDP (EDNS).
 !String question(str name, RecordType t, i64 id) {
-    String q
-    errdefer q.free()
-    putU16(&q, id)
-    putU16(&q, 0x0100)
-    putU16(&q, 1)
-    putU16(&q, 0)
-    putU16(&q, 0)
-    putU16(&q, 1)
-    str rest = name
-    if str.endsWith(rest, ".") {
-        rest = rest[0:rest.len - 1]
+    scoped m := dns.query(u16(id), name, wireType(t))
+    m.additionals.push(dns.Record{name: "".copy(), kind: .opt, class: 1232})
+    return try encodeQuery(&m, name)
+}
+
+!String encodeQuery(dns.Message *m, str name) {
+    return m.encode() catch e {
+        return error(NetError.notFound, "'{name}' isn't a host name")
     }
-    for rest.len > 0 {
-        label, after, _ := str.cut(rest, ".")
-        if label.len == 0 || label.len > 63 {
-            return error(NetError.notFound, "'{name}' isn't a host name")
-        }
-        u8[1] n = [u8(label.len)]
-        q.append(n[0:1])
-        q.append(label)
-        rest = after
-    }
-    q.append("\x00")
-    putU16(&q, typeCode(t))
-    putU16(&q, 1)
-    // the OPT record: no name, type 41, the UDP size as its class
-    q.append("\x00")
-    putU16(&q, 41)
-    putU16(&q, 1232)
-    putU16(&q, 0)
-    putU16(&q, 0)
-    putU16(&q, 0)
-    return q
+}
+
+void putU16(String *out, i64 v) {
+    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:2])
 }
 
 i64 u16At(str m, i64 i) => if i + 2 <= m.len { i64(m[i]) << 8 | i64(m[i + 1]) } else { 0 }
 
-i64 u32At(str m, i64 i) => if i + 4 <= m.len { u16At(m, i) << 16 | u16At(m, i + 2) } else { 0 }
-
-// Reads the name at m[i] into out (which may be null), following
-// compression pointers; where the name ends in m, or -1 when it is broken.
-i64 readName(str m, i64 i, String *out) {
-    i64 end = -1
-    jumps := 0
-    bool first = true
-    for {
-        if i >= m.len {
-            return -1
-        }
-        n := i64(m[i])
-        if n == 0 {
-            return if end >= 0 { end } else { i + 1 }
-        }
-        if n & 0xc0 == 0xc0 {
-            if i + 1 >= m.len || jumps > 64 {
-                return -1
-            }
-            if end < 0 {
-                end = i + 2
-            }
-            i = (n & 0x3f) << 8 | i64(m[i + 1])
-            jumps += 1
-            continue
-        }
-        if i + 1 + n > m.len {
-            return -1
-        }
-        if out != null {
-            if !first {
-                out.append(".")
-            }
-            out.append(m[i + 1:i + 1 + n])
-        }
-        first = false
-        i += 1 + n
-    }
-}
-
 // What a reply said: 0 answers, 1 no such name, 2 the server failed, 3
 // truncated, 4 not a reply to this query.
-i64 parseReply(str m, i64 id, RecordType want, List[Record] *out) {
-    if m.len < 12 || u16At(m, 0) != id {
+i64 parseReply(str bytes, i64 id, RecordType want, List[Record] *out) {
+    scoped m := dns.parse(bytes) catch e {
         return 4
     }
-    flags := u16At(m, 2)
-    if flags & 0x8000 == 0 {
+    h := m.header
+    if i64(h.id) != id || !h.response {
         return 4
     }
-    if flags & 0x0200 != 0 {
+    if h.truncated {
         return 3
     }
-    rcode := flags & 0xf
-    if rcode == 3 {
+    if h.rcode == 3 {
         return 1
     }
-    if rcode != 0 {
+    if h.rcode != 0 {
         return 2
     }
-    qd := u16At(m, 4)
-    an := u16At(m, 6)
-    i := 12
-    for q in 0..qd {
-        i = readName(m, i, null)
-        if i < 0 {
-            return 4
-        }
-        i += 4
-    }
-    for k in 0..an {
-        Record r
-        i = readName(m, i, &r.name)
-        if i < 0 || i + 10 > m.len {
-            r.free()
-            return 4
-        }
-        code := u16At(m, i)
-        r.ttl = Duration(u32At(m, i + 4)) * 1s
-        size := u16At(m, i + 8)
-        data := i + 10
-        i = data + size
-        if i > m.len {
-            r.free()
-            return 4
-        }
-        t, known := typeOf(code)
+    for a in m.answers {
+        t, known := typeOf(a.kind.value)
         if !known || t != want && !(t == .cname && want != .cname) {
-            r.free()
             continue
         }
-        r.kind = t
-        bool good = true
-        match t {
-            .a => {
-                good = size == 4
-                if good {
-                    r.ip.ip[10] = 0xff
-                    r.ip.ip[11] = 0xff
-                    for b in 0..4 {
-                        r.ip.ip[12 + b] = m[data + b]
-                    }
-                }
-            },
-            .aaaa => {
-                good = size == 16
-                if good {
-                    for b in 0..16 {
-                        r.ip.ip[b] = m[data + b]
-                    }
-                }
-            },
-            .cname, .ns, .ptr, .soa => {
-                good = readName(m, data, &r.target) >= 0
-            },
-            .mx => {
-                r.priority = u16At(m, data)
-                good = size > 2 && readName(m, data + 2, &r.target) >= 0
-            },
-            .srv => {
-                r.priority = u16At(m, data)
-                r.weight = u16At(m, data + 2)
-                r.port = u16(u16At(m, data + 4))
-                good = size > 6 && readName(m, data + 6, &r.target) >= 0
-            },
-            .txt => {
-                j := data
-                for j < data + size {
-                    n := i64(m[j])
-                    if j + 1 + n > data + size {
-                        good = false
-                        break
-                    }
-                    r.target.append(m[j + 1:j + 1 + n])
-                    j += 1 + n
-                }
-            },
-        }
-        if !good {
-            r.free()
-            return 4
-        }
+        Record r = .{name: a.name.copy(), kind: t, ttl: a.ttl, priority: a.priority, weight: a.weight, port: a.port}
+        r.ip.ip = a.ip
+        r.target = if t == .txt { a.text.copy() } else { a.target.copy() }
         out.push(r)
     }
     return 0

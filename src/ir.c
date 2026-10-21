@@ -581,8 +581,8 @@ static const char *arrayAddr(IR *ir, Node *e) {
  * order: what a dyn value points to. Written once per pair. */
 static const char *vtable(IR *ir, Type *st, Node *iface) {
     char name[400];
-    snprintf(name, sizeof name, "@\"vt.%s.%s.%s.%s\"", st->decl->module ? st->decl->module : "main", st->name,
-             iface->module ? iface->module : "main", iface->name);
+    snprintf(name, sizeof name, "@\"vt.%s.%s#%d.%s.%s\"", st->decl->module ? st->decl->module : "main", st->name,
+             st->decl->inst, iface->module ? iface->module : "main", iface->name);
     for (int i = 0; i < ir->vtables.len; i++) {
         if (strcmp(ir->vtables.items[i]->name, name) == 0) {
             return ir->vtables.items[i]->name;
@@ -3501,9 +3501,11 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                     mainFn = d;
                 }
             } else if (d->list.len && (d->list.items[0]->flags & F_SELF)) {
-                d->ir = fmt(&ir, "@\"m.%s.%s.%s\"", mod, d->list.items[0]->type->elem->name, d->name);
+                Type *self = d->list.items[0]->type->elem;
+                int selfInst = self->kind == TY_STRUCT && self->decl ? self->decl->inst : 0;
+                d->ir = fmt(&ir, "@\"m.%s.%s#%d.%s#%d\"", mod, self->name, selfInst, d->name, d->inst);
             } else {
-                d->ir = fmt(&ir, "@\"f.%s.%s\"", mod, d->name);
+                d->ir = fmt(&ir, "@\"f.%s.%s#%d\"", mod, d->name, d->inst);
                 if (strcmp(d->name, gComptime == 1 ? "irisComptimeMain" : "main") == 0 && strcmp(mod, "main") == 0) {
                     mainFn = d;
                 }
@@ -3614,7 +3616,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                        "  call void @iris_error_report(i64 %%e)\n  unreachable\nok:\n  ret i32 0\n}\n\n",
                  mainFn->ir);
     } else {
-        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main.main\"");
+        sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main.main#0\"");
     }
     /* libc functions the generated code uses, unless import c declared them */
     static const struct { const char *name, *decl; } libc[] = {

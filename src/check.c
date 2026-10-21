@@ -135,6 +135,7 @@ typedef struct {
     int pendCap;
     int instDepth;
     int instGen;            /* how many instances deep the body being checked is */
+    int instCount;          /* instances made so far, for their IR names */
     NodeList genericMethods;
     NodeList exports;       /* @export functions, to catch two with one name */
     Program *prog;
@@ -442,7 +443,9 @@ static Type *structType(Checker *c, Node *decl) {
         t->decl = decl;
         t->ir = arenaStrndup(c->arena, "", 0);
         StrBuf b = {0};
-        sbPrintf(&b, "%%\"T.%s.%s\"", decl->module ? decl->module : "main", decl->name);
+        sbPrintf(&b, "%%\"T.%s.%s", decl->module ? decl->module : "main", decl->name);
+        if (decl->inst) sbPrintf(&b, "#%d", decl->inst);
+        sbPutc(&b, '"');
         t->ir = sbFinish(&b, c->arena);
         decl->type = t;
     }
@@ -1842,6 +1845,7 @@ static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node 
     Node *copy = cloneNode(c->arena, decl);
     copy->list2 = (NodeList){0};
     copy->name = instanceName(c, decl->name, args, n);
+    copy->inst = ++c->instCount;
     Type *t = structType(c, copy);
     t->generic = decl;
     t->args = in->args;
@@ -1955,6 +1959,7 @@ static Node *instantiateMethod(Checker *c, Node *e, Node *m, Type *st) {
     copy->list2 = (NodeList){0};
     copy->b = NULL;
     copy->name = instanceName(c, m->name, args, n);
+    copy->inst = ++c->instCount;
     copy->flags |= F_INSTANCE;
     in->fn = copy;
     Scope *s = paramScope(c, m, &m->list2, args);
@@ -2001,6 +2006,7 @@ static Node *instantiateFunc(Checker *c, Node *decl, Type **args, int n, Node *a
     Node *copy = cloneNode(c->arena, decl);
     copy->list2 = (NodeList){0};
     copy->name = instanceName(c, decl->name, args, n);
+    copy->inst = ++c->instCount;
     copy->flags |= F_INSTANCE;
     in->fn = copy;
     Scope *s = paramScope(c, decl, &decl->list2, args);
