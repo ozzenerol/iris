@@ -1254,8 +1254,12 @@ static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
                 sbPuts(&r, "{\"name\":");
                 putJsonString(&r, name.buf, name.len);
                 sbPrintf(&r, ",\"kind\":%d,\"range\":", symbolKind(d));
-                putRange(&r, src, named->line, 1, 1);
-                sbPuts(&r, ",\"selectionRange\":");
+                /* the whole line, so the name in selectionRange always lies inside it */
+                sbPuts(&r, "{\"start\":");
+                putPos(&r, src, named->line, 1);
+                sbPuts(&r, ",\"end\":");
+                putPos(&r, src, named->line + 1, 1);
+                sbPuts(&r, "},\"selectionRange\":");
                 putRange(&r, src, named->line, named->col, (int)strlen(named->name));
                 sbPutc(&r, '}');
                 sbFree(&name);

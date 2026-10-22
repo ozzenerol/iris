@@ -100,6 +100,11 @@ def main():
     s = c.request("textDocument/documentSymbol", {"textDocument": td})
     names = [x["name"] for x in (s and s["result"]) or []]
     check("symbols: %r" % names, names == ["Point", "Point.sum", "main"])
+    def inside(x):
+        pos = lambda q: (q["line"], q["character"])
+        a, b = x["range"], x["selectionRange"]
+        return pos(a["start"]) <= pos(b["start"]) and pos(b["end"]) <= pos(a["end"])
+    check("symbol names inside their ranges", all(inside(x) for x in (s and s["result"]) or []))
 
     # completion after "p." and after "json."
     text2 = SOURCE.replace('    print("{p.sum()}")', '    p.\n    print("{p.sum()}")')
@@ -331,6 +336,7 @@ f64 total(dyn Shape s) => s.area()
     c.notify("textDocument/didSave", {"textDocument": {"uri": "file://" + jpath}})
     sym = c.request("textDocument/documentSymbol", {"textDocument": {"uri": "file://" + jpath}})
     check("symbols of a std file: %r" % (sym and len(sym["result"]),), sym and len(sym["result"]) > 3)
+    check("std symbol names inside their ranges", sym and all(inside(x) for x in sym["result"]))
 
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)

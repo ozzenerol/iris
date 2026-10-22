@@ -16,6 +16,38 @@ builds `iris` with every core and installs it in `/usr/local/bin` (sudo only for
 
 It needs a C11 compiler, `clang` 15 or newer (to compile programs) and Python 3 (for the tests and the docs). During work on the compiler, `make -j` builds `./iris` and `make test` runs the tests.
 
+## Editors
+
+### Neovim and Vim
+
+`./build-and-install.sh` copies the Vim files (file type, syntax, indent) to `/usr/local/share/iris/editors/vim`. Add that folder to the runtime path:
+
+```lua
+vim.opt.rtp:append("/usr/local/share/iris/editors/vim")
+```
+
+With lazy.nvim, put it in `performance.rtp.paths` instead, because lazy resets the runtime path when it starts. Then start the language server for `.iris` files (Neovim 0.11 or newer):
+
+```lua
+vim.lsp.config("iris", {
+  cmd = { "iris", "lsp" },
+  filetypes = { "iris" },
+  root_markers = { "iris.mod", ".git" },
+})
+vim.lsp.enable("iris")
+```
+
+### VS Code
+
+The extension in `editors/vscode` highlights `.iris` files and the `iris` blocks in Markdown, runs `iris lsp`, and debugs programs with gdb. Build and install it:
+
+```
+make vscode
+code --install-extension editors/vscode/iris.vsix
+```
+
+To debug, open a `.iris` file, set a breakpoint and press F5. The extension builds the program with `iris build` and runs it under gdb 14 or newer. A `launch.json` entry of type `iris` sets `program` (a file or a project folder), `args`, `cwd`, `env` and `mode`. See `editors/vscode/README.md`.
+
 ## Docs
 
 The docs are in `docs-src/` as Markdown. Build and read them with:

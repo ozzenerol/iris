@@ -1,9 +1,10 @@
 {
   "name": "iris",
   "displayName": "Iris",
-  "description": "Iris language support: syntax highlighting, and errors, hover, go to definition, outline, completion and formatting from iris lsp.",
+  "description": "Iris language support: syntax highlighting, errors, hover, go to definition, outline, completion and formatting from iris lsp, and debugging with gdb.",
   "version": "0.63.0",
   "publisher": "ozzenerol",
+  "icon": "icons/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/ozzenerol/iris"
@@ -13,7 +14,8 @@
   },
   "categories": [
     "Programming Languages",
-    "Formatters"
+    "Formatters",
+    "Debuggers"
   ],
   "main": "./extension.js",
   "activationEvents": [],
@@ -28,7 +30,11 @@
         "extensions": [
           ".iris"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/iris.svg",
+          "dark": "./icons/iris.svg"
+        }
       }
     ],
     "grammars": [
@@ -55,6 +61,11 @@
           "type": "string",
           "default": "iris",
           "description": "The iris program that runs the language server (iris lsp)."
+        },
+        "iris.gdbPath": {
+          "type": "string",
+          "default": "gdb",
+          "description": "The gdb program used for debugging (gdb 14 or newer, run as gdb -i=dap)."
         }
       }
     },
@@ -62,6 +73,86 @@
       {
         "command": "iris.restartServer",
         "title": "Iris: Restart Language Server"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "iris"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "iris",
+        "label": "Iris (gdb)",
+        "languages": [
+          "iris"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .iris file or project folder to build and debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the program.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The folder the program runs in.",
+                "default": "${workspaceFolder}"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Extra environment variables.",
+                "default": {}
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "debug",
+                  "release-safe",
+                  "release-fast"
+                ],
+                "description": "The build mode.",
+                "default": "debug"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "iris",
+            "request": "launch",
+            "name": "Debug Iris",
+            "program": "${file}",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Iris: Launch",
+            "description": "Build an Iris program and debug it with gdb.",
+            "body": {
+              "type": "iris",
+              "request": "launch",
+              "name": "Debug Iris",
+              "program": "^\"\\${file}\"",
+              "args": [],
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          }
+        ]
       }
     ]
   },

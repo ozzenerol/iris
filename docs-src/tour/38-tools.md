@@ -131,6 +131,10 @@ conn = {fd = 7, peer = {ptr = "10.0.0.5", len = 8, cap = 16}}
 
 A function's name in the debugger is its module and name, `f.main.handle`, or `m.main.Server.close` for a method. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 
+In VS Code, the Iris extension debugs with gdb. Set a breakpoint in a `.iris` file and press F5. The extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
+
+In VS Code, the Iris extension debugs with gdb. Set a breakpoint in a `.iris` file and press F5: the extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
+
 ## The libraries Iris loads
 
 Some modules use a C library that is loaded the first time a program uses it, so a program that doesn't use it needs nothing installed:
