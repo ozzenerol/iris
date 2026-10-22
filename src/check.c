@@ -991,11 +991,10 @@ static Type *resolveType(Checker *c, Node *t) {
             /* said here, where the map or set is declared, not inside its code */
             Type *k = args[0];
             bool ok = k->kind == TY_INT || k->kind == TY_BOOL || k->kind == TY_PTR || isStr(k) ||
-                      (k->kind == TY_ENUM && !k->hasData);
+                      k->kind == TY_STRING || (k->kind == TY_ENUM && !k->hasData);
             if (!ok) {
-                error(c, t->list.items[0], "a %s can be integers, bool, enums, pointers or str, not %s%s",
-                      isSet ? "Set's values" : "Map's keys", k->name,
-                      k->kind == TY_STRING ? (isSet ? " (use str: the set keeps its own copy)" : " (use str: the map keeps its own copy)") : "");
+                error(c, t->list.items[0], "a %s can be integers, bool, enums, pointers, str or String, not %s",
+                      isSet ? "Set's values" : "Map's keys", k->name);
                 return &tyError;
             }
         }
@@ -3321,6 +3320,9 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         case N_STRUCT: case N_TYPEDEF:
             error(c, e, "%s is a type, not a value", e->name);
             return setType(e, &tyError);
+        case N_IMPORT: case N_IMPORT_ITEM:
+            error(c, e, "%s is a module, not a value", e->name);
+            return setType(e, &tyError);
         case N_CONST:
             checkConstDecl(c, d);
             if (d->type && isFloat(d->type)) {
@@ -4631,10 +4633,9 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         Type *t = checkExpr(c, &e->list.items[0], NULL);
         if (isErr(t)) return setType(e, &tyError);
         bool ok = t->kind == TY_INT || t->kind == TY_BOOL || t->kind == TY_PTR || isStr(t) ||
-                  (t->kind == TY_ENUM && !t->hasData);
+                  t->kind == TY_STRING || (t->kind == TY_ENUM && !t->hasData);
         if (!ok) {
-            error(c, e, "a Map's keys can be integers, bool, enums, pointers or str, not %s%s", t->name,
-                  t->kind == TY_STRING ? " (use str: the map keeps its own copy)" : "");
+            error(c, e, "a Map's keys can be integers, bool, enums, pointers, str or String, not %s", t->name);
             return setType(e, &tyError);
         }
         e->builtin = d->name[0] == 'h' ? BI_HASH : d->name[3] == 'O' ? BI_KEY_OWN : BI_KEY_FREE;

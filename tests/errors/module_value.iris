@@ -1,0 +1,6 @@
+// error: 5: str is a module, not a value
+import str
+
+void main() {
+    x := str
+}
