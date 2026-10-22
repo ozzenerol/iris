@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.60.1</span>
+    <span class="ver">v0.61.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -166,7 +166,7 @@ true 0 -1</code></pre>
 false 0 true
 true false 1</code></pre>
 <p><code>getOr(k, fallback)</code> gives the value or the fallback, <code>has(k)</code> whether the key is there, and <code>remove(k)</code> takes it out, giving false when it wasn't there. <code>keys()</code> gives the keys as a new <code>List</code>, which the caller frees. <code>clear</code> takes every key out and keeps the memory.</p>
-<p>Keys can be integers, <code>bool</code>, enums, pointers or <code>str</code>. A <code>str</code> key is copied into the map, so the text it came from can change or go away. A map's keys come in no particular order.</p>
+<p>Keys can be integers, <code>bool</code>, enums, pointers, <code>str</code> or <code>String</code>. A <code>str</code> or <code>String</code> key is copied into the map, so the text it came from can change or go away, and the caller still frees its own <code>String</code>. The keys from <code>keys()</code> and from a loop belong to the map: free the list, not the keys in it. A map's keys come in no particular order.</p>
 <h2 id="going-over-a-map"><a href="#going-over-a-map">Going over a map</a></h2>
 <p>A loop over a map gives each key and its value:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
@@ -203,7 +203,22 @@ true false 1</code></pre>
 <pre class="out"><code>10.0.0.5 is blocked already
 2 blocked, true false
 still blocked: 10.0.0.5</code></pre>
-<p>A set's values follow the rules of a map's keys: integers, <code>bool</code>, enums, pointers or <code>str</code>, and a <code>str</code> is copied into the set. <code>values()</code> gives them as a new <code>List</code>, which the caller frees. <code>clear</code> takes every value out and keeps the memory.</p>
+<p>A set's values follow the rules of a map's keys: integers, <code>bool</code>, enums, pointers, <code>str</code> or <code>String</code>, and a <code>str</code> or <code>String</code> is copied into the set. <code>values()</code> gives them as a new <code>List</code>, which the caller frees. <code>clear</code> takes every value out and keeps the memory.</p>
+<p>A <code>Set[String]</code> works the same way. The set keeps its own copy, so the <code>String</code> that was added is still the caller's to free:</p>
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Set</span>[<span class="t">String</span>] users
+    <span class="k">defer</span> users.<span class="f">free</span>()
+    <span class="k">for</span> name <span class="k">in</span> [<span class="s">&quot;ana&quot;</span>, <span class="s">&quot;bo&quot;</span>, <span class="s">&quot;ana&quot;</span>] {
+        <span class="t">String</span> s = name.<span class="f">copy</span>()
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> is new: </span><span class="e">{</span>users.<span class="f">add</span>(s)<span class="e">}</span><span class="s">&quot;</span>)
+        s.<span class="f">free</span>()
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>users.len<span class="e">}</span><span class="s"> users&quot;</span>)
+}</code></pre>
+<pre class="out"><code>ana is new: true
+bo is new: true
+ana is new: false
+2 users</code></pre>
 <h2 id="requests-per-client"><a href="#requests-per-client">Requests per client</a></h2>
 <p>An access log has a line for each request, with the client's address first. A map counts the lines of each address, and the sorted keys print them in order:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
@@ -269,7 +284,7 @@ still blocked: 10.0.0.5</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.60.1</span>
+    <span>Iris v0.61.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

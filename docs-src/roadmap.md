@@ -68,3 +68,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.59 | `ch.free()` frees a channel, and `scoped` works on channels. | released |
 | 0.60 | The `dns` module reads and writes DNS messages, and the DNS server guide uses it. | released |
 | 0.60.1 | A function that returns nothing can have a condition after its `=>` body: `void Dns.free() => self.cfg.free() if self.cfg is not null`. | released |
+| 0.61 | `Set[String]` and `Map[String, V]` work. The set or map keeps its own copy of each `String`. | released |
