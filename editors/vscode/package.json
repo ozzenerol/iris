@@ -2,7 +2,7 @@
   "name": "iris",
   "displayName": "Iris",
   "description": "Iris language support: syntax highlighting, errors, hover, go to definition, outline, completion and formatting from iris lsp, and debugging with gdb.",
-  "version": "0.63.0",
+  "version": "0.64.0",
   "publisher": "ozzenerol",
   "icon": "icons/icon.png",
   "repository": {
