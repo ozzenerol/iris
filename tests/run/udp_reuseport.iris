@@ -1,0 +1,38 @@
+// expect: two sockets on one port: true
+// expect: got 8
+
+import net
+
+void serve(net.Udp *s, chan[i64] done) {
+    u8[16] buf
+    i64 got = 0
+    for {
+        n, _ := s.readFrom(buf) catch e {
+            break
+        }
+        got += n
+    }
+    done <- got
+}
+
+!void main() {
+    a := try net.listenUdp(0, "127.0.0.1")
+    defer a.close()
+    port := a.localAddr().port
+    b := try net.listenUdp(port, "127.0.0.1")
+    defer b.close()
+    print("two sockets on one port: {b.localAddr().port == port}")
+    a.setTimeout(300ms)
+    b.setTimeout(300ms)
+    scoped chan[i64] done = chan[i64](2)
+    spawn serve(&a, done)
+    spawn serve(&b, done)
+    to := try net.parseAddr("127.0.0.1", port)
+    for i in 0..8 {
+        c := try net.dialUdp(to)
+        try c.send("x")
+        c.close()
+    }
+    total := <-done + <-done
+    print("got {total}")
+}

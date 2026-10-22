@@ -145,7 +145,8 @@ pub void Udp.setTimeout(Duration d) {
 
 // A UDP socket on port (0 picks a free one) of host, an IP ("" for all
 // addresses), for reading datagrams from anywhere and sending them
-// anywhere.
+// anywhere. Several sockets can listen on one port, such as one per
+// thread; each datagram goes to one of them.
 pub !Udp listenUdp(u16 port = 0, str host = "") {
     i32 err
     i32 family

@@ -126,6 +126,8 @@ import net
 ping from 127.0.0.1: true
 ```
 
+Several sockets can listen on the same UDP port, such as one per thread. The kernel gives each datagram to one of them.
+
 ## Names
 
 `net.lookup` gives the addresses of a host name, with the system's resolver. `net.query` asks DNS for records of a kind, such as MX or TXT. A `Resolver` asks given servers instead of the system's. The [dns module](#dns) reads and writes the messages themselves, for a program that is a DNS server:
