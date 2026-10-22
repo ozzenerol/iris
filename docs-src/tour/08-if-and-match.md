@@ -70,6 +70,30 @@ trying 8080
 
 `return if` followed by a block is still an if that gives a value: `return if ok { 1 } else { 2 }`.
 
+A function that returns nothing can put the condition after an `=>` body. The call runs only when the condition holds:
+
+```iris run
+struct Conn {
+    i64 *buf
+}
+
+void Conn.show() => print("buf {*self.buf}") if self.buf is not null
+
+void main() {
+    i64 n = 42
+    Conn a = Conn{buf: &n}
+    Conn b = Conn{}
+    a.show()
+    b.show()
+}
+```
+
+```output
+buf 42
+```
+
+A function that returns a value can't, since it would have nothing to return when the condition is false. Write `a if cond else b` there.
+
 ## if as a value
 
 `if` can give a value. Each branch ends with the value it gives, without `return`, and `else` is required, since there must be a value whichever way it goes:

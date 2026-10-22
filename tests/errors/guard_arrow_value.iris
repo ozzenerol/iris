@@ -1,0 +1,7 @@
+// error: 3: f returns a value, so its '=>' body can't have an 'if' after it; write 'a if cond else b'
+
+i64 f(bool b) => 1 if b
+
+void main() {
+    print("{f(true)}")
+}

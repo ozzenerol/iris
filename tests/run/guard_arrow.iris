@@ -1,0 +1,25 @@
+// expect: hi
+// expect: say
+// expect: 7
+// expect: done
+
+struct Box {
+    i64 *p
+}
+
+void Box.show() => print("{*self.p}") if self.p is not null
+void hi(bool on) => print("hi") if on
+!void say(bool on) => print("say") if on
+
+void main() {
+    hi(true)
+    hi(false)
+    say(true) catch e { }
+    say(false) catch e { }
+    i64 v = 7
+    Box b = Box{p: &v}
+    b.show()
+    Box n = Box{}
+    n.show()
+    print("done")
+}

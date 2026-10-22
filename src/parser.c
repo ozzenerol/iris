@@ -1651,6 +1651,18 @@ static Node *parseFuncRest(Parser *p, Node *ret, NodeList attrs, unsigned flags,
         f->c = parseBlock(p);
     } else if (accept(p, P_ARROW)) {
         f->d = parseExpr(p);
+        if (at(p, K_IF)) {
+            /* `=> call() if cond` is a body of one guarded statement */
+            Node *r = ret && ret->kind == N_T_ERR ? ret->a : ret;
+            if (!r || r->kind != N_T_NAME || strcmp(r->name, "void") != 0) {
+                fail(p, peek(p), "%s returns a value, so its '=>' body can't have an 'if' after it; "
+                     "write 'a if cond else b'", f->name);
+            }
+            Node *b = valueBlock(p, f->d);
+            b->list.items[0] = parseGuard(p, b->list.items[0]);
+            f->c = b;
+            f->d = NULL;
+        }
     } else if (needBody && !attrs.len) {
         /* with attributes (@extern) a function can be declared without a body */
         fail(p, peek(p), "expected '{' or '=>' to start the function body, found %s", describe(p, peek(p)));
