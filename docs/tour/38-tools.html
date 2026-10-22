@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.62.0</span>
+    <span class="ver">v0.63.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -84,7 +84,11 @@ vim.lsp.config(&quot;iris&quot;, {
     root_markers = { &quot;iris.mod&quot;, &quot;.git&quot; },
 })
 vim.lsp.enable(&quot;iris&quot;)</code></pre>
-<p>Vim uses the same syntax files with <code>set rtp+=/path/to/iris/editors/vim</code>. Other editors start <code>iris lsp</code> as the language server for <code>.iris</code> files.</p>
+<p>Vim uses the same syntax files with <code>set rtp+=/path/to/iris/editors/vim</code>.</p>
+<p>The VS Code extension in <code>editors/vscode</code> highlights <code>.iris</code> files and the <code>iris</code> code blocks in Markdown, and starts <code>iris lsp</code>. <code>make vscode</code> packages it (it needs Node.js and npm):</p>
+<pre class="code"><code>make vscode
+code --install-extension editors/vscode/iris.vsix</code></pre>
+<p>The <code>iris.path</code> setting picks the <code>iris</code> program when it isn't the one on the PATH. Other editors start <code>iris lsp</code> as the language server for <code>.iris</code> files.</p>
 <h2 id="other-platforms"><a href="#other-platforms">Other platforms</a></h2>
 <p><code>--target</code> builds for another platform:</p>
 <pre class="code"><code>iris build --target=aarch64-linux main.iris
@@ -111,7 +115,7 @@ conn = {fd = 7, peer = {ptr = &quot;10.0.0.5&quot;, len = 8, cap = 16}}</code></
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.62.0</span>
+    <span>Iris v0.63.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>
