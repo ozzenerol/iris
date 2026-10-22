@@ -1646,6 +1646,25 @@ static Val emitBuiltin(IR *ir, Node *e) {
             ins(ir, "%s = call ptr @iris_bytes_dup(ptr %s, i64 %s)", r, ptr, len);
             return makeSlice(ir, r, len, t);
         }
+        if (t->kind == TY_STRING) {
+            /* a String key: hashed by its bytes, and the map keeps its own copy */
+            const char *ptr = tmp(ir), *len = tmp(ir), *r = tmp(ir);
+            ins(ir, "%s = extractvalue %%String %s, 0", ptr, v.s);
+            ins(ir, "%s = extractvalue %%String %s, 1", len, v.s);
+            if (e->builtin == BI_HASH) {
+                ins(ir, "%s = call i64 @iris_hash_bytes(ptr %s, i64 %s)", r, ptr, len);
+                return val(r, &tyU64);
+            }
+            if (e->builtin == BI_KEY_FREE) {
+                ins(ir, "call void @free(ptr %s)", ptr);
+                return val("", &tyVoid);
+            }
+            const char *slot = allocaFor(ir, &tyString, "key");
+            ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+            ins(ir, "call void @iris_string_append(ptr %s, ptr %s, i64 %s)", slot, ptr, len);
+            ins(ir, "%s = load %%String, ptr %s", r, slot);
+            return val(r, &tyString);
+        }
         if (e->builtin == BI_KEY_OWN) return v;
         if (e->builtin == BI_KEY_FREE) return val("", &tyVoid);
         const char *x = tmp(ir), *r = tmp(ir);

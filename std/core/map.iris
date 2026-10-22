@@ -1,6 +1,6 @@
-// A map from keys to values. Keys can be integers, bool, enums, pointers
-// or str; a str key is copied, so the map keeps its own. A new Map is
-// empty; free gives its memory back.
+// A map from keys to values. Keys can be integers, bool, enums, pointers,
+// str or String; a str or String key is copied, so the map keeps its own.
+// A new Map is empty; free gives its memory back.
 pub struct Map[K, V] {
     K[] keyArr
     V[] vals
@@ -143,8 +143,8 @@ pub void Map[K, V].free() {
     self.state = alloc(u8, 0)
 }
 
-// The keys, in no particular order. A str key points into the map's own
-// copy, valid until the key is removed.
+// The keys, in no particular order. A str or String key is the map's own
+// copy, valid until the key is removed; free only the list.
 pub List[K] Map[K, V].keys() {
     List[K] out
     out.reserve(self.len)

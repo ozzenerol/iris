@@ -1,10 +1,8 @@
-// error: 8: a Set's values can be integers, bool, enums, pointers or str, not P
-// error: 9: a Set's values can be integers, bool, enums, pointers or str, not String (use str: the set keeps its own copy)
+// error: 7: a Set's values can be integers, bool, enums, pointers, str or String, not P
 struct P {
     i64 x
 }
 
 void main() {
     Set[P] s
-    Set[String] t
 }

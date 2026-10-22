@@ -1,6 +1,6 @@
 // A set of values, each kept once. Values can be integers, bool, enums,
-// pointers or str; a str is copied, so the set keeps its own. A new Set
-// is empty; free gives its memory back.
+// pointers, str or String; a str or String is copied, so the set keeps its
+// own. A new Set is empty; free gives its memory back.
 pub struct Set[T] {
     Map[T, bool] m
     pub i64 len
@@ -38,8 +38,8 @@ pub void Set[T].free() {
     self.len = 0
 }
 
-// The values, in no particular order, as a new List. A str points into
-// the set's own copy, valid until it is removed.
+// The values, in no particular order, as a new List. A str or String is
+// the set's own copy, valid until it is removed; free only the list.
 pub List[T] Set[T].values() => self.m.keys()
 
 // for v in set, in no particular order

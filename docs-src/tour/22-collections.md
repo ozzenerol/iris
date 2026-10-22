@@ -164,7 +164,7 @@ true false 1
 
 `getOr(k, fallback)` gives the value or the fallback, `has(k)` whether the key is there, and `remove(k)` takes it out, giving false when it wasn't there. `keys()` gives the keys as a new `List`, which the caller frees. `clear` takes every key out and keeps the memory.
 
-Keys can be integers, `bool`, enums, pointers or `str`. A `str` key is copied into the map, so the text it came from can change or go away. A map's keys come in no particular order.
+Keys can be integers, `bool`, enums, pointers, `str` or `String`. A `str` or `String` key is copied into the map, so the text it came from can change or go away, and the caller still frees its own `String`. The keys from `keys()` and from a loop belong to the map: free the list, not the keys in it. A map's keys come in no particular order.
 
 ## Going over a map
 
@@ -219,7 +219,29 @@ void main() {
 still blocked: 10.0.0.5
 ```
 
-A set's values follow the rules of a map's keys: integers, `bool`, enums, pointers or `str`, and a `str` is copied into the set. `values()` gives them as a new `List`, which the caller frees. `clear` takes every value out and keeps the memory.
+A set's values follow the rules of a map's keys: integers, `bool`, enums, pointers, `str` or `String`, and a `str` or `String` is copied into the set. `values()` gives them as a new `List`, which the caller frees. `clear` takes every value out and keeps the memory.
+
+A `Set[String]` works the same way. The set keeps its own copy, so the `String` that was added is still the caller's to free:
+
+```iris run
+void main() {
+    Set[String] users
+    defer users.free()
+    for name in ["ana", "bo", "ana"] {
+        String s = name.copy()
+        print("{s} is new: {users.add(s)}")
+        s.free()
+    }
+    print("{users.len} users")
+}
+```
+
+```output
+ana is new: true
+bo is new: true
+ana is new: false
+2 users
+```
 
 ## Requests per client
 

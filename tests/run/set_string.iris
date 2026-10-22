@@ -1,0 +1,38 @@
+// expect: true false
+// expect: false
+// expect: 2
+// expect: true false 1
+// expect: 3 5
+
+void main() {
+    Set[String] seen
+    defer seen.free()
+    String a = format("alice")
+    seen.add(a)
+    a.free()
+    String b = format("alice")
+    String c = format("bob")
+    print("{seen.has(b)} {seen.has(c)}")
+    print("{seen.add(b)}")
+    seen.add(c)
+    print("{seen.len}")
+    b.free()
+    c.free()
+    String key = format("bob")
+    print("{seen.remove(key)} {seen.remove(key)} {seen.len}")
+    key.free()
+
+    Map[String, i64] ages
+    String k = format("x")
+    ages.set(k, 3)
+    k.free()
+    String q = format("x")
+    v, _ := ages.get(q)
+    q.free()
+    i64 n = 0
+    for name in seen {
+        n += name.len
+    }
+    ages.free()
+    print("{v} {n}")
+}
