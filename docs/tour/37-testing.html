@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Testing - Iris</title>
-<meta name="description" content="Tests sit next to the code they test, in test blocks, and iris test runs them. This chapter covers writing tests, checking with expect, tests that use errors, and running them.">
+<meta name="description" content="Tests sit next to the code they test, in test blocks, and iris test runs them. This chapter covers writing tests, checking with expect, tests that use errors, running them, and measuring how fast code is with bench blocks.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.61.1</span>
+    <span class="ver">v0.62.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -47,7 +47,7 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-files.html"><span class="num">29</span>Files</a></li><li><a href="30-flags.html"><span class="num">30</span>Command-line flags</a></li><li><a href="31-time.html"><span class="num">31</span>Time</a></li><li><a href="32-logging.html"><span class="num">32</span>Input, output and logging</a></li><li><a href="33-http.html"><span class="num">33</span>HTTP</a></li><li><a href="34-sqlite.html"><span class="num">34</span>SQLite</a></li><li><a href="35-processes.html"><span class="num">35</span>Programs and the environment</a></li><li><a href="36-calling-c.html"><span class="num">36</span>Calling C</a></li><li><a href="37-testing.html" class="on"><span class="num">37</span>Testing</a></li><li><a href="38-tools.html"><span class="num">38</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Testing</h1>
-<p class="lede">Tests sit next to the code they test, in <code>test</code> blocks, and <code>iris test</code> runs them. This chapter covers writing tests, checking with <code>expect</code>, tests that use errors, and running them.</p>
+<p class="lede">Tests sit next to the code they test, in <code>test</code> blocks, and <code>iris test</code> runs them. This chapter covers writing tests, checking with <code>expect</code>, tests that use errors, running them, and measuring how fast code is with <code>bench</code> blocks.</p>
 <h2 id="test-blocks"><a href="#test-blocks">test blocks</a></h2>
 <p>A <code>test</code> block has a name in quotes and a body, and can go in any file of a module, at the top level:</p>
 <pre class="code"><code><span class="c">// A 16-bit number in network byte order.</span>
@@ -111,14 +111,50 @@ FAIL a bad port
     <span class="k">scoped</span> http.<span class="t">Reply</span> r = <span class="k">try</span> http.<span class="f">get</span>(url)
     <span class="f">expect</span>(r.status == <span class="n">200</span>, <span class="s">&quot;status </span><span class="e">{</span>r.status<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
+<h2 id="benchmarks"><a href="#benchmarks">Benchmarks</a></h2>
+<p>A <code>bench</code> block measures how long its code takes. <code>iris bench</code> runs its body again and again, more times each round, until a round takes a second, and prints how many runs that was and the time of one:</p>
+<pre class="code"><code><span class="t">i64</span> <span class="f">checksum</span>(<span class="t">str</span> data) {
+    <span class="t">u32</span> sum = <span class="n">0</span>
+    <span class="k">for</span> b <span class="k">in</span> data {
+        sum = sum * <span class="n">31</span> + <span class="t">u32</span>(b)
+    }
+    <span class="k">return</span> <span class="t">i64</span>(sum)
+}
+
+<span class="k">bench</span> <span class="s">&quot;checksum of a 1500-byte packet&quot;</span> {
+    <span class="t">u8</span>[<span class="n">1500</span>] packet
+    _ = <span class="f">checksum</span>(packet)
+}</code></pre>
+<pre class="code"><code>iris bench main.iris</code></pre>
+<pre class="out"><code>checksum of a 1500-byte packet        1000000 runs       1.01us/run</code></pre>
+<p>The compiler leaves out work whose result isn't used. In a <code>bench</code> block, <code>_ = value</code> keeps the value, so the work that made it is measured.</p>
+<p>When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. Only the whole block is timed, so setting up should cost little next to the loop:</p>
+<pre class="code"><code><span class="k">bench</span> <span class="s">&quot;sort 10000 ports&quot;</span> (n) {
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">i64</span>] ports
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">10000</span> {
+        ports.<span class="f">push</span>((i * <span class="n">7919</span>) % <span class="n">65536</span>)
+    }
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">i64</span>] work
+    <span class="k">for</span> k <span class="k">in</span> <span class="n">0</span>..n {
+        work.<span class="f">clear</span>()
+        <span class="k">for</span> p <span class="k">in</span> ports {
+            work.<span class="f">push</span>(p)
+        }
+        work.<span class="f">sort</span>(less)
+        _ = work.<span class="f">at</span>(<span class="n">0</span>)
+    }
+}
+
+<span class="t">bool</span> <span class="f">less</span>(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a &lt; b</code></pre>
+<p><code>iris bench</code> builds with <code>--mode=release-fast</code> unless another mode is given, and runs only the bench blocks, not <code>main</code> or the tests. A name after the file runs only the benches whose name has it in. <code>--time=200ms</code> sets how long the last round of each bench takes. A <code>bench</code> block that fails with an error stops with the error and its trace, and <code>iris bench</code> then ends with status 1.</p>
     <nav class="pager"><a class="prev" href="36-calling-c.html"><span>Previous</span>Calling C</a><a class="next" href="38-tools.html"><span>Next</span>Tools</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#test-blocks">test blocks</a></li><li><a href="#expect">expect</a></li><li><a href="#errors-in-tests">Errors in tests</a></li><li><a href="#iris-test">iris test</a></li><li><a href="#tests-that-need-more">Tests that need more</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#test-blocks">test blocks</a></li><li><a href="#expect">expect</a></li><li><a href="#errors-in-tests">Errors in tests</a></li><li><a href="#iris-test">iris test</a></li><li><a href="#tests-that-need-more">Tests that need more</a></li><li><a href="#benchmarks">Benchmarks</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.61.1</span>
+    <span>Iris v0.62.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

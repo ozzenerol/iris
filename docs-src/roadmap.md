@@ -70,3 +70,4 @@ Each step is a release. A release is made when everything in it works and the te
 | 0.60.1 | A function that returns nothing can have a condition after its `=>` body: `void Dns.free() => self.cfg.free() if self.cfg is not null`. | released |
 | 0.61 | `Set[String]` and `Map[String, V]` work. The set or map keeps its own copy of each `String`. | released |
 | 0.61.1 | Several UDP sockets can listen on one port, such as one per thread, and the kernel gives each datagram to one of them. | released |
+| 0.62 | `iris bench` and `bench` blocks. Batched UDP with `readMany` and `sendMany`, files mapped into memory with `fs.mapFile`, AES-GCM in `crypto`, `time.since`, and the new modules `pool`, `uuid`, `jwt` and `smtp`. | released |

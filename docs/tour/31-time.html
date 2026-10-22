@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.61.1</span>
+    <span class="ver">v0.62.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -200,6 +200,7 @@ TimeError.invalid: &#x27;2026-10-1x&#x27; has &#x27;x&#x27; where a digit should
 <pre class="out"><code>took at least 20ms: true
 took under a second: true</code></pre>
 <p><code>{took}</code> writes the <code>Duration</code> in its units, like <code>20.1ms</code>. As in <a href="03-integers.html#units">Integers</a>, dividing by a unit gives a plain number, so <code>took / 1ms</code> is the milliseconds, and <code>i64(took)</code> the nanoseconds.</p>
+<p><code>time.since(start)</code> is the same as <code>time.clock() - start</code>.</p>
 <h2 id="waiting"><a href="#waiting">Waiting</a></h2>
 <p><code>sleep(d)</code> waits for a <code>Duration</code>, and while one task sleeps the others run. In a <code>select</code>, an <code>after(d)</code> arm gives up waiting on channels after that time. Both are built in, without an import; <a href="24-tasks-and-channels.html#select">Tasks and channels</a> shows them with tasks.</p>
 <p>To do something at a steady rate, like a health check every few seconds, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait:</p>
@@ -227,7 +228,7 @@ three checks in at least 30ms: true</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.61.1</span>
+    <span>Iris v0.62.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

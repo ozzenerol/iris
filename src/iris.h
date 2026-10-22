@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IRIS_VERSION "0.61.1"
+#define IRIS_VERSION "0.62.0"
 
 /* ---------------------------------------------------------------- arena.c */
 
@@ -140,6 +140,7 @@ enum {
     F_PUB = 1 << 0,
     F_SCOPED = 1 << 1,
     F_THREADLOCAL = 1 << 2,
+    F_BENCH = 1 << 3,       /* a bench block, and the function it became */
     F_PACKED = 1 << 4,
     F_FLAGS = 1 << 5,
     F_C_IMPORT = 1 << 6,
@@ -275,6 +276,7 @@ typedef struct {
     const char *csources[64];   /* .c files in the program's folders, compiled with it */
     int ncsources;
     NodeList tests;         /* iris test: the functions the test blocks became */
+    NodeList benches;       /* iris bench: the functions the bench blocks became */
     Module *core;           /* std/core: its names are seen by every module */
     Module *text;           /* std/str: its functions are also methods of str and String */
     bool textImplicit;      /* ... loaded only for that: only what is called is compiled */
@@ -282,6 +284,8 @@ typedef struct {
 
 /* iris test: test blocks are compiled, and main runs them */
 extern bool gTesting;
+/* iris bench: main runs the bench blocks instead */
+extern bool gBenching;
 
 /* comptime.c: 0 no comptime, 1 checking the helper, 2 the program with the values */
 typedef struct {
