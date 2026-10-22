@@ -1,6 +1,6 @@
 // Hashes, signatures and encryption: SHA-256, SHA-512, HMAC, HKDF, PBKDF2,
-// Ed25519 signatures, X25519 key exchange and ChaCha20-Poly1305, and SHA-1
-// and MD5 for older protocols.
+// Ed25519 signatures, X25519 key exchange, ChaCha20-Poly1305 and AES-GCM,
+// and SHA-1 and MD5 for older protocols.
 
 // What can go wrong: a peer's key that isn't one, or sealed data that was
 // changed or sealed with another key.
@@ -182,6 +182,42 @@ pub String seal(str key, str nonce, str data, str extra = "") {
     String out
     rawSeal(key.ptr, nonce.ptr, data.ptr, data.len, extra.ptr, extra.len, &out)
     return out
+}
+
+@extern("iris_aes_seal")
+void rawAesSeal(u8 *key, i64 keyLen, u8 *nonce, u8 *data, i64 len, u8 *extra, i64 extraLen, String *out)
+
+@extern("iris_aes_open")
+i32 rawAesOpen(u8 *key, i64 keyLen, u8 *nonce, u8 *data, i64 len, u8 *extra, i64 extraLen, String *out)
+
+// Encrypts data with AES-GCM: a 16, 24 or 32-byte key (AES-128, AES-192 or
+// AES-256) and a 12-byte nonce. It works as seal does and gives
+// data.len + 16 bytes. On CPUs with AES instructions (x86_64 and most
+// ARM64 ones) it is the fastest choice. A nonce must never be used twice
+// with one key.
+pub String aesSeal(str key, str nonce, str data, str extra = "") {
+    aesCheck("aesSeal", key, nonce)
+    String out
+    rawAesSeal(key.ptr, key.len, nonce.ptr, data.ptr, data.len, extra.ptr, extra.len, &out)
+    return out
+}
+
+// The data that aesSeal hid, with the same key, nonce and extra.
+// CryptoError.tampered when anything was changed, or the key, nonce or
+// extra differ.
+pub !String aesUnseal(str key, str nonce, str sealed, str extra = "") {
+    aesCheck("aesUnseal", key, nonce)
+    String out
+    if rawAesOpen(key.ptr, key.len, nonce.ptr, sealed.ptr, sealed.len, extra.ptr, extra.len, &out) == 0 {
+        return error(CryptoError.tampered, "the sealed data was changed, or the key doesn't fit")
+    }
+    return out
+}
+
+void aesCheck(str name, str key, str nonce) {
+    if (key.len != 16 && key.len != 24 && key.len != 32) || nonce.len != 12 {
+        panic("{name} takes a 16, 24 or 32-byte key and a 12-byte nonce, not {key.len} and {nonce.len}")
+    }
 }
 
 // The data that seal hid, with the same key, nonce and extra.

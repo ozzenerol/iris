@@ -447,7 +447,7 @@ static const char *floatConst(IR *ir, double v, Type *t) {
 
 static const char *fnName(IR *ir) {
     if (ir->func && (ir->func->flags & F_TESTFN)) {
-        return cString(ir, fmt(ir, "test \"%s\"", ir->func->text));
+        return cString(ir, fmt(ir, (ir->func->flags & F_BENCH) ? "bench \"%s\"" : "test \"%s\"", ir->func->text));
     }
     return cString(ir, ir->func ? ir->func->name : "?");
 }
@@ -2802,7 +2802,14 @@ static void emitAssign(IR *ir, Node *s) {
     }
     Node *target = s->list.items[0];
     if (target->kind == N_IDENT && strcmp(target->name, "_") == 0) {
-        emitExpr(ir, s->b);
+        Val v = emitExpr(ir, s->b);
+        if (ir->func && (ir->func->flags & F_BENCH) && v.t && v.t->kind != TY_VOID) {
+            /* in a bench block, _ = value keeps the value: the optimizer
+             * can't drop the work that made it */
+            const char *slot = allocaFor(ir, v.t, "keep");
+            ins(ir, "store %s %s, ptr %s", llType(ir, v.t), v.s, slot);
+            ins(ir, "call void asm sideeffect \"\", \"r,~{memory}\"(ptr %s)", slot);
+        }
         return;
     }
     Type *t = target->type;
@@ -3188,6 +3195,9 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     sbPuts(out, ")");
     if (f->flags & F_INLINE) {
         sbPuts(out, " alwaysinline");
+    }
+    if ((f->flags & F_BENCH) && f->ival == 1) {
+        sbPuts(out, " noinline");
     }
     if (ir->mode == MODE_DEBUG && !(f->flags & F_UNCHECKED)) {
         sbPuts(out, " #0");
@@ -3605,6 +3615,11 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
         Node *t = prog->tests.items[i];
         testNames[i] = stringConst(&ir, t->text, strlen(t->text));
     }
+    const char **benchNames = arenaAlloc(a, sizeof(char *) * (size_t)(prog->benches.len + 1));
+    for (int i = 0; gBenching && i < prog->benches.len; i++) {
+        Node *t = prog->benches.items[i];
+        benchNames[i] = stringConst(&ir, t->text, strlen(t->text));
+    }
     sbPuts(&out, types.buf);
     if (ir.head.buf) {
         sbPuts(&out, ir.head.buf);
@@ -3615,7 +3630,18 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     }
     sbPrintf(&out, "define i32 @main(i32 %%argc, ptr %%argv)%s {\n", mode == MODE_DEBUG ? " #0" : "");
     sbPuts(&out, "  call void @iris_init(i32 %argc, ptr %argv)\n");
-    if (gTesting) {
+    if (gBenching) {
+        /* iris bench: each bench that the filter lets through */
+        for (int i = 0; i < prog->benches.len; i++) {
+            Node *t = prog->benches.items[i];
+            const char *name = benchNames[i];
+            sbPrintf(&out, "  %%go%d = call i1 @iris_bench_start(ptr %s)\n  br i1 %%go%d, label %%run%d, label %%next%d\n"
+                           "run%d:\n  call void @iris_bench_run(ptr %s, ptr %s)\n"
+                           "  br label %%next%d\nnext%d:\n",
+                     i, name, i, i, i, i, name, t->ir, i, i);
+        }
+        sbPuts(&out, "  %rc = call i32 @iris_bench_summary()\n  ret i32 %rc\n}\n\n");
+    } else if (gTesting) {
         /* iris test: each test that the filter lets through, then the summary */
         for (int i = 0; i < prog->tests.len; i++) {
             Node *t = prog->tests.items[i];
@@ -3696,6 +3722,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i1 @iris_test_start(ptr)\n"
            "declare void @iris_test_done(ptr, i64)\n"
            "declare i32 @iris_test_summary()\n"
+           "declare i1 @iris_bench_start(ptr)\n"
+           "declare void @iris_bench_run(ptr, ptr)\n"
+           "declare i32 @iris_bench_summary()\n"
            "declare void @iris_mutex_lock(ptr)\n"
            "declare zeroext i1 @iris_mutex_try_lock(ptr)\n"
            "declare void @iris_mutex_unlock(ptr, ptr, i32, i32, ptr)\n"

@@ -156,6 +156,9 @@ static bool spaceBetween(const Token *toks, int prev, int i, bool inBrackets) {
     if (pk == P_COMMA) {
         return true;
     }
+    if (k == P_LPAREN && pk == T_STRING) {
+        return true;                            /* bench "name" (n) */
+    }
     if (k == P_LPAREN && (pk == T_IDENT || pk == P_RPAREN || pk == P_RBRACK || pk == K_CHAN)) {
         return false;                           /* a call */
     }

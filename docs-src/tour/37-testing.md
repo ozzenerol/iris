@@ -1,6 +1,6 @@
 # Testing
 
-Tests sit next to the code they test, in `test` blocks, and `iris test` runs them. This chapter covers writing tests, checking with `expect`, tests that use errors, and running them.
+Tests sit next to the code they test, in `test` blocks, and `iris test` runs them. This chapter covers writing tests, checking with `expect`, tests that use errors, running them, and measuring how fast code is with `bench` blocks.
 
 ## test blocks
 
@@ -100,3 +100,56 @@ test "the server answers" {
     expect(r.status == 200, "status {r.status}")
 }
 ```
+
+## Benchmarks
+
+A `bench` block measures how long its code takes. `iris bench` runs its body again and again, more times each round, until a round takes a second, and prints how many runs that was and the time of one:
+
+```iris
+i64 checksum(str data) {
+    u32 sum = 0
+    for b in data {
+        sum = sum * 31 + u32(b)
+    }
+    return i64(sum)
+}
+
+bench "checksum of a 1500-byte packet" {
+    u8[1500] packet
+    _ = checksum(packet)
+}
+```
+
+```shell
+iris bench main.iris
+```
+
+```output
+checksum of a 1500-byte packet        1000000 runs       1.01us/run
+```
+
+The compiler leaves out work whose result isn't used. In a `bench` block, `_ = value` keeps the value, so the work that made it is measured.
+
+When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. Only the whole block is timed, so setting up should cost little next to the loop:
+
+```iris
+bench "sort 10000 ports" (n) {
+    scoped List[i64] ports
+    for i in 0..10000 {
+        ports.push((i * 7919) % 65536)
+    }
+    scoped List[i64] work
+    for k in 0..n {
+        work.clear()
+        for p in ports {
+            work.push(p)
+        }
+        work.sort(less)
+        _ = work.at(0)
+    }
+}
+
+bool less(i64 a, i64 b) => a < b
+```
+
+`iris bench` builds with `--mode=release-fast` unless another mode is given, and runs only the bench blocks, not `main` or the tests. A name after the file runs only the benches whose name has it in. `--time=200ms` sets how long the last round of each bench takes. A `bench` block that fails with an error stops with the error and its trace, and `iris bench` then ends with status 1.

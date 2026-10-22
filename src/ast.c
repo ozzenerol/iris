@@ -268,8 +268,11 @@ static void printNode(Node *n, int depth, const char *label) {
         child(n->b, d, "value");
         break;
     case N_TEST:
-        sbPuts(&b, "test ");
+        sbPuts(&b, n->flags & F_BENCH ? "bench " : "test ");
         putQuoted(&b, n->text, strlen(n->text));
+        if (n->name) {
+            sbPrintf(&b, " (%s)", n->name);
+        }
         line(depth, label, b.buf);
         child(n->c, d, "body");
         break;

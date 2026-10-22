@@ -72,6 +72,34 @@ import crypto, random
 CryptoError.tampered
 ```
 
+## AES-GCM
+
+`aesSeal` and `aesUnseal` work as `seal` and `unseal` do, with AES-GCM and a 16, 24 or 32-byte key. Where the CPU has AES instructions, as x86_64 and most ARM64 CPUs do, they do the work, and AES-GCM is the fastest choice. Elsewhere it runs in plain code that takes the same time for any key, which is much slower, so `seal` is the better choice there. Many protocols and file formats use AES-GCM, which is the other reason to have it:
+
+```iris run
+import crypto, hex, random
+
+!void main() {
+    u8[32] key
+    random.bytes(key)
+    nonce := "nonce 000001"
+    scoped String sealed = crypto.aesSeal(key, nonce, "card 4242", extra: "order 17")
+    print("{sealed.len} bytes")
+    scoped String back = try crypto.aesUnseal(key, nonce, sealed, extra: "order 17")
+    print(back)
+    _ = crypto.aesUnseal(key, nonce, sealed, extra: "order 18") catch e {
+        print("{e.code}")
+        format("")
+    }
+}
+```
+
+```output
+25 bytes
+card 4242
+CryptoError.tampered
+```
+
 ## Agreeing on a key
 
 X25519 lets two sides agree on a secret over a network anyone can read. Each makes a 32-byte secret with `random.bytes` and sends the other `x25519Public` of it. `x25519` with its own secret and the other side's public key gives both the same 32 bytes. `hkdfSha256` turns them into keys for `seal`:

@@ -1,0 +1,69 @@
+// expect: read 5
+// expect: a:1
+// expect: b:1
+// expect: c:1
+// expect: d:1
+// expect: eeeee:5
+// expect: echoed 5
+// expect: a
+// expect: b
+// expect: c
+// expect: d
+// expect: eeeee
+// expect: cut to 4: eeee
+// expect: NetError.timeout
+
+import net
+
+!void main() {
+    server := try net.listenUdp(0, "127.0.0.1")
+    defer server.close()
+    to := try net.parseAddr("127.0.0.1", server.localAddr().port)
+    client := try net.dialUdp(to)
+    defer client.close()
+
+    u8[512] space
+    net.Datagram[8] msgs
+    for i in 0..8 {
+        msgs[i].buf = space[i * 64:(i + 1) * 64]
+    }
+    words := ["a", "b", "c", "d", "eeeee"]
+    net.Datagram[5] out
+    u8[40] outSpace
+    for i in 0..5 {
+        out[i].buf = outSpace[i * 8:(i + 1) * 8]
+        w := words[i]
+        for j in 0..w.len {
+            out[i].buf[j] = w[j]
+        }
+        out[i].len = w.len
+    }
+    try client.sendMany(out)
+    sleep(20ms)
+    n := try server.readMany(msgs)
+    print("read {n}")
+    for i in 0..n {
+        print("{msgs[i].data()}:{msgs[i].len}")
+    }
+
+    // send them all back to whoever sent each one
+    try server.sendMany(msgs[0:n])
+    print("echoed {n}")
+    sleep(20ms)
+    got := try client.readMany(msgs)
+    for i in 0..got {
+        print(msgs[i].data())
+    }
+
+    small := [net.Datagram{buf: space[0:4]}]
+    try client.sendMany(out[4:5])
+    sleep(20ms)
+    _ = try server.readMany(small)
+    print("cut to 4: {small[0].data()}")
+
+    server.setTimeout(30ms)
+    _ = server.readMany(msgs) catch e {
+        print("{e.code}")
+        0
+    }
+}

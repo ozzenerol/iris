@@ -1,0 +1,8 @@
+// error: 7: expect is for test blocks: test "name" { expect(...) }
+
+void main() {
+}
+
+bench "no expect here" {
+    expect(1 == 1)
+}

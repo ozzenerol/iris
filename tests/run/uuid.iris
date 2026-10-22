@@ -1,0 +1,47 @@
+// expect: 4 36 true
+// expect: 7 true true
+// expect: later sorts after: true
+// expect: 0190e5d4-8a2b-7c3d-9e4f-5a6b7c8d9e0f 7
+// expect: 2024-07-24
+// expect: same: true
+// expect: 00000000-0000-0000-0000-000000000000 true
+// expect: 'nope' isn't a UUID: it has 4 characters, not 36
+// expect: UuidError.invalid
+// expect: different: true
+
+import time, uuid
+
+!void main() {
+    a := uuid.v4()
+    scoped String at = a.format()
+    print("{a.version()} {at.len} {at[14] == '4'}")
+
+    b := uuid.v7()
+    sleep(2ms)
+    c := uuid.v7()
+    scoped String bt = b.format()
+    scoped String ct = c.format()
+    print("{b.version()} {bt[19] == '8' || bt[19] == '9' || bt[19] == 'a' || bt[19] == 'b'} {time.now().sub(b.time()) < 1s}")
+    print("later sorts after: {b.compare(c) < 0 && bt.compare(ct) < 0}")
+
+    p := try uuid.parse("0190E5D4-8A2B-7C3D-9E4F-5A6B7C8D9E0F")
+    scoped String pt = p.format()
+    print("{pt} {p.version()}")
+    scoped String day = p.time().dateText()
+    print(day)
+    q := try uuid.parse("0190e5d48a2b7c3d9e4f5a6b7c8d9e0f")
+    print("same: {p.equal(q)}")
+
+    scoped String nt = uuid.nil().format()
+    print("{nt} {uuid.nil().isNil()}")
+
+    _ = uuid.parse("nope") catch e {
+        print(e.message)
+        uuid.nil()
+    }
+    _ = uuid.parse("0190e5d4-8a2b-7c3d-9e4f-5a6b7c8d9e0g") catch e {
+        print("{e.code}")
+        uuid.nil()
+    }
+    print("different: {!uuid.v4().equal(uuid.v4())}")
+}

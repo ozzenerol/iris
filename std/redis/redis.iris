@@ -9,7 +9,7 @@
 //
 // do sends any command: try db.do(["ZADD", "scores", "10", "ada"]).
 
-import net, str, time, url
+import net, pool, str, time, url
 
 // What Redis calls fail with: connect, server (an error reply, with the
 // server's message), closed, protocol (the server sent something that isn't
@@ -48,6 +48,12 @@ struct Conn {
     net.Conn conn
     bool broken
 }
+
+// Closes the connection.
+pub void Conn.close() => self.conn.close()
+
+// Whether the connection can be used again: false after a network error.
+pub bool Conn.reusable() => !self.broken
 
 !Reply Conn.read() {
     scoped String line = self.conn.readLine(64MiB) catch e {
@@ -243,17 +249,9 @@ void Settings.free() {
 
 // ------------------------------------------------------------ the client
 
-struct State {
-    Settings settings
-    i64 max
-    Mutex lock
-    List[Conn] idle
-    i64 open
-}
-
 // Connections to a server, shared by tasks and threads.
 pub struct Client {
-    State *s
+    pool.Pool[Conn, Settings] p
 }
 
 // A client for the server at address, with at most max connections open.
@@ -264,55 +262,22 @@ pub !Client connect(str address, i64 max = 10) {
         settings.free()
         return e
     }
-    State[] mem = alloc(State, 1)
-    s := &mem[0]
-    s.settings = settings
-    s.max = if max > 0 { max } else { 10 }
-    s.idle.push(first)
-    s.open = 1
-    return Client{s: s}
+    p := pool.make(settings, open, max: max)
+    p.add(first)
+    return Client{p: p}
 }
 
 !Conn Client.take() {
-    start := time.clock()
-    for {
-        self.s.lock.lock()
-        if self.s.idle.len > 0 {
-            c := self.s.idle.pop()
-            self.s.lock.unlock()
-            return c
-        }
-        if self.s.open < self.s.max {
-            self.s.open += 1
-            self.s.lock.unlock()
-            c := open(&self.s.settings) catch e {
-                self.s.lock.lock()
-                self.s.open -= 1
-                self.s.lock.unlock()
-                return e
-            }
-            return c
-        }
-        self.s.lock.unlock()
-        if time.clock() - start > 30s {
+    c := self.p.take() catch e {
+        if e.code == pool.PoolError.timeout {
             return error(RedisError.connect, "no connection came free in 30s")
         }
-        sleep(1ms)
+        return e
     }
+    return c
 }
 
-void Client.give(Conn c) {
-    if c.broken {
-        c.conn.close()
-        self.s.lock.lock()
-        self.s.open -= 1
-        self.s.lock.unlock()
-        return
-    }
-    self.s.lock.lock()
-    self.s.idle.push(c)
-    self.s.lock.unlock()
-}
+void Client.give(Conn c) => self.p.give(c)
 
 // Sends any command: db.do(["HSET", "user:1", "name", "Ada"]). An error
 // reply fails with RedisError.server and the server's message.
@@ -461,15 +426,8 @@ List[String] texts(Reply r) {
 
 // Closes the connections. Calls that are running keep theirs until they end.
 pub void Client.close() {
-    self.s.lock.lock()
-    for c in self.s.idle {
-        c.conn.close()
-    }
-    self.s.idle.free()
-    self.s.lock.unlock()
-    self.s.settings.free()
-    free(self.s[0:1])
-    self.s = null
+    self.p.close()
+    self.p.config().free()
 }
 
 // ------------------------------------------------------------ pipelines

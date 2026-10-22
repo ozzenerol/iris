@@ -9,6 +9,12 @@ i32 rawUdpSend(i32 fd, i32 family, u8 *buf, i64 len, u8 *ip, i64 port, i64 timeo
 @extern("iris_udp_recv")
 i64 rawUdpRecv(i32 fd, u8 *buf, i64 len, u8 *ip, i64 *port, i64 timeout)
 
+@extern("iris_udp_recv_many")
+i64 rawUdpRecvMany(i32 fd, Datagram *d, i64 n, i64 timeout)
+
+@extern("iris_udp_send_many")
+i32 rawUdpSendMany(i32 fd, i32 family, i32 connected, Datagram *d, i64 n, i64 timeout)
+
 @extern("iris_sock_local")
 void rawLocal(i32 fd, u8 *ip, i64 *port)
 
@@ -217,6 +223,44 @@ pub !(i64, Addr) Udp.readFrom(u8[] buf) {
 pub !i64 Udp.read(u8[] buf) {
     n, _ := try self.readFrom(buf)
     return n
+}
+
+// One datagram of a batch for readMany and sendMany: buf is the space
+// for it, len how many bytes of buf it uses, and addr where it came from
+// or goes to.
+pub struct Datagram {
+    pub u8[] buf
+    pub i64 len
+    pub Addr addr
+}
+
+// The bytes of the datagram: buf cut to len.
+pub str Datagram.data() => self.buf[0:self.len]
+
+// Waits for a datagram, then reads as many as are already waiting, up to
+// msgs.len, with one system call on Linux. Each one goes into the buf of
+// the next item of msgs, which gets its len and addr. Gives how many it
+// read. A datagram longer than its buf is cut to fit.
+pub !i64 Udp.readMany(Datagram[] msgs) {
+    n := rawUdpRecvMany(self.sock, msgs.ptr, msgs.len, self.timeout)
+    if n < 0 {
+        try udpFail(i32(-n), "reading datagrams")
+    }
+    return n
+}
+
+// Sends each item of msgs, the first len bytes of its buf, to its addr,
+// with one system call per 64 on Linux. On a dialUdp socket each goes to
+// where the socket is connected and addr is not used.
+pub !void Udp.sendMany(Datagram[] msgs) {
+    i32 connected = 0
+    if self.connected {
+        connected = 1
+    }
+    code := rawUdpSendMany(self.sock, self.family, connected, msgs.ptr, msgs.len, self.timeout)
+    if code != 0 {
+        try udpFail(code, "sending datagrams")
+    }
 }
 
 // The address the socket is bound to: its port for listenUdp(0).

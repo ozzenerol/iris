@@ -1,0 +1,149 @@
+// JSON Web Tokens (RFC 7519), signed with HS256 (HMAC-SHA256 and a shared
+// key) or EdDSA (Ed25519 and a key pair). The claims are a @json struct:
+//
+//     @json
+//     struct Claims {
+//         String sub
+//         i64 exp
+//     }
+//
+//     token := jwt.sign(Claims{sub: "ada".copy(), exp: time.now().add(1h).unix()}, key)
+//     scoped Claims c = try jwt.verify[Claims](token, key)
+//
+// verify checks the algorithm, the signature, and the exp and nbf claims
+// when the token has them, before it reads the claims.
+
+import base64, crypto, json, str, time
+
+// What verify fails with: invalid (not a token, or claims that don't
+// decode), algorithm (signed with another algorithm than the one asked
+// for), signature (the signature doesn't match: the token was changed or
+// signed with another key), expired (past its exp), early (before its nbf).
+pub enum JwtError { invalid, algorithm, signature, expired, early }
+
+@json
+struct Header {
+    String alg
+    String typ
+}
+
+@json
+struct Times {
+    i64 exp
+    i64 nbf
+}
+
+// A token with claims, signed with HS256 and key. A key should be at
+// least 32 random bytes.
+pub String sign[T](T claims, str key) {
+    scoped String body = json.encode(claims)
+    String out = signedPart("HS256", body)
+    sig := crypto.hmacSha256(key, out)
+    scoped String s = base64.encodeUrl(sig)
+    out.append(".")
+    out.append(s)
+    return out
+}
+
+// The claims of an HS256 token signed with key. leeway is how far past
+// its exp or before its nbf the token is still taken, for clocks that
+// differ a little.
+pub !T verify[T](str token, str key, Duration leeway = 0s) {
+    head, payload, signed, sig := try split(token)
+    scoped String alg = try algorithm(head)
+    if alg != "HS256" {
+        return error(JwtError.algorithm, "the token is signed with {alg}, not HS256")
+    }
+    want := crypto.hmacSha256(key, signed)
+    if !crypto.equal(want, sig) {
+        return error(JwtError.signature, "the token's signature doesn't match")
+    }
+    return try claimsOf[T](payload, leeway)
+}
+
+// A token with claims, signed with EdDSA (Ed25519) and the 32-byte private
+// seed. Anyone with crypto.ed25519Public(seed) can verify it, without
+// being able to sign.
+pub String signEd25519[T](T claims, str seed) {
+    scoped String body = json.encode(claims)
+    String out = signedPart("EdDSA", body)
+    sig := crypto.ed25519Sign(seed, out)
+    scoped String s = base64.encodeUrl(sig)
+    out.append(".")
+    out.append(s)
+    return out
+}
+
+// The claims of an EdDSA token, checked with the signer's 32-byte public
+// key.
+pub !T verifyEd25519[T](str token, str publicKey, Duration leeway = 0s) {
+    head, payload, signed, sig := try split(token)
+    scoped String alg = try algorithm(head)
+    if alg != "EdDSA" {
+        return error(JwtError.algorithm, "the token is signed with {alg}, not EdDSA")
+    }
+    if !crypto.ed25519Verify(publicKey, signed, sig) {
+        return error(JwtError.signature, "the token's signature doesn't match")
+    }
+    return try claimsOf[T](payload, leeway)
+}
+
+// header.payload, each as base64url, for the signature to cover.
+String signedPart(str alg, str body) {
+    scoped String head = format("{{\"alg\":\"{alg}\",\"typ\":\"JWT\"}}")
+    String out = base64.encodeUrl(head)
+    scoped String p = base64.encodeUrl(body)
+    out.append(".")
+    out.append(p)
+    return out
+}
+
+// The header and payload decoded, the part the signature covers, and the
+// signature, decoded; each a String the caller frees.
+!(String, String, str, String) split(str token) {
+    first := str.find(token, ".")
+    last := str.findLast(token, ".")
+    if first < 0 || last == first {
+        return error(JwtError.invalid, "a token has three parts with dots between them")
+    }
+    head := base64.decodeUrl(token[0:first]) catch e {
+        return error(JwtError.invalid, "the token's header isn't base64url")
+    }
+    payload := base64.decodeUrl(token[first + 1:last]) catch e {
+        head.free()
+        return error(JwtError.invalid, "the token's claims aren't base64url")
+    }
+    sig := base64.decodeUrl(token[last + 1:]) catch e {
+        head.free()
+        payload.free()
+        return error(JwtError.invalid, "the token's signature isn't base64url")
+    }
+    return (head, payload, token[0:last], sig)
+}
+
+!String algorithm(String head) {
+    defer head.free()
+    h := json.decode(Header, head) catch e {
+        return error(JwtError.invalid, "the token's header isn't JSON")
+    }
+    h.typ.free()
+    return h.alg
+}
+
+!T claimsOf[T](String payload, Duration leeway) {
+    defer payload.free()
+    t := json.decode(Times, payload) catch e {
+        return error(JwtError.invalid, "the token's claims don't decode: {e.message}")
+    }
+    now := time.now()
+    if t.exp != 0 && now.add(-leeway).unix() >= t.exp {
+        return error(JwtError.expired, "the token expired at {time.unix(t.exp).iso()}")
+    }
+    if t.nbf != 0 && now.add(leeway).unix() < t.nbf {
+        return error(JwtError.early, "the token can't be used before {time.unix(t.nbf).iso()}")
+    }
+    c := json.decode(T, payload) catch e {
+        return error(JwtError.invalid, "the token's claims don't decode: {e.message}")
+    }
+    return c
+}

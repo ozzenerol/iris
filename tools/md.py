@@ -122,6 +122,8 @@ def word_class(code, m):
     text = m.group()
     if text in KEYWORDS:
         return "k"
+    if text == "bench" and code[m.end():].startswith(' "') and (m.start() == 0 or code[m.start() - 1] == "\n"):
+        return "k"                              # bench "name" { }
     if text in TYPES:
         return "t"
     rest = code[m.end():m.end() + 1]

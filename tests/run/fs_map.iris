@@ -1,0 +1,54 @@
+// expect: 11 bytes: hello world
+// expect: private change stays: hello world
+// expect: shared: Hello world
+// expect: grown to 16: 16
+// expect: counter 3
+// expect: memory 1048576 0 7
+// expect: empty 0
+// expect: no.bin: no such file
+
+import fs
+
+!void main() {
+    dir := "/tmp/iris-map-test"
+    if fs.exists(dir) {
+        try fs.removeAll(dir)
+    }
+    try fs.mkdirAll(dir)
+    try fs.writeAll("/tmp/iris-map-test/a.txt", "hello world")
+
+    scoped m := try fs.mapFile("/tmp/iris-map-test/a.txt")
+    print("{m.bytes.len} bytes: {m.bytes}")
+    m.bytes[0] = 'H'
+    scoped String now = try fs.readAll("/tmp/iris-map-test/a.txt")
+    print("private change stays: {now}")
+
+    scoped w := try fs.mapFile("/tmp/iris-map-test/a.txt", write: true)
+    w.bytes[0] = 'H'
+    try w.sync()
+    scoped String after = try fs.readAll("/tmp/iris-map-test/a.txt")
+    print("shared: {after}")
+
+    // two mappings of one file share their memory
+    scoped a := try fs.mapFile("/tmp/iris-map-test/c.bin", write: true, size: 16)
+    scoped b := try fs.mapFile("/tmp/iris-map-test/c.bin", write: true)
+    print("grown to 16: {b.bytes.len}")
+    for i in 0..3 {
+        a.bytes[0] += 1
+    }
+    print("counter {b.bytes[0]}")
+
+    scoped mem := try fs.mapMemory(1 << 20)
+    mem.bytes[100] = 7
+    print("memory {mem.bytes.len} {mem.bytes[0]} {mem.bytes[100]}")
+
+    try fs.writeAll("/tmp/iris-map-test/e.txt", "")
+    scoped e := try fs.mapFile("/tmp/iris-map-test/e.txt")
+    print("empty {e.bytes.len}")
+
+    _ = fs.mapFile("no.bin") catch err {
+        print(err.message)
+        fs.Mapped{}
+    }
+    try fs.removeAll(dir)
+}

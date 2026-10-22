@@ -1,0 +1,7 @@
+// error: 6: expected the name of the count, as in bench "name" (n) { }, found '3'
+
+void main() {
+}
+
+bench "count" (3) {
+}

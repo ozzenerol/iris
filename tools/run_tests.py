@@ -11,7 +11,7 @@
                                // panic: MESSAGE   stderr has "panic: MESSAGE", exit 2
                                // stderr: TEXT     stderr has TEXT
                                // mode: MODE       build mode (default debug)
-                               // command: test    use iris test instead of iris run
+                               // command: test    use iris test (or bench) instead of iris run
                                // args: A B        arguments after the file
                                // env: NAME=VALUE  set for the run
                                // stdin: LINE      one per line of input
@@ -260,7 +260,11 @@ def run_tests(iris, only, failures, folder="run", env=None):
             continue
         code, out, err = run(iris, args, dict(envs), "".join(l + "\n" for l in stdin) if stdin else None)
         want_out = "".join(line + "\n" for line in expect)
-        if out != want_out:
+        if "…" in want_out:
+            bad = output_mismatch(want_out, out)
+            if bad:
+                problems.append(bad)
+        elif out != want_out:
             problems.append(diff(want_out, out).replace("tree", "output"))
         if code != want_exit:
             problems.append("exit status %d, want %d" % (code, want_exit))

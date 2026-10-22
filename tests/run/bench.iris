@@ -1,0 +1,57 @@
+// command: bench
+// env: IRIS_BENCH_TIME=20000000
+// exit: 1
+// expect: sum to 1000 … runs …/run
+// expect: sort 64 … runs …/run
+// expect: FAIL fails on the third run
+// expect: 3 benches, 1 failed
+// stderr: error: TimeError.invalid: the third run
+
+import time
+
+i64 sum(i64 n) {
+    i64 total = 0
+    for i in 0..n {
+        total += i
+    }
+    return total
+}
+
+i64 runs = 0
+
+void main() {
+    print("main doesn't run")
+}
+
+bench "sum to 1000" {
+    _ = sum(1000)
+}
+
+bench "sort 64" (n) {
+    i64[64] start
+    for i in 0..64 {
+        start[i] = 64 - i
+    }
+    for k in 0..n {
+        xs := start
+        for i in 1..64 {
+            j := i
+            for j > 0 && xs[j - 1] > xs[j] {
+                xs[j - 1], xs[j] = xs[j], xs[j - 1]
+                j -= 1
+            }
+        }
+        _ = xs[0]
+    }
+}
+
+bench "fails on the third run" {
+    runs += 1
+    if runs == 3 {
+        return error(time.TimeError.invalid, "the third run")
+    }
+}
+
+test "not run by iris bench" {
+    expect(sum(4) == 6)
+}

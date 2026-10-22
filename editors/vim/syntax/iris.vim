@@ -5,6 +5,8 @@ endif
 
 syn keyword irisKeyword if else for in match break continue return try catch defer errdefer scoped
 syn keyword irisKeyword spawn select thread when comptime import pub const test asm
+" bench is a keyword only at the start of a bench block: bench "name"
+syn match irisKeyword "^bench\ze\s\+\""
 syn keyword irisOperator not and or is
 syn keyword irisStructure struct union enum interface type dyn chan threadlocal
 syn keyword irisType void bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 str String Error Duration

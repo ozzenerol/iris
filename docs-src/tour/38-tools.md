@@ -10,6 +10,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris build main.iris` | compiles a program, or a project when given its folder; `-o name` names the output |
 | `iris check main.iris` | checks a program and its tests without compiling it |
 | `iris test [file] [name]` | runs the test blocks, or those whose name has `name` in it |
+| `iris bench [file] [name]` | runs the bench blocks, built with `release-fast` |
 | `iris fmt file-or-folder` | puts code in the standard layout |
 | `iris doc http` | shows the documentation of a module, a name, a file or a project |
 | `iris mod init [path]` | makes `iris.mod`, which turns the folder into a project |
@@ -21,7 +22,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris lex file.iris` | prints the tokens |
 | `iris version` | prints the version |
 
-`iris run`, `build`, `check`, `test` and `ir` take these options:
+`iris run`, `build`, `check`, `test`, `bench` and `ir` take these options:
 
 | Option | What it does |
 |---|---|
@@ -30,7 +31,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `-l name` | links a C library |
 | `-I folder` | a folder where `import c` looks for headers |
 
-For `run` and `test`, options go before the file. `build`, `check` and `ir` take them before or after it.
+`iris bench` also takes `--time=1s`, how long each bench's last round takes. For `run`, `test` and `bench`, options go before the file. `build`, `check` and `ir` take them before or after it.
 
 ## Build modes
 

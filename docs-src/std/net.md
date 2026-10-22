@@ -128,6 +128,47 @@ ping from 127.0.0.1: true
 
 Several sockets can listen on the same UDP port, such as one per thread. The kernel gives each datagram to one of them.
 
+## Many datagrams at once
+
+A busy UDP server spends much of its time in system calls, one per datagram. `readMany` waits for a datagram and then takes all that are waiting, up to the number of `Datagram`s it is given, with one system call on Linux. Each `Datagram` has the space for one datagram in `buf`; `readMany` sets its `len` and the `addr` it came from. `sendMany` sends a batch the same way, so a batch read can go back as it is:
+
+```iris run
+import net
+
+!void main() {
+    srv := try net.listenUdp(0, "127.0.0.1")
+    defer srv.close()
+    cl := try net.dialUdp(srv.localAddr())
+    defer cl.close()
+    for word in ["a", "bb", "ccc"] {
+        try cl.send(word)
+    }
+    sleep(20ms)
+
+    u8[4096] space
+    net.Datagram[4] batch
+    for i in 0..4 {
+        batch[i].buf = space[i * 1024:(i + 1) * 1024]
+    }
+    n := try srv.readMany(batch)
+    for d in batch[0:n] {
+        print("{d.data()} ({d.len} bytes)")
+    }
+    try srv.sendMany(batch[0:n])
+    sleep(20ms)
+    u8[64] buf
+    k := try cl.read(buf)
+    print("back: {buf[0:k]}")
+}
+```
+
+```output
+a (1 bytes)
+bb (2 bytes)
+ccc (3 bytes)
+back: a
+```
+
 ## Names
 
 `net.lookup` gives the addresses of a host name, with the system's resolver. `net.query` asks DNS for records of a kind, such as MX or TXT. A `Resolver` asks given servers instead of the system's. The [dns module](#dns) reads and writes the messages themselves, for a program that is a DNS server:

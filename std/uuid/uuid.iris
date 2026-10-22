@@ -1,0 +1,131 @@
+// UUIDs (RFC 9562): 128-bit ids written as 36 characters,
+// "0190e5d4-8a2b-7c3d-9e4f-5a6b7c8d9e0f". v4 is random. v7 starts with the
+// time in milliseconds, so an id made in a later millisecond sorts after
+// one made earlier, which keeps database indexes compact.
+
+import random, time
+
+// What parse fails with: invalid for text that isn't a UUID.
+pub enum UuidError { invalid }
+
+// A UUID: its 16 bytes.
+pub struct Uuid {
+    pub u8[16] bytes
+}
+
+// A random UUID, version 4: 122 random bits from the system's secure
+// source.
+pub Uuid v4() {
+    Uuid u
+    random.bytes(u.bytes)
+    u.bytes[6] = (u.bytes[6] & 0x0f) | 0x40
+    u.bytes[8] = (u.bytes[8] & 0x3f) | 0x80
+    return u
+}
+
+// A UUID of version 7: the Unix time in milliseconds, then 74 random bits.
+pub Uuid v7() {
+    Uuid u
+    random.bytes(u.bytes)
+    ms := time.now().unixMs()
+    for i in 0..6 {
+        u.bytes[i] = u8((ms >> (40 - 8 * i)) & 0xff)
+    }
+    u.bytes[6] = (u.bytes[6] & 0x0f) | 0x70
+    u.bytes[8] = (u.bytes[8] & 0x3f) | 0x80
+    return u
+}
+
+// The UUID with all bits zero.
+pub Uuid nil() => Uuid{}
+
+// The version: 4 or 7 for the ones made here, 0 for nil.
+pub i64 Uuid.version() => i64(self.bytes[6] >> 4)
+
+// The time a v7 UUID was made, to the millisecond.
+pub time.Time Uuid.time() {
+    i64 ms = 0
+    for i in 0..6 {
+        ms = (ms << 8) | i64(self.bytes[i])
+    }
+    return time.Time{ns: ms * 1000000}
+}
+
+// Whether u and other are the same UUID.
+pub bool Uuid.equal(Uuid other) {
+    for i in 0..16 {
+        if self.bytes[i] != other.bytes[i] {
+            return false
+        }
+    }
+    return true
+}
+
+// Less than 0 when u sorts before other, 0 when they are the same, more
+// than 0 when it sorts after: the order of their text. v7 UUIDs sort by
+// the time they were made.
+pub i64 Uuid.compare(Uuid other) {
+    for i in 0..16 {
+        if self.bytes[i] != other.bytes[i] {
+            return i64(self.bytes[i]) - i64(other.bytes[i])
+        }
+    }
+    return 0
+}
+
+// Whether the UUID is nil, all zeros.
+pub bool Uuid.isNil() => self.equal(Uuid{})
+
+// The UUID as 36 characters, in lower case.
+pub String Uuid.format() {
+    digits := "0123456789abcdef"
+    String out
+    for i in 0..16 {
+        if i == 4 || i == 6 || i == 8 || i == 10 {
+            out.append("-")
+        }
+        b := i64(self.bytes[i])
+        out.append(digits[b >> 4:(b >> 4) + 1])
+        out.append(digits[b & 15:(b & 15) + 1])
+    }
+    return out
+}
+
+// A UUID written as 36 characters with dashes, in upper or lower case,
+// or as 32 hex digits without them.
+pub !Uuid parse(str text) {
+    if text.len != 36 && text.len != 32 {
+        return error(UuidError.invalid, "'{text}' isn't a UUID: it has {text.len} characters, not 36")
+    }
+    Uuid u
+    i64 at = 0
+    for i in 0..16 {
+        if text.len == 36 && (i == 4 || i == 6 || i == 8 || i == 10) {
+            if text[at] != '-' {
+                return error(UuidError.invalid, "'{text}' isn't a UUID: a dash is missing")
+            }
+            at += 1
+        }
+        hi := hexValue(text[at])
+        lo := hexValue(text[at + 1])
+        if hi < 0 || lo < 0 {
+            return error(UuidError.invalid, "'{text}' isn't a UUID: it has a character that isn't a hex digit")
+        }
+        u.bytes[i] = u8(hi * 16 + lo)
+        at += 2
+    }
+    return u
+}
+
+i64 hexValue(u8 c) {
+    if c >= '0' && c <= '9' {
+        return i64(c - '0')
+    }
+    if c >= 'a' && c <= 'f' {
+        return i64(c - 'a') + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return i64(c - 'A') + 10
+    }
+    return -1
+}

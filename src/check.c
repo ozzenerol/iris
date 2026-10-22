@@ -55,7 +55,7 @@ static Type *builtinTypes[] = {&tyI8, &tyI16, &tyI32, &tyI64, &tyU8, &tyU16, &ty
                                &tyU64, &tyF32, &tyF64, &tyBool, &tyStr, &tyVoid, &tyString, &tyErrorValue,
                                &tyDuration, &tyMutex, &tyThread};
 
-bool gTesting, gWithTests;
+bool gTesting, gWithTests, gBenching;
 
 /* ---------------------------------------------------------------- target */
 
@@ -1778,7 +1778,13 @@ static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report) {
             break;
         }
         if (!m->type) {
+            /* the method's types are named in its own module */
+            Scope *inIface = c->scope;
+            if (m->scope) {
+                c->scope = m->scope;
+            }
             checkSignature(c, m, NULL);
+            c->scope = inIface;
         }
         bool same = m->list.len - 1 == want->list.len;
         int before = gErrors;
@@ -1802,13 +1808,19 @@ static bool conforms(Checker *c, Type *t, Node *iface, Node *at, bool report) {
     return ok;
 }
 
-/* Checks the T: Interface bounds of type parameters. */
-static bool checkBounds(Checker *c, NodeList *params, Type **args, Node *at) {
+/* Checks the T: Interface bounds of the type parameters of decl. A bound
+ * is named where decl is written, so it is looked up there. */
+static bool checkBounds(Checker *c, Node *decl, NodeList *params, Type **args, Node *at) {
     bool ok = true;
     for (int i = 0; i < params->len; i++) {
         Node *tp = params->items[i];
         if (!tp->a) continue;
+        Scope *saved = c->scope;
+        if (decl->scope) {
+            c->scope = decl->scope;
+        }
         Node *d = tp->a->kind == N_T_NAME ? lookup(c, tp->a->name) : NULL;
+        c->scope = saved;
         if (!d || d->kind != N_INTERFACE) {
             error(c, tp->a, "a type parameter's bound must be an interface");
             ok = false;
@@ -1837,7 +1849,7 @@ static Type *instantiateStruct(Checker *c, Node *decl, Type **args, int n, Node 
         error(c, at, "generic types are nested too deeply");
         return &tyError;
     }
-    if (!checkBounds(c, &decl->list2, args, at)) {
+    if (!checkBounds(c, decl, &decl->list2, args, at)) {
         return &tyError;
     }
     in = newInstance(c, decl, args, n);
@@ -1950,7 +1962,7 @@ static Node *instantiateMethod(Checker *c, Node *e, Node *m, Type *st) {
         error(c, e, "generic methods call each other with ever new types");
         return NULL;
     }
-    if (!checkBounds(c, &m->list2, args, e)) {
+    if (!checkBounds(c, m, &m->list2, args, e)) {
         return NULL;
     }
     in = newInstance(c, m, args, n);
@@ -1998,7 +2010,7 @@ static Node *instantiateFunc(Checker *c, Node *decl, Type **args, int n, Node *a
         error(c, at, "generic functions call each other with ever new types");
         return NULL;
     }
-    if (!checkBounds(c, &decl->list2, args, at)) {
+    if (!checkBounds(c, decl, &decl->list2, args, at)) {
         return NULL;
     }
     in = newInstance(c, decl, args, n);
@@ -2046,6 +2058,17 @@ static void infer(Node *tn, Type *actual, NodeList *params, Type **out) {
         return;
     case N_T_ARRAY:
         if (actual->kind == TY_ARRAY) infer(tn->a, actual->elem, params, out);
+        return;
+    case N_T_ERR:
+        if (tn->a && tn->a->kind == N_T_FUNC && actual->kind == TY_FUNC && actual->elem->kind == TY_RESULT) {
+            /* !T(C *): a function that returns !T */
+            infer(tn->a->a, actual->elem->elem, params, out);
+            for (int i = 0; i < tn->a->list.len && i < actual->nelems; i++) {
+                infer(tn->a->list.items[i], actual->elems[i], params, out);
+            }
+        } else if (actual->kind == TY_RESULT) {
+            infer(tn->a, actual->elem, params, out);
+        }
         return;
     case N_T_FUNC:
         if (actual->kind == TY_FUNC) {
@@ -4729,7 +4752,7 @@ static Type *checkCall(Checker *c, Node *e, Type *expected) {
         if (strcmp(name, "expect") == 0) {
             /* expect(cond) or expect(cond, "text"): in a test, a failure is reported and the test goes on */
             e->builtin = BI_EXPECT;
-            if (!c->func || !(c->func->flags & F_TESTFN)) {
+            if (!c->func || !(c->func->flags & F_TESTFN) || (c->func->flags & F_BENCH)) {
                 error(c, e, "expect is for test blocks: test \"name\" { expect(...) }");
             }
             if (e->list.len < 1 || e->list.len > 2 || e->list.items[0]->kind == N_NAMED_ARG) {
@@ -6365,19 +6388,69 @@ static void expandTests(Checker *c, Program *prog, Module *m, NodeList *list) {
         if (!gWithTests || m != prog->main) {
             continue;
         }
+        bool bench = (d->flags & F_BENCH) != 0;
         Node *f = like(c, N_FUNC, d);
         char name[32];
-        snprintf(name, sizeof name, "test.%d", prog->tests.len + 1);
+        snprintf(name, sizeof name, bench ? "bench.%d" : "test.%d",
+                 (bench ? prog->benches.len : prog->tests.len) + 1);
         f->name = arenaStrndup(c->arena, name, strlen(name));
         f->text = d->text;
-        f->flags = F_TESTFN;
+        f->flags = F_TESTFN | (bench ? F_BENCH : 0);
         Node *ret = like(c, N_T_ERR, d);
         ret->a = like(c, N_T_NAME, d);
         ret->a->name = "void";
         f->a = ret;
         f->c = d->c;
+        if (bench) {
+            /* !void bench.N(i64 n) */
+            Node *param = like(c, N_PARAM, d);
+            param->name = d->name ? d->name : "bench$n";
+            param->a = like(c, N_T_NAME, d);
+            param->a->name = "i64";
+            listPush(c->arena, &f->list, param);
+        }
+        if (bench && !d->name) {
+            /* bench "name" { body }: the body becomes a function of its own
+             * that is never inlined, so the optimizer can't move its work
+             * out of the loop, and bench.N calls it n times:
+             * for bench$i in 0..bench$n { try bench$N$run() } */
+            Node *run = like(c, N_FUNC, d);
+            snprintf(name, sizeof name, "bench$%d$run", prog->benches.len + 1);
+            run->name = arenaStrndup(c->arena, name, strlen(name));
+            run->text = d->text;
+            run->flags = F_TESTFN | F_BENCH;
+            run->ival = 1;          /* noinline */
+            run->a = ret;
+            run->c = d->c;
+            listPush(c->arena, &out, run);
+            Node *callee = like(c, N_IDENT, d);
+            callee->name = run->name;
+            Node *call = like(c, N_CALL, d);
+            call->a = callee;
+            Node *tr = like(c, N_TRY, d);
+            tr->a = call;
+            Node *stmt = like(c, N_EXPR_STMT, d);
+            stmt->a = tr;
+            Node *inner = like(c, N_BLOCK, d);
+            listPush(c->arena, &inner->list, stmt);
+            Node *loop = like(c, N_FOR, d);
+            loop->flags |= F_FOR_IN;
+            Node *iv = like(c, N_IDENT, d);
+            iv->name = "bench$i";
+            listPush(c->arena, &loop->list, iv);
+            Node *range = like(c, N_BINARY, d);
+            range->op = P_DOTDOT;
+            range->a = like(c, N_INT, d);
+            range->b = like(c, N_IDENT, d);
+            range->b->name = "bench$n";
+            loop->a = range;
+            loop->c = inner;
+            Node *body = like(c, N_BLOCK, d);
+            listPush(c->arena, &body->list, loop);
+            f->c = body;
+        }
         listPush(c->arena, &out, f);
-        listPush(c->arena, &prog->tests, f);
+        listPush(c->arena, bench ? &prog->benches : &prog->tests, f);
     }
     if (any) {
         *list = out;

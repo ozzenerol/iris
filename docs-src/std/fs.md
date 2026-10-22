@@ -58,6 +58,34 @@ import fs
 
 `create` opens a file for writing, emptying it first, and `openAppend` for writing at its end; `File.write` writes to it. `File.read` fills a buffer, for files that aren't text.
 
+## Mapping a file into memory
+
+`mapFile` gives a file's bytes as memory, without reading them first: the system reads each part when it is first used, so a large file costs nothing until it is looked at. `free` gives the memory back. Changes stay in the memory unless `write` is set; then they go to the file, and every program that maps the same file with `write` sees them, which is a way for two processes to share memory. With `write` and a `size`, the file grows to that size first:
+
+```iris run
+import fs
+
+!void main() {
+    try fs.writeAll("/tmp/iris-map.txt", "hello, world")
+    scoped m := try fs.mapFile("/tmp/iris-map.txt")
+    print("{m.bytes.len} bytes: {m.bytes[0:5]}")
+
+    scoped counters := try fs.mapFile("/tmp/iris-counters.bin", write: true, size: 64)
+    counters.bytes[0] += 1
+    try counters.sync()
+    print("runs: {counters.bytes[0]}")
+    try fs.remove("/tmp/iris-counters.bin")
+    try fs.remove("/tmp/iris-map.txt")
+}
+```
+
+```output
+12 bytes: hello
+runs: 1
+```
+
+`mapMemory` gives zeroed memory of any size straight from the system, for a large buffer that goes back to the system as soon as it is freed.
+
 ## Folders
 
 `mkdir` makes a folder, `mkdirAll` makes it with the folders above it, and `readDir` lists one. `removeAll` removes a folder with everything in it:

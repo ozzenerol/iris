@@ -24,6 +24,8 @@ static void usage(FILE *out) {
           "  build [options] <file>       compile a program (-o <name> for the output)\n"
           "  check <file>                 check a program without compiling it\n"
           "  test [options] [file] [name] run the test blocks (those whose name has <name>)\n"
+          "  bench [options] [file] [name] run the bench blocks, built with release-fast\n"
+          "                               (--time=<duration> per bench, default 1s)\n"
           "  ir [options] <file>          print the LLVM IR\n"
           "  fmt [--check] <file|folder>  put code in the standard layout (- for stdin)\n"
           "  mod init [path]              make iris.mod: this folder becomes a project\n"
@@ -342,8 +344,24 @@ static bool parseMode(const char *arg, BuildMode *mode) {
 }
 
 /* iris run, build, check and ir */
+/* "500ms", "2s": nanoseconds, or -1 */
+static long long parseBenchTime(const char *s) {
+    char *end;
+    double v = strtod(s, &end);
+    static const struct { const char *unit; double ns; } units[] = {
+        {"ns", 1}, {"us", 1e3}, {"ms", 1e6}, {"s", 1e9}, {"m", 60e9},
+    };
+    for (size_t k = 0; k < sizeof units / sizeof units[0]; k++) {
+        if (end != s && v > 0 && strcmp(end, units[k].unit) == 0) {
+            return (long long)(v * units[k].ns);
+        }
+    }
+    return -1;
+}
+
 static int cmdCompile(const char *cmd, int argc, char **argv) {
-    BuildMode mode = MODE_DEBUG;
+    bool bench = strcmp(cmd, "bench") == 0;
+    BuildMode mode = bench ? MODE_RELEASE_FAST : MODE_DEBUG;
     const char *out = NULL, *path = NULL;
     const char *includes[64], *links[64];
     int nincludes = 0, nlinks = 0;
@@ -370,10 +388,19 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             }
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && strcmp(cmd, "build") == 0) {
             out = argv[++i];
+        } else if (bench && strncmp(argv[i], "--time=", 7) == 0) {
+            long long ns = parseBenchTime(argv[i] + 7);
+            if (ns <= 0) {
+                fprintf(stderr, "iris: --time takes a duration, such as 500ms or 2s, not %s\n", argv[i] + 7);
+                return 2;
+            }
+            char v[32];
+            snprintf(v, sizeof v, "%lld", ns);
+            setenv("IRIS_BENCH_TIME", v, 1);
         } else if (argv[i][0] == '-' && argv[i][1]) {
             fprintf(stderr, "iris: unknown option %s\n", argv[i]);
             return 2;
-        } else if (strcmp(cmd, "run") == 0 || strcmp(cmd, "test") == 0) {
+        } else if (strcmp(cmd, "run") == 0 || strcmp(cmd, "test") == 0 || bench) {
             /* what follows is the program's arguments, or the test's name */
             path = argv[i++];
             break;
@@ -384,8 +411,9 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             return 2;
         }
     }
-    bool test = strcmp(cmd, "test") == 0;
+    bool test = strcmp(cmd, "test") == 0 || bench;
     gWithTests = test || strcmp(cmd, "check") == 0;
+    gBenching = bench;
     if (test) {
         gTesting = true;
         if (!path) {
@@ -761,7 +789,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(cmd, "run") == 0 || strcmp(cmd, "build") == 0 || strcmp(cmd, "check") == 0 ||
-        strcmp(cmd, "ir") == 0 || strcmp(cmd, "test") == 0) {
+        strcmp(cmd, "ir") == 0 || strcmp(cmd, "test") == 0 || strcmp(cmd, "bench") == 0) {
         return cmdCompile(cmd, argc, argv);
     }
     if (strcmp(cmd, "c") == 0 && argc >= 3) {

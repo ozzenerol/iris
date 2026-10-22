@@ -37,6 +37,9 @@ pub Time now() => Time{ns: rawNow()}
 // readings is the time between them.
 pub Duration clock() => rawClock()
 
+// How long it has been since start, a reading of clock().
+pub Duration since(Duration start) => rawClock() - start
+
 // The moment a number of seconds after 1970-01-01 00:00 UTC.
 pub Time unix(i64 seconds) => Time{ns: seconds * NS}
 

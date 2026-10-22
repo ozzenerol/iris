@@ -1,0 +1,176 @@
+// expect: S: EHLO localhost
+// expect: S: STARTTLS
+// expect: S: EHLO localhost
+// expect: S: AUTH PLAIN AGFkYQBzZWNyZXQ=
+// expect: S: MAIL FROM:<alerts@example.com>
+// expect: S: RCPT TO:<ops@example.com>
+// expect: S: RCPT TO:<lead@example.com>
+// expect: S: RCPT TO:<audit@example.com>
+// expect: S: DATA
+// expect: header From: Alerts <alerts@example.com>
+// expect: header To: ops@example.com
+// expect: header Cc: lead@example.com
+// expect: header Subject: =?UTF-8?B?ZGlzayA5MSUg4oCUIGRiMQ==?=
+// expect: no Bcc header: true
+// expect: multipart: true
+// expect: body has the text: true
+// expect: body has the html: true
+// expect: S: QUIT
+// expect: sent
+// expect: S: EHLO relay.example.com
+// expect: S: MAIL FROM:<a@example.com>
+// expect: S: RCPT TO:<nobody@example.com>
+// expect: S: RSET
+// expect: SmtpError.rejected: RCPT TO:<nobody@example.com>: the server said 550 no such user
+// expect: S: QUIT
+// expect: no tls: S: EHLO localhost
+// expect: no tls: S: QUIT
+// expect: SmtpError.auth: localhost doesn't offer TLS, so the password isn't sent
+// expect: bad subject: S: EHLO localhost
+// expect: bad subject: S: QUIT
+// expect: SmtpError.rejected: the mail's subject has a line break in it
+// expect: smtps: S: EHLO localhost
+// expect: smtps: S: MAIL FROM:<a@example.com>
+// expect: smtps: S: RCPT TO:<b@example.com>
+// expect: smtps: S: DATA
+// expect: smtps: S: QUIT
+// expect: SmtpError.connect: 'http://x' isn't an smtp:// or smtps:// address
+
+import base64, net, smtp, str
+
+struct Server {
+    bool tls      // offers STARTTLS
+    bool implicit // TLS from the start
+    str prefix
+}
+
+!String line(net.Conn c, str prefix) {
+    l := try c.readLine()
+    print("{prefix}S: {l}")
+    return l
+}
+
+void serve(net.Listener ln, net.TlsConfig *config, Server s) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    talk(c, config, s) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void talk(net.Conn c, net.TlsConfig *config, Server s) {
+    secure := s.implicit
+    if s.implicit {
+        try c.acceptTls(config)
+    }
+    try c.write("220 test ESMTP\r\n")
+    for {
+        scoped String l = try line(c, s.prefix)
+        if str.startsWith(l, "EHLO") {
+            if s.tls && !secure {
+                try c.write("250-test\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n")
+            } else {
+                try c.write("250-test\r\n250 AUTH PLAIN\r\n")
+            }
+        } else if l == "STARTTLS" {
+            try c.write("220 go ahead\r\n")
+            try c.acceptTls(config)
+            secure = true
+        } else if str.startsWith(l, "AUTH PLAIN") {
+            try c.write("235 ok\r\n")
+        } else if str.startsWith(l, "RCPT TO:<nobody") {
+            try c.write("550 no such user\r\n")
+        } else if l == "DATA" {
+            try c.write("354 go\r\n")
+            scoped String data = format("")
+            for {
+                scoped String d = try c.readLine()
+                if d == "." {
+                    break
+                }
+                data.append(d)
+                data.append("\n")
+            }
+            if s.prefix.len == 0 {
+                show(data)
+            }
+            try c.write("250 queued\r\n")
+        } else if l == "QUIT" {
+            try c.write("221 bye\r\n")
+            return
+        } else {
+            try c.write("250 ok\r\n")
+        }
+    }
+}
+
+void show(str data) {
+    for l in str.split(data, "\n") {
+        for h in ["From:", "To:", "Cc:", "Subject:"] {
+            if str.startsWith(l, h) {
+                print("header {l}")
+            }
+        }
+    }
+    print("no Bcc header: {!str.contains(data, "audit")}")
+    print("multipart: {str.contains(data, "multipart/alternative")}")
+    scoped String text = base64.encode("/var is at 91%.")
+    print("body has the text: {str.contains(data, text)}")
+    scoped String html = base64.encode("<p>/var is at <b>91%</b>.</p>")
+    print("body has the html: {str.contains(data, html)}")
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    ln := try net.listen(0, "localhost")
+    defer ln.close()
+
+    spawn serve(ln, &config, Server{tls: true})
+    scoped String url = format("smtp://ada:secret@localhost:{ln.port}?ca=tests/data/tls/ca.pem")
+    try smtp.send(url, smtp.Mail{
+        from: "Alerts <alerts@example.com>",
+        to: ["ops@example.com"],
+        cc: ["lead@example.com"],
+        bcc: ["audit@example.com"],
+        subject: "disk 91% — db1",
+        text: "/var is at 91%.",
+        html: "<p>/var is at <b>91%</b>.</p>",
+    })
+    print("sent")
+
+    spawn serve(ln, &config, Server{})
+    scoped String plain = format("smtp://localhost:{ln.port}?helo=relay.example.com")
+    c := try smtp.connect(plain)
+    c.send(smtp.Mail{from: "a@example.com", to: ["nobody@example.com"], text: "hi"}) catch e {
+        print("{e.code}: {e.message}")
+    }
+    c.close()
+
+    spawn serve(ln, &config, Server{prefix: "no tls: "})
+    scoped String noTls = format("smtp://ada:secret@localhost:{ln.port}")
+    smtp.send(noTls, smtp.Mail{from: "a@example.com", to: ["b@example.com"], text: "hi"}) catch e {
+        print("{e.code}: {e.message}")
+    }
+    sleep(20ms)
+
+    spawn serve(ln, &config, Server{prefix: "bad subject: "})
+    scoped String any = format("smtp://localhost:{ln.port}")
+    smtp.send(any, smtp.Mail{from: "a@example.com", to: ["b@example.com"], subject: "a\r\nBcc: x@example.com"}) catch e {
+        print("{e.code}: {e.message}")
+    }
+    sleep(20ms)
+
+    spawn serve(ln, &config, Server{implicit: true, prefix: "smtps: "})
+    scoped String tls = format("smtps://localhost:{ln.port}?ca=tests/data/tls/ca.pem")
+    c2 := try smtp.connect(tls)
+    try c2.send(smtp.Mail{from: "a@example.com", to: ["b@example.com"], text: "hi"})
+    c2.close()
+
+    _ = smtp.connect("http://x") catch e {
+        print("{e.code}: {e.message}")
+        smtp.Client{}
+    }
+}

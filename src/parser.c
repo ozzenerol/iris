@@ -1876,6 +1876,30 @@ static Node *parseWhen(Parser *p, bool top) {
     return w;
 }
 
+static bool tokIs(Parser *p, Token *t, const char *word) {
+    return (size_t)t->len == strlen(word) && memcmp(t->s, word, (size_t)t->len) == 0;
+}
+
+/* bench "name" { body } runs the body again and again; bench "name" (n)
+ * { body } runs it once with a count n for its own loop, so the body can
+ * set things up first. Either way it is N_TEST with F_BENCH; name is the
+ * count's name, NULL without one. */
+static Node *parseBench(Parser *p, NodeList attrs) {
+    noAttrs(p, attrs, "a bench block");
+    Token *t = next(p);
+    Node *bs = node(p, N_TEST, t);
+    bs->flags |= F_BENCH;
+    Node *s = parseString(p, next(p));
+    bs->text = s->kind == N_STRING ? s->text : "";
+    if (accept(p, P_LPAREN)) {
+        Token *n = expectIdent(p, "the name of the count, as in bench \"name\" (n) { }");
+        bs->name = tokText(p, n);
+        expect(p, P_RPAREN);
+    }
+    bs->c = parseBlock(p);
+    return bs;
+}
+
 static Node *parseTopLevel(Parser *p) {
     NodeList attrs = {0};
     parseAttrs(p, &attrs);
@@ -1956,6 +1980,9 @@ static Node *parseTopLevel(Parser *p) {
         break;
     }
 
+    if (t->kind == T_IDENT && peekAt(p, 1)->kind == T_STRING && tokIs(p, t, "bench")) {
+        return parseBench(p, attrs);
+    }
     if (t->kind == T_IDENT && peekAt(p, 1)->kind == P_DEFINE) {
         noAttrs(p, attrs, "a global");
         Node *d = parseSimpleStmt(p, true);

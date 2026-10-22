@@ -1,0 +1,93 @@
+// expect: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZGEiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjAsIm5iZiI6MH0.…
+// expect: ada admin
+// expect: JwtError.signature
+// expect: JwtError.signature
+// expect: JwtError.expired
+// expect: JwtError.early
+// expect: within leeway: ada
+// expect: ed25519: ada
+// expect: JwtError.algorithm: the token is signed with EdDSA, not HS256
+// expect: JwtError.algorithm: the token is signed with none, not HS256
+// expect: JwtError.invalid
+// expect: python verifies: ada
+
+import base64, crypto, jwt, process, time
+
+@json
+struct Claims {
+    String sub
+    String role
+    i64 exp
+    i64 nbf
+}
+
+!void main() {
+    key := "a key of 32 bytes or more, kept on the server"
+    scoped String t = jwt.sign(Claims{sub: "ada".copy(), role: "admin".copy()}, key)
+    print(t)
+    scoped Claims c = try jwt.verify[Claims](t, key)
+    print("{c.sub} {c.role}")
+
+    _ = jwt.verify[Claims](t, "another key") catch e {
+        print("{e.code}")
+        Claims{}
+    }
+    scoped String changed = format("{t}")
+    changed[40] = 'A' if changed[40] != 'A' else 'B'
+    _ = jwt.verify[Claims](changed, key) catch e {
+        print("{e.code}")
+        Claims{}
+    }
+
+    past := time.now().add(-1h).unix()
+    scoped String old = jwt.sign(Claims{sub: "ada".copy(), exp: past}, key)
+    _ = jwt.verify[Claims](old, key) catch e {
+        print("{e.code}")
+        Claims{}
+    }
+    later := time.now().add(1h).unix()
+    scoped String early = jwt.sign(Claims{sub: "ada".copy(), nbf: later}, key)
+    _ = jwt.verify[Claims](early, key) catch e {
+        print("{e.code}")
+        Claims{}
+    }
+    justNow := time.now().add(-10s).unix()
+    scoped String recent = jwt.sign(Claims{sub: "ada".copy(), exp: justNow}, key)
+    scoped Claims r = try jwt.verify[Claims](recent, key, leeway: 1m)
+    print("within leeway: {r.sub}")
+
+    seed := "0123456789abcdef0123456789abcdef"
+    public := crypto.ed25519Public(seed)
+    scoped String ed = jwt.signEd25519(Claims{sub: "ada".copy()}, seed)
+    scoped Claims ec = try jwt.verifyEd25519[Claims](ed, public)
+    print("ed25519: {ec.sub}")
+    _ = jwt.verify[Claims](ed, key) catch e {
+        print("{e.code}: {e.message}")
+        Claims{}
+    }
+
+    // alg none must never be taken
+    scoped String noneHead = base64.encodeUrl(r"""{"alg":"none","typ":"JWT"}""")
+    scoped String noneBody = base64.encodeUrl(r"""{"sub":"mallory"}""")
+    scoped String none = format("{noneHead}.{noneBody}.")
+    _ = jwt.verify[Claims](none, key) catch e {
+        print("{e.code}: {e.message}")
+        Claims{}
+    }
+    _ = jwt.verify[Claims]("not a token", key) catch e {
+        print("{e.code}")
+        Claims{}
+    }
+
+    code := r"""
+import base64, hashlib, hmac, json, sys
+t, key = sys.argv[1], sys.argv[2].encode()
+h, p, s = t.split(".")
+pad = lambda x: x + "=" * (-len(x) % 4)
+want = base64.urlsafe_b64encode(hmac.new(key, (h + "." + p).encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+assert want == s
+print("python verifies:", json.loads(base64.urlsafe_b64decode(pad(p)))["sub"])
+"""
+    scoped out := try process.run(["python3", "-c", code, t, key])
+    print(out.stdout.trim())
+}

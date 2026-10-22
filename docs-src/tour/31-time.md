@@ -230,6 +230,8 @@ took under a second: true
 
 `{took}` writes the `Duration` in its units, like `20.1ms`. As in [Integers](03-integers.html#units), dividing by a unit gives a plain number, so `took / 1ms` is the milliseconds, and `i64(took)` the nanoseconds.
 
+`time.since(start)` is the same as `time.clock() - start`.
+
 ## Waiting
 
 `sleep(d)` waits for a `Duration`, and while one task sleeps the others run. In a `select`, an `after(d)` arm gives up waiting on channels after that time. Both are built in, without an import; [Tasks and channels](24-tasks-and-channels.html#select) shows them with tasks.

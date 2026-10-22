@@ -19,6 +19,7 @@
 #include <sys/ioctl.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 
 typedef struct {
     char *ptr;
@@ -756,6 +757,63 @@ int iris_fs_open(const char *path, int64_t n, int mode, int *err) {
     }
     free(p);
     return fd;
+}
+
+/* Maps a file into memory: all of it, grown to size first when write is
+ * set and the file is smaller (made if needed). With write, changes go to
+ * the file and to every other mapping of it; without, they stay in this
+ * mapping. 0, or a code. */
+int iris_fs_map(const char *path, int64_t n, int write, int64_t size, char **ptr, int64_t *len) {
+    char *p = cpath(path, n);
+    *ptr = NULL;
+    *len = 0;
+    if (!p) return 1;
+    int fd = open(p, (write ? (O_RDWR | (size > 0 ? O_CREAT : 0)) : O_RDONLY) | O_CLOEXEC, 0666);
+    free(p);
+    if (fd < 0) return fsCode(errno);
+    struct stat st;
+    if (fstat(fd, &st) != 0 || S_ISDIR(st.st_mode)) {
+        int code = S_ISDIR(st.st_mode) ? 4 : fsCode(errno);
+        close(fd);
+        return code;
+    }
+    int64_t have = st.st_size;
+    if (write && size > have) {
+        if (ftruncate(fd, (off_t)size) != 0) {
+            int code = fsCode(errno);
+            close(fd);
+            return code;
+        }
+        have = size;
+    }
+    if (have == 0) {
+        close(fd);
+        return 0;
+    }
+    void *m = mmap(NULL, (size_t)have, PROT_READ | PROT_WRITE, write ? MAP_SHARED : MAP_PRIVATE, fd, 0);
+    int e = errno;
+    close(fd);
+    if (m == MAP_FAILED) return fsCode(e);
+    *ptr = m;
+    *len = have;
+    return 0;
+}
+
+/* size bytes of zeroed memory from the OS, or NULL. */
+char *iris_mem_map(int64_t size) {
+    if (size <= 0) return NULL;
+    void *m = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return m == MAP_FAILED ? NULL : m;
+}
+
+void iris_mem_unmap(char *ptr, int64_t len) {
+    if (ptr && len > 0) munmap(ptr, (size_t)len);
+}
+
+/* Writes a file mapping's changes to the file now. 0, or a code. */
+int iris_mem_sync(char *ptr, int64_t len) {
+    if (!ptr || len <= 0) return 0;
+    return msync(ptr, (size_t)len, MS_SYNC) == 0 ? 0 : fsCode(errno);
 }
 
 /* Bytes read (0 at the end), or minus an error code. */
@@ -2538,6 +2596,132 @@ int64_t iris_udp_recv(int fd, char *buf, int64_t len, uint8_t *ip, int64_t *port
     }
 }
 
+/* One datagram of a batch, laid out as Iris's net.Datagram: the space
+ * for it, its length and the address it came from or goes to. */
+typedef struct {
+    char *buf;
+    int64_t cap;
+    int64_t len;
+    uint8_t ip[16];
+    uint16_t port;
+} IrisDatagram;
+
+/* Waits for a datagram, then reads as many as are waiting, up to n: how
+ * many, or -code. */
+int64_t iris_udp_recv_many(int fd, IrisDatagram *d, int64_t n, int64_t timeout) {
+    if (n <= 0) return 0;
+    int64_t deadline = deadlineOf(timeout);
+    int64_t got = 0;
+    for (;;) {
+#ifdef __linux__
+        enum { MAX = 64 };
+        struct mmsghdr h[MAX];
+        struct iovec v[MAX];
+        struct sockaddr_storage ss[MAX];
+        int k = n - got < MAX ? (int)(n - got) : MAX;
+        for (int i = 0; i < k; i++) {
+            v[i].iov_base = d[got + i].buf;
+            v[i].iov_len = (size_t)d[got + i].cap;
+            memset(&h[i], 0, sizeof h[i]);
+            h[i].msg_hdr.msg_iov = &v[i];
+            h[i].msg_hdr.msg_iovlen = 1;
+            h[i].msg_hdr.msg_name = &ss[i];
+            h[i].msg_hdr.msg_namelen = sizeof ss[i];
+        }
+        int r = recvmmsg(fd, h, (unsigned)k, MSG_DONTWAIT, NULL);
+        if (r > 0) {
+            for (int i = 0; i < r; i++) {
+                IrisDatagram *x = &d[got + i];
+                int64_t port;
+                x->len = h[i].msg_len;
+                fromSockaddr(&ss[i], x->ip, &port);
+                x->port = (uint16_t)port;
+            }
+            got += r;
+            if (got == n || r < k) return got;
+            continue;
+        }
+#else
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof ss;
+        IrisDatagram *x = &d[got];
+        ssize_t r = recvfrom(fd, x->buf, (size_t)x->cap, MSG_DONTWAIT, (struct sockaddr *)&ss, &sl);
+        if (r >= 0) {
+            int64_t port;
+            x->len = r;
+            fromSockaddr(&ss, x->ip, &port);
+            x->port = (uint16_t)port;
+            got++;
+            if (got == n) return got;
+            continue;
+        }
+#endif
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (got > 0) return got;
+            if (!waitFdUntil(fd, 0, deadline)) return -3;
+            continue;
+        }
+        return got > 0 ? got : -netCode(errno);
+    }
+}
+
+/* Sends each datagram to its address, or where the socket is connected
+ * (connected 1). 0, or a code. */
+int iris_udp_send_many(int fd, int family, int connected, IrisDatagram *d, int64_t n, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (int64_t i = 0; i < n; i++) {
+        if (!connected && family == AF_INET && !isMapped(d[i].ip)) return 6;
+    }
+    int64_t sent = 0;
+    while (sent < n) {
+#ifdef __linux__
+        enum { MAX = 64 };
+        struct mmsghdr h[MAX];
+        struct iovec v[MAX];
+        struct sockaddr_storage ss[MAX];
+        int k = n - sent < MAX ? (int)(n - sent) : MAX;
+        for (int i = 0; i < k; i++) {
+            IrisDatagram *x = &d[sent + i];
+            v[i].iov_base = x->buf;
+            v[i].iov_len = (size_t)x->len;
+            memset(&h[i], 0, sizeof h[i]);
+            h[i].msg_hdr.msg_iov = &v[i];
+            h[i].msg_hdr.msg_iovlen = 1;
+            if (!connected) {
+                h[i].msg_hdr.msg_name = &ss[i];
+                h[i].msg_hdr.msg_namelen = toSockaddr(x->ip, x->port, family, &ss[i]);
+            }
+        }
+        int r = sendmmsg(fd, h, (unsigned)k, MSG_DONTWAIT);
+        if (r > 0) {
+            sent += r;
+            continue;
+        }
+#else
+        IrisDatagram *x = &d[sent];
+        struct sockaddr_storage ss;
+        ssize_t r;
+        if (connected) {
+            r = send(fd, x->buf, (size_t)x->len, 0);
+        } else {
+            socklen_t sl = toSockaddr(x->ip, x->port, family, &ss);
+            r = sendto(fd, x->buf, (size_t)x->len, 0, (struct sockaddr *)&ss, sl);
+        }
+        if (r >= 0) {
+            sent++;
+            continue;
+        }
+#endif
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 1, deadline)) return 3;
+            continue;
+        }
+        if (errno == EMSGSIZE) return 9;
+        return netCode(errno);
+    }
+    return 0;
+}
+
 /* Where a socket is bound. */
 void iris_sock_local(int fd, uint8_t *ip, int64_t *port) {
     struct sockaddr_storage ss;
@@ -3619,6 +3803,88 @@ int iris_test_summary(void) {
     printf("%d test%s, %d passed, %d failed\n", testsRun, testsRun == 1 ? "" : "s", testsRun - testsFailed,
            testsFailed);
     return testsFailed ? 1 : 0;
+}
+
+/* iris bench: main calls iris_bench_start before each bench (false: the
+   filter, the program's first argument, leaves it out), then
+   iris_bench_run with the function the bench block became. It is called
+   with a count, 1 first, then larger ones until one call takes the bench
+   time (IRIS_BENCH_TIME nanoseconds, 1s when not set); that call's time
+   over its count is what one run takes. */
+
+static int benchesRun, benchesFailed;
+
+bool iris_bench_start(const char *name) {
+    if (gArgc > 1 && !strstr(name, gArgv[1])) {
+        return false;
+    }
+    benchesRun++;
+    return true;
+}
+
+static void benchPerRun(char *buf, size_t size, double ns) {
+    if (ns < 1000) {
+        snprintf(buf, size, "%.2fns", ns);
+    } else if (ns < 1e6) {
+        snprintf(buf, size, "%.2fus", ns / 1e3);
+    } else if (ns < 1e9) {
+        snprintf(buf, size, "%.2fms", ns / 1e6);
+    } else {
+        snprintf(buf, size, "%.2fs", ns / 1e9);
+    }
+}
+
+void iris_bench_run(const char *name, int64_t (*fn)(int64_t)) {
+    int64_t target = 1000000000LL;
+    const char *env = getenv("IRIS_BENCH_TIME");
+    if (env && *env && atoll(env) > 0) {
+        target = atoll(env);
+    }
+    int64_t n = 1, took = 0;
+    for (;;) {
+        int64_t start = nowNs();
+        int64_t err = fn(n);
+        took = nowNs() - start;
+        if (err) {
+            fflush(stdout);
+            IrisString s = {0};
+            iris_write_errcode(3, &s, err);
+            fprintf(stderr, "    error: %.*s", (int)s.len, s.ptr);
+            if (msgCurLen) {
+                fprintf(stderr, ": %.*s", (int)msgCurLen, msgCur);
+            }
+            fputc('\n', stderr);
+            for (int i = 0; i < traceLen; i++) {
+                fprintf(stderr, "      at %s  %s:%d\n", trace[i].fn, trace[i].file, trace[i].line);
+            }
+            iris_string_free(&s);
+            benchesFailed++;
+            printf("FAIL %s\n", name);
+            fflush(stdout);
+            return;
+        }
+        if (took >= target || n >= 1000000000LL) {
+            break;
+        }
+        /* aim a little past the target, growing at most 100 times */
+        double want = took > 0 ? (double)n * (double)target / (double)took * 1.2 : (double)n * 100;
+        int64_t next = want > (double)n * 100 ? n * 100 : (int64_t)want;
+        n = next > n ? next : n + 1;
+        if (n > 1000000000LL) {
+            n = 1000000000LL;
+        }
+    }
+    char per[32];
+    benchPerRun(per, sizeof per, (double)took / (double)n);
+    printf("%-32s %12lld runs %12s/run\n", name, (long long)n, per);
+    fflush(stdout);
+}
+
+int iris_bench_summary(void) {
+    if (benchesFailed) {
+        printf("%d bench%s, %d failed\n", benchesRun, benchesRun == 1 ? "" : "es", benchesFailed);
+    }
+    return benchesFailed ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------- hashing (Map) */
@@ -5087,6 +5353,359 @@ int iris_chacha_open(const unsigned char *key, const unsigned char *nonce, const
     chachaXor(key, 1, nonce, sealed, pt, n);
     iris_string_append(out, (const char *)pt, (int64_t)n);
     free(pt);
+    return 1;
+}
+
+/* AES-GCM (NIST SP 800-38D) with a 12-byte nonce and a 16-byte tag, for
+   AES-128, AES-192 and AES-256. Where the CPU has AES and carry-less
+   multiply instructions (x86_64 AES-NI and PCLMULQDQ, ARMv8 AES and PMULL)
+   they do the work. Elsewhere plain C does, in constant time: each S-box
+   lookup reads the whole table. */
+
+#if defined(__x86_64__)
+#include <wmmintrin.h>
+#include <emmintrin.h>
+#define AES_HW_TARGET __attribute__((target("aes,pclmul,sse2")))
+#elif defined(__aarch64__)
+#include <arm_neon.h>
+#ifdef __linux__
+#include <sys/auxv.h>
+#endif
+#define AES_HW_TARGET __attribute__((target("aes")))
+#endif
+
+static const uint8_t aesSbox[256] = {
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+};
+
+/* sbox[x], reading the whole table, 8 entries at a time, so the time
+   doesn't depend on x */
+static uint8_t aesSub(uint8_t x) {
+    uint64_t word = 0;
+    unsigned want = x >> 3;
+    for (unsigned i = 0; i < 32; i++) {
+        uint64_t w;
+        memcpy(&w, aesSbox + 8 * i, 8);
+        uint64_t hit = 0 - (uint64_t)((((i ^ want) - 1u) >> 8) & 1u);
+        word |= w & hit;
+    }
+    uint8_t bytes[8];
+    memcpy(bytes, &word, 8);
+    uint8_t r = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        uint8_t hit = (uint8_t)(0u - ((((i ^ (x & 7u)) - 1u) >> 8) & 1u));
+        r |= bytes[i] & hit;
+    }
+    return r;
+}
+
+typedef struct {
+    uint8_t rk[15][16];         /* round keys, as FIPS 197 lays them out */
+    int rounds;
+    int hw;
+    uint64_t h1, h0;            /* GHASH's H, high and low 64 bits */
+} AesGcm;
+
+static int aesHw = -1;
+
+static int aesHasHw(void) {
+    if (aesHw < 0) {
+        int hw = 0;
+        if (!getenv("IRIS_AES_SOFT")) {
+#if defined(__x86_64__)
+            __builtin_cpu_init();
+            hw = __builtin_cpu_supports("aes") && __builtin_cpu_supports("pclmul");
+#elif defined(__aarch64__) && defined(__APPLE__)
+            hw = 1;
+#elif defined(__aarch64__) && defined(__linux__)
+            unsigned long caps = getauxval(AT_HWCAP);
+            hw = (caps & (1UL << 3)) && (caps & (1UL << 4));       /* HWCAP_AES, HWCAP_PMULL */
+#endif
+        }
+        aesHw = hw;
+    }
+    return aesHw;
+}
+
+static void aesExpand(AesGcm *a, const uint8_t *key, int keyLen) {
+    int nk = keyLen / 4;
+    a->rounds = nk + 6;
+    uint8_t w[60][4];
+    for (int i = 0; i < nk; i++) memcpy(w[i], key + 4 * i, 4);
+    uint8_t rcon = 1;
+    for (int i = nk; i < 4 * (a->rounds + 1); i++) {
+        uint8_t t[4];
+        memcpy(t, w[i - 1], 4);
+        if (i % nk == 0) {
+            uint8_t first = t[0];
+            t[0] = aesSub(t[1]) ^ rcon;
+            t[1] = aesSub(t[2]);
+            t[2] = aesSub(t[3]);
+            t[3] = aesSub(first);
+            rcon = (uint8_t)((rcon << 1) ^ ((rcon >> 7) * 0x1b));
+        } else if (nk > 6 && i % nk == 4) {
+            for (int j = 0; j < 4; j++) t[j] = aesSub(t[j]);
+        }
+        for (int j = 0; j < 4; j++) w[i][j] = w[i - nk][j] ^ t[j];
+    }
+    for (int r = 0; r <= a->rounds; r++) memcpy(a->rk[r], w[4 * r], 16);
+}
+
+static uint8_t aesTimes2(uint8_t x) { return (uint8_t)((x << 1) ^ ((x >> 7) * 0x1b)); }
+
+static void aesBlockSoft(const AesGcm *a, const uint8_t in[16], uint8_t out[16]) {
+    uint8_t s[16];
+    for (int i = 0; i < 16; i++) s[i] = in[i] ^ a->rk[0][i];
+    for (int r = 1; r <= a->rounds; r++) {
+        uint8_t t[16];
+        /* SubBytes and ShiftRows: byte c*4+row moves left by row columns */
+        for (int c = 0; c < 4; c++) {
+            for (int row = 0; row < 4; row++) t[c * 4 + row] = aesSub(s[((c + row) % 4) * 4 + row]);
+        }
+        if (r < a->rounds) {
+            for (int c = 0; c < 4; c++) {
+                uint8_t *x = t + 4 * c;
+                uint8_t all = x[0] ^ x[1] ^ x[2] ^ x[3], first = x[0];
+                x[0] ^= all ^ aesTimes2(x[0] ^ x[1]);
+                x[1] ^= all ^ aesTimes2(x[1] ^ x[2]);
+                x[2] ^= all ^ aesTimes2(x[2] ^ x[3]);
+                x[3] ^= all ^ aesTimes2(x[3] ^ first);
+            }
+        }
+        for (int i = 0; i < 16; i++) s[i] = t[i] ^ a->rk[r][i];
+    }
+    memcpy(out, s, 16);
+}
+
+#ifdef AES_HW_TARGET
+#if defined(__x86_64__)
+AES_HW_TARGET static void aesBlockHw(const AesGcm *a, const uint8_t in[16], uint8_t out[16]) {
+    __m128i s = _mm_xor_si128(_mm_loadu_si128((const __m128i *)in), _mm_loadu_si128((const __m128i *)a->rk[0]));
+    for (int r = 1; r < a->rounds; r++) s = _mm_aesenc_si128(s, _mm_loadu_si128((const __m128i *)a->rk[r]));
+    s = _mm_aesenclast_si128(s, _mm_loadu_si128((const __m128i *)a->rk[a->rounds]));
+    _mm_storeu_si128((__m128i *)out, s);
+}
+
+AES_HW_TARGET static void clmulHw(uint64_t x, uint64_t y, uint64_t *hi, uint64_t *lo) {
+    __m128i p = _mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)x), _mm_cvtsi64_si128((long long)y), 0);
+    *lo = (uint64_t)_mm_cvtsi128_si64(p);
+    *hi = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(p, p));
+}
+#else
+AES_HW_TARGET static void aesBlockHw(const AesGcm *a, const uint8_t in[16], uint8_t out[16]) {
+    uint8x16_t s = vld1q_u8(in);
+    for (int r = 0; r < a->rounds - 1; r++) s = vaesmcq_u8(vaeseq_u8(s, vld1q_u8(a->rk[r])));
+    s = vaeseq_u8(s, vld1q_u8(a->rk[a->rounds - 1]));
+    s = veorq_u8(s, vld1q_u8(a->rk[a->rounds]));
+    vst1q_u8(out, s);
+}
+
+AES_HW_TARGET static void clmulHw(uint64_t x, uint64_t y, uint64_t *hi, uint64_t *lo) {
+    poly128_t p = vmull_p64((poly64_t)x, (poly64_t)y);
+    uint64x2_t v = vreinterpretq_u64_p128(p);
+    *lo = vgetq_lane_u64(v, 0);
+    *hi = vgetq_lane_u64(v, 1);
+}
+#endif
+#endif
+
+static void aesBlock(const AesGcm *a, const uint8_t in[16], uint8_t out[16]) {
+#ifdef AES_HW_TARGET
+    if (a->hw) {
+        aesBlockHw(a, in, out);
+        return;
+    }
+#endif
+    aesBlockSoft(a, in, out);
+}
+
+/* The low 64 bits of the carry-less product, with integer multiplies
+   whose carries fall in gaps (BearSSL's bmul64): constant time. */
+static uint64_t clmulLow(uint64_t x, uint64_t y) {
+    const uint64_t m0 = 0x1111111111111111ULL, m1 = m0 << 1, m2 = m0 << 2, m3 = m0 << 3;
+    uint64_t x0 = x & m0, x1 = x & m1, x2 = x & m2, x3 = x & m3;
+    uint64_t y0 = y & m0, y1 = y & m1, y2 = y & m2, y3 = y & m3;
+    uint64_t z0 = (x0 * y0) ^ (x1 * y3) ^ (x2 * y2) ^ (x3 * y1);
+    uint64_t z1 = (x0 * y1) ^ (x1 * y0) ^ (x2 * y3) ^ (x3 * y2);
+    uint64_t z2 = (x0 * y2) ^ (x1 * y1) ^ (x2 * y0) ^ (x3 * y3);
+    uint64_t z3 = (x0 * y3) ^ (x1 * y2) ^ (x2 * y1) ^ (x3 * y0);
+    return (z0 & m0) | (z1 & m1) | (z2 & m2) | (z3 & m3);
+}
+
+static uint64_t rev64(uint64_t x) {
+    x = ((x >> 1) & 0x5555555555555555ULL) | ((x & 0x5555555555555555ULL) << 1);
+    x = ((x >> 2) & 0x3333333333333333ULL) | ((x & 0x3333333333333333ULL) << 2);
+    x = ((x >> 4) & 0x0f0f0f0f0f0f0f0fULL) | ((x & 0x0f0f0f0f0f0f0f0fULL) << 4);
+    x = ((x >> 8) & 0x00ff00ff00ff00ffULL) | ((x & 0x00ff00ff00ff00ffULL) << 8);
+    x = ((x >> 16) & 0x0000ffff0000ffffULL) | ((x & 0x0000ffff0000ffffULL) << 16);
+    return (x >> 32) | (x << 32);
+}
+
+/* The 128-bit carry-less product of x and y. */
+static void clmul(const AesGcm *a, uint64_t x, uint64_t y, uint64_t *hi, uint64_t *lo) {
+#ifdef AES_HW_TARGET
+    if (a->hw) {
+        clmulHw(x, y, hi, lo);
+        return;
+    }
+#endif
+    *lo = clmulLow(x, y);
+    *hi = rev64(clmulLow(rev64(x), rev64(y))) >> 1;
+}
+
+static uint64_t load64be(const uint8_t *p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v = (v << 8) | p[i];
+    return v;
+}
+
+static void store64be(uint8_t *p, uint64_t v) {
+    for (int i = 7; i >= 0; i--) {
+        p[i] = (uint8_t)v;
+        v >>= 8;
+    }
+}
+
+/* y = (y ^ block) * H in GF(2^128), as GCM defines it */
+static void ghashBlock(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t block[16]) {
+    uint64_t x1 = *y1 ^ load64be(block), x0 = *y0 ^ load64be(block + 8);
+    uint64_t z0h, z0l, z1h, z1l, z2h, z2l;
+    clmul(a, x0, a->h0, &z0h, &z0l);
+    clmul(a, x1, a->h1, &z1h, &z1l);
+    clmul(a, x0 ^ x1, a->h0 ^ a->h1, &z2h, &z2l);
+    z2h ^= z0h ^ z1h;
+    z2l ^= z0l ^ z1l;
+    uint64_t v0 = z0l, v1 = z0h ^ z2l, v2 = z1l ^ z2h, v3 = z1h;
+    /* the bits are reflected: shift left once, then reduce by
+       x^128 + x^7 + x^2 + x + 1 */
+    v3 = (v3 << 1) | (v2 >> 63);
+    v2 = (v2 << 1) | (v1 >> 63);
+    v1 = (v1 << 1) | (v0 >> 63);
+    v0 <<= 1;
+    v2 ^= v0 ^ (v0 >> 1) ^ (v0 >> 2) ^ (v0 >> 7);
+    v1 ^= (v0 << 63) ^ (v0 << 62) ^ (v0 << 57);
+    v3 ^= v1 ^ (v1 >> 1) ^ (v1 >> 2) ^ (v1 >> 7);
+    v2 ^= (v1 << 63) ^ (v1 << 62) ^ (v1 << 57);
+    *y1 = v3;
+    *y0 = v2;
+}
+
+static void ghashPadded(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p, size_t n) {
+    while (n >= 16) {
+        ghashBlock(a, y1, y0, p);
+        p += 16;
+        n -= 16;
+    }
+    if (n > 0) {
+        uint8_t last[16] = {0};
+        memcpy(last, p, n);
+        ghashBlock(a, y1, y0, last);
+    }
+}
+
+static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
+    aesExpand(a, key, keyLen);
+    a->hw = aesHasHw();
+    uint8_t zero[16] = {0}, h[16];
+    aesBlock(a, zero, h);
+    a->h1 = load64be(h);
+    a->h0 = load64be(h + 8);
+}
+
+/* CTR from counter block 2 on, as GCM does */
+static void aesGcmCtr(const AesGcm *a, const uint8_t nonce[12], const uint8_t *in, uint8_t *out, size_t n) {
+    uint8_t ctr[16], ks[16];
+    memcpy(ctr, nonce, 12);
+    uint32_t c = 2;
+    while (n > 0) {
+        ctr[12] = (uint8_t)(c >> 24);
+        ctr[13] = (uint8_t)(c >> 16);
+        ctr[14] = (uint8_t)(c >> 8);
+        ctr[15] = (uint8_t)c;
+        aesBlock(a, ctr, ks);
+        size_t k = n < 16 ? n : 16;
+        for (size_t i = 0; i < k; i++) out[i] = in[i] ^ ks[i];
+        in += k;
+        out += k;
+        n -= k;
+        c++;
+    }
+}
+
+static void aesGcmTag(const AesGcm *a, const uint8_t nonce[12], const uint8_t *aad, size_t aadLen, const uint8_t *ct,
+                      size_t ctLen, uint8_t tag[16]) {
+    uint64_t y1 = 0, y0 = 0;
+    ghashPadded(a, &y1, &y0, aad, aadLen);
+    ghashPadded(a, &y1, &y0, ct, ctLen);
+    uint8_t lens[16];
+    store64be(lens, (uint64_t)aadLen * 8);
+    store64be(lens + 8, (uint64_t)ctLen * 8);
+    ghashBlock(a, &y1, &y0, lens);
+    uint8_t j0[16], ek[16], s[16];
+    memcpy(j0, nonce, 12);
+    j0[12] = j0[13] = j0[14] = 0;
+    j0[15] = 1;
+    aesBlock(a, j0, ek);
+    store64be(s, y1);
+    store64be(s + 8, y0);
+    for (int i = 0; i < 16; i++) tag[i] = ek[i] ^ s[i];
+}
+
+/* AES-GCM: the data sealed, then its 16-byte tag, added to out */
+void iris_aes_seal(const uint8_t *key, int64_t keyLen, const uint8_t *nonce, const uint8_t *data, int64_t len,
+                   const uint8_t *aad, int64_t aadLen, IrisString *out) {
+    AesGcm a;
+    aesGcmInit(&a, key, (int)keyLen);
+    uint8_t *ct = malloc((size_t)len + 16);
+    if (!ct) {
+        outOfMemory();
+    }
+    aesGcmCtr(&a, nonce, data, ct, (size_t)len);
+    aesGcmTag(&a, nonce, aad, (size_t)aadLen, ct, (size_t)len, ct + len);
+    iris_string_append(out, (const char *)ct, len + 16);
+    free(ct);
+    memset(&a, 0, sizeof a);
+}
+
+/* Opens what iris_aes_seal made: 1 and the data added to out, or 0 when
+   the tag doesn't match, and then out gets nothing. */
+int iris_aes_open(const uint8_t *key, int64_t keyLen, const uint8_t *nonce, const uint8_t *sealed, int64_t len,
+                  const uint8_t *aad, int64_t aadLen, IrisString *out) {
+    if (len < 16) {
+        return 0;
+    }
+    AesGcm a;
+    aesGcmInit(&a, key, (int)keyLen);
+    size_t n = (size_t)len - 16;
+    uint8_t tag[16];
+    aesGcmTag(&a, nonce, aad, (size_t)aadLen, sealed, n, tag);
+    if (!iris_const_equal((const char *)tag, 16, (const char *)sealed + n, 16)) {
+        memset(&a, 0, sizeof a);
+        return 0;
+    }
+    uint8_t *pt = malloc(n ? n : 1);
+    if (!pt) {
+        outOfMemory();
+    }
+    aesGcmCtr(&a, nonce, sealed, pt, n);
+    iris_string_append(out, (const char *)pt, (int64_t)n);
+    free(pt);
+    memset(&a, 0, sizeof a);
     return 1;
 }
 

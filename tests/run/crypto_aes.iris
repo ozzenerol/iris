@@ -1,0 +1,56 @@
+// expect: f3d7408bb6df52a08b58b988bf28483c4ea9e32c29f49ae16259
+// expect: hello, aes
+// expect: 530f8afbc74536b9a963b4f1c4cb738b
+// expect: 87d910afb4dbb07ab513b7e78689ab1f7cf4402b4cce39039a1cfeb796f973d0bd8233b5f5b23d
+// expect: CryptoError.tampered
+// expect: CryptoError.tampered
+// expect: 1000 bytes back
+
+import crypto, hex
+
+!void main() {
+    scoped String key = try hex.decode("feffe9928665731c6d6a8f9467308308")
+    scoped String nonce = try hex.decode("cafebabefacedbaddecaf888")
+    scoped String sealed = crypto.aesSeal(key, nonce, "hello, aes", "hdr")
+    scoped String h = hex.encode(sealed)
+    print(h)
+    scoped String back = try crypto.aesUnseal(key, nonce, sealed, "hdr")
+    print(back)
+
+    u8[32] zero
+    u8[12] zeroNonce
+    scoped String empty = crypto.aesSeal(zero, zeroNonce, "")
+    scoped String he = hex.encode(empty)
+    print(he)
+
+    u8[24] k24
+    u8[12] n12
+    for i in 0..24 {
+        k24[i] = u8(i)
+    }
+    for i in 0..12 {
+        n12[i] = u8(i)
+    }
+    scoped String s24 = crypto.aesSeal(k24, n12, "a 24-byte key works too")
+    scoped String h24 = hex.encode(s24)
+    print(h24)
+
+    _ = crypto.aesUnseal(key, nonce, sealed, "other") catch e {
+        print("{e.code}")
+        format("")
+    }
+    scoped String changed = format("{sealed}")
+    changed[0] ^= 1
+    _ = crypto.aesUnseal(key, nonce, changed, "hdr") catch e {
+        print("{e.code}")
+        format("")
+    }
+
+    scoped String big = format("")
+    for i in 0..1000 {
+        big.append("z")
+    }
+    scoped String sb = crypto.aesSeal(key, nonce, big)
+    scoped String bb = try crypto.aesUnseal(key, nonce, sb)
+    print("{bb.len} bytes back")
+}

@@ -1,0 +1,140 @@
+// A pool of connections, or of anything that is costly to open and can be
+// used again: tasks and threads take one, use it, and give it back.
+//
+//     p := pool.make(address, connect, max: 8)
+//     defer p.close()
+//     c := try p.take()
+//     defer p.give(c)
+//
+// T is what is pooled. It has close, and reusable, which says whether it
+// can be given to the next caller or should be closed instead. C is what
+// opening one needs, such as an address: the pool keeps it and calls
+// open with it.
+
+import time
+
+// What take fails with when no item comes free in time. A failure to open
+// one is the open function's own error.
+pub enum PoolError { timeout }
+
+// What a pooled item has: close, and reusable, false when it is broken or
+// in a state the next caller can't use, so the pool closes it.
+pub interface Item {
+    void close()
+    bool reusable()
+}
+
+struct State[T, C] {
+    C config
+    !T(C *) opener
+    i64 max
+    Duration wait
+    Mutex lock
+    List[T] idle
+    i64 count
+    bool closed
+}
+
+// Items shared by tasks and threads. Copies of a Pool share the same
+// items.
+pub struct Pool[T: Item, C] {
+    State[T, C] *s
+}
+
+// A pool that opens items with open(&config), at most max at a time. take
+// waits up to wait for one to come free when max are in use. Nothing is
+// opened until the first take.
+pub Pool[T, C] make[T: Item, C](C config, !T(C *) open, i64 max = 10, Duration wait = 30s) {
+    State[T, C][] mem = alloc(State[T, C], 1)
+    s := &mem[0]
+    s.config = config
+    s.opener = open
+    s.max = if max > 0 { max } else { 10 }
+    s.wait = wait
+    return Pool[T, C]{s: s}
+}
+
+// An item: an idle one, a new one, or, when max are in use, the next one
+// given back. Give it back with give when done.
+pub !T Pool[T, C].take() {
+    start := time.clock()
+    for {
+        self.s.lock.lock()
+        if self.s.idle.len > 0 {
+            it := self.s.idle.pop()
+            self.s.lock.unlock()
+            return it
+        }
+        if self.s.count < self.s.max {
+            self.s.count += 1
+            self.s.lock.unlock()
+            it := self.s.opener(&self.s.config) catch e {
+                self.s.lock.lock()
+                self.s.count -= 1
+                self.s.lock.unlock()
+                return e
+            }
+            return it
+        }
+        self.s.lock.unlock()
+        if time.clock() - start > self.s.wait {
+            return error(PoolError.timeout, "none of the {self.s.max} came free in {self.s.wait}")
+        }
+        sleep(1ms)
+    }
+}
+
+// Gives an item back. One that isn't reusable, or one given back after
+// close, is closed.
+pub void Pool[T, C].give(T it) {
+    self.s.lock.lock()
+    if self.s.closed || !it.reusable() {
+        self.s.count -= 1
+        self.s.lock.unlock()
+        it.close()
+        return
+    }
+    self.s.idle.push(it)
+    self.s.lock.unlock()
+}
+
+// Adds an item opened elsewhere, such as a first one opened to check the
+// config, to the idle ones. It counts toward max.
+pub void Pool[T, C].add(T it) {
+    self.s.lock.lock()
+    self.s.count += 1
+    self.s.idle.push(it)
+    self.s.lock.unlock()
+}
+
+// How many items are open: idle ones and ones in use.
+pub i64 Pool[T, C].size() {
+    self.s.lock.lock()
+    n := self.s.count
+    self.s.lock.unlock()
+    return n
+}
+
+// How many items are idle in the pool.
+pub i64 Pool[T, C].idle() {
+    self.s.lock.lock()
+    n := self.s.idle.len
+    self.s.lock.unlock()
+    return n
+}
+
+// The config the pool opens items with.
+pub C *Pool[T, C].config() => &self.s.config
+
+// Closes the idle items. Items in use are closed when they are given back.
+// The config is the caller's to free.
+pub void Pool[T, C].close() {
+    self.s.lock.lock()
+    for it in self.s.idle {
+        it.close()
+    }
+    self.s.idle.free()
+    self.s.count = 0
+    self.s.closed = true
+    self.s.lock.unlock()
+}

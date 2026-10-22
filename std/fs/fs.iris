@@ -313,3 +313,74 @@ pub void File.close() {
     free(self.buf)
     self.buf = alloc(u8, 0)
 }
+
+@extern("iris_fs_map")
+i32 rawMap(u8 *path, i64 pathLen, i32 write, i64 size, u8 **ptr, i64 *len)
+
+@extern("iris_mem_map")
+u8 *rawMemMap(i64 size)
+
+@extern("iris_mem_unmap")
+void rawMemUnmap(u8 *ptr, i64 len)
+
+@extern("iris_mem_sync")
+i32 rawMemSync(u8 *ptr, i64 len)
+
+// Memory that the OS fills from a file, or zeroed memory, from mapFile and
+// mapMemory. bytes is the memory. Free it with free.
+pub struct Mapped {
+    pub u8[] bytes
+    String path
+}
+
+// Maps the whole file at path into memory. The OS reads each part of the
+// file when it is first used, so a large file costs nothing until it is
+// read. With write, changes to bytes go to the file, and every program
+// that maps the same file with write sees them: two processes can share
+// memory this way. With write and a size larger than the file, the file
+// grows to size first, made if it isn't there. Without write, changes stay
+// in this memory.
+pub !Mapped mapFile(str path, bool write = false, i64 size = 0) {
+    u8 *ptr
+    i64 len
+    i32 w = 0
+    if write {
+        w = 1
+    }
+    code := rawMap(path.ptr, path.len, w, size, &ptr, &len)
+    if code != 0 {
+        return fsError(code, path)
+    }
+    m := Mapped{path: format("{path}")}
+    if len > 0 {
+        m.bytes = ptr[0:len]
+    }
+    return m
+}
+
+// size bytes of zeroed memory straight from the OS, for a large buffer
+// that is given back with free as soon as it isn't used.
+pub !Mapped mapMemory(i64 size) {
+    ptr := rawMemMap(size)
+    if ptr == null {
+        return error(FsError.other, "can't map {size} bytes of memory")
+    }
+    return Mapped{bytes: ptr[0:size]}
+}
+
+// Writes the changes made so far to the file now, for a mapFile with
+// write. Without sync they reach the file at some time after the change.
+pub !void Mapped.sync() {
+    code := rawMemSync(self.bytes.ptr, self.bytes.len)
+    if code != 0 {
+        return fsError(code, self.path)
+    }
+}
+
+// Gives the memory back. A mapFile with write keeps its changes in the
+// file.
+pub void Mapped.free() {
+    rawMemUnmap(self.bytes.ptr, self.bytes.len)
+    self.path.free()
+    self.bytes = []
+}

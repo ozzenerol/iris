@@ -1,0 +1,340 @@
+// Sending mail over SMTP. The server is given as an address:
+//
+//     smtp://user:password@mail.example.com:587    STARTTLS, then the login
+//     smtps://user:password@mail.example.com       TLS from the start, port 465
+//
+// with ?ca=file to trust other certificates than the system's, and
+// ?helo=name for the name the client gives itself. On smtp:// the
+// connection switches to TLS whenever the server offers it, and a
+// password is never sent without TLS.
+//
+//     try smtp.send("smtps://alerts:secret@mail.example.com", smtp.Mail{
+//         from: "alerts@example.com",
+//         to: ["ops@example.com"],
+//         subject: "disk 91% full on db1",
+//         text: "/var is at 91%.",
+//     })
+
+import base64, net, str, time, url, uuid
+
+// What sending fails with: connect (the server can't be reached, or TLS
+// fails), auth (the login is refused, or would have to go out without
+// TLS), rejected (the server refused a sender, a recipient or the mail,
+// with its reply in the message), protocol (the server said something
+// that isn't SMTP).
+pub enum SmtpError { connect, auth, rejected, protocol }
+
+// A mail. from, to and subject are needed, and text, html or both: with
+// both, the mail program shows the one it can. cc goes in the header for
+// everyone to see; bcc gets the mail without being shown.
+pub struct Mail {
+    pub str from
+    pub str[] to
+    pub str[] cc
+    pub str[] bcc
+    pub str replyTo
+    pub str subject
+    pub str text
+    pub str html
+}
+
+// A connection to a mail server, for sending several mails. One task
+// uses it at a time.
+pub struct Client {
+    net.Conn conn
+    String host
+    bool tls
+    bool broken
+}
+
+struct Settings {
+    String host
+    u16 port
+    String user
+    String password
+    String ca
+    String helo
+    bool implicitTls
+}
+
+void Settings.free() {
+    self.host.free()
+    self.user.free()
+    self.password.free()
+    self.ca.free()
+    self.helo.free()
+}
+
+!Settings settingsOf(str address) {
+    u := url.parse(address) catch e {
+        return error(SmtpError.connect, "'{address}' isn't an smtp:// or smtps:// address")
+    }
+    if (u.scheme != "smtp" && u.scheme != "smtps") || u.host.len == 0 {
+        return error(SmtpError.connect, "'{address}' isn't an smtp:// or smtps:// address")
+    }
+    Settings s
+    errdefer s.free()
+    name, pass, _ := str.cut(u.user, ":")
+    s.user = try url.decode(name)
+    s.password = try url.decode(pass)
+    s.host = u.host.copy()
+    s.implicitTls = u.scheme == "smtps"
+    i64 port = u.port
+    if port == 0 {
+        port = 465 if s.implicitTls else 587
+    }
+    s.port = u16(port)
+    str rest = u.query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        if key == "ca" {
+            s.ca = try url.decode(value)
+        } else if key == "helo" {
+            s.helo = try url.decode(value)
+        }
+    }
+    if s.helo.len == 0 {
+        s.helo = "localhost".copy()
+    }
+    return s
+}
+
+// A reply: its code, and its text, the lines joined with spaces.
+!(i64, String) Client.reply() {
+    String text
+    for {
+        line := self.conn.readLine(64KiB) catch e {
+            text.free()
+            self.broken = true
+            return error(SmtpError.connect, "the server closed the connection: {e.message}")
+        }
+        defer line.free()
+        if line.len < 3 {
+            text.free()
+            self.broken = true
+            return error(SmtpError.protocol, "the server sent '{line}', not an SMTP reply")
+        }
+        code := line[0:3].parseInt() catch e {
+            text.free()
+            self.broken = true
+            return error(SmtpError.protocol, "the server sent '{line}', not an SMTP reply")
+        }
+        if text.len > 0 {
+            text.append(" ")
+        }
+        text.append(line[4:] if line.len > 4 else "")
+        if line.len == 3 || line[3] != '-' {
+            return (code, text)
+        }
+    }
+}
+
+// Sends a command and reads the reply, which must have the code want.
+!String Client.command(str line, i64 want, SmtpError fail = SmtpError.rejected) {
+    self.conn.write(line) catch e {
+        self.broken = true
+        return error(SmtpError.connect, "sending to the server: {e.message}")
+    }
+    code, text := try self.reply()
+    if code != want && !(want == 250 && code == 251) {
+        what := line.trimRight()
+        if str.startsWith(what, "AUTH ") {
+            what = "AUTH"
+        }
+        defer text.free()
+        return error(fail, "{what}: the server said {code} {text}")
+    }
+    return text
+}
+
+// Connects to the server at address, starts TLS and logs in.
+pub !Client connect(str address) {
+    scoped s := try settingsOf(address)
+    conn := net.dial(s.host, s.port, timeout: 30s) catch e {
+        return error(SmtpError.connect, e.message)
+    }
+    conn.setTimeout(60s)
+    c := Client{conn: conn, host: s.host.copy()}
+    errdefer c.close()
+    if s.implicitTls {
+        c.conn.startTls(s.host, s.ca) catch e {
+            return error(SmtpError.connect, e.message)
+        }
+        c.tls = true
+    }
+    code, greeting := try c.reply()
+    greeting.free()
+    if code != 220 {
+        return error(SmtpError.connect, "{s.host} isn't taking mail: it said {code}")
+    }
+    scoped String ext = try c.command("EHLO {s.helo}\r\n", 250, SmtpError.protocol)
+    if !c.tls && hasWord(ext, "STARTTLS") {
+        scoped String ready = try c.command("STARTTLS\r\n", 220, SmtpError.connect)
+        c.conn.startTls(s.host, s.ca) catch e {
+            return error(SmtpError.connect, e.message)
+        }
+        c.tls = true
+        ext.free()
+        ext = try c.command("EHLO {s.helo}\r\n", 250, SmtpError.protocol)
+    }
+    if s.user.len > 0 {
+        if !c.tls {
+            return error(SmtpError.auth, "{s.host} doesn't offer TLS, so the password isn't sent")
+        }
+        scoped String plain = format("\x00{s.user}\x00{s.password}")
+        scoped String encoded = base64.encode(plain)
+        scoped String ok = try c.command("AUTH PLAIN {encoded}\r\n", 235, SmtpError.auth)
+    }
+    return c
+}
+
+bool hasWord(str text, str word) {
+    for w in str.fields(text) {
+        if w == word {
+            return true
+        }
+    }
+    return false
+}
+
+// Sends a mail.
+pub !void Client.send(Mail m) {
+    if m.from.len == 0 || m.to.len + m.cc.len + m.bcc.len == 0 {
+        return error(SmtpError.rejected, "a mail needs from and at least one of to, cc and bcc")
+    }
+    try checkLine("from", m.from)
+    try checkLine("subject", m.subject)
+    try checkLine("replyTo", m.replyTo)
+    scoped String ok = try self.command("MAIL FROM:<{bare(m.from)}>\r\n", 250)
+    for list in [m.to, m.cc, m.bcc] {
+        for to in list {
+            try checkLine("to", to)
+            scoped String r = self.command("RCPT TO:<{bare(to)}>\r\n", 250) catch e {
+                if !self.broken {
+                    // the server forgets the mail, so the next send starts clean
+                    scoped String reset = self.command("RSET\r\n", 250) catch e2 { "".copy() }
+                }
+                return e
+            }
+        }
+    }
+    scoped String go = try self.command("DATA\r\n", 354)
+    scoped String msg = message(m, self.host)
+    msg.append(".\r\n")
+    scoped String done = try self.command(msg, 250)
+}
+
+// The address in "Ada <ada@example.com>", or the text when it has no <>.
+str bare(str addr) {
+    open := str.findLast(addr, "<")
+    close := str.findLast(addr, ">")
+    if open >= 0 && close > open {
+        return addr[open + 1:close]
+    }
+    return addr.trim()
+}
+
+!void checkLine(str field, str value) {
+    if str.contains(value, "\r") || str.contains(value, "\n") {
+        return error(SmtpError.rejected, "the mail's {field} has a line break in it")
+    }
+}
+
+// The mail as SMTP sends it: headers, then the body in base64, lines
+// ending in \r\n.
+String message(Mail m, str host) {
+    String out
+    scoped String date = rfc5322(time.now())
+    scoped String id = uuid.v4().format()
+    out.append("Date: {date}\r\n")
+    out.append("Message-ID: <{id}@{host}>\r\n")
+    out.append("From: {m.from}\r\n")
+    if m.to.len > 0 {
+        scoped String to = str.join(m.to, ", ")
+        out.append("To: {to}\r\n")
+    }
+    if m.cc.len > 0 {
+        scoped String cc = str.join(m.cc, ", ")
+        out.append("Cc: {cc}\r\n")
+    }
+    if m.replyTo.len > 0 {
+        out.append("Reply-To: {m.replyTo}\r\n")
+    }
+    scoped String subject = headerText(m.subject)
+    out.append("Subject: {subject}\r\n")
+    out.append("MIME-Version: 1.0\r\n")
+    if m.html.len > 0 && m.text.len > 0 {
+        scoped String boundary = uuid.v4().format()
+        out.append("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n")
+        out.append("--{boundary}\r\n")
+        part(&out, "text/plain", m.text)
+        out.append("--{boundary}\r\n")
+        part(&out, "text/html", m.html)
+        out.append("--{boundary}--\r\n")
+    } else if m.html.len > 0 {
+        part(&out, "text/html", m.html)
+    } else {
+        part(&out, "text/plain", m.text)
+    }
+    return out
+}
+
+void part(String *out, str kind, str body) {
+    out.append("Content-Type: {kind}; charset=utf-8\r\n")
+    out.append("Content-Transfer-Encoding: base64\r\n\r\n")
+    scoped String b = base64.encode(body)
+    i := 0
+    for i < b.len {
+        end := i + 76 if i + 76 < b.len else b.len
+        out.append(b[i:end])
+        out.append("\r\n")
+        i = end
+    }
+}
+
+// Header text as it is, or, with bytes beyond ASCII, as an RFC 2047
+// encoded word.
+String headerText(str text) {
+    for i in 0..text.len {
+        if text[i] >= 0x80 {
+            scoped String b = base64.encode(text)
+            return format("=?UTF-8?B?{b}?=")
+        }
+    }
+    return text.copy()
+}
+
+// "Thu, 22 Oct 2026 14:03:09 +0000"
+String rfc5322(time.Time t) {
+    u := t.utc()
+    day := match u.weekday() {
+        .monday => "Mon"
+        .tuesday => "Tue"
+        .wednesday => "Wed"
+        .thursday => "Thu"
+        .friday => "Fri"
+        .saturday => "Sat"
+        .sunday => "Sun"
+    }
+    months := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    scoped String clock = u.format("hh:mm:ss")
+    return format("{day}, {u.day()} {months[u.month() - 1]} {u.year()} {clock} +0000")
+}
+
+// Sends a mail through the server at address: connect, send and close.
+pub !void send(str address, Mail m) {
+    c := try connect(address)
+    defer c.close()
+    try c.send(m)
+}
+
+// Says goodbye to the server and closes the connection.
+pub void Client.close() {
+    if !self.broken {
+        scoped String bye = self.command("QUIT\r\n", 221) catch e { "".copy() }
+    }
+    self.conn.close()
+    self.host.free()
+}
