@@ -46,7 +46,11 @@ test-debug: iris-debug
 docs:
 	python3 tools/build_docs.py
 
+# the VS Code extension, editors/vscode/iris.vsix
+vscode:
+	cd editors/vscode && npm ci --no-audit --no-fund && npx --yes @vscode/vsce@3.6.0 package --skip-license -o iris.vsix
+
 clean:
 	rm -rf iris iris-debug build
 
-.PHONY: test test-debug docs clean
+.PHONY: test test-debug docs vscode clean

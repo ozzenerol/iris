@@ -1,0 +1,71 @@
+{
+  "name": "iris",
+  "displayName": "Iris",
+  "description": "Iris language support: syntax highlighting, and errors, hover, go to definition, outline, completion and formatting from iris lsp.",
+  "version": "0.63.0",
+  "publisher": "ozzenerol",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ozzenerol/iris"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "iris",
+        "aliases": [
+          "Iris",
+          "iris"
+        ],
+        "extensions": [
+          ".iris"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "iris",
+        "scopeName": "source.iris",
+        "path": "./syntaxes/iris.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.iris.codeblock",
+        "path": "./syntaxes/markdown-iris.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.iris": "iris"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Iris",
+      "properties": {
+        "iris.path": {
+          "type": "string",
+          "default": "iris",
+          "description": "The iris program that runs the language server (iris lsp)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "iris.restartServer",
+        "title": "Iris: Restart Language Server"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

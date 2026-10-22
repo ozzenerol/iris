@@ -1,0 +1,307 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Iris",
+  "scopeName": "source.iris",
+  "fileTypes": [
+    "iris"
+  ],
+  "patterns": [
+    {
+      "include": "#code"
+    }
+  ],
+  "repository": {
+    "code": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#chars"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#attributes"
+        },
+        {
+          "include": "#bench"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#functions"
+        },
+        {
+          "include": "#enumdot"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#braces"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.iris",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "include": "#todo"
+            }
+          ]
+        },
+        {
+          "name": "comment.line.double-slash.iris",
+          "begin": "//",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#todo"
+            }
+          ]
+        }
+      ]
+    },
+    "todo": {
+      "name": "keyword.other.todo.iris",
+      "match": "\\b(TODO|FIXME|XXX|NOTE)\\b"
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.raw.iris",
+          "begin": "r\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.double.raw.iris",
+          "begin": "r\"",
+          "end": "\"|$"
+        },
+        {
+          "name": "string.quoted.triple.iris",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "include": "#string-inner"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.iris",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            {
+              "include": "#string-inner"
+            }
+          ]
+        }
+      ]
+    },
+    "string-inner": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.iris",
+          "match": "\\\\(x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|.)"
+        },
+        {
+          "name": "constant.character.escape.iris",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "name": "meta.interpolation.iris",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.iris"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.iris"
+            }
+          },
+          "contentName": "source.iris",
+          "patterns": [
+            {
+              "include": "#code"
+            }
+          ]
+        }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.iris",
+      "match": "'(\\\\x[0-9a-fA-F]{2}|\\\\.|[^'\\\\])'",
+      "captures": {
+        "1": {
+          "patterns": [
+            {
+              "name": "constant.character.escape.iris",
+              "match": "\\\\(x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|.)"
+            }
+          ]
+        }
+      }
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.iris",
+          "match": "\\b0x[0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.iris",
+          "match": "\\b0b[01_]+\\b"
+        },
+        {
+          "match": "\\b([0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?)(ns|us|ms|s|m|h|KiB|MiB|GiB)?\\b",
+          "captures": {
+            "1": {
+              "name": "constant.numeric.iris"
+            },
+            "2": {
+              "name": "keyword.other.unit.iris"
+            }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "name": "entity.other.attribute-name.iris",
+      "match": "@[A-Za-z_]\\w*"
+    },
+    "bench": {
+      "match": "^(bench)(?=\\s+\")",
+      "captures": {
+        "1": {
+          "name": "keyword.other.iris"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.iris",
+          "match": "\\b(if|else|for|in|match|break|continue|return|try|catch|defer|errdefer|select|when|spawn|thread)\\b"
+        },
+        {
+          "name": "keyword.other.iris",
+          "match": "\\b(import|pub|const|comptime|test|asm|scoped|threadlocal)\\b"
+        },
+        {
+          "name": "keyword.operator.word.iris",
+          "match": "\\b(not|and|or|is)\\b"
+        },
+        {
+          "match": "\\b(struct|union|enum|interface|type)\\b(?:\\s+([A-Za-z_]\\w*))?",
+          "captures": {
+            "1": {
+              "name": "storage.type.iris"
+            },
+            "2": {
+              "name": "entity.name.type.iris"
+            }
+          }
+        },
+        {
+          "name": "storage.type.iris",
+          "match": "\\b(dyn|chan)\\b"
+        },
+        {
+          "name": "constant.language.boolean.iris",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.iris",
+          "match": "\\bnull\\b"
+        },
+        {
+          "name": "variable.language.self.iris",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.iris",
+          "match": "\\b(void|bool|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|str|u16be|u32be|u64be|i16be|i32be|i64be)\\b"
+        },
+        {
+          "name": "support.type.iris",
+          "match": "\\b(String|Error|Duration|Mutex|Thread|Atomic|List|Map|Set|Arena)\\b"
+        },
+        {
+          "name": "entity.name.type.iris",
+          "match": "\\b[A-Z]\\w*[a-z]\\w*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.iris",
+          "match": "\\b(print|panic|format|alloc|free|sizeof|error|sleep|after|expect)(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.iris",
+          "match": "\\b[A-Za-z_]\\w*(?=\\()"
+        }
+      ]
+    },
+    "enumdot": {
+      "match": "(?<![\\w)\\]}\\\".])\\.([A-Za-z_]\\w*)",
+      "captures": {
+        "1": {
+          "name": "variable.other.enummember.iris"
+        }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.iris",
+          "match": "=>|<-"
+        },
+        {
+          "name": "keyword.operator.assignment.iris",
+          "match": ":=|[-+*/%&|^]?=(?!=)|<<=|>>="
+        },
+        {
+          "name": "keyword.operator.comparison.iris",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.iris",
+          "match": "\\.\\.=?|<<|>>|[-+*/%&|^~!?]"
+        }
+      ]
+    },
+    "braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        {
+          "include": "#code"
+        }
+      ]
+    }
+  }
+}

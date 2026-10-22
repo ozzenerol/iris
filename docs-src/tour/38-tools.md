@@ -92,7 +92,16 @@ vim.lsp.config("iris", {
 vim.lsp.enable("iris")
 ```
 
-Vim uses the same syntax files with `set rtp+=/path/to/iris/editors/vim`. Other editors start `iris lsp` as the language server for `.iris` files.
+Vim uses the same syntax files with `set rtp+=/path/to/iris/editors/vim`.
+
+The VS Code extension in `editors/vscode` highlights `.iris` files and the `iris` code blocks in Markdown, and starts `iris lsp`. `make vscode` packages it (it needs Node.js and npm):
+
+```shell
+make vscode
+code --install-extension editors/vscode/iris.vsix
+```
+
+The `iris.path` setting picks the `iris` program when it isn't the one on the PATH. Other editors start `iris lsp` as the language server for `.iris` files.
 
 ## Other platforms
 
