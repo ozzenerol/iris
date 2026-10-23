@@ -1056,20 +1056,23 @@ int iris_fs_read_all(const char *path, int64_t n, IrisString *out) {
     return bad ? 5 : 0;
 }
 
+int iris_fs_write_fd(int fd, const char *data, int64_t len);
+
+/* Without stdio, which would stat the file to choose a buffer. */
 int iris_fs_write(const char *path, int64_t n, const char *data, int64_t len, int append) {
     char *p = cpath(path, n);
     if (!p) {
         return 1;
     }
-    FILE *f = fopen(p, append ? "ab" : "wb");
+    int fd = open(p, O_WRONLY | O_CREAT | O_CLOEXEC | (append ? O_APPEND : O_TRUNC), 0666);
     int err = errno;
     free(p);
-    if (!f) {
+    if (fd < 0) {
         return fsCode(err);
     }
-    size_t put = len ? fwrite(data, 1, (size_t)len, f) : 0;
-    int bad = fclose(f) != 0 || put != (size_t)len;
-    return bad ? 5 : 0;
+    int code = iris_fs_write_fd(fd, data, len);
+    if (close(fd) != 0 && !code) code = 5;
+    return code;
 }
 
 int iris_fs_exists(const char *path, int64_t n) {
@@ -1125,7 +1128,12 @@ int iris_fs_mkdir(const char *path, int64_t n, int parents) {
         return 1;
     }
     int code = 0;
-    if (parents) {
+    if (parents && mkdir(p, 0777) == 0) {
+        /* the folder above was there: the usual case, in one call */
+    } else if (parents && errno == EEXIST) {
+        struct stat st;
+        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) code = 3;
+    } else if (parents) {
         for (char *s = p + 1; *s && !code; s++) {
             if (*s == '/') {
                 *s = 0;
@@ -1152,30 +1160,47 @@ int iris_fs_rename(const char *from, int64_t fn, const char *to, int64_t tn) {
     return code;
 }
 
+/* name in the folder dirfd, a folder (isDir 1), not one (0), or not known
+   (-1), and everything in it. Names are taken from the folder each is in,
+   so the system doesn't follow the whole path for each one. */
+static int removeIn(int dirfd, const char *name, int isDir) {
+    if (isDir < 0) {
+        struct stat st;
+        if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return errno == ENOENT ? 0 : fsCode(errno);
+        isDir = S_ISDIR(st.st_mode);
+    }
+    if (!isDir) {
+        return unlinkat(dirfd, name, 0) == 0 || errno == ENOENT ? 0 : fsCode(errno);
+    }
+    int fd = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return errno == ENOENT ? 0 : fsCode(errno);
+    DIR *d = fdopendir(fd);
+    if (!d) {
+        int code = fsCode(errno);
+        close(fd);
+        return code;
+    }
+    struct dirent *e;
+    int code = 0;
+    while (!code && (e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        int kind = -1;
+#ifdef DT_DIR
+        if (e->d_type != DT_UNKNOWN) kind = e->d_type == DT_DIR;
+#endif
+        code = removeIn(fd, e->d_name, kind);
+    }
+    closedir(d);
+    if (code) return code;
+    return unlinkat(dirfd, name, AT_REMOVEDIR) == 0 || errno == ENOENT ? 0 : fsCode(errno);
+}
+
 static int removeTree(const char *p) {
     struct stat st;
     if (lstat(p, &st) != 0) {
         return errno == ENOENT ? 0 : fsCode(errno);
     }
-    if (S_ISDIR(st.st_mode)) {
-        DIR *d = opendir(p);
-        if (!d) return fsCode(errno);
-        struct dirent *e;
-        int code = 0;
-        while (!code && (e = readdir(d))) {
-            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-            size_t len = strlen(p) + strlen(e->d_name) + 2;
-            char *sub = malloc(len);
-            if (!sub) outOfMemory();
-            snprintf(sub, len, "%s/%s", p, e->d_name);
-            code = removeTree(sub);
-            free(sub);
-        }
-        closedir(d);
-        if (code) return code;
-        return rmdir(p) == 0 ? 0 : fsCode(errno);
-    }
-    return unlink(p) == 0 ? 0 : fsCode(errno);
+    return removeIn(AT_FDCWD, p, S_ISDIR(st.st_mode));
 }
 
 /* A file, or a folder and everything in it; nothing there is no error. */
@@ -1430,6 +1455,26 @@ int iris_os_hostname(IrisString *out) {
     buf[sizeof buf - 1] = 0;
     iris_string_append(out, buf, (int64_t)strlen(buf));
     return 0;
+}
+
+/* Asks for the cache lines of bytes at p, so a search in them doesn't wait
+   for one line after another. */
+void iris_core_prefetch(const char *p, int64_t bytes) {
+    for (int64_t i = 0; i < bytes; i += 64) __builtin_prefetch(p + i);
+}
+
+/* a when c, else b, without a branch: for a search where c can't be guessed. */
+int64_t iris_core_pick(int32_t c, int64_t a, int64_t b) {
+    return __builtin_unpredictable(c != 0) ? a : b;
+}
+
+/* Memory grown to n bytes, moved when it must be, and not zeroed: for a
+   Deque, which writes each place before it reads it. A large block grows
+   by moving its pages, and pages it doesn't use yet stay untouched. */
+char *iris_core_grow_raw(char *p, int64_t n) {
+    char *q = realloc(p, (size_t)n);
+    if (!q) outOfMemory();
+    return q;
 }
 
 /* $HOME, or the home folder in the user database. 0, or 1 for none. */

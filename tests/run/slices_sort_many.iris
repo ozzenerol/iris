@@ -1,5 +1,7 @@
 // expect: sorted 10000 ok
 // expect: stable ok
+// expect: patterns ok
+// expect: by ok
 
 struct Item {
     i64 key
@@ -7,6 +9,24 @@ struct Item {
 }
 
 bool byKey(Item a, Item b) => a.key < b.key
+bool desc(i64 a, i64 b) => a > b
+
+bool ordered(i64[] xs) {
+    for i in 1..xs.len {
+        if xs[i - 1] > xs[i] {
+            return false
+        }
+    }
+    return true
+}
+
+i64 total(i64[] xs) {
+    i64 s = 0
+    for x in xs {
+        s += x
+    }
+    return s
+}
 
 void main() {
     List[i64] xs
@@ -19,21 +39,65 @@ void main() {
         xs.push(i64(x % 1000))
     }
     sort(xs.items())
-    good := true
-    for i in 1..xs.len {
-        good = good && xs.at(i - 1) <= xs.at(i)
-    }
-    print("sorted {xs.len} {if good { "ok" } else { "bad" }}")
+    print("sorted {xs.len} {if ordered(xs.items()) { "ok" } else { "bad" }}")
+
+    // List.sort keeps equal values in their order
     List[Item] items
     defer items.free()
     for i in 0..5000 {
         items.push(Item{key: (i * 31) % 17, seq: i})
     }
-    sortBy(items.items(), byKey)
+    items.sort(byKey)
+    good := true
     for i in 1..items.len {
         a := items.at(i - 1)
         b := items.at(i)
         good = good && (a.key < b.key || (a.key == b.key && a.seq < b.seq))
     }
     print("stable {if good { "ok" } else { "bad" }}")
+
+    // all equal, two values, sorted, reversed, sawtooth, organ pipe
+    n := 30000
+    i64[] ys = alloc(i64, n)
+    defer free(ys)
+    for kind in 0..6 {
+        for i in 0..n {
+            ys[i] = match kind {
+                0 => 7
+                1 => i64(i % 2)
+                2 => i64(i)
+                3 => i64(n - i)
+                4 => i64(i % 100)
+                _ => if i < n / 2 { i64(i) } else { i64(n - i) }
+            }
+        }
+        before := total(ys)
+        sort(ys)
+        good = good && ordered(ys) && total(ys) == before
+    }
+    print("patterns {if good { "ok" } else { "bad" }}")
+
+    for i in 0..n {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        ys[i] = i64(x % 50)
+    }
+    sortBy(ys, desc)
+    for i in 1..n {
+        good = good && ys[i - 1] >= ys[i]
+    }
+    Item[] its = alloc(Item, n)
+    defer free(its)
+    for i in 0..n {
+        its[i] = Item{key: (i * 7919) % 1000, seq: i}
+    }
+    sortBy(its, byKey)
+    i64 seqs = 0
+    for i in 0..n {
+        good = good && (i == 0 || its[i - 1].key <= its[i].key)
+        seqs += its[i].seq
+    }
+    good = good && seqs == i64(n) * i64(n - 1) / 2
+    print("by {if good { "ok" } else { "bad" }}")
 }

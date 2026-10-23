@@ -7,6 +7,9 @@ pub struct Deque[T] {
     pub i64 len
 }
 
+@extern("iris_core_grow_raw")
+u8 *rawGrow(u8 *p, i64 bytes)
+
 // The place in buf of the value at i.
 i64 Deque[T].slot(i64 i) => (self.head + i) & (self.buf.len - 1)
 
@@ -19,13 +22,31 @@ pub void Deque[T].reserve(i64 n) {
     for size < n {
         size *= 2
     }
-    T[] next = alloc(T, size)
-    for i in 0..self.len {
-        next[i] = self.buf[self.slot(i)]
+    old := self.buf.len
+    // grown in place when it can be, then the values that wrapped round the
+    // end are put back in order: the shorter part moves. A size that is a
+    // multiple of 32 may be a type aligned past what realloc gives.
+    if sizeof(T) % 32 == 0 {
+        self.buf = growSlice(self.buf, size)
+    } else {
+        T *p = rawGrow(self.buf.ptr, size * sizeof(T))
+        self.buf = p[0:size]
     }
-    free(self.buf)
-    self.buf = next
-    self.head = 0
+    if self.head + self.len > old {
+        front := old - self.head
+        wrapped := self.len - front
+        if wrapped <= front {
+            for i in 0..wrapped {
+                self.buf[old + i] = self.buf[i]
+            }
+        } else {
+            to := size - front
+            for i in 0..front {
+                self.buf[to + i] = self.buf[self.head + i]
+            }
+            self.head = to
+        }
+    }
 }
 
 void Deque[T].grow() {

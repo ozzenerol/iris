@@ -6,176 +6,386 @@
 // its own. A new SortedMap is empty; free gives its memory back.
 pub struct SortedMap[K, V] {
     pub bool(K, K) less
-    // A skip list. Node 0 is the head; links holds each node's next node at
-    // each of its levels, 0 for none. A removed node waits in spare, by level.
-    List[SortedNode[K, V]] nodes
-    List[i64] links
-    i64[25] spare
-    i64 levels
-    u64 seed
+    // A B+ tree. Leaf i has its keys and values at i * SORTED_LEAF in lkeys
+    // and lvals, and the leaves are linked in order. Inner node i has its
+    // keys at i * SORTED_WIDE in ikeys and its children at
+    // i * (SORTED_WIDE + 1) in kids; the keys of child j + 1 don't go before
+    // key j, and those of child j go before it. A node that is no longer
+    // used waits in a list of spare ones.
+    List[K] lkeys
+    List[V] lvals
+    List[SortedLeaf] leaves
+    List[K] ikeys
+    List[i64] kids
+    List[i64] ilen
+    i64 root
+    i64 height // levels of inner nodes above the leaves
+    i64 head // the first leaf and the last
+    i64 tail
+    i64 spareLeaf
+    i64 spareInner
     pub i64 len
 }
 
-struct SortedNode[K, V] {
-    K key
-    V val
-    i64 at // where its links start
-    i64 levels
+struct SortedLeaf {
+    i64 len
+    i64 next // -1 for none
+    i64 prev
 }
 
-const SORTED_LEVELS = 24
+const SORTED_LEAF = 32
+const SORTED_WIDE = 64
+const SORTED_KIDS = 65
 
-// The node after n at level l.
-i64 SortedMap[K, V].link(i64 n, i64 l) => self.links.buf[self.nodes.buf[n].at + l]
-
-void SortedMap[K, V].setLink(i64 n, i64 l, i64 to) {
-    self.links.buf[self.nodes.buf[n].at + l] = to
+// n more items at the end of a list, growing it by half or more.
+void growBy[T](List[T] *l, i64 n) {
+    if l.len + n > l.buf.len {
+        size := l.buf.len + l.buf.len / 2
+        if size < l.len + n {
+            size = l.len + n
+        }
+        l.reserve(size)
+    }
+    l.len += n
 }
 
 void SortedMap[K, V].start() {
     if self.less == null {
         panic("a SortedMap needs a less function: SortedMap[K, V]{{less: f}}")
     }
-    if self.nodes.len > 0 {
+    if self.leaves.len > 0 {
         return
     }
-    SortedNode[K, V] head
-    head.levels = SORTED_LEVELS
-    self.nodes.push(head)
-    for i in 0..SORTED_LEVELS {
-        self.links.push(0)
-    }
-    self.levels = 1
-    if self.seed == 0 {
-        self.seed = 0x9e3779b97f4a7c15
-    }
+    self.spareLeaf = -1
+    self.spareInner = -1
+    self.root = self.newLeaf()
+    self.height = 0
+    self.head = self.root
+    self.tail = self.root
 }
 
-// How many levels a new node has: one more with each chance of 1 in 4.
-i64 SortedMap[K, V].newLevels() {
-    x := self.seed
-    x ^= x << 13
-    x ^= x >> 7
-    x ^= x << 17
-    self.seed = x
-    n := 1
-    for n < SORTED_LEVELS && (x & 3) == 0 {
-        n += 1
-        x >>= 2
+i64 SortedMap[K, V].newLeaf() {
+    n := self.spareLeaf
+    if n >= 0 {
+        self.spareLeaf = self.leaves.buf[n].next
+    } else {
+        n = self.leaves.len
+        self.leaves.push(SortedLeaf{})
+        growBy(&self.lkeys, SORTED_LEAF)
+        growBy(&self.lvals, SORTED_LEAF)
+    }
+    self.leaves.buf[n] = SortedLeaf{len: 0, next: -1, prev: -1}
+    return n
+}
+
+i64 SortedMap[K, V].newInner() {
+    n := self.spareInner
+    if n >= 0 {
+        self.spareInner = self.kids.buf[n * SORTED_KIDS]
+    } else {
+        n = self.ilen.len
+        self.ilen.push(0)
+        growBy(&self.ikeys, SORTED_WIDE)
+        growBy(&self.kids, SORTED_KIDS)
+    }
+    self.ilen.buf[n] = 0
+    return n
+}
+
+@extern("iris_core_prefetch")
+void prefetch(u8 *p, i64 bytes)
+
+@extern("iris_core_pick")
+i64 rawPick(i32 c, i64 a, i64 b)
+
+// a when c, else b, without a branch.
+i64 pick(bool c, i64 a, i64 b) => rawPick(if c { 1 } else { 0 }, a, b)
+
+// The first place in leaf n whose key doesn't go before k.
+i64 SortedMap[K, V].lower(i64 n, K k) {
+    base := n * SORTED_LEAF
+    prefetch(&self.lkeys.buf[base], SORTED_LEAF * sizeof(K))
+    keys := self.lkeys.buf
+    size := self.leaves.buf[n].len
+    if size == 0 {
+        return 0
+    }
+    // halves of a size set by the size alone, and no branch on what less
+    // says, which the CPU can't guess
+    at := base
+    for size > 1 {
+        half := size >> 1
+        at = pick(self.less(keys[at + half - 1], k), at + half, at)
+        size -= half
+    }
+    return at - base + pick(self.less(keys[at], k), 1, 0)
+}
+
+// The child of inner node n that k goes down to.
+i64 SortedMap[K, V].route(i64 n, K k) {
+    base := n * SORTED_WIDE
+    prefetch(&self.ikeys.buf[base], SORTED_WIDE * sizeof(K))
+    keys := self.ikeys.buf
+    size := self.ilen.buf[n]
+    if size == 0 {
+        return 0
+    }
+    at := base
+    for size > 1 {
+        half := size >> 1
+        at = pick(self.less(k, keys[at + half - 1]), at, at + half)
+        size -= half
+    }
+    return at - base + pick(self.less(k, keys[at]), 0, 1)
+}
+
+// The leaf k belongs in; with a path, the inner nodes on the way there and
+// the child taken in each (a path of length 1 is no path).
+i64 SortedMap[K, V].leafOf(K k, i64[] nodes, i64[] at) {
+    n := self.root
+    for d in 0..self.height {
+        i := self.route(n, k)
+        if nodes.len > 1 {
+            nodes[d] = n
+            at[d] = i
+        }
+        n = self.kids.buf[n * SORTED_KIDS + i]
     }
     return n
 }
 
-// The last node at each level whose key goes before k, in before, and the
-// node after it at level 0: the node with k, if k is there.
-i64 SortedMap[K, V].seek(K k, i64[] before) {
-    x := 0
-    l := self.levels - 1
-    for l >= 0 {
-        for {
-            n := self.link(x, l)
-            break if n == 0 || !self.less(self.nodes.buf[n].key, k)
-            x = n
-        }
-        before[l] = x
-        l -= 1
-    }
-    return self.link(x, 0)
-}
-
-// The node with k, or 0.
-i64 SortedMap[K, V].find(K k) {
+// The leaf and the place of k, and whether it is there.
+(i64, i64, bool) SortedMap[K, V].find(K k) {
     if self.len == 0 {
-        return 0
+        return (0, 0, false)
     }
-    i64[24] before
-    n := self.seek(k, before[:])
-    if n != 0 && !self.less(k, self.nodes.buf[n].key) {
-        return n
-    }
-    return 0
+    i64[1] none
+    n := self.leafOf(k, none[:], none[:])
+    i := self.lower(n, k)
+    found := i < self.leaves.buf[n].len && !self.less(k, self.lkeys.buf[n * SORTED_LEAF + i])
+    return (n, i, found)
 }
 
 // Sets the value of k, adding k if it isn't there.
 pub void SortedMap[K, V].set(K k, V v) {
     self.start()
-    i64[24] before
-    n := self.seek(k, before[:])
-    if n != 0 && !self.less(k, self.nodes.buf[n].key) {
-        self.nodes.buf[n].val = v
+    i64[24] nodes
+    i64[24] at
+    n := self.leafOf(k, nodes[:], at[:])
+    i := self.lower(n, k)
+    count := self.leaves.buf[n].len
+    if i < count && !self.less(k, self.lkeys.buf[n * SORTED_LEAF + i]) {
+        self.lvals.buf[n * SORTED_LEAF + i] = v
         return
     }
-    levels := self.newLevels()
-    for self.levels < levels {
-        before[self.levels] = 0
-        self.levels += 1
-    }
-    node := self.spare[levels]
-    if node != 0 {
-        self.spare[levels] = self.link(node, 0)
-    } else {
-        node = self.nodes.len
-        SortedNode[K, V] fresh
-        fresh.at = self.links.len
-        fresh.levels = levels
-        self.nodes.push(fresh)
-        for i in 0..levels {
-            self.links.push(0)
+    if count == SORTED_LEAF {
+        // a full leaf: half of it goes to a new leaf after it
+        m := self.newLeaf()
+        half := SORTED_LEAF / 2
+        a := n * SORTED_LEAF
+        b := m * SORTED_LEAF
+        for j in 0..SORTED_LEAF - half {
+            self.lkeys.buf[b + j] = self.lkeys.buf[a + half + j]
+            self.lvals.buf[b + j] = self.lvals.buf[a + half + j]
         }
+        self.leaves.buf[n].len = half
+        self.leaves.buf[m].len = SORTED_LEAF - half
+        next := self.leaves.buf[n].next
+        self.leaves.buf[m].next = next
+        self.leaves.buf[m].prev = n
+        if next >= 0 {
+            self.leaves.buf[next].prev = m
+        } else {
+            self.tail = m
+        }
+        self.leaves.buf[n].next = m
+        if i > half {
+            n = m
+            i -= half
+        }
+        self.leafInsert(n, i, keyOwn(k), v)
+        self.len += 1
+        self.addKid(nodes[:], at[:], self.height - 1, self.lkeys.buf[b], m)
+        return
     }
-    self.nodes.buf[node].key = keyOwn(k)
-    self.nodes.buf[node].val = v
-    for l in 0..levels {
-        self.setLink(node, l, self.link(before[l], l))
-        self.setLink(before[l], l, node)
-    }
+    self.leafInsert(n, i, keyOwn(k), v)
     self.len += 1
+}
+
+void SortedMap[K, V].leafInsert(i64 n, i64 i, K k, V v) {
+    base := n * SORTED_LEAF
+    j := self.leaves.buf[n].len
+    for j > i {
+        self.lkeys.buf[base + j] = self.lkeys.buf[base + j - 1]
+        self.lvals.buf[base + j] = self.lvals.buf[base + j - 1]
+        j -= 1
+    }
+    self.lkeys.buf[base + i] = k
+    self.lvals.buf[base + i] = v
+    self.leaves.buf[n].len += 1
+}
+
+// Puts child m, whose keys don't go before sep, after the child taken at
+// depth d of the path; d -1 is above the root.
+void SortedMap[K, V].addKid(i64[] nodes, i64[] at, i64 d, K sep, i64 m) {
+    if d < 0 {
+        r := self.newInner()
+        self.kids.buf[r * SORTED_KIDS] = self.root
+        self.kids.buf[r * SORTED_KIDS + 1] = m
+        self.ikeys.buf[r * SORTED_WIDE] = sep
+        self.ilen.buf[r] = 1
+        self.root = r
+        self.height += 1
+        return
+    }
+    p := nodes[d]
+    i := at[d]
+    if self.ilen.buf[p] < SORTED_WIDE {
+        self.innerInsert(p, i, sep, m)
+        return
+    }
+    // a full node: the keys after the middle one go to a new node, and the
+    // middle one goes up
+    q := self.newInner()
+    half := SORTED_WIDE / 2
+    pk := p * SORTED_WIDE
+    qk := q * SORTED_WIDE
+    pc := p * SORTED_KIDS
+    qc := q * SORTED_KIDS
+    up := self.ikeys.buf[pk + half]
+    for j in 0..SORTED_WIDE - half - 1 {
+        self.ikeys.buf[qk + j] = self.ikeys.buf[pk + half + 1 + j]
+    }
+    for j in 0..SORTED_WIDE - half {
+        self.kids.buf[qc + j] = self.kids.buf[pc + half + 1 + j]
+    }
+    self.ilen.buf[p] = half
+    self.ilen.buf[q] = SORTED_WIDE - half - 1
+    if i <= half {
+        self.innerInsert(p, i, sep, m)
+    } else {
+        self.innerInsert(q, i - half - 1, sep, m)
+    }
+    self.addKid(nodes, at, d - 1, up, q)
+}
+
+// Puts key sep and child m after child i of inner node p.
+void SortedMap[K, V].innerInsert(i64 p, i64 i, K sep, i64 m) {
+    pk := p * SORTED_WIDE
+    pc := p * SORTED_KIDS
+    j := self.ilen.buf[p]
+    for j > i {
+        self.ikeys.buf[pk + j] = self.ikeys.buf[pk + j - 1]
+        self.kids.buf[pc + j + 1] = self.kids.buf[pc + j]
+        j -= 1
+    }
+    self.ikeys.buf[pk + i] = sep
+    self.kids.buf[pc + i + 1] = m
+    self.ilen.buf[p] += 1
 }
 
 // The value of k, and whether k is there.
 pub (V, bool) SortedMap[K, V].get(K k) {
-    n := self.find(k)
-    if n == 0 {
+    n, i, found := self.find(k)
+    if !found {
         V none
         return (none, false)
     }
-    return (self.nodes.buf[n].val, true)
+    return (self.lvals.buf[n * SORTED_LEAF + i], true)
 }
 
 // The value of k, or fallback when k isn't there.
 pub V SortedMap[K, V].getOr(K k, V fallback) {
-    n := self.find(k)
-    return if n == 0 { fallback } else { self.nodes.buf[n].val }
+    n, i, found := self.find(k)
+    return if found { self.lvals.buf[n * SORTED_LEAF + i] } else { fallback }
 }
 
 // Whether k is there.
-pub bool SortedMap[K, V].has(K k) => self.find(k) != 0
+pub bool SortedMap[K, V].has(K k) {
+    _, _, found := self.find(k)
+    return found
+}
 
 // Takes k out; false when it wasn't there.
 pub bool SortedMap[K, V].remove(K k) {
     if self.len == 0 {
         return false
     }
-    i64[24] before
-    n := self.seek(k, before[:])
-    if n == 0 || self.less(k, self.nodes.buf[n].key) {
+    i64[24] nodes
+    i64[24] at
+    n := self.leafOf(k, nodes[:], at[:])
+    i := self.lower(n, k)
+    base := n * SORTED_LEAF
+    count := self.leaves.buf[n].len
+    if i >= count || self.less(k, self.lkeys.buf[base + i]) {
         return false
     }
-    levels := self.nodes.buf[n].levels
-    for l in 0..levels {
-        self.setLink(before[l], l, self.link(n, l))
+    keyFree(self.lkeys.buf[base + i])
+    for j in i..count - 1 {
+        self.lkeys.buf[base + j] = self.lkeys.buf[base + j + 1]
+        self.lvals.buf[base + j] = self.lvals.buf[base + j + 1]
     }
-    for self.levels > 1 && self.link(0, self.levels - 1) == 0 {
-        self.levels -= 1
-    }
-    keyFree(self.nodes.buf[n].key)
     K noKey
     V noValue
-    self.nodes.buf[n].key = noKey
-    self.nodes.buf[n].val = noValue
-    self.setLink(n, 0, self.spare[levels])
-    self.spare[levels] = n
+    self.lkeys.buf[base + count - 1] = noKey
+    self.lvals.buf[base + count - 1] = noValue
+    self.leaves.buf[n].len = count - 1
     self.len -= 1
+    if self.len == 0 {
+        self.reset()
+        return true
+    }
+    if count - 1 > 0 {
+        return true
+    }
+    // an empty leaf leaves the chain and its parent. Leaves that are not
+    // empty stay as they are, however few keys they have.
+    prev := self.leaves.buf[n].prev
+    next := self.leaves.buf[n].next
+    if prev >= 0 {
+        self.leaves.buf[prev].next = next
+    } else {
+        self.head = next
+    }
+    if next >= 0 {
+        self.leaves.buf[next].prev = prev
+    } else {
+        self.tail = prev
+    }
+    self.leaves.buf[n].next = self.spareLeaf
+    self.spareLeaf = n
+    d := self.height - 1
+    for d >= 0 {
+        p := nodes[d]
+        c := at[d]
+        pk := p * SORTED_WIDE
+        pc := p * SORTED_KIDS
+        keys := self.ilen.buf[p]
+        // child c goes, with the key before it, or the first key for child 0
+        kk := if c > 0 { c - 1 } else { 0 }
+        for j in kk..keys - 1 {
+            self.ikeys.buf[pk + j] = self.ikeys.buf[pk + j + 1]
+        }
+        for j in c..keys {
+            self.kids.buf[pc + j] = self.kids.buf[pc + j + 1]
+        }
+        if keys > 0 {
+            self.ilen.buf[p] = keys - 1
+            break
+        }
+        // it had one child: it goes too
+        self.kids.buf[pc] = self.spareInner
+        self.spareInner = p
+        d -= 1
+    }
+    // a root with one child gives way to it
+    for self.height > 0 && self.ilen.buf[self.root] == 0 {
+        r := self.root
+        self.root = self.kids.buf[r * SORTED_KIDS]
+        self.kids.buf[r * SORTED_KIDS] = self.spareInner
+        self.spareInner = r
+        self.height -= 1
+    }
     return true
 }
 
@@ -186,8 +396,8 @@ pub (K, V, bool) SortedMap[K, V].first() {
         V noValue
         return (noKey, noValue, false)
     }
-    n := self.link(0, 0)
-    return (self.nodes.buf[n].key, self.nodes.buf[n].val, true)
+    at := self.head * SORTED_LEAF
+    return (self.lkeys.buf[at], self.lvals.buf[at], true)
 }
 
 // The last key and its value, and false when the map is empty.
@@ -197,15 +407,8 @@ pub (K, V, bool) SortedMap[K, V].last() {
         V noValue
         return (noKey, noValue, false)
     }
-    x := 0
-    l := self.levels - 1
-    for l >= 0 {
-        for self.link(x, l) != 0 {
-            x = self.link(x, l)
-        }
-        l -= 1
-    }
-    return (self.nodes.buf[x].key, self.nodes.buf[x].val, true)
+    at := self.tail * SORTED_LEAF + self.leaves.buf[self.tail].len - 1
+    return (self.lkeys.buf[at], self.lvals.buf[at], true)
 }
 
 // The keys in order, as a new List. A str or String key is the map's own
@@ -219,47 +422,77 @@ pub List[K] SortedMap[K, V].keys() {
     return out
 }
 
-// Takes every key out and keeps the memory.
-pub void SortedMap[K, V].clear() {
-    if self.nodes.len == 0 {
-        return
-    }
-    n := self.link(0, 0)
-    for n != 0 {
-        keyFree(self.nodes.buf[n].key)
-        n = self.link(n, 0)
-    }
-    self.nodes.clear()
-    self.links.clear()
-    for i in 0..self.spare.len {
-        self.spare[i] = 0
-    }
+// Empty, with the memory kept.
+void SortedMap[K, V].reset() {
+    self.lkeys.clear()
+    self.lvals.clear()
+    self.leaves.clear()
+    self.ikeys.clear()
+    self.kids.clear()
+    self.ilen.clear()
     self.len = 0
     self.start()
+}
+
+// Takes every key out and keeps the memory.
+pub void SortedMap[K, V].clear() {
+    if self.leaves.len == 0 {
+        return
+    }
+    if self.len > 0 {
+        n := self.head
+        for n >= 0 {
+            base := n * SORTED_LEAF
+            for i in 0..self.leaves.buf[n].len {
+                keyFree(self.lkeys.buf[base + i])
+            }
+            n = self.leaves.buf[n].next
+        }
+    }
+    self.reset()
 }
 
 // Gives the map's memory back; the map is empty after.
 pub void SortedMap[K, V].free() {
     self.clear()
-    self.nodes.free()
-    self.links.free()
+    self.lkeys.free()
+    self.lvals.free()
+    self.leaves.free()
+    self.ikeys.free()
+    self.kids.free()
+    self.ilen.free()
+}
+
+// A place in the leaves as a loop's position: 0 is before the start, -1
+// after the end.
+i64 SortedMap[K, V].place(i64 n, i64 i) {
+    if i >= self.leaves.buf[n].len {
+        n = self.leaves.buf[n].next
+        i = 0
+        if n < 0 {
+            return -1
+        }
+    }
+    return n * 64 + i + 1
 }
 
 // for k, v in map, in the order of the keys. The map must not change
 // during the loop.
 pub (K, V, bool) SortedMap[K, V].next(i64 *at) {
-    n := *at
-    if n == 0 && self.len > 0 {
-        n = self.link(0, 0)
+    p := *at
+    if p == 0 {
+        p = if self.len > 0 { self.head * 64 + 1 } else { -1 }
     }
-    if n <= 0 {
+    if p < 0 {
         K noKey
         V noValue
         return (noKey, noValue, false)
     }
-    next := self.link(n, 0)
-    *at = if next == 0 { -1 } else { next }
-    return (self.nodes.buf[n].key, self.nodes.buf[n].val, true)
+    n := (p - 1) >> 6
+    i := (p - 1) & 63
+    *at = self.place(n, i + 1)
+    base := n * SORTED_LEAF
+    return (self.lkeys.buf[base + i], self.lvals.buf[base + i], true)
 }
 
 // The keys from one key up to another, from range.
@@ -274,25 +507,28 @@ pub struct SortedRange[K, V] {
 pub SortedRange[K, V] SortedMap[K, V].range(K from, K to) {
     i64 start = -1
     if self.len > 0 {
-        i64[24] before
-        n := self.seek(from, before[:])
-        if n != 0 {
-            start = n
-        }
+        i64[1] none
+        n := self.leafOf(from, none[:], none[:])
+        start = self.place(n, self.lower(n, from))
     }
     return SortedRange[K, V]{m: self, start: start, to: to}
 }
 
 // for k, v in map.range(a, b)
 pub (K, V, bool) SortedRange[K, V].next(i64 *at) {
-    n := if *at == 0 { self.start } else { *at }
+    p := if *at == 0 { self.start } else { *at }
     m := self.m
-    if n <= 0 || !m.less(m.nodes.buf[n].key, self.to) {
-        K noKey
-        V noValue
-        return (noKey, noValue, false)
+    if p > 0 {
+        n := (p - 1) >> 6
+        i := (p - 1) & 63
+        slot := n * SORTED_LEAF + i
+        if m.less(m.lkeys.buf[slot], self.to) {
+            *at = m.place(n, i + 1)
+            return (m.lkeys.buf[slot], m.lvals.buf[slot], true)
+        }
     }
-    next := m.link(n, 0)
-    *at = if next == 0 { -1 } else { next }
-    return (m.nodes.buf[n].key, m.nodes.buf[n].val, true)
+    *at = -1
+    K noKey
+    V noValue
+    return (noKey, noValue, false)
 }
