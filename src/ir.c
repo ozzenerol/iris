@@ -3506,8 +3506,10 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
                     returnValue(ir, v);
                 }
             } else if (f->type->kind == TY_VOID) {
+                freeTemps(ir, 0);   /* text built for a call in the body */
                 ins(ir, "ret void");
             } else {
+                freeTemps(ir, 0);
                 ins(ir, "ret %s %s", llType(ir, f->type), v.s);
             }
         }
