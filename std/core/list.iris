@@ -13,7 +13,8 @@ pub void List[T].reserve(i64 n) {
     self.buf = growSlice(self.buf, n)
 }
 
-// The slice with room for n items, the new ones zero; it may have moved.
+// The slice with room for n items; it may have moved. The new items aren't
+// set: List and Deque write each before they read it.
 @builtin
 void growSlice()
 

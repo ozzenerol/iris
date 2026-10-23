@@ -1582,9 +1582,9 @@ void *iris_alloc(int64_t size, int64_t count, const char *file, int line, int co
     return p;
 }
 
-/* List's growSlice: n items of size where there were len, the new ones
-   zero. realloc can often grow in place, or move the pages without
-   copying them; a type aligned beyond malloc's gets new memory. */
+/* List's growSlice: room for n items of size where there were len.
+   realloc can often grow in place, or move the pages without copying
+   them; a type aligned beyond malloc's gets new memory. */
 void *iris_grow(void *p, int64_t len, int64_t n, int64_t size, int64_t align) {
     if (size == 0) {
         size = 1;
@@ -1608,7 +1608,9 @@ void *iris_grow(void *p, int64_t len, int64_t n, int64_t size, int64_t align) {
             outOfMemory();
         }
     }
-    memset(q + old, 0, total - old);
+    /* the new items are left as they are: List and Deque write them before
+       they read them, and zeroing would fault in pages realloc moved
+       untouched */
     return q;
 }
 
