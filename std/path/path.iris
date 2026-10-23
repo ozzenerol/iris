@@ -71,3 +71,126 @@ pub str stem(str p) {
 
 // Whether the path starts at the root.
 pub bool isAbs(str p) => p.len > 0 && p[0] == '/'
+
+// The folder and the name: split("/home/ada/notes.txt") is ("/home/ada/",
+// "notes.txt"). The folder keeps its /, so the two put back together are
+// the path. A path without a / is all name.
+pub (str, str) split(str p) {
+    i := p.len
+    for i > 0 && p[i - 1] != '/' {
+        i -= 1
+    }
+    return (p[0:i], p[i:])
+}
+
+// The shortest path to the same place: no . parts, no doubled /, no /
+// at the end, and each .. with the part before it taken out.
+// clean("a//b/./../c/") is "a/c". An empty path is ".".
+pub String clean(str p) {
+    abs := isAbs(p)
+    List[str] parts
+    defer parts.free()
+    // how many of the parts at the start are .., which can't be taken out
+    i64 ups = 0
+    i := 0
+    for i < p.len {
+        for i < p.len && p[i] == '/' {
+            i += 1
+        }
+        start := i
+        for i < p.len && p[i] != '/' {
+            i += 1
+        }
+        part := p[start:i]
+        continue if part.len == 0 || part == "."
+        if part == ".." {
+            if parts.len > ups {
+                _ = parts.pop()
+            } else if !abs {
+                parts.push(part)
+                ups += 1
+            }
+            continue
+        }
+        parts.push(part)
+    }
+    String out
+    if abs {
+        out.append("/")
+    }
+    for k, part in parts.items() {
+        if k > 0 {
+            out.append("/")
+        }
+        out.append(part)
+    }
+    if out.len == 0 {
+        out.append(".")
+    }
+    return out
+}
+
+// What rel fails with: notRelative when one path starts at the root and the
+// other doesn't, or the base has .. parts the target can't follow.
+pub enum PathError { notRelative }
+
+// The path that leads from base to target: rel("/srv", "/srv/www/index.html")
+// is "www/index.html", and rel("/srv/www", "/srv/logs") is "../logs". Both
+// paths are cleaned first. Joining base and the result gives target.
+pub !String rel(str base, str target) {
+    scoped String b = clean(base)
+    scoped String t = clean(target)
+    if isAbs(b) != isAbs(t) {
+        return error(PathError.notRelative, "can't make {target} relative to {base}")
+    }
+    if b == t {
+        return ".".copy()
+    }
+    bs := partsOf(b)
+    defer bs.free()
+    ts := partsOf(t)
+    defer ts.free()
+    same := 0
+    for same < bs.len && same < ts.len && bs.at(same) == ts.at(same) {
+        same += 1
+    }
+    for k in same..bs.len {
+        if bs.at(k) == ".." {
+            return error(PathError.notRelative, "can't make {target} relative to {base}")
+        }
+    }
+    String out
+    for k in same..bs.len {
+        if out.len > 0 {
+            out.append("/")
+        }
+        out.append("..")
+    }
+    for k in same..ts.len {
+        if out.len > 0 {
+            out.append("/")
+        }
+        out.append(ts.at(k))
+    }
+    return out
+}
+
+// The parts of a clean path, with "." and "/" as none.
+List[str] partsOf(str p) {
+    List[str] out
+    i := 0
+    for i < p.len {
+        for i < p.len && p[i] == '/' {
+            i += 1
+        }
+        start := i
+        for i < p.len && p[i] != '/' {
+            i += 1
+        }
+        part := p[start:i]
+        if part.len > 0 && part != "." {
+            out.push(part)
+        }
+    }
+    return out
+}

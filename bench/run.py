@@ -12,7 +12,7 @@ OUT = os.path.join(HERE, "out")
 CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "fannkuch-redux",
        "hashmap", "sort", "strings", "channels"]
 # the standard library against Go's and the best-known Rust crates
-LIB = ["fmt-text", "utf8", "bigint", "rwlock"]
+LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
 NET = ["http-hello", "http-json", "tcp-echo", "http2"]

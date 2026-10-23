@@ -248,31 +248,10 @@ FsError.exists
 
 ## Walking a tree
 
-There is no call that walks a whole tree: a function that lists a folder and calls itself for each folder in it does it. `path.join` makes each child's path:
+`fs.walk(root)` gives the path of every file under a folder, in the folders under it too, as a `List` of `String`s. Each folder's names come in order, and a folder's files follow it. `freeEach` frees the paths and the list:
 
 ```iris run
-import fs, path
-
-!i64 walk(str dir, i64 depth) {
-    scoped d := try fs.readDir(dir)
-    scoped String indent
-    for _ in 0..depth {
-        indent.append("  ")
-    }
-    i64 total = 0
-    for e in d.entries {
-        scoped String p = path.join(dir, e.name)
-        if e.isDir {
-            print("{indent}{e.name}/")
-            total += try walk(p, depth + 1)
-        } else {
-            info := try fs.stat(p)
-            print("{indent}{e.name} {info.size}")
-            total += info.size
-        }
-    }
-    return total
-}
+import fs
 
 !void main() {
     root := "/tmp/iris-tour-walk"
@@ -281,20 +260,89 @@ import fs, path
     try fs.writeAll("/tmp/iris-tour-walk/README", "read me\n")
     try fs.writeAll("/tmp/iris-tour-walk/src/main.iris", "void main() {{}}\n")
     try fs.writeAll("/tmp/iris-tour-walk/src/net/tcp.iris", "// tcp\n")
-    total := try walk(root, 0)
+    files := try fs.walk(root)
+    defer files.freeEach()
+    i64 total = 0
+    for f in files {
+        info := try fs.stat(f)
+        print("{f} {info.size}")
+        total += info.size
+    }
     print("{total} bytes")
     try fs.removeAll(root)
 }
 ```
 
 ```output
-README 8
-src/
-  main.iris 15
-  net/
-    tcp.iris 7
+/tmp/iris-tour-walk/README 8
+/tmp/iris-tour-walk/src/main.iris 15
+/tmp/iris-tour-walk/src/net/tcp.iris 7
 30 bytes
 ```
+
+A link is listed as a file and not followed, so a link to a folder above can't make the walk go round.
+
+## Finding files by name
+
+`fs.glob(pattern)` gives the paths of the files that match a pattern, sorted. In each part of the pattern, `*` matches any run of characters, `?` one character, and `[abc]` one of those characters; `[a-z]` is a range and `[!abc]` any character but those. A part that is `**` matches any number of folders, none too. A name that starts with a dot is matched only by a pattern that starts with one:
+
+```iris run
+import fs
+
+!void main() {
+    root := "/tmp/iris-tour-glob"
+    try fs.removeAll(root)
+    try fs.mkdirAll("/tmp/iris-tour-glob/src/net")
+    for name in ["src/main.iris", "src/net/tcp.iris", "src/net/udp.iris", "notes.txt"] {
+        scoped String p = format("{root}/{name}")
+        try fs.writeAll(p, "")
+    }
+    sources := try fs.glob("/tmp/iris-tour-glob/**/*.iris")
+    defer sources.freeEach()
+    for f in sources {
+        print(f)
+    }
+    print("{fs.matches("[tu]?p.iris", "udp.iris")} {fs.matches("*.iris", "notes.txt")}")
+    try fs.removeAll(root)
+}
+```
+
+```output
+/tmp/iris-tour-glob/src/main.iris
+/tmp/iris-tour-glob/src/net/tcp.iris
+/tmp/iris-tour-glob/src/net/udp.iris
+true false
+```
+
+`fs.matches(pattern, name)` says whether one name matches one part of a pattern. A pattern that starts with a wildcard is taken from the working folder, and gives paths without `./` in front.
+
+## Temporary files and copies
+
+`fs.tempDir(prefix)` makes a new folder with a name no other has, the prefix and six random characters, and gives its path; `fs.tempFile(prefix)` does the same for an empty file. They go in `$TMPDIR`, or `/tmp`, or in the folder given as `dir`. `fs.copy(from, to)` copies a file, with its permissions, and replaces what is at `to`:
+
+```iris run
+import fs, path, str
+
+!void main() {
+    scoped String work = try fs.tempDir("deploy")
+    print("{str.startsWith(path.base(work), "deploy-")} {path.base(work).len}")
+    scoped String conf = try fs.tempFile("proxy", dir: work)
+    try fs.writeAll(conf, "listen 8080\n")
+    scoped String backup = path.join(work, "proxy.conf.bak")
+    try fs.copy(conf, backup)
+    scoped String text = try fs.readAll(backup)
+    print(text)
+    try fs.removeAll(work)
+}
+```
+
+```output
+true 13
+listen 8080
+
+```
+
+The program removes them when it is done; `removeAll` takes a folder with everything in it.
 
 ## Paths
 
@@ -308,6 +356,9 @@ The `path` module works on the text of a path and never looks at the disk. `path
 | `path.ext("access.log.gz")` | `.gz`, and `""` when there is none |
 | `path.stem("access.log")` | `access` |
 | `path.isAbs("/etc")` | `true` |
+| `path.split("/srv/www/index.html")` | `/srv/www/` and `index.html` |
+| `path.clean("/srv//www/../logs/")` | `/srv/logs` |
+| `path.rel("/srv/www", "/srv/logs/a.log")` | `../logs/a.log` |
 
 ```iris run
 import path
@@ -329,3 +380,62 @@ void main() {
 ```
 
 A name that starts with a dot, like `.bashrc`, has no extension. A `/` at the end of a path is ignored.
+
+`path.split(p)` gives the folder and the name. The folder keeps its `/`, so the two put together are the path again, and a path without a `/` is all name. `path.clean(p)` gives a new `String` with the shortest path to the same place: no `.` parts, no doubled `/` and no `/` at the end, and each `..` takes out the part before it. `path.rel(base, target)` gives the path that leads from `base` to `target`, so that joining `base` and it gives `target`; it fails with `path.PathError.notRelative` when one of them starts at `/` and the other doesn't:
+
+```iris run
+import path
+
+!void main() {
+    dir, name := path.split("/srv/www/index.html")
+    print("{dir} {name}")
+    scoped String c = path.clean("/srv//www/./../logs/")
+    scoped String up = path.clean("../a/../..")
+    print("{c} {up}")
+    scoped String r = try path.rel("/srv/www", "/srv/logs/access.log")
+    scoped String same = try path.rel("/srv", "/srv/")
+    print("{r} {same}")
+    _ = path.rel("srv", "/srv") catch e {
+        print("{e.code}")
+        "".copy()
+    }
+}
+```
+
+```output
+/srv/www/ index.html
+/srv/logs ../..
+../logs/access.log .
+PathError.notRelative
+```
+
+## The working folder
+
+A path that doesn't start with `/` is taken from the working folder. `os.cwd()` gives it and `os.chdir(path)` changes it, for the whole program. `os.home()` gives the user's home folder, `os.hostname()` the name of the machine, and `os.pid()` the program's process id:
+
+```iris run
+import fs, os
+
+!void main() {
+    scoped String start = try os.cwd()
+    try os.chdir("/tmp")
+    try fs.writeAll("iris-tour-here.txt", "here")
+    print("{fs.exists("/tmp/iris-tour-here.txt")}")
+    try fs.remove("iris-tour-here.txt")
+    try os.chdir(start)
+    scoped String home = try os.home()
+    scoped String host = try os.hostname()
+    print("{home.len > 0} {host.len > 0} {os.pid() > 0}")
+    os.chdir("/tmp/iris-tour-no-such-folder") catch e {
+        print("{e.code}")
+    }
+}
+```
+
+```output
+true
+true true true
+OsError.notFound
+```
+
+`os.home()` reads `$HOME`, and asks the system for the user's folder when it isn't set.

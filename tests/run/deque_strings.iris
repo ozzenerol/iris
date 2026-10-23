@@ -1,0 +1,14 @@
+// expect: job-1 job-2
+// expect: 1 left
+
+void main() {
+    Deque[String] jobs
+    defer jobs.freeEach()
+    for i in 1..4 {
+        jobs.push(format("job-{i}"))
+    }
+    scoped String a = jobs.popFront()
+    scoped String b = jobs.popFront()
+    print("{a} {b}")
+    print("{jobs.len} left")
+}

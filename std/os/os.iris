@@ -1,8 +1,11 @@
-// The program's arguments and environment, and leaving the program.
+// The program's arguments and environment, its working folder, the
+// machine it runs on, and leaving the program.
 
 // What env fails with: notSet for a variable that isn't set; setenv fails
-// with invalid for a name that can't be one.
-pub enum OsError { notSet, invalid }
+// with invalid for a name that can't be one. chdir fails with notFound for
+// a folder that isn't there, permission for one the program may not enter,
+// and other for the rest.
+pub enum OsError { notSet, invalid, notFound, permission, other }
 
 @extern("iris_os_argc")
 i64 argCount()
@@ -65,3 +68,64 @@ pub !void unsetenv(str name) {
 // otherwise need a value.
 @noreturn
 pub void exit(i32 code) => rawExit(code)
+
+@extern("iris_os_cwd")
+i32 rawCwd(String *out)
+
+@extern("iris_os_chdir")
+i32 rawChdir(u8 *path, i64 n)
+
+@extern("iris_os_hostname")
+i32 rawHostname(String *out)
+
+@extern("iris_os_home")
+i32 rawHome(String *out)
+
+@extern("getpid")
+i32 rawPid()
+
+Error osError(i32 code, str path) => match code {
+    1 => error(OsError.notFound, "{path}: no such folder")
+    2 => error(OsError.permission, "{path}: permission denied")
+    _ => error(OsError.other, "{path}: can't be used")
+}
+
+// The working folder: where paths that don't start with / are taken from.
+pub !String cwd() {
+    String out
+    code := rawCwd(&out)
+    if code != 0 {
+        return osError(code, ".")
+    }
+    return out
+}
+
+// Changes the working folder, for the whole program and its threads.
+pub !void chdir(str path) {
+    code := rawChdir(path.ptr, path.len)
+    if code != 0 {
+        return osError(code, path)
+    }
+}
+
+// The name of the machine.
+pub !String hostname() {
+    String out
+    if rawHostname(&out) != 0 {
+        return error(OsError.other, "the host name can't be read")
+    }
+    return out
+}
+
+// The process id of the program.
+pub i64 pid() => i64(rawPid())
+
+// The user's home folder: $HOME, or the one the system has for the user
+// when HOME isn't set.
+pub !String home() {
+    String out
+    if rawHome(&out) != 0 {
+        return error(OsError.notSet, "the user has no home folder")
+    }
+    return out
+}

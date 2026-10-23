@@ -1,0 +1,8 @@
+// error: 6: the value for less is bool(i64, i64), but bool(str, str) is needed
+
+bool lower(i64 a, i64 b) => a < b
+
+void main() {
+    h := Heap[str]{less: lower}
+    h.free()
+}

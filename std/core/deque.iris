@@ -1,0 +1,136 @@
+// A queue with both ends open: values go in and come out at the front and
+// at the back, each in the same time however many there are. A new Deque is
+// empty; free gives its memory back.
+pub struct Deque[T] {
+    T[] buf // a power of two long, or empty
+    i64 head
+    pub i64 len
+}
+
+// The place in buf of the value at i.
+i64 Deque[T].slot(i64 i) => (self.head + i) & (self.buf.len - 1)
+
+// Makes room for at least n values without growing again.
+pub void Deque[T].reserve(i64 n) {
+    if n <= self.buf.len {
+        return
+    }
+    size := 8
+    for size < n {
+        size *= 2
+    }
+    T[] next = alloc(T, size)
+    for i in 0..self.len {
+        next[i] = self.buf[self.slot(i)]
+    }
+    free(self.buf)
+    self.buf = next
+    self.head = 0
+}
+
+void Deque[T].grow() {
+    if self.len == self.buf.len {
+        self.reserve(self.len + 1)
+    }
+}
+
+void Deque[T].empty(str what) {
+    if self.len == 0 {
+        panic("{what} on an empty Deque")
+    }
+}
+
+// Adds a value at the back.
+pub void Deque[T].push(T value) {
+    self.grow()
+    self.buf[self.slot(self.len)] = value
+    self.len += 1
+}
+
+// Adds a value at the front.
+pub void Deque[T].pushFront(T value) {
+    self.grow()
+    self.head = (self.head - 1) & (self.buf.len - 1)
+    self.buf[self.head] = value
+    self.len += 1
+}
+
+// Takes the value at the back off.
+pub T Deque[T].pop() {
+    self.empty("pop")
+    self.len -= 1
+    return self.buf[self.slot(self.len)]
+}
+
+// Takes the value at the front off.
+pub T Deque[T].popFront() {
+    self.empty("popFront")
+    v := self.buf[self.head]
+    self.head = (self.head + 1) & (self.buf.len - 1)
+    self.len -= 1
+    return v
+}
+
+// The value at the front.
+pub T Deque[T].first() {
+    self.empty("first")
+    return self.buf[self.head]
+}
+
+// The value at the back.
+pub T Deque[T].last() {
+    self.empty("last")
+    return self.buf[self.slot(self.len - 1)]
+}
+
+void Deque[T].check(i64 i) {
+    if i < 0 || i >= self.len {
+        panic("index {i} is out of range for a Deque of {self.len}")
+    }
+}
+
+// The value at i, counting from the front at 0.
+pub T Deque[T].at(i64 i) {
+    self.check(i)
+    return self.buf[self.slot(i)]
+}
+
+// Replaces the value at i.
+pub void Deque[T].set(i64 i, T value) {
+    self.check(i)
+    self.buf[self.slot(i)] = value
+}
+
+// Empties the deque and keeps its memory for new values.
+pub void Deque[T].clear() {
+    self.len = 0
+    self.head = 0
+}
+
+// Gives the deque's memory back; the deque is empty after.
+pub void Deque[T].free() {
+    free(self.buf)
+    self.buf = alloc(T, 0)
+    self.len = 0
+    self.head = 0
+}
+
+// Frees each value, then the deque: for a deque of Strings or of structs
+// with a free method.
+pub void Deque[T].freeEach() {
+    for i in 0..self.len {
+        self.buf[self.slot(i)].free()
+    }
+    self.free()
+}
+
+// for v in deque, from the front to the back
+pub (T, bool) Deque[T].next(i64 *at) {
+    if *at >= self.len {
+        T none
+        return (none, false)
+    }
+    v := self.buf[self.slot(*at)]
+    *at += 1
+    return (v, true)
+}

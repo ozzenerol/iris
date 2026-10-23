@@ -1,0 +1,34 @@
+// expect: true true false true false
+// expect: true true false true true false
+// expect: true false true true
+// expect: b.iris
+// expect: lib/c.iris
+// expect: 2 found, .hidden left out
+// expect: one.txt
+
+import fs, os, path
+
+!void main() {
+    print("{fs.matches("*.iris", "main.iris")} {fs.matches("m?in.*", "main.iris")} {fs.matches("*.iris", "main.c")} {fs.matches("*", "")} {fs.matches("a*b*c", "abxbx")}")
+    print("{fs.matches("[abc]x", "bx")} {fs.matches("[a-c]x", "cx")} {fs.matches("[a-c]x", "dx")} {fs.matches("[!a-c]x", "dx")} {fs.matches("*[0-9]", "log7")} {fs.matches("[ab", "a")}")
+    print("{fs.matches("**", "x")} {fs.matches("?", "")} {fs.matches("a*", "a")} {fs.matches("*a*a*a", "aaaa")}")
+    scoped String start = try os.cwd()
+    scoped String dir = try fs.tempDir("iris-glob")
+    try os.chdir(dir)
+    try fs.mkdirAll("lib")
+    try fs.writeAll("b.iris", "")
+    try fs.writeAll(".hidden.iris", "")
+    try fs.writeAll("lib/c.iris", "")
+    try fs.writeAll("one.txt", "")
+    List[String] found = try fs.glob("**/*.iris")
+    for f in found {
+        print(f)
+    }
+    print("{found.len} found, .hidden left out")
+    found.freeEach()
+    List[String] exact = try fs.glob("one.txt")
+    print(exact.at(0))
+    exact.freeEach()
+    try os.chdir(start)
+    try fs.removeAll(dir)
+}

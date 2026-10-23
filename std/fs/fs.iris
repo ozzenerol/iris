@@ -384,3 +384,286 @@ pub void Mapped.free() {
     self.path.free()
     self.bytes = []
 }
+
+@extern("iris_fs_copy")
+i32 rawCopy(u8 *from, i64 fromLen, u8 *to, i64 toLen)
+
+@extern("iris_fs_temp")
+i32 rawTemp(u8 *prefix, i64 prefixLen, u8 *dir, i64 dirLen, i32 folder, String *out)
+
+// Copies the file at from to to, with its permissions. A file at to is
+// replaced.
+pub !void copy(str from, str to) {
+    code := rawCopy(from.ptr, from.len, to.ptr, to.len)
+    if code != 0 {
+        return fsError(code, if code == 1 || code == 4 { from } else { to })
+    }
+}
+
+// Makes a new, empty file with a name no other file has, prefix followed
+// by a dash and six random characters, and gives its path. It goes in dir,
+// or in the system's folder for temporary files ($TMPDIR, or /tmp) when dir
+// is "". The caller removes it when done.
+pub !String tempFile(str prefix = "iris", str dir = "") {
+    String out
+    code := rawTemp(prefix.ptr, prefix.len, dir.ptr, dir.len, 0, &out)
+    if code != 0 {
+        return fsError(code, if dir.len > 0 { dir } else { prefix })
+    }
+    return out
+}
+
+// Makes a new, empty folder with a name no other has, as tempFile does for
+// a file, and gives its path. The caller removes it with removeAll.
+pub !String tempDir(str prefix = "iris", str dir = "") {
+    String out
+    code := rawTemp(prefix.ptr, prefix.len, dir.ptr, dir.len, 1, &out)
+    if code != 0 {
+        return fsError(code, if dir.len > 0 { dir } else { prefix })
+    }
+    return out
+}
+
+// The path of every file under a folder and the folders in it, each joined
+// to root, folder by folder in the order of their names. Links are listed
+// as files and not followed. The caller frees the paths and the list, with
+// freeEach.
+pub !List[String] walk(str root) {
+    List[String] out
+    walkInto(root, &out) catch e {
+        out.freeEach()
+        return e
+    }
+    return out
+}
+
+String joinPath(str a, str b) {
+    if a.len == 0 {
+        return b.copy()
+    }
+    String out = a.copy()
+    if a[a.len - 1] != '/' {
+        out.append("/")
+    }
+    out.append(b)
+    return out
+}
+
+!void walkInto(str dir, List[String] *out) {
+    scoped Dir d = try readDir(dir)
+    for e in d.entries {
+        String p = joinPath(dir, e.name)
+        if e.isDir {
+            walkInto(p, out) catch err {
+                p.free()
+                return err
+            }
+            p.free()
+        } else {
+            out.push(p)
+        }
+    }
+}
+
+bool before(String a, String b) => str.compare(a, b) < 0
+
+// The paths of the files that match a pattern, sorted. In the pattern, *
+// matches any run of characters in one part of a path, ? one character,
+// [abc] one of those characters ([a-z] a range, [!abc] any other), and a
+// part that is ** matches any number of folders, none included:
+// glob("src/**/*.iris"). A folder that isn't there matches nothing. The
+// caller frees the paths and the list, with freeEach.
+pub !List[String] glob(str pattern) {
+    List[String] out
+    // the folder to start from: the parts before the first with a wildcard
+    List[str] parts = str.split(pattern, "/")
+    defer parts.free()
+    i64 first = 0
+    for first < parts.len && !hasWild(parts.at(first)) {
+        first += 1
+    }
+    if first == parts.len {
+        if exists(pattern) {
+            info := try stat(pattern)
+            if !info.isDir {
+                out.push(pattern.copy())
+            }
+        }
+        return out
+    }
+    String root
+    defer root.free()
+    if first == 0 {
+        root.append(".")
+    } else {
+        for i in 0..first {
+            if i > 0 {
+                root.append("/")
+            }
+            root.append(parts.at(i))
+        }
+        if root.len == 0 {
+            root.append("/")
+        }
+    }
+    // a**b is one ** when it is a whole part; **/** is one **
+    List[str] rest
+    defer rest.free()
+    for i in first..parts.len {
+        p := parts.at(i)
+        continue if p == "**" && rest.len > 0 && rest.last() == "**"
+        continue if p.len == 0 && i < parts.len - 1
+        rest.push(p)
+    }
+    globIn(root, first == 0, rest.items(), 0, &out) catch e {
+        out.freeEach()
+        return e
+    }
+    out.sort(before)
+    return out
+}
+
+bool hasWild(str s) {
+    for c in s {
+        if c == '*' || c == '?' || c == '[' {
+            return true
+        }
+    }
+    return false
+}
+
+// The files under dir that match parts[i:], into out. With bare, a match is
+// named without dir in front, for a pattern that starts with a wildcard.
+!void globIn(str dir, bool bare, str[] parts, i64 i, List[String] *out) {
+    d := readDir(dir) catch e {
+        if e.code == FsError.notFound || e.code == FsError.permission {
+            return
+        }
+        return e
+    }
+    defer d.free()
+    part := parts[i]
+    last := i == parts.len - 1
+    if part == "**" {
+        if last {
+            for e in d.entries {
+                String p = if bare { e.name.copy() } else { joinPath(dir, e.name) }
+                if e.isDir {
+                    walkInto(p, out) catch err {
+                        p.free()
+                        return err
+                    }
+                    p.free()
+                } else {
+                    out.push(p)
+                }
+            }
+            return
+        }
+        // none: the next part matches here; or more: go down a folder
+        try globIn(dir, bare, parts, i + 1, out)
+        for e in d.entries {
+            if e.isDir {
+                scoped String p = if bare { e.name.copy() } else { joinPath(dir, e.name) }
+                try globIn(p, false, parts, i, out)
+            }
+        }
+        return
+    }
+    for e in d.entries {
+        continue if !matches(part, e.name)
+        // a name that starts with a dot is matched only by a dot
+        continue if str.startsWith(e.name, ".") && (part.len == 0 || part[0] != '.')
+        if last {
+            if !e.isDir {
+                out.push(if bare { e.name.copy() } else { joinPath(dir, e.name) })
+            }
+        } else if e.isDir {
+            scoped String p = if bare { e.name.copy() } else { joinPath(dir, e.name) }
+            try globIn(p, false, parts, i + 1, out)
+        }
+    }
+}
+
+// Whether name matches one part of a glob pattern.
+pub bool matches(str pattern, str name) {
+    p := 0
+    n := 0
+    // where the last * was, to go back to when what follows it doesn't match
+    i64 star = -1
+    i64 starName = 0
+    for n < name.len {
+        if p < pattern.len {
+            c := pattern[p]
+            if c == '*' {
+                star = p
+                starName = n
+                p += 1
+                continue
+            }
+            if c == '?' {
+                p += 1
+                n += 1
+                continue
+            }
+            if c == '[' {
+                ok, end := matchClass(pattern, p, name[n])
+                if end > 0 && ok {
+                    p = end
+                    n += 1
+                    continue
+                }
+                if end == 0 && name[n] == '[' {
+                    p += 1
+                    n += 1
+                    continue
+                }
+            } else if c == name[n] {
+                p += 1
+                n += 1
+                continue
+            }
+        }
+        if star < 0 {
+            return false
+        }
+        p = star + 1
+        starName += 1
+        n = starName
+    }
+    for p < pattern.len && pattern[p] == '*' {
+        p += 1
+    }
+    return p == pattern.len
+}
+
+// Whether c is in the [...] at pattern[at], and the place after the ]; 0
+// when there is no ] to close it.
+(bool, i64) matchClass(str pattern, i64 at, u8 c) {
+    i := at + 1
+    negate := i < pattern.len && (pattern[i] == '!' || pattern[i] == '^')
+    if negate {
+        i += 1
+    }
+    found := false
+    start := i
+    for i < pattern.len {
+        if pattern[i] == ']' && i > start {
+            return (found != negate, i + 1)
+        }
+        lo := pattern[i]
+        if i + 2 < pattern.len && pattern[i + 1] == '-' && pattern[i + 2] != ']' {
+            hi := pattern[i + 2]
+            if c >= lo && c <= hi {
+                found = true
+            }
+            i += 3
+        } else {
+            if c == lo {
+                found = true
+            }
+            i += 1
+        }
+    }
+    return (false, 0)
+}

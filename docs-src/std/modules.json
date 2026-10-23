@@ -1,7 +1,7 @@
 {
   "groups": [
     {"title": "Core", "modules": [
-      {"name": "core", "title": "Collections", "summary": "List, Map, Set and Arena, which every program has without an import."},
+      {"name": "core", "title": "Collections", "summary": "List, Map, Set, Deque, Heap, SortedMap and Arena, and sorting and searching slices, which every program has without an import."},
       {"name": "str", "title": "Text", "summary": "Searching, cutting, trimming and changing text, and reading numbers from it."},
       {"name": "math", "title": "Maths", "summary": "Constants and functions on floating point numbers, and integer maths: gcd, square roots, powers, floor division, and checked, saturating and wrapping arithmetic."},
       {"name": "big", "title": "Big numbers", "summary": "Whole numbers of any size, with division, powers, modular powers and any base from 2 to 36."},
@@ -24,9 +24,9 @@
     ]},
     {"title": "System", "modules": [
       {"name": "io", "title": "Standard input and output", "summary": "Lines from standard input, and writing to standard output and error."},
-      {"name": "fs", "title": "Files", "summary": "Reading and writing files, folders, what stat says about them, and files mapped into memory."},
-      {"name": "path", "title": "Paths", "summary": "Joining file paths and taking them apart."},
-      {"name": "os", "title": "The program", "summary": "Its arguments, its environment, and leaving it."},
+      {"name": "fs", "title": "Files", "summary": "Reading and writing files, folders, walking them and finding files by pattern, copies, temporary files, and files mapped into memory."},
+      {"name": "path", "title": "Paths", "summary": "Joining file paths, taking them apart, cleaning them and making one relative to another."},
+      {"name": "os", "title": "The program", "summary": "Its arguments, its environment, the working folder, the machine, and leaving it."},
       {"name": "process", "title": "Processes", "summary": "Running other programs and reading what they print."},
       {"name": "env", "title": "Settings", "summary": "Environment variables into an @env struct."},
       {"name": "flags", "title": "Flags", "summary": "Command-line flags into a @flags struct, with --help made from it."},

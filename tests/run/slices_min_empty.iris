@@ -1,0 +1,6 @@
+// panic: min of an empty slice
+
+void main() {
+    i64[] xs = []
+    _ = min(xs)
+}

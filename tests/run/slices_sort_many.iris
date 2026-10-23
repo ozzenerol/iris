@@ -1,0 +1,39 @@
+// expect: sorted 10000 ok
+// expect: stable ok
+
+struct Item {
+    i64 key
+    i64 seq
+}
+
+bool byKey(Item a, Item b) => a.key < b.key
+
+void main() {
+    List[i64] xs
+    defer xs.free()
+    u64 x = 88172645463325252
+    for i in 0..10000 {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        xs.push(i64(x % 1000))
+    }
+    sort(xs.items())
+    good := true
+    for i in 1..xs.len {
+        good = good && xs.at(i - 1) <= xs.at(i)
+    }
+    print("sorted {xs.len} {if good { "ok" } else { "bad" }}")
+    List[Item] items
+    defer items.free()
+    for i in 0..5000 {
+        items.push(Item{key: (i * 31) % 17, seq: i})
+    }
+    sortBy(items.items(), byKey)
+    for i in 1..items.len {
+        a := items.at(i - 1)
+        b := items.at(i)
+        good = good && (a.key < b.key || (a.key == b.key && a.seq < b.seq))
+    }
+    print("stable {if good { "ok" } else { "bad" }}")
+}
