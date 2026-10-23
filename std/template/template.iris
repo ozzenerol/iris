@@ -416,26 +416,23 @@ pub !Template load(str dir, str main = "") {
 
 // A value from the data, as JSON has them.
 struct Value {
-    u8 kind     // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
-    String text // a string's text, a number as written
+    u8 kind  // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
+    str text // a string's text, a number as written: in the JSON, or a String the render keeps
     bool b
-    List[Value] items
-    List[String] keys
+    List[Value] items // an array's values, or an object's
+    str key           // in an object, the key this value has
 }
 
-void Value.free() {
-    self.text.free()
-    freeValues(&self.items)
-    self.keys.freeEach()
-}
+void Value.free() => freeValues(&self.items)
 
 Value *Value.get(str key) {
     if self.kind != 5 {
         return null
     }
-    for i in 0..self.keys.len {
-        if self.keys.at(i) == key {
-            return &self.items.items()[i]
+    items := self.items.items()
+    for i in 0..items.len {
+        if items[i].key == key {
+            return &items[i]
         }
     }
     return null
@@ -493,6 +490,7 @@ u32 hexOf(u8 c) {
 struct JsonReader {
     str t
     i64 pos
+    List[String] pool // strings with escapes, decoded; the others point into t
 }
 
 void JsonReader.spaces() {
@@ -501,14 +499,28 @@ void JsonReader.spaces() {
     }
 }
 
-String JsonReader.string() {
+str JsonReader.string() {
     self.pos += 1
+    start := self.pos
+    for self.pos < self.t.len {
+        c := self.t[self.pos]
+        if c == '"' {
+            self.pos += 1
+            return self.t[start:self.pos - 1]
+        }
+        if c == '\\' {
+            break
+        }
+        self.pos += 1
+    }
     String out
+    out.append(self.t[start:self.pos])
     for self.pos < self.t.len {
         c := self.t[self.pos]
         self.pos += 1
         if c == '"' {
-            return out
+            self.pool.push(out)
+            return self.pool.items()[self.pool.len - 1]
         }
         if c != '\\' {
             appendByte(&out, c)
@@ -541,7 +553,8 @@ String JsonReader.string() {
             _ => appendByte(&out, e)
         }
     }
-    return out
+    self.pool.push(out)
+    return self.pool.items()[self.pool.len - 1]
 }
 
 Value JsonReader.value() {
@@ -579,10 +592,12 @@ Value JsonReader.value() {
                 self.pos += 1
                 break
             }
-            o.keys.push(self.string())
+            key := self.string()
             self.spaces()
             self.pos += 1 // :
-            o.items.push(self.value())
+            v := self.value()
+            v.key = key
+            o.items.push(v)
             self.spaces()
             if self.pos < self.t.len && self.t[self.pos] == ',' {
                 self.pos += 1
@@ -601,7 +616,7 @@ Value JsonReader.value() {
     if w == "null" {
         return Value{}
     }
-    return Value{kind: 2, text: w.copy()}
+    return Value{kind: 2, text: w}
 }
 
 // ------------------------------------------------------------ filling in
@@ -617,7 +632,8 @@ struct Render {
     Template *t
     Value *root
     List[Binding] scope
-    List[Value] made // the values of len, made while filling in
+    List[Value] made   // the values of len, made while filling in
+    List[String] texts // the text of values made while filling in
     String out
     i64 depth
 }
@@ -628,6 +644,7 @@ void Render.free() {
     }
     self.scope.free()
     freeValues(&self.made)
+    self.texts.freeEach()
 }
 
 void Binding.free() => self.own.free()
@@ -657,7 +674,8 @@ Value *Render.lookup(List[String] *name) {
         next := v.get(part)
         if next == null && part == "len" && (v.kind == 3 || v.kind == 4 || v.kind == 5) {
             n := if v.kind == 3 { v.text.len } else { v.items.len }
-            self.made.push(Value{kind: 2, text: format("{n}")})
+            self.texts.push(format("{n}"))
+            self.made.push(Value{kind: 2, text: self.texts.items()[self.texts.len - 1]})
             return &self.made.items()[self.made.len - 1]
         }
         v = next
@@ -686,7 +704,11 @@ pub String escape(str text) {
 void escapeTo(String *out, str text) {
     i64 start = 0
     for i in 0..text.len {
-        rep := match text[i] {
+        c := text[i]
+        if c > '>' || (c > '\'' && c < '<') {
+            continue // most characters: none of & < > " '
+        }
+        rep := match c {
             '&' => "&amp;"
             '<' => "&lt;"
             '>' => "&gt;"
@@ -773,7 +795,11 @@ str textOf(Value *v) => match v.kind {
                 for k in 0..v.items.len {
                     i64 marks = self.scope.len
                     if n.key.len > 0 {
-                        key := if v.kind == 5 { Value{kind: 3, text: v.keys.at(k).copy()} } else { Value{kind: 2, text: format("{k}")} }
+                        Value key = Value{kind: 3, text: if v.kind == 5 { v.items.items()[k].key } else { "" }}
+                        if v.kind != 5 {
+                            self.texts.push(format("{k}"))
+                            key = Value{kind: 2, text: self.texts.items()[self.texts.len - 1]}
+                        }
                         self.scope.push(Binding{name: n.key, own: key})
                     }
                     self.scope.push(Binding{name: n.item, value: &v.items.items()[k]})
@@ -830,6 +856,7 @@ str textOf(Value *v) => match v.kind {
 pub !String Template.render[T](T data, str name = "") {
     scoped String j = json.encode(data)
     jr := JsonReader{t: j}
+    defer jr.pool.freeEach()
     scoped Value root = jr.value()
     if root.kind != 5 {
         return error(TemplateError.wrongType, "a template is filled from a struct or a Map")
@@ -857,6 +884,7 @@ pub !String Template.renderMap[V](Map[str, V] data, str name = "") {
     }
     j.append("}}")
     jr := JsonReader{t: j}
+    defer jr.pool.freeEach()
     scoped Value root = jr.value()
     return try self.fill(&root, name)
 }
