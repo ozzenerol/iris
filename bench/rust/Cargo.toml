@@ -9,6 +9,12 @@ axum = { version = "0.8", features = ["http2"] }
 serde = { version = "1", features = ["derive"] }
 async-channel = "2"
 num-bigint = "0.4"
+quick-xml = "0.38"
+toml = "0.9"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+crc32fast = "1"
+tar = "0.4"
+minijinja = "2"
 
 [profile.release]
 opt-level = 3
@@ -111,3 +117,23 @@ path = "../sort-by/main.rs"
 [[bin]]
 name = "fs-walk"
 path = "../fs-walk/main.rs"
+
+[[bin]]
+name = "xml-parse"
+path = "../xml-parse/main.rs"
+
+[[bin]]
+name = "toml-parse"
+path = "../toml-parse/main.rs"
+
+[[bin]]
+name = "zip"
+path = "../zip/main.rs"
+
+[[bin]]
+name = "tar"
+path = "../tar/main.rs"
+
+[[bin]]
+name = "template"
+path = "../template/main.rs"

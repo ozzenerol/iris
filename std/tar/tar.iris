@@ -1,0 +1,538 @@
+// Tar archives: reading them from memory or a file (gzip-compressed ones
+// too), writing them, and putting their files into a folder. Names longer
+// than the ustar header holds are written with a PAX header.
+//
+//     scoped tar.Archive a = try tar.open("site.tar.gz")
+//     try a.extract("/srv/site")
+
+import compress, fs, path, str
+
+// What tar fails with: broken for an archive that isn't tar or is cut short,
+// unsafe for a name that would put a file outside the folder it goes into.
+pub enum TarError { broken, unsafe }
+
+// What an entry is: a file, a folder, a symbolic link, a hard link, or
+// something else (a device, a FIFO).
+pub enum Kind { file, dir, symlink, link, other }
+
+// One file, folder or link of an archive.
+pub struct Entry {
+    pub String name
+    pub Kind kind
+    pub i64 size
+    // the permission bits, 420 (0644) for a plain file
+    pub i64 mode
+    // when it was last changed, in seconds since 1970
+    pub i64 mtime
+    // what a link points to
+    pub String link
+    // a file's bytes, inside the archive's memory
+    pub str data
+}
+
+// Frees the entry's name and link.
+pub void Entry.free() {
+    self.name.free()
+    self.link.free()
+}
+
+// The entries of an archive, read from memory or a file.
+pub struct Archive {
+    pub List[Entry] entries
+    String bytes // what the archive owns: a file's bytes, or what gzip gave
+}
+
+// Frees the entries, and the bytes the archive read or decompressed.
+pub void Archive.free() {
+    self.entries.freeEach()
+    self.bytes.free()
+}
+
+// The entry called name, or null.
+pub Entry *Archive.find(str name) {
+    for i in 0..self.entries.len {
+        e := &self.entries.items()[i]
+        if e.name == name {
+            return e
+        }
+    }
+    return null
+}
+
+// ------------------------------------------------------------ reading
+
+// The text of a header field, up to its first NUL.
+str field(str h, i64 at, i64 n) {
+    f := h[at:at + n]
+    for i in 0..f.len {
+        if f[i] == 0 {
+            return f[0:i]
+        }
+    }
+    return f
+}
+
+// A number in a header field: octal digits, or base 256 when the first byte
+// has its top bit set. -1 when it is neither.
+i64 number(str h, i64 at, i64 n) {
+    if (h[at] & 0x80) != 0 {
+        i64 v = i64(h[at] & 0x7f)
+        for i in at + 1..at + n {
+            v = (v << 8) | i64(h[i])
+        }
+        return v
+    }
+    i64 v
+    bool any = false
+    for i in at..at + n {
+        c := h[i]
+        if c == 0 || (c == ' ' && any) {
+            break
+        }
+        if c == ' ' {
+            continue
+        }
+        if c < '0' || c > '7' {
+            return -1
+        }
+        v = v * 8 + i64(c - '0')
+        any = true
+    }
+    return v
+}
+
+bool zeroBlock(str h) {
+    for c in h {
+        if c != 0 {
+            return false
+        }
+    }
+    return true
+}
+
+// The sum of the header's bytes, its checksum field taken as spaces.
+i64 checksum(str h) {
+    i64 sum
+    for i in 0..512 {
+        sum += if i >= 148 && i < 156 { 32 } else { i64(h[i]) }
+    }
+    return sum
+}
+
+// What a PAX header sets for the entry after it: path, linkpath, size and
+// mtime are used, the other keys skipped.
+!void readPax(str data, String *name, String *link, i64 *size, i64 *mtime) {
+    rest := data
+    for rest.len > 0 {
+        sp := str.find(rest, " ")
+        if sp <= 0 {
+            return error(TarError.broken, "a PAX header that can't be read")
+        }
+        n := str.parseInt(rest[0:sp]) catch e {
+            return error(TarError.broken, "a PAX header that can't be read")
+        }
+        if n <= sp + 1 || n > rest.len {
+            return error(TarError.broken, "a PAX header that can't be read")
+        }
+        record := rest[sp + 1:n - 1]
+        rest = rest[n:]
+        key, value, _ := str.cut(record, "=")
+        if key == "path" {
+            name.free()
+            *name = value.copy()
+        } else if key == "linkpath" {
+            link.free()
+            *link = value.copy()
+        } else if key == "size" {
+            *size = str.parseInt(value) catch -1
+        } else if key == "mtime" {
+            whole, _, _ := str.cut(value, ".")
+            *mtime = str.parseInt(whole) catch 0
+        }
+    }
+}
+
+// The entries of data, which they point into.
+!List[Entry] readEntries(str data) {
+    List[Entry] out
+    errdefer out.freeEach()
+    String longName // from a PAX or GNU header, for the next entry
+    defer longName.free()
+    String longLink
+    defer longLink.free()
+    i64 paxSize = -1
+    i64 paxTime = -1
+    i64 pos = 0
+    for pos < data.len {
+        if pos + 512 > data.len {
+            return error(TarError.broken, "the archive ends inside a header")
+        }
+        h := data[pos:pos + 512]
+        if zeroBlock(h) {
+            break
+        }
+        name := field(h, 0, 100)
+        if checksum(h) != number(h, 148, 8) {
+            return error(TarError.broken, "{name}: the header's checksum doesn't match")
+        }
+        size := number(h, 124, 12)
+        if size < 0 {
+            return error(TarError.broken, "{name}: the size can't be read")
+        }
+        flag := h[156]
+        if flag == 'x' || flag == 'g' || flag == 'L' || flag == 'K' {
+            if pos + 512 + size > data.len {
+                return error(TarError.broken, "the archive ends inside {name}")
+            }
+            body := data[pos + 512:pos + 512 + size]
+            if flag == 'x' {
+                try readPax(body, &longName, &longLink, &paxSize, &paxTime)
+            } else if flag == 'L' {
+                longName.free()
+                longName = field(body, 0, body.len).copy()
+            } else if flag == 'K' {
+                longLink.free()
+                longLink = field(body, 0, body.len).copy()
+            }
+            pos += 512 + (size + 511) / 512 * 512
+            continue
+        }
+        if paxSize >= 0 {
+            size = paxSize
+        }
+        Entry e = Entry{size: size, mode: number(h, 100, 8), mtime: number(h, 136, 12)}
+        if paxTime >= 0 {
+            e.mtime = paxTime
+        }
+        if longName.len > 0 {
+            e.name = longName
+            String none
+            longName = none
+        } else {
+            prefix := if str.startsWith(field(h, 257, 6), "ustar") { field(h, 345, 155) } else { "" }
+            if prefix.len > 0 {
+                e.name = format("{prefix}/{name}")
+            } else {
+                e.name = name.copy()
+            }
+        }
+        if longLink.len > 0 {
+            e.link = longLink
+            String none
+            longLink = none
+        } else {
+            e.link = field(h, 157, 100).copy()
+        }
+        paxSize = -1
+        paxTime = -1
+        e.kind = match flag {
+            '0', 0, '7' => .file
+            '5' => .dir
+            '2' => .symlink
+            '1' => .link
+            _ => .other
+        }
+        if e.kind == .file && str.endsWith(e.name, "/") {
+            e.kind = .dir
+        }
+        // only files have their bytes in the archive
+        stored := if e.kind == .file || e.kind == .other { size } else { 0 }
+        if pos + 512 + stored > data.len {
+            msg := format("the archive ends inside {e.name}")
+            defer msg.free()
+            e.free()
+            return error(TarError.broken, "{msg}")
+        }
+        e.data = data[pos + 512:pos + 512 + stored]
+        out.push(e)
+        pos += 512 + (stored + 511) / 512 * 512
+    }
+    return out
+}
+
+// Reads an archive from memory; one compressed with gzip is decompressed
+// first. The entries' data points into data, which must outlive the archive,
+// unless it was compressed.
+pub !Archive parse(str data) {
+    if data.len >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+        Archive a = Archive{bytes: try compress.gunzip(data)}
+        errdefer a.free()
+        a.entries = try readEntries(a.bytes)
+        return a
+    }
+    return Archive{entries: try readEntries(data)}
+}
+
+// Reads an archive from a file; one compressed with gzip is decompressed.
+pub !Archive open(str file) {
+    String bytes = try fs.readAll(file)
+    if bytes.len >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        defer bytes.free()
+        return try parse(bytes)
+    }
+    Archive a = Archive{bytes: bytes}
+    errdefer a.free()
+    a.entries = try readEntries(a.bytes)
+    return a
+}
+
+@extern("chmod")
+i32 cChmod(u8 *path, u32 mode)
+
+@extern("symlink")
+i32 cSymlink(u8 *target, u8 *path)
+
+@extern("link")
+i32 cLink(u8 *old, u8 *new)
+
+@extern("unlink")
+i32 cUnlink(u8 *path)
+
+@extern("access")
+i32 cAccess(u8 *path, i32 how)
+
+// Whether a name stays inside the folder it is put in: not absolute, and no
+// .. part.
+!void checkSafe(str name, str what) {
+    if path.isAbs(name) {
+        return error(TarError.unsafe, "{what} is an absolute path")
+    }
+    rest := name
+    for {
+        part, after, more := str.cut(rest, "/")
+        if part == ".." {
+            return error(TarError.unsafe, "{what} has .. in it, which would leave the folder")
+        }
+        if !more {
+            return
+        }
+        rest = after
+    }
+}
+
+// Puts the archive's files, folders and links into dir, made when it isn't
+// there. A name with .. in it, or an absolute one, or a link that points out
+// of dir, fails with TarError.unsafe before anything is written.
+pub !void Archive.extract(str dir) {
+    for e in self.entries {
+        try checkSafe(e.name, e.name)
+        if e.kind == .symlink || e.kind == .link {
+            try checkSafe(e.link, "the link {e.name}")
+        }
+    }
+    try fs.mkdirAll(dir)
+    for e in self.entries {
+        scoped String to = path.join(dir, e.name)
+        match e.kind {
+            .dir => try fs.mkdirAll(to)
+            .file => {
+                parent := path.dir(to)
+                if parent.len > 0 {
+                    try fs.mkdirAll(parent)
+                }
+                try fs.writeAll(to, e.data)
+                scoped String z = format("{to}\0")
+                cChmod(z.ptr, u32(e.mode & 4095))
+            }
+            .symlink, .link => {
+                parent := path.dir(to)
+                if parent.len > 0 {
+                    try fs.mkdirAll(parent)
+                }
+                scoped String z = format("{to}\0")
+                cUnlink(z.ptr)
+                if e.kind == .symlink {
+                    scoped String t = format("{e.link}\0")
+                    if cSymlink(t.ptr, z.ptr) != 0 {
+                        return error(fs.FsError.other, "{e.name}: the link can't be made")
+                    }
+                } else {
+                    scoped String old = path.join(dir, e.link)
+                    scoped String t = format("{old}\0")
+                    if cLink(t.ptr, z.ptr) != 0 {
+                        return error(fs.FsError.other, "{e.name}: the link can't be made")
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ------------------------------------------------------------ writing
+
+// Builds an archive in memory: add entries, then finish. out is the
+// archive, to write to a file or compress.
+pub struct Writer {
+    pub String out
+}
+
+// Frees the archive's bytes.
+pub void Writer.free() => self.out.free()
+
+void zeros(String *out, i64 n) {
+    u8[512] z
+    out.append(z[0:n])
+}
+
+// s in a field of n bytes, the rest NULs.
+void putField(String *out, str s, i64 n) {
+    t := if s.len > n { s[0:n] } else { s }
+    out.append(t)
+    zeros(out, n - t.len)
+}
+
+// v as n - 1 octal digits and a NUL.
+void putOctal(String *out, i64 v, i64 n) {
+    u8[24] d
+    x := v
+    for i in 0..n - 1 {
+        d[n - 2 - i] = u8('0' + (x & 7))
+        x = x >> 3
+    }
+    out.append(d[0:n - 1])
+    zeros(out, 1)
+}
+
+// A ustar header, its checksum filled in.
+void Writer.header(str name, str prefix, i64 size, i64 mode, i64 mtime, u8 flag, str link) {
+    start := self.out.len
+    putField(&self.out, name, 100)
+    putOctal(&self.out, mode, 8)
+    putOctal(&self.out, 0, 8)
+    putOctal(&self.out, 0, 8)
+    putOctal(&self.out, size, 12)
+    putOctal(&self.out, mtime, 12)
+    self.out.append("        ")
+    u8[1] f = [flag]
+    self.out.append(f[0:1])
+    putField(&self.out, link, 100)
+    self.out.append("ustar")
+    zeros(&self.out, 1)
+    self.out.append("00")
+    zeros(&self.out, 32 + 32 + 8 + 8)
+    putField(&self.out, prefix, 155)
+    zeros(&self.out, 12)
+    sum := checksum(self.out[start:start + 512])
+    u8[8] c
+    x := sum
+    for i in 0..6 {
+        c[5 - i] = u8('0' + (x & 7))
+        x = x >> 3
+    }
+    u8[] b = self.out.ptr[0:self.out.len]
+    for i in 0..6 {
+        b[start + 148 + i] = c[i]
+    }
+    b[start + 154] = 0
+    b[start + 155] = ' '
+}
+
+// One "len key=value\n" PAX record.
+void paxRecord(String *out, str key, str value) {
+    n := key.len + value.len + 3
+    i64 digits = 1
+    for {
+        scoped String s = format("{n + digits}")
+        if s.len == digits {
+            break
+        }
+        digits = s.len
+    }
+    out.append("{n + digits} {key}={value}\n")
+}
+
+void Writer.pad(i64 size) {
+    zeros(&self.out, (512 - size % 512) % 512)
+}
+
+// An entry: a PAX header first when the name or the link doesn't fit.
+void Writer.entry(str name, i64 size, i64 mode, i64 mtime, u8 flag, str link, str data) {
+    str short = name
+    str prefix = ""
+    if name.len > 100 {
+        // ustar splits a name of up to 256 bytes at a / into a prefix and a name
+        i64 cut = -1
+        for i in 0..name.len {
+            if name[i] == '/' && i <= 155 && name.len - i - 1 <= 100 && name.len - i - 1 > 0 {
+                cut = i
+                break
+            }
+        }
+        if cut >= 0 {
+            prefix = name[0:cut]
+            short = name[cut + 1:]
+        }
+    }
+    if (short.len > 100) || link.len > 100 {
+        String pax
+        defer pax.free()
+        if short.len > 100 {
+            paxRecord(&pax, "path", name)
+            prefix = ""
+        }
+        if link.len > 100 {
+            paxRecord(&pax, "linkpath", link)
+        }
+        self.header("././@PaxHeader", "", pax.len, 420, mtime, 'x', "")
+        self.out.append(pax)
+        self.pad(pax.len)
+    }
+    self.header(short, prefix, size, mode, mtime, flag, link)
+    self.out.append(data)
+    self.pad(data.len)
+}
+
+// Adds a file with data as its bytes. mode is the permission bits (420 is
+// 0644, 493 is 0755) and mtime the time of change in seconds since 1970.
+pub void Writer.add(str name, str data, i64 mode = 420, i64 mtime = 0) {
+    self.entry(name, data.len, mode, mtime, '0', "", data)
+}
+
+// Adds a folder; its name gets a / at the end when it has none.
+pub void Writer.addDir(str name, i64 mode = 493, i64 mtime = 0) {
+    if str.endsWith(name, "/") {
+        self.entry(name, 0, mode, mtime, '5', "", "")
+        return
+    }
+    scoped String n = format("{name}/")
+    self.entry(n, 0, mode, mtime, '5', "", "")
+}
+
+// Adds a symbolic link called name that points to target.
+pub void Writer.addLink(str name, str target, i64 mtime = 0) {
+    self.entry(name, 0, 511, mtime, '2', target, "")
+}
+
+// Adds the file at file as name (its own name when name is ""), with its
+// time of change, and mode 493 when it can be run, else 420.
+pub !void Writer.addFile(str file, str name = "") {
+    scoped String data = try fs.readAll(file)
+    info := try fs.stat(file)
+    scoped String z = format("{file}\0")
+    mode := if cAccess(z.ptr, 1) == 0 { 493 } else { 420 }
+    self.add(if name.len > 0 { name } else { path.base(file) }, data, mode, info.modified.unix())
+}
+
+// Adds the files and folders inside dir, with names relative to it, under
+// prefix when that isn't "".
+pub !void Writer.addTree(str dir, str prefix = "") {
+    scoped fs.Dir d = try fs.readDir(dir)
+    for e in d.entries {
+        scoped String full = path.join(dir, e.name)
+        scoped String name = if prefix.len > 0 { format("{prefix}/{e.name}") } else { e.name.copy() }
+        if e.isDir {
+            info := try fs.stat(full)
+            self.addDir(name, mtime: info.modified.unix())
+            try self.addTree(full, name)
+        } else {
+            try self.addFile(full, name)
+        }
+    }
+}
+
+// Ends the archive with the two empty blocks tar expects.
+pub void Writer.finish() {
+    zeros(&self.out, 512)
+    zeros(&self.out, 512)
+}

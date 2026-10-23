@@ -1,0 +1,31 @@
+import template
+
+@json
+struct Row {
+    i64 id
+    String name
+    i64 qty
+}
+
+@json
+struct Page {
+    String title
+    List[Row] rows
+}
+
+// A page with a table of 1000 rows whose text needs escaping, rendered
+// 2000 times.
+!void main() {
+    scoped template.Template t = try template.parse(r"""<html><head><title>{{ title }}</title></head><body><table>{{ for r in rows }}<tr><td>{{ r.id }}</td><td>{{ r.name }}</td><td>{{ r.qty }}</td></tr>{{ end }}</table></body></html>""")
+    Page p = Page{title: "Orders & <returns>".copy()}
+    defer p.free()
+    for i in 0..1000 {
+        p.rows.push(Row{id: i, name: format("item <{i}> & more"), qty: i % 17})
+    }
+    i64 total = 0
+    for _ in 0..2000 {
+        scoped String html = try t.render(p)
+        total += html.len
+    }
+    print("{total}")
+}

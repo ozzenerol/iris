@@ -1,0 +1,37 @@
+import zip, compress
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// 2000 files of mixed sizes, deflated into a zip in memory, then read back
+// with each CRC checked.
+!void main() {
+    i64 seed = 1
+    zip.Writer w
+    defer w.free()
+    for i in 0..2000 {
+        size := next(&seed) % 20000 + 100
+        String data
+        for data.len < size {
+            data.append(WORDS[next(&seed) % 10])
+        }
+        scoped String name = format("dir{i % 20}/file{i}.txt")
+        try w.add(name, data)
+        data.free()
+    }
+    w.finish()
+    scoped zip.Archive a = try zip.parse(w.out)
+    i64 bytes = 0
+    i64 crcs = 0
+    for i in 0..a.entries.len {
+        e := &a.entries.items()[i]
+        scoped String data = try a.read(e)
+        bytes += data.len
+        crcs += i64(compress.crc32(data))
+    }
+    print("{a.entries.len} {bytes} {crcs}")
+}

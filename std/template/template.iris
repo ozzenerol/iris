@@ -1,0 +1,862 @@
+// HTML templates: text with {{ name }} for values, {{ if }}, {{ for }} and
+// {{ include }}, filled from a @json struct or a Map. Values are escaped for
+// HTML unless written {{ raw name }}.
+//
+//     scoped template.Template t = try template.parse(text)
+//     scoped String html = try t.render(page)
+
+import fs, json, path, str
+
+// What templates fail with: syntax for a template that can't be read,
+// missing for a value or a template that isn't there when filling it in,
+// wrongType for a value that can't go where it is used.
+pub enum TemplateError { syntax, missing, wrongType }
+
+// what a Node is
+const TEXT = 0
+const VALUE = 1
+const IF = 2
+const FOR = 3
+const INCLUDE = 4
+
+// A comparison in {{ if }}: the value of left, or left == right, or
+// left != right, with not in front to turn it around.
+struct Cond {
+    List[String] left
+    bool negate
+    u8 op              // 0 none, 1 ==, 2 !=
+    List[String] right // a name, when rightText is unset
+    String rightText
+    bool rightIsText
+}
+
+void Cond.free() {
+    self.left.freeEach()
+    self.right.freeEach()
+    self.rightText.free()
+}
+
+// One piece of a template.
+struct Node {
+    u8 kind
+    i64 line
+    String text       // TEXT's text, INCLUDE's name
+    List[String] name // VALUE's and FOR's list
+    bool raw
+    Cond cond
+    List[Node] body
+    List[Node] other // IF's else, FOR's else
+    String key       // FOR's names: {{ for key, item in list }}, key "" without one
+    String item
+}
+
+void freeNodes(List[Node] *nodes) {
+    for i in 0..nodes.len {
+        nodes.items()[i].free()
+    }
+    nodes.free()
+}
+
+void freeValues(List[Value] *values) {
+    for i in 0..values.len {
+        values.items()[i].free()
+    }
+    values.free()
+}
+
+void Node.free() {
+    self.text.free()
+    self.name.freeEach()
+    self.cond.free()
+    freeNodes(&self.body)
+    freeNodes(&self.other)
+    self.key.free()
+    self.item.free()
+}
+
+// A template, with the others it can include by name.
+pub struct Template {
+    List[String] names
+    List[List[Node]] trees
+}
+
+// Frees the template and the ones added to it.
+pub void Template.free() {
+    self.names.freeEach()
+    for i in 0..self.trees.len {
+        freeNodes(&self.trees.items()[i])
+    }
+    self.trees.free()
+}
+
+// ------------------------------------------------------------ reading
+
+// A piece of the text: text, or what is inside {{ }}.
+struct Tok {
+    bool tag
+    str text
+    i64 line
+}
+
+bool isSpace(u8 c) => c == ' ' || c == '\t' || c == '\r'
+
+// Whether a tag is one that only shapes the template (if, else, end, for,
+// a comment): those alone on a line take the line with them.
+bool isBlock(str tag) {
+    t := str.trim(tag)
+    return t.len > 0 && t[0] == '#' || t == "else" || t == "end" || str.startsWith(t, "if ") ||
+        str.startsWith(t, "else if ") || str.startsWith(t, "for ")
+}
+
+// The text cut into text and tags.
+!List[Tok] tokens(str text) {
+    List[Tok] out
+    errdefer out.free()
+    i64 line = 1
+    i64 pos = 0
+    for pos < text.len {
+        at := str.find(text[pos:], "{{")
+        if at < 0 {
+            out.push(Tok{text: text[pos:], line: line})
+            break
+        }
+        before := text[pos:pos + at]
+        start := pos + at + 2
+        close := str.find(text[start:], "}}")
+        if close < 0 {
+            for c in before {
+                if c == '\n' {
+                    line += 1
+                }
+            }
+            return error(TemplateError.syntax, "line {line}: {{{{ has no closing }}}}")
+        }
+        inner := text[start:start + close]
+        after := start + close + 2
+        if isBlock(inner) {
+            // alone on its line: take the spaces before it and the line break after
+            i64 b = before.len
+            for b > 0 && isSpace(before[b - 1]) {
+                b -= 1
+            }
+            i64 e = after
+            for e < text.len && isSpace(text[e]) {
+                e += 1
+            }
+            atStart := (b > 0 && before[b - 1] == '\n') || (b == 0 && (pos == 0 || text[pos - 1] == '\n'))
+            if atStart && (e == text.len || text[e] == '\n') {
+                before = before[0:b]
+                after = if e < text.len { e + 1 } else { e }
+            }
+        }
+        if before.len > 0 {
+            out.push(Tok{text: before, line: line})
+        }
+        for c in before {
+            if c == '\n' {
+                line += 1
+            }
+        }
+        out.push(Tok{tag: true, text: inner, line: line})
+        for c in text[start:after] {
+            if c == '\n' {
+                line += 1
+            }
+        }
+        pos = after
+    }
+    return out
+}
+
+Error syntax(i64 line, str msg) => error(TemplateError.syntax, "line {line}: {msg}")
+
+// A dotted name, a.b.c, as its parts.
+!List[String] nameOf(str s, i64 line) {
+    List[String] out
+    errdefer out.freeEach()
+    if s.len == 0 {
+        return syntax(line, "expected a name")
+    }
+    rest := s
+    for {
+        part, after, more := str.cut(rest, ".")
+        if part.len == 0 {
+            return syntax(line, "'{s}' is not a name")
+        }
+        for c in part {
+            ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+            if !ok {
+                return syntax(line, "'{s}' is not a name")
+            }
+        }
+        out.push(part.copy())
+        if !more {
+            return out
+        }
+        rest = after
+    }
+}
+
+!Cond condOf(str s, i64 line) {
+    Cond c
+    errdefer c.free()
+    t := str.trim(s)
+    if str.startsWith(t, "not ") {
+        c.negate = true
+        t = str.trim(t[4:])
+    }
+    i64 at = str.find(t, "==")
+    if at >= 0 {
+        c.op = 1
+    } else {
+        at = str.find(t, "!=")
+        if at >= 0 {
+            c.op = 2
+        }
+    }
+    if c.op == 0 {
+        c.left = try nameOf(t, line)
+        return c
+    }
+    c.left = try nameOf(str.trim(t[0:at]), line)
+    right := str.trim(t[at + 2:])
+    if right.len >= 2 && right[0] == '"' && right[right.len - 1] == '"' {
+        c.rightText = right[1:right.len - 1].copy()
+        c.rightIsText = true
+    } else if right.len > 0 && (right[0] == '-' || (right[0] >= '0' && right[0] <= '9')) || right == "true" || right == "false" {
+        c.rightText = right.copy()
+        c.rightIsText = true
+    } else {
+        c.right = try nameOf(right, line)
+    }
+    return c
+}
+
+struct Builder {
+    List[Tok] toks
+    i64 at
+}
+
+// Nodes up to an {{ else }}, {{ else if }} or {{ end }}, or to the end when
+// top is set; the tag that stopped it is left for the caller.
+!List[Node] Builder.nodes(bool top) {
+    List[Node] out
+    errdefer freeNodes(&out)
+    for self.at < self.toks.len {
+        tok := self.toks.at(self.at)
+        if !tok.tag {
+            out.push(Node{kind: TEXT, line: tok.line, text: tok.text.copy()})
+            self.at += 1
+            continue
+        }
+        t := str.trim(tok.text)
+        if t.len > 0 && t[0] == '#' {
+            self.at += 1
+            continue
+        }
+        if t == "end" || t == "else" || str.startsWith(t, "else if ") {
+            if top {
+                return syntax(tok.line, "{{{{ {t} }}}} closes nothing")
+            }
+            return out
+        }
+        self.at += 1
+        if str.startsWith(t, "if ") {
+            out.push(try self.ifNode(t[3:], tok.line))
+        } else if str.startsWith(t, "for ") || t == "for" {
+            out.push(try self.forNode(t[3:], tok.line))
+        } else if str.startsWith(t, "include ") {
+            name := str.trim(t[8:])
+            if name.len < 2 || name[0] != '"' || name[name.len - 1] != '"' {
+                return syntax(tok.line, "{{{{ include }}}} takes a name in quotes: {{{{ include \"header\" }}}}")
+            }
+            out.push(Node{kind: INCLUDE, line: tok.line, text: name[1:name.len - 1].copy()})
+        } else if str.startsWith(t, "raw ") {
+            out.push(Node{kind: VALUE, line: tok.line, raw: true, name: try nameOf(str.trim(t[4:]), tok.line)})
+        } else if t == "if" {
+            return syntax(tok.line, "{{{{ if }}}} needs a condition")
+        } else {
+            out.push(Node{kind: VALUE, line: tok.line, name: try nameOf(t, tok.line)})
+        }
+    }
+    return out
+}
+
+// The tag that ends a block, or "" at the end of the template.
+str Builder.closer() {
+    if self.at >= self.toks.len {
+        return ""
+    }
+    return str.trim(self.toks.at(self.at).text)
+}
+
+!Node Builder.ifNode(str cond, i64 line) {
+    Node n = Node{kind: IF, line: line}
+    errdefer n.free()
+    n.cond = try condOf(cond, line)
+    n.body = try self.nodes(false)
+    t := self.closer()
+    if t.len == 0 {
+        return syntax(line, "{{{{ if }}}} has no {{{{ end }}}}")
+    }
+    self.at += 1
+    if t == "end" {
+        return n
+    }
+    if t == "else" {
+        n.other = try self.nodes(false)
+        if self.closer() != "end" {
+            return syntax(line, "{{{{ if }}}} has no {{{{ end }}}}")
+        }
+        self.at += 1
+        return n
+    }
+    // else if: an if of its own inside the else, which takes the end
+    n.other.push(try self.ifNode(t[8:], self.toks.at(self.at - 1).line))
+    return n
+}
+
+!Node Builder.forNode(str head, i64 line) {
+    names, list, found := str.cut(str.trim(head), " in ")
+    if !found || str.trim(names).len == 0 || str.trim(list).len == 0 {
+        return syntax(line, "{{{{ for }}}} needs a name and a list: {{{{ for x in xs }}}}")
+    }
+    Node n = Node{kind: FOR, line: line}
+    errdefer n.free()
+    k, v, two := str.cut(names, ",")
+    if two {
+        n.key = str.trim(k).copy()
+        n.item = str.trim(v).copy()
+    } else {
+        n.item = str.trim(names).copy()
+    }
+    n.name = try nameOf(str.trim(list), line)
+    n.body = try self.nodes(false)
+    t := self.closer()
+    if t == "else" {
+        self.at += 1
+        n.other = try self.nodes(false)
+        if self.closer() != "end" {
+            return syntax(line, "{{{{ for }}}} has no {{{{ end }}}}")
+        }
+    } else if t != "end" {
+        return syntax(line, "{{{{ for }}}} has no {{{{ end }}}}")
+    }
+    self.at += 1
+    return n
+}
+
+!List[Node] build(str text) {
+    toks := try tokens(text)
+    b := Builder{toks: toks}
+    defer b.toks.free()
+    return try b.nodes(true)
+}
+
+// Reads a template. Blocks ({{ if }}, {{ else }}, {{ end }}, {{ for }} and
+// {{# comments }}) that are alone on a line take that line out with them.
+pub !Template parse(str text) {
+    Template t
+    errdefer t.free()
+    t.trees.push(try build(text))
+    t.names.push("".copy())
+    return t
+}
+
+// Adds a template that {{ include "name" }} puts in, from text.
+pub !void Template.add(str name, str text) {
+    nodes := try build(text)
+    for i in 0..self.names.len {
+        if self.names.at(i) == name {
+            freeNodes(&self.trees.items()[i])
+            self.trees.set(i, nodes)
+            return
+        }
+    }
+    self.names.push(name.copy())
+    self.trees.push(nodes)
+}
+
+// Reads every file in dir, and the folders in it, as templates named by
+// their path inside dir ("layout.html", "parts/nav.html"); the main one is
+// the file called main, which is "" when there is none.
+pub !Template load(str dir, str main = "") {
+    Template t
+    errdefer t.free()
+    if main.len > 0 {
+        scoped String file = path.join(dir, main)
+        scoped String text = try fs.readAll(file)
+        t.trees.push(try build(text))
+    } else {
+        List[Node] none
+        t.trees.push(none)
+    }
+    t.names.push("".copy())
+    try t.addDir(dir, "")
+    return t
+}
+
+!void Template.addDir(str dir, str prefix) {
+    scoped fs.Dir d = try fs.readDir(dir)
+    for e in d.entries {
+        scoped String full = path.join(dir, e.name)
+        scoped String name = if prefix.len > 0 { format("{prefix}/{e.name}") } else { e.name.copy() }
+        if e.isDir {
+            try self.addDir(full, name)
+        } else {
+            scoped String text = try fs.readAll(full)
+            self.add(name, text) catch err {
+                return error(TemplateError.syntax, "{name}: {err.message}")
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the data
+
+// A value from the data, as JSON has them.
+struct Value {
+    u8 kind     // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
+    String text // a string's text, a number as written
+    bool b
+    List[Value] items
+    List[String] keys
+}
+
+void Value.free() {
+    self.text.free()
+    freeValues(&self.items)
+    self.keys.freeEach()
+}
+
+Value *Value.get(str key) {
+    if self.kind != 5 {
+        return null
+    }
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            return &self.items.items()[i]
+        }
+    }
+    return null
+}
+
+bool Value.truthy() => match self.kind {
+    1 => self.b
+    2 => self.text != "0" && self.text != "0.0" && self.text != "-0"
+    3 => self.text.len > 0
+    4, 5 => self.items.len > 0
+    _ => false
+}
+
+void appendByte(String *out, u8 c) {
+    u8[1] b = [c]
+    out.append(b[0:1])
+}
+
+void appendRune(String *out, u32 r) {
+    u8[4] b
+    i64 n
+    if r < 0x80 {
+        b[0] = u8(r)
+        n = 1
+    } else if r < 0x800 {
+        b[0] = u8(0xc0 | (r >> 6))
+        b[1] = u8(0x80 | (r & 0x3f))
+        n = 2
+    } else if r < 0x10000 {
+        b[0] = u8(0xe0 | (r >> 12))
+        b[1] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[2] = u8(0x80 | (r & 0x3f))
+        n = 3
+    } else {
+        b[0] = u8(0xf0 | (r >> 18))
+        b[1] = u8(0x80 | ((r >> 12) & 0x3f))
+        b[2] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[3] = u8(0x80 | (r & 0x3f))
+        n = 4
+    }
+    out.append(b[0:n])
+}
+
+u32 hexOf(u8 c) {
+    if c >= '0' && c <= '9' {
+        return u32(c - '0')
+    }
+    if c >= 'a' && c <= 'f' {
+        return u32(c - 'a') + 10
+    }
+    return u32(c - 'A') + 10
+}
+
+// Reads the JSON that json.encode writes.
+struct JsonReader {
+    str t
+    i64 pos
+}
+
+void JsonReader.spaces() {
+    for self.pos < self.t.len && (self.t[self.pos] == ' ' || self.t[self.pos] == '\n' || self.t[self.pos] == '\r' || self.t[self.pos] == '\t') {
+        self.pos += 1
+    }
+}
+
+String JsonReader.string() {
+    self.pos += 1
+    String out
+    for self.pos < self.t.len {
+        c := self.t[self.pos]
+        self.pos += 1
+        if c == '"' {
+            return out
+        }
+        if c != '\\' {
+            appendByte(&out, c)
+            continue
+        }
+        e := self.t[self.pos]
+        self.pos += 1
+        match e {
+            'n' => out.append("\n")
+            't' => out.append("\t")
+            'r' => out.append("\r")
+            'b' => appendByte(&out, 8)
+            'f' => appendByte(&out, 12)
+            'u' => {
+                u32 r = 0
+                for _ in 0..4 {
+                    r = r * 16 + hexOf(self.t[self.pos])
+                    self.pos += 1
+                }
+                if r >= 0xd800 && r < 0xdc00 && self.pos + 6 <= self.t.len && self.t[self.pos] == '\\' {
+                    u32 lo = 0
+                    for k in 2..6 {
+                        lo = lo * 16 + hexOf(self.t[self.pos + k])
+                    }
+                    self.pos += 6
+                    r = 0x10000 + ((r - 0xd800) << 10) + (lo - 0xdc00)
+                }
+                appendRune(&out, r)
+            }
+            _ => appendByte(&out, e)
+        }
+    }
+    return out
+}
+
+Value JsonReader.value() {
+    self.spaces()
+    if self.pos >= self.t.len {
+        return Value{}
+    }
+    c := self.t[self.pos]
+    if c == '"' {
+        return Value{kind: 3, text: self.string()}
+    }
+    if c == '[' {
+        self.pos += 1
+        Value a = Value{kind: 4}
+        for self.pos < self.t.len {
+            self.spaces()
+            if self.t[self.pos] == ']' {
+                self.pos += 1
+                break
+            }
+            a.items.push(self.value())
+            self.spaces()
+            if self.pos < self.t.len && self.t[self.pos] == ',' {
+                self.pos += 1
+            }
+        }
+        return a
+    }
+    if c == '{' {
+        self.pos += 1
+        Value o = Value{kind: 5}
+        for self.pos < self.t.len {
+            self.spaces()
+            if self.t[self.pos] == '}' {
+                self.pos += 1
+                break
+            }
+            o.keys.push(self.string())
+            self.spaces()
+            self.pos += 1 // :
+            o.items.push(self.value())
+            self.spaces()
+            if self.pos < self.t.len && self.t[self.pos] == ',' {
+                self.pos += 1
+            }
+        }
+        return o
+    }
+    start := self.pos
+    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' && self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
+        self.pos += 1
+    }
+    w := self.t[start:self.pos]
+    if w == "true" || w == "false" {
+        return Value{kind: 1, b: w == "true"}
+    }
+    if w == "null" {
+        return Value{}
+    }
+    return Value{kind: 2, text: w.copy()}
+}
+
+// ------------------------------------------------------------ filling in
+
+// A name a {{ for }} gave a value: one in the data, or its own (a key).
+struct Binding {
+    str name
+    Value *value
+    Value own
+}
+
+struct Render {
+    Template *t
+    Value *root
+    List[Binding] scope
+    List[Value] made // the values of len, made while filling in
+    String out
+    i64 depth
+}
+
+void Render.free() {
+    for i in 0..self.scope.len {
+        self.scope.items()[i].free()
+    }
+    self.scope.free()
+    freeValues(&self.made)
+}
+
+void Binding.free() => self.own.free()
+
+// The value of a dotted name, or null when the data doesn't have it. len
+// after a list, a table or text is how many it holds.
+Value *Render.lookup(List[String] *name) {
+    first := name.at(0)
+    Value *v = null
+    i64 i = self.scope.len - 1
+    for i >= 0 {
+        b := &self.scope.items()[i]
+        if b.name == first {
+            v = if b.value == null { &b.own } else { b.value }
+            break
+        }
+        i -= 1
+    }
+    if v == null {
+        v = self.root.get(first)
+    }
+    for k in 1..name.len {
+        if v == null {
+            return null
+        }
+        part := name.at(k)
+        next := v.get(part)
+        if next == null && part == "len" && (v.kind == 3 || v.kind == 4 || v.kind == 5) {
+            n := if v.kind == 3 { v.text.len } else { v.items.len }
+            self.made.push(Value{kind: 2, text: format("{n}")})
+            return &self.made.items()[self.made.len - 1]
+        }
+        v = next
+    }
+    return v
+}
+
+String joined(List[String] *name) {
+    String out
+    for i in 0..name.len {
+        if i > 0 {
+            out.append(".")
+        }
+        out.append(name.at(i))
+    }
+    return out
+}
+
+// text with &, <, >, " and ' written as entities, for HTML.
+pub String escape(str text) {
+    String out
+    escapeTo(&out, text)
+    return out
+}
+
+void escapeTo(String *out, str text) {
+    i64 start = 0
+    for i in 0..text.len {
+        rep := match text[i] {
+            '&' => "&amp;"
+            '<' => "&lt;"
+            '>' => "&gt;"
+            '"' => "&quot;"
+            '\'' => "&#39;"
+            _ => ""
+        }
+        if rep.len > 0 {
+            out.append(text[start:i])
+            out.append(rep)
+            start = i + 1
+        }
+    }
+    out.append(text[start:])
+}
+
+// A value's text, for writing it or comparing it.
+str textOf(Value *v) => match v.kind {
+    1 => if v.b { "true" } else { "false" }
+    2, 3 => v.text
+    _ => ""
+}
+
+!bool Render.check(Node *n) {
+    c := &n.cond
+    v := self.lookup(&c.left)
+    bool yes
+    if c.op == 0 {
+        yes = v != null && v.truthy()
+    } else {
+        str left = if v == null { "" } else { textOf(v) }
+        str right = c.rightText
+        if !c.rightIsText {
+            r := self.lookup(&c.right)
+            right = if r == null { "" } else { textOf(r) }
+        }
+        yes = (left == right) == (c.op == 1)
+    }
+    return yes != c.negate
+}
+
+!void Render.run(List[Node] *nodes) {
+    for i in 0..nodes.len {
+        n := &nodes.items()[i]
+        match n.kind {
+            TEXT => self.out.append(n.text)
+            VALUE => {
+                v := self.lookup(&n.name)
+                if v == null {
+                    scoped String s = joined(&n.name)
+                    return error(TemplateError.missing, "line {n.line}: {s} is not in the data")
+                }
+                if v.kind == 4 || v.kind == 5 {
+                    scoped String s = joined(&n.name)
+                    return error(TemplateError.wrongType, "line {n.line}: {s} is a list or a table, which can't be written as text")
+                }
+                if n.raw {
+                    self.out.append(textOf(v))
+                } else {
+                    escapeTo(&self.out, textOf(v))
+                }
+            }
+            IF => {
+                if try self.check(n) {
+                    try self.run(&n.body)
+                } else {
+                    try self.run(&n.other)
+                }
+            }
+            FOR => {
+                v := self.lookup(&n.name)
+                if v == null {
+                    scoped String s = joined(&n.name)
+                    return error(TemplateError.missing, "line {n.line}: {s} is not in the data")
+                }
+                if v.kind != 4 && v.kind != 5 {
+                    scoped String s = joined(&n.name)
+                    return error(TemplateError.wrongType, "line {n.line}: {s} is not a list or a table, so {{{{ for }}}} can't go through it")
+                }
+                if v.items.len == 0 {
+                    try self.run(&n.other)
+                    continue
+                }
+                for k in 0..v.items.len {
+                    i64 marks = self.scope.len
+                    if n.key.len > 0 {
+                        key := if v.kind == 5 { Value{kind: 3, text: v.keys.at(k).copy()} } else { Value{kind: 2, text: format("{k}")} }
+                        self.scope.push(Binding{name: n.key, own: key})
+                    }
+                    self.scope.push(Binding{name: n.item, value: &v.items.items()[k]})
+                    try self.run(&n.body)
+                    for self.scope.len > marks {
+                        b := self.scope.pop()
+                        b.free()
+                    }
+                }
+            }
+            INCLUDE => {
+                List[Node] *tree = null
+                for k in 0..self.t.names.len {
+                    if self.t.names.at(k) == n.text {
+                        tree = &self.t.trees.items()[k]
+                    }
+                }
+                if tree == null {
+                    return error(TemplateError.missing, "line {n.line}: no template called \"{n.text}\"")
+                }
+                if self.depth > 32 {
+                    return error(TemplateError.wrongType, "line {n.line}: templates include each other more than 32 deep")
+                }
+                self.depth += 1
+                try self.run(tree)
+                self.depth -= 1
+            }
+            _ => {}
+        }
+    }
+}
+
+!String Template.fill(Value *root, str name) {
+    List[Node] *tree = null
+    for k in 0..self.names.len {
+        if self.names.at(k) == name {
+            tree = &self.trees.items()[k]
+        }
+    }
+    if tree == null {
+        return error(TemplateError.missing, "no template called \"{name}\"")
+    }
+    Render r = Render{t: self, root: root}
+    defer r.free()
+    r.run(tree) catch e {
+        r.out.free()
+        return e
+    }
+    return r.out
+}
+
+// Fills in the template with data, a @json struct; name picks one added
+// with add, "" the main one.
+pub !String Template.render[T](T data, str name = "") {
+    scoped String j = json.encode(data)
+    jr := JsonReader{t: j}
+    scoped Value root = jr.value()
+    if root.kind != 5 {
+        return error(TemplateError.wrongType, "a template is filled from a struct or a Map")
+    }
+    return try self.fill(&root, name)
+}
+
+// Fills in the template with the keys and values of a Map. The values can
+// be text, numbers, lists or @json structs.
+pub !String Template.renderMap[V](Map[str, V] data, str name = "") {
+    String j
+    defer j.free()
+    j.append("{{")
+    bool first = true
+    for k, v in data {
+        if !first {
+            j.append(",")
+        }
+        first = false
+        scoped String q = json.quote(k)
+        j.append(q)
+        j.append(":")
+        scoped String e = json.encode(v)
+        j.append(e)
+    }
+    j.append("}}")
+    jr := JsonReader{t: j}
+    scoped Value root = jr.value()
+    return try self.fill(&root, name)
+}

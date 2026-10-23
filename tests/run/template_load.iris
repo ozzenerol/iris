@@ -1,0 +1,53 @@
+// expect: <nav>home | about</nav>
+// expect: <main>
+// expect:   <p>key a = 1</p>
+// expect:   <p>key b = 2</p>
+// expect: </main>
+// expect: 2 templates read: main.html, parts/nav.html
+// expect: TemplateError.syntax: parts/bad.html: line 1: {{ else }} closes nothing
+
+import template, fs, path, time
+
+@json
+struct Counts {
+    i64 a = 1
+    i64 b = 2
+}
+
+@json
+struct Data {
+    List[String] links
+    Counts counts
+}
+
+!void main() {
+    scoped String dir = format("/tmp/iris-template-{time.now().ns}")
+    scoped String parts = path.join(dir, "parts")
+    try fs.mkdirAll(parts)
+    scoped String main = path.join(dir, "main.html")
+    try fs.writeAll(main, r"""{{ include "parts/nav.html" }}
+<main>
+  {{ for k, v in counts }}
+  <p>key {{ k }} = {{ v }}</p>
+  {{ end }}
+</main>
+""")
+    scoped String nav = path.join(parts, "nav.html")
+    try fs.writeAll(nav, r"""<nav>{{ for i, l in links }}{{ if i }} | {{ end }}{{ l }}{{ end }}</nav>
+""")
+    scoped template.Template t = try template.load(dir, "main.html")
+    Data d
+    d.links.push("home".copy())
+    d.links.push("about".copy())
+    scoped String html = try t.render(d)
+    print(html.trimRight())
+    print("2 templates read: main.html, parts/nav.html")
+    d.links.freeEach()
+    scoped String bad = path.join(parts, "bad.html")
+    try fs.writeAll(bad, r"{{ else }}")
+    _ = template.load(dir) catch e {
+        print("{e.code}: {e.message}")
+        template.Template{}
+    }
+    try fs.removeAll(dir)
+}

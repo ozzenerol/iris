@@ -1,0 +1,121 @@
+// expect: <!doctype html>
+// expect: <title>Orders for Ada &amp; Co</title>
+// expect: <h1>Orders for Ada &amp; Co</h1>
+// expect: <ul>
+// expect:   <li>0: tea &lt;green&gt; x2, 3.5 (paid)</li>
+// expect:   <li>1: cake x1, 12 (open)</li>
+// expect: </ul>
+// expect: <p>2 orders, admin</p>
+// expect: <b>bold</b>
+// expect: <footer>Ada &amp; Co</footer>
+// expect: --
+// expect: <p>no orders</p>
+// expect: <footer>Bob</footer>
+// expect: --
+// expect: TemplateError.missing: line 1: messages is not in the data
+// expect: 3 messages: hi, lunch?, bye
+// expect: TemplateError.syntax: line 2: {{ if }} has no {{ end }}
+// expect: TemplateError.syntax: line 1: {{ end }} closes nothing
+// expect: TemplateError.syntax: line 1: {{ for }} needs a name and a list: {{ for x in xs }}
+// expect: TemplateError.syntax: line 1: {{ has no closing }}
+// expect: TemplateError.missing: line 1: user.nmae is not in the data
+// expect: TemplateError.missing: line 1: no template called "nav"
+// expect: <ok/>
+
+import template
+
+enum State { open, paid }
+
+@json
+struct Order {
+    String item
+    i64 qty
+    f64 price
+    State state
+}
+
+@json
+struct Page {
+    String user
+    bool admin
+    List[Order] orders
+    String note
+}
+
+!void main() {
+    scoped template.Template t = try template.parse(r"""<!doctype html>
+<title>Orders for {{ user }}</title>
+{{# the page's heading }}
+{{ include "heading" }}
+{{ if orders }}
+<ul>
+  {{ for i, o in orders }}
+  <li>{{ i }}: {{ o.item }} x{{ o.qty }}, {{ o.price }} ({{ o.state }})</li>
+  {{ end }}
+</ul>
+<p>{{ orders.len }} orders{{ if admin }}, admin{{ else if user == "Bob" }}, bob{{ end }}</p>
+{{ else }}
+<p>no orders</p>
+{{ end }}
+{{ raw note }}
+<footer>{{ user }}</footer>
+""")
+    try t.add("heading", r"""<h1>Orders for {{ user }}</h1>
+""")
+    Page p = Page{user: "Ada & Co".copy(), admin: true, note: "<b>bold</b>".copy()}
+    defer p.free()
+    p.orders.push(Order{item: "tea <green>".copy(), qty: 2, price: 3.5, state: .paid})
+    p.orders.push(Order{item: "cake".copy(), qty: 1, price: 12.0})
+    scoped String html = try t.render(p)
+    print(html)
+    print("--")
+    Page empty = Page{user: "Bob".copy()}
+    defer empty.free()
+    scoped template.Template short = try template.parse(r"""{{ if orders }}x{{ else }}<p>no orders</p>{{ end }}
+<footer>{{ user }}</footer>""")
+    scoped String e = try short.render(empty)
+    print(e)
+    print("--")
+    String none
+    scoped template.Template m = try template.parse(r"hello {{ name }}, {{ count }} new: {{ for i, m in messages }}{{ if i }}, {{ end }}{{ m }}{{ end }}")
+    Map[str, str] names
+    defer names.free()
+    names.set("name", "Ada")
+    names.set("count", "3")
+    scoped String flat = m.renderMap(names) catch err {
+        print("{err.code}: {err.message}")
+        none
+    }
+    Map[str, List[str]] lists
+    defer lists.free()
+    List[str] msgs
+    defer msgs.free()
+    msgs.push("hi")
+    msgs.push("lunch?")
+    msgs.push("bye")
+    lists.set("messages", msgs)
+    scoped template.Template m2 = try template.parse(r"{{ messages.len }} messages: {{ for i, m in messages }}{{ if i }}, {{ end }}{{ m }}{{ end }}")
+    scoped String both = try m2.renderMap(lists)
+    print(both)
+
+    for bad in [r"""x
+{{ if a }}""", r"{{ end }}", r"{{ for x }}{{ end }}", r"{{ x"] {
+        _ = template.parse(bad) catch err {
+            print("{err.code}: {err.message}")
+            template.Template{}
+        }
+    }
+    scoped template.Template typo = try template.parse(r"{{ user.nmae }}")
+    scoped String r1 = typo.render(p) catch err {
+        print("{err.code}: {err.message}")
+        none
+    }
+    scoped template.Template nav = try template.parse(r"""{{ include "nav" }}""")
+    scoped String r2 = nav.render(p) catch err {
+        print("{err.code}: {err.message}")
+        none
+    }
+    scoped template.Template plain = try template.parse("<ok/>")
+    scoped String r3 = try plain.render(p)
+    print(r3)
+}

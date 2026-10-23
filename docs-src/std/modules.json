@@ -13,11 +13,16 @@
     {"title": "Text and data", "modules": [
       {"name": "json", "title": "JSON", "summary": "Turning @json structs into JSON text and back."},
       {"name": "csv", "title": "CSV", "summary": "Reading and writing comma-separated values."},
+      {"name": "toml", "title": "TOML", "summary": "TOML files into @json structs or a Value, and written back."},
+      {"name": "ini", "title": "INI", "summary": "INI files: sections, keys and comments, read and written."},
+      {"name": "xml", "title": "XML", "summary": "XML read as a stream of events or as a tree of elements, and written."},
       {"name": "regex", "title": "Regular expressions", "summary": "Patterns in RE2's syntax, matched in time linear in the text."},
       {"name": "base64", "title": "Base64", "summary": "Base64, the standard and the URL-safe alphabet."},
       {"name": "hex", "title": "Hex", "summary": "Bytes as hexadecimal digits, and back."},
       {"name": "url", "title": "URLs", "summary": "Taking URLs apart, and the %XX encoding of their parts."},
       {"name": "compress", "title": "Compression", "summary": "Deflate in the gzip, zlib and raw formats."},
+      {"name": "tar", "title": "Tar archives", "summary": "Reading, writing and extracting tar archives, gzip-compressed ones too."},
+      {"name": "zip", "title": "Zip archives", "summary": "Reading, writing and extracting zip archives, stored or deflated, with the CRC checked."},
       {"name": "crypto", "title": "Cryptography", "summary": "SHA-256, SHA-512, HMAC, HKDF, PBKDF2, Ed25519 signatures, X25519, ChaCha20-Poly1305, AES-GCM, SHA-1, MD5 and a constant-time compare."},
       {"name": "jwt", "title": "JSON Web Tokens", "summary": "Signing and checking tokens with HS256 or EdDSA, with their claims in a @json struct."},
       {"name": "uuid", "title": "UUIDs", "summary": "Random v4 and time-ordered v7 UUIDs, written as text and read back."}
@@ -37,6 +42,7 @@
     {"title": "Network", "modules": [
       {"name": "net", "title": "Networking", "summary": "TCP, UDP, TLS, addresses and looking up names."},
       {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."},
+      {"name": "template", "title": "HTML templates", "summary": "Templates with values, if, for and include, escaped for HTML, filled from a struct or a Map."},
       {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."},
       {"name": "smtp", "title": "Mail", "summary": "Sending mail over SMTP, with STARTTLS or TLS and a login."}
     ]},

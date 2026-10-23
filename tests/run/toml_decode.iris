@@ -1,0 +1,92 @@
+// expect: edge listens on 0.0.0.0:8443, 2 backends
+// expect: 10.0.0.11:8080 weight 3 [eu]
+// expect: 10.0.0.12:8080 weight 1 []
+// expect: log: info, started 2026-10-23T09:00:00Z, timeout 2.5
+// expect: TomlError.wrongType: port: expected a number, found a string
+// expect: TomlError.missing: the required field "name" is missing
+// expect: TomlError.range: port: 70000 doesn't fit in u16
+// expect: TomlError.syntax: line 1: expected "=" after the key
+// expect: name = "edge"
+// expect: host = "0.0.0.0"
+// expect: port = 8443
+// expect: timeout = 2.5
+// expect: 
+// expect: [log]
+// expect: level = "info"
+// expect: started = "2026-10-23T09:00:00Z"
+// expect: 
+// expect: [[backends]]
+// expect: addr = "10.0.0.11:8080"
+// expect: weight = 3
+// expect: tags = ["eu"]
+// expect: 
+// expect: [[backends]]
+// expect: addr = "10.0.0.12:8080"
+// expect: weight = 1
+// expect: tags = []
+// expect: round trip: edge 2
+
+import toml, str
+
+enum Level { debug, info, warn }
+
+@json
+struct Backend {
+    String addr
+    i64 weight = 1
+    List[String] tags
+}
+
+@json
+struct Log {
+    Level level = .warn
+    String started
+}
+
+@json
+struct Config {
+    @json(required) String name
+    String host
+    u16 port = 80
+    f64 timeout
+    Log log
+    List[Backend] backends
+}
+
+!void main() {
+    text := r"""
+name = "edge"
+host = "0.0.0.0"
+port = 8443
+timeout = 2.5
+
+[log]
+level = "info"
+started = 2026-10-23T09:00:00Z
+
+[[backends]]
+addr = "10.0.0.11:8080"
+weight = 3
+tags = ["eu"]
+
+[[backends]]
+addr = "10.0.0.12:8080"
+"""
+    scoped Config c = try toml.decode[Config](text)
+    print("{c.name} listens on {c.host}:{c.port}, {c.backends.len} backends")
+    for b in c.backends {
+        str tags = if b.tags.len > 0 { b.tags.at(0) } else { "" }
+        print("{b.addr} weight {b.weight} [{tags}]")
+    }
+    print("log: {c.log.level}, started {c.log.started}, timeout {c.timeout}")
+    for bad in ["name = \"x\"\nport = \"high\"", "port = 1", "name = \"x\"\nport = 70000", "name"] {
+        _ = toml.decode[Config](bad) catch e {
+            print("{e.code}: {e.message}")
+            Config{}
+        }
+    }
+    scoped String out = try toml.encode(c)
+    print(str.trimRight(out))
+    scoped Config back = try toml.decode[Config](out)
+    print("round trip: {back.name} {back.backends.len}")
+}

@@ -1,0 +1,97 @@
+// expect: title: TOML Example
+// expect: owner.dob: 1979-05-27T07:32:00-08:00 (datetime)
+// expect: ports: 3, the last 8002
+// expect: data: 2 arrays, [gamma delta]
+// expect: enabled: true, temp: 79.5
+// expect: servers: alpha 10.0.0.1, beta 10.0.0.2
+// expect: products: 2, the second has no name: true
+// expect: point: x=1 y=2
+// expect: ints: 255 493 5 -17 1000000
+// expect: floats: 0.5 -0.01 5e+22 inf true
+// expect: strings: [tab	end] [C:\Users] [two
+// expect: lines] [joined words] [é☃] [it's "raw"]
+// expect: dotted: a.b.c = 1, site."google.com" = true
+// expect: dates: 1979-05-27 07:32:00 1979-05-27 07:32:00 1979-05-27 07:32:00Z
+
+import toml
+
+!void main() {
+    text := r"""
+# This is a TOML document
+title = "TOML Example"
+
+[owner]
+name = "Tom Preston-Werner"
+dob = 1979-05-27T07:32:00-08:00
+
+[database]
+enabled = true
+ports = [ 8000, 8001, 8002 ]
+data = [ ["delta", "phi"], ["gamma", "delta"] ]
+temp_targets = { cpu = 79.5, case = 72.0 }
+
+[servers]
+
+[servers.alpha]
+ip = "10.0.0.1"
+role = "frontend"
+
+[servers.beta]
+ip = "10.0.0.2"
+role = "backend"
+
+[[products]]
+name = "Hammer"
+sku = 738594937
+
+[[products]]  # empty table within the array
+
+[misc]
+point = { x = 1, y = 2 }
+ints = [0xff, 0o755, 0b101, -17, 1_000_000,]
+floats = [
+  0.5,   # a comment
+  -1e-2,
+  5e+22,
+  inf,
+  nan,
+]
+s1 = "tab\tend"
+s2 = 'C:\Users'
+s5 = "\u00e9\U00002603"
+a.b.c = 1
+site."google.com" = true
+d1 = 1979-05-27
+t1 = 07:32:00
+ldt = 1979-05-27 07:32:00
+odt = 1979-05-27 07:32:00Z
+"""
+    scoped toml.Value doc = try toml.parse(text)
+    scoped toml.Value more = try toml.parse("s3 = \"\"\"\ntwo\nlines\"\"\"\ns4 = \"\"\"joined \\\n     words\"\"\"\ns6 = '''it's \"raw\"'''")
+    print("title: {doc.get("title").text}")
+    dob := doc.get("owner").get("dob")
+    print("owner.dob: {dob.text} ({dob.kind})")
+    db := doc.get("database")
+    ports := db.get("ports")
+    print("ports: {ports.len()}, the last {ports.at(2).int}")
+    data := db.get("data")
+    print("data: {data.len()} arrays, [{data.at(1).at(0).text} {data.at(1).at(1).text}]")
+    print("enabled: {db.get("enabled").boolean}, temp: {db.get("temp_targets").get("cpu").float}")
+    servers := doc.get("servers")
+    a := servers.get("alpha")
+    b := servers.get("beta")
+    print("servers: {servers.keys.at(0)} {a.get("ip").text}, {servers.keys.at(1)} {b.get("ip").text}")
+    products := doc.get("products")
+    print("products: {products.len()}, the second has no name: {products.at(1).get("name") == null}")
+    m := doc.get("misc")
+    p := m.get("point")
+    print("point: x={p.get("x").int} y={p.get("y").int}")
+    ints := m.get("ints")
+    print("ints: {ints.at(0).int} {ints.at(1).int} {ints.at(2).int} {ints.at(3).int} {ints.at(4).int}")
+    fl := m.get("floats")
+    nan := fl.at(4).float
+    print("floats: {fl.at(0).float} {fl.at(1).float} {fl.at(2).float} {fl.at(3).float} {nan != nan}")
+    print("strings: [{m.get("s1").text}] [{m.get("s2").text}] [{more.get("s3").text}] [{more.get("s4").text}] [{m.get("s5").text}] [{more.get("s6").text}]")
+    print("dotted: a.b.c = {m.get("a").get("b").get("c").int}, site.\"google.com\" = {m.get("site").get("google.com").boolean}")
+    print("dates: {m.get("d1").text} {m.get("t1").text} {m.get("ldt").text} {m.get("odt").text}")
+}

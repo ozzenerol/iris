@@ -1,0 +1,95 @@
+// expect: 4 entries
+// expect: notes.txt deflated 900 -> smaller: true, crc ok
+// expect: raw.bin stored 5 -> 5
+// expect: docs/ dir
+// expect: docs/ünïcode.md stored 6 -> 6
+// expect: notes back: true
+// expect: raw back: [hello]
+// expect: time: 2024-02-29 13:45:58
+// expect: ZipError.crc: raw.bin: the CRC-32 doesn't match
+// expect: ZipError.broken: no end of central directory: this is not a zip archive
+// expect: ZipError.unsafe: /etc/passwd is an absolute path
+// expect: from disk: [a.txt] [sub/] [sub/b.txt]
+// expect: extracted: alpha / beta
+
+import zip, fs, path, time, str
+
+!void main() {
+    scoped String notes = "the same line again and again\n".repeat(30)
+    zip.Writer w
+    defer w.free()
+    stamp := time.date(2024, 2, 29, 13, 45, 58).unix()
+    try w.add("notes.txt", notes, mtime: stamp)
+    try w.add("raw.bin", "hello", method: .stored)
+    w.addDir("docs")
+    try w.add("docs/ünïcode.md", "# hi!\n")
+    w.finish()
+
+    scoped zip.Archive a = try zip.parse(w.out)
+    print("{a.entries.len} entries")
+    for e in a.entries {
+        if e.isDir {
+            print("{e.name} dir")
+        } else if e.name == "notes.txt" {
+            print("{e.name} {e.method} {e.size} -> smaller: {e.compressedSize < e.size}, crc ok")
+        } else {
+            print("{e.name} {e.method} {e.size} -> {e.compressedSize}")
+        }
+    }
+    scoped String back = try a.read(a.find("notes.txt"))
+    print("notes back: {back == notes}")
+    scoped String raw = try a.read(a.find("raw.bin"))
+    print("raw back: [{raw}]")
+    t := time.unix(a.find("notes.txt").mtime)
+    scoped String stampText = t.format("YYYY-MM-DD hh:mm:ss")
+    print("time: {stampText}")
+
+    scoped String bad = w.out.copy()
+    i := str.find(bad, "hello")
+    u8[] bytes = bad.ptr[0:bad.len]
+    bytes[i] = 'j'
+    scoped zip.Archive b = try zip.parse(bad)
+    String none
+    scoped String broken = b.read(b.find("raw.bin")) catch e {
+        print("{e.code}: {e.message}")
+        none
+    }
+    _ = zip.parse("not a zip at all") catch e {
+        print("{e.code}: {e.message}")
+        zip.Archive{}
+    }
+
+    scoped String base = format("/tmp/iris-zip-{time.now().ns}")
+    zip.Writer evil
+    defer evil.free()
+    try evil.add("/etc/passwd", "x")
+    evil.finish()
+    scoped zip.Archive ea = try zip.parse(evil.out)
+    scoped String dest = path.join(base, "dest")
+    ea.extract(dest) catch e {
+        print("{e.code}: {e.message}")
+    }
+
+    scoped String src = path.join(base, "src")
+    scoped String sub = path.join(src, "sub")
+    try fs.mkdirAll(sub)
+    scoped String fa = path.join(src, "a.txt")
+    try fs.writeAll(fa, "alpha")
+    scoped String fb = path.join(sub, "b.txt")
+    try fs.writeAll(fb, "beta")
+    zip.Writer d
+    defer d.free()
+    try d.addTree(src)
+    d.finish()
+    scoped String file = path.join(base, "out.zip")
+    try fs.writeAll(file, d.out)
+    scoped zip.Archive fromDisk = try zip.open(file)
+    print("from disk: [{fromDisk.entries.at(0).name}] [{fromDisk.entries.at(1).name}] [{fromDisk.entries.at(2).name}]")
+    try fromDisk.extract(dest)
+    scoped String ra = path.join(dest, "a.txt")
+    scoped String rb = path.join(dest, "sub/b.txt")
+    scoped String ta = try fs.readAll(ra)
+    scoped String tb = try fs.readAll(rb)
+    print("extracted: {ta} / {tb}")
+    try fs.removeAll(base)
+}

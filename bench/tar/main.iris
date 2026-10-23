@@ -1,0 +1,36 @@
+import tar
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// The zip benchmark's 2000 files into a tar in memory, then read back.
+!void main() {
+    i64 seed = 1
+    tar.Writer w
+    defer w.free()
+    for i in 0..2000 {
+        size := next(&seed) % 20000 + 100
+        String data
+        for data.len < size {
+            data.append(WORDS[next(&seed) % 10])
+        }
+        scoped String name = format("dir{i % 20}/file{i}.txt")
+        w.add(name, data)
+        data.free()
+    }
+    w.finish()
+    scoped tar.Archive a = try tar.parse(w.out)
+    i64 bytes = 0
+    i64 sum = 0
+    for e in a.entries {
+        bytes += e.data.len
+        for b in e.data {
+            sum += i64(b)
+        }
+    }
+    print("{a.entries.len} {bytes} {sum} {w.out.len}")
+}

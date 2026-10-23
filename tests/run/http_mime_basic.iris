@@ -1,0 +1,44 @@
+// expect: index.html text/html; charset=utf-8
+// expect: app.JS text/javascript; charset=utf-8
+// expect: logo.svg image/svg+xml
+// expect: photo.jpeg image/jpeg
+// expect: data.json application/json
+// expect: font.woff2 font/woff2
+// expect: archive.tar.gz application/gzip
+// expect: README application/octet-stream
+// expect: 200 text/css; charset=utf-8 [body { color: red }]
+// expect: 404 text/plain; charset=utf-8 [not found]
+// expect: 404 text/plain; charset=utf-8 [not found]
+
+import http, net, fs, path, time, str
+
+void files(http.Request *req, http.Response *res) {
+    res.fileFrom("/tmp/iris-mime-test", req.param("path")) catch e {
+        res.error(500, e.message)
+    }
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    for name in ["index.html", "app.JS", "logo.svg", "photo.jpeg", "data.json", "font.woff2", "archive.tar.gz", "README"] {
+        print("{name} {http.mimeType(name)}")
+    }
+    try fs.mkdirAll("/tmp/iris-mime-test")
+    try fs.writeAll("/tmp/iris-mime-test/site.css", "body {{ color: red }}")
+    http.Router r
+    defer r.free()
+    r.get("/static/*path", files)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    for p in ["site.css", "nope.css", "../etc/passwd"] {
+        scoped String url = format("http://127.0.0.1:{ln.port}/static/{p}")
+        scoped http.Reply rep = try http.get(url)
+        print("{rep.status} {rep.header("Content-Type")} [{str.trim(rep.body)}]")
+    }
+    try fs.removeAll("/tmp/iris-mime-test")
+}

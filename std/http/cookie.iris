@@ -1,0 +1,86 @@
+// Cookies: reading those a request sent, and setting them in the answer.
+
+import str
+
+// Which cross-site requests a browser sends a cookie with: unset leaves
+// the attribute out, so the browser's default (lax) applies.
+pub enum SameSite { unset, lax, strict, none }
+
+// A cookie to set. The value is sent as it is, so it should hold no spaces,
+// quotes, commas, semicolons or backslashes; url.encode or base64 makes any
+// value safe.
+pub struct Cookie {
+    pub str name
+    pub str value
+    // the paths and the domain it is sent to ("" leaves Domain out)
+    pub str path = "/"
+    pub str domain
+    // how long it is kept: 0 until the browser closes, below 0 removes it
+    pub Duration maxAge
+    // only over https, and not readable by JavaScript
+    pub bool secure
+    pub bool httpOnly = true
+    pub SameSite sameSite = .lax
+}
+
+// Adds a Set-Cookie header for c to the answer.
+pub void Response.setCookie(Cookie c) {
+    String h
+    defer h.free()
+    h.append(c.name)
+    h.append("=")
+    h.append(c.value)
+    if c.path.len > 0 {
+        h.append("; Path={c.path}")
+    }
+    if c.domain.len > 0 {
+        h.append("; Domain={c.domain}")
+    }
+    if c.maxAge < 0 {
+        h.append("; Max-Age=0")
+    } else if c.maxAge > 0 {
+        h.append("; Max-Age={c.maxAge / 1s}")
+    }
+    if c.httpOnly {
+        h.append("; HttpOnly")
+    }
+    if c.secure {
+        h.append("; Secure")
+    }
+    match c.sameSite {
+        .lax => h.append("; SameSite=Lax")
+        .strict => h.append("; SameSite=Strict")
+        .none => h.append("; SameSite=None")
+        .unset => {}
+    }
+    self.header("Set-Cookie", h)
+}
+
+// Tells the browser to remove the cookie called name, set for path.
+pub void Response.clearCookie(str name, str path = "/") {
+    self.setCookie(Cookie{name: name, path: path, maxAge: -1s})
+}
+
+// The value of the cookie called name that the request sent, "" when it
+// sent none.
+pub str Request.cookie(str name) {
+    for i in 0..self.count {
+        if !sameName(self.names[i], "Cookie") {
+            continue
+        }
+        str rest = self.values[i]
+        for rest.len > 0 {
+            pair, after, _ := str.cut(rest, ";")
+            rest = after
+            k, v, found := str.cut(str.trim(pair), "=")
+            if found && k == name {
+                val := str.trim(v)
+                if val.len >= 2 && val[0] == '"' && val[val.len - 1] == '"' {
+                    return val[1:val.len - 1]
+                }
+                return val
+            }
+        }
+    }
+    return ""
+}
