@@ -165,7 +165,7 @@ a debug build
 | `arch` | `.x86_64`, `.arm64` |
 | `mode` | `.debug`, `.releaseSafe`, `.releaseFast` |
 
-Conditions join with `&&`, `||` and `!`, and compare with `==` and `!=`. The values are those of the platform the program is built for, which `--target` changes (see [Tools](38-tools.html)).
+Conditions join with `&&`, `||` and `!`, and compare with `==` and `!=`. The values are those of the platform the program is built for, which `--target` changes (see [Tools](39-tools.html)).
 
 ## Attributes
 

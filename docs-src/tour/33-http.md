@@ -411,7 +411,7 @@ r.maxBody = 1 << 20
 r.gzip = true
 ```
 
-`r.shutdown()` stops taking new connections, waits for the requests that are being answered, and then `serve` returns. A server that stops cleanly on Ctrl-C, or when systemd or Docker stop it, waits for the signal in a task of its own and calls `shutdown` (see [Programs and the environment](35-processes.html)):
+`r.shutdown()` stops taking new connections, waits for the requests that are being answered, and then `serve` returns. A server that stops cleanly on Ctrl-C, or when systemd or Docker stop it, waits for the signal in a task of its own and calls `shutdown` (see [Programs and the environment](36-processes.html)):
 
 ```iris
 import http, signal

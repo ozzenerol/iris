@@ -63,6 +63,8 @@ iris build --mode=release-fast --pgo=iris-pgo -o server main.iris
 
 `iris` uses `clang`, version 15 or newer, to turn the IR into a program. `IRIS_CC` names another `clang` to use.
 
+The runtime, the part of every program written in C, is compiled once for each build mode and target and kept in `~/.cache/iris/rt` (or `rt` in `IRIS_PATH`). Later builds compile only the program's own code, so a small program builds in a tenth of a second. Builds with `--pgo-gen` or `--pgo` compile the runtime each time, and so does every build when `IRIS_NO_RT_CACHE` is set.
+
 ## Formatting
 
 `iris fmt` puts code in the standard layout: four spaces for each level, a space around operators and after commas, none inside brackets, at most one blank line in a row, and comments at the ends of lines that are next to each other lined up in one column. It changes only spaces and line breaks: comments and text in strings stay as they are, and a file whose tokens would change is left alone.

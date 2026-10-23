@@ -6250,6 +6250,9 @@ static struct {
     char *(*nameOneline)(const void *, char *, int);
     void (*x509Free)(void *);
     uint64_t (*ctxSetOptions)(void *, uint64_t);
+    void *(*ctxGetKey)(const void *);
+    int (*ctxUseCert)(void *, void *);
+    int (*ctxUsePkey)(void *, void *);
 } ossl;
 
 static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
@@ -6370,6 +6373,9 @@ static void osslLoad(void) {
     *(void **)&ossl.getPeerCert = dlsym(ssl, "SSL_get1_peer_certificate");     /* OpenSSL 3 */
     if (!ossl.getPeerCert) SYM(ssl, getPeerCert, "SSL_get_peer_certificate");
     SYM(ssl, ctxSetOptions, "SSL_CTX_set_options");
+    SYM(ssl, ctxGetKey, "SSL_CTX_get0_privatekey");
+    SYM(ssl, ctxUseCert, "SSL_CTX_use_certificate");
+    SYM(ssl, ctxUsePkey, "SSL_CTX_use_PrivateKey");
 #undef SYM
     *(void **)&ossl.ctxSetAlpnSelect = dlsym(ssl, "SSL_CTX_set_alpn_select_cb");
     *(void **)&ossl.sslSetAlpnProtos = dlsym(ssl, "SSL_set_alpn_protos");
@@ -6502,6 +6508,11 @@ static bool tlsWait(void *ssl, int r) {
 void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca, int64_t caLen, const char *alpn,
                        int64_t alpnLen, const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
     if (!tlsReady()) return NULL;
+    if (hostLen <= 0) {
+        /* the name is what the certificate is checked against */
+        tlsSay("a TLS client needs the server's name or IP to check its certificate");
+        return NULL;
+    }
     char *h = cpath(host, hostLen), *caPath = caLen > 0 ? cpath(ca, caLen) : NULL;
     char *certPath = certLen > 0 ? cpath(cert, certLen) : NULL, *keyPath = keyLen > 0 ? cpath(key, keyLen) : NULL;
     bool own = caPath || certPath;
@@ -6518,7 +6529,9 @@ void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca
         return NULL;
     }
     ossl.sslSetFd(ssl, fd);
-    ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);
+    unsigned char ipBuf[16];
+    bool isIp = inet_pton(AF_INET, h, ipBuf) == 1 || inet_pton(AF_INET6, h, ipBuf) == 1;
+    if (!isIp) ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);     /* SNI names hosts, never IPs */
     ossl.sslSet1Host(ssl, h);
     if (alpnLen > 0 && ossl.sslSetAlpnProtos) {
         /* the protocols to offer, each with its length in front: "\x02h2\x08http/1.1" */
@@ -6590,7 +6603,8 @@ typedef struct {
     unsigned char *alpn;
 } TlsServer;
 
-enum { TLS_VERIFY_FAIL_NO_CERT = 2, TLS_CTRL_SERVERNAME_CB = 53, TLS_CTRL_SERVERNAME_ARG = 54 };
+enum { TLS_VERIFY_FAIL_NO_CERT = 2, TLS_CTRL_SERVERNAME_CB = 53, TLS_CTRL_SERVERNAME_ARG = 54,
+       TLS_CTRL_GET_CHAIN = 82, TLS_CTRL_CHAIN = 88 };
 
 static void genRelease(TlsGen *g) {
     if (!g || __atomic_sub_fetch(&g->refs, 1, __ATOMIC_ACQ_REL) != 0) return;
@@ -6620,7 +6634,9 @@ static int pickCert(void *ssl, int *alert, void *arg) {
     return 0;
 }
 
-static void *serverCtx(TlsServer *s, TlsGen *g, const char *cert, const char *key) {
+/* A context for one certificate: read from its files, or, when from isn't
+   NULL, the certificate, key and chain that context loaded already. */
+static void *serverCtx(TlsServer *s, TlsGen *g, const char *cert, const char *key, void *from) {
     void *ctx = ossl.ctxNew(ossl.serverMethod());
     if (!ctx) {
         tlsSayOpenssl("starting TLS");
@@ -6632,11 +6648,18 @@ static void *serverCtx(TlsServer *s, TlsGen *g, const char *cert, const char *ke
     /* a renegotiation would call pickCert after the handshake let go of
        its generation */
     ossl.ctxSetOptions(ctx, 1u << 30 /* SSL_OP_NO_RENEGOTIATION */);
-    if (ossl.ctxUseChain(ctx, cert) != 1) {
+    if (from) {
+        void *chain = NULL;
+        ossl.ctxCtrl(from, TLS_CTRL_GET_CHAIN, 0, &chain);
+        if (ossl.ctxUseCert(ctx, ossl.ctxGetCert(from)) != 1 || ossl.ctxUsePkey(ctx, ossl.ctxGetKey(from)) != 1 ||
+            (chain && ossl.ctxCtrl(ctx, TLS_CTRL_CHAIN, 1, chain) != 1)) {
+            snprintf(what, sizeof what, "using the certificate %s", cert);
+            goto fail;
+        }
+    } else if (ossl.ctxUseChain(ctx, cert) != 1) {
         snprintf(what, sizeof what, "reading the certificate %s", cert);
         goto fail;
-    }
-    if (ossl.ctxUseKey(ctx, key, 1) != 1 || ossl.ctxCheckKey(ctx) != 1) {
+    } else if (ossl.ctxUseKey(ctx, key, 1) != 1 || ossl.ctxCheckKey(ctx) != 1) {
         snprintf(what, sizeof what, "reading the key %s", key);
         goto fail;
     }
@@ -6658,8 +6681,10 @@ fail:
 }
 
 /* Builds a generation from the server's settings and swaps it in: 0, or -1
-   with the message set and the old one kept. */
-static int serverBuild(TlsServer *s) {
+   with the message set and the old one kept. With files, every certificate
+   is read from its files; without, the ones loaded already are kept, and
+   only those past them are read. */
+static int serverBuild(TlsServer *s, bool files) {
     TlsGen *g = calloc(1, sizeof *g);
     if (!g) outOfMemory();
     g->refs = 1;
@@ -6672,8 +6697,10 @@ static int serverBuild(TlsServer *s) {
         if (!g->alpn) outOfMemory();
         memcpy(g->alpn, s->alpn, len + 1);
     }
+    TlsGen *old = s->gen;           /* changes come one at a time */
     for (int i = 0; i < s->n; i++) {
-        g->ctxs[i] = serverCtx(s, g, s->certs[i], s->keys[i]);
+        void *from = !files && old && i < old->n ? old->ctxs[i] : NULL;
+        g->ctxs[i] = serverCtx(s, g, s->certs[i], s->keys[i], from);
         g->n = i + 1;
         if (!g->ctxs[i]) {
             genRelease(g);
@@ -6684,7 +6711,6 @@ static int serverBuild(TlsServer *s) {
     ossl.ctxCallbackCtrl(g->ctxs[0], TLS_CTRL_SERVERNAME_CB, (void (*)(void))pickCert);
     ossl.ctxCtrl(g->ctxs[0], TLS_CTRL_SERVERNAME_ARG, 0, g);
     spinLock(&s->lock);
-    TlsGen *old = s->gen;
     s->gen = g;
     spinUnlock(&s->lock);
     genRelease(old);
@@ -6716,7 +6742,7 @@ void *iris_tls_server_ctx(const char *cert, int64_t certLen, const char *key, in
     TlsServer *s = calloc(1, sizeof *s);
     if (!s) outOfMemory();
     serverAddFiles(s, c, k);
-    if (serverBuild(s) != 0) {
+    if (serverBuild(s, true) != 0) {
         free(c);
         free(k);
         free(s->certs);
@@ -6738,7 +6764,7 @@ int iris_tls_server_add(void *server, const char *cert, int64_t certLen, const c
         return -1;
     }
     serverAddFiles(s, c, k);
-    if (serverBuild(s) != 0) {
+    if (serverBuild(s, false) != 0) {
         s->n--;
         free(c);
         free(k);
@@ -6748,7 +6774,7 @@ int iris_tls_server_add(void *server, const char *cert, int64_t certLen, const c
 }
 
 /* Reads every certificate and key again. */
-int iris_tls_server_reload(void *server) { return serverBuild(server); }
+int iris_tls_server_reload(void *server) { return serverBuild(server, true); }
 
 /* Asks clients for a certificate signed by one in ca; required makes a
    client without one fail the handshake. */
@@ -6762,7 +6788,7 @@ int iris_tls_server_clients(void *server, const char *ca, int64_t caLen, int req
     }
     s->clientCa = path;
     s->clientRequired = required;
-    if (serverBuild(s) != 0) {
+    if (serverBuild(s, false) != 0) {
         s->clientCa = old;
         s->clientRequired = oldRequired;
         free(path);
@@ -6794,7 +6820,7 @@ int iris_tls_server_alpn(void *server, const char *protos, int64_t len) {
     p[len] = 0;
     s->alpn = len > 0 ? p : NULL;
     if (len == 0) free(p);
-    if (serverBuild(s) != 0) {
+    if (serverBuild(s, false) != 0) {
         free(s->alpn);
         s->alpn = old;
         return -1;

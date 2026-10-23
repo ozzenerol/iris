@@ -58,8 +58,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# tests run several at a time; each is a separate process
+POOL = ThreadPoolExecutor(max_workers=int(os.environ.get("IRIS_TEST_JOBS", os.cpu_count() or 4)))
+
+
+def gather(jobs, failures):
+    """Waits for the jobs, in order, adding the failures each one gives."""
+    for j in jobs:
+        failures.extend(j.result())
+    return len(jobs)
 
 
 def run(iris, args, env=None, stdin=None):
@@ -200,83 +212,89 @@ def diff(want, got):
 
 
 def error_tests(iris, only, failures):
-    count = 0
+    jobs = []
     for path in sorted(glob.glob(os.path.join(ROOT, "tests/errors/*.iris"))):
         name = "errors/" + os.path.basename(path)[:-5]
         if only and not any(o in name for o in only):
             continue
-        count += 1
-        with open(path) as f:
-            expected = re.findall(r"^// error: (\d+): (.*)$", f.read(), re.M)
-        if not expected:
-            failures.append((name, "no // error: lines at the top"))
-            continue
-        code, out, err = run(iris, ["check", path])
-        if code == 0:
-            failures.append((name, "compiled, but should have failed"))
-            continue
-        for line, msg in expected:
-            pat = re.compile(r":%s:\d+: error: %s$" % (line, re.escape(msg.strip())), re.M)
-            if not pat.search(err):
-                failures.append((name, "missing error at line %s: %s\ngot:\n%s" % (line, msg, err)))
-                break
-    return count
+        jobs.append(POOL.submit(error_test, iris, path, name))
+    return gather(jobs, failures)
+
+
+def error_test(iris, path, name):
+    with open(path) as f:
+        expected = re.findall(r"^// error: (\d+): (.*)$", f.read(), re.M)
+    if not expected:
+        return [(name, "no // error: lines at the top")]
+    code, out, err = run(iris, ["check", path])
+    if code == 0:
+        return [(name, "compiled, but should have failed")]
+    for line, msg in expected:
+        pat = re.compile(r":%s:\d+: error: %s$" % (line, re.escape(msg.strip())), re.M)
+        if not pat.search(err):
+            return [(name, "missing error at line %s: %s\ngot:\n%s" % (line, msg, err))]
+    return []
 
 
 def run_tests(iris, only, failures, folder="run", env=None):
-    count = 0
+    jobs = []
     for path in sorted(glob.glob(os.path.join(ROOT, "tests", folder, "*.iris"))):
         name = folder + "/" + os.path.basename(path)[:-5]
         if only and not any(o in name for o in only):
             continue
-        count += 1
-        text = open(path).read()
-        expect = re.findall(r"^// expect:(?: (.*))?$", text, re.M)
-        exits = re.findall(r"^// exit: (\d+)$", text, re.M)
-        panics = re.findall(r"^// panic: (.*)$", text, re.M)
-        modes = re.findall(r"^// mode: (\S+)$", text, re.M)
-        stderrs = re.findall(r"^// stderr: (.*)$", text, re.M)
-        want_exit = int(exits[0]) if exits else (2 if panics or stderrs else 0)
-        commands = re.findall(r"^// command: (\S+)$", text, re.M)
-        extra = re.findall(r"^// args: (.*)$", text, re.M)
-        args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
-        args += extra[0].split() if extra else []
-        envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M) + list((env or {}).items())
-        stdin = re.findall(r"^// stdin:(?: (.*))?$", text, re.M)
-        keys = re.findall(r"^// tty: (.*)$", text, re.M)
-        problems = []
-        if keys:
-            code, out = run_tty(iris, args, dict(envs), keys)
-            err = ""
-            for line in expect:
-                if line not in out:
-                    problems.append("the terminal didn't show '%s'" % line)
-            if problems:
-                problems.append("it showed:\n" + out)
-            if code != want_exit:
-                problems.append("exit status %d, want %d" % (code, want_exit))
-            if problems:
-                failures.append((name, "\n".join(problems)))
-            continue
-        code, out, err = run(iris, args, dict(envs), "".join(l + "\n" for l in stdin) if stdin else None)
-        want_out = "".join(line + "\n" for line in expect)
-        if "…" in want_out:
-            bad = output_mismatch(want_out, out)
-            if bad:
-                problems.append(bad)
-        elif out != want_out:
-            problems.append(diff(want_out, out).replace("tree", "output"))
+        jobs.append(POOL.submit(run_test, iris, path, name, env))
+    return gather(jobs, failures)
+
+
+def run_test(iris, path, name, env):
+    failures = []
+    text = open(path).read()
+    expect = re.findall(r"^// expect:(?: (.*))?$", text, re.M)
+    exits = re.findall(r"^// exit: (\d+)$", text, re.M)
+    panics = re.findall(r"^// panic: (.*)$", text, re.M)
+    modes = re.findall(r"^// mode: (\S+)$", text, re.M)
+    stderrs = re.findall(r"^// stderr: (.*)$", text, re.M)
+    want_exit = int(exits[0]) if exits else (2 if panics or stderrs else 0)
+    commands = re.findall(r"^// command: (\S+)$", text, re.M)
+    extra = re.findall(r"^// args: (.*)$", text, re.M)
+    args = [commands[0] if commands else "run"] + (["--mode=" + modes[0]] if modes else []) + [path]
+    args += extra[0].split() if extra else []
+    envs = re.findall(r"^// env: (\S+?)=(.*)$", text, re.M) + list((env or {}).items())
+    stdin = re.findall(r"^// stdin:(?: (.*))?$", text, re.M)
+    keys = re.findall(r"^// tty: (.*)$", text, re.M)
+    problems = []
+    if keys:
+        code, out = run_tty(iris, args, dict(envs), keys)
+        err = ""
+        for line in expect:
+            if line not in out:
+                problems.append("the terminal didn't show '%s'" % line)
+        if problems:
+            problems.append("it showed:\n" + out)
         if code != want_exit:
             problems.append("exit status %d, want %d" % (code, want_exit))
-        for p in panics:
-            if "panic: " + p not in err:
-                problems.append("stderr lacks 'panic: %s'" % p)
-        for p in stderrs:
-            if p not in err:
-                problems.append("stderr lacks '%s'" % p)
         if problems:
-            failures.append((name, "\n".join(problems) + ("\nstderr:\n" + err if err else "")))
-    return count
+            failures.append((name, "\n".join(problems)))
+        return failures
+    code, out, err = run(iris, args, dict(envs), "".join(l + "\n" for l in stdin) if stdin else None)
+    want_out = "".join(line + "\n" for line in expect)
+    if "…" in want_out:
+        bad = output_mismatch(want_out, out)
+        if bad:
+            problems.append(bad)
+    elif out != want_out:
+        problems.append(diff(want_out, out).replace("tree", "output"))
+    if code != want_exit:
+        problems.append("exit status %d, want %d" % (code, want_exit))
+    for p in panics:
+        if "panic: " + p not in err:
+            problems.append("stderr lacks 'panic: %s'" % p)
+    for p in stderrs:
+        if p not in err:
+            problems.append("stderr lacks '%s'" % p)
+    if problems:
+        failures.append((name, "\n".join(problems) + ("\nstderr:\n" + err if err else "")))
+    return failures
 
 
 def project_tests(iris, only, failures):
@@ -365,6 +383,7 @@ def doc_tests(iris, only, failures):
     # "docs" runs every page's examples; "docs-src/tour/03" only that page's
     if only and not any(o in "docs" or any(o in os.path.relpath(f, ROOT) for f in files) for o in only):
         return 0
+    jobs = []
     count = 0
     with tempfile.TemporaryDirectory() as tmp:
         for md in files:
@@ -372,6 +391,7 @@ def doc_tests(iris, only, failures):
             if only and not any(o in "docs" or o in rel for o in only):
                 continue
             lines = open(md).read().split("\n")
+            blocks = []
             i = 0
             while i < len(lines):
                 m = re.match(r"^```\s*(\S*)\s*(\S*)", lines[i])
@@ -384,33 +404,49 @@ def doc_tests(iris, only, failures):
                 while j < len(lines) and not lines[j].startswith("```"):
                     j += 1
                 if lang == "iris" and mode != "error":
-                    count += 1
-                    src = os.path.join(tmp, "example.iris")
-                    with open(src, "w") as f:
-                        f.write("\n".join(lines[start:j]) + "\n")
-                    where = "docs %s:%d" % (rel, start)
-                    code, out, err = run(iris, ["parse", "--snippet", src])
-                    if code != 0:
-                        err = err.replace(src, "%s (block at line %d)" % (rel, start))
-                        failures.append((where, err))
-                    elif mode == "run":
+                    want = None
+                    if mode == "run":
                         # a whole program: it runs, and prints the ```output block after it
                         k = j + 1
                         while k < len(lines) and not lines[k].strip():
                             k += 1
-                        want = None
                         if k < len(lines) and lines[k].startswith("```output"):
                             m2 = k + 1
                             while m2 < len(lines) and not lines[m2].startswith("```"):
                                 m2 += 1
                             want = "".join(l + "\n" for l in lines[k + 1:m2])
-                        code, out, err = run(iris, ["run", src])
-                        if code != 0:
-                            failures.append((where, "exit status %d\n%s" % (code, err.replace(src, rel))))
-                        elif want is not None and out != want:
-                            failures.append((where, diff(want, out).replace("tree", "output")))
+                    blocks.append(("\n".join(lines[start:j]) + "\n", start, mode, want))
                 i = j + 1
+            # a page's examples run in order, since one may use what another made
+            folder = os.path.join(tmp, str(len(jobs)))
+            os.mkdir(folder)
+            jobs.append(POOL.submit(doc_page, iris, os.path.join(folder, "example.iris"), rel, blocks))
+            count += len(blocks)
+        gather(jobs, failures)
     return count
+
+
+def doc_page(iris, src, rel, blocks):
+    failures = []
+    for code_text, start, mode, want in blocks:
+        failures += doc_test(iris, src, code_text, rel, start, mode, want)
+    return failures
+
+
+def doc_test(iris, src, code_text, rel, start, mode, want):
+    with open(src, "w") as f:
+        f.write(code_text)
+    where = "docs %s:%d" % (rel, start)
+    code, out, err = run(iris, ["parse", "--snippet", src])
+    if code != 0:
+        return [(where, err.replace(src, "%s (block at line %d)" % (rel, start)))]
+    if mode == "run":
+        code, out, err = run(iris, ["run", src])
+        if code != 0:
+            return [(where, "exit status %d\n%s" % (code, err.replace(src, rel)))]
+        if want is not None and out != want:
+            return [(where, diff(want, out).replace("tree", "output"))]
+    return []
 
 
 def output_mismatch(want, got):
@@ -565,18 +601,20 @@ def service_tests(iris, only, failures, skipped, folder, script, prefix):
 
 
 def std_tests(iris, only, failures):
-    count = 0
+    jobs = []
     for path in sorted(glob.glob(os.path.join(ROOT, "std/**/*.iris"), recursive=True)):
         name = os.path.relpath(path, ROOT)
         if only and not any(o in name for o in only):
             continue
         if not re.search(r'^test "', open(path).read(), re.M):
             continue
-        count += 1
-        code, out, err = run(iris, ["test", path])
-        if code != 0:
-            failures.append((name, out + err))
-    return count
+        jobs.append(POOL.submit(std_test, iris, path, name))
+    return gather(jobs, failures)
+
+
+def std_test(iris, path, name):
+    code, out, err = run(iris, ["test", path])
+    return [(name, out + err)] if code != 0 else []
 
 
 def main():
@@ -597,11 +635,15 @@ def main():
     total += project_tests(args.iris, args.only, failures)
     total += mod_init_test(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
+    # the guides mostly wait for their servers, so they go on beside the rest
+    guide_failures = []
+    guides = POOL.submit(guide_tests, args.iris, args.only, guide_failures, skipped)
     total += doc_tests(args.iris, args.only, failures)
-    total += guide_tests(args.iris, args.only, failures, skipped)
     total += std_tests(args.iris, args.only, failures)
     total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")
     total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")
+    total += guides.result()
+    failures.extend(guide_failures)
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],

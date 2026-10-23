@@ -191,4 +191,4 @@ Neither can the names of built-in types (`i64`, `str`, `String`...) and built-in
 iris fmt main.iris
 ```
 
-The [Tools](38-tools.html) chapter covers it and the other commands.
+The [Tools](39-tools.html) chapter covers it and the other commands.

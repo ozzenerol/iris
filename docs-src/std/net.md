@@ -237,7 +237,7 @@ void route(net.Conn client) {
 
 ## TLS
 
-`net.dialTls` connects and starts TLS, checking the server's certificate against the system's certificates, or the ones in a `ca` file. A server makes a `TlsConfig` from a certificate and its key and calls `acceptTls` on each connection:
+`net.dialTls` connects and starts TLS, checking the server's certificate against the system's certificates, or the ones in a `ca` file. The host is what the certificate must name, a name or an IP, so it can't be empty. A server makes a `TlsConfig` from a certificate and its key and calls `acceptTls` on each connection:
 
 ```iris
 c := try net.dialTls("example.com", 443)

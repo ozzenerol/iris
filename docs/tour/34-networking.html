@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Networking - Iris</title>
+<meta name="description" content="The net module has TCP, UDP, TLS and Unix sockets. A call that waits for the network lets the other tasks on its thread run, so a server can hold many connections with one task each and no callbacks. This chapter goes from a server and a client to the parts a proxy needs: socket options, half-closing, copying between connections and looking at the first bytes.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.67.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-files.html"><span class="num">29</span>Files</a></li><li><a href="30-flags.html"><span class="num">30</span>Command-line flags</a></li><li><a href="31-time.html"><span class="num">31</span>Time</a></li><li><a href="32-logging.html"><span class="num">32</span>Input, output and logging</a></li><li><a href="33-http.html"><span class="num">33</span>HTTP</a></li><li><a href="34-networking.html" class="on"><span class="num">34</span>Networking</a></li><li><a href="35-sqlite.html"><span class="num">35</span>SQLite</a></li><li><a href="36-processes.html"><span class="num">36</span>Programs and the environment</a></li><li><a href="37-calling-c.html"><span class="num">37</span>Calling C</a></li><li><a href="38-testing.html"><span class="num">38</span>Testing</a></li><li><a href="39-tools.html"><span class="num">39</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Networking</h1>
+<p class="lede">The <code>net</code> module has TCP, UDP, TLS and Unix sockets. A call that waits for the network lets the other tasks on its thread run, so a server can hold many connections with one task each and no callbacks. This chapter goes from a server and a client to the parts a proxy needs: socket options, half-closing, copying between connections and looking at the first bytes.</p>
+<h2 id="a-server-and-a-client"><a href="#a-server-and-a-client">A server and a client</a></h2>
+<p><code>net.listen</code> gives a <code>Listener</code>, and its <code>accept</code> waits for the next connection. <code>net.dial</code> connects. A <code>Conn</code> reads with <code>read</code>, <code>readLine</code> and <code>readExactly</code>, and writes with <code>write</code>. Each connection the server accepts gets a task of its own:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c) {
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">for</span> {
+        line := c.<span class="f">readLine</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        c.<span class="f">write</span>(<span class="s">&quot;you said: </span><span class="e">{</span>line<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+            line.<span class="f">free</span>()
+            <span class="k">return</span>
+        }
+        line.<span class="f">free</span>()
+    }
+}
+
+<span class="t">void</span> <span class="f">server</span>(net.<span class="t">Listener</span> ln) {
+    <span class="k">for</span> {
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="k">spawn</span> <span class="f">handle</span>(conn)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">server</span>(ln)
+
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;hello</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> reply = <span class="k">try</span> c.<span class="f">readLine</span>()
+    <span class="f">print</span>(reply)
+}</code></pre>
+<pre class="out"><code>you said: hello</code></pre>
+<p>Port 0 lets the system pick a free port, which <code>ln.port</code> then holds. A host of <code>&quot;&quot;</code> listens on every address, IPv6 and IPv4 at once. <code>listen(port, host, shared: true)</code> lets several threads listen on the same port, each with its own listener, and the kernel spreads the connections between them. That is how a server uses every core.</p>
+<h2 id="timeouts-and-errors"><a href="#timeouts-and-errors">Timeouts and errors</a></h2>
+<p>A call that fails gives a <code>NetError</code>: <code>refused</code> when nothing listens, <code>closed</code> when the other side went away, <code>timeout</code>, <code>notFound</code> for a name that doesn't resolve, and <code>inUse</code> for a port that is taken. <code>dial</code> takes a timeout for connecting, and <code>setTimeout</code> limits how long each read or write on a connection may wait:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    _ = net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, <span class="n">1</span>, timeout: <span class="n">1s</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+        net.<span class="t">Conn</span>{}
+    }
+
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">setTimeout</span>(<span class="n">50ms</span>)
+    <span class="t">u8</span>[<span class="n">16</span>] buf
+    _ = c.<span class="f">read</span>(buf) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="n">0</span>
+    }
+}</code></pre>
+<pre class="out"><code>NetError.refused
+NetError.timeout</code></pre>
+<p><code>readLine</code> takes a limit on a line's length, so a client can't make a server hold a line without end.</p>
+<h2 id="socket-options"><a href="#socket-options">Socket options</a></h2>
+<p>Every connection from <code>net</code> starts with <code>TCP_NODELAY</code> on, so small writes go out at once. A <code>Conn</code> changes the common options with methods: <code>setNoDelay</code>, <code>setKeepAlive</code> with the idle time, the interval between probes and how many may go unanswered, and <code>setBuffers</code> for the kernel's buffers. Any other option that is an int goes through <code>setOption</code> and <code>option</code>, with the level and name C uses, from the system's headers with <a href="37-calling-c.html">import c</a>:</p>
+<pre class="code run"><code><span class="k">import</span> net
+<span class="k">import</span> c <span class="s">&quot;sys/socket.h&quot;</span>
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    conn := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> conn.<span class="f">close</span>()
+
+    <span class="k">try</span> conn.<span class="f">setKeepAlive</span>(<span class="n">30s</span>, <span class="n">10s</span>, <span class="n">3</span>)
+    on := <span class="k">try</span> conn.<span class="f">option</span>(c.SOL_SOCKET, c.SO_KEEPALIVE)
+    <span class="f">print</span>(<span class="s">&quot;keepalive: </span><span class="e">{</span>on != <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">try</span> conn.<span class="f">setOption</span>(c.SOL_SOCKET, c.SO_KEEPALIVE, <span class="n">0</span>)
+    off := <span class="k">try</span> conn.<span class="f">option</span>(c.SOL_SOCKET, c.SO_KEEPALIVE)
+    <span class="f">print</span>(<span class="s">&quot;keepalive: </span><span class="e">{</span>off != <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>keepalive: true
+keepalive: false</code></pre>
+<p>A Linux-only option like <code>TCP_KEEPIDLE</code> comes from <code>netinet/tcp.h</code> the same way, as <code>conn.setOption(c.IPPROTO_TCP, c.TCP_KEEPIDLE, 30)</code>. <code>setOptionBytes</code> and <code>optionBytes</code> take an option whose value is a struct, as its bytes.</p>
+<h2 id="setting-up-a-socket"><a href="#setting-up-a-socket">Setting up a socket</a></h2>
+<p>Some options only count when they are set before a socket binds, listens or connects: <code>SO_REUSEPORT</code>, <code>IP_TRANSPARENT</code>, <code>TCP_FASTOPEN</code>, and buffer sizes large enough to change TCP's window. <code>net.socket</code> gives a <code>Socket</code> that takes them. <code>bind</code> gives it an address, then <code>listen</code> turns it into a <code>Listener</code>, with room for a backlog of connections, or <code>connect</code> turns it into a <code>Conn</code>.</p>
+<p>On a client, <code>bind</code> picks the address and the port the connection comes from:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="k">try</span> net.<span class="f">socket</span>()
+    <span class="k">try</span> s.<span class="f">setBuffers</span>(read: <span class="n">1MiB</span>)
+    <span class="k">try</span> s.<span class="f">bind</span>(net.<span class="t">Addr</span>{port: <span class="n">0</span>})
+    ln := <span class="k">try</span> s.<span class="f">listen</span>(backlog: <span class="n">4096</span>)
+
+    cs := <span class="k">try</span> net.<span class="f">socket</span>(net.<span class="t">Family</span>.v4)
+    <span class="k">try</span> cs.<span class="f">bind</span>(<span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;127.0.0.1&quot;</span>))
+    conn := <span class="k">try</span> cs.<span class="f">connect</span>(<span class="k">try</span> net.<span class="f">ip</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port))
+    <span class="k">defer</span> conn.<span class="f">close</span>()
+
+    srv := <span class="k">try</span> ln.<span class="f">accept</span>()
+    <span class="k">defer</span> srv.<span class="f">close</span>()
+    from := srv.<span class="f">remoteAddr</span>()
+    <span class="k">scoped</span> <span class="t">String</span> ip = from.<span class="f">ipText</span>()
+    <span class="f">print</span>(<span class="s">&quot;from </span><span class="e">{</span>ip<span class="e">}</span><span class="s">, the client&#x27;s port: </span><span class="e">{</span>from.port == conn.<span class="f">localAddr</span>().port<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>from 127.0.0.1, the client&#x27;s port: true</code></pre>
+<p><code>net.Addr{port: 8080}</code> is every address on port 8080. A <code>Socket</code> is IPv6 that takes IPv4 too; <code>Family.v4</code> and <code>Family.v6</code> give one of them only.</p>
+<h2 id="half-closing"><a href="#half-closing">Half-closing</a></h2>
+<p><code>closeWrite</code> ends this side's writes. The other side reads the end of the data, and this side can still read what comes back. A client that sends a whole request and then waits for the answer can say it is done this way:</p>
+<pre class="code run"><code><span class="k">import</span> net, <span class="t">str</span>
+
+<span class="t">void</span> <span class="f">shout</span>(net.<span class="t">Listener</span> ln) {
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="t">String</span> text
+    <span class="k">defer</span> text.<span class="f">free</span>()
+    <span class="t">u8</span>[<span class="n">256</span>] buf
+    <span class="k">for</span> {
+        n := c.<span class="f">read</span>(buf) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        text.<span class="f">append</span>(buf[<span class="n">0</span>:n])
+    }
+    <span class="k">scoped</span> <span class="t">String</span> loud = <span class="t">str</span>.<span class="f">upper</span>(text)
+    c.<span class="f">write</span>(loud) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">shout</span>(ln)
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;all of it, &quot;</span>)
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;then the end&quot;</span>)
+    <span class="k">try</span> c.<span class="f">closeWrite</span>()
+
+    <span class="t">u8</span>[<span class="n">256</span>] buf
+    n := <span class="k">try</span> c.<span class="f">read</span>(buf)
+    <span class="f">print</span>(buf[<span class="n">0</span>:n])
+}</code></pre>
+<pre class="out"><code>ALL OF IT, THEN THE END</code></pre>
+<p>Over TLS, <code>closeWrite</code> sends TLS's own end of data first.</p>
+<h2 id="copying-between-connections"><a href="#copying-between-connections">Copying between connections</a></h2>
+<p><code>net.copy(to, from)</code> copies what one connection reads to another until the first one's data ends, and gives the number of bytes. Small messages go through a buffer. On Linux, when neither connection uses TLS, a steady stream goes from socket to socket inside the kernel, with <code>splice</code>, without coming up to the program.</p>
+<p>A TCP proxy is two copies, one each way. When one direction ends, the proxy passes the end on with <code>closeWrite</code>, and the other direction goes on:</p>
+<pre class="code run"><code><span class="k">import</span> net
+
+<span class="t">void</span> <span class="f">backend</span>(net.<span class="t">Listener</span> ln) {
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    c.<span class="f">write</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="s">, from the backend</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
+}
+
+<span class="t">void</span> <span class="f">oneWay</span>(net.<span class="t">Conn</span> *to, net.<span class="t">Conn</span> *from, <span class="k">chan</span>[<span class="t">i64</span>] done) {
+    n := net.<span class="f">copy</span>(to, from) <span class="k">catch</span> e {
+        done &lt;- -<span class="n">1</span>
+        <span class="k">return</span>
+    }
+    to.<span class="f">closeWrite</span>() <span class="k">catch</span> e { }
+    done &lt;- n
+}
+
+<span class="t">void</span> <span class="f">proxy</span>(net.<span class="t">Listener</span> ln, <span class="t">u16</span> backendPort, <span class="k">chan</span>[<span class="t">i64</span>] counts) {
+    client := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> client.<span class="f">close</span>()
+    server := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, backendPort, timeout: <span class="n">2s</span>) <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> server.<span class="f">close</span>()
+    done := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
+    <span class="k">defer</span> done.<span class="f">free</span>()
+    <span class="k">spawn</span> <span class="f">oneWay</span>(&amp;server, &amp;client, done)
+    <span class="f">oneWay</span>(&amp;client, &amp;server, done)
+    _ = &lt;-done
+    counts &lt;- client.received
+    counts &lt;- server.received
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    back := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">backend</span>(back)
+    front := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    counts := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
+    <span class="k">defer</span> counts.<span class="f">free</span>()
+    <span class="k">spawn</span> <span class="f">proxy</span>(front, back.port, counts)
+
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, front.port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;hello</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">try</span> c.<span class="f">closeWrite</span>()
+    <span class="k">scoped</span> <span class="t">String</span> reply = <span class="k">try</span> c.<span class="f">readLine</span>()
+    <span class="f">print</span>(reply)
+    up := &lt;-counts
+    down := &lt;-counts
+    <span class="f">print</span>(<span class="s">&quot;the proxy moved </span><span class="e">{</span>up<span class="e">}</span><span class="s"> bytes up and </span><span class="e">{</span>down<span class="e">}</span><span class="s"> bytes down&quot;</span>)
+}</code></pre>
+<pre class="out"><code>hello, from the backend
+the proxy moved 6 bytes up and 24 bytes down</code></pre>
+<p><code>received</code> and <code>sent</code> count the bytes each connection moved, through an error too, which is what a proxy logs. Each copy waits for data as long as its connection's <code>setTimeout</code> allows, so that timeout is an idle timeout. <code>limit</code> stops a copy after that many bytes.</p>
+<h2 id="the-first-bytes"><a href="#the-first-bytes">The first bytes</a></h2>
+<p><code>peek(n)</code> gives the next n bytes without taking them. A server can look at them to tell what a connection is before it decides who handles it. On a connection without TLS the bytes stay in the socket, so whatever reads next gets them, <code>acceptTls</code> and <code>copy</code> included:</p>
+<pre class="code run"><code><span class="k">import</span> net, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">for</span> text <span class="k">in</span> [<span class="s">&quot;SSH-2.0-client</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>, <span class="s">&quot;GET / HTTP/1.1</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>, <span class="s">&quot;</span><span class="e">\x16</span><span class="e">\x03</span><span class="e">\x01</span><span class="s">&quot;</span>] {
+        c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+        <span class="k">try</span> c.<span class="f">write</span>(text)
+        s := <span class="k">try</span> ln.<span class="f">accept</span>()
+        head := <span class="k">try</span> s.<span class="f">peek</span>(<span class="n">3</span>)
+        kind := <span class="k">if</span> <span class="t">str</span>.<span class="f">startsWith</span>(head, <span class="s">&quot;SSH&quot;</span>) {
+            <span class="s">&quot;ssh&quot;</span>
+        } <span class="k">else</span> <span class="k">if</span> head.len &gt; <span class="n">0</span> &amp;&amp; head[<span class="n">0</span>] == <span class="n">0x16</span> {
+            <span class="s">&quot;tls&quot;</span>
+        } <span class="k">else</span> {
+            <span class="s">&quot;http&quot;</span>
+        }
+        <span class="k">scoped</span> <span class="t">String</span> first = <span class="k">try</span> s.<span class="f">readExactly</span>(<span class="n">3</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>kind<span class="e">}</span><span class="s">, and the reads still get its first </span><span class="e">{</span>first.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
+        c.<span class="f">close</span>()
+        s.<span class="f">close</span>()
+    }
+}</code></pre>
+<pre class="out"><code>ssh, and the reads still get its first 3 bytes
+http, and the reads still get its first 3 bytes
+tls, and the reads still get its first 3 bytes</code></pre>
+<p><code>peekServerName</code> reads a TLS client's first message and gives the host name it asks for (SNI), with TLS still in place. One port can then send each name to its own backend with <code>copy</code>, and the backend does the TLS:</p>
+<pre class="code"><code><span class="t">void</span> <span class="f">route</span>(net.<span class="t">Conn</span> client) {
+    <span class="k">defer</span> client.<span class="f">close</span>()
+    client.<span class="f">setTimeout</span>(<span class="n">5s</span>)
+    name := client.<span class="f">peekServerName</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    port := <span class="k">if</span> name == <span class="s">&quot;api.example.com&quot;</span> { <span class="n">9001</span> } <span class="k">else</span> { <span class="n">9002</span> }
+    backend := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, <span class="t">u16</span>(port)) <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> backend.<span class="f">close</span>()
+    <span class="c">// copies both ways, as in the proxy above</span>
+}</code></pre>
+<h2 id="tls"><a href="#tls">TLS</a></h2>
+<p><code>net.dialTls</code> connects and starts TLS. The server's certificate must be valid for the host and signed by a certificate the system trusts, or one in a <code>ca</code> file. A client that a server asks for a certificate gives its own with <code>cert</code> and <code>key</code>:</p>
+<pre class="code"><code>c := <span class="k">try</span> net.<span class="f">dialTls</span>(<span class="s">&quot;example.com&quot;</span>, <span class="n">443</span>)
+<span class="k">defer</span> c.<span class="f">close</span>()
+backend := <span class="k">try</span> net.<span class="f">dialTls</span>(<span class="s">&quot;db.internal&quot;</span>, <span class="n">5433</span>, ca: <span class="s">&quot;certs/ca.pem&quot;</span>, cert: <span class="s">&quot;certs/proxy.pem&quot;</span>,
+                           key: <span class="s">&quot;certs/proxy.key&quot;</span>)</code></pre>
+<p>A server makes a <code>TlsConfig</code> from a certificate and its key, and calls <code>acceptTls</code> on each connection. <code>addCert</code> adds certificates for other names, and each client gets the one for the name it asks for; <code>serverName</code> says which. <code>reload</code> reads the files again while the server runs, as after the certificates are renewed. <code>verifyClients</code> asks each client for a certificate signed by a given CA, and <code>peerSubject</code> says who the client is:</p>
+<pre class="code"><code>config := <span class="k">try</span> net.<span class="f">tlsConfig</span>(<span class="s">&quot;certs/example.com.pem&quot;</span>, <span class="s">&quot;certs/example.com.key&quot;</span>)
+<span class="k">try</span> config.<span class="f">addCert</span>(<span class="s">&quot;certs/wildcard.example.net.pem&quot;</span>, <span class="s">&quot;certs/wildcard.example.net.key&quot;</span>)
+<span class="k">try</span> config.<span class="f">verifyClients</span>(<span class="s">&quot;certs/clients-ca.pem&quot;</span>)
+
+conn := <span class="k">try</span> ln.<span class="f">accept</span>()
+<span class="k">try</span> conn.<span class="f">acceptTls</span>(&amp;config)
+<span class="k">scoped</span> <span class="t">String</span> who = conn.<span class="f">peerSubject</span>()
+<span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conn.<span class="f">serverName</span>()<span class="e">}</span><span class="s"> for </span><span class="e">{</span>who<span class="e">}</span><span class="s">&quot;</span>)</code></pre>
+<h2 id="unix-sockets-and-passing-sockets-on"><a href="#unix-sockets-and-passing-sockets-on">Unix sockets and passing sockets on</a></h2>
+<p><code>listenUnix</code> and <code>dialUnix</code> work like <code>listen</code> and <code>dial</code>, on a path. Over a Unix socket, <code>sendFds</code> sends open file descriptors with some bytes, and <code>readFds</code> receives them. <code>adoptListener</code> and <code>adoptConn</code> turn a descriptor from elsewhere into a <code>Listener</code> or a <code>Conn</code>. A server hands its listening sockets to its next version this way, so a restart drops no connection:</p>
+<pre class="code run"><code><span class="k">import</span> fs, net, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> path = <span class="f">format</span>(<span class="s">&quot;/tmp/iris-tour-</span><span class="e">{</span>os.<span class="f">pid</span>()<span class="e">}</span><span class="s">.sock&quot;</span>)
+    <span class="k">defer</span> fs.<span class="f">remove</span>(path) <span class="k">catch</span> e { }
+    handover := <span class="k">try</span> net.<span class="f">listenUnix</span>(path)
+    <span class="k">defer</span> handover.<span class="f">close</span>()
+    tcp := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+
+    sender := <span class="k">try</span> net.<span class="f">dialUnix</span>(path)
+    <span class="k">defer</span> sender.<span class="f">close</span>()
+    <span class="k">try</span> sender.<span class="f">sendFds</span>(<span class="s">&quot;the listener&quot;</span>, [tcp.<span class="f">fd</span>()])
+
+    receiver := <span class="k">try</span> handover.<span class="f">accept</span>()
+    <span class="k">defer</span> receiver.<span class="f">close</span>()
+    <span class="t">u8</span>[<span class="n">64</span>] buf
+    <span class="t">i32</span>[<span class="n">1</span>] fds
+    n, k := <span class="k">try</span> receiver.<span class="f">readFds</span>(buf, fds)
+    took := <span class="k">try</span> net.<span class="f">adoptListener</span>(fds[<span class="n">0</span>])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>buf[<span class="n">0</span>:n]<span class="e">}</span><span class="s">: </span><span class="e">{</span>k<span class="e">}</span><span class="s"> descriptor, same port: </span><span class="e">{</span>took.port == tcp.port<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>the listener: 1 descriptor, same port: true</code></pre>
+<p>For a descriptor used through <code>import c</code>, <code>net.waitRead</code> and <code>net.waitWrite</code> wait in the event loop until it is ready, so the other tasks run meanwhile.</p>
+<p>The <a href="../std/index.html#net">net library page</a> has the rest: UDP with <code>listenUdp</code> and batches of datagrams, names with <code>lookup</code> and <code>query</code>, and every function of the module.</p>
+    <nav class="pager"><a class="prev" href="33-http.html"><span>Previous</span>HTTP</a><a class="next" href="35-sqlite.html"><span>Next</span>SQLite</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#timeouts-and-errors">Timeouts and errors</a></li><li><a href="#socket-options">Socket options</a></li><li><a href="#setting-up-a-socket">Setting up a socket</a></li><li><a href="#half-closing">Half-closing</a></li><li><a href="#copying-between-connections">Copying between connections</a></li><li><a href="#the-first-bytes">The first bytes</a></li><li><a href="#tls">TLS</a></li><li><a href="#unix-sockets-and-passing-sockets-on">Unix sockets and passing sockets on</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.67.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

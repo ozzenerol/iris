@@ -1,0 +1,56 @@
+// expect: offered after the files went: true
+// expect: http/1.1 over TLS: hello
+// expect: reload without the files: NetError.tls
+// expect: still serving: hello
+
+import fs, net, os
+
+void serve(net.Listener ln, net.TlsConfig *config) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        c.acceptTls(config) catch e {
+            c.close()
+            continue
+        }
+        c.write("hello\n") catch e { }
+        c.close()
+    }
+}
+
+!String hello(u16 port) {
+    c := try net.dial("127.0.0.1", port)
+    defer c.close()
+    try c.startTls("localhost", "tests/data/tls/ca.pem", "\x08http/1.1")
+    return try c.readLine()
+}
+
+!void main() {
+    scoped String cert = format("/tmp/iris-cert-{os.pid()}.pem")
+    scoped String key = format("/tmp/iris-key-{os.pid()}.pem")
+    try fs.copy("tests/data/tls/server.pem", cert)
+    try fs.copy("tests/data/tls/server.key", key)
+    config := try net.tlsConfig(cert, key)
+    defer config.free()
+    try fs.remove(cert)
+    try fs.remove(key)
+
+    // settings keep the certificate that is loaded already
+    config.offerProtocols("\x08http/1.1") catch e {
+        print("offerProtocols: {e.message}")
+    }
+    config.offerHttp2()
+    print("offered after the files went: true")
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln, &config)
+    scoped String a = try hello(ln.port)
+    print("http/1.1 over TLS: {a}")
+
+    // reload reads the files, and keeps the old ones when it can't
+    config.reload() catch e {
+        print("reload without the files: {e.code}")
+    }
+    scoped String b = try hello(ln.port)
+    print("still serving: {b}")
+}

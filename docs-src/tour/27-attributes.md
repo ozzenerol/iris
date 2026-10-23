@@ -189,7 +189,7 @@ A `@noreturn` function returns `void`, has no `return`, and can't reach its end:
 
 ## @export
 
-`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](36-calling-c.html)):
+`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](37-calling-c.html)):
 
 ```iris
 @export

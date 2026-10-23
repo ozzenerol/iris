@@ -382,6 +382,8 @@ pub !Conn dialTls(str host, u16 port, str ca = "", str cert = "", str key = "") 
 }
 
 // Starts TLS as the client on a connection that is open, as dialTls does.
+// host is the name, or the IP, the server's certificate must have; it
+// can't be empty. A name is also sent to the server (SNI).
 // protocols are offered to the server with ALPN, each with its length in
 // front: "\x02h2\x08http/1.1"; protocol() says which one it took. cert and
 // key are the client's own certificate and key; key "" means the key is in
@@ -405,8 +407,10 @@ pub str Conn.protocol() {
 }
 
 // A server's certificates and keys, for accepting TLS connections. It can be
-// shared by every thread, and changed while they use it: a handshake uses
-// what it was when the handshake started.
+// shared by every thread, and changed while they use it, one change at a
+// time: a handshake uses what it was when the handshake started. A change
+// of settings keeps the certificates loaded already; only addCert, for its
+// new one, and reload read files.
 pub struct TlsConfig {
     u8 *ctx
 }

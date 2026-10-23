@@ -4,6 +4,7 @@
 // expect: x.b.test: CN=*.b.test
 // expect: localhost: CN=localhost
 // expect: no name: localhost
+// expect: empty name: NetError.tls true
 // expect: after reload: hello a.test
 // expect: wrong file: NetError.tls true
 // expect: without a client certificate: NetError.tls
@@ -100,15 +101,20 @@ void sniffer(net.Listener ln, net.TlsConfig *config) {
     scoped String s = c.peerSubject()
     print("localhost: {s[1:]}")
     c.close()
-    // a client that asks for no name gets the first certificate
+    // a client that asks for no name, connecting by IP, gets the first certificate
     raw := try net.dial("127.0.0.1", ln.port)
-    raw.startTls("", "tests/data/tls/ca.pem") catch e {
-        print("no name: {e.message}")
-    }
+    try raw.startTls("127.0.0.1", "tests/data/tls/ca.pem")
     scoped String d = raw.peerSubject()
     print("no name: {d[4:]}")
     raw.close()
+    empty := try net.dial("127.0.0.1", ln.port)
+    empty.startTls("", "tests/data/tls/ca.pem") catch e {
+        print("empty name: {e.code} {str.contains(e.message, "needs the server's name")}")
+    }
+    empty.close()
 
+    // a setting changed after the files are gone keeps the certificates
+    try config.offerProtocols("\x08http/1.1")
     try config.reload()
     scoped String again = try lineFrom(ln.port, "a.test")
     print("after reload: {again}")

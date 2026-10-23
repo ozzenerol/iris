@@ -3,6 +3,7 @@
 #define _DARWIN_C_SOURCE        /* mkdtemp on macOS */
 #include "iris.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -286,6 +287,62 @@ static const char *pgoProfile(const char *cc, const char *dir, char *buf, size_t
 
 static int runProgram(char **argv) { return runCommand(argv, NULL, NULL); }
 
+/* The folder that keeps compiled runtimes: $IRIS_PATH/rt or
+ * ~/.cache/iris/rt, made when missing. False when it can't be. */
+static bool runtimeCacheDir(char *buf, size_t n) {
+    const char *base = getenv("IRIS_PATH");
+    char tmp[3000];
+    if (base && strlen(base) > 2900) return false;
+    if (!base || !*base) {
+        const char *home = getenv("HOME");
+        if (!home || !*home) return false;
+        if (strlen(home) > 2900) return false;
+        snprintf(tmp, sizeof tmp, "%s/.cache", home);
+        mkdir(tmp, 0755);
+        snprintf(tmp, sizeof tmp, "%s/.cache/iris", home);
+        base = tmp;
+    }
+    mkdir(base, 0755);
+    snprintf(buf, n, "%s/rt", base);
+    mkdir(buf, 0755);
+    struct stat st;
+    return stat(buf, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* The runtime compiled with flags, as an object file in the cache, named
+ * by a hash of the runtime and the flags: compiled the first time, then
+ * reused, so a program only compiles its own code. False when it can't be
+ * made; rtPath is the runtime's source, written already. */
+static bool cachedRuntime(char **flags, int nflags, const char *rtPath, char *obj, size_t n) {
+    uint64_t h = 1469598103934665603ULL;
+    for (const char *p = runtimeSource; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    for (int i = 0; i < nflags; i++) {
+        for (const char *p = flags[i]; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+        h = (h ^ 0xff) * 1099511628211ULL;
+    }
+    char dir[4096];
+    if (!runtimeCacheDir(dir, sizeof dir)) return false;
+    snprintf(obj, n, "%s/%s-%016llx.o", dir, IRIS_VERSION, (unsigned long long)h);
+    if (access(obj, R_OK) == 0) return true;
+    /* compiled to a name of its own, then renamed, so programs built at
+     * once don't see half a file */
+    char part[4500];
+    snprintf(part, sizeof part, "%s.%d.part", obj, (int)getpid());
+    char *args[64];
+    int k = 0;
+    for (int i = 0; i < nflags && k < 58; i++) args[k++] = flags[i];
+    args[k++] = "-c";
+    args[k++] = (char *)rtPath;
+    args[k++] = "-o";
+    args[k++] = part;
+    args[k] = NULL;
+    if (runProgram(args) != 0 || rename(part, obj) != 0) {
+        unlink(part);
+        return false;
+    }
+    return true;
+}
+
 /* Compiles the IR with clang into out, linking the C libraries named. */
 static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir, const char **links,
                       int nlinks) {
@@ -299,23 +356,23 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     if (!cc || !*cc) {
         cc = "clang";
     }
-    char *args[320];
-    char linkArgs[256][300];
-    int n = 0;
-    args[n++] = (char *)cc;
-    args[n++] = mode == MODE_DEBUG ? "-O0" : "-O3";
+    /* the flags that compile both the program and the runtime */
+    char *flags[48];
+    int nf = 0;
+    flags[nf++] = (char *)cc;
+    flags[nf++] = mode == MODE_DEBUG ? "-O0" : "-O3";
     /* release builds optimize the program and the runtime as one, so the
      * runtime's small functions are inlined into the program */
-    int lto = mode == MODE_DEBUG ? -1 : n;
+    int lto = mode == MODE_DEBUG ? -1 : nf;
     int ltoArgs = 0;
     if (lto >= 0) {
-        args[n++] = "-flto";
+        flags[nf++] = "-flto";
         /* loops start on a 32-byte boundary, so a small hot loop doesn't
          * straddle two of them by chance; with LTO the linker's code
          * generator is told */
-        args[n++] = strcmp(gTarget.os, "macos") == 0 ? "-Wl,-mllvm,-align-loops=32" : "-Wl,-plugin-opt=-align-loops=32";
+        flags[nf++] = strcmp(gTarget.os, "macos") == 0 ? "-Wl,-mllvm,-align-loops=32" : "-Wl,-plugin-opt=-align-loops=32";
         ltoArgs = 2;
-        args[n++] = "-falign-loops=32";
+        flags[nf++] = "-falign-loops=32";
     }
     char cpuArg[256], pgoArg[4400], pgoBuf[4300];
     if (mode != MODE_DEBUG && gCpu) {
@@ -327,88 +384,87 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
             "x86_64";
 #endif
         snprintf(cpuArg, sizeof cpuArg, "%s=%s", strcmp(arch, "aarch64") == 0 ? "-mcpu" : "-march", gCpu);
-        args[n++] = cpuArg;
+        flags[nf++] = cpuArg;
     }
+    /* a profile changes how the runtime compiles: such builds compile it
+     * each time */
+    bool cache = !(mode != MODE_DEBUG && (gPgoGen || gPgoUse)) && !getenv("IRIS_NO_RT_CACHE");
     if (mode != MODE_DEBUG && gPgoGen) {
-        args[n++] = "-fprofile-generate=iris-pgo";
+        flags[nf++] = "-fprofile-generate=iris-pgo";
     } else if (mode != MODE_DEBUG && gPgoUse) {
         const char *profile = pgoProfile(cc, dir, pgoBuf, sizeof pgoBuf);
         if (!profile) {
             return false;
         }
         snprintf(pgoArg, sizeof pgoArg, "-fprofile-use=%s", profile);
-        args[n++] = pgoArg;
-        args[n++] = "-Wno-backend-plugin";  /* functions the profile didn't see */
+        flags[nf++] = pgoArg;
+        flags[nf++] = "-Wno-backend-plugin";  /* functions the profile didn't see */
     }
-    args[n++] = "-g";
-    args[n++] = "-Wno-override-module";
-    args[n++] = "-w";
+    flags[nf++] = "-g";
+    flags[nf++] = "-Wno-override-module";
+    flags[nf++] = "-w";
     char sysroot[4200];
     if (gTarget.triple) {
-        args[n++] = "-target";
-        args[n++] = (char *)gTarget.triple;
+        flags[nf++] = "-target";
+        flags[nf++] = (char *)gTarget.triple;
         const char *sr = getenv("IRIS_SYSROOT");
         if (sr && *sr) {
             snprintf(sysroot, sizeof sysroot, "--sysroot=%s", sr);
-            args[n++] = sysroot;
+            flags[nf++] = sysroot;
         }
     }
-    int asan = n;
+    int asan = -1;
     if (mode == MODE_DEBUG) {
-        args[n++] = "-fsanitize=address";   /* use after free, out-of-bounds memory */
+        asan = nf;
+        flags[nf++] = "-fsanitize=address";   /* use after free, out-of-bounds memory */
     }
-    args[n++] = llPath;
-    args[n++] = rtPath;
-    args[n++] = "-o";
-    args[n++] = (char *)out;
-    for (int i = 0; i < nlinks && i < 256; i++) {
-        size_t ln = strlen(links[i]);
-        if (ln > 2 && strcmp(links[i] + ln - 2, ".c") == 0) {
-            args[n++] = (char *)links[i];       /* a C file of the program */
-            continue;
-        }
-        snprintf(linkArgs[i], sizeof linkArgs[i], "-l%s", links[i]);
-        args[n++] = linkArgs[i];
-    }
-    args[n++] = "-lm";              /* the math module's functions */
-    args[n++] = "-pthread";         /* http.serve's threads */
-    if (strcmp(gTarget.os, "linux") == 0) {
-        args[n++] = "-ldl";         /* TLS loads OpenSSL when it is first used */
-    }
-    args[n] = NULL;
-    int rc;
-    if (mode == MODE_DEBUG) {
-        /* not every clang has AddressSanitizer's libraries: build without
-         * it when linking with it fails */
-        char errPath[4200];
-        snprintf(errPath, sizeof errPath, "%s/clang.err", dir);
-        rc = runProgramTo(args, errPath);
-        if (rc != 0 && rc != 127) {
-            for (int i = asan; args[i]; i++) {
-                args[i] = args[i + 1];
+    char linkArgs[256][300];
+    char errPath[4200];
+    snprintf(errPath, sizeof errPath, "%s/clang.err", dir);
+    int rc = 0;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        char rtObj[4400];
+        bool cached = cache && cachedRuntime(flags, nf, rtPath, rtObj, sizeof rtObj);
+        char *args[320];
+        int n = 0;
+        for (int i = 0; i < nf; i++) args[n++] = flags[i];
+        args[n++] = llPath;
+        args[n++] = cached ? rtObj : rtPath;
+        args[n++] = "-o";
+        args[n++] = (char *)out;
+        for (int i = 0; i < nlinks && i < 256; i++) {
+            size_t ln = strlen(links[i]);
+            if (ln > 2 && strcmp(links[i] + ln - 2, ".c") == 0) {
+                args[n++] = (char *)links[i];       /* a C file of the program */
+                continue;
             }
-            rc = runProgram(args);
-            if (rc == 0) {
-                fprintf(stderr, "iris: note: this clang can't use AddressSanitizer, so this debug build doesn't "
-                                "check for use after free\n");
-            }
+            snprintf(linkArgs[i], sizeof linkArgs[i], "-l%s", links[i]);
+            args[n++] = linkArgs[i];
         }
-        unlink(errPath);
-    } else {
-        /* a linker that can't do LTO: build without it */
-        char errPath[4200];
-        snprintf(errPath, sizeof errPath, "%s/clang.err", dir);
-        rc = runProgramTo(args, errPath);
-        if (rc != 0 && rc != 127) {
-            int i = lto;
-            for (; args[i + ltoArgs]; i++) {
-                args[i] = args[i + ltoArgs];
-            }
-            args[i] = NULL;
-            rc = runProgram(args);
+        args[n++] = "-lm";              /* the math module's functions */
+        args[n++] = "-pthread";         /* http.serve's threads */
+        if (strcmp(gTarget.os, "linux") == 0) {
+            args[n++] = "-ldl";         /* TLS loads OpenSSL when it is first used */
         }
-        unlink(errPath);
+        args[n] = NULL;
+        rc = attempt == 0 ? runProgramTo(args, errPath) : runProgram(args);
+        if (rc == 0 || rc == 127 || attempt == 1) break;
+        if (mode == MODE_DEBUG) {
+            /* not every clang has AddressSanitizer's libraries: build
+             * without it when linking with it fails */
+            for (int i = asan; i < nf - 1; i++) flags[i] = flags[i + 1];
+            nf--;
+        } else {
+            /* a linker that can't do LTO: build without it */
+            for (int i = lto; i + ltoArgs < nf; i++) flags[i] = flags[i + ltoArgs];
+            nf -= ltoArgs;
+        }
     }
+    if (rc == 0 && mode == MODE_DEBUG && asan >= 0 && (asan >= nf || strcmp(flags[asan], "-fsanitize=address") != 0)) {
+        fprintf(stderr, "iris: note: this clang can't use AddressSanitizer, so this debug build doesn't "
+                        "check for use after free\n");
+    }
+    unlink(errPath);
     if (rc == 127) {
         fprintf(stderr, "iris: clang is needed to build programs; install it or set IRIS_CC\n");
     } else if (rc != 0 && gTarget.triple) {
