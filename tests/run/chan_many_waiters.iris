@@ -1,0 +1,56 @@
+// expect: 12497500
+// expect: 0 1 2 3 4
+// Many tasks wait on one channel; each value goes to one of them, and the
+// tasks that waited first are woken first.
+
+void worker(chan[i64] jobs, chan[i64] results) {
+    i64 sum = 0
+    for {
+        v := <-jobs
+        if v < 0 {
+            results <- sum
+            return
+        }
+        sum += v
+    }
+}
+
+void waiter(i64 id, chan[i64] wake, chan[i64] order) {
+    _ = <-wake
+    order <- id
+}
+
+void main() {
+    jobs := chan[i64](16)
+    results := chan[i64](1000)
+    for _ in 0..1000 {
+        spawn worker(jobs, results)
+    }
+    for i in 0..5000 {
+        jobs <- i
+    }
+    for _ in 0..1000 {
+        jobs <- -1
+    }
+    i64 total = 0
+    for _ in 0..1000 {
+        total += <-results
+    }
+    print("{total}")
+
+    wake := chan[i64](0)
+    order := chan[i64](5)
+    for id in 0..5 {
+        spawn waiter(id, wake, order)
+    }
+    sleep(10ms)
+    for _ in 0..5 {
+        wake <- 1
+    }
+    scoped String line = "".copy()
+    for i in 0..5 {
+        line.append(if i == 0 { "" } else { " " })
+        line.append("{<-order}")
+    }
+    print(line)
+}

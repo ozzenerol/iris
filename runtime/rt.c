@@ -20,6 +20,372 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <pthread.h>
+#include <stdatomic.h>
+
+/* ---------------------------------------------------------------- memory
+
+   The program's malloc: each thread takes small blocks from pages of its
+   own, so most allocations and frees touch no lock and no other thread's
+   memory. Memory is taken from the system in 4 MiB segments of 64 KiB
+   pages; each page holds blocks of one size class, up to 32 KiB. Larger
+   blocks come from the C library's malloc, and so does everything under
+   AddressSanitizer, which needs to see each allocation.
+
+   free knows a block is one of ours from a bitmap of the segments; any
+   other pointer (from the C library, from C code the program calls) goes
+   to the C library's free. A block freed by another thread goes on its
+   page's list of remote frees, which the owner takes back when it needs
+   room. A thread that ends leaves its heap to the next thread made. */
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define IRIS_HEAP_OFF 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define IRIS_HEAP_OFF 1
+#endif
+
+void *iris_malloc(size_t n);
+void *iris_calloc(size_t count, size_t size);
+void *iris_realloc(void *p, size_t n);
+void iris_free(void *p);
+
+#ifdef IRIS_HEAP_OFF
+void *iris_malloc(size_t n) { return malloc(n); }
+void *iris_calloc(size_t count, size_t size) { return calloc(count, size); }
+void *iris_realloc(void *p, size_t n) { return realloc(p, n); }
+void iris_free(void *p) { free(p); }
+#else
+
+#define SEG_SHIFT 22                    /* 4 MiB */
+#define SEG_SIZE ((size_t)1 << SEG_SHIFT)
+#define PAGE_SHIFT 16                   /* 64 KiB */
+#define PAGE_SIZE ((size_t)1 << PAGE_SHIFT)
+#define SEG_PAGES (SEG_SIZE / PAGE_SIZE)
+#define SMALL_MAX 32768
+#define NCLASSES 85
+#define ADDR_BITS 48
+
+typedef struct Heap Heap;
+typedef struct HPage HPage;
+
+struct HPage {
+    void *free;                         /* blocks freed by the owner, ready */
+    _Atomic(void *) remote;             /* blocks freed by other threads */
+    int64_t used;                       /* blocks given out and not taken back */
+    uint32_t blockSize, capacity, bumped;
+    uint16_t cls;
+    uint8_t where;                      /* 0 nowhere, 1 its class's list, 2 the full list, 3 free pages */
+    _Atomic int full;
+    _Atomic int delayed;                /* on the heap's delayed stack */
+    _Atomic(Heap *) heap;
+    char *start;
+    HPage *next, *prev;
+    HPage *delayedNext;
+};
+
+typedef struct {
+    HPage pages[SEG_PAGES];             /* page 0 holds these and no blocks */
+} Segment;
+
+struct Heap {
+    HPage *cur[NCLASSES];
+    HPage *lists[NCLASSES];             /* pages with room, or that may have it */
+    HPage *fullList;
+    HPage *freePages;
+    int64_t nFree;
+    _Atomic(HPage *) delayed;           /* full pages another thread freed into */
+    Heap *nextAbandoned;
+};
+
+/* one bit per 4 MiB of address space: whether it is one of our segments */
+static _Atomic uint64_t segBits[((size_t)1 << (ADDR_BITS - SEG_SHIFT)) / 64];
+static pthread_mutex_t heapLock = PTHREAD_MUTEX_INITIALIZER;
+static Heap *abandoned;
+static pthread_key_t heapKey;
+static pthread_once_t heapOnce = PTHREAD_ONCE_INIT;
+static _Thread_local Heap *myHeap;
+
+static inline bool ours(const void *p) {
+    uintptr_t a = (uintptr_t)p;
+    if (a >> ADDR_BITS) return false;
+    size_t i = a >> SEG_SHIFT;
+    return (atomic_load_explicit(&segBits[i / 64], memory_order_relaxed) >> (i % 64)) & 1;
+}
+
+static inline HPage *pageOf(void *p) {
+    Segment *seg = (Segment *)((uintptr_t)p & ~(SEG_SIZE - 1));
+    return &seg->pages[((uintptr_t)p - (uintptr_t)seg) >> PAGE_SHIFT];
+}
+
+/* 16-byte steps up to 1 KiB, then four steps for each doubling */
+static inline int classOf(size_t n) {
+    if (n <= 1024) return n == 0 ? 1 : (int)((n + 15) >> 4);
+    int b = 63 - __builtin_clzll((unsigned long long)(n - 1));
+    int sub = (int)(((n - 1) >> (b - 2)) & 3);
+    return 64 + (b - 10) * 4 + sub + 1;
+}
+
+static inline size_t classSize(int cls) {
+    if (cls <= 64) return (size_t)cls << 4;
+    int k = cls - 65;
+    int b = 10 + k / 4, sub = k % 4;
+    return (size_t)(4 + sub + 1) << (b - 2);
+}
+
+static void heapExit(void *h) {
+    pthread_mutex_lock(&heapLock);
+    ((Heap *)h)->nextAbandoned = abandoned;
+    abandoned = h;
+    pthread_mutex_unlock(&heapLock);
+}
+
+static void heapKeyMake(void) { pthread_key_create(&heapKey, heapExit); }
+
+static Heap *heapNew(void) {
+    pthread_once(&heapOnce, heapKeyMake);
+    pthread_mutex_lock(&heapLock);
+    Heap *h = abandoned;
+    if (h) {
+        abandoned = h->nextAbandoned;
+    }
+    pthread_mutex_unlock(&heapLock);
+    if (!h) {
+        h = calloc(1, sizeof(Heap));
+        if (!h) return NULL;
+    }
+    myHeap = h;
+    pthread_setspecific(heapKey, h);
+    return h;
+}
+
+static void listPushPage(HPage **list, HPage *pg, uint8_t where) {
+    pg->prev = NULL;
+    pg->next = *list;
+    if (*list) (*list)->prev = pg;
+    *list = pg;
+    pg->where = where;
+}
+
+static void listUnlinkPage(Heap *h, HPage *pg) {
+    HPage **list = pg->where == 1 ? &h->lists[pg->cls] : pg->where == 2 ? &h->fullList : &h->freePages;
+    if (pg->prev) pg->prev->next = pg->next; else *list = pg->next;
+    if (pg->next) pg->next->prev = pg->prev;
+    pg->next = pg->prev = NULL;
+    pg->where = 0;
+}
+
+/* A new segment: its pages go to the heap's free pages. */
+static bool heapGrow(Heap *h) {
+    char *raw = mmap(NULL, SEG_SIZE * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (raw == MAP_FAILED) return false;
+    char *seg = (char *)(((uintptr_t)raw + SEG_SIZE - 1) & ~(SEG_SIZE - 1));
+    if (seg > raw) munmap(raw, (size_t)(seg - raw));
+    if (seg + SEG_SIZE < raw + SEG_SIZE * 2) munmap(seg + SEG_SIZE, (size_t)(raw + SEG_SIZE * 2 - (seg + SEG_SIZE)));
+    if ((uintptr_t)seg >> ADDR_BITS) {
+        munmap(seg, SEG_SIZE);
+        return false;
+    }
+    Segment *s = (Segment *)seg;
+    for (size_t i = SEG_PAGES - 1; i >= 1; i--) {
+        HPage *pg = &s->pages[i];
+        pg->start = seg + i * PAGE_SIZE;
+        atomic_store(&pg->heap, h);
+        listPushPage(&h->freePages, pg, 3);
+        h->nFree++;
+    }
+    size_t i = (uintptr_t)seg >> SEG_SHIFT;
+    atomic_fetch_or(&segBits[i / 64], (uint64_t)1 << (i % 64));
+    return true;
+}
+
+/* Takes back the blocks other threads freed. */
+static void collectRemote(HPage *pg) {
+    void *r = atomic_exchange(&pg->remote, NULL);
+    while (r) {
+        void *next = *(void **)r;
+        *(void **)r = pg->free;
+        pg->free = r;
+        pg->used--;
+        r = next;
+    }
+}
+
+/* A page with no blocks in use goes back to the free pages; past 64 of
+   them, its memory goes back to the system too. */
+static void retirePage(Heap *h, HPage *pg) {
+    if (h->cur[pg->cls] == pg || atomic_load(&pg->delayed)) return;
+    if (pg->where) listUnlinkPage(h, pg);
+    atomic_store(&pg->full, 0);
+    pg->free = NULL;
+    pg->bumped = 0;
+    if (h->nFree >= 64) {
+        madvise(pg->start, PAGE_SIZE, MADV_DONTNEED);
+    }
+    listPushPage(&h->freePages, pg, 3);
+    h->nFree++;
+}
+
+static bool pageHasRoom(HPage *pg) {
+    if (pg->free || pg->bumped < pg->capacity) return true;
+    collectRemote(pg);
+    return pg->free != NULL;
+}
+
+/* The page is out of room: off to the full list, unless another thread
+   freed into it meanwhile. */
+static void markFull(Heap *h, HPage *pg) {
+    if (pg->where == 1) listUnlinkPage(h, pg);
+    listPushPage(&h->fullList, pg, 2);
+    atomic_store(&pg->full, 1);
+    if (atomic_load(&pg->remote)) {
+        atomic_store(&pg->full, 0);
+        listUnlinkPage(h, pg);
+        listPushPage(&h->lists[pg->cls], pg, 1);
+    }
+}
+
+static void drainDelayed(Heap *h) {
+    HPage *pg = atomic_exchange(&h->delayed, NULL);
+    while (pg) {
+        HPage *next = pg->delayedNext;
+        atomic_store(&pg->delayed, 0);
+        if (atomic_load(&pg->full) && pg->where == 2) {
+            atomic_store(&pg->full, 0);
+            listUnlinkPage(h, pg);
+            listPushPage(&h->lists[pg->cls], pg, 1);
+        }
+        pg = next;
+    }
+}
+
+static void *takeBlock(HPage *pg) {
+    void *b = pg->free;
+    if (b) {
+        pg->free = *(void **)b;
+    } else {
+        b = pg->start + (size_t)pg->bumped * pg->blockSize;
+        pg->bumped++;
+    }
+    pg->used++;
+    return b;
+}
+
+static void *mallocSlow(Heap *h, int cls) {
+    drainDelayed(h);
+    HPage *pg = h->cur[cls];
+    if (pg && pageHasRoom(pg)) return takeBlock(pg);
+    if (pg) {
+        h->cur[cls] = NULL;
+        markFull(h, pg);
+    }
+    /* another page of the class with room */
+    for (HPage *p = h->lists[cls]; p;) {
+        HPage *next = p->next;
+        if (pageHasRoom(p)) {
+            h->cur[cls] = p;
+            return takeBlock(p);
+        }
+        markFull(h, p);
+        p = next;
+    }
+    if (!h->freePages && !heapGrow(h)) return NULL;
+    pg = h->freePages;
+    listUnlinkPage(h, pg);
+    h->nFree--;
+    pg->cls = (uint16_t)cls;
+    pg->blockSize = (uint32_t)classSize(cls);
+    pg->capacity = (uint32_t)(PAGE_SIZE / pg->blockSize);
+    pg->bumped = 0;
+    pg->free = NULL;
+    pg->used = 0;
+    atomic_store(&pg->full, 0);
+    listPushPage(&h->lists[cls], pg, 1);
+    h->cur[cls] = pg;
+    return takeBlock(pg);
+}
+
+void *iris_malloc(size_t n) {
+    if (n > SMALL_MAX) return malloc(n);
+    Heap *h = myHeap;
+    if (!h && !(h = heapNew())) return malloc(n);
+    int cls = classOf(n);
+    HPage *pg = h->cur[cls];
+    if (pg && pg->free) {
+        void *b = pg->free;
+        pg->free = *(void **)b;
+        pg->used++;
+        return b;
+    }
+    void *b = mallocSlow(h, cls);
+    return b ? b : malloc(n);
+}
+
+void iris_free(void *p) {
+    if (!p) return;
+    if (!ours(p)) {
+        free(p);
+        return;
+    }
+    HPage *pg = pageOf(p);
+    Heap *owner = atomic_load_explicit(&pg->heap, memory_order_relaxed);
+    if (owner == myHeap) {
+        *(void **)p = pg->free;
+        pg->free = p;
+        pg->used--;
+        if (pg->where == 2) {
+            /* room again: back to its class's list */
+            atomic_store(&pg->full, 0);
+            listUnlinkPage(owner, pg);
+            listPushPage(&owner->lists[pg->cls], pg, 1);
+        }
+        if (pg->used == 0) retirePage(owner, pg);
+        return;
+    }
+    void *head = atomic_load(&pg->remote);
+    do {
+        *(void **)p = head;
+    } while (!atomic_compare_exchange_weak(&pg->remote, &head, p));
+    if (atomic_load(&pg->full)) {
+        int no = 0;
+        if (atomic_compare_exchange_strong(&pg->delayed, &no, 1)) {
+            HPage *top = atomic_load(&owner->delayed);
+            do {
+                pg->delayedNext = top;
+            } while (!atomic_compare_exchange_weak(&owner->delayed, &top, pg));
+        }
+    }
+}
+
+void *iris_calloc(size_t count, size_t size) {
+    if (size && count > SIZE_MAX / size) return NULL;
+    size_t n = count * size;
+    if (n > SMALL_MAX) return calloc(count, size);
+    void *p = iris_malloc(n);
+    if (p) memset(p, 0, n);
+    return p;
+}
+
+void *iris_realloc(void *p, size_t n) {
+    if (!p) return iris_malloc(n);
+    if (!ours(p)) return realloc(p, n);
+    size_t have = pageOf(p)->blockSize;
+    if (n <= have && n > have / 2) return p;
+    void *q = iris_malloc(n);
+    if (!q) return NULL;
+    memcpy(q, p, n < have ? n : have);
+    iris_free(p);
+    return q;
+}
+#endif
+
+/* everything below allocates with the program's malloc */
+#define malloc(n) iris_malloc(n)
+#define calloc(c, n) iris_calloc(c, n)
+#define realloc(p, n) iris_realloc(p, n)
+#define free(p) iris_free(p)
 
 typedef struct {
     char *ptr;
@@ -78,23 +444,62 @@ static void outOfMemory(void) {
     exit(2);
 }
 
+/* the program's own calloc calls (ir.c, emitCalloc) end here when it fails */
+void iris_out_of_memory(void) {
+    outOfMemory();
+}
+
+/* Makes room for n more bytes. p may point into s itself (s.append(s[2:]))
+   and moves with the buffer. */
+__attribute__((noinline)) static void stringGrow(IrisString *s, const char **p, int64_t n) {
+    int64_t cap = s->cap ? s->cap * 2 : 16;
+    while (cap < s->len + n) {
+        cap *= 2;
+    }
+    bool inside = s->ptr && *p >= s->ptr && *p < s->ptr + s->len;
+    int64_t at = inside ? *p - s->ptr : 0;
+    char *q = realloc(s->ptr, (size_t)cap);
+    if (!q) {
+        outOfMemory();
+    }
+    s->ptr = q;
+    s->cap = cap;
+    if (inside) {
+        *p = q + at;
+    }
+}
+
+/* Short pieces, the usual ones in text being built, are copied with a
+   few moves instead of a call to memcpy. */
 void iris_string_append(IrisString *s, const char *p, int64_t n) {
     if (n <= 0) {
         return;
     }
-    if (s->len + n > s->cap) {
-        int64_t cap = s->cap ? s->cap * 2 : 16;
-        while (cap < s->len + n) {
-            cap *= 2;
-        }
-        char *q = realloc(s->ptr, (size_t)cap);
-        if (!q) {
-            outOfMemory();
-        }
-        s->ptr = q;
-        s->cap = cap;
+    if (__builtin_expect(s->len + n > s->cap, 0)) {
+        stringGrow(s, &p, n);
     }
-    memcpy(s->ptr + s->len, p, (size_t)n);
+    char *d = s->ptr + s->len;
+    if (n >= 8 && n <= 16) {
+        uint64_t a, b;
+        __builtin_memcpy(&a, p, 8);
+        __builtin_memcpy(&b, p + n - 8, 8);
+        __builtin_memcpy(d, &a, 8);
+        __builtin_memcpy(d + n - 8, &b, 8);
+    } else if (n >= 4 && n < 8) {
+        uint32_t a, b;
+        __builtin_memcpy(&a, p, 4);
+        __builtin_memcpy(&b, p + n - 4, 4);
+        __builtin_memcpy(d, &a, 4);
+        __builtin_memcpy(d + n - 4, &b, 4);
+    } else if (n < 4) {
+        d[0] = p[0];
+        if (n > 1) {
+            d[1] = p[1];
+            if (n > 2) d[2] = p[2];
+        }
+    } else {
+        memcpy(d, p, (size_t)n);
+    }
     s->len += n;
 }
 
@@ -128,16 +533,44 @@ static void put(int sink, IrisString *dst, const char *s, size_t n) {
 
 void iris_write_str(int sink, IrisString *dst, const char *s, int64_t n) { put(sink, dst, s, (size_t)n); }
 
+/* The digits of u, written backwards from end; returns where they start.
+ * Two digits at a time, from a table. */
+static char *u64Digits(uint64_t u, char *end) {
+    static const char pairs[] =
+        "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+        "40414243444546474849505152535455565758596061626364656667686970717273747576777879"
+        "8081828384858687888990919293949596979899";
+    char *p = end;
+    while (u >= 100) {
+        unsigned k = (unsigned)(u % 100) * 2;
+        u /= 100;
+        *--p = pairs[k + 1];
+        *--p = pairs[k];
+    }
+    if (u >= 10) {
+        *--p = pairs[u * 2 + 1];
+        *--p = pairs[u * 2];
+    } else {
+        *--p = (char)('0' + u);
+    }
+    return p;
+}
+
 void iris_write_i64(int sink, IrisString *dst, int64_t v) {
     char buf[32];
-    int n = snprintf(buf, sizeof buf, "%lld", (long long)v);
-    put(sink, dst, buf, (size_t)n);
+    char *end = buf + sizeof buf;
+    char *p = u64Digits(v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v, end);
+    if (v < 0) {
+        *--p = '-';
+    }
+    put(sink, dst, p, (size_t)(end - p));
 }
 
 void iris_write_u64(int sink, IrisString *dst, int64_t v) {
     char buf[32];
-    int n = snprintf(buf, sizeof buf, "%llu", (unsigned long long)(uint64_t)v);
-    put(sink, dst, buf, (size_t)n);
+    char *end = buf + sizeof buf;
+    char *p = u64Digits((uint64_t)v, end);
+    put(sink, dst, p, (size_t)(end - p));
 }
 
 /* A Duration as people write it: 1.5s, 2h3m0s, 250ms, 12us, 7ns. */
@@ -414,6 +847,36 @@ void *iris_alloc(int64_t size, int64_t count, const char *file, int line, int co
         outOfMemory();
     }
     return p;
+}
+
+/* List's growSlice: n items of size where there were len, the new ones
+   zero. realloc can often grow in place, or move the pages without
+   copying them; a type aligned beyond malloc's gets new memory. */
+void *iris_grow(void *p, int64_t len, int64_t n, int64_t size, int64_t align) {
+    if (size == 0) {
+        size = 1;
+    }
+    if (n <= len || n > INT64_MAX / size) {
+        outOfMemory();
+    }
+    size_t old = (size_t)len * (size_t)size, total = (size_t)n * (size_t)size;
+    char *q;
+    if (align > 16) {
+        if (posix_memalign((void **)&q, (size_t)align, total) != 0) {
+            outOfMemory();
+        }
+        if (old) {
+            memcpy(q, p, old);
+        }
+        free(p);
+    } else {
+        q = realloc(p, total);
+        if (!q) {
+            outOfMemory();
+        }
+    }
+    memset(q + old, 0, total - old);
+    return q;
 }
 
 /* alloc of a type whose align(n) is more than malloc gives */
@@ -942,9 +1405,31 @@ void iris_term_write(int fd, const char *p, int64_t n) {
 }
 
 /* str.find: the C library's memmem, which scans many bytes at a time. */
+/* memchr for the first byte, then a compare: fast for the short texts
+ * programs look for, and memmem's setup isn't paid on each call. Many
+ * false starts hand the rest to memmem, which stays linear. */
 int64_t iris_str_find(const char *s, int64_t n, const char *sub, int64_t m) {
-    const char *at = memmem(s, (size_t)n, sub, (size_t)m);
-    return at ? (int64_t)(at - s) : -1;
+    if (m == 1) {
+        const char *at = memchr(s, sub[0], (size_t)n);
+        return at ? (int64_t)(at - s) : -1;
+    }
+    const char *p = s, *last = s + n - m;
+    int misses = 0;
+    while (p <= last) {
+        p = memchr(p, sub[0], (size_t)(last - p + 1));
+        if (!p) {
+            return -1;
+        }
+        if (memcmp(p + 1, sub + 1, (size_t)m - 1) == 0) {
+            return (int64_t)(p - s);
+        }
+        p++;
+        if (++misses > 64) {
+            const char *at = memmem(p, (size_t)(s + n - p), sub, (size_t)m);
+            return at ? (int64_t)(at - s) : -1;
+        }
+    }
+    return -1;
 }
 
 /* str.parseFloat: 0 ok, 1 empty, 2 not a number */
@@ -1777,7 +2262,7 @@ static void arrived(void *fake) {
 
 /* Finished tasks kept with their stacks, so a spawn needs no system call.
    Not under AddressSanitizer, which tracks each stack's memory. */
-#define TASK_CACHE_MAX 16
+#define TASK_CACHE_MAX 1024     /* a busy server has hundreds of tasks per thread */
 static _Thread_local Task *taskCache[TASK_CACHE_MAX];
 static _Thread_local int taskCacheLen;
 
@@ -1790,6 +2275,19 @@ static void releaseTask(Task *t) {
 #endif
     munmap(t->stack - 4096, t->stackSize + 4096);
     free(t);
+}
+
+/* A thread that ends gives back the stacks it kept. */
+static void freeTaskCache(void) {
+    if (deadTask && deadTask != current) {
+        releaseTask(deadTask);
+        deadTask = NULL;
+    }
+    while (taskCacheLen > 0) {
+        Task *t = taskCache[--taskCacheLen];
+        munmap(t->stack - 4096, t->stackSize + 4096);
+        free(t);
+    }
 }
 
 static void switchTo(Task *next) {
@@ -2005,7 +2503,42 @@ struct Waiter {
     void *data;                 /* channels with no buffer: the value, or where it goes */
     int64_t *got;               /* set when the value was handed over: the select arm + 1 */
     int64_t arm;
+    Waiter *prev;
+    bool queued;                /* in a WaitQueue */
 };
+
+/* The tasks waiting on one side of a channel, first come first served.
+   Taking one out is O(1), so a channel with many waiters stays fast. */
+typedef struct {
+    Waiter *head, *tail;
+} WaitQueue;
+
+static void queuePush(WaitQueue *q, Waiter *w) {
+    w->next = NULL;
+    w->prev = q->tail;
+    if (q->tail) {
+        q->tail->next = w;
+    } else {
+        q->head = w;
+    }
+    q->tail = w;
+    w->queued = true;
+}
+
+static void queueRemove(WaitQueue *q, Waiter *w) {
+    if (!w->queued) return;
+    if (w->prev) {
+        w->prev->next = w->next;
+    } else {
+        q->head = w->next;
+    }
+    if (w->next) {
+        w->next->prev = w->prev;
+    } else {
+        q->tail = w->prev;
+    }
+    w->queued = false;
+}
 
 static bool claim(Waiter *w) {
     return !__atomic_exchange_n(w->claimed, 1, __ATOMIC_ACQ_REL);
@@ -2016,7 +2549,7 @@ typedef struct {
     int lock;
     int64_t elemSize, cap, len, head;
     char *buf;
-    Waiter *recvWaiters, *sendWaiters;
+    WaitQueue recvWaiters, sendWaiters;
 } Chan;
 
 void *iris_chan_new(int64_t elemSize, int64_t cap, const char *file, int line, int col, const char *fn) {
@@ -2036,35 +2569,22 @@ void *iris_chan_new(int64_t elemSize, int64_t cap, const char *file, int line, i
     return c;
 }
 
-/* Wakes the first waiter in list that can still be claimed. */
-static void wakeOne(Waiter **list) {
-    while (*list) {
-        Waiter *w = *list;
-        *list = w->next;
-        if (claim(w)) {
-            wakeTask(w->task);
-            return;
-        }
-    }
-}
-
-static void unlinkWaiter(Waiter **list, Waiter *w) {
-    for (Waiter **p = list; *p; p = &(*p)->next) {
-        if (*p == w) {
-            *p = w->next;
-            return;
-        }
-    }
-}
-
-/* The first waiter in list that can still be claimed, taken out of it. */
-static Waiter *takeWaiter(Waiter **list) {
-    while (*list) {
-        Waiter *w = *list;
-        *list = w->next;
+/* The first waiter in q that can still be claimed, taken out of it. */
+static Waiter *takeWaiter(WaitQueue *q) {
+    while (q->head) {
+        Waiter *w = q->head;
+        queueRemove(q, w);
         if (claim(w)) return w;
     }
     return NULL;
+}
+
+/* Wakes the first waiter in q that can still be claimed. */
+static void wakeOne(WaitQueue *q) {
+    Waiter *w = takeWaiter(q);
+    if (w) {
+        wakeTask(w->task);
+    }
 }
 
 /* A channel with no buffer: the value goes straight from a sender to a
@@ -2082,12 +2602,12 @@ static void handSend(Chan *c, const void *value) {
         }
         int claimed = 0;
         int64_t taken = 0;
-        Waiter w = {current, &claimed, c->sendWaiters, (void *)value, &taken, 0};
-        c->sendWaiters = &w;
+        Waiter w = {.task = current, .claimed = &claimed, .data = (void *)value, .got = &taken};
+        queuePush(&c->sendWaiters, &w);
         spinUnlock(&c->lock);
         schedule();
         spinLock(&c->lock);
-        unlinkWaiter(&c->sendWaiters, &w);
+        queueRemove(&c->sendWaiters, &w);
         if (taken) {
             spinUnlock(&c->lock);
             return;
@@ -2114,12 +2634,12 @@ static void handRecv(Chan *c, void *out) {
         }
         int claimed = 0;
         int64_t got = 0;
-        Waiter w = {current, &claimed, c->recvWaiters, out, &got, 0};
-        c->recvWaiters = &w;
+        Waiter w = {.task = current, .claimed = &claimed, .data = out, .got = &got};
+        queuePush(&c->recvWaiters, &w);
         spinUnlock(&c->lock);
         schedule();
         spinLock(&c->lock);
-        unlinkWaiter(&c->recvWaiters, &w);
+        queueRemove(&c->recvWaiters, &w);
         if (got) {
             spinUnlock(&c->lock);
             return;
@@ -2135,12 +2655,12 @@ void iris_chan_send(Chan *c, const void *value) {
     spinLock(&c->lock);
     while (c->len == c->cap) {
         int claimed = 0;
-        Waiter w = {current, &claimed, c->sendWaiters};
-        c->sendWaiters = &w;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&c->sendWaiters, &w);
         spinUnlock(&c->lock);
         schedule();
         spinLock(&c->lock);
-        unlinkWaiter(&c->sendWaiters, &w);
+        queueRemove(&c->sendWaiters, &w);
     }
     memcpy(c->buf + ((c->head + c->len) % c->cap) * c->elemSize, value, (size_t)c->elemSize);
     c->len++;
@@ -2164,12 +2684,12 @@ void iris_chan_recv(Chan *c, void *out) {
     spinLock(&c->lock);
     while (c->len == 0) {
         int claimed = 0;
-        Waiter w = {current, &claimed, c->recvWaiters};
-        c->recvWaiters = &w;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&c->recvWaiters, &w);
         spinUnlock(&c->lock);
         schedule();
         spinLock(&c->lock);
-        unlinkWaiter(&c->recvWaiters, &w);
+        queueRemove(&c->recvWaiters, &w);
     }
     chanTake(c, out);
     spinUnlock(&c->lock);
@@ -2180,7 +2700,7 @@ void iris_chan_recv(Chan *c, void *out) {
 void iris_chan_free(Chan *c, const char *file, int line, int col, const char *fn) {
     if (!c) return;
     spinLock(&c->lock);
-    bool waiting = c->recvWaiters || c->sendWaiters;
+    bool waiting = c->recvWaiters.head || c->sendWaiters.head;
     spinUnlock(&c->lock);
     if (waiting) {
         static const char msg[] = "a channel was freed while a task was waiting on it";
@@ -2219,9 +2739,9 @@ int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
         for (; added < n && !arrived; added++) {
             Chan *c = chans[added];
             spinLock(&c->lock);
-            ws[added] = (Waiter){current, &claimed, c->recvWaiters, outs[added], &got, added};
-            c->recvWaiters = &ws[added];
-            arrived = c->cap == 0 ? c->sendWaiters != NULL : c->len > 0;
+            ws[added] = (Waiter){.task = current, .claimed = &claimed, .data = outs[added], .got = &got, .arm = added};
+            queuePush(&c->recvWaiters, &ws[added]);
+            arrived = c->cap == 0 ? c->sendWaiters.head != NULL : c->len > 0;
             spinUnlock(&c->lock);
         }
         bool mine = arrived && !__atomic_exchange_n(&claimed, 1, __ATOMIC_ACQ_REL);
@@ -2238,7 +2758,7 @@ int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
         }
         for (int64_t i = 0; i < added; i++) {
             spinLock(&chans[i]->lock);
-            unlinkWaiter(&chans[i]->recvWaiters, &ws[i]);
+            queueRemove(&chans[i]->recvWaiters, &ws[i]);
             spinUnlock(&chans[i]->lock);
         }
         if (got) {
@@ -2265,7 +2785,7 @@ void iris_mutex_lock(Mutex *m) {
         return;
     }
     int claimed = 0;
-    Waiter w = {current, &claimed, NULL};
+    Waiter w = {.task = current, .claimed = &claimed};
     if (m->tail) {
         m->tail->next = &w;
     } else {
@@ -2888,6 +3408,7 @@ static void *threadMain(void *p) {
         waitingForTasks = true;
         schedule();
     }
+    freeTaskCache();
     spinLock(&th->lock);
     th->done = 1;
     Task *j = th->joiner;

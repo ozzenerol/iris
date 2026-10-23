@@ -1,0 +1,56 @@
+struct Node {
+    Node *left
+    Node *right
+}
+
+// The children first, then the node, as the Rust and Go versions do.
+Node *make(i64 depth) {
+    Node *left = null
+    Node *right = null
+    if depth > 0 {
+        left = make(depth - 1)
+        right = make(depth - 1)
+    }
+    Node *n = alloc(Node, 1).ptr
+    n.left = left
+    n.right = right
+    return n
+}
+
+i64 check(Node *n) {
+    if n.left == null {
+        return 1
+    }
+    return 1 + check(n.left) + check(n.right)
+}
+
+void drop(Node *n) {
+    if n.left != null {
+        drop(n.left)
+        drop(n.right)
+    }
+    free(n)
+}
+
+const i64 MAX_DEPTH = 21
+
+void main() {
+    stretch := make(MAX_DEPTH + 1)
+    print("stretch tree of depth {MAX_DEPTH + 1}\t check: {check(stretch)}")
+    drop(stretch)
+    long := make(MAX_DEPTH)
+    d := 4
+    for d <= MAX_DEPTH {
+        iterations := 1 << (MAX_DEPTH - d + 4)
+        i64 sum = 0
+        for _ in 0..iterations {
+            t := make(d)
+            sum += check(t)
+            drop(t)
+        }
+        print("{iterations}\t trees of depth {d}\t check: {sum}")
+        d += 2
+    }
+    print("long lived tree of depth {MAX_DEPTH}\t check: {check(long)}")
+    drop(long)
+}

@@ -1,0 +1,55 @@
+import math
+
+const i64 N = 5500
+
+f64 a(i64 i, i64 j) => 1.0 / f64((i + j) * (i + j + 1) / 2 + i + 1)
+
+void mulAv(f64[] v, f64[] out) {
+    for i in 0..v.len {
+        f64 sum = 0.0
+        for j in 0..v.len {
+            sum += a(i, j) * v[j]
+        }
+        out[i] = sum
+    }
+}
+
+void mulAtv(f64[] v, f64[] out) {
+    for i in 0..v.len {
+        f64 sum = 0.0
+        for j in 0..v.len {
+            sum += a(j, i) * v[j]
+        }
+        out[i] = sum
+    }
+}
+
+void mulAtAv(f64[] v, f64[] out, f64[] tmp) {
+    mulAv(v, tmp)
+    mulAtv(tmp, out)
+}
+
+void main() {
+    f64[] u = alloc(f64, N)
+    f64[] v = alloc(f64, N)
+    f64[] tmp = alloc(f64, N)
+    defer {
+        free(u)
+        free(v)
+        free(tmp)
+    }
+    for i in 0..N {
+        u[i] = 1.0
+    }
+    for _ in 0..10 {
+        mulAtAv(u, v, tmp)
+        mulAtAv(v, u, tmp)
+    }
+    f64 vBv = 0.0
+    f64 vv = 0.0
+    for i in 0..N {
+        vBv += u[i] * v[i]
+        vv += v[i] * v[i]
+    }
+    print("{math.sqrt(vBv / vv)}")
+}

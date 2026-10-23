@@ -2,11 +2,18 @@
 // str or String; a str or String key is copied, so the map keeps its own.
 // A new Map is empty; free gives its memory back.
 pub struct Map[K, V] {
-    K[] keyArr
-    V[] vals
-    u8[] state // 0 empty, 1 used, 2 removed
+    Entry[K, V][] slots
+    u8[] state // 0 empty, 1 removed, 0x80 | 7 bits of the key's hash: used
     pub i64 len
     i64 removed
+}
+
+// A key and its value side by side, so a lookup that finds the key has the
+// value at hand. The states are an array of their own: small, so it stays in
+// the cache, and most slots that don't match are passed over there.
+struct Entry[K, V] {
+    K key
+    V val
 }
 
 @builtin
@@ -18,46 +25,48 @@ void keyOwn()
 @builtin
 void keyFree()
 
-// The slot of k, or of the place it would go: (slot, found).
-(i64, bool) Map[K, V].slot(K k) {
+// The state of a used slot for a key with hash h: the top 7 bits of h tell
+// most keys apart without reading the key itself.
+u8 tagOf(u64 h) => u8(h >> 57) | 0x80
+
+// The slot of k, or of the place it would go: (slot, found, state).
+(i64, bool, u8) Map[K, V].slot(K k) {
     mask := self.state.len - 1
-    i := i64(hashOf(k) & u64(mask))
+    h := hashOf(k)
+    tag := tagOf(h)
+    i := i64(h & u64(mask))
     i64 firstRemoved = -1
     for {
         s := self.state[i]
         if s == 0 {
-            return (if firstRemoved >= 0 { firstRemoved } else { i }, false)
+            return (if firstRemoved >= 0 { firstRemoved } else { i }, false, tag)
         }
-        if s == 2 {
-            if firstRemoved < 0 {
-                firstRemoved = i
+        if s == tag {
+            if self.slots[i].key == k {
+                return (i, true, tag)
             }
-        } else if self.keyArr[i] == k {
-            return (i, true)
+        } else if s == 1 && firstRemoved < 0 {
+            firstRemoved = i
         }
         i = (i + 1) & mask
     }
 }
 
 void Map[K, V].grow() {
-    oldKeys := self.keyArr
-    oldVals := self.vals
+    old := self.slots
     oldState := self.state
-    size := if oldState.len == 0 { 8 } else if self.len * 2 >= oldState.len { oldState.len * 2 } else { oldState.len }
-    self.keyArr = alloc(K, size)
-    self.vals = alloc(V, size)
+    size := if old.len == 0 { 8 } else if self.len * 2 >= old.len { old.len * 2 } else { old.len }
+    self.slots = alloc(Entry[K, V], size)
     self.state = alloc(u8, size)
     self.removed = 0
-    for i in 0..oldState.len {
-        if oldState[i] == 1 {
-            at, _ := self.slot(oldKeys[i])
-            self.keyArr[at] = oldKeys[i]
-            self.vals[at] = oldVals[i]
-            self.state[at] = 1
+    for i in 0..old.len {
+        if oldState[i] >= 0x80 {
+            at, _, tag := self.slot(old[i].key)
+            self.slots[at] = old[i]
+            self.state[at] = tag
         }
     }
-    free(oldKeys)
-    free(oldVals)
+    free(old)
     free(oldState)
 }
 
@@ -66,16 +75,16 @@ pub void Map[K, V].set(K k, V v) {
     if (self.len + self.removed + 1) * 4 > self.state.len * 3 {
         self.grow()
     }
-    at, found := self.slot(k)
+    at, found, tag := self.slot(k)
     if !found {
-        if self.state[at] == 2 {
+        if self.state[at] == 1 {
             self.removed -= 1
         }
-        self.keyArr[at] = keyOwn(k)
-        self.state[at] = 1
+        self.slots[at].key = keyOwn(k)
+        self.state[at] = tag
         self.len += 1
     }
-    self.vals[at] = v
+    self.slots[at].val = v
 }
 
 // The value of k, and whether k is there.
@@ -84,12 +93,12 @@ pub (V, bool) Map[K, V].get(K k) {
         V none
         return (none, false)
     }
-    at, found := self.slot(k)
+    at, found, _ := self.slot(k)
     if !found {
         V none
         return (none, false)
     }
-    return (self.vals[at], true)
+    return (self.slots[at].val, true)
 }
 
 // The value of k, or fallback when k isn't there.
@@ -109,12 +118,12 @@ pub bool Map[K, V].remove(K k) {
     if self.len == 0 {
         return false
     }
-    at, found := self.slot(k)
+    at, found, _ := self.slot(k)
     if !found {
         return false
     }
-    keyFree(self.keyArr[at])
-    self.state[at] = 2
+    keyFree(self.slots[at].key)
+    self.state[at] = 1
     self.len -= 1
     self.removed += 1
     return true
@@ -123,8 +132,8 @@ pub bool Map[K, V].remove(K k) {
 // Takes every key out and keeps the memory.
 pub void Map[K, V].clear() {
     for i in 0..self.state.len {
-        if self.state[i] == 1 {
-            keyFree(self.keyArr[i])
+        if self.state[i] >= 0x80 {
+            keyFree(self.slots[i].key)
         }
         self.state[i] = 0
     }
@@ -135,11 +144,9 @@ pub void Map[K, V].clear() {
 // Gives the map's memory back; the map is empty after.
 pub void Map[K, V].free() {
     self.clear()
-    free(self.keyArr)
-    free(self.vals)
+    free(self.slots)
     free(self.state)
-    self.keyArr = alloc(K, 0)
-    self.vals = alloc(V, 0)
+    self.slots = alloc(Entry[K, V], 0)
     self.state = alloc(u8, 0)
 }
 
@@ -149,8 +156,8 @@ pub List[K] Map[K, V].keys() {
     List[K] out
     out.reserve(self.len)
     for i in 0..self.state.len {
-        if self.state[i] == 1 {
-            out.push(self.keyArr[i])
+        if self.state[i] >= 0x80 {
+            out.push(self.slots[i].key)
         }
     }
     return out
@@ -161,8 +168,8 @@ pub (K, V, bool) Map[K, V].next(i64 *at) {
     for *at < self.state.len {
         i := *at
         *at += 1
-        if self.state[i] == 1 {
-            return (self.keyArr[i], self.vals[i], true)
+        if self.state[i] >= 0x80 {
+            return (self.slots[i].key, self.slots[i].val, true)
         }
     }
     K noKey

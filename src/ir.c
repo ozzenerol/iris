@@ -493,9 +493,37 @@ static void nullCheck(IR *ir, const char *p, Node *at) {
     failIf(ir, z, at, "null pointer used");
 }
 
+/* calloc called straight from the program, so LLVM sees an allocation it
+ * can inline around; out of memory stops the program as iris_alloc does. */
+static const char *emitCalloc(IR *ir, const char *size, const char *count) {
+    const char *p = tmp(ir), *z = tmp(ir), *total = tmp(ir);
+    /* malloc and a memset LLVM can see: stores that follow take its place */
+    ins(ir, "%s = mul i64 %s, %s", total, size, count);
+    ins(ir, "%s = call ptr @iris_malloc(i64 %s)", p, total);
+    ins(ir, "%s = icmp eq ptr %s, null", z, p);
+    int fail = newLabel(ir), ok = newLabel(ir);
+    ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", z, fail, ok);
+    ir->terminated = true;
+    sbPrintf(&ir->body, "L%d:\n", fail);
+    ir->terminated = false;
+    ins(ir, "call void @iris_out_of_memory()");
+    ins(ir, "unreachable");
+    ir->terminated = true;
+    sbPrintf(&ir->body, "L%d:\n", ok);
+    ir->terminated = false;
+    ins(ir, "call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %s, i1 false)", p, total);
+    return p;
+}
+
 static void indexCheck(IR *ir, const char *idx, const char *len, Node *at) {
     if (!boundsChecks(ir)) {
-        return;
+        bool fixed = len[0] >= '0' && len[0] <= '9';
+        if (!(ir->mode == MODE_RELEASE_FAST && fixed && !unchecked(ir))) {
+            return;
+        }
+        /* release-fast keeps the checks of fixed-size arrays: they bound
+         * the loops over the array, which LLVM then unrolls, and are
+         * almost always taken out */
     }
     const char *bad = tmp(ir);
     ins(ir, "%s = icmp uge i64 %s, %s", bad, idx, len);
@@ -633,7 +661,7 @@ static Val emitConvert(IR *ir, Node *e) {
             sbPrintf(x, "%s%s %%a%d", i ? ", " : "", t, i);
             sbPrintf(&args, "%s%s %%a%d", i ? ", " : "", t, i);
         }
-        sbPrintf(x, ") {\n  call void %s(%s)\n  ret i64 0\n}\n\n", fn->ir, args.buf ? args.buf : "");
+        sbPrintf(x, ") nounwind {\n  call void %s(%s)\n  ret i64 0\n}\n\n", fn->ir, args.buf ? args.buf : "");
         sbFree(&args);
         return val(name, to);
     }
@@ -777,7 +805,10 @@ static Val emitArith(IR *ir, Node *at, TokKind op, Val a, Val b) {
         failIf(ir, of, at, "integer overflow");
         return val(r, t);
     }
-    ins(ir, "%s = %s %s %s, %s", r, op == P_PLUS ? "add" : op == P_MINUS ? "sub" : "mul", ty, a.s, b.s);
+    /* release-fast assumes signed math doesn't overflow, which a debug
+     * build checks: LLVM can then widen and reorder loop counters */
+    const char *flags = ir->mode == MODE_RELEASE_FAST && t->isSigned && !unchecked(ir) ? " nsw" : "";
+    ins(ir, "%s = %s%s %s %s, %s", r, op == P_PLUS ? "add" : op == P_MINUS ? "sub" : "mul", flags, ty, a.s, b.s);
     return val(r, t);
 }
 
@@ -956,6 +987,40 @@ static Val emitBinary(IR *ir, Node *e) {
     default:
         return emitCompare(ir, op, a, b);
     }
+}
+
+/* Whether working out e could call something or read a String, which
+ * appending to a String while its pieces are worked out could change. */
+static bool readsStrings(Node *e) {
+    if (!e) {
+        return false;
+    }
+    if (e->kind == N_CALL) {
+        return true;
+    }
+    if (e->type) {
+        TypeKind k = e->type->kind == TY_PTR ? e->type->elem->kind : e->type->kind;
+        if (k == TY_STRING || k == TY_STRUCT || k == TY_ARRAY || k == TY_TUPLE || k == TY_DYN || k == TY_RESULT) {
+            return true;
+        }
+    }
+    if (readsStrings(e->a) || readsStrings(e->b) || readsStrings(e->c) || readsStrings(e->d)) {
+        return true;
+    }
+    for (int i = 0; i < e->list.len; i++) {
+        if (readsStrings(e->list.items[i])) return true;
+    }
+    for (int i = 0; i < e->list2.len; i++) {
+        if (readsStrings(e->list2.items[i])) return true;
+    }
+    return false;
+}
+
+static bool interpReadsStrings(Node *interp) {
+    for (int i = 0; i < interp->list.len; i++) {
+        if (readsStrings(interp->list.items[i])) return true;
+    }
+    return false;
 }
 
 /* Writes the pieces of text to a runtime sink: 1 stdout, 2 the panic
@@ -1468,6 +1533,20 @@ static Val emitBuiltin(IR *ir, Node *e) {
                 size, n.s, (long long)typeAlignOf(t), ir->fileStr, e->line, e->col, fnName(ir));
             return makeSlice(ir, p, n.s, e->type);
         }
+        Node *count = e->list.items[1];
+        if (e->flags & F_STACK) {
+            /* in the frame: zeroed here, each time the alloc runs */
+            const char *slot = fmt(ir, "%%v.stack.%d", ++ir->vars);
+            sbPrintf(&ir->allocas, "  %s = alloca [%lld x %s], align 16\n", slot, (long long)count->cval,
+                     llType(ir, t));
+            ins(ir, "call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %lld, i1 false)", slot,
+                (long long)(count->cval * typeSizeOf(t)));
+            return makeSlice(ir, slot, n.s, e->type);
+        }
+        if (count->isConst && count->cval > 0 && count->cval < (INT64_C(1) << 31)) {
+            /* a count known when compiling: no checks are needed */
+            return makeSlice(ir, emitCalloc(ir, size, n.s), n.s, e->type);
+        }
         ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", p, size, n.s,
             ir->fileStr, e->line, e->col, fnName(ir));
         return makeSlice(ir, p, n.s, e->type);
@@ -1479,7 +1558,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
             p = tmp(ir);
             ins(ir, "%s = extractvalue { ptr, i64 } %s, 0", p, v.s);
         }
-        ins(ir, "call void @free(ptr %s)", p);
+        ins(ir, "call void @iris_free(ptr %s)", p);
         return val("", &tyVoid);
     }
     case BI_ENUM_NEW:
@@ -1640,7 +1719,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
                 return val(r, &tyU64);
             }
             if (e->builtin == BI_KEY_FREE) {
-                ins(ir, "call void @free(ptr %s)", ptr);
+                ins(ir, "call void @iris_free(ptr %s)", ptr);
                 return val("", &tyVoid);
             }
             ins(ir, "%s = call ptr @iris_bytes_dup(ptr %s, i64 %s)", r, ptr, len);
@@ -1656,7 +1735,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
                 return val(r, &tyU64);
             }
             if (e->builtin == BI_KEY_FREE) {
-                ins(ir, "call void @free(ptr %s)", ptr);
+                ins(ir, "call void @iris_free(ptr %s)", ptr);
                 return val("", &tyVoid);
             }
             const char *slot = allocaFor(ir, &tyString, "key");
@@ -1678,8 +1757,32 @@ static Val emitBuiltin(IR *ir, Node *e) {
                 ins(ir, "%s = zext %s %s to i64", x, lt, v.s);
             }
         }
-        ins(ir, "%s = call i64 @iris_hash_u64(i64 %s)", r, x);
+        /* iris_hash_u64 (splitmix64), written out so it is inlined */
+        const char *h[7];
+        for (int i = 0; i < 7; i++) h[i] = tmp(ir);
+        ins(ir, "%s = add i64 %s, -7046029254386353131", h[0], x);
+        ins(ir, "%s = lshr i64 %s, 30", h[1], h[0]);
+        ins(ir, "%s = xor i64 %s, %s", h[2], h[0], h[1]);
+        ins(ir, "%s = mul i64 %s, -4658895280553007687", h[3], h[2]);
+        ins(ir, "%s = lshr i64 %s, 27", h[4], h[3]);
+        ins(ir, "%s = xor i64 %s, %s", h[5], h[3], h[4]);
+        ins(ir, "%s = mul i64 %s, -7723592293110705685", h[6], h[5]);
+        const char *s31 = tmp(ir);
+        ins(ir, "%s = lshr i64 %s, 31", s31, h[6]);
+        ins(ir, "%s = xor i64 %s, %s", r, h[6], s31);
         return val(r, &tyU64);
+    }
+    case BI_GROW: {
+        Type *item = e->type->elem;
+        Val s = emitExpr(ir, e->list.items[0]);
+        Val n = emitExpr(ir, e->list.items[1]);
+        const char *ptr, *len;
+        sliceParts(ir, s, &ptr, &len);
+        const char *size = sizeOf(ir, item);
+        const char *p = tmp(ir);
+        ins(ir, "%s = call ptr @iris_grow(ptr %s, i64 %s, i64 %s, i64 %s, i64 %lld)", p, ptr, len, n.s, size,
+            (long long)typeAlignOf(item));
+        return makeSlice(ir, p, n.s, e->type);
     }
     case BI_EXPECT: {
         Val cond = emitExpr(ir, e->list.items[0]);
@@ -1704,8 +1807,13 @@ static Val emitBuiltin(IR *ir, Node *e) {
     case BI_STRING_FREE: {
         Node *recv = e->a->a;
         const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+        Node *arg = e->builtin == BI_STRING_APPEND ? e->list.items[0] : NULL;
         if (e->builtin == BI_STRING_FREE) {
             ins(ir, "call void @iris_string_free(ptr %s)", addr);
+        } else if (arg->kind == N_INTERP && (arg->flags & F_TEMPTEXT) && !interpReadsStrings(arg)) {
+            /* s.append("{a} {b}"): the pieces go straight into s, with no
+             * String in between */
+            emitText(ir, arg, 3, addr);
         } else {
             Val v = emitExpr(ir, e->list.items[0]);
             const char *ptr, *len;
@@ -2623,10 +2731,76 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
 
 /* ---------------------------------------------------------------- statements */
 
+/* Whether every use of decl under n only reads or writes its items or
+ * its length: x[i], x[i] = v, x.len, for v in x. Then nothing can keep
+ * a pointer to its memory. */
+static bool usedInPlace(Node *n, Node *decl, Node *parent) {
+    if (!n) {
+        return true;
+    }
+    if (n->kind == N_IDENT && n->ref == decl) {
+        return parent && ((parent->kind == N_INDEX && parent->a == n) ||
+                          (parent->kind == N_FIELD_ACCESS && parent->a == n && strcmp(parent->name, "len") == 0) ||
+                          (parent->kind == N_FOR && (parent->flags & F_FOR_IN) && parent->a == n));
+    }
+    if (n->kind == N_UNARY && n->op == P_AMP && n->a && n->a->kind == N_INDEX && n->a->a->kind == N_IDENT &&
+        n->a->a->ref == decl) {
+        return false;               /* &x[i] */
+    }
+    if (!usedInPlace(n->a, decl, n) || !usedInPlace(n->b, decl, n) || !usedInPlace(n->c, decl, n) ||
+        !usedInPlace(n->d, decl, n)) {
+        return false;
+    }
+    for (int i = 0; i < n->list.len; i++) {
+        if (!usedInPlace(n->list.items[i], decl, n)) return false;
+    }
+    for (int i = 0; i < n->list2.len; i++) {
+        if (!usedInPlace(n->list2.items[i], decl, n)) return false;
+    }
+    return true;
+}
+
+/* x := alloc(T, n) with n known and small, then defer free(x), and x only
+ * used in place after: the items live in the function's frame and the
+ * free is left out. T is a number, bool or pointer, so no method can take
+ * the address of an item. */
+static void markStackAlloc(IR *ir, Node *b, int i) {
+    if (ir->mode == MODE_DEBUG || i + 1 >= b->list.len) {
+        return;     /* debug builds keep alloc, which AddressSanitizer checks */
+    }
+    Node *s = b->list.items[i];
+    Node *decl = s->kind == N_DEFINE && s->list.len == 1 ? s->list.items[0] : s->kind == N_VAR ? s : NULL;
+    Node *call = decl ? s->b : NULL;
+    if (!call || call->kind != N_CALL || call->builtin != BI_ALLOC || !call->type || call->type->kind != TY_SLICE) {
+        return;
+    }
+    Type *item = call->type->elem;
+    Node *count = call->list.items[1];
+    if (!(item->kind == TY_INT || item->kind == TY_FLOAT || item->kind == TY_BOOL || item->kind == TY_PTR) ||
+        !count->isConst || count->cval <= 0 || count->cval * typeSizeOf(item) > 4096) {
+        return;
+    }
+    Node *d = b->list.items[i + 1];
+    Node *fr = d->kind == N_DEFER ? d->a : NULL;
+    if (fr && fr->kind == N_EXPR_STMT) {
+        fr = fr->a;
+    }
+    if (!fr || fr->kind != N_CALL || fr->builtin != BI_FREE || fr->list.len != 1 ||
+        fr->list.items[0]->kind != N_IDENT || fr->list.items[0]->ref != decl) {
+        return;
+    }
+    for (int k = i + 2; k < b->list.len; k++) {
+        if (!usedInPlace(b->list.items[k], decl, NULL)) return;
+    }
+    call->flags |= F_STACK;
+    d->flags |= F_STACK;
+}
+
 static void emitBlock(IR *ir, Node *b) {
     DeferFrame frame;
     pushFrame(ir, &frame);
     for (int i = 0; i < b->list.len; i++) {
+        markStackAlloc(ir, b, i);
         emitStmt(ir, b->list.items[i]);
     }
     if (!ir->terminated) {
@@ -2663,7 +2837,8 @@ static void emitFor(IR *ir, Node *s) {
         placeLabel(ir, post);
         Val cur = load(ir, v->ir, t);
         const char *nx = tmp(ir);
-        ins(ir, "%s = add %s %s, 1", nx, llType(ir, t), cur.s);
+        /* below the end before the step, so the step can't overflow */
+        ins(ir, "%s = add %s %s %s, 1", nx, t->isSigned ? "nsw" : "nuw", llType(ir, t), cur.s);
         ins(ir, "store %s %s, ptr %s", llType(ir, t), nx, v->ir);
         br(ir, cond);
         placeLabel(ir, end);
@@ -2749,7 +2924,7 @@ static void emitFor(IR *ir, Node *s) {
         placeLabel(ir, post);
         Val cur = load(ir, iSlot, &tyI64);
         const char *nx = tmp(ir);
-        ins(ir, "%s = add i64 %s, 1", nx, cur.s);
+        ins(ir, "%s = add nuw nsw i64 %s, 1", nx, cur.s);
         ins(ir, "store i64 %s, ptr %s", nx, iSlot);
         br(ir, cond);
         placeLabel(ir, end);
@@ -2868,11 +3043,10 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     }
     sbPuts(&env, " }");
     const char *envTy = sbFinish(&env, ir->arena);
-    const char *szp = tmp(ir), *sz = tmp(ir), *mem = tmp(ir);
+    const char *szp = tmp(ir), *sz = tmp(ir);
     ins(ir, "%s = getelementptr %s, ptr null, i64 1", szp, envTy);
     ins(ir, "%s = ptrtoint ptr %s to i64", sz, szp);
-    ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 1, ptr %s, i32 %d, i32 %d, ptr %s)", mem, sz, ir->fileStr,
-        call->line, call->col, fnName(ir));
+    const char *mem = emitCalloc(ir, sz, "1");
     if (indirect) {
         const char *f0 = tmp(ir);
         ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envTy, mem);
@@ -2895,7 +3069,7 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
 
     /* the thunk */
     StrBuf *x = &ir->extra;
-    sbPrintf(x, "define internal void %s(ptr %%env)%s {\n", thunk, ir->mode == MODE_DEBUG ? " #0" : "");
+    sbPrintf(x, "define internal void %s(ptr %%env) nounwind%s {\n", thunk, ir->mode == MODE_DEBUG ? " #0" : "");
     StrBuf args = {0};
     for (int i = 0; i < n; i++) {
         sbPrintf(x, "  %%a%d.p = getelementptr %s, ptr %%env, i32 0, i32 %d\n", i, envTy, i + first);
@@ -2926,7 +3100,7 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     } else {
         sbPrintf(x, "  %%r = call %s %s(%s)\n", fty.buf, callee, args.buf ? args.buf : "");
     }
-    sbPuts(x, "  call void @free(ptr %env)\n  ret void\n}\n\n");
+    sbPuts(x, "  call void @iris_free(ptr %env)\n  ret void\n}\n\n");
     sbFree(&args);
     sbFree(&fty);
     return handle;
@@ -3028,7 +3202,7 @@ static void emitStmtInner(IR *ir, Node *s) {
     }
     case N_DEFER:
     case N_ERRDEFER:
-        if (ir->defers) {
+        if (ir->defers && !(s->flags & F_STACK)) {
             listPush(ir->arena, &ir->defers->items, s);
         }
         return;
@@ -3192,7 +3366,7 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
         p->ir = varSlot(ir, p->type, p, i + 1);
         sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(ir, p->type), p->name, p->ir);
     }
-    sbPuts(out, ")");
+    sbPuts(out, ") nounwind");      /* nothing in Iris unwinds the stack */
     if (f->flags & F_INLINE) {
         sbPuts(out, " alwaysinline");
     }
@@ -3665,7 +3839,6 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     }
     /* libc functions the generated code uses, unless import c declared them */
     static const struct { const char *name, *decl; } libc[] = {
-        {"free", "declare void @free(ptr)\n"},
         {"strlen", "declare i64 @strlen(ptr)\n"},
     };
     for (size_t k = 0; k < sizeof libc / sizeof libc[0]; k++) {
@@ -3687,6 +3860,10 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_out_of_memory() noreturn\n"
+           "declare noalias ptr @iris_malloc(i64)\n"
+           "declare void @iris_free(ptr)\n"
+           "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare ptr @iris_arena_alloc(ptr, i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"

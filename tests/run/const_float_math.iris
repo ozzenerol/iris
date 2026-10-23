@@ -1,0 +1,18 @@
+// expect: 39.47841760435743 365.24 14419
+// expect: 1.5707963267948966 -3.141592653589793 0.5
+// expect: 3.3333333
+import math
+
+const f64 SOLAR_MASS = 4.0 * math.pi * math.pi
+const f64 DAYS = 365.24
+const f64 YEAR_MASS = SOLAR_MASS * DAYS
+const f64 HALF_PI = math.pi / 2
+const NEG = -math.pi
+const f64 REST = 7.5 % 1.0
+const f32 THIRD = 10.0 / 3
+
+void main() {
+    print("{SOLAR_MASS} {DAYS} {math.round(YEAR_MASS)}")
+    print("{HALF_PI} {NEG} {REST}")
+    print("{THIRD}")
+}

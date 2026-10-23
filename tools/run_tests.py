@@ -470,11 +470,19 @@ def guide_tests(iris, only, failures, skipped):
         def stop():
             nonlocal server
             if server:
+                # a server that stopped itself is gone already; macOS then
+                # answers EPERM for a group whose last process isn't reaped
                 try:
                     os.killpg(server.pid, signal.SIGTERM)
                     server.wait(timeout=15)
-                except (ProcessLookupError, subprocess.TimeoutExpired):
-                    os.killpg(server.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    server.wait()
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(server.pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    server.wait()
                 server = None
                 # the program itself can outlive the shell that started it by a little
                 deadline = time.time() + 5

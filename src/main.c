@@ -42,6 +42,11 @@ static void usage(FILE *out) {
           "  --mode=debug|release-safe|release-fast   (default: debug)\n"
           "  --target=<os>   build for another platform: x86_64-linux, aarch64-linux,\n"
           "                  x86_64-macos, aarch64-macos\n"
+          "  --cpu=<name>    release builds: use what this CPU has (native: the one\n"
+          "                  building), such as AVX2; the program may not run on older ones\n"
+          "  --pgo-gen       release builds: a program that records where it spends its\n"
+          "                  time, in iris-pgo/ when it runs\n"
+          "  --pgo=<path>    release builds: optimize with what --pgo-gen recorded\n"
           "  -I <folder>      where C headers are, for import c\n"
           "  -l <library>     link a C library: -l sqlite3\n"
           "\n"
@@ -220,6 +225,65 @@ static Program *frontEnd(Arena *a, const char *path, const char **includes, int 
 
 static int runProgramTo(char **argv, const char *errPath) { return runCommand(argv, NULL, errPath); }
 
+/* --cpu, --pgo-gen and --pgo: for release builds */
+static const char *gCpu;
+static bool gPgoGen;
+static const char *gPgoUse;
+
+/* The major version of the clang that builds programs, or 0. */
+static int clangMajor(const char *cc, const char *dir) {
+    char outPath[4200];
+    snprintf(outPath, sizeof outPath, "%s/cc.version", dir);
+    char *argv[] = {(char *)cc, "--version", NULL};
+    int major = 0;
+    if (runCommand(argv, outPath, "/dev/null") == 0) {
+        FILE *f = fopen(outPath, "r");
+        char line[512];
+        if (f && fgets(line, sizeof line, f)) {
+            char *v = strstr(line, "version ");
+            if (v) major = atoi(v + 8);
+        }
+        if (f) fclose(f);
+    }
+    unlink(outPath);
+    return major;
+}
+
+/* Merges the profiles that --pgo names (a .profdata file is used as it
+ * is; a folder or .profraw files are merged into dir) with the
+ * llvm-profdata of the same version as clang. NULL when that fails. */
+static const char *pgoProfile(const char *cc, const char *dir, char *buf, size_t n) {
+    size_t len = strlen(gPgoUse);
+    if (len > 9 && strcmp(gPgoUse + len - 9, ".profdata") == 0) {
+        return gPgoUse;
+    }
+    snprintf(buf, n, "%s/merged.profdata", dir);
+    const char *tool = getenv("IRIS_PROFDATA");
+    char named[64];
+    int major = clangMajor(cc, dir);
+    const char *tries[4];
+    int ntries = 0;
+    if (tool && *tool) tries[ntries++] = tool;
+    if (major > 0) {
+        snprintf(named, sizeof named, "llvm-profdata-%d", major);
+        tries[ntries++] = named;
+    }
+    tries[ntries++] = "llvm-profdata";
+    for (int i = 0; i < ntries; i++) {
+        char *argv[] = {(char *)tries[i], "merge", "-o", buf, (char *)gPgoUse, NULL};
+        int rc = runCommand(argv, NULL, NULL);
+        if (rc == 0) return buf;
+        if (rc != 127) return NULL;
+    }
+#ifdef __APPLE__
+    char *argv[] = {"xcrun", "llvm-profdata", "merge", "-o", buf, (char *)gPgoUse, NULL};
+    if (runCommand(argv, NULL, NULL) == 0) return buf;
+#endif
+    fprintf(stderr, "iris: --pgo needs llvm-profdata%s%s; install it or set IRIS_PROFDATA\n",
+            major > 0 ? " " : "", major > 0 ? named + 13 : "");
+    return NULL;
+}
+
 static int runProgram(char **argv) { return runCommand(argv, NULL, NULL); }
 
 /* Compiles the IR with clang into out, linking the C libraries named. */
@@ -239,7 +303,43 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     char linkArgs[256][300];
     int n = 0;
     args[n++] = (char *)cc;
-    args[n++] = mode == MODE_DEBUG ? "-O0" : "-O2";
+    args[n++] = mode == MODE_DEBUG ? "-O0" : "-O3";
+    /* release builds optimize the program and the runtime as one, so the
+     * runtime's small functions are inlined into the program */
+    int lto = mode == MODE_DEBUG ? -1 : n;
+    int ltoArgs = 0;
+    if (lto >= 0) {
+        args[n++] = "-flto";
+        /* loops start on a 32-byte boundary, so a small hot loop doesn't
+         * straddle two of them by chance; with LTO the linker's code
+         * generator is told */
+        args[n++] = strcmp(gTarget.os, "macos") == 0 ? "-Wl,-mllvm,-align-loops=32" : "-Wl,-plugin-opt=-align-loops=32";
+        ltoArgs = 2;
+        args[n++] = "-falign-loops=32";
+    }
+    char cpuArg[256], pgoArg[4400], pgoBuf[4300];
+    if (mode != MODE_DEBUG && gCpu) {
+        /* x86 names a whole machine with -march; arm64 uses -mcpu */
+        const char *arch = gTarget.triple ? gTarget.arch :
+#if defined(__aarch64__)
+            "aarch64";
+#else
+            "x86_64";
+#endif
+        snprintf(cpuArg, sizeof cpuArg, "%s=%s", strcmp(arch, "aarch64") == 0 ? "-mcpu" : "-march", gCpu);
+        args[n++] = cpuArg;
+    }
+    if (mode != MODE_DEBUG && gPgoGen) {
+        args[n++] = "-fprofile-generate=iris-pgo";
+    } else if (mode != MODE_DEBUG && gPgoUse) {
+        const char *profile = pgoProfile(cc, dir, pgoBuf, sizeof pgoBuf);
+        if (!profile) {
+            return false;
+        }
+        snprintf(pgoArg, sizeof pgoArg, "-fprofile-use=%s", profile);
+        args[n++] = pgoArg;
+        args[n++] = "-Wno-backend-plugin";  /* functions the profile didn't see */
+    }
     args[n++] = "-g";
     args[n++] = "-Wno-override-module";
     args[n++] = "-w";
@@ -295,7 +395,19 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
         }
         unlink(errPath);
     } else {
-        rc = runProgram(args);
+        /* a linker that can't do LTO: build without it */
+        char errPath[4200];
+        snprintf(errPath, sizeof errPath, "%s/clang.err", dir);
+        rc = runProgramTo(args, errPath);
+        if (rc != 0 && rc != 127) {
+            int i = lto;
+            for (; args[i + ltoArgs]; i++) {
+                args[i] = args[i + ltoArgs];
+            }
+            args[i] = NULL;
+            rc = runProgram(args);
+        }
+        unlink(errPath);
     }
     if (rc == 127) {
         fprintf(stderr, "iris: clang is needed to build programs; install it or set IRIS_CC\n");
@@ -307,15 +419,23 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     return rc == 0;
 }
 
+/* A build folder and the files in it. */
 static void removeTree(const char *dir) {
-    const char *names[] = {"program.ll", "rt.c", "program"};
-    char path[4200];
-    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
-        unlink(path);
+    DIR *d = opendir(dir);
+    if (d) {
+        struct dirent *e;
+        char path[4400];
+        while ((e = readdir(d))) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+            unlink(path);
+        }
+        closedir(d);
     }
     rmdir(dir);
 }
+
+static void removeTreeArg(void *dir) { removeTree(dir); }
 
 static bool makeTempDir(char *buf, size_t n) {
     const char *base = getenv("TMPDIR");
@@ -386,6 +506,12 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
                                 "x86_64-macos and aarch64-macos\n", argv[i] + 9);
                 return 2;
             }
+        } else if (strncmp(argv[i], "--cpu=", 6) == 0 && argv[i][6]) {
+            gCpu = argv[i] + 6;
+        } else if (strcmp(argv[i], "--pgo-gen") == 0) {
+            gPgoGen = true;
+        } else if (strncmp(argv[i], "--pgo=", 6) == 0 && argv[i][6]) {
+            gPgoUse = argv[i] + 6;
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && strcmp(cmd, "build") == 0) {
             out = argv[++i];
         } else if (bench && strncmp(argv[i], "--time=", 7) == 0) {
@@ -494,10 +620,9 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             args[k + 1] = argv[i + k];
         }
         fflush(stdout);
-        rc = runProgram(args);
+        rc = runCommandStarted(args, NULL, NULL, removeTreeArg, dir);
         free(args);
     }
-    unlink(exe);
     removeTree(dir);
 done:
     arenaFree(&a);

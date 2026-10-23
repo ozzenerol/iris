@@ -1,0 +1,44 @@
+import http, json
+
+@json
+struct Item {
+    String name
+    i64 qty
+    f64 price
+}
+
+@json
+struct Order {
+    i64 id
+    String customer
+    List[Item] items
+    List[String] tags
+}
+
+@json
+struct Total {
+    i64 id
+    i64 count
+    f64 total
+}
+
+void order(http.Request *req, http.Response *res) {
+    scoped Order o = json.decode(Order, req.body) catch e {
+        res.error(400, e.message)
+        return
+    }
+    f64 sum = 0.0
+    for it in o.items {
+        sum += f64(it.qty) * it.price
+    }
+    t := Total{id: o.id, count: o.items.len, total: sum}
+    scoped String body = json.encode(t)
+    res.json(body)
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.post("/order", order)
+    try r.serve(9000, "127.0.0.1")
+}

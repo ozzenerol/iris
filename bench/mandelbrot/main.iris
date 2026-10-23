@@ -1,0 +1,28 @@
+const i64 N = 4000
+const i64 ITER = 50
+
+void main() {
+    i64 inside = 0
+    for y in 0..N {
+        ci := 2.0 * f64(y) / f64(N) - 1.0
+        for x in 0..N {
+            cr := 2.0 * f64(x) / f64(N) - 1.5
+            f64 zr = 0.0
+            f64 zi = 0.0
+            bool escaped = false
+            for _ in 0..ITER {
+                tr := zr * zr - zi * zi + cr
+                zi = 2.0 * zr * zi + ci
+                zr = tr
+                if zr * zr + zi * zi > 4.0 {
+                    escaped = true
+                    break
+                }
+            }
+            if !escaped {
+                inside += 1
+            }
+        }
+    }
+    print("{inside}")
+}

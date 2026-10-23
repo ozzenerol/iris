@@ -1,0 +1,23 @@
+const i64 N = 10000000
+
+void main() {
+    Map[i64, i64] m
+    defer m.free()
+    u64 x = 88172645463325252
+    for i in 0..N {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        m.set(i64(x % 50000000), i)
+    }
+    i64 hits = 0
+    i64 sum = 0
+    for i in 0..N {
+        v, ok := m.get(i * 5)
+        if ok {
+            hits += 1
+            sum += v
+        }
+    }
+    print("{m.len} {hits} {sum}")
+}

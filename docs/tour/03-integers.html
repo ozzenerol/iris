@@ -142,7 +142,7 @@ host 42
 <p>A result that doesn't fit in its type is an overflow. In a debug build, which is what <code>iris run</code> makes, it stops the program with a message that says where:</p>
 <pre class="code"><code><span class="t">u8</span> ttl = <span class="n">250</span>
 next := ttl + <span class="n">10</span> <span class="c">// panic: integer overflow</span></code></pre>
-<p>The release builds don't check overflow, and the value wraps around: <code>250 + 10</code> in a <code>u8</code> gives <code>4</code>. Dividing by zero stops a debug and a <code>release-safe</code> build; in <code>release-fast</code> it is not checked, and the result can't be relied on.</p>
+<p>The release builds don't check overflow. An unsigned value wraps around: <code>250 + 10</code> in a <code>u8</code> gives <code>4</code>. A signed value wraps around in a <code>release-safe</code> build. A <code>release-fast</code> build assumes signed math never overflows, as the debug build has checked, and uses that to make loops faster; there a signed overflow gives a result that can't be relied on. Dividing by zero stops a debug and a <code>release-safe</code> build; in <code>release-fast</code> it is not checked, and the result can't be relied on.</p>
 <p>Arithmetic happens in the type of the values. Two <code>u8</code> values add up as a <code>u8</code>, even when the result goes into an <code>i64</code>, so the sum of two big bytes overflows. Convert first when the result needs more room:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span> ipHeader = <span class="n">60</span> <span class="c">// the IHL field, in bytes</span>

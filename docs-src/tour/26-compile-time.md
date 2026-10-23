@@ -22,6 +22,24 @@ void main() {
 edge: frames up to 16384 bytes, 16375 of payload
 ```
 
+Floating point constants work the same way, with `+`, `-`, `*`, `/` and `%` on numbers and other constants, including those of other modules such as `math.pi`:
+
+```iris run
+import math
+
+const f64 SOLAR_MASS = 4.0 * math.pi * math.pi
+const f64 DAYS_PER_YEAR = 365.24
+const f64 TURN = 2 * math.pi
+
+void main() {
+    print("{SOLAR_MASS} {DAYS_PER_YEAR} {TURN}")
+}
+```
+
+```output
+39.47841760435743 365.24 6.283185307179586
+```
+
 Text with values in braces can be a constant too, when every value is a constant number, `bool` or text. The text is put together when compiling, and the constant is a `str`. The text can be written as it is, or given to `format` or `str.format`:
 
 ```iris run

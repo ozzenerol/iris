@@ -1,0 +1,10 @@
+i64 fib(i64 n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+void main() {
+    print("{fib(42)}")
+}

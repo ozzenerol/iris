@@ -30,6 +30,9 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `--target=x86_64-linux` and the others | builds for another platform |
 | `-l name` | links a C library |
 | `-I folder` | a folder where `import c` looks for headers |
+| `--cpu=native` or a CPU's name | release builds use what that CPU has, such as AVX2; `native` is the one building. The program may not run on older CPUs |
+| `--pgo-gen` | release builds: the program records where it spends its time, in the folder `iris-pgo` of wherever it runs |
+| `--pgo=iris-pgo` | release builds: optimised with what `--pgo-gen` recorded (a folder, `.profraw` files or a `.profdata` file) |
 
 `iris bench` also takes `--time=1s`, how long each bench's last round takes. For `run`, `test` and `bench`, options go before the file. `build`, `check` and `ir` take them before or after it.
 
@@ -39,14 +42,24 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 |---|---|---|---|
 | `debug` | every one, and AddressSanitizer for memory | no | writing and testing the program |
 | `release-safe` | indexes and slices, and division by zero | yes | most programs that run for real |
-| `release-fast` | none | yes | code that has been measured and needs every bit of speed |
+| `release-fast` | only indexes into arrays of a fixed size | yes | code that has been measured and needs every bit of speed |
 
 ```shell
 iris build --mode=release-safe main.iris
 iris build main.iris -o server --mode=release-fast
 ```
 
-A debug build is many times slower than a release build, so speed is measured with a release one.
+A debug build is many times slower than a release build, so speed is measured with a release one. A release build optimises the program and the runtime together, so the runtime's small functions are put where they are called; with a linker that can't do that, it builds without it.
+
+To optimise with a profile, build with `--pgo-gen`, run the program on work like the real one, then build again with `--pgo`:
+
+```shell
+iris build --mode=release-fast --pgo-gen -o server main.iris
+./server            # writes iris-pgo/*.profraw as it runs
+iris build --mode=release-fast --pgo=iris-pgo -o server main.iris
+```
+
+`--pgo` needs `llvm-profdata` of the same version as `clang`; `IRIS_PROFDATA` names another.
 
 `iris` uses `clang`, version 15 or newer, to turn the IR into a program. `IRIS_CC` names another `clang` to use.
 

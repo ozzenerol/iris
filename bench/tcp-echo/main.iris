@@ -1,0 +1,39 @@
+import net
+
+const i64 THREADS = 4
+
+void echo(net.Conn conn) {
+    defer conn.close()
+    u8[4096] buf
+    for {
+        n := conn.read(buf[0:4096]) catch e {
+            return
+        }
+        if n == 0 {
+            return
+        }
+        conn.write(buf[0:n]) catch e {
+            return
+        }
+    }
+}
+
+void serve() {
+    ln := net.listen(9000, "127.0.0.1", true) catch e {
+        print("listen: {e.message}")
+        return
+    }
+    for {
+        conn := ln.accept() catch e {
+            continue
+        }
+        spawn echo(conn)
+    }
+}
+
+void main() {
+    for _ in 1..THREADS {
+        thread serve()
+    }
+    serve()
+}

@@ -1,0 +1,76 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["http2"] }
+serde = { version = "1", features = ["derive"] }
+async-channel = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[[bin]]
+name = "binary-trees"
+path = "../binary-trees/main.rs"
+
+[[bin]]
+name = "channels"
+path = "../channels/main.rs"
+
+[[bin]]
+name = "fannkuch-redux"
+path = "../fannkuch-redux/main.rs"
+
+[[bin]]
+name = "fib"
+path = "../fib/main.rs"
+
+[[bin]]
+name = "hashmap"
+path = "../hashmap/main.rs"
+
+[[bin]]
+name = "http2"
+path = "../http2/main.rs"
+
+[[bin]]
+name = "http-hello"
+path = "../http-hello/main.rs"
+
+[[bin]]
+name = "http-json"
+path = "../http-json/main.rs"
+
+[[bin]]
+name = "mandelbrot"
+path = "../mandelbrot/main.rs"
+
+[[bin]]
+name = "nbody"
+path = "../nbody/main.rs"
+
+[[bin]]
+name = "sieve"
+path = "../sieve/main.rs"
+
+[[bin]]
+name = "sort"
+path = "../sort/main.rs"
+
+[[bin]]
+name = "spectral-norm"
+path = "../spectral-norm/main.rs"
+
+[[bin]]
+name = "strings"
+path = "../strings/main.rs"
+
+[[bin]]
+name = "tcp-echo"
+path = "../tcp-echo/main.rs"

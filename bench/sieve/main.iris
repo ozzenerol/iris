@@ -1,0 +1,18 @@
+const i64 N = 100000000
+
+void main() {
+    bool[] composite = alloc(bool, N + 1)
+    defer free(composite)
+    i64 count = 0
+    for i in 2..N + 1 {
+        if !composite[i] {
+            count += 1
+            j := i * i
+            for j <= N {
+                composite[j] = true
+                j += i
+            }
+        }
+    }
+    print("{count}")
+}

@@ -1,0 +1,19 @@
+import str
+
+const i64 N = 5000000
+
+void main() {
+    scoped String s = "".copy()
+    for i in 0..N {
+        s.append("item-{i},")
+    }
+    found := str.count(s, "99,")
+    scoped List[str] parts = str.split(s, ",")
+    i64 total = 0
+    for p in parts {
+        total += p.len
+    }
+    scoped String up = str.upper(s[0:1000000])
+    scoped String rep = str.replace(s, "item", "x")
+    print("{s.len} {found} {parts.len} {total} {up.len} {rep.len}")
+}

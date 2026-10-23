@@ -4,12 +4,25 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 int runCommand(char **argv, const char *outPath, const char *errPath) {
+    return runCommandStarted(argv, outPath, errPath, NULL, NULL);
+}
+
+/* As runCommand; started(arg) is called once the program has replaced the
+ * child, when its file is no longer needed: iris run removes it then, so
+ * nothing is left behind when iris itself is killed. */
+int runCommandStarted(char **argv, const char *outPath, const char *errPath, void (*started)(void *), void *arg) {
     fflush(stdout);
     fflush(stderr);
+    int fds[2] = {-1, -1};
+    if (started && pipe(fds) == 0) {
+        fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+        fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    }
     pid_t pid = fork();
     if (pid < 0) {
         perror("iris: fork");
@@ -27,6 +40,15 @@ int runCommand(char **argv, const char *outPath, const char *errPath) {
         execvp(argv[0], argv);
         fprintf(stderr, "iris: can't run %s\n", argv[0]);
         _exit(127);
+    }
+    if (fds[0] >= 0) {
+        /* the write end closes when exec succeeds (or the child ends) */
+        close(fds[1]);
+        char c;
+        while (read(fds[0], &c, 1) > 0) {
+        }
+        close(fds[0]);
+        started(arg);
     }
     int status;
     if (waitpid(pid, &status, 0) < 0) {

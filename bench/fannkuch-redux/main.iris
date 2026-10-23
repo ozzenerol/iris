@@ -1,0 +1,59 @@
+const i64 N = 11
+
+void main() {
+    i64[16] perm1
+    i64[16] perm
+    i64[16] count
+    for i in 0..N {
+        perm1[i] = i
+    }
+    i64 maxFlips = 0
+    i64 checksum = 0
+    i64 permCount = 0
+    r := N
+    for {
+        for r != 1 {
+            count[r - 1] = r
+            r -= 1
+        }
+        for i in 0..N {
+            perm[i] = perm1[i]
+        }
+        i64 flips = 0
+        k := perm[0]
+        for k != 0 {
+            i := 0
+            j := k
+            for i < j {
+                t := perm[i]
+                perm[i] = perm[j]
+                perm[j] = t
+                i += 1
+                j -= 1
+            }
+            flips += 1
+            k = perm[0]
+        }
+        if flips > maxFlips {
+            maxFlips = flips
+        }
+        checksum += if permCount % 2 == 0 { flips } else { -flips }
+        for {
+            if r == N {
+                print("{checksum}\nPfannkuchen({N}) = {maxFlips}")
+                return
+            }
+            p0 := perm1[0]
+            for i in 0..r {
+                perm1[i] = perm1[i + 1]
+            }
+            perm1[r] = p0
+            count[r] -= 1
+            if count[r] > 0 {
+                break
+            }
+            r += 1
+        }
+        permCount += 1
+    }
+}

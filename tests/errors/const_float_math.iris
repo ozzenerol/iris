@@ -1,0 +1,7 @@
+// error: 4: the value is a floating point number, but i64 is needed
+// error: 5: a constant's value must be known when compiling
+f64 x = 2.0
+const i64 N = 2.0 * 3.0
+const f64 M = 2.0 * x
+
+void main() { }

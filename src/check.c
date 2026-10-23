@@ -2621,11 +2621,20 @@ static void checkConstDecl(Checker *c, Node *d) {
             error(c, d->b, "the value is %s, but %s is needed", d->type->name, declared->name);
         }
     } else if (gErrors == before) {
-        checkExpr(c, &d->b, NULL);
-        if (!isErr(d->b->type)) {
-            error(c, d->b, "a constant's value must be known when compiling");
+        Type *t = checkExpr(c, &d->b, declared && isFloat(declared) ? declared : NULL);
+        if (isFloat(t) && d->b->isConst) {
+            if (declared && !isErr(declared) && !isFloat(declared)) {
+                error(c, d->b, "the value is a floating point number, but %s is needed", declared->name);
+            }
+            d->isConst = true;
+            d->fval = d->b->fval;
+            d->type = t;
+        } else {
+            if (!isErr(t)) {
+                error(c, d->b, "a constant's value must be known when compiling");
+            }
+            d->type = &tyError;
         }
-        d->type = &tyError;
     } else {
         d->type = &tyError;
     }
@@ -2868,6 +2877,14 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
         return setType(e, t);
     }
     if (isFloat(t) && (op == P_PLUS || op == P_MINUS || op == P_STAR || op == P_SLASH || op == P_PERCENT)) {
+        if (e->a->isConst && e->b->isConst) {
+            /* 4.0 * math.pi * math.pi is known when compiling */
+            double x = e->a->fval, y = e->b->fval;
+            double r = op == P_PLUS ? x + y : op == P_MINUS ? x - y : op == P_STAR ? x * y
+                     : op == P_SLASH ? x / y : fmod(x, y);
+            e->isConst = true;
+            e->fval = t == &tyF32 ? (double)(float)r : r;
+        }
         return setType(e, t);
     }
     if (!isInt(t)) {
@@ -4663,6 +4680,23 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         }
         e->builtin = d->name[0] == 'h' ? BI_HASH : d->name[3] == 'O' ? BI_KEY_OWN : BI_KEY_FREE;
         return setType(e, e->builtin == BI_HASH ? &tyU64 : e->builtin == BI_KEY_OWN ? t : &tyVoid);
+    }
+    if (strcmp(d->name, "growSlice") == 0) {
+        /* List's: the slice made longer, its new items zero, maybe moved */
+        if (e->list.len != 2) {
+            error(c, e, "growSlice takes a slice and its new length");
+            return setType(e, &tyError);
+        }
+        Type *t = checkExpr(c, &e->list.items[0], NULL);
+        checkExpr(c, &e->list.items[1], &tyI64);
+        coerce(c, &e->list.items[1], &tyI64, "the length");
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind != TY_SLICE) {
+            error(c, e->list.items[0], "growSlice takes a slice, not %s", t->name);
+            return setType(e, &tyError);
+        }
+        e->builtin = BI_GROW;
+        return setType(e, t);
     }
     error(c, e, "%s is not a built-in the compiler knows", d->name);
     return setType(e, &tyError);

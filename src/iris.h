@@ -169,6 +169,7 @@ enum {
     F_NORETURN = 1 << 29,   /* @noreturn: a call to the function never comes back, like panic */
     F_POSTFIX = 1 << 30,    /* x++ and x--: the value is the one before the change */
 };
+#define F_STACK (1u << 31)      /* the IR writer's: an alloc kept on the stack, and its free left out */
 
 typedef struct Node Node;
 typedef struct Type Type;
@@ -231,6 +232,7 @@ Node *parseSource(Arena *a, Source *src, bool snippet);
 /* Runs a program and waits for it; stdout and stderr go to the files given
  * (NULL: ours). Returns its exit status, 127 if it can't run. */
 int runCommand(char **argv, const char *outPath, const char *errPath);
+int runCommandStarted(char **argv, const char *outPath, const char *errPath, void (*started)(void *), void *arg);
 char *readAllFile(Arena *a, const char *path, size_t *len);
 bool writeText(const char *path, const char *text, size_t len);
 
@@ -394,6 +396,7 @@ enum {
     BI_JSON_ENCODE, BI_JSON_DECODE, BI_JSON_FREE,
     BI_EXPECT,
     BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
+    BI_GROW,                /* List's: growSlice(s, n) */
     BI_TABLE_OF,
     BI_ENV_LOAD,
     BI_FLAGS_PARSE,

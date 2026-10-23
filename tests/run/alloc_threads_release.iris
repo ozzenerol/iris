@@ -1,0 +1,88 @@
+// mode: release-fast
+// expect: made 40000, freed 40000, bytes 159368000
+// expect: grown 100000 70000
+// expect: rounds 8 total 3200
+// Blocks made on one thread and freed on another, blocks of many sizes,
+// growth past the small sizes, and threads that end and leave their memory
+// to the next ones.
+
+void producer(i64 id, chan[String] out) {
+    for i in 0..10000 {
+        size := (i * 37 + id) % 8000 + 1
+        scoped String s = "".copy()
+        for _ in 0..size {
+            s.append("x")
+        }
+        out <- s.copy()
+    }
+}
+
+void consumer(chan[String] input, i64 n, chan[i64] done) {
+    i64 bytes = 0
+    for _ in 0..n {
+        s := <-input
+        bytes += s.len
+        s.free()
+    }
+    done <- bytes
+}
+
+i64 churn() {
+    List[i64[]] blocks
+    defer {
+        for b in blocks {
+            free(b)
+        }
+        blocks.free()
+    }
+    for i in 0..400 {
+        blocks.push(alloc(i64, i % 50 + 1))
+    }
+    i64 total = 0
+    for b in blocks {
+        b[0] = 1
+        total += b[0]
+    }
+    return total
+}
+
+void churner(chan[i64] out) {
+    out <- churn()
+}
+
+void main() {
+    ch := chan[String](256)
+    done := chan[i64](1)
+    t := thread consumer(ch, 40000, done)
+    a := thread producer(1, ch)
+    b := thread producer(2, ch)
+    c := thread producer(3, ch)
+    d := thread producer(4, ch)
+    a.join()
+    b.join()
+    c.join()
+    d.join()
+    bytes := <-done
+    t.join()
+    print("made 40000, freed 40000, bytes {bytes}")
+
+    List[i64] big
+    for i in 0..100000 {
+        big.push(i)
+    }
+    scoped String text = "".copy()
+    for i in 0..10000 {
+        text.append("abcdefg")
+    }
+    print("grown {big.len} {text.len}")
+    big.free()
+
+    results := chan[i64](8)
+    i64 total = 0
+    for _ in 0..8 {
+        th := thread churner(results)
+        total += <-results
+        th.join()
+    }
+    print("rounds 8 total {total}")
+}

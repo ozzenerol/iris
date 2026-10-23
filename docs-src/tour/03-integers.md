@@ -175,7 +175,7 @@ u8 ttl = 250
 next := ttl + 10 // panic: integer overflow
 ```
 
-The release builds don't check overflow, and the value wraps around: `250 + 10` in a `u8` gives `4`. Dividing by zero stops a debug and a `release-safe` build; in `release-fast` it is not checked, and the result can't be relied on.
+The release builds don't check overflow. An unsigned value wraps around: `250 + 10` in a `u8` gives `4`. A signed value wraps around in a `release-safe` build. A `release-fast` build assumes signed math never overflows, as the debug build has checked, and uses that to make loops faster; there a signed overflow gives a result that can't be relied on. Dividing by zero stops a debug and a `release-safe` build; in `release-fast` it is not checked, and the result can't be relied on.
 
 Arithmetic happens in the type of the values. Two `u8` values add up as a `u8`, even when the result goes into an `i64`, so the sum of two big bytes overflows. Convert first when the result needs more room:
 

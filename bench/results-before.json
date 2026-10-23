@@ -1,0 +1,119 @@
+{
+ "results": {
+  "fib": {
+   "iris": 0.567,
+   "iris_out": "267914296",
+   "rust": 0.474,
+   "rust_out": "267914296",
+   "go": 1.074,
+   "go_out": "267914296"
+  },
+  "sieve": {
+   "iris": 0.563,
+   "iris_out": "5761455",
+   "rust": 0.546,
+   "rust_out": "5761455",
+   "go": 0.57,
+   "go_out": "5761455"
+  },
+  "nbody": {
+   "iris": 2.382,
+   "iris_out": "-0.16907516382852447\n-0.16905990681396785",
+   "rust": 1.716,
+   "rust_out": "-0.16907516382852447\n-0.16905990681396785",
+   "go": 2.559,
+   "go_out": "-0.1690751638285245\n-0.16905990679587"
+  },
+  "spectral-norm": {
+   "iris": 1.207,
+   "iris_out": "1.2742241527925133",
+   "rust": 0.944,
+   "rust_out": "1.2742241527925133",
+   "go": 1.194,
+   "go_out": "1.2742241527925133"
+  },
+  "mandelbrot": {
+   "iris": 0.79,
+   "iris_out": "6351041",
+   "rust": 0.798,
+   "rust_out": "6351041",
+   "go": 0.814,
+   "go_out": "6351041"
+  },
+  "binary-trees": {
+   "iris": 11.384,
+   "iris_out": "stretch tree of depth 22\t check: 8388607\n2097152\t trees of depth 4\t check: 65011712\n524288\t trees of depth 6\t check: 66584576\n131072\t trees of depth 8\t check: 66977792\n32768\t trees of depth 10\t check: 67076096\n8192\t trees of depth 12\t check: 67100672\n2048\t trees of depth 14\t check: 67106816\n512\t trees of depth 16\t check: 67108352\n128\t trees of depth 18\t check: 67108736\n32\t trees of depth 20\t check: 67108832\nlong lived tree of depth 21\t check: 4194303",
+   "rust": 8.296,
+   "rust_out": "stretch tree of depth 22\t check: 8388607\n2097152\t trees of depth 4\t check: 65011712\n524288\t trees of depth 6\t check: 66584576\n131072\t trees of depth 8\t check: 66977792\n32768\t trees of depth 10\t check: 67076096\n8192\t trees of depth 12\t check: 67100672\n2048\t trees of depth 14\t check: 67106816\n512\t trees of depth 16\t check: 67108352\n128\t trees of depth 18\t check: 67108736\n32\t trees of depth 20\t check: 67108832\nlong lived tree of depth 21\t check: 4194303",
+   "go": 17.138,
+   "go_out": "stretch tree of depth 22\t check: 8388607\n2097152\t trees of depth 4\t check: 65011712\n524288\t trees of depth 6\t check: 66584576\n131072\t trees of depth 8\t check: 66977792\n32768\t trees of depth 10\t check: 67076096\n8192\t trees of depth 12\t check: 67100672\n2048\t trees of depth 14\t check: 67106816\n512\t trees of depth 16\t check: 67108352\n128\t trees of depth 18\t check: 67108736\n32\t trees of depth 20\t check: 67108832\nlong lived tree of depth 21\t check: 4194303"
+  },
+  "fannkuch-redux": {
+   "iris": 1.562,
+   "iris_out": "556355\nPfannkuchen(11) = 51",
+   "rust": 1.405,
+   "rust_out": "556355\nPfannkuchen(11) = 51",
+   "go": 1.64,
+   "go_out": "556355\nPfannkuchen(11) = 51"
+  },
+  "hashmap": {
+   "iris": 1.33,
+   "iris_out": "9064874 1814018 9373763947513",
+   "rust": 1.144,
+   "rust_out": "9064874 1814018 9373763947513",
+   "go": 2.108,
+   "go_out": "9064874 1814018 9373763947513"
+  },
+  "sort": {
+   "iris": 0.572,
+   "iris_out": "60363840502 4612753471619008402 9223371629816228874",
+   "rust": 0.586,
+   "rust_out": "60363840502 4612753471619008402 9223371629816228874",
+   "go": 0.601,
+   "go_out": "60363840502 4612753471619008402 9223371629816228874"
+  },
+  "strings": {
+   "iris": 1.064,
+   "iris_out": "63888890 50000 5000001 58888890 1000000 48888890",
+   "rust": 0.264,
+   "rust_out": "63888890 50000 5000001 58888890 1000000 48888890",
+   "go": 0.438,
+   "go_out": "63888890 50000 5000001 58888890 1000000 48888890"
+  },
+  "channels": {
+   "iris": 7.362,
+   "iris_out": "2000000 12499997500000",
+   "rust": 10.594,
+   "rust_out": "2000000 12499997500000",
+   "go": 0.564,
+   "go_out": "2000000 12499997500000"
+  },
+  "http-hello": {
+   "iris": 437852,
+   "rust": 434717,
+   "go": 261596
+  },
+  "http-json": {
+   "iris": 417745,
+   "rust": 416585,
+   "go": 167474
+  },
+  "tcp-echo": {
+   "iris": 450707,
+   "rust": 447875,
+   "go": 304696
+  },
+  "http2": {
+   "iris": 107207,
+   "rust": 909643,
+   "go": 170612
+  }
+ },
+ "setup": {
+  "machine": "holyc-build, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
+  "iris": "iris 0.64.0",
+  "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "go": "go version go1.27.0 linux/amd64",
+  "date": "2026-10-22 22:39"
+ }
+}

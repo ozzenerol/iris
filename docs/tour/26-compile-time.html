@@ -60,6 +60,17 @@ try {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>NAME<span class="e">}</span><span class="s">: frames up to </span><span class="e">{</span>MAX_FRAME<span class="e">}</span><span class="s"> bytes, </span><span class="e">{</span>MAX_PAYLOAD<span class="e">}</span><span class="s"> of payload&quot;</span>)
 }</code></pre>
 <pre class="out"><code>edge: frames up to 16384 bytes, 16375 of payload</code></pre>
+<p>Floating point constants work the same way, with <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>%</code> on numbers and other constants, including those of other modules such as <code>math.pi</code>:</p>
+<pre class="code run"><code><span class="k">import</span> math
+
+<span class="k">const</span> <span class="t">f64</span> SOLAR_MASS = <span class="n">4.0</span> * math.pi * math.pi
+<span class="k">const</span> <span class="t">f64</span> DAYS_PER_YEAR = <span class="n">365.24</span>
+<span class="k">const</span> <span class="t">f64</span> TURN = <span class="n">2</span> * math.pi
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>SOLAR_MASS<span class="e">}</span><span class="s"> </span><span class="e">{</span>DAYS_PER_YEAR<span class="e">}</span><span class="s"> </span><span class="e">{</span>TURN<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>39.47841760435743 365.24 6.283185307179586</code></pre>
 <p>Text with values in braces can be a constant too, when every value is a constant number, <code>bool</code> or text. The text is put together when compiling, and the constant is a <code>str</code>. The text can be written as it is, or given to <code>format</code> or <code>str.format</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 

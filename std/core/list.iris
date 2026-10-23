@@ -10,13 +10,12 @@ pub void List[T].reserve(i64 n) {
     if n <= self.buf.len {
         return
     }
-    T[] bigger = alloc(T, n)
-    for i in 0..self.len {
-        bigger[i] = self.buf[i]
-    }
-    free(self.buf)
-    self.buf = bigger
+    self.buf = growSlice(self.buf, n)
 }
+
+// The slice with room for n items, the new ones zero; it may have moved.
+@builtin
+void growSlice()
 
 // Adds a value at the end.
 pub void List[T].push(T value) {

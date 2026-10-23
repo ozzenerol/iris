@@ -236,6 +236,10 @@ void encodeReply(String *block, Out *o) {
 }
 
 void Writer.reply(Out *o) {
+    defer {
+        o.contentType.free()
+        o.headers.free()
+    }
     for i in 0..self.reset.len {
         if self.reset.at(i) == o.stream {
             // the client gave up on it
@@ -919,4 +923,7 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr re
     r.headers.free()
     jobs.put(Out{job: .close})
     _ = <-done
+    // the writer took every job, and the requests have all answered
+    done.free()
+    q.ch.free()
 }

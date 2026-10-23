@@ -1,0 +1,55 @@
+const i64 ROUNDS = 2000000
+const i64 WORKERS = 1000
+const i64 JOBS = 5000000
+
+void pong(chan[i64] ping, chan[i64] back) {
+    for {
+        v := <-ping
+        back <- v + 1
+        if v < 0 {
+            return
+        }
+    }
+}
+
+void worker(chan[i64] jobs, chan[i64] results) {
+    i64 sum = 0
+    for {
+        v := <-jobs
+        if v < 0 {
+            results <- sum
+            return
+        }
+        sum += v
+    }
+}
+
+void main() {
+    ping := chan[i64](0)
+    back := chan[i64](0)
+    spawn pong(ping, back)
+    i64 v = 0
+    for _ in 0..ROUNDS {
+        ping <- v
+        v = <-back
+    }
+    ping <- -1
+    _ = <-back
+
+    jobs := chan[i64](1024)
+    results := chan[i64](WORKERS)
+    for _ in 0..WORKERS {
+        spawn worker(jobs, results)
+    }
+    for i in 0..JOBS {
+        jobs <- i
+    }
+    for _ in 0..WORKERS {
+        jobs <- -1
+    }
+    i64 total = 0
+    for _ in 0..WORKERS {
+        total += <-results
+    }
+    print("{v} {total}")
+}

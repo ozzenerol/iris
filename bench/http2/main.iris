@@ -1,0 +1,12 @@
+import http
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello, world\n")
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    try r.serve(9000, "127.0.0.1")
+}

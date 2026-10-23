@@ -1,0 +1,47 @@
+// mode: release-fast
+// expect: 49956400000
+// expect: kept 7
+// expect: 8 8
+// An alloc that stays in its function may live in the frame; one whose
+// items are pointed at, or that leaves, stays on the heap. Either way it
+// starts at zero each time.
+
+i64 work(i64 seed) {
+    i64[] counts = alloc(i64, 64)
+    defer free(counts)
+    for i in 0..1000 {
+        counts[(seed + i * 7) % 64] += i
+    }
+    i64 total = 0
+    for c in counts {
+        total += c
+    }
+    return total + counts.len
+}
+
+u8 *keep
+
+void pointedAt() {
+    u8[] buf = alloc(u8, 16)
+    buf[3] = 7
+    keep = &buf[3]
+}
+
+u8 firstEach() {
+    u8[] buf = alloc(u8, 8)
+    defer free(buf)
+    u8 was = buf[0]
+    buf[0] = 8
+    return was + buf[0]
+}
+
+void main() {
+    i64 sum = 0
+    for s in 0..100000 {
+        sum += work(s)
+    }
+    print("{sum}")
+    pointedAt()
+    print("kept {*keep}")
+    print("{firstEach()} {firstEach()}")
+}

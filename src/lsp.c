@@ -474,6 +474,20 @@ static char *stdPathOf(const char *path) {
     return stdSource(std) ? strdup(std) : NULL;
 }
 
+/* Whether the file at path holds exactly text. */
+static bool sameFileText(const char *path, const char *text) {
+    struct stat st;
+    size_t n = strlen(text);
+    if (stat(path, &st) != 0 || (size_t)st.st_size != n) return false;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    char *buf = malloc(n + 1);
+    bool same = buf && fread(buf, 1, n, f) == n && memcmp(buf, text, n) == 0;
+    free(buf);
+    fclose(f);
+    return same;
+}
+
 static char *stdCopy(const char *path) {
     const char *text = stdSource(path);
     if (!text) return NULL;
@@ -481,8 +495,8 @@ static char *stdCopy(const char *path) {
     stdCacheDir(dir, sizeof dir);
     char full[4200];
     snprintf(full, sizeof full, "%s/%s", dir, path + 4);
-    struct stat st;
-    if (stat(full, &st) != 0) {
+    /* a build with other std files but the same version rewrites it */
+    if (!sameFileText(full, text)) {
         /* make the folders, then the file */
         for (char *s = full + 1; *s; s++) {
             if (*s == '/') {

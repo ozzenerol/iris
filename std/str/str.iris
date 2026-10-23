@@ -50,16 +50,15 @@ pub i64 count(str s, str sub) {
         return 0
     }
     i64 n
-    i64 i
-    for i + sub.len <= s.len {
-        if s[i:i + sub.len] == sub {
-            n += 1
-            i += sub.len
-        } else {
-            i += 1
+    rest := s
+    for {
+        at := find(rest, sub)
+        if at < 0 {
+            return n
         }
+        n += 1
+        rest = rest[at + sub.len:]
     }
-    return n
 }
 
 bool isSpace(u8 c) => c == ' ' || c == '\t' || c == '\n' || c == '\r'
@@ -197,17 +196,17 @@ pub String replace(str s, str old, str new) {
         out.append(s)
         return out
     }
-    i64 i
-    for i < s.len {
-        if i + old.len <= s.len && s[i:i + old.len] == old {
-            out.append(new)
-            i += old.len
-        } else {
-            out.append(s[i:i + 1])
-            i += 1
+    rest := s
+    for {
+        at := find(rest, old)
+        if at < 0 {
+            out.append(rest)
+            return out
         }
+        out.append(rest[0:at])
+        out.append(new)
+        rest = rest[at + old.len:]
     }
-    return out
 }
 
 // s n times in a row.

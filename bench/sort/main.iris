@@ -1,0 +1,60 @@
+const i64 N = 10000000
+
+void quicksort(i64[] a, i64 lo, i64 hi) {
+    for hi - lo > 16 {
+        pivot := a[lo + (hi - lo) / 2]
+        i := lo
+        j := hi
+        for i <= j {
+            for a[i] < pivot {
+                i += 1
+            }
+            for a[j] > pivot {
+                j -= 1
+            }
+            if i <= j {
+                t := a[i]
+                a[i] = a[j]
+                a[j] = t
+                i += 1
+                j -= 1
+            }
+        }
+        if j - lo < hi - i {
+            quicksort(a, lo, j)
+            lo = i
+        } else {
+            quicksort(a, i, hi)
+            hi = j
+        }
+    }
+    for i in lo + 1..hi + 1 {
+        v := a[i]
+        j := i - 1
+        for j >= lo && a[j] > v {
+            a[j + 1] = a[j]
+            j -= 1
+        }
+        a[j + 1] = v
+    }
+}
+
+void main() {
+    i64[] a = alloc(i64, N)
+    defer free(a)
+    u64 x = 88172645463325252
+    for i in 0..N {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        a[i] = i64(x >> 1)
+    }
+    quicksort(a, 0, N - 1)
+    for i in 1..N {
+        if a[i - 1] > a[i] {
+            print("not sorted")
+            return
+        }
+    }
+    print("{a[0]} {a[N / 2]} {a[N - 1]}")
+}
