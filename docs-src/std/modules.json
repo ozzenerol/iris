@@ -7,7 +7,8 @@
       {"name": "big", "title": "Big numbers", "summary": "Whole numbers of any size, with division, powers, modular powers and any base from 2 to 36."},
       {"name": "random", "title": "Random numbers", "summary": "Numbers and bytes from the system's random source, and seeded generators."},
       {"name": "time", "title": "Time", "summary": "The time of day, dates, a clock for measuring, and Durations."},
-      {"name": "pool", "title": "Pools", "summary": "Connections, or anything costly to open, shared by tasks and threads."}
+      {"name": "pool", "title": "Pools", "summary": "Connections, or anything costly to open, shared by tasks and threads."},
+      {"name": "sync", "title": "Waiting and limits", "summary": "Wait groups, semaphores, run-once, read-write locks and a pool of worker tasks, for tasks and threads."}
     ]},
     {"title": "Text and data", "modules": [
       {"name": "json", "title": "JSON", "summary": "Turning @json structs into JSON text and back."},

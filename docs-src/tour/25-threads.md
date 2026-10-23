@@ -181,6 +181,10 @@ void main() {
 
 It suits a cache or a counter that each thread keeps for itself, with no lock. The tasks of one thread share its value.
 
+## Waiting for many, and limits
+
+The `sync` module builds on `Mutex` and channels, and works between tasks and threads alike: a `WaitGroup` waits for a number of them to finish, a `Semaphore` lets only so many in at once, a `Once` runs a function the first time, an `RwLock` lets many readers or one writer in, and `Workers` hand jobs from a queue to a few tasks (see [the library](../std/index.html#sync)).
+
 ## Threads in the library
 
 `http.serve` and `Router.serve` start a thread for each CPU core, each with its own event loop, so a handler runs on several threads at once: a global it changes needs an `Atomic` or a `Mutex`, or `threadlocal`. `threads: 1` keeps everything on one thread.

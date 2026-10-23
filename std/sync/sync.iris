@@ -1,0 +1,258 @@
+// Waiting for and limiting other tasks and threads: wait groups,
+// semaphores, run-once, read-write locks and a pool of worker tasks. Each
+// works between tasks of one thread and between threads.
+
+// Waits for a number of tasks or threads to finish: add before starting
+// each, done when each ends, and wait until all are. A WaitGroup can't be
+// copied; pass a pointer to it.
+pub struct WaitGroup {
+    Mutex lock
+    i64 count
+    List[chan[bool]] waiters
+}
+
+// n more to wait for.
+pub void WaitGroup.add(i64 n = 1) {
+    self.lock.lock()
+    self.count += n
+    if self.count < 0 {
+        self.lock.unlock()
+        panic("WaitGroup count below 0")
+    }
+    if self.count == 0 {
+        self.wakeAll()
+    }
+    self.lock.unlock()
+}
+
+// One of them is finished.
+pub void WaitGroup.done() => self.add(-1)
+
+// Waits until the count is 0.
+pub void WaitGroup.wait() {
+    self.lock.lock()
+    if self.count == 0 {
+        self.lock.unlock()
+        return
+    }
+    ch := chan[bool](1)
+    self.waiters.push(ch)
+    self.lock.unlock()
+    _ = <-ch
+    ch.free()
+}
+
+// the lock is held
+void WaitGroup.wakeAll() {
+    for ch in self.waiters {
+        ch <- true
+    }
+    self.waiters.clear()
+}
+
+// Gives the WaitGroup's memory back; nothing may be waiting on it.
+pub void WaitGroup.free() {
+    self.waiters.free()
+}
+
+// Lets at most a number of callers in at once; the others wait for a
+// release.
+pub struct Semaphore {
+    chan[bool] slots
+}
+
+// A Semaphore that lets n in at once.
+pub Semaphore semaphore(i64 n) {
+    if n < 1 {
+        panic("a semaphore needs room for at least 1, not {n}")
+    }
+    s := Semaphore{slots: chan[bool](n)}
+    for _ in 0..n {
+        s.slots <- true
+    }
+    return s
+}
+
+// Waits for a place, and takes it.
+pub void Semaphore.acquire() {
+    _ = <-self.slots
+}
+
+// Gives a place back.
+pub void Semaphore.release() {
+    self.slots <- true
+}
+
+// Gives the Semaphore's memory back; nothing may be waiting on it.
+pub void Semaphore.free() {
+    // the places still in the channel are bools, which own nothing
+    self.slots.free()
+}
+
+// Runs a function once, the first time run is called, and makes every
+// other caller wait until it has finished. A Once can't be copied.
+pub struct Once {
+    Mutex lock
+    Atomic[i64] finished
+}
+
+// Calls f, unless it has been called already.
+pub void Once.run(void() f) {
+    if self.finished.load() == 1 {
+        return
+    }
+    self.lock.lock()
+    if self.finished.load() == 0 {
+        f()
+        self.finished.store(1)
+    }
+    self.lock.unlock()
+}
+
+// Whether the function has run.
+pub bool Once.done() => self.finished.load() == 1
+
+// Many readers at once, or one writer. A writer that waits keeps new
+// readers out, and a writer that finishes lets the waiting readers in
+// before the next writer, so neither waits for ever. An RwLock can't be
+// copied.
+pub struct RwLock {
+    Mutex lock
+    i64 readers
+    bool writing
+    List[chan[bool]] readQueue
+    List[chan[bool]] writeQueue
+}
+
+// Waits until no writer has the lock or waits for it, then reads.
+pub void RwLock.readLock() {
+    self.lock.lock()
+    if !self.writing && self.writeQueue.len == 0 {
+        self.readers += 1
+        self.lock.unlock()
+        return
+    }
+    ch := chan[bool](1)
+    self.readQueue.push(ch)
+    self.lock.unlock()
+    _ = <-ch // the waker counted this reader in
+    ch.free()
+}
+
+// One reader is finished.
+pub void RwLock.readUnlock() {
+    self.lock.lock()
+    if self.readers <= 0 {
+        self.lock.unlock()
+        panic("readUnlock of an RwLock that isn't read-locked")
+    }
+    self.readers -= 1
+    if self.readers == 0 && self.writeQueue.len > 0 {
+        self.writing = true
+        w := self.writeQueue.remove(0)
+        w <- true
+    }
+    self.lock.unlock()
+}
+
+// Waits until no one reads or writes, then writes.
+pub void RwLock.writeLock() {
+    self.lock.lock()
+    if !self.writing && self.readers == 0 {
+        self.writing = true
+        self.lock.unlock()
+        return
+    }
+    ch := chan[bool](1)
+    self.writeQueue.push(ch)
+    self.lock.unlock()
+    _ = <-ch // the waker set writing for this writer
+    ch.free()
+}
+
+// The writer is finished: the waiting readers go first, then the next
+// writer.
+pub void RwLock.writeUnlock() {
+    self.lock.lock()
+    if !self.writing {
+        self.lock.unlock()
+        panic("writeUnlock of an RwLock that isn't write-locked")
+    }
+    self.writing = false
+    if self.readQueue.len > 0 {
+        self.readers += self.readQueue.len
+        for ch in self.readQueue {
+            ch <- true
+        }
+        self.readQueue.clear()
+    } else if self.writeQueue.len > 0 {
+        self.writing = true
+        w := self.writeQueue.remove(0)
+        w <- true
+    }
+    self.lock.unlock()
+}
+
+// Gives the RwLock's memory back; nothing may hold it or wait on it.
+pub void RwLock.free() {
+    self.readQueue.free()
+    self.writeQueue.free()
+}
+
+// A job for the workers, or the sign to stop.
+struct Job[T] {
+    T value
+    bool stop
+}
+
+// A number of tasks that take jobs from a queue and hand each to one
+// function: work that waits, such as requests to other servers, done a few
+// at a time. The tasks run on the thread that made the Workers.
+pub struct Workers[T] {
+    chan[Job[T]] jobs
+    chan[bool] finished
+    i64 count
+}
+
+// n tasks, each calling handle with the jobs given to submit. queue jobs
+// can wait to be taken before submit waits too.
+pub Workers[T] workers[T](i64 n, void(T) handle, i64 queue = 64) {
+    if n < 1 {
+        panic("workers needs at least 1 task, not {n}")
+    }
+    w := Workers[T]{jobs: chan[Job[T]](queue), finished: chan[bool](n), count: n}
+    for _ in 0..n {
+        spawn work(w.jobs, w.finished, handle)
+    }
+    return w
+}
+
+void work[T](chan[Job[T]] jobs, chan[bool] finished, void(T) handle) {
+    for {
+        j := <-jobs
+        if j.stop {
+            finished <- true
+            return
+        }
+        handle(j.value)
+    }
+}
+
+// Hands a job to the next task that is free, waiting while the queue is
+// full.
+pub void Workers[T].submit(T job) {
+    self.jobs <- Job[T]{value: job}
+}
+
+// Waits for every job given so far to be done, then stops the tasks and
+// gives the Workers' memory back.
+pub void Workers[T].finish() {
+    for _ in 0..self.count {
+        self.jobs <- Job[T]{stop: true}
+    }
+    for _ in 0..self.count {
+        _ = <-self.finished
+    }
+    self.jobs.free()
+    self.finished.free()
+}

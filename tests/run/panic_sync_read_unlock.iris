@@ -1,0 +1,7 @@
+// panic: readUnlock of an RwLock that isn't read-locked
+import sync
+
+void main() {
+    sync.RwLock l
+    l.readUnlock()
+}
