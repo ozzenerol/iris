@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command-line flags - Iris</title>
+<meta name="description" content="A struct marked @flags describes the flags a program takes, and the flags module fills it from the program&#x27;s arguments. The compiler writes the table of flags for each struct, and the help is made from it.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.68.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html" class="on"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
+  <article class="prose">
+<h1>Command-line flags</h1>
+<p class="lede">A struct marked <code>@flags</code> describes the flags a program takes, and the <code>flags</code> module fills it from the program's arguments. The compiler writes the table of flags for each struct, and the help is made from it.</p>
+<h2 id="a-first-program"><a href="#a-first-program">A first program</a></h2>
+<p>Each field is a flag named after it: <code>port</code> is <code>--port</code>. A field with a value, like <code>port = 8080</code>, keeps it when the flag isn't given. <code>flags.parse(Options)</code> reads the program's own arguments:</p>
+<pre class="code"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>(<span class="s">&quot;serves the files in a folder&quot;</span>)
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="t">u16</span> port = <span class="n">8080</span>
+    <span class="t">str</span> root = <span class="s">&quot;.&quot;</span>
+    <span class="t">bool</span> verbose
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> o := flags.<span class="f">parse</span>(<span class="t">Options</span>)
+    <span class="f">print</span>(<span class="s">&quot;serving </span><span class="e">{</span>o.root<span class="e">}</span><span class="s"> on port </span><span class="e">{</span>o.port<span class="e">}</span><span class="s">, verbose </span><span class="e">{</span>o.verbose<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<p>Built as <code>serve</code>, the program prints:</p>
+<pre class="out"><code>$ ./serve
+serving . on port 8080, verbose false
+$ ./serve --port 9000 --verbose --root /srv/www
+serving /srv/www on port 9000, verbose true</code></pre>
+<p><code>flags.parse</code> gives the struct itself. When something is wrong, it says what and ends the program, so <code>main</code> never sees a half-read struct.</p>
+<h2 id="reading-given-arguments"><a href="#reading-given-arguments">Reading given arguments</a></h2>
+<p><code>flags.parseArgs(T, args, name)</code> reads the arguments given instead of the program's own, and gives a <code>!T</code> instead of ending the program. <code>name</code> is the program's name in the help and the messages; <code>&quot;&quot;</code> uses the program's real name. The examples in this chapter use it, so they always run with the same arguments:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="t">u16</span> port = <span class="n">8080</span>
+    <span class="t">str</span> root = <span class="s">&quot;.&quot;</span>
+    <span class="t">bool</span> verbose
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;--port&quot;</span>, <span class="s">&quot;9000&quot;</span>, <span class="s">&quot;--verbose&quot;</span>], <span class="s">&quot;serve&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>o.root<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.verbose<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>. 9000 true</code></pre>
+<p>It suits tests, and programs with subcommands (see below). A <code>str</code> field points into the arguments given, so they must live as long as the struct.</p>
+<h2 id="names-and-short-forms"><a href="#names-and-short-forms">Names and short forms</a></h2>
+<p>A field named with more than one word gets <code>-</code> between the words: <code>dryRun</code> is <code>--dry-run</code>. <code>@flag</code> on a field gives a letter for the short form and the help text, in any order:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>(<span class="s">&quot;copies files into a folder&quot;</span>)
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;n&#x27;</span>, <span class="s">&quot;show what would be copied&quot;</span>) <span class="t">bool</span> dryRun
+    <span class="a">@flag</span>(<span class="s">&#x27;j&#x27;</span>, <span class="s">&quot;how many copies to run at once&quot;</span>) <span class="t">i64</span> jobs = <span class="n">4</span>
+    <span class="a">@flag</span>(<span class="s">&#x27;o&#x27;</span>) <span class="t">str</span> out = <span class="s">&quot;backup&quot;</span>
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> a := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;--dry-run&quot;</span>, <span class="s">&quot;--jobs&quot;</span>, <span class="s">&quot;8&quot;</span>, <span class="s">&quot;--out=/tmp/b&quot;</span>], <span class="s">&quot;copy&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a.dryRun<span class="e">}</span><span class="s"> </span><span class="e">{</span>a.jobs<span class="e">}</span><span class="s"> </span><span class="e">{</span>a.out<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> b := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;-n&quot;</span>, <span class="s">&quot;-j&quot;</span>, <span class="s">&quot;2&quot;</span>, <span class="s">&quot;-o&quot;</span>, <span class="s">&quot;x&quot;</span>], <span class="s">&quot;copy&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>b.dryRun<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.jobs<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.out<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>true 8 /tmp/b
+true 2 x</code></pre>
+<p>A value can be written <code>--jobs 8</code>, <code>--jobs=8</code> or <code>-j 8</code>.</p>
+<h2 id="bool-flags"><a href="#bool-flags">Bool flags</a></h2>
+<p>A <code>bool</code> flag needs no value: <code>--verbose</code> turns it on. <code>--verbose=false</code> turns it off, which is how a flag whose default is <code>true</code> is turned off. One-letter <code>bool</code> flags can be joined, <code>-vq</code> is <code>-v -q</code>:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;v&#x27;</span>) <span class="t">bool</span> verbose
+    <span class="a">@flag</span>(<span class="s">&#x27;q&#x27;</span>) <span class="t">bool</span> quiet
+    <span class="t">bool</span> color = <span class="k">true</span>
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;-vq&quot;</span>, <span class="s">&quot;--color=false&quot;</span>], <span class="s">&quot;tool&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>o.verbose<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.quiet<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.color<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>true true false</code></pre>
+<p>A letter that needs a value can't be joined with others: <code>-vj 8</code> is an error.</p>
+<h2 id="arguments-that-aren-t-flags"><a href="#arguments-that-aren-t-flags">Arguments that aren't flags</a></h2>
+<p>A <code>str[]</code> field with <code>@flag(args)</code> gets the arguments that aren't flags, in order, wherever they are among the flags. After <code>--</code>, every argument is taken as it is, even one that starts with <code>-</code>:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;f&#x27;</span>) <span class="t">bool</span> force
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] files
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;a.txt&quot;</span>, <span class="s">&quot;-f&quot;</span>, <span class="s">&quot;b.txt&quot;</span>, <span class="s">&quot;--&quot;</span>, <span class="s">&quot;-c.txt&quot;</span>], <span class="s">&quot;rm&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>o.force<span class="e">}</span><span class="s">, </span><span class="e">{</span>o.files.len<span class="e">}</span><span class="s"> files:&quot;</span>)
+    <span class="k">for</span> f <span class="k">in</span> o.files {
+        <span class="f">print</span>(<span class="s">&quot;  </span><span class="e">{</span>f<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>true, 3 files:
+  a.txt
+  b.txt
+  -c.txt</code></pre>
+<p>The slice belongs to the struct, so <code>scoped</code> frees it. Without an <code>@flag(args)</code> field, an argument that isn't a flag is an error.</p>
+<h2 id="required-flags"><a href="#required-flags">Required flags</a></h2>
+<p><code>@flag(required)</code> makes a flag that must be given. On the <code>@flag(args)</code> field it means at least one argument is needed. <code>required</code> goes with the letter and the help in any order:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;t&#x27;</span>, required, <span class="s">&quot;where the files go&quot;</span>) <span class="t">str</span> to
+    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] files
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    _ = flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;a.txt&quot;</span>], <span class="s">&quot;copy&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(e.message)
+        <span class="t">Options</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>--to is needed
+usage: copy [flags] files...
+run copy --help to see the flags
+</code></pre>
+<h2 id="types"><a href="#types">Types</a></h2>
+<p>A field can be any integer or float type, <code>bool</code>, <code>str</code>, <code>String</code>, a plain enum, or <code>Duration</code>. An enum flag takes the name of one of its values, and a <code>Duration</code> flag takes <code>30s</code>, <code>1500ms</code> or <code>1m30s</code>:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="k">enum</span> <span class="t">Format</span> { text, json, csv }
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="t">Format</span> format
+    <span class="t">Duration</span> timeout = <span class="n">30s</span>
+    <span class="t">f64</span> ratio = <span class="n">0.5</span>
+    <span class="t">u8</span> level
+    <span class="t">String</span> label
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;--format&quot;</span>, <span class="s">&quot;csv&quot;</span>, <span class="s">&quot;--timeout=1m30s&quot;</span>, <span class="s">&quot;--ratio&quot;</span>, <span class="s">&quot;0.25&quot;</span>, <span class="s">&quot;--level&quot;</span>, <span class="s">&quot;3&quot;</span>, <span class="s">&quot;--label&quot;</span>, <span class="s">&quot;night&quot;</span>], <span class="s">&quot;report&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>o.format<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.timeout<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.ratio<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.level<span class="e">}</span><span class="s"> </span><span class="e">{</span>o.label<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>csv 1m30s 0.25 3 night</code></pre>
+<p>A <code>String</code> field holds its own copy of the text, which the struct's <code>free</code> method frees. That method is what <code>scoped</code> calls.</p>
+<h2 id="help"><a href="#help">Help</a></h2>
+<p><code>-h</code> and <code>--help</code> show the help, made from the struct: the text given to <code>@flags</code>, a usage line, and one line per flag with its short form, the kind of value it takes, its help and its default. <code>flags.parse</code> prints it and ends the program with status 0. <code>flags.parseArgs</code> fails with <code>flags.FlagError.help</code>, and the help is the message. Since every <code>@flags</code> struct has them, <code>&#x27;h&#x27;</code> can't be another flag's letter, and no field can be named <code>help</code>:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="k">enum</span> <span class="t">Format</span> { text, json }
+
+<span class="a">@flags</span>(<span class="s">&quot;copies files into a folder&quot;</span>)
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;f&#x27;</span>, <span class="s">&quot;overwrite files that are there&quot;</span>) <span class="t">bool</span> force
+    <span class="a">@flag</span>(<span class="s">&#x27;j&#x27;</span>, <span class="s">&quot;how many copies to run at once&quot;</span>) <span class="t">i64</span> jobs = <span class="n">4</span>
+    <span class="t">Format</span> format
+    <span class="t">Duration</span> timeout = <span class="n">30s</span>
+    <span class="a">@flag</span>(required, <span class="s">&quot;where the files go&quot;</span>) <span class="t">str</span> to
+    <span class="a">@flag</span>(args) <span class="t">str</span>[] files
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    _ = flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, [<span class="s">&quot;--help&quot;</span>], <span class="s">&quot;copy&quot;</span>) <span class="k">catch</span> e {
+        <span class="k">if</span> e.code == flags.<span class="t">FlagError</span>.help {
+            <span class="f">print</span>(e.message)
+        }
+        <span class="t">Options</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>copies files into a folder
+
+usage: copy [flags] [files...]
+
+flags:
+  -f, --force               overwrite files that are there
+  -j, --jobs &lt;n&gt;            how many copies to run at once (default 4)
+      --format &lt;text|json&gt;  (default text)
+      --timeout &lt;duration&gt;  (default 30s)
+      --to &lt;text&gt;           where the files go (required)
+  -h, --help                show this help
+</code></pre>
+<h2 id="wrong-flags"><a href="#wrong-flags">Wrong flags</a></h2>
+<p>A flag that isn't there, a missing value, or a value of the wrong kind is an error. <code>flags.parseArgs</code> fails with <code>flags.FlagError.invalid</code>; the message says what is wrong, then gives the usage line and how to get the help:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>
+<span class="k">struct</span> <span class="t">Options</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;j&#x27;</span>) <span class="t">i64</span> jobs = <span class="n">4</span>
+    <span class="t">bool</span> force
+}
+
+<span class="t">void</span> <span class="f">check</span>(<span class="t">str</span>[] args) {
+    _ = flags.<span class="f">parseArgs</span>(<span class="t">Options</span>, args, <span class="s">&quot;copy&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Options</span>{}
+    }
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">check</span>([<span class="s">&quot;--jobz&quot;</span>, <span class="s">&quot;2&quot;</span>])
+    <span class="f">check</span>([<span class="s">&quot;--jobs&quot;</span>, <span class="s">&quot;many&quot;</span>])
+    <span class="f">check</span>([<span class="s">&quot;-j&quot;</span>])
+}</code></pre>
+<pre class="out"><code>FlagError.invalid: --jobz isn&#x27;t a flag
+usage: copy [flags]
+run copy --help to see the flags
+
+FlagError.invalid: --jobs: &#x27;many&#x27; isn&#x27;t a whole number
+usage: copy [flags]
+run copy --help to see the flags
+
+FlagError.invalid: -j needs a value
+usage: copy [flags]
+run copy --help to see the flags
+</code></pre>
+<p><code>flags.parse</code> prints the same message after <code>error: </code> on standard error, and the program ends with status 2, the usual status for a wrong command line:</p>
+<pre class="out"><code>$ ./copy --jobz 2
+error: --jobz isn&#x27;t a flag
+usage: copy [flags]
+run copy --help to see the flags
+$ echo $?
+2</code></pre>
+<h2 id="subcommands"><a href="#subcommands">Subcommands</a></h2>
+<p>A program with subcommands, like <code>net ping</code> and <code>net scan</code>, has one <code>@flags</code> struct for each. The first argument picks the subcommand, and <code>flags.parseArgs</code> reads the rest with that subcommand's struct:</p>
+<pre class="code run"><code><span class="k">import</span> flags
+
+<span class="a">@flags</span>(<span class="s">&quot;sends echo requests to hosts&quot;</span>)
+<span class="k">struct</span> <span class="t">PingOptions</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;c&#x27;</span>, <span class="s">&quot;how many to send to each&quot;</span>) <span class="t">i64</span> count = <span class="n">4</span>
+    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] hosts
+}
+
+<span class="a">@flags</span>(<span class="s">&quot;finds the open ports of a host&quot;</span>)
+<span class="k">struct</span> <span class="t">ScanOptions</span> {
+    <span class="a">@flag</span>(<span class="s">&#x27;t&#x27;</span>, <span class="s">&quot;how long to wait for each port&quot;</span>) <span class="t">Duration</span> timeout = <span class="n">1s</span>
+    <span class="a">@flag</span>(args, required) <span class="t">str</span>[] hosts
+}
+
+!<span class="t">void</span> <span class="f">run</span>(<span class="t">str</span>[] args) {
+    <span class="k">if</span> args.len == <span class="n">0</span> {
+        <span class="f">print</span>(<span class="s">&quot;usage: net ping|scan ...&quot;</span>)
+        <span class="k">return</span>
+    }
+    rest := args[<span class="n">1</span>:]
+    <span class="k">match</span> args[<span class="n">0</span>] {
+        <span class="s">&quot;ping&quot;</span> =&gt; {
+            <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">PingOptions</span>, rest, <span class="s">&quot;net ping&quot;</span>)
+            <span class="f">print</span>(<span class="s">&quot;ping: </span><span class="e">{</span>o.hosts.len<span class="e">}</span><span class="s"> hosts, </span><span class="e">{</span>o.count<span class="e">}</span><span class="s"> each&quot;</span>)
+        }
+        <span class="s">&quot;scan&quot;</span> =&gt; {
+            <span class="k">scoped</span> o := <span class="k">try</span> flags.<span class="f">parseArgs</span>(<span class="t">ScanOptions</span>, rest, <span class="s">&quot;net scan&quot;</span>)
+            <span class="f">print</span>(<span class="s">&quot;scan: </span><span class="e">{</span>o.hosts[<span class="n">0</span>]<span class="e">}</span><span class="s">, </span><span class="e">{</span>o.timeout<span class="e">}</span><span class="s"> a port&quot;</span>)
+        }
+        _ =&gt; <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>args[<span class="n">0</span>]<span class="e">}</span><span class="s"> isn&#x27;t a command&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> <span class="f">run</span>([<span class="s">&quot;ping&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;2&quot;</span>, <span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>])
+    <span class="k">try</span> <span class="f">run</span>([<span class="s">&quot;scan&quot;</span>, <span class="s">&quot;-t&quot;</span>, <span class="s">&quot;200ms&quot;</span>, <span class="s">&quot;10.0.0.5&quot;</span>])
+}</code></pre>
+<pre class="out"><code>ping: 2 hosts, 2 each
+scan: 10.0.0.5, 200ms a port</code></pre>
+<p>A real program builds <code>args</code> from its own arguments, with <code>os.argc()</code> and <code>os.arg(i)</code>.</p>
+<h2 id="the-raw-arguments"><a href="#the-raw-arguments">The raw arguments</a></h2>
+<p>The <code>os</code> module gives the arguments as they are, without flags: <code>os.argc()</code> is how many there are, and <code>os.arg(i)</code> gives one, <code>os.arg(0)</code> being the program's own name:</p>
+<pre class="code"><code><span class="k">import</span> os
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..os.<span class="f">argc</span>() {
+        <span class="f">print</span>(<span class="s">&quot;argument </span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>os.<span class="f">arg</span>(i)<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+    <nav class="pager"><a class="prev" href="04-logging.html"><span>Previous</span>Input, output and logging</a><a class="next" href="06-processes.html"><span>Next</span>Programs and the environment</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-first-program">A first program</a></li><li><a href="#reading-given-arguments">Reading given arguments</a></li><li><a href="#names-and-short-forms">Names and short forms</a></li><li><a href="#bool-flags">Bool flags</a></li><li><a href="#arguments-that-aren-t-flags">Arguments that aren&#x27;t flags</a></li><li><a href="#required-flags">Required flags</a></li><li><a href="#types">Types</a></li><li><a href="#help">Help</a></li><li><a href="#wrong-flags">Wrong flags</a></li><li><a href="#subcommands">Subcommands</a></li><li><a href="#the-raw-arguments">The raw arguments</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.68.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

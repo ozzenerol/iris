@@ -1,6 +1,6 @@
 ## Into a struct
 
-`toml.decode[T](text)` reads TOML into a `@json` struct, as `json.decode` reads JSON (see [JSON](../tour/28-json.html)). Tables are structs, arrays are slices or `List`s, and keys the struct doesn't have are skipped. A date or a time goes into a `String` as it was written:
+`toml.decode[T](text)` reads TOML into a `@json` struct, as `json.decode` reads JSON (see [JSON](../library-tour/01-json.html)). Tables are structs, arrays are slices or `List`s, and keys the struct doesn't have are skipped. A date or a time goes into a `String` as it was written:
 
 ```iris run
 import toml

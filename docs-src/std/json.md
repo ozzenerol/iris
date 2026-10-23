@@ -1,6 +1,6 @@
 ## Encoding and decoding
 
-A struct marked `@json` can be turned into JSON with `json.encode` and read back with `json.decode`. Field names are used as they are, `String` and `str` fields become JSON strings, numbers and `bool` stay what they are, and enums go by their value's name. The [JSON chapter](../tour/28-json.html) of the Tour has every rule; this is the short version:
+A struct marked `@json` can be turned into JSON with `json.encode` and read back with `json.decode`. Field names are used as they are, `String` and `str` fields become JSON strings, numbers and `bool` stay what they are, and enums go by their value's name. The [JSON chapter](../library-tour/01-json.html) of the Tour has every rule; this is the short version:
 
 ```iris run
 import json

@@ -28,8 +28,8 @@ try {
     <a class="brand" href="index.html"><img src="assets/logo.svg" alt="">Iris</a>
     <nav class="main">
       <a href="tour/index.html">Language Tour</a>
+      <a href="library-tour/index.html">Library Tour</a>
       <a href="std/index.html">Library</a>
-      <a href="guides/index.html">Guides</a>
       <a href="design/index.html">Design</a>
       <a href="roadmap.html">Roadmap</a>
     </nav>
@@ -60,7 +60,7 @@ try {
 <pre class="out"><code>routes ready</code></pre>
 <p>With <code>try r.serve(8080)</code> at the end, that is a web server on every CPU core, with HTTP/1.1 and HTTP/2.</p>
 <h2 id="where-to-start"><a href="#where-to-start">Where to start</a></h2>
-<ul><li>The <a href="tour/index.html">Language Tour</a> covers every part of the language, and the parts of the library almost every program uses (files, flags, time, logging, HTTP, SQLite, other programs), one topic per chapter, with programs you can run and their output.</li><li>The <a href="std/index.html">Library</a> has every module of the standard library, with each type and function and what it does.</li><li>The <a href="guides/index.html">Guides</a> build whole programs step by step: a REST API, and a command-line tool.</li><li><a href="design/index.html">Design</a> explains how Iris works underneath and why, for people working on the compiler.</li><li>The <a href="roadmap.html">Roadmap</a> lists each release and what it brought.</li></ul>
+<ul><li>The <a href="tour/index.html">Language Tour</a> covers every part of the language, one topic per chapter, with programs you can run and their output. Start here.</li><li>The <a href="library-tour/index.html">Library Tour</a> shows what the standard library does, one task per chapter: files, HTTP, databases, formats, cryptography and more.</li><li>The <a href="std/index.html">Library</a> has every module of the standard library, with each type and function and what it does.</li><li><a href="design/index.html">Design</a> explains how Iris works underneath and why, for people working on the compiler.</li><li>The <a href="roadmap.html">Roadmap</a> lists each release and what it brought.</li></ul>
 <h2 id="install"><a href="#install">Install</a></h2>
 <p>Iris is built from its source. It needs a C compiler and <code>clang</code> 15 or newer, which Iris uses to make programs; on Debian and Ubuntu, <code>sudo apt install build-essential clang</code>, and on macOS, the Xcode command-line tools. Then, in the source folder:</p>
 <pre class="code"><code>./build-and-install.sh</code></pre>
@@ -76,6 +76,7 @@ try {
   <div class="bar">
     <span>Iris v0.68.0</span>
     <a href="tour/index.html">Language Tour</a>
+    <a href="library-tour/index.html">Library Tour</a>
     <a href="std/index.html">Library</a>
     <a href="roadmap.html">Roadmap</a>
   </div>

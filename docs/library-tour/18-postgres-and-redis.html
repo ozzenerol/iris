@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL and Redis - Iris</title>
+<meta name="description" content="A service that runs on more than one machine keeps its data on a database server. The pg module talks to PostgreSQL and the redis module to Redis or Valkey, both over the network with nothing else to install. Each keeps a pool of connections that every task and thread of a program can share, and the pool module gives the same for any other kind of connection.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.68.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html" class="on"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
+  <article class="prose">
+<h1>PostgreSQL and Redis</h1>
+<p class="lede">A service that runs on more than one machine keeps its data on a database server. The <code>pg</code> module talks to PostgreSQL and the <code>redis</code> module to Redis or Valkey, both over the network with nothing else to install. Each keeps a pool of connections that every task and thread of a program can share, and the <code>pool</code> module gives the same for any other kind of connection.</p>
+<p>The examples in this chapter need a server, so they read its address from an environment variable. They are written the way <a href="17-sqlite.html">SQLite</a> is, and what that chapter says about values in SQL, rows into structs and transactions holds here too.</p>
+<h2 id="connecting-to-postgresql"><a href="#connecting-to-postgresql">Connecting to PostgreSQL</a></h2>
+<p><code>pg.pool(address)</code> gives a <code>pg.Pool</code>. It connects once to check the address and the login, and opens more connections as tasks need them, up to a number given after the address, 10 unless one is. <code>close</code> closes them all:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    address := os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://app:secret@localhost:5432/shop&quot;</span>
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(address, <span class="n">20</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT version()&quot;</span>)
+    <span class="k">defer</span> rows.<span class="f">free</span>()
+    _ = rows.<span class="f">next</span>()
+    <span class="f">print</span>(rows.<span class="f">text</span>(<span class="n">0</span>)[<span class="n">0</span>:<span class="n">13</span>])
+}</code></pre>
+<pre class="out"><code>PostgreSQL 17</code></pre>
+<p>The address is <code>postgres://user:password@host:port/database</code>. <code>?sslmode=require</code> makes the connection use TLS, and <code>?sslmode=verify-full&amp;ca=root.pem</code> checks the server's certificate as well. A login that is refused fails with <code>PgError.auth</code>, and a server that can't be reached with <code>PgError.connect</code>.</p>
+<h2 id="changing-data"><a href="#changing-data">Changing data</a></h2>
+<p><code>exec</code> runs one statement and gives how many rows it changed. The values go apart from the SQL, as <code>$1</code>, <code>$2</code> and on, and are <code>.int</code>, <code>.float</code>, <code>.text</code>, <code>.bool</code>, or <code>.none</code> for NULL. <code>execScript</code> runs SQL with no values that may hold several statements, as a schema does:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="k">try</span> db.<span class="f">execScript</span>(<span class="s">r&quot;&quot;&quot;
+        DROP TABLE IF EXISTS products;
+        CREATE TABLE products (
+            id serial PRIMARY KEY,
+            name text UNIQUE NOT NULL,
+            price numeric(10, 2) NOT NULL,
+            stock int NOT NULL DEFAULT 0
+        );
+        &quot;&quot;&quot;</span>)
+    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;green tea&quot;</span>, <span class="s">&quot;lemon cake&quot;</span>, <span class="s">&quot;coffee&quot;</span>]
+    <span class="t">f64</span>[<span class="n">3</span>] prices = [<span class="n">3.5</span>, <span class="n">4.25</span>, <span class="n">2.8</span>]
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        _ = <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price, stock) VALUES ($1, $2, $3)&quot;</span>, [.<span class="f">text</span>(names[i]), .<span class="f">float</span>(prices[i]), .<span class="f">int</span>(<span class="n">10</span>)])
+    }
+    n := <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE products SET stock = stock - 1 WHERE price &lt; $1&quot;</span>, [.<span class="f">float</span>(<span class="n">4.0</span>)])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> rows changed&quot;</span>)
+    _ = db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price) VALUES ($1, $2)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;coffee&quot;</span>), .<span class="f">float</span>(<span class="n">3.0</span>)]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="n">0</span>
+    }
+}</code></pre>
+<pre class="out"><code>2 rows changed
+PgError.constraint: duplicate key value violates unique constraint &quot;products_name_key&quot;: Key (name)=(coffee) already exists. (23505)</code></pre>
+<p>A statement that the server refuses fails with <code>PgError.failed</code>, or <code>PgError.constraint</code> for a <code>UNIQUE</code>, <code>NOT NULL</code>, foreign key or <code>CHECK</code> that isn't met. The message has the server's text, with its SQLSTATE code in brackets.</p>
+<h2 id="reading-rows"><a href="#reading-rows">Reading rows</a></h2>
+<p><code>query</code> gives <code>pg.Rows</code>. <code>pg.all[T](rows)</code> reads every row into a <code>@json</code> struct, each field from the column of the same name, and <code>pg.one[T](rows)</code> reads the first row, or fails with <code>PgError.noRows</code>:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    <span class="t">i64</span> id
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    products := <span class="k">try</span> pg.all[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE stock &gt; $1 ORDER BY price&quot;</span>, [.<span class="f">int</span>(<span class="n">0</span>)]))
+    <span class="k">defer</span> {
+        <span class="k">for</span> p <span class="k">in</span> products {
+            p.<span class="f">free</span>()
+        }
+        products.<span class="f">free</span>()
+    }
+    <span class="k">for</span> p <span class="k">in</span> products {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.id<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>p.price<span class="e">}</span><span class="s">, </span><span class="e">{</span>p.stock<span class="e">}</span><span class="s"> left&quot;</span>)
+    }
+    <span class="k">scoped</span> <span class="t">Product</span> cake = <span class="k">try</span> pg.one[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE name = $1&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;lemon cake&quot;</span>)]))
+    <span class="f">print</span>(<span class="s">&quot;cake is </span><span class="e">{</span>cake.id<span class="e">}</span><span class="s">&quot;</span>)
+    _ = pg.one[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE id = $1&quot;</span>, [.<span class="f">int</span>(<span class="n">99</span>)])) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Product</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>3 coffee: 2.8, 9 left
+1 green tea: 3.5, 9 left
+2 lemon cake: 4.25, 10 left
+cake is 2
+PgError.noRows</code></pre>
+<p><code>Rows</code> can be read one row at a time too: <code>next</code> moves to the next row, and <code>int</code>, <code>float</code>, <code>bool</code>, <code>text</code> and <code>isNull</code> read a column by its number, from 0. The whole result has come back from the server by the time <code>query</code> returns, so <code>len</code> is the number of rows:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT count(*), sum(stock), avg(price)::float8 FROM products&quot;</span>)
+    <span class="k">defer</span> rows.<span class="f">free</span>()
+    _ = rows.<span class="f">next</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> products, </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> in stock, </span><span class="e">{</span>rows.<span class="f">float</span>(<span class="n">2</span>):.<span class="n">2</span><span class="e">}</span><span class="s"> on average&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 products, 28 in stock, 3.52 on average</code></pre>
+<h2 id="transactions"><a href="#transactions">Transactions</a></h2>
+<p><code>db.begin()</code> takes a connection from the pool for a transaction. Its <code>query</code> and <code>exec</code> run inside the transaction, and <code>commit</code> or <code>rollback</code> ends it and gives the connection back. With <code>scoped</code>, a transaction that is left without <code>commit</code>, by an error or a <code>return</code>, rolls back:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+<span class="c">// Takes count of a product from the stock, and says whether there were enough.</span>
+!<span class="t">bool</span> <span class="f">order</span>(pg.<span class="t">Pool</span> *db, <span class="t">str</span> product, <span class="t">i64</span> count) {
+    <span class="k">scoped</span> tx := <span class="k">try</span> db.<span class="f">begin</span>()
+    rows := <span class="k">try</span> tx.<span class="f">query</span>(<span class="s">&quot;SELECT stock FROM products WHERE name = $1 FOR UPDATE&quot;</span>, [.<span class="f">text</span>(product)])
+    <span class="k">defer</span> rows.<span class="f">free</span>()
+    <span class="k">if</span> !rows.<span class="f">next</span>() || rows.<span class="f">int</span>(<span class="n">0</span>) &lt; count {
+        <span class="k">return</span> <span class="k">false</span>
+    }
+    _ = <span class="k">try</span> tx.<span class="f">exec</span>(<span class="s">&quot;UPDATE products SET stock = stock - $1 WHERE name = $2&quot;</span>, [.<span class="f">int</span>(count), .<span class="f">text</span>(product)])
+    <span class="k">try</span> tx.<span class="f">commit</span>()
+    <span class="k">return</span> <span class="k">true</span>
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="f">print</span>(<span class="s">&quot;4 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">4</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;50 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">50</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT stock FROM products WHERE name = &#x27;coffee&#x27;&quot;</span>)
+    <span class="k">defer</span> rows.<span class="f">free</span>()
+    _ = rows.<span class="f">next</span>()
+    <span class="f">print</span>(<span class="s">&quot;coffee left: </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>4 coffees: true
+50 coffees: false
+coffee left: 5</code></pre>
+<p>The second order returned before <code>commit</code>, so <code>scoped</code> rolled it back. <code>FOR UPDATE</code> locks the row until the transaction ends, so two orders at once can't both take the last items. A transaction that clashes with another, by a deadlock or a serialization failure, fails with <code>PgError.retry</code>, and running it again is the right thing to do.</p>
+<h2 id="connecting-to-redis"><a href="#connecting-to-redis">Connecting to Redis</a></h2>
+<p>Redis keeps keys and values in memory, for caches, sessions, counters and queues. <code>redis.connect(address)</code> gives a <code>redis.Client</code> with its own pool of connections, which every task and thread can share. <code>set</code> stores a value, with a time to live when <code>ttl</code> is given, and <code>get</code> gives a value and whether the key was there:</p>
+<pre class="code"><code><span class="k">import</span> os, redis
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> redis.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;REDIS_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;redis://localhost:6379&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="k">try</span> db.<span class="f">set</span>(<span class="s">&quot;session:9f2c&quot;</span>, <span class="s">&quot;ada&quot;</span>, ttl: <span class="n">30m</span>)
+    user, found := <span class="k">try</span> db.<span class="f">get</span>(<span class="s">&quot;session:9f2c&quot;</span>)
+    <span class="k">defer</span> user.<span class="f">free</span>()
+    <span class="f">print</span>(<span class="s">&quot;found </span><span class="e">{</span>found<span class="e">}</span><span class="s">: </span><span class="e">{</span>user<span class="e">}</span><span class="s">&quot;</span>)
+    left := <span class="k">try</span> db.<span class="f">ttl</span>(<span class="s">&quot;session:9f2c&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;ends within 30m: </span><span class="e">{</span>left &lt;= <span class="n">30m</span><span class="e">}</span><span class="s">&quot;</span>)
+    _, there := <span class="k">try</span> db.<span class="f">get</span>(<span class="s">&quot;session:none&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;found </span><span class="e">{</span>there<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">try</span> db.<span class="f">del</span>([<span class="s">&quot;session:9f2c&quot;</span>])<span class="e">}</span><span class="s"> deleted&quot;</span>)
+}</code></pre>
+<pre class="out"><code>found true: ada
+ends within 30m: true
+found false
+1 deleted</code></pre>
+<p>The address is <code>redis://user:password@host:port/database</code>, and <code>rediss://</code> uses TLS.</p>
+<h2 id="counters-hashes-and-lists"><a href="#counters-hashes-and-lists">Counters, hashes and lists</a></h2>
+<p><code>incr</code> adds one to a number and gives the new value, in one step on the server, so tasks on many machines can count together. A hash keeps the fields of one thing under one key, and a list keeps values in order, which makes a simple queue:</p>
+<pre class="code"><code><span class="k">import</span> os, redis
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> redis.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;REDIS_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;redis://localhost:6379&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    _ = <span class="k">try</span> db.<span class="f">del</span>([<span class="s">&quot;hits:/&quot;</span>, <span class="s">&quot;user:7&quot;</span>, <span class="s">&quot;jobs&quot;</span>])
+    <span class="k">for</span> _ <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        _ = <span class="k">try</span> db.<span class="f">incr</span>(<span class="s">&quot;hits:/&quot;</span>)
+    }
+    <span class="f">print</span>(<span class="s">&quot;hits: </span><span class="e">{</span><span class="k">try</span> db.<span class="f">incrBy</span>(<span class="s">&quot;hits:/&quot;</span>, <span class="n">10</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">try</span> db.<span class="f">hset</span>(<span class="s">&quot;user:7&quot;</span>, <span class="s">&quot;name&quot;</span>, <span class="s">&quot;Ada&quot;</span>)
+    <span class="k">try</span> db.<span class="f">hset</span>(<span class="s">&quot;user:7&quot;</span>, <span class="s">&quot;plan&quot;</span>, <span class="s">&quot;pro&quot;</span>)
+    plan, _ := <span class="k">try</span> db.<span class="f">hget</span>(<span class="s">&quot;user:7&quot;</span>, <span class="s">&quot;plan&quot;</span>)
+    <span class="k">defer</span> plan.<span class="f">free</span>()
+    <span class="f">print</span>(<span class="s">&quot;plan </span><span class="e">{</span>plan<span class="e">}</span><span class="s">&quot;</span>)
+
+    _ = <span class="k">try</span> db.<span class="f">rpush</span>(<span class="s">&quot;jobs&quot;</span>, <span class="s">&quot;resize 1.png&quot;</span>)
+    _ = <span class="k">try</span> db.<span class="f">rpush</span>(<span class="s">&quot;jobs&quot;</span>, <span class="s">&quot;resize 2.png&quot;</span>)
+    <span class="k">scoped</span> <span class="t">List</span>[<span class="t">String</span>] jobs = <span class="k">try</span> db.<span class="f">lrange</span>(<span class="s">&quot;jobs&quot;</span>)
+    <span class="k">for</span> j <span class="k">in</span> jobs {
+        <span class="f">print</span>(<span class="s">&quot;job: </span><span class="e">{</span>j<span class="e">}</span><span class="s">&quot;</span>)
+        j.<span class="f">free</span>()
+    }
+}</code></pre>
+<pre class="out"><code>hits: 13
+plan pro
+job: resize 1.png
+job: resize 2.png</code></pre>
+<h2 id="any-command"><a href="#any-command">Any command</a></h2>
+<p><code>do</code> sends any command, its words as a list, and gives the server's <code>redis.Reply</code>. A reply holds <code>text</code> for strings, <code>int</code> for numbers and <code>items</code> for lists, and <code>kind</code> says which. An error from the server fails with <code>RedisError.server</code> and its message:</p>
+<pre class="code"><code><span class="k">import</span> os, redis
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> redis.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;REDIS_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;redis://localhost:6379&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    _ = <span class="k">try</span> db.<span class="f">del</span>([<span class="s">&quot;scores&quot;</span>])
+    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;ada&quot;</span>, <span class="s">&quot;linus&quot;</span>, <span class="s">&quot;grace&quot;</span>]
+    <span class="t">str</span>[<span class="n">3</span>] scores = [<span class="s">&quot;310&quot;</span>, <span class="s">&quot;120&quot;</span>, <span class="s">&quot;450&quot;</span>]
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        <span class="k">scoped</span> redis.<span class="t">Reply</span> r = <span class="k">try</span> db.<span class="f">do</span>([<span class="s">&quot;ZADD&quot;</span>, <span class="s">&quot;scores&quot;</span>, scores[i], names[i]])
+    }
+    <span class="k">scoped</span> redis.<span class="t">Reply</span> top = <span class="k">try</span> db.<span class="f">do</span>([<span class="s">&quot;ZREVRANGE&quot;</span>, <span class="s">&quot;scores&quot;</span>, <span class="s">&quot;0&quot;</span>, <span class="s">&quot;1&quot;</span>, <span class="s">&quot;WITHSCORES&quot;</span>])
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..top.items.len / <span class="n">2</span> {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>top.items.<span class="f">at</span>(i * <span class="n">2</span>).text<span class="e">}</span><span class="s">: </span><span class="e">{</span>top.items.<span class="f">at</span>(i * <span class="n">2</span> + <span class="n">1</span>).text<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    _ = db.<span class="f">do</span>([<span class="s">&quot;INCR&quot;</span>, <span class="s">&quot;scores&quot;</span>]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        redis.<span class="t">Reply</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>grace: 450
+ada: 310
+RedisError.server: WRONGTYPE Operation against a key holding the wrong kind of value</code></pre>
+<p>A <code>Pipeline</code> sends several commands at once and waits once for all the replies, which saves a round trip for each (see the <a href="../std/index.html#redis">library</a>).</p>
+<h2 id="publish-and-subscribe"><a href="#publish-and-subscribe">Publish and subscribe</a></h2>
+<p><code>publish</code> sends a message on a channel to everyone listening. <code>redis.subscribe(address, channels)</code> opens a connection of its own for listening, and <code>next</code> waits for the next message. Here a task listens while <code>main</code> publishes:</p>
+<pre class="code"><code><span class="k">import</span> os, redis
+
+<span class="t">void</span> <span class="f">listen</span>(<span class="t">str</span> address, <span class="k">chan</span>[<span class="t">bool</span>] ready, <span class="k">chan</span>[<span class="t">bool</span>] done) {
+    <span class="k">defer</span> done &lt;- <span class="k">true</span>
+    <span class="k">scoped</span> sub := redis.<span class="f">subscribe</span>(address, [<span class="s">&quot;deploys&quot;</span>]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;subscribe: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">return</span>
+    }
+    ready &lt;- <span class="k">true</span>
+    <span class="k">for</span> _ <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
+        <span class="k">scoped</span> m := sub.<span class="f">next</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>m.channel<span class="e">}</span><span class="s">: </span><span class="e">{</span>m.data<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    address := os.<span class="f">env</span>(<span class="s">&quot;REDIS_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;redis://localhost:6379&quot;</span>
+    db := <span class="k">try</span> redis.<span class="f">connect</span>(address)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="k">chan</span>[<span class="t">bool</span>] ready = <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
+    <span class="k">scoped</span> <span class="k">chan</span>[<span class="t">bool</span>] done = <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
+    <span class="k">spawn</span> <span class="f">listen</span>(address, ready, done)
+    _ = &lt;-ready
+    _ = <span class="k">try</span> db.<span class="f">publish</span>(<span class="s">&quot;deploys&quot;</span>, <span class="s">&quot;api 1.4.2&quot;</span>)
+    _ = <span class="k">try</span> db.<span class="f">publish</span>(<span class="s">&quot;deploys&quot;</span>, <span class="s">&quot;worker 1.4.2&quot;</span>)
+    _ = &lt;-done
+}</code></pre>
+<pre class="out"><code>deploys: api 1.4.2
+deploys: worker 1.4.2</code></pre>
+<p><code>pattern: true</code> listens on channel patterns such as <code>deploys.*</code>.</p>
+<h2 id="a-pool-for-other-connections"><a href="#a-pool-for-other-connections">A pool for other connections</a></h2>
+<p>The <code>pool</code> module keeps connections of any kind for reuse: to a service with its own protocol, or a client this library doesn't have. <code>pool.make(config, open)</code> takes what opening a connection needs and the function that opens one. <code>take</code> gives an idle connection or opens a new one, and <code>give</code> puts it back. The struct needs <code>pub</code> methods <code>close</code>, and <code>reusable</code>, which says whether the next caller can use it:</p>
+<pre class="code run"><code><span class="k">import</span> pool
+
+<span class="k">struct</span> <span class="t">Backend</span> {
+    <span class="t">i64</span> id
+    <span class="t">bool</span> broken
+}
+
+<span class="k">pub</span> <span class="t">void</span> <span class="t">Backend</span>.<span class="f">close</span>() =&gt; <span class="f">print</span>(<span class="s">&quot;close </span><span class="e">{</span><span class="k">self</span>.id<span class="e">}</span><span class="s">&quot;</span>)
+<span class="k">pub</span> <span class="t">bool</span> <span class="t">Backend</span>.<span class="f">reusable</span>() =&gt; !<span class="k">self</span>.broken
+
+<span class="t">i64</span> opened = <span class="n">0</span>
+
+!<span class="t">Backend</span> <span class="f">dial</span>(<span class="t">str</span> *address) {
+    opened += <span class="n">1</span>
+    <span class="f">print</span>(<span class="s">&quot;open </span><span class="e">{</span>opened<span class="e">}</span><span class="s"> to </span><span class="e">{</span>*address<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">return</span> <span class="t">Backend</span>{id: opened}
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    backends := pool.<span class="f">make</span>(<span class="s">&quot;10.0.0.5:9000&quot;</span>, dial, max: <span class="n">2</span>)
+    <span class="k">defer</span> backends.<span class="f">close</span>()
+    a := <span class="k">try</span> backends.<span class="f">take</span>()
+    backends.<span class="f">give</span>(a)
+    b := <span class="k">try</span> backends.<span class="f">take</span>()
+    <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>b.id<span class="e">}</span><span class="s"> again&quot;</span>)
+    b.broken = <span class="k">true</span>
+    backends.<span class="f">give</span>(b)
+    c := <span class="k">try</span> backends.<span class="f">take</span>()
+    <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>c.id<span class="e">}</span><span class="s">, </span><span class="e">{</span>backends.<span class="f">size</span>()<span class="e">}</span><span class="s"> open&quot;</span>)
+    backends.<span class="f">give</span>(c)
+}</code></pre>
+<pre class="out"><code>open 1 to 10.0.0.5:9000
+got 1 again
+close 1
+open 2 to 10.0.0.5:9000
+got 2, 1 open
+close 2</code></pre>
+<p>A connection that broke is closed when it is given back, and the next <code>take</code> opens a new one. When <code>max</code> connections are in use, <code>take</code> waits for one to come back, for at most <code>wait</code>, 30 seconds unless given, and then fails with <code>PoolError.timeout</code>. Copies of a <code>Pool</code> share the same connections, so it can be handed to tasks and threads.</p>
+    <nav class="pager"><a class="prev" href="17-sqlite.html"><span>Previous</span>SQLite</a><a class="next" href="19-random-and-crypto.html"><span>Next</span>Random numbers and cryptography</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-to-postgresql">Connecting to PostgreSQL</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#transactions">Transactions</a></li><li><a href="#connecting-to-redis">Connecting to Redis</a></li><li><a href="#counters-hashes-and-lists">Counters, hashes and lists</a></li><li><a href="#any-command">Any command</a></li><li><a href="#publish-and-subscribe">Publish and subscribe</a></li><li><a href="#a-pool-for-other-connections">A pool for other connections</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.68.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

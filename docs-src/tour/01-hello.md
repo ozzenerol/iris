@@ -70,7 +70,7 @@ listening on 8080
 
 The [Errors](18-errors.html) chapter covers errors in full.
 
-The arguments a program was started with come from the `os` module, and the `flags` module reads them into a struct (see [Command-line flags](30-flags.html)):
+The arguments a program was started with come from the `os` module, and the `flags` module reads them into a struct (see [Command-line flags](../library-tour/05-flags.html)):
 
 ```iris
 import os
@@ -191,4 +191,4 @@ Neither can the names of built-in types (`i64`, `str`, `String`...) and built-in
 iris fmt main.iris
 ```
 
-The [Tools](50-tools.html) chapter covers it and the other commands.
+The [Tools](30-tools.html) chapter covers it and the other commands.

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV and XML - Iris</title>
+<meta name="description" content="Spreadsheets, exports and reports often come as CSV, and many older services and feeds speak XML. The csv module reads and writes comma-separated values, and the xml module reads a document into a tree or a step at a time, and writes one back.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.68.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html" class="on"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
+  <article class="prose">
+<h1>CSV and XML</h1>
+<p class="lede">Spreadsheets, exports and reports often come as CSV, and many older services and feeds speak XML. The <code>csv</code> module reads and writes comma-separated values, and the <code>xml</code> module reads a document into a tree or a step at a time, and writes one back.</p>
+<h2 id="reading-csv"><a href="#reading-csv">Reading CSV</a></h2>
+<p><code>csv.parse(text)</code> reads every record into a <code>List</code> of <code>csv.Record</code>. A record's <code>len</code> is its number of fields, and <code>at(i)</code> gives field <code>i</code>, or <code>&quot;&quot;</code> past the end. A field in double quotes may hold commas, line breaks, and quotes written twice:</p>
+<pre class="code run"><code><span class="k">import</span> csv
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    text := <span class="s">&quot;host,port,note</span><span class="e">\n</span><span class="s">db,5432,</span><span class="e">\&quot;</span><span class="s">primary, in rack 3</span><span class="e">\&quot;</span><span class="e">\n</span><span class="s">cache,6379,</span><span class="e">\&quot;</span><span class="s">says </span><span class="e">\&quot;</span><span class="e">\&quot;</span><span class="s">hi</span><span class="e">\&quot;</span><span class="e">\&quot;</span><span class="e">\&quot;</span><span class="e">\n</span><span class="s">&quot;</span>
+    rows := <span class="k">try</span> csv.<span class="f">parse</span>(text)
+    <span class="k">defer</span> rows.<span class="f">freeEach</span>()
+    <span class="k">for</span> r <span class="k">in</span> rows.<span class="f">items</span>()[<span class="n">1</span>:] {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">:</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> [</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">2</span>)<span class="e">}</span><span class="s">]&quot;</span>)
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.len<span class="e">}</span><span class="s"> records, </span><span class="e">{</span>rows.<span class="f">at</span>(<span class="n">0</span>).<span class="f">len</span>()<span class="e">}</span><span class="s"> fields each&quot;</span>)
+}</code></pre>
+<pre class="out"><code>db:5432 [primary, in rack 3]
+cache:6379 [says &quot;hi&quot;]
+3 records, 3 fields each</code></pre>
+<p>The first record is the header here, so the loop starts after it. <code>freeEach</code> frees every record and then the list.</p>
+<p>A large file is read a record at a time with <code>csv.reader(text)</code>, whose <code>read</code> gives the next record and fails with <code>CsvError.end</code> when there are no more. <code>sep</code> sets another separator, and <code>line</code> is the line the next record starts on, for messages about bad input:</p>
+<pre class="code run"><code><span class="k">import</span> csv
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    text := <span class="s">&quot;name;bytes</span><span class="e">\n</span><span class="s">index.html;5120</span><span class="e">\n</span><span class="s">logo.png;20480</span><span class="e">\n</span><span class="s">app.js;x</span><span class="e">\n</span><span class="s">&quot;</span>
+    rd := csv.<span class="f">reader</span>(text)
+    rd.sep = <span class="s">&quot;;&quot;</span>
+    <span class="k">scoped</span> csv.<span class="t">Record</span> header = <span class="k">try</span> rd.<span class="f">read</span>()
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> {
+        at := rd.line
+        r := rd.<span class="f">read</span>() <span class="k">catch</span> e {
+            <span class="k">if</span> e.code != csv.<span class="t">CsvError</span>.end {
+                <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            }
+            <span class="k">break</span>
+        }
+        <span class="k">defer</span> r.<span class="f">free</span>()
+        n := r.<span class="f">at</span>(<span class="n">1</span>).<span class="f">parseInt</span>() <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;line </span><span class="e">{</span>at<span class="e">}</span><span class="s">: </span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> isn&#x27;t a number of bytes&quot;</span>)
+            <span class="k">continue</span>
+        }
+        total += n
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes in all&quot;</span>)
+}</code></pre>
+<pre class="out"><code>line 4: x isn&#x27;t a number of bytes
+25600 bytes in all</code></pre>
+<p>A quoted field without its closing quote fails with <code>CsvError.quote</code> and the line it started on.</p>
+<h2 id="writing-csv"><a href="#writing-csv">Writing CSV</a></h2>
+<p><code>csv.row(fields)</code> gives one line of CSV, ending in <code>\n</code>. A field is put in quotes only when it needs them: when it holds the separator, a quote or a line break. <code>csv.quote(field)</code> does that to one field:</p>
+<pre class="code run"><code><span class="k">import</span> csv
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">String</span> out
+    <span class="k">defer</span> out.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">String</span> header = csv.<span class="f">row</span>([<span class="s">&quot;host&quot;</span>, <span class="s">&quot;status&quot;</span>, <span class="s">&quot;note&quot;</span>])
+    out.<span class="f">append</span>(header)
+    <span class="t">str</span>[<span class="n">3</span>] a = [<span class="s">&quot;api&quot;</span>, <span class="s">&quot;up&quot;</span>, <span class="s">&quot;fine&quot;</span>]
+    <span class="t">str</span>[<span class="n">3</span>] b = [<span class="s">&quot;db&quot;</span>, <span class="s">&quot;down&quot;</span>, <span class="s">&quot;disk full, </span><span class="e">\&quot;</span><span class="s">/var</span><span class="e">\&quot;</span><span class="s"> at 100%&quot;</span>]
+    <span class="k">for</span> r <span class="k">in</span> [a[:], b[:]] {
+        <span class="k">scoped</span> <span class="t">String</span> line = csv.<span class="f">row</span>(r)
+        out.<span class="f">append</span>(line)
+    }
+    <span class="f">print</span>(out)
+}</code></pre>
+<pre class="out"><code>host,status,note
+api,up,fine
+db,down,&quot;disk full, &quot;&quot;/var&quot;&quot; at 100%&quot;
+</code></pre>
+<p>The second argument of <code>csv.row</code> and <code>csv.quote</code> is the separator, <code>&quot;,&quot;</code> when it is left out.</p>
+<h2 id="reading-xml-into-a-tree"><a href="#reading-xml-into-a-tree">Reading XML into a tree</a></h2>
+<p><code>xml.parse(text)</code> reads a document into its root <code>xml.Element</code>. An element has a <code>name</code>, its <code>attrs</code>, its <code>children</code> and its <code>text</code>, the text right inside it. <code>child(name)</code> gives the first child with that name, or <code>null</code>, and <code>attr(name)</code> gives an attribute's value, or <code>&quot;&quot;</code>. Entities such as <code>&amp;amp;</code> are decoded, and text that is only spaces between tags is left out:</p>
+<pre class="code run"><code><span class="k">import</span> xml
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    text := <span class="s">r&quot;&quot;&quot;
+        &lt;?xml version=&quot;1.0&quot;?&gt;
+        &lt;feed&gt;
+          &lt;title&gt;Status &amp;amp; incidents&lt;/title&gt;
+          &lt;entry id=&quot;41&quot; severity=&quot;minor&quot;&gt;
+            &lt;title&gt;Slow logins&lt;/title&gt;
+            &lt;updated&gt;2026-10-23T08:10:00Z&lt;/updated&gt;
+          &lt;/entry&gt;
+          &lt;entry id=&quot;42&quot; severity=&quot;major&quot;&gt;
+            &lt;title&gt;API down in eu-west&lt;/title&gt;
+            &lt;updated&gt;2026-10-24T09:00:00Z&lt;/updated&gt;
+          &lt;/entry&gt;
+        &lt;/feed&gt;
+        &quot;&quot;&quot;</span>
+    <span class="k">scoped</span> xml.<span class="t">Element</span> feed = <span class="k">try</span> xml.<span class="f">parse</span>(text)
+    <span class="f">print</span>(feed.<span class="f">child</span>(<span class="s">&quot;title&quot;</span>).text)
+    <span class="k">for</span> e <span class="k">in</span> feed.children {
+        <span class="k">if</span> e.name != <span class="s">&quot;entry&quot;</span> {
+            <span class="k">continue</span>
+        }
+        <span class="f">print</span>(<span class="s">&quot;#</span><span class="e">{</span>e.<span class="f">attr</span>(<span class="s">&quot;id&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>e.<span class="f">attr</span>(<span class="s">&quot;severity&quot;</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.<span class="f">child</span>(<span class="s">&quot;title&quot;</span>).text<span class="e">}</span><span class="s"> at </span><span class="e">{</span>e.<span class="f">child</span>(<span class="s">&quot;updated&quot;</span>).text<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>Status &amp; incidents
+#41 minor: Slow logins at 2026-10-23T08:10:00Z
+#42 major: API down in eu-west at 2026-10-24T09:00:00Z</code></pre>
+<p><code>child</code> gives a pointer, so a missing element is checked against <code>null</code> before it is used. Text mixed with elements, as in <code>&lt;p&gt;a &lt;b&gt;bold&lt;/b&gt; word&lt;/p&gt;</code>, is kept as children with no name: <code>isText()</code> tells them apart, and <code>allText()</code> joins all the text inside an element:</p>
+<pre class="code run"><code><span class="k">import</span> xml
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> xml.<span class="t">Element</span> p = <span class="k">try</span> xml.<span class="f">parse</span>(<span class="s">&quot;&lt;p&gt;Restart &lt;code&gt;nginx&lt;/code&gt; after &lt;b&gt;every&lt;/b&gt; change.&lt;/p&gt;&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> all = p.<span class="f">allText</span>()
+    <span class="f">print</span>(all)
+    <span class="k">for</span> c <span class="k">in</span> p.children {
+        <span class="k">if</span> c.<span class="f">isText</span>() {
+            <span class="f">print</span>(<span class="s">&quot;text [</span><span class="e">{</span>c.text<span class="e">}</span><span class="s">]&quot;</span>)
+        } <span class="k">else</span> {
+            <span class="f">print</span>(<span class="s">&quot;&lt;</span><span class="e">{</span>c.name<span class="e">}</span><span class="s">&gt; [</span><span class="e">{</span>c.text<span class="e">}</span><span class="s">]&quot;</span>)
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;has a link: </span><span class="e">{</span>p.<span class="f">child</span>(<span class="s">&quot;a&quot;</span>) != <span class="k">null</span><span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>Restart nginx after every change.
+text [Restart ]
+&lt;code&gt; [nginx]
+text [ after ]
+&lt;b&gt; [every]
+text [ change.]
+has a link: false</code></pre>
+<h2 id="reading-xml-a-step-at-a-time"><a href="#reading-xml-a-step-at-a-time">Reading XML a step at a time</a></h2>
+<p>A large document doesn't need to be held as a tree. <code>xml.reader(text)</code> reads it a step at a time: each <code>next</code> gives an <code>xml.Event</code> that is a <code>.start</code> tag with its <code>name</code> and attributes, a <code>.text</code>, or an <code>.end</code> tag. At the end of the document, <code>next</code> fails with <code>XmlError.end</code>. This adds up the sizes in a listing without building the tree:</p>
+<pre class="code run"><code><span class="k">import</span> xml
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    rd := xml.<span class="f">reader</span>(<span class="s">r&quot;&quot;&quot;&lt;ListBucketResult&gt;&lt;Contents&gt;&lt;Key&gt;a.log&lt;/Key&gt;&lt;Size&gt;1200&lt;/Size&gt;&lt;/Contents&gt;&lt;Contents&gt;&lt;Key&gt;b.log&lt;/Key&gt;&lt;Size&gt;800&lt;/Size&gt;&lt;/Contents&gt;&lt;/ListBucketResult&gt;&quot;&quot;&quot;</span>)
+    <span class="k">defer</span> rd.<span class="f">free</span>()
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="t">i64</span> files = <span class="n">0</span>
+    <span class="t">bool</span> inSize = <span class="k">false</span>
+    <span class="k">for</span> {
+        ev := rd.<span class="f">next</span>() <span class="k">catch</span> e {
+            <span class="k">if</span> e.code != xml.<span class="t">XmlError</span>.end {
+                <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            }
+            <span class="k">break</span>
+        }
+        <span class="k">match</span> ev.kind {
+            .start =&gt; inSize = ev.name == <span class="s">&quot;Size&quot;</span>
+            .text =&gt; {
+                <span class="k">if</span> inSize {
+                    total += ev.text.<span class="f">parseInt</span>() <span class="k">catch</span> <span class="n">0</span>
+                    files += <span class="n">1</span>
+                }
+            }
+            .end =&gt; inSize = <span class="k">false</span>
+        }
+        ev.<span class="f">free</span>()
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>files<span class="e">}</span><span class="s"> files, </span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes&quot;</span>)
+}</code></pre>
+<pre class="out"><code>2 files, 2000 bytes</code></pre>
+<p>Text that isn't well-formed XML fails with <code>XmlError.syntax</code> and the line: a tag closed by the wrong end tag, one never closed, an attribute without quotes, or a second root element:</p>
+<pre class="code run"><code><span class="k">import</span> xml
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">for</span> text <span class="k">in</span> [<span class="s">&quot;&lt;a&gt;&lt;b&gt;&lt;/a&gt;&quot;</span>, <span class="s">&quot;&lt;a x=1/&gt;&quot;</span>, <span class="s">&quot;&lt;a/&gt;&lt;b/&gt;&quot;</span>] {
+        _ = xml.<span class="f">parse</span>(text) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            xml.<span class="f">element</span>(<span class="s">&quot;&quot;</span>)
+        }
+    }
+}</code></pre>
+<pre class="out"><code>XmlError.syntax: line 1: &lt;/a&gt; closes &lt;b&gt;
+XmlError.syntax: line 1: an attribute&#x27;s value needs quotes
+XmlError.syntax: line 1: a second root element</code></pre>
+<h2 id="writing-xml"><a href="#writing-xml">Writing XML</a></h2>
+<p><code>xml.element(name)</code> makes an element. <code>set</code> gives it an attribute, <code>addText</code> text, and <code>add</code> a child, which the parent owns after. <code>write</code> gives the whole tree as XML on one line, with <code>&amp;</code>, <code>&lt;</code>, <code>&gt;</code> and quotes written as entities:</p>
+<pre class="code run"><code><span class="k">import</span> xml
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> xml.<span class="t">Element</span> urls = xml.<span class="f">element</span>(<span class="s">&quot;urlset&quot;</span>)
+    urls.<span class="f">set</span>(<span class="s">&quot;xmlns&quot;</span>, <span class="s">&quot;http://www.sitemaps.org/schemas/sitemap/0.9&quot;</span>)
+    <span class="k">for</span> page <span class="k">in</span> [<span class="s">&quot;/&quot;</span>, <span class="s">&quot;/docs?a=1&amp;b=2&quot;</span>] {
+        u := xml.<span class="f">element</span>(<span class="s">&quot;url&quot;</span>)
+        loc := xml.<span class="f">element</span>(<span class="s">&quot;loc&quot;</span>)
+        <span class="k">scoped</span> <span class="t">String</span> full = <span class="f">format</span>(<span class="s">&quot;https://example.com</span><span class="e">{</span>page<span class="e">}</span><span class="s">&quot;</span>)
+        loc.<span class="f">addText</span>(full)
+        u.<span class="f">add</span>(loc)
+        urls.<span class="f">add</span>(u)
+    }
+    <span class="k">scoped</span> <span class="t">String</span> text = urls.<span class="f">write</span>()
+    <span class="f">print</span>(text)
+}</code></pre>
+<pre class="out"><code>&lt;urlset xmlns=&quot;http://www.sitemaps.org/schemas/sitemap/0.9&quot;&gt;&lt;url&gt;&lt;loc&gt;https://example.com/&lt;/loc&gt;&lt;/url&gt;&lt;url&gt;&lt;loc&gt;https://example.com/docs?a=1&amp;amp;b=2&lt;/loc&gt;&lt;/url&gt;&lt;/urlset&gt;</code></pre>
+<p><code>xml.escape(text)</code> gives any text with those characters written as entities, for XML written by hand.</p>
+    <nav class="pager"><a class="prev" href="09-regular-expressions.html"><span>Previous</span>Regular expressions</a><a class="next" href="11-encodings-and-ids.html"><span>Next</span>Encodings and ids</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#reading-csv">Reading CSV</a></li><li><a href="#writing-csv">Writing CSV</a></li><li><a href="#reading-xml-into-a-tree">Reading XML into a tree</a></li><li><a href="#reading-xml-a-step-at-a-time">Reading XML a step at a time</a></li><li><a href="#writing-xml">Writing XML</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.68.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

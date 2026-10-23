@@ -1,6 +1,6 @@
 # Attributes
 
-An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except `@json` and `@flags`, which have their own chapters: [JSON](28-json.html) and [Command-line flags](30-flags.html).
+An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except `@json` and `@flags`, which have their own chapters: [JSON](../library-tour/01-json.html) and [Command-line flags](../library-tour/05-flags.html).
 
 | Attribute | On | What it does |
 |---|---|---|
@@ -106,7 +106,7 @@ The first file wins for a variable set in both, since a variable that is already
 
 ## @flags
 
-`@flags` lets `flags.parse` fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The [Command-line flags](30-flags.html) chapter covers it.
+`@flags` lets `flags.parse` fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The [Command-line flags](../library-tour/05-flags.html) chapter covers it.
 
 ## @inline
 
@@ -189,7 +189,7 @@ A `@noreturn` function returns `void`, has no `return`, and can't reach its end:
 
 ## @export
 
-`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](48-calling-c.html)):
+`@export` makes a function callable from C by its name, for a library that calls back into Iris code. `@export("name")` gives it another C name. An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error (see [Calling C](28-calling-c.html)):
 
 ```iris
 @export

@@ -25,9 +25,9 @@ With `try r.serve(8080)` at the end, that is a web server on every CPU core, wit
 
 ## Where to start
 
-- The [Language Tour](tour/index.html) covers every part of the language, and the parts of the library almost every program uses (files, flags, time, logging, HTTP, SQLite, other programs), one topic per chapter, with programs you can run and their output.
+- The [Language Tour](tour/index.html) covers every part of the language, one topic per chapter, with programs you can run and their output. Start here.
+- The [Library Tour](library-tour/index.html) shows what the standard library does, one task per chapter: files, HTTP, databases, formats, cryptography and more.
 - The [Library](std/index.html) has every module of the standard library, with each type and function and what it does.
-- The [Guides](guides/index.html) build whole programs step by step: a REST API, and a command-line tool.
 - [Design](design/index.html) explains how Iris works underneath and why, for people working on the compiler.
 - The [Roadmap](roadmap.html) lists each release and what it brought.
 

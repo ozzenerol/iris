@@ -3,7 +3,7 @@
 
   docs/index.html            docs-src/index.md, the home page
   docs/tour/                 docs-src/tour/NN-name.md: the Language Tour
-  docs/guides/               docs-src/guides/NN-name.md: whole programs, step by step
+  docs/library-tour/         docs-src/library-tour/NN-name.md: the Library Tour
   docs/design/               docs-src/design/NN-name.md: how Iris works underneath
   docs/std/index.html        the library browser (docs-src/assets/std.js)
   docs/std/data.js           the library's API: `iris doc --json` on every module
@@ -47,11 +47,11 @@ VERSION = version()
 SECTIONS = [
     # (folder, name in the top bar, what its index page says)
     ("tour", "Language Tour",
-     "Every part of the language, and the library modules almost every program uses, one topic per chapter, "
-     "explained fully and with many small programs and "
+     "Every part of the language, one topic per chapter, explained fully and with many small programs and "
      "their output. Read it in order the first time; later, use it as the reference."),
-    ("guides", "Guides",
-     "Whole programs, built one step at a time, with every changed function shown in full."),
+    ("library-tour", "Library Tour",
+     "What the standard library does, one task per chapter: files, the terminal, formats, HTTP and "
+     "networking, databases, cryptography and more. Read the Language Tour first, then the chapters you need."),
     ("design", "Design",
      "How Iris works underneath, and why it is the way it is: for people working on the compiler, and for "
      "anyone who wants to know."),
@@ -95,8 +95,8 @@ try {{
     <a class="brand" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">Iris</a>
     <nav class="main">
       {nav("tour/index.html", "Language Tour", "tour")}
+      {nav("library-tour/index.html", "Library Tour", "library-tour")}
       {nav("std/index.html", "Library", "std")}
-      {nav("guides/index.html", "Guides", "guides")}
       {nav("design/index.html", "Design", "design")}
       {nav("roadmap.html", "Roadmap", "roadmap")}
     </nav>
@@ -114,6 +114,7 @@ try {{
   <div class="bar">
     <span>Iris {VERSION}</span>
     <a href="{root}tour/index.html">Language Tour</a>
+    <a href="{root}library-tour/index.html">Library Tour</a>
     <a href="{root}std/index.html">Library</a>
     <a href="{root}roadmap.html">Roadmap</a>
   </div>

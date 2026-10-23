@@ -143,7 +143,7 @@ A package is a project like any other: its `iris.mod` names it by its address, a
 
 ## C libraries
 
-A project can also use C code: `import c "header.h"` reads a C header, and a `link` line in `iris.mod` links the library (see [Calling C](48-calling-c.html)):
+A project can also use C code: `import c "header.h"` reads a C header, and a `link` line in `iris.mod` links the library (see [Calling C](28-calling-c.html)):
 
 ```output
 module github.com/me/app

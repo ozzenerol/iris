@@ -116,5 +116,3 @@ for id in ids {
     }
 }
 ```
-
-The [REST API guide](../guides/01-rest-api.html) builds a whole service with the Router and SQLite.

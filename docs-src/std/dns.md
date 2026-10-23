@@ -25,4 +25,4 @@ import dns
 example.com mx 10 mail.example.com 1h0m0s
 ```
 
-A server answers a query with `reply`, which keeps the query's id and questions; the [DNS server guide](../guides/04-dns-server.html) builds one. To look names up, use `net.lookup` and `net.query`, which ask DNS servers with this module.
+A server answers a query with `reply`, which keeps the query's id and questions. To look names up, use `net.lookup` and `net.query`, which ask DNS servers with this module.

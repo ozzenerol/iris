@@ -4,7 +4,7 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-Servers, clients, databases (SQLite, PostgreSQL, Redis), JSON, regular expressions, compression, and command-line tools are in the standard library. The docs in `docs/` have a Language Tour, the library, and guides.
+Servers, clients, databases (SQLite, PostgreSQL, Redis), JSON, regular expressions, compression, and command-line tools are in the standard library. The docs in `docs/` have a Language Tour, a Library Tour, and the library.
 
 ## Speed
 
@@ -106,7 +106,7 @@ python3 tools/build_docs.py --serve
 and open http://localhost:8000. Without `--serve` it only builds `docs/`; its pages can be opened as files too, but then some browsers can't keep the theme from page to page. They have five parts:
 
 - Language Tour: each part of the language, with examples.
+- Library Tour: what the standard library does, one task per chapter.
 - Library: every module of the standard library.
-- Guides: whole programs, step by step.
 - Design: how the language works underneath, for anyone working on the compiler.
 - Roadmap: what gets built, in order.
