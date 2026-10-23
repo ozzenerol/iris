@@ -20,7 +20,7 @@ pub struct SortedMap[K, V] {
     List[i64] ilen
     i64 root
     i64 height // levels of inner nodes above the leaves
-    i64 head // the first leaf and the last
+    i64 head   // the first leaf and the last
     i64 tail
     i64 spareLeaf
     i64 spareInner
