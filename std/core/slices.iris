@@ -293,7 +293,7 @@ pub void reverse[T](T[] xs) {
 }
 
 // Whether a value equal to v is in the slice. T needs ==.
-pub bool contains[T](T[] xs, T v) => indexOf(xs, v) >= 0
+pub bool has[T](T[] xs, T v) => indexOf(xs, v) >= 0
 
 // Where the first value equal to v is, or -1. T needs ==.
 pub i64 indexOf[T](T[] xs, T v) {

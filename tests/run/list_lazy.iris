@@ -16,7 +16,7 @@ void main() {
     List[i64] xs
     xs.push(3)
     xs.push(7)
-    print("{xs.contains(7)} {xs.contains(9)} {xs.indexOf(7)}")
+    print("{xs.has(7)} {xs.has(9)} {xs.indexOf(7)}")
     xs.free()
     List[Point] ps
     ps.push(Point{x: 1})
@@ -24,7 +24,7 @@ void main() {
     ps.free()
     List[str] words
     words.push("a")
-    print("{words.contains("a")}")
+    print("{words.has("a")}")
     words.free()
     List[Note] notes
     notes.push(Note{title: "x".copy()})
@@ -36,6 +36,6 @@ void main() {
     m.set("a", 1)
     m.set("b", 2)
     scoped List[str] ks = m.keys()
-    print("{ks.len} {ks.contains("b")}")
+    print("{ks.len} {ks.has("b")}")
     m.free()
 }

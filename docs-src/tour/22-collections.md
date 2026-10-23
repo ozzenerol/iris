@@ -73,7 +73,7 @@ popped 8084, removed 8081
 
 ## Searching and sorting
 
-`contains(v)` says whether a value equal to v is there, and `indexOf(v)` where (-1 when it isn't). They compare with `==`, so they work with values that `==` can compare.
+`has(v)` says whether a value equal to v is there, and `indexOf(v)` where (-1 when it isn't). They compare with `==`, so they work with values that `==` can compare.
 
 `sort(less)` sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:
 
@@ -99,7 +99,7 @@ void main() {
     defer protocols.free()
     protocols.push("http/1.1")
     protocols.push("h2")
-    print("{protocols.contains("h2")} {protocols.indexOf("http/1.1")} {protocols.indexOf("h3")}")
+    print("{protocols.has("h2")} {protocols.indexOf("http/1.1")} {protocols.indexOf("h3")}")
 }
 ```
 
@@ -327,7 +327,7 @@ The `defer` runs last, so the loop frees the values first and the map after them
 
 ## Functions on slices
 
-`sort`, `reverse`, `contains`, `indexOf`, `min`, `max` and `binarySearch` work on any slice. A list passes its values with `items()`, and the list itself changes:
+`sort`, `reverse`, `has`, `indexOf`, `min`, `max` and `binarySearch` work on any slice. A list passes its values with `items()`, and the list itself changes:
 
 ```iris run
 void main() {
@@ -337,7 +337,7 @@ void main() {
     at, found := binarySearch(ms, 12)
     where, there := binarySearch(ms, 50)
     print("12 at {at} {found}, 50 would go at {where} {there}")
-    print("{contains(ms, 90)} {indexOf(ms, 7)} {indexOf(ms, 8)}")
+    print("{has(ms, 90)} {indexOf(ms, 7)} {indexOf(ms, 8)}")
     List[u16] ports
     defer ports.free()
     for p in [443, 22, 8080] {
@@ -356,7 +356,7 @@ true 1 -1
 8080 443 22
 ```
 
-`sort`, `min`, `max` and `binarySearch` compare with `<`, so they take numbers, `Duration`s and text. `binarySearch` needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. `contains` and `indexOf` compare with `==`. For other values, `sortBy(xs, less)` sorts with a function that says whether its first value goes before its second, as `List.sort` does, and `binarySearchBy(xs, v, less)` searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; `List.sort` keeps them in their order. `min` or `max` of an empty slice stops the program.
+`sort`, `min`, `max` and `binarySearch` compare with `<`, so they take numbers, `Duration`s and text. `binarySearch` needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. `has` and `indexOf` compare with `==`. For other values, `sortBy(xs, less)` sorts with a function that says whether its first value goes before its second, as `List.sort` does, and `binarySearchBy(xs, v, less)` searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; `List.sort` keeps them in their order. `min` or `max` of an empty slice stops the program.
 
 ## Deque
 

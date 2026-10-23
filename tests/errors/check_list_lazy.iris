@@ -7,5 +7,5 @@ struct Box {
 void main() {
     List[Box] boxes
     b := Box{}
-    _ = boxes.contains(b)
+    _ = boxes.has(b)
 }

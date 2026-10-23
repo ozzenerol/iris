@@ -52,4 +52,4 @@ void main() {
 
 ## Slices
 
-`sort`, `reverse`, `contains`, `indexOf`, `min`, `max` and `binarySearch` take any slice, and a `List` through `items()`. `sortBy` and `binarySearchBy` take a `less` function for values that `<` can't compare.
+`sort`, `reverse`, `has`, `indexOf`, `min`, `max` and `binarySearch` take any slice, and a `List` through `items()`. `sortBy` and `binarySearchBy` take a `less` function for values that `<` can't compare.

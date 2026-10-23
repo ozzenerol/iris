@@ -100,7 +100,7 @@ popped 8084, removed 8081
 0 after clear</code></pre>
 <p><code>clear</code> empties the list and keeps its memory for reuse. <code>reserve(n)</code> makes room for n values at once, which saves growing step by step when the count is known ahead.</p>
 <h2 id="searching-and-sorting"><a href="#searching-and-sorting">Searching and sorting</a></h2>
-<p><code>contains(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> where (-1 when it isn't). They compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
+<p><code>has(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> where (-1 when it isn't). They compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
 <p><code>sort(less)</code> sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Upstream</span> {
     <span class="t">str</span> addr
@@ -123,7 +123,7 @@ popped 8084, removed 8081
     <span class="k">defer</span> protocols.<span class="f">free</span>()
     protocols.<span class="f">push</span>(<span class="s">&quot;http/1.1&quot;</span>)
     protocols.<span class="f">push</span>(<span class="s">&quot;h2&quot;</span>)
-    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>protocols.<span class="f">contains</span>(<span class="s">&quot;h2&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;http/1.1&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;h3&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>protocols.<span class="f">has</span>(<span class="s">&quot;h2&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;http/1.1&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;h3&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.12:8080 4ms
 10.0.0.13:8080 12ms
@@ -278,7 +278,7 @@ ana is new: false
 <pre class="out"><code>2 reasons, 404 is Not Found</code></pre>
 <p>The <code>defer</code> runs last, so the loop frees the values first and the map after them.</p>
 <h2 id="functions-on-slices"><a href="#functions-on-slices">Functions on slices</a></h2>
-<p><code>sort</code>, <code>reverse</code>, <code>contains</code>, <code>indexOf</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> work on any slice. A list passes its values with <code>items()</code>, and the list itself changes:</p>
+<p><code>sort</code>, <code>reverse</code>, <code>has</code>, <code>indexOf</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> work on any slice. A list passes its values with <code>items()</code>, and the list itself changes:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span>[] ms = [<span class="n">36</span>, <span class="n">4</span>, <span class="n">12</span>, <span class="n">90</span>, <span class="n">7</span>]
     <span class="f">sort</span>(ms)
@@ -286,7 +286,7 @@ ana is new: false
     at, found := <span class="f">binarySearch</span>(ms, <span class="n">12</span>)
     where, there := <span class="f">binarySearch</span>(ms, <span class="n">50</span>)
     <span class="f">print</span>(<span class="s">&quot;12 at </span><span class="e">{</span>at<span class="e">}</span><span class="s"> </span><span class="e">{</span>found<span class="e">}</span><span class="s">, 50 would go at </span><span class="e">{</span>where<span class="e">}</span><span class="s"> </span><span class="e">{</span>there<span class="e">}</span><span class="s">&quot;</span>)
-    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">contains</span>(ms, <span class="n">90</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">7</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">8</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">has</span>(ms, <span class="n">90</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">7</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">8</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="t">List</span>[<span class="t">u16</span>] ports
     <span class="k">defer</span> ports.<span class="f">free</span>()
     <span class="k">for</span> p <span class="k">in</span> [<span class="n">443</span>, <span class="n">22</span>, <span class="n">8080</span>] {
@@ -300,7 +300,7 @@ ana is new: false
 12 at 2 true, 50 would go at 4 false
 true 1 -1
 8080 443 22</code></pre>
-<p><code>sort</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> compare with <code>&lt;</code>, so they take numbers, <code>Duration</code>s and text. <code>binarySearch</code> needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. <code>contains</code> and <code>indexOf</code> compare with <code>==</code>. For other values, <code>sortBy(xs, less)</code> sorts with a function that says whether its first value goes before its second, as <code>List.sort</code> does, and <code>binarySearchBy(xs, v, less)</code> searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; <code>List.sort</code> keeps them in their order. <code>min</code> or <code>max</code> of an empty slice stops the program.</p>
+<p><code>sort</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> compare with <code>&lt;</code>, so they take numbers, <code>Duration</code>s and text. <code>binarySearch</code> needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. <code>has</code> and <code>indexOf</code> compare with <code>==</code>. For other values, <code>sortBy(xs, less)</code> sorts with a function that says whether its first value goes before its second, as <code>List.sort</code> does, and <code>binarySearchBy(xs, v, less)</code> searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; <code>List.sort</code> keeps them in their order. <code>min</code> or <code>max</code> of an empty slice stops the program.</p>
 <h2 id="deque"><a href="#deque">Deque</a></h2>
 <p>A <code>Deque[T]</code> is a queue open at both ends. <code>push</code> and <code>pop</code> add and take at the back, <code>pushFront</code> and <code>popFront</code> at the front, and each takes the same time however many values there are. <code>first</code> and <code>last</code> give the values at the ends, and <code>at(i)</code> the one at i, counting from the front:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {

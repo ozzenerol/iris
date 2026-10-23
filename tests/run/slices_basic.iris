@@ -41,7 +41,7 @@ void main() {
     reverse(xs)
     scoped String b = join(xs)
     print(b)
-    print("{contains(xs, 8)} {contains(xs, 7)} {indexOf(xs, 5)} {indexOf(xs, 4)}")
+    print("{has(xs, 8)} {has(xs, 7)} {indexOf(xs, 5)} {indexOf(xs, 4)}")
     print("{min(xs)} {max(xs)}")
     Duration[3] ds = [36ms, 4ms, 12ms]
     print("{min(ds[:])} {max(ds[:])}")
