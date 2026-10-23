@@ -315,10 +315,11 @@ i32 rawDecode(u8 *p, i64 len, i64 at, i64 *n)
 // The characters of a text, for a loop: for r in s.runes() { }.
 pub struct Runes {
     pub str text
+    bool valid // all UTF-8, checked once: then each character is read without checks
 }
 
 // The characters of s, one code point at a time.
-pub Runes runes(str s) => Runes{text: s}
+pub Runes runes(str s) => Runes{text: s, valid: validUtf8(s)}
 
 // for r in s.runes(): the next character.
 pub (i32, bool) Runes.next(i64 *at) {
@@ -329,6 +330,20 @@ pub (i32, bool) Runes.next(i64 *at) {
     if b < 0x80 {
         *at += 1
         return (i32(b), true)
+    }
+    if self.valid {
+        // checked already: the lead byte says how many follow
+        i := *at
+        if b < 0xe0 {
+            *at = i + 2
+            return ((i32(b) & 0x1f) << 6 | (i32(self.text[i + 1]) & 0x3f), true)
+        }
+        if b < 0xf0 {
+            *at = i + 3
+            return ((i32(b) & 0x0f) << 12 | (i32(self.text[i + 1]) & 0x3f) << 6 | (i32(self.text[i + 2]) & 0x3f), true)
+        }
+        *at = i + 4
+        return ((i32(b) & 0x07) << 18 | (i32(self.text[i + 1]) & 0x3f) << 12 | (i32(self.text[i + 2]) & 0x3f) << 6 | (i32(self.text[i + 3]) & 0x3f), true)
     }
     r, n := decodeRune(self.text, *at)
     *at += n
