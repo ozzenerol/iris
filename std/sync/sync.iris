@@ -117,7 +117,7 @@ pub bool Once.done() => self.finished.load() == 1
 // before the next writer, so neither waits for ever. An RwLock can't be
 // copied.
 pub struct RwLock {
-    Mutex keep // not used: it only stops the RwLock being copied
+    Mutex keep   // not used: it only stops the RwLock being copied
     i64[8] state // the runtime's lock word and queues
 }
 

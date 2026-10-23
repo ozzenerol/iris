@@ -4692,9 +4692,12 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
     switch (t->kind) {
     case J_INT: case J_UINT: {
         int64_t v = readInt(p, t->size, t->kind == J_INT);
-        int n = t->kind == J_INT || t->size < 8 ? snprintf(buf, sizeof buf, "%lld", (long long)v)
-                                                : snprintf(buf, sizeof buf, "%llu", (unsigned long long)v);
-        iris_string_append(out, buf, n);
+        /* signed, or an unsigned type small enough to be read into one */
+        bool isSigned = t->kind == J_INT || t->size < 8;
+        char *end = buf + sizeof buf;
+        char *d = u64Digits(isSigned && v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v, end);
+        if (isSigned && v < 0) *--d = '-';
+        iris_string_append(out, d, end - d);
         break;
     }
     case J_FLOAT: {
