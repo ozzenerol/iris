@@ -404,6 +404,12 @@ static void printNode(Node *n, int depth, const char *label) {
         line(depth, label, "interp");
         children(&n->list, d, NULL);
         break;
+    case N_FMTSPEC:
+        sbPuts(&b, "fmt ");
+        putQuoted(&b, n->text, n->textLen);
+        line(depth, label, b.buf);
+        child(n->a, d, NULL);
+        break;
     case N_CHAR:
         sbPrintf(&b, "char %llu", (unsigned long long)n->ival);
         line(depth, label, b.buf);

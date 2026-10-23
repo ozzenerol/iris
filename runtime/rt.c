@@ -643,6 +643,126 @@ void iris_write_duration(int sink, IrisString *dst, int64_t d) {
     put(sink, dst, buf, (size_t)n);
 }
 
+/* {n:x}, {n:+}: an integer in a base, with its sign; into s. */
+void iris_fmt_int(IrisString *s, int64_t v, int isSigned, int base, int upper, int plus) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    bool neg = isSigned && v < 0;
+    uint64_t u = neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    char buf[72];
+    char *end = buf + sizeof buf, *p = end;
+    do {
+        *--p = digits[u % (uint64_t)base];
+        u /= (uint64_t)base;
+    } while (u);
+    if (neg) {
+        *--p = '-';
+    } else if (plus) {
+        *--p = '+';
+    }
+    iris_string_append(s, p, end - p);
+}
+
+/* {x:.2}, {x:e}, {x:+}: a float with that many digits after the point, or
+   in exponent form; into s. Without a precision, the fewest digits that
+   read back the same, as plain text does. */
+void iris_write_float(int sink, IrisString *dst, double v, int bits);
+
+void iris_fmt_float(IrisString *s, double v, int bits, int prec, int kind, int plus) {
+    char buf[512];
+    int n;
+    if (kind == 'e') {
+        n = snprintf(buf, sizeof buf, plus ? "%+.*e" : "%.*e", prec < 0 ? 6 : prec, v);
+    } else if (prec >= 0 || kind == 'f') {
+        n = snprintf(buf, sizeof buf, plus ? "%+.*f" : "%.*f", prec < 0 ? 6 : prec, v);
+    } else {
+        if (plus && !(v < 0) && !(v != v)) {
+            iris_string_append(s, "+", 1);
+        }
+        iris_write_float(3, s, v, bits);
+        return;
+    }
+    if (n < 0) n = 0;
+    if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
+    iris_string_append(s, buf, n);
+}
+
+/* The bytes of the first n characters of p (UTF-8), and how many there are. */
+static int64_t runePrefix(const char *p, int64_t len, int64_t n, int64_t *count) {
+    int64_t i = 0, c = 0;
+    while (i < len && c < n) {
+        unsigned char b = (unsigned char)p[i];
+        i += b < 0x80 ? 1 : b >> 5 == 6 ? 2 : b >> 4 == 14 ? 3 : b >> 3 == 30 ? 4 : 1;
+        c++;
+    }
+    if (i > len) i = len;
+    *count = c;
+    return i;
+}
+
+static void putRepeated(int sink, IrisString *dst, const char *unit, int ulen, int64_t times) {
+    char buf[256];
+    while (times > 0) {
+        int k = 0;
+        while (times > 0 && k + ulen <= (int)sizeof buf) {
+            memcpy(buf + k, unit, (size_t)ulen);
+            k += ulen;
+            times--;
+        }
+        put(sink, dst, buf, (size_t)k);
+    }
+}
+
+/* The text in s padded to width characters with fill, by align ('<', '>'
+   or '^'); zero puts zeros after a sign instead; maxChars cuts text. Frees s. */
+void iris_write_padded(int sink, IrisString *dst, IrisString *s, int64_t width, int fill, int align, int zero,
+                       int64_t maxChars) {
+    int64_t len = s->len, chars;
+    if (maxChars >= 0) {
+        len = runePrefix(s->ptr, s->len, maxChars, &chars);
+    } else {
+        runePrefix(s->ptr, s->len, INT64_MAX, &chars);
+    }
+    int64_t pad = width > chars ? width - chars : 0;
+    char unit[4];
+    int ulen;
+    if (zero) {
+        unit[0] = '0';
+        ulen = 1;
+    } else if (fill < 0x80) {
+        unit[0] = (char)fill;
+        ulen = 1;
+    } else if (fill < 0x800) {
+        unit[0] = (char)(0xc0 | fill >> 6);
+        unit[1] = (char)(0x80 | (fill & 0x3f));
+        ulen = 2;
+    } else if (fill < 0x10000) {
+        unit[0] = (char)(0xe0 | fill >> 12);
+        unit[1] = (char)(0x80 | (fill >> 6 & 0x3f));
+        unit[2] = (char)(0x80 | (fill & 0x3f));
+        ulen = 3;
+    } else {
+        unit[0] = (char)(0xf0 | fill >> 18);
+        unit[1] = (char)(0x80 | (fill >> 12 & 0x3f));
+        unit[2] = (char)(0x80 | (fill >> 6 & 0x3f));
+        unit[3] = (char)(0x80 | (fill & 0x3f));
+        ulen = 4;
+    }
+    const char *p = s->ptr ? s->ptr : "";
+    if (zero) {
+        /* -0042: the sign first */
+        int64_t sign = len > 0 && (p[0] == '-' || p[0] == '+') ? 1 : 0;
+        put(sink, dst, p, (size_t)sign);
+        putRepeated(sink, dst, unit, ulen, pad);
+        put(sink, dst, p + sign, (size_t)(len - sign));
+    } else {
+        int64_t before = align == '>' ? pad : align == '^' ? pad / 2 : 0;
+        putRepeated(sink, dst, unit, ulen, before);
+        put(sink, dst, p, (size_t)len);
+        putRepeated(sink, dst, unit, ulen, pad - before);
+    }
+    iris_string_free(s);
+}
+
 /* A float in the fewest digits that read back as the same value, written
  * as a plain decimal unless it is very large or very small: 100, 0.25,
  * 1e+21, 1e-07. */

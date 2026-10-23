@@ -131,6 +131,7 @@ typedef enum {
     N_ENUM_DOT, N_STRUCT_LIT, N_FIELD_INIT, N_ARRAY_LIT, N_TUPLE, N_TRY,
     N_CATCH, N_COMPTIME, N_CHAN_MAKE, N_THREAD,
     N_INCDEC,               /* ++x, x++, --x, x--: a: the place; op: P_INC or P_DEC; flags F_POSTFIX */
+    N_FMTSPEC,              /* {value:spec} in text: a: the value; text: the spec, as fmtSpecParse reads it */
     /* added by the checker */
     N_CONVERT,              /* a: the value; type: the target; flags F_EXPLICIT */
     N_SELF_PARAM            /* the implicit self parameter of a method */
@@ -214,6 +215,19 @@ struct Node {
 };
 
 Node *newNode(Arena *a, NodeKind kind, int line, int col);
+
+/* How a value in text is written, after a ':' in its braces:
+ * [[fill]align][+][0][width][.precision][type]. */
+typedef struct {
+    int fill;               /* a code point; ' ' unless given */
+    char align;             /* '<', '>', '^', or 0: numbers right, the rest left */
+    bool plus, zero;        /* '+': a sign on positive numbers; '0': zeros after the sign */
+    int64_t width;          /* at least this many characters; 0 for none */
+    int64_t prec;           /* digits after the point, or the most characters of text; -1 for none */
+    char type;              /* 'x', 'X', 'o', 'b' for integers, 'e', 'f' for floats, or 0 */
+} FmtSpec;
+
+bool fmtSpecParse(const char *s, size_t n, FmtSpec *out);
 void listPush(Arena *a, NodeList *l, Node *n);
 
 void printTree(Node *n);

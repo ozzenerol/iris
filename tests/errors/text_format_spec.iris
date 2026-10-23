@@ -1,0 +1,20 @@
+// error: 8: a constant's text can't say how a value is written (:03); use format when the program runs
+// error: 12: ':x' writes an integer in another base, not f64
+// error: 13: a precision is for floating point numbers and text, not i64
+// error: 14: '+' is for numbers, not str
+// error: 15: ':e' is for floating point numbers, not i64; convert it first, f64(...)
+// error: 16: '0' is for numbers, not bool
+const N = 5
+const T = "n={N:03}"
+
+void main() {
+    ratio := 1.5
+    print("{ratio:x}")
+    print("{3:.2}")
+    print("{"a":+}")
+    print("{3:e}")
+    print("{true:05}")
+    print("{width(x: 1)} {"a:b"} {[1, 2][0:1].len}")
+}
+
+i64 width(i64 x) => x

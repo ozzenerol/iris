@@ -1032,6 +1032,42 @@ static bool interpReadsStrings(Node *interp) {
     return false;
 }
 
+static void emitText(IR *ir, Node *arg, int sink, const char *dst);
+
+/* {value:spec}: the value is written into a String of its own, as the
+ * spec says for numbers and as usual for the rest, then padded to the
+ * width into the sink (iris_write_padded frees the String). */
+static void emitFmtSpec(IR *ir, Node *spec, int sink, const char *dst) {
+    FmtSpec fs;
+    fmtSpecParse(spec->text, spec->textLen, &fs);
+    Node *val = spec->a;
+    Type *t = val->type;
+    bool integer = t->kind == TY_INT && t != &tyDuration;
+    bool number = integer || t->kind == TY_FLOAT;
+    const char *slot = allocaFor(ir, &tyString, "fmt");
+    ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+    if (integer && (fs.type || fs.plus)) {
+        Val v = emitExpr(ir, val);
+        int base = fs.type == 'x' || fs.type == 'X' ? 16 : fs.type == 'o' ? 8 : fs.type == 'b' ? 2 : 10;
+        ins(ir, "call void @iris_fmt_int(ptr %s, i64 %s, i32 %d, i32 %d, i32 %d, i32 %d)", slot, toI64(ir, v),
+            t->isSigned ? 1 : 0, base, fs.type == 'X' ? 1 : 0, fs.plus ? 1 : 0);
+    } else if (t->kind == TY_FLOAT && (fs.prec >= 0 || fs.type || fs.plus)) {
+        Val v = emitExpr(ir, val);
+        const char *x = v.s;
+        if (t->bits == 32) {
+            x = tmp(ir);
+            ins(ir, "%s = fpext float %s to double", x, v.s);
+        }
+        ins(ir, "call void @iris_fmt_float(ptr %s, double %s, i32 %d, i32 %lld, i32 %d, i32 %d)", slot, x, t->bits,
+            (long long)fs.prec, fs.type, fs.plus ? 1 : 0);
+    } else {
+        emitText(ir, val, 3, slot);
+    }
+    char align = fs.align ? fs.align : number ? '>' : '<';
+    ins(ir, "call void @iris_write_padded(i32 %d, ptr %s, ptr %s, i64 %lld, i32 %d, i32 %d, i32 %d, i64 %lld)", sink,
+        dst, slot, (long long)fs.width, fs.fill, align, fs.zero ? 1 : 0, (long long)(number ? -1 : fs.prec));
+}
+
 /* Writes the pieces of text to a runtime sink: 1 stdout, 2 the panic
  * message, 3 the String at dst. */
 static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
@@ -1043,6 +1079,10 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
         n = arg->list.len;
     }
     for (int i = 0; i < n; i++) {
+        if (list[i]->kind == N_FMTSPEC) {
+            emitFmtSpec(ir, list[i], sink, dst);
+            continue;
+        }
         Val v = emitExpr(ir, list[i]);
         if (v.t->kind == TY_SLICE) {
             const char *ptr, *len;
@@ -3874,6 +3914,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare noalias ptr @iris_calloc(i64, i64)\n"
            "declare void @iris_free(ptr)\n"
            "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
+           "declare void @iris_fmt_int(ptr, i64, i32, i32, i32, i32)\n"
+           "declare void @iris_fmt_float(ptr, double, i32, i32, i32, i32)\n"
+           "declare void @iris_write_padded(i32, ptr, ptr, i64, i32, i32, i32, i64)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare ptr @iris_arena_alloc(ptr, i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"

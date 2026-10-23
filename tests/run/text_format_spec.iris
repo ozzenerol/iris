@@ -1,0 +1,22 @@
+// expect: [  8080] [8080  ] [ 8080  ] [008080] [-00042]
+// expect: [ff] [FF] [11111111] [377] [-ff] [+8080]
+// expect: [0.26] [2.567890e-01] [2.568e-01] [+0.3] [   0.257] [1.500000]
+// expect: [    Köln] [**Köln***] [Kö] [Köln──] [  true] [warn  |]
+// expect: [   250ms] [c8] [-05]
+// expect: 00ff- Köln
+// How a value is written: {value:spec}.
+enum Level { info, warn }
+
+void main() {
+    port := 8080
+    id := 255
+    loss := 0.256789
+    name := "Köln"
+    print("[{port:>6}] [{port:<6}] [{port:^7}] [{port:06}] [{-42:06}]")
+    print("[{id:x}] [{id:X}] [{id:08b}] [{id:o}] [{-id:x}] [{port:+}]")
+    print("[{loss:.2}] [{loss:e}] [{loss:.3e}] [{loss:+.1}] [{loss:8.3}] [{1.5:f}]")
+    print("[{name:>8}] [{name:*^9}] [{name:.2}] [{name:─<6}] [{true:>6}] [{Level.warn:<6}|]")
+    print("[{250ms:>8}] [{u8(200):x}] [{i8(-5):03}]")
+    scoped String s = format("{id:04x}-{name:>5}")
+    print(s)
+}

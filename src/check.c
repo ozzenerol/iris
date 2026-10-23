@@ -455,6 +455,7 @@ static Type *structType(Checker *c, Node *decl) {
 static Type *resolveType(Checker *c, Node *t);
 static Type *checkArenaAlloc(Checker *c, Node *e, Node *recv);
 static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool);
+static void checkFmtSpec(Checker *c, Node *spec);
 
 /* Sizes and alignments, by the same rules as C on 64-bit machines. They
  * decide how much room a data enum keeps for its values' data. */
@@ -2505,6 +2506,12 @@ static void foldConstText(Checker *c, Node *d) {
             sbPutn(&out, (*part)->text, (*part)->textLen);
             continue;
         }
+        if ((*part)->kind == N_FMTSPEC) {
+            error(c, *part, "a constant's text can't say how a value is written (:%s); use format when the program runs",
+                  (*part)->text);
+            ok = false;
+            continue;
+        }
         Type *t = checkExpr(c, part, NULL);
         if (isErr(t)) {
             ok = false;
@@ -3307,6 +3314,10 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
     case N_INTERP:
         error(c, e, "text with {} values can be passed straight to a function that takes str, or to format to keep it");
         return setType(e, &tyError);
+    case N_FMTSPEC:
+        checkExpr(c, &e->a, NULL);
+        checkFmtSpec(c, e);
+        return setType(e, e->a->type ? e->a->type : &tyError);
     case N_NULL:
         return setType(e, &tyNull);
     case N_IDENT: {
@@ -3700,12 +3711,37 @@ static void checkTextArg(Checker *c, Node *call, const char *fn) {
     checkText(c, &call->list.items[0], fn);
 }
 
+/* A {value:spec}: what the spec asks for must fit the value's type. */
+static void checkFmtSpec(Checker *c, Node *spec) {
+    Type *t = spec->a->type;
+    spec->type = t;
+    if (!t || isErr(t)) {
+        return;
+    }
+    FmtSpec fs;
+    fmtSpecParse(spec->text, spec->textLen, &fs);
+    bool integer = isInt(t) && t != &tyDuration;
+    bool number = integer || isFloat(t);
+    if (fs.type && strchr("xXob", fs.type) && !integer) {
+        error(c, spec, "':%c' writes an integer in another base, not %s", fs.type, t->name);
+    } else if ((fs.type == 'e' || fs.type == 'f') && !isFloat(t)) {
+        error(c, spec, "':%c' is for floating point numbers, not %s; convert it first, f64(...)", fs.type, t->name);
+    } else if ((fs.plus || fs.zero) && !number) {
+        error(c, spec, "'%s' is for numbers, not %s", fs.plus ? "+" : "0", t->name);
+    } else if (fs.prec >= 0 && integer) {
+        error(c, spec, "a precision is for floating point numbers and text, not %s", t->name);
+    }
+}
+
 static void checkText(Checker *c, Node **slot, const char *fn) {
     Node *arg = *slot;
     if (arg->kind == N_INTERP) {
         arg->type = &tyStr;
         for (int i = 0; i < arg->list.len; i++) {
             Node **part = &arg->list.items[i];
+            if ((*part)->kind == N_FMTSPEC) {
+                part = &(*part)->a;     /* the value; its spec is checked below */
+            }
             if ((*part)->kind == N_STRING) {
                 (*part)->type = &tyStr;
                 continue;
@@ -3763,6 +3799,11 @@ static void checkText(Checker *c, Node **slot, const char *fn) {
                 }
             } else if (t->kind == TY_STRING) {
                 coerce(c, part, &tyStr, "the value");
+            }
+        }
+        for (int i = 0; i < arg->list.len; i++) {
+            if (arg->list.items[i]->kind == N_FMTSPEC) {
+                checkFmtSpec(c, arg->list.items[i]);
             }
         }
         return;
