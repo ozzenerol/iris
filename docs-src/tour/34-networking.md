@@ -84,7 +84,7 @@ NetError.timeout
 
 ## Socket options
 
-Every connection from `net` starts with `TCP_NODELAY` on, so small writes go out at once. A `Conn` changes the common options with methods: `setNoDelay`, `setKeepAlive` with the idle time, the interval between probes and how many may go unanswered, and `setBuffers` for the kernel's buffers. Any other option that is an int goes through `setOption` and `option`, with the level and name C uses, from the system's headers with [import c](37-calling-c.html):
+Every connection from `net` starts with `TCP_NODELAY` on, so small writes go out at once. A `Conn` changes the common options with methods: `setNoDelay`, `setKeepAlive` with the idle time, the interval between probes and how many may go unanswered, and `setBuffers` for the kernel's buffers. Any other option that is an int goes through `setOption` and `option`, with the level and name C uses, from the system's headers with [import c](48-calling-c.html):
 
 ```iris run
 import net

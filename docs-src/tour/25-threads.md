@@ -183,7 +183,189 @@ It suits a cache or a counter that each thread keeps for itself, with no lock. T
 
 ## Waiting for many, and limits
 
-The `sync` module builds on `Mutex` and channels, and works between tasks and threads alike: a `WaitGroup` waits for a number of them to finish, a `Semaphore` lets only so many in at once, a `Once` runs a function the first time, an `RwLock` lets many readers or one writer in, and `Workers` hand jobs from a queue to a few tasks (see [the library](../std/index.html#sync)).
+The `sync` module builds on `Mutex` and channels, and works between tasks and threads alike. A `WaitGroup` waits for a number of them to finish, a `Semaphore` lets only so many in at once, a `Once` runs a function the first time, an `RwLock` lets many readers or one writer in, and `Workers` hand jobs from a queue to a few tasks.
+
+### WaitGroup
+
+A `WaitGroup` counts what is still running. `add` counts one more before each task or thread starts, `done` counts one less when it ends, and `wait` waits until the count is back to 0. `defer group.done()` at the top of the function makes sure it is counted however the function ends:
+
+```iris run
+import sync
+
+sync.WaitGroup group
+Atomic[i64] bytes
+
+void download(i64 size) {
+    defer group.done()
+    sleep(5ms) // the transfer
+    bytes.add(size)
+}
+
+void main() {
+    for size in [1200, 800, 4096] {
+        group.add()
+        spawn download(size)
+    }
+    group.add()
+    t := thread download(10000)
+    group.wait()
+    t.join()
+    print("{bytes.load()} bytes")
+    group.free()
+}
+```
+
+```output
+16096 bytes
+```
+
+The count goes up before the task starts, so `wait` can't miss one that hasn't begun yet. A thread is counted the same way as a task.
+
+### Semaphore
+
+A `Semaphore` lets a number of callers in at once and makes the others wait. `acquire` takes a place, waiting while there is none, and `release` gives it back. It keeps a program from opening a thousand connections to a backend at once:
+
+```iris run
+import sync
+
+sync.WaitGroup group
+sync.Semaphore slots
+Atomic[i64] inside
+Atomic[i64] most
+
+void call(i64 id) {
+    defer group.done()
+    slots.acquire()
+    defer slots.release()
+    n := inside.add(1)
+    for {
+        m := most.load()
+        if n <= m || most.cas(m, n) {
+            break
+        }
+    }
+    sleep(2ms) // the request
+    inside.sub(1)
+}
+
+void main() {
+    slots = sync.semaphore(3)
+    defer slots.free()
+    for id in 0..20 {
+        group.add()
+        spawn call(id)
+    }
+    group.wait()
+    group.free()
+    print("at most {most.load()} at once")
+}
+```
+
+```output
+at most 3 at once
+```
+
+### Once
+
+A `Once` runs a function the first time `run` is called, and makes every other caller wait until it has finished, so nothing uses what it sets up before it is ready. It suits setup that is costly and may never be needed:
+
+```iris run
+import sync
+
+sync.Once setup
+sync.WaitGroup group
+
+void loadRules() => print("rules loaded")
+
+void handle(i64 id) {
+    defer group.done()
+    setup.run(loadRules)
+}
+
+void main() {
+    for id in 0..5 {
+        group.add()
+        spawn handle(id)
+    }
+    group.wait()
+    group.free()
+    print("done: {setup.done()}")
+}
+```
+
+```output
+rules loaded
+done: true
+```
+
+### RwLock
+
+A `Mutex` lets one caller in at a time. Data that is read often and changed seldom, such as a routing table or settings that are loaded again now and then, does better with an `RwLock`: `readLock` lets any number of readers in at once, and `writeLock` waits until it is alone. A writer that waits keeps new readers out, so a stream of readers can't keep it waiting for ever:
+
+```iris run
+import sync
+
+sync.RwLock lock
+Map[str, str] routes
+
+str lookup(str host) {
+    lock.readLock()
+    defer lock.readUnlock()
+    to, found := routes.get(host)
+    return if found { to } else { "-" }
+}
+
+void update(str host, str to) {
+    lock.writeLock()
+    defer lock.writeUnlock()
+    routes.set(host, to)
+}
+
+void main() {
+    update("api.example.com", "10.0.0.11:8080")
+    print(lookup("api.example.com"))
+    update("api.example.com", "10.0.0.12:8080")
+    print("{lookup("api.example.com")} {lookup("www.example.com")}")
+    routes.free()
+}
+```
+
+```output
+10.0.0.11:8080
+10.0.0.12:8080 -
+```
+
+The `str` that `lookup` gives points into the map, so it is valid only until the entry changes. A program that keeps it longer copies it while it holds the lock.
+
+### Workers
+
+`sync.workers(n, handle)` starts `n` tasks that take jobs from a queue and call `handle` with each. `submit` adds a job, waiting while the queue is full, and `finish` waits for every job and then stops the tasks. It suits work that waits, such as requests to other servers, done a few at a time:
+
+```iris run
+import sync
+
+Atomic[i64] checked
+
+void check(i64 port) {
+    sleep(2ms) // a probe of the port
+    checked.add(1)
+}
+
+void main() {
+    w := sync.workers(4, check)
+    for port in 8000..8050 {
+        w.submit(port)
+    }
+    w.finish()
+    print("{checked.load()} ports checked")
+}
+```
+
+```output
+50 ports checked
+```
+
+A `WaitGroup`, a `Once` and an `RwLock` hold a `Mutex`, so they can't be copied either; keep them in a global or a struct, and pass a pointer.
 
 ## Threads in the library
 

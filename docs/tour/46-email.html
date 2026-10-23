@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sending email - Iris</title>
+<meta name="description" content="Services send mail for sign-ups, password resets, alerts and reports. The smtp module sends it through a mail server over SMTP, the way a mail program does, with TLS and a login.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html" class="on">Language Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../guides/index.html">Guides</a>
+      <a href="../design/index.html">Design</a>
+      <a href="../roadmap.html">Roadmap</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.67.1</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Language Tour" data-label="the chapter list" aria-expanded="true">&#8249; Language Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-json.html"><span class="num">28</span>JSON</a></li><li><a href="29-files.html"><span class="num">29</span>Files</a></li><li><a href="30-flags.html"><span class="num">30</span>Command-line flags</a></li><li><a href="31-time.html"><span class="num">31</span>Time</a></li><li><a href="32-logging.html"><span class="num">32</span>Input, output and logging</a></li><li><a href="33-http.html"><span class="num">33</span>HTTP</a></li><li><a href="34-networking.html"><span class="num">34</span>Networking</a></li><li><a href="35-sqlite.html"><span class="num">35</span>SQLite</a></li><li><a href="36-processes.html"><span class="num">36</span>Programs and the environment</a></li><li><a href="37-regular-expressions.html"><span class="num">37</span>Regular expressions</a></li><li><a href="38-configuration.html"><span class="num">38</span>Configuration files</a></li><li><a href="39-csv-and-xml.html"><span class="num">39</span>CSV and XML</a></li><li><a href="40-encodings-and-ids.html"><span class="num">40</span>Encodings and ids</a></li><li><a href="41-random-and-crypto.html"><span class="num">41</span>Random numbers and cryptography</a></li><li><a href="42-compression-and-archives.html"><span class="num">42</span>Compression and archives</a></li><li><a href="43-templates.html"><span class="num">43</span>Templates</a></li><li><a href="44-postgres-and-redis.html"><span class="num">44</span>PostgreSQL and Redis</a></li><li><a href="45-terminal.html"><span class="num">45</span>Terminal output and input</a></li><li><a href="46-email.html" class="on"><span class="num">46</span>Sending email</a></li><li><a href="47-math-and-big-numbers.html"><span class="num">47</span>Math and big numbers</a></li><li><a href="48-calling-c.html"><span class="num">48</span>Calling C</a></li><li><a href="49-testing.html"><span class="num">49</span>Testing</a></li><li><a href="50-tools.html"><span class="num">50</span>Tools</a></li></ol></aside>
+  <article class="prose">
+<h1>Sending email</h1>
+<p class="lede">Services send mail for sign-ups, password resets, alerts and reports. The <code>smtp</code> module sends it through a mail server over SMTP, the way a mail program does, with TLS and a login.</p>
+<h2 id="a-mail"><a href="#a-mail">A mail</a></h2>
+<p>A <code>smtp.Mail</code> holds what a mail has: <code>from</code>, <code>to</code>, <code>subject</code>, and the body as <code>text</code>, <code>html</code> or both. With both, the reader's mail program shows the one it can. <code>smtp.send(address, mail)</code> connects to the server, sends the mail and closes:</p>
+<pre class="code"><code><span class="k">import</span> smtp
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> smtp.<span class="f">send</span>(<span class="s">&quot;smtps://alerts:secret@mail.example.com&quot;</span>, smtp.<span class="t">Mail</span>{
+        from: <span class="s">&quot;Alerts &lt;alerts@example.com&gt;&quot;</span>,
+        to: [<span class="s">&quot;ops@example.com&quot;</span>],
+        subject: <span class="s">&quot;disk 91% full on db1&quot;</span>,
+        text: <span class="s">&quot;/var on db1 is at 91%.&quot;</span>,
+        html: <span class="s">&quot;&lt;p&gt;/var on &lt;b&gt;db1&lt;/b&gt; is at 91%.&lt;/p&gt;&quot;</span>,
+    })
+}</code></pre>
+<p><code>cc</code> names more recipients that everyone sees, <code>bcc</code> sends to recipients without naming them in the mail, and <code>replyTo</code> says where answers go. A subject with characters beyond ASCII is encoded as mail headers need it.</p>
+<h2 id="the-server-s-address"><a href="#the-server-s-address">The server's address</a></h2>
+<p>The server is given as an address, with the login in it:</p>
+<div class="table"><table><thead><tr><th>Address</th><th>Connection</th></tr></thead><tbody><tr><td><code>smtps://user:password@mail.example.com</code></td><td>TLS from the start, on port 465 unless one is given</td></tr><tr><td><code>smtp://user:password@mail.example.com:587</code></td><td>plain at first, then TLS with STARTTLS</td></tr><tr><td><code>smtp://localhost:25</code></td><td>a local server, with no login</td></tr></tbody></table></div>
+<p>On <code>smtp://</code>, the connection switches to TLS whenever the server offers it, and a password is never sent without TLS: when the server doesn't offer TLS, a login fails with <code>SmtpError.auth</code> before the password goes out. <code>?ca=file</code> trusts certificates other than the system's, for a server inside a company. A password with characters that mean something in a URL, such as <code>@</code> or <code>/</code>, is written with <code>url.encode</code> (see <a href="40-encodings-and-ids.html">Encodings and ids</a>).</p>
+<p>The password belongs in the environment, not in the code, so the address is read from a variable (see <a href="38-configuration.html">Configuration files</a>):</p>
+<pre class="code"><code><span class="k">import</span> os, smtp
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    server := <span class="k">try</span> os.<span class="f">env</span>(<span class="s">&quot;SMTP_URL&quot;</span>)
+    <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{from: <span class="s">&quot;noreply@example.com&quot;</span>, to: [<span class="s">&quot;ada@example.com&quot;</span>], subject: <span class="s">&quot;Welcome&quot;</span>, text: <span class="s">&quot;Thanks for signing up.&quot;</span>})
+}</code></pre>
+<h2 id="what-goes-over-the-wire"><a href="#what-goes-over-the-wire">What goes over the wire</a></h2>
+<p>To see what <code>smtp</code> sends, this program runs a small mail server of its own in a task, which answers every command with success and prints what it gets. A real server would also check the sender and the recipients and keep the mail:</p>
+<pre class="code run"><code><span class="k">import</span> net, smtp
+
+<span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+    <span class="t">bool</span> inData = <span class="k">false</span>
+    <span class="k">for</span> {
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="k">if</span> inData {
+            <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
+                inData = <span class="k">false</span>
+                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            } <span class="k">else</span> <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;Subject:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;To:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Type:&quot;</span>) {
+                shown, _, _ := line.<span class="f">cut</span>(<span class="s">&quot;;&quot;</span>)
+                <span class="f">print</span>(<span class="s">&quot;  </span><span class="e">{</span>shown<span class="e">}</span><span class="s">&quot;</span>)
+            }
+            <span class="k">continue</span>
+        }
+        <span class="f">print</span>(line)
+        <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;EHLO&quot;</span>) {
+            c.<span class="f">write</span>(<span class="s">&quot;250 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+        } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;DATA&quot;</span> {
+            inData = <span class="k">true</span>
+            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+        } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;QUIT&quot;</span> {
+            c.<span class="f">write</span>(<span class="s">&quot;221 bye</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
+            <span class="k">return</span>
+        } <span class="k">else</span> {
+            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+        }
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(ln)
+    <span class="k">scoped</span> <span class="t">String</span> server = <span class="f">format</span>(<span class="s">&quot;smtp://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">?helo=app.example.com&quot;</span>)
+    <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{
+        from: <span class="s">&quot;Shop &lt;orders@example.com&gt;&quot;</span>,
+        to: [<span class="s">&quot;ada@example.com&quot;</span>],
+        bcc: [<span class="s">&quot;archive@example.com&quot;</span>],
+        subject: <span class="s">&quot;Order 1041 shipped&quot;</span>,
+        text: <span class="s">&quot;Your order is on its way.&quot;</span>,
+        html: <span class="s">&quot;&lt;p&gt;Your order is on its way.&lt;/p&gt;&quot;</span>,
+    })
+}</code></pre>
+<pre class="out"><code>EHLO app.example.com
+MAIL FROM:&lt;orders@example.com&gt;
+RCPT TO:&lt;ada@example.com&gt;
+RCPT TO:&lt;archive@example.com&gt;
+DATA
+  To: ada@example.com
+  Subject: Order 1041 shipped
+  Content-Type: multipart/alternative
+  Content-Type: text/plain
+  Content-Type: text/html
+QUIT</code></pre>
+<p>The <code>bcc</code> address got the mail with <code>RCPT TO</code>, and isn't in any header. The body has a plain text part and an HTML part, each encoded so that any text gets through. Every mail also gets a <code>Date</code> and a <code>Message-ID</code>.</p>
+<h2 id="several-mails"><a href="#several-mails">Several mails</a></h2>
+<p><code>smtp.connect(address)</code> gives a <code>smtp.Client</code> that sends many mails on one connection, which is much faster than connecting for each. <code>close</code> ends it:</p>
+<pre class="code"><code><span class="k">import</span> smtp
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    c := <span class="k">try</span> smtp.<span class="f">connect</span>(<span class="s">&quot;smtp://alerts:secret@mail.example.com:587&quot;</span>)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">for</span> to <span class="k">in</span> [<span class="s">&quot;ada@example.com&quot;</span>, <span class="s">&quot;linus@example.com&quot;</span>, <span class="s">&quot;grace@example.com&quot;</span>] {
+        c.<span class="f">send</span>(smtp.<span class="t">Mail</span>{from: <span class="s">&quot;alerts@example.com&quot;</span>, to: [to], subject: <span class="s">&quot;Maintenance tonight&quot;</span>, text: <span class="s">&quot;The API is down from 22:00 to 22:30 UTC.&quot;</span>}) <span class="k">catch</span> e {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>to<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+}</code></pre>
+<p>One task uses a <code>Client</code> at a time. A program that sends from many tasks gives each its own, or keeps them in a pool (see <a href="44-postgres-and-redis.html#a-pool-for-other-connections">PostgreSQL and Redis</a>).</p>
+<h2 id="errors"><a href="#errors">Errors</a></h2>
+<p><code>SmtpError.connect</code> means the server can't be reached or TLS failed, and <code>auth</code> that the login was refused. <code>rejected</code> means the server refused the sender, a recipient or the mail, and the message has the server's reply, so a full mailbox or an unknown address shows why. After a <code>rejected</code> recipient, the <code>Client</code> can send the next mail.</p>
+<p>A line break in <code>from</code>, <code>subject</code>, <code>replyTo</code> or an address fails with <code>SmtpError.rejected</code> before anything is sent, so text from a form can't add headers of its own, such as a <code>Bcc</code> to everyone.</p>
+    <nav class="pager"><a class="prev" href="45-terminal.html"><span>Previous</span>Terminal output and input</a><a class="next" href="47-math-and-big-numbers.html"><span>Next</span>Math and big numbers</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-mail">A mail</a></li><li><a href="#the-server-s-address">The server&#x27;s address</a></li><li><a href="#what-goes-over-the-wire">What goes over the wire</a></li><li><a href="#several-mails">Several mails</a></li><li><a href="#errors">Errors</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.67.1</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../std/index.html">Library</a>
+    <a href="../roadmap.html">Roadmap</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

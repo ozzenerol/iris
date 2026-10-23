@@ -490,4 +490,4 @@ SqlError.failed: the SQL has 1 ? but 2 values were given
 
 A `Db` can be shared by threads; each call waits for the database on the thread that makes it. `IRIS_SQLITE` names another copy of SQLite to load instead of the system's.
 
-The [REST API guide](../guides/01-rest-api.html) builds a whole service that keeps its data in SQLite. For a database server, the library also has `pg` for PostgreSQL and `redis` for Redis (see the [library](../std/index.html)).
+The [REST API guide](../guides/01-rest-api.html) builds a whole service that keeps its data in SQLite. For a database server, [PostgreSQL and Redis](44-postgres-and-redis.html) covers `pg` and `redis`.
