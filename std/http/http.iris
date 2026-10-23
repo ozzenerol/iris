@@ -32,6 +32,7 @@ pub struct Request {
     i64 count
     List[str] paramNames
     List[str] paramValues
+    List[String] kept // form values decoded by form, freed with the request
     // when the request came in, by time.clock(): time.clock() - req.received
     // is how long it has taken
     pub Duration received
@@ -127,6 +128,7 @@ void Request.free() {
     free(self.values)
     self.paramNames.free()
     self.paramValues.free()
+    self.kept.freeEach()
 }
 
 // Answers with text.

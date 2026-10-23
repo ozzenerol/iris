@@ -1,0 +1,40 @@
+// expect: Set-Cookie: session=abc123; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Strict
+// expect: Set-Cookie: theme=dark; Path=/; SameSite=Lax
+// expect: Set-Cookie: old=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax
+// expect: body: session=[abc123] theme=[dark] lang=[ro] missing=[]
+
+import http, net, str
+
+void handle(http.Request *req, http.Response *res) {
+    res.setCookie(http.Cookie{name: "session", value: "abc123", maxAge: 1h, secure: true, sameSite: .strict})
+    res.setCookie(http.Cookie{name: "theme", value: "dark", httpOnly: false})
+    res.clearCookie("old")
+    res.text("session=[{req.cookie("session")}] theme=[{req.cookie("theme")}] lang=[{req.cookie("lang")}] missing=[{req.cookie("nope")}]")
+}
+
+void server(net.Listener ln) {
+    http.serveOn(ln, handle) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    try c.write("GET / HTTP/1.1\r\nHost: x\r\nCookie: session=abc123; theme=dark\r\nCookie: lang=ro\r\nConnection: close\r\n\r\n")
+    String body
+    defer body.free()
+    for {
+        scoped String line = c.readLine() catch e {
+            break
+        }
+        if str.startsWith(line, "Set-Cookie") {
+            print(line)
+        }
+        if str.startsWith(line, "session=") {
+            print("body: {line}")
+        }
+    }
+}

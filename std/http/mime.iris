@@ -1,0 +1,97 @@
+// MIME types by file extension, and answering with a file.
+
+import fs, path, str
+
+// The MIME type for a file's name, by its extension in any case:
+// mimeType("app.js") is "text/javascript; charset=utf-8". An extension
+// it doesn't know gives "application/octet-stream".
+pub str mimeType(str name) {
+    e := path.ext(name)
+    if e.len > 12 {
+        return "application/octet-stream"
+    }
+    u8[12] buf
+    for i in 0..e.len {
+        c := e[i]
+        buf[i] = if c >= 'A' && c <= 'Z' { c + 32 } else { c }
+    }
+    ext := buf[0:e.len]
+    return match ext {
+        ".html", ".htm" => "text/html; charset=utf-8"
+        ".css" => "text/css; charset=utf-8"
+        ".js", ".mjs" => "text/javascript; charset=utf-8"
+        ".json", ".map" => "application/json"
+        ".txt", ".text", ".log" => "text/plain; charset=utf-8"
+        ".md" => "text/markdown; charset=utf-8"
+        ".csv" => "text/csv; charset=utf-8"
+        ".xml" => "application/xml"
+        ".svg" => "image/svg+xml"
+        ".png" => "image/png"
+        ".jpg", ".jpeg" => "image/jpeg"
+        ".gif" => "image/gif"
+        ".webp" => "image/webp"
+        ".avif" => "image/avif"
+        ".ico" => "image/x-icon"
+        ".bmp" => "image/bmp"
+        ".woff" => "font/woff"
+        ".woff2" => "font/woff2"
+        ".ttf" => "font/ttf"
+        ".otf" => "font/otf"
+        ".pdf" => "application/pdf"
+        ".zip" => "application/zip"
+        ".gz", ".tgz" => "application/gzip"
+        ".tar" => "application/x-tar"
+        ".wasm" => "application/wasm"
+        ".mp3" => "audio/mpeg"
+        ".ogg" => "audio/ogg"
+        ".wav" => "audio/wav"
+        ".mp4" => "video/mp4"
+        ".webm" => "video/webm"
+        ".toml" => "application/toml"
+        ".yaml", ".yml" => "application/yaml"
+        ".webmanifest" => "application/manifest+json"
+        _ => "application/octet-stream"
+    }
+}
+
+// Answers with the file at file, its Content-Type from its extension. A
+// file that isn't there, or a folder, is answered with 404.
+pub !void Response.file(str file) {
+    data := fs.readAll(file) catch e {
+        if e.code == fs.FsError.notFound || e.code == fs.FsError.isDir {
+            self.status = 404
+            self.text("not found\n")
+            return
+        }
+        return e
+    }
+    self.body.free()
+    self.body = data
+    self.contentType.free()
+    self.contentType = mimeType(file).copy()
+}
+
+// Answers with the file called name inside dir, as file does, for a route
+// like "/static/*path". A name with a .. part, or an absolute one, is
+// answered with 404, so no file outside dir is sent.
+pub !void Response.fileFrom(str dir, str name) {
+    rest := name
+    bool safe = !path.isAbs(name) && !str.contains(name, "\\") && name.len > 0
+    for safe {
+        part, after, more := str.cut(rest, "/")
+        if part == ".." {
+            safe = false
+        }
+        if !more {
+            break
+        }
+        rest = after
+    }
+    if !safe {
+        self.status = 404
+        self.text("not found\n")
+        return
+    }
+    scoped String full = path.join(dir, name)
+    try self.file(full)
+}

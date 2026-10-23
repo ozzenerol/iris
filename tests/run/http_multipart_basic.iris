@@ -1,0 +1,66 @@
+// expect: 200 title=[Holiday photos] tags=[sea, sun] missing=[]
+// expect: file photo: beach.jpg image/jpeg 11 bytes [jpeg bytes!]
+// expect: file notes: notes.txt text/plain 13 bytes [line 1
+// expect: line 2]
+// expect: no file field: false
+// expect: 200 name=[Ada Lovelace] note=[1 + 1 = 2 & more] none=[]
+// expect: parts: 4 [title] [photo beach.jpg] [notes notes.txt]
+// expect: HttpError.badRequest: the multipart body has no closing boundary
+
+import http, net, str
+
+void upload(http.Request *req, http.Response *res) {
+    String out
+    defer out.free()
+    out.append("title=[{req.form("title")}] tags=[{req.form("tags")}] missing=[{req.form("nope")}]\n")
+    for name in ["photo", "notes"] {
+        f, ok := req.file(name)
+        if ok {
+            out.append("file {f.name}: {f.filename} {f.contentType} {f.data.len} bytes [{f.data}]\n")
+        }
+    }
+    _, ok := req.file("title")
+    out.append("no file field: {ok}")
+    res.text(out)
+}
+
+void signup(http.Request *req, http.Response *res) {
+    res.text("name=[{req.form("name")}] note=[{req.form("note")}] none=[{req.form("none")}]")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.post("/upload", upload)
+    r.post("/signup", signup)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+
+    scoped http.Multipart form = http.multipart()
+    form.field("title", "Holiday photos")
+    form.field("tags", "sea, sun")
+    form.file("photo", "beach.jpg", "image/jpeg", "jpeg bytes!")
+    form.file("notes", "notes.txt", "text/plain", "line 1\nline 2")
+    form.finish()
+    scoped String url = format("http://127.0.0.1:{ln.port}/upload")
+    scoped String ct = form.contentType()
+    scoped http.Reply rep = try http.post(url, ct, form.body)
+    print("{rep.status} {rep.body}")
+
+    scoped String url2 = format("http://127.0.0.1:{ln.port}/signup")
+    scoped http.Reply rep2 = try http.post(url2, "application/x-www-form-urlencoded", "name=Ada+Lovelace&note=1+%2B+1+%3D+2+%26+more")
+    print("{rep2.status} {rep2.body}")
+
+    scoped List[http.Part] parts = try http.parseMultipart(form.body, ct)
+    print("parts: {parts.len} [{parts.at(0).name}] [{parts.at(2).name} {parts.at(2).filename}] [{parts.at(3).name} {parts.at(3).filename}]")
+    _ = http.parseMultipart(form.body[0:form.body.len - 10], ct) catch e {
+        print("{e.code}: {e.message}")
+        List[http.Part]{}
+    }
+}

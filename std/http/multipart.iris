@@ -1,0 +1,218 @@
+// Forms: url-encoded and multipart/form-data bodies, with the files sent in
+// them, read on the server and written for the client.
+
+import random, str, url
+
+// One part of a multipart/form-data body. The text points into the body.
+pub struct Part {
+    // the form field's name, and the file's name ("" for a plain field)
+    pub str name
+    pub str filename
+    pub str contentType
+    pub str data
+}
+
+// The boundary from a multipart Content-Type, "" when there is none.
+str boundaryOf(str contentType) {
+    rest := contentType
+    for {
+        part, after, more := str.cut(rest, ";")
+        k, v, found := str.cut(str.trim(part), "=")
+        if found && str.trim(k) == "boundary" {
+            b := str.trim(v)
+            if b.len >= 2 && b[0] == '"' && b[b.len - 1] == '"' {
+                return b[1:b.len - 1]
+            }
+            return b
+        }
+        if !more {
+            return ""
+        }
+        rest = after
+    }
+}
+
+// The value of key="value" in a header like Content-Disposition.
+str paramOf(str header, str key) {
+    rest := header
+    for {
+        part, after, more := str.cut(rest, ";")
+        k, v, found := str.cut(str.trim(part), "=")
+        if found && sameName(str.trim(k), key) {
+            val := str.trim(v)
+            if val.len >= 2 && val[0] == '"' && val[val.len - 1] == '"' {
+                return val[1:val.len - 1]
+            }
+            return val
+        }
+        if !more {
+            return ""
+        }
+        rest = after
+    }
+}
+
+// The parts of a multipart/form-data body, contentType being the request's
+// Content-Type with its boundary. They point into body.
+pub !List[Part] parseMultipart(str body, str contentType) {
+    b := boundaryOf(contentType)
+    if b.len == 0 {
+        return error(HttpError.badRequest, "the Content-Type has no multipart boundary")
+    }
+    scoped String delim = format("--{b}")
+    scoped String next = format("\r\n--{b}")
+    List[Part] out
+    errdefer out.free()
+    at := str.find(body, delim)
+    if at < 0 {
+        return error(HttpError.badRequest, "the multipart body has no boundary")
+    }
+    rest := body[at + delim.len:]
+    for {
+        if str.startsWith(rest, "--") {
+            return out
+        }
+        if !str.startsWith(rest, "\r\n") {
+            return error(HttpError.badRequest, "a multipart boundary is not followed by a line break")
+        }
+        rest = rest[2:]
+        headEnd := str.find(rest, "\r\n\r\n")
+        if headEnd < 0 {
+            return error(HttpError.badRequest, "a multipart part has no end to its headers")
+        }
+        head := rest[0:headEnd]
+        content := rest[headEnd + 4:]
+        end := str.find(content, next)
+        if end < 0 {
+            return error(HttpError.badRequest, "the multipart body has no closing boundary")
+        }
+        Part p
+        p.data = content[0:end]
+        lines := head
+        for lines.len > 0 {
+            line, after, _ := str.cut(lines, "\r\n")
+            lines = after
+            name, value, found := str.cut(line, ":")
+            if !found {
+                continue
+            }
+            if sameName(str.trim(name), "Content-Disposition") {
+                p.name = paramOf(value, "name")
+                p.filename = paramOf(value, "filename")
+            } else if sameName(str.trim(name), "Content-Type") {
+                p.contentType = str.trim(value)
+            }
+        }
+        out.push(p)
+        rest = content[end + next.len:]
+    }
+}
+
+// Whether the request's body is a multipart form.
+bool Request.isMultipart() => str.startsWith(str.trim(self.header("Content-Type")), "multipart/form-data")
+
+// A field of a form the request sent, url-encoded or multipart, "" when it
+// has none. For a file field it is "": file gives those.
+pub str Request.form(str name) {
+    if self.isMultipart() {
+        parts := parseMultipart(self.body, self.header("Content-Type")) catch e {
+            return ""
+        }
+        defer parts.free()
+        for p in parts {
+            if p.name == name && p.filename.len == 0 {
+                return p.data
+            }
+        }
+        return ""
+    }
+    rest := str.trim(self.body)
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        scoped String k = url.decode(key) catch e {
+            continue
+        }
+        if k != name {
+            continue
+        }
+        // the decoded value is kept with the request, which frees it
+        v := url.decode(value) catch e {
+            return value
+        }
+        self.kept.push(v)
+        return v
+    }
+    return ""
+}
+
+// A file the request sent in a multipart form field, and whether there is
+// one. Its text points into the request's body.
+pub (Part, bool) Request.file(str name) {
+    Part none
+    if !self.isMultipart() {
+        return (none, false)
+    }
+    parts := parseMultipart(self.body, self.header("Content-Type")) catch e {
+        return (none, false)
+    }
+    defer parts.free()
+    for p in parts {
+        if p.name == name && p.filename.len > 0 {
+            return (p, true)
+        }
+    }
+    return (none, false)
+}
+
+// A multipart/form-data body being written, for a client to send: add the
+// fields and files, finish, then send body with contentType().
+pub struct Multipart {
+    pub String body
+    String boundary
+}
+
+// A new multipart body with a random boundary.
+pub Multipart multipart() {
+    u8[12] r
+    random.bytes(r[0:12])
+    Multipart m
+    m.boundary.append("iris-")
+    hex := "0123456789abcdef"
+    for c in r {
+        hi := i64(c >> 4)
+        lo := i64(c & 15)
+        m.boundary.append(hex[hi:hi + 1])
+        m.boundary.append(hex[lo:lo + 1])
+    }
+    return m
+}
+
+// Adds a plain field.
+pub void Multipart.field(str name, str value) {
+    self.body.append("--{self.boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+    self.body.append(value)
+    self.body.append("\r\n")
+}
+
+// Adds a file: its field's name, its file name, its type and its bytes.
+pub void Multipart.file(str name, str filename, str contentType, str data) {
+    self.body.append("--{self.boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {contentType}\r\n\r\n")
+    self.body.append(data)
+    self.body.append("\r\n")
+}
+
+// Ends the body.
+pub void Multipart.finish() {
+    self.body.append("--{self.boundary}--\r\n")
+}
+
+// The Content-Type to send the body with.
+pub String Multipart.contentType() => format("multipart/form-data; boundary={self.boundary}")
+
+// Frees the body.
+pub void Multipart.free() {
+    self.body.free()
+    self.boundary.free()
+}
