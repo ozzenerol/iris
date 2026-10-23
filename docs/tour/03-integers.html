@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.65.1</span>
+    <span class="ver">v0.66.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -152,6 +152,17 @@ next := ttl + <span class="n">10</span> <span class="c">// panic: integer overfl
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes of headers&quot;</span>)
 }</code></pre>
 <pre class="out"><code>320 bytes of headers</code></pre>
+<p>The <code>math</code> module has what wraps around, or stops at the ends, on purpose in every build: <code>math.addWrap</code> and <code>mulWrap</code> wrap, as a hash needs; <code>math.addSat</code> and <code>mulSat</code> stop at the largest or smallest <code>i64</code>; and <code>math.addChecked</code> and <code>mulChecked</code> give the result and whether it fit:</p>
+<pre class="code run"><code><span class="k">import</span> math
+
+<span class="t">void</span> <span class="f">main</span>() {
+    total, ok := math.<span class="f">addChecked</span>(<span class="n">9223372036854775800</span>, <span class="n">10</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ok<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">addSat</span>(<span class="n">9223372036854775800</span>, <span class="n">10</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">mulWrap</span>(<span class="n">4294967296</span>, <span class="n">4294967296</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">gcd</span>(<span class="n">84</span>, <span class="n">36</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">isqrt</span>(<span class="n">99</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">ipow</span>(<span class="n">3</span>, <span class="n">4</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">divFloor</span>(-<span class="n">7</span>, <span class="n">2</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">mod</span>(-<span class="n">7</span>, <span class="n">3</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>false 9223372036854775807 0
+12 9 81 -4 2</code></pre>
+<p><code>/</code> rounds toward zero and <code>%</code> takes the sign of the left side, so <code>-7 / 2</code> is <code>-3</code> and <code>-7 % 3</code> is <code>-1</code>; <code>math.divFloor</code> and <code>math.mod</code> round down instead, which a calendar or a ring buffer wants. Numbers too big for an <code>i64</code> are the <code>big</code> module's (see <a href="../std/index.html#big">the library</a>).</p>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
 <p>A value converts to another integer type on its own when that type holds every value it could have: <code>u8</code> to <code>u16</code>, <code>i32</code> to <code>i64</code>, <code>u32</code> to <code>i64</code>. Every other conversion is written out, with the type's name used like a function:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
@@ -183,7 +194,7 @@ next := seq + offset <span class="c">// error: &#x27;+&#x27; can&#x27;t mix u32 
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.65.1</span>
+    <span>Iris v0.66.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

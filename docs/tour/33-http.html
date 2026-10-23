@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.65.1</span>
+    <span class="ver">v0.66.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -139,7 +139,7 @@ try {
 405 allowed: GET</code></pre>
 <p>A path no pattern has gets 404, with the text <code>not found</code> and a newline, which <code>str.trim</code> takes off here. A path that is there for other methods gets 405, with an <code>Allow</code> header that lists them. When several patterns match, the one with the most fixed parts wins: <code>/users/me</code> goes before <code>/users/:id</code>, whatever the order they were added in.</p>
 <h2 id="what-a-request-holds"><a href="#what-a-request-holds">What a request holds</a></h2>
-<div class="table"><table><thead><tr><th>Field or method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>req.method</code></td><td><code>&quot;GET&quot;</code>, <code>&quot;POST&quot;</code>, …</td></tr><tr><td><code>req.path</code></td><td>the path, with its query</td></tr><tr><td><code>req.route()</code></td><td>the path without its query</td></tr><tr><td><code>req.body</code></td><td>the body, as text</td></tr><tr><td><code>req.param(&quot;id&quot;)</code></td><td>a part of the path, from the pattern</td></tr><tr><td><code>req.query(&quot;page&quot;)</code></td><td>a value from the query</td></tr><tr><td><code>req.header(&quot;Authorization&quot;)</code></td><td>a header, by its name in any case</td></tr><tr><td><code>req.protocol</code></td><td><code>&quot;HTTP/1.1&quot;</code> or <code>&quot;HTTP/2&quot;</code></td></tr><tr><td><code>req.received</code></td><td>when it came in, by <code>time.clock()</code></td></tr><tr><td><code>req.remote</code></td><td>who sent it, a <code>net.Addr</code>: <code>req.remote.ipText()</code> and <code>req.remote.port</code></td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Field or method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>req.method</code></td><td><code>&quot;GET&quot;</code>, <code>&quot;POST&quot;</code>, …</td></tr><tr><td><code>req.path</code></td><td>the path, with its query</td></tr><tr><td><code>req.route()</code></td><td>the path without its query</td></tr><tr><td><code>req.body</code></td><td>the body, as text</td></tr><tr><td><code>req.param(&quot;id&quot;)</code></td><td>a part of the path, from the pattern</td></tr><tr><td><code>req.query(&quot;page&quot;)</code></td><td>a value from the query</td></tr><tr><td><code>req.form(&quot;email&quot;)</code></td><td>a field of a form in the body</td></tr><tr><td><code>req.file(&quot;photo&quot;)</code></td><td>a file sent in a form</td></tr><tr><td><code>req.cookie(&quot;session&quot;)</code></td><td>a cookie the client sent</td></tr><tr><td><code>req.header(&quot;Authorization&quot;)</code></td><td>a header, by its name in any case</td></tr><tr><td><code>req.protocol</code></td><td><code>&quot;HTTP/1.1&quot;</code> or <code>&quot;HTTP/2&quot;</code></td></tr><tr><td><code>req.received</code></td><td>when it came in, by <code>time.clock()</code></td></tr><tr><td><code>req.remote</code></td><td>who sent it, a <code>net.Addr</code>: <code>req.remote.ipText()</code> and <code>req.remote.port</code></td></tr></tbody></table></div>
 <h2 id="answers"><a href="#answers">Answers</a></h2>
 <p><code>res.text(s)</code> answers with text and <code>res.json(s)</code> with JSON; each sets the <code>Content-Type</code>. The status is 200 unless <code>res.status</code> says another. <code>res.error(status, message)</code> sets the status and answers with <code>{&quot;error&quot;: message}</code>, and <code>res.header(name, value)</code> adds a header.</p>
 <p>A handler can return <code>!void</code>. An error that leaves it is answered with 500 and the error's message, so <code>try</code> can be used in a handler like anywhere else.</p>
@@ -190,6 +190,118 @@ try {
 at /backends/1
 400 {&quot;error&quot;: &quot;the required field \&quot;addr\&quot; is missing&quot;}
 400 {&quot;error&quot;: &quot;line 1, column 1: expected an object, found something else&quot;}</code></pre>
+<h2 id="forms-and-uploads"><a href="#forms-and-uploads">Forms and uploads</a></h2>
+<p><code>req.form(name)</code> gives a field of a form in the body, sent as <code>application/x-www-form-urlencoded</code> (with its <code>%XX</code> and <code>+</code> decoded) or as <code>multipart/form-data</code>. <code>req.file(name)</code> gives a file sent in a multipart form, as an <code>http.Part</code> with its <code>filename</code>, <code>contentType</code> and <code>data</code>, and whether there is one. Both give text that points into the request, valid until the handler returns.</p>
+<p>A client builds a multipart body with <code>http.multipart()</code>: <code>field</code> adds a field, <code>file</code> a file, and <code>finish</code> ends it. <code>contentType()</code> is the <code>Content-Type</code> to send it with:</p>
+<pre class="code run"><code><span class="k">import</span> http, net
+
+<span class="t">void</span> <span class="f">upload</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    f, ok := req.<span class="f">file</span>(<span class="s">&quot;photo&quot;</span>)
+    <span class="k">if</span> !ok {
+        res.<span class="f">error</span>(<span class="n">400</span>, <span class="s">&quot;no photo&quot;</span>)
+        <span class="k">return</span>
+    }
+    res.<span class="f">text</span>(<span class="s">&quot;</span><span class="e">{</span>req.<span class="f">form</span>(<span class="s">&quot;title&quot;</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span>f.filename<span class="e">}</span><span class="s">, </span><span class="e">{</span>f.contentType<span class="e">}</span><span class="s">, </span><span class="e">{</span>f.data.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, net.<span class="t">Listener</span> ln) {
+    r.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;server: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">post</span>(<span class="s">&quot;/photos&quot;</span>, upload)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;r, ln)
+
+    <span class="k">scoped</span> http.<span class="t">Multipart</span> form = http.<span class="f">multipart</span>()
+    form.<span class="f">field</span>(<span class="s">&quot;title&quot;</span>, <span class="s">&quot;The harbour at dawn&quot;</span>)
+    form.<span class="f">file</span>(<span class="s">&quot;photo&quot;</span>, <span class="s">&quot;harbour.jpg&quot;</span>, <span class="s">&quot;image/jpeg&quot;</span>, <span class="s">&quot;not really a jpeg&quot;</span>)
+    form.<span class="f">finish</span>()
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/photos&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> contentType = form.<span class="f">contentType</span>()
+    <span class="k">scoped</span> http.<span class="t">Reply</span> reply = <span class="k">try</span> http.<span class="f">post</span>(url, contentType, form.body)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reply.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>reply.body<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> http.<span class="t">Reply</span> none = <span class="k">try</span> http.<span class="f">post</span>(url, <span class="s">&quot;application/x-www-form-urlencoded&quot;</span>, <span class="s">&quot;title=No+photo&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>none.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>none.body<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>200 The harbour at dawn: harbour.jpg, image/jpeg, 17 bytes
+400 {&quot;error&quot;: &quot;no photo&quot;}</code></pre>
+<p>The whole body is read before the handler runs, so an upload counts against the Router's <code>maxBody</code>, 16 MiB unless it is set. <code>http.parseMultipart(body, contentType)</code> gives every part of a multipart body, in order.</p>
+<h2 id="cookies"><a href="#cookies">Cookies</a></h2>
+<p><code>req.cookie(name)</code> gives the value of a cookie the client sent, <code>&quot;&quot;</code> when it sent none. <code>res.setCookie(c)</code> adds a <code>Set-Cookie</code> header for an <code>http.Cookie</code>, and <code>res.clearCookie(name)</code> tells the browser to remove one:</p>
+<div class="table"><table><thead><tr><th>Field</th><th>What it sets</th><th>Default</th></tr></thead><tbody><tr><td><code>name</code>, <code>value</code></td><td>the cookie</td><td></td></tr><tr><td><code>path</code></td><td>the paths it is sent to</td><td><code>&quot;/&quot;</code></td></tr><tr><td><code>domain</code></td><td>the hosts it is sent to</td><td>this host only</td></tr><tr><td><code>maxAge</code></td><td>how long it is kept; <code>0s</code> until the browser closes</td><td><code>0s</code></td></tr><tr><td><code>secure</code></td><td>sent only over HTTPS</td><td><code>false</code></td></tr><tr><td><code>httpOnly</code></td><td>not readable by JavaScript</td><td><code>true</code></td></tr><tr><td><code>sameSite</code></td><td><code>.lax</code>, <code>.strict</code>, <code>.none</code>, or <code>.unset</code> to leave it out</td><td><code>.lax</code></td></tr></tbody></table></div>
+<p>The value is sent as it is, so it should be plain text without spaces, quotes, commas or semicolons; <code>base64</code> or <code>url.encode</code> makes any value fit.</p>
+<pre class="code run"><code><span class="k">import</span> http, net, <span class="t">str</span>
+
+<span class="t">void</span> <span class="f">login</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    res.<span class="f">setCookie</span>(http.<span class="t">Cookie</span>{name: <span class="s">&quot;session&quot;</span>, value: <span class="s">&quot;7f3a9c&quot;</span>, maxAge: <span class="n">8h</span>, secure: <span class="k">true</span>})
+    res.<span class="f">clearCookie</span>(<span class="s">&quot;guest&quot;</span>)
+    res.<span class="f">text</span>(<span class="s">&quot;welcome back, </span><span class="e">{</span>req.<span class="f">cookie</span>(<span class="s">&quot;user&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
+    http.<span class="f">serveOn</span>(ln, login) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;server: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(ln)
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;GET / HTTP/1.1</span><span class="e">\r</span><span class="e">\n</span><span class="s">Host: localhost</span><span class="e">\r</span><span class="e">\n</span><span class="s">Cookie: user=ada; theme=dark</span><span class="e">\r</span><span class="e">\n</span><span class="s">Connection: close</span><span class="e">\r</span><span class="e">\n</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">for</span> {
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
+            <span class="k">break</span>
+        }
+        <span class="k">if</span> <span class="t">str</span>.<span class="f">startsWith</span>(line, <span class="s">&quot;Set-Cookie&quot;</span>) || <span class="t">str</span>.<span class="f">startsWith</span>(line, <span class="s">&quot;welcome&quot;</span>) {
+            <span class="f">print</span>(line)
+        }
+    }
+}</code></pre>
+<pre class="out"><code>Set-Cookie: session=7f3a9c; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Lax
+Set-Cookie: guest=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax
+welcome back, ada</code></pre>
+<h2 id="files"><a href="#files">Files</a></h2>
+<p><code>res.file(path)</code> answers with a file, its <code>Content-Type</code> from its extension, and with 404 when there is no such file. <code>res.fileFrom(dir, name)</code> does the same for a file inside <code>dir</code>, and answers 404 for a name with a <code>..</code> part or an absolute one, so a route like <code>/static/*path</code> can't send a file from outside <code>dir</code>. <code>http.mimeType(name)</code> gives the type it uses, <code>application/octet-stream</code> for an extension it doesn't know:</p>
+<pre class="code run"><code><span class="k">import</span> http, fs, net, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">static</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    <span class="k">try</span> res.<span class="f">fileFrom</span>(<span class="s">&quot;/tmp/iris-tour-site&quot;</span>, req.<span class="f">param</span>(<span class="s">&quot;path&quot;</span>))
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, net.<span class="t">Listener</span> ln) {
+    r.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;server: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> fs.<span class="f">mkdirAll</span>(<span class="s">&quot;/tmp/iris-tour-site&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-site/style.css&quot;</span>, <span class="s">&quot;h1 </span><span class="e">{{</span><span class="s"> color: teal </span><span class="e">}}</span><span class="e">\n</span><span class="s">&quot;</span>)
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">get</span>(<span class="s">&quot;/static/*path&quot;</span>, static)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;r, ln)
+    <span class="k">for</span> name <span class="k">in</span> [<span class="s">&quot;style.css&quot;</span>, <span class="s">&quot;missing.js&quot;</span>, <span class="s">&quot;../etc/passwd&quot;</span>] {
+        <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/static/</span><span class="e">{</span>name<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">scoped</span> http.<span class="t">Reply</span> reply = <span class="k">try</span> http.<span class="f">get</span>(url)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reply.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>reply.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(reply.body)<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    <span class="f">print</span>(http.<span class="f">mimeType</span>(<span class="s">&quot;logo.SVG&quot;</span>))
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(<span class="s">&quot;/tmp/iris-tour-site&quot;</span>)
+}</code></pre>
+<pre class="out"><code>200 text/css; charset=utf-8: h1 { color: teal }
+404 text/plain; charset=utf-8: not found
+404 text/plain; charset=utf-8: not found
+image/svg+xml</code></pre>
+<p>HTML pages are often made with the <code>template</code> module (see <a href="../std/index.html#template">the library</a>).</p>
 <h2 id="checks-and-logging"><a href="#checks-and-logging">Checks and logging</a></h2>
 <p><code>r.use(check)</code> runs a check before the handler of every request, and <code>r.use(check, &quot;/admin&quot;)</code> only for paths that start with <code>/admin</code>. A check that answers the request itself returns <code>false</code>, and the handler isn't called: a login check, a rate limit. <code>r.after(done)</code> runs after every request, answered or not, for a log:</p>
 <pre class="code run"><code><span class="k">import</span> http, net
@@ -350,11 +462,11 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
     <nav class="pager"><a class="prev" href="32-logging.html"><span>Previous</span>Input, output and logging</a><a class="next" href="34-sqlite.html"><span>Next</span>SQLite</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server">A server</a></li><li><a href="#paths">Paths</a></li><li><a href="#what-a-request-holds">What a request holds</a></li><li><a href="#answers">Answers</a></li><li><a href="#checks-and-logging">Checks and logging</a></li><li><a href="#limits-and-stopping">Limits and stopping</a></li><li><a href="#a-client">A client</a></li><li><a href="#https">HTTPS</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server">A server</a></li><li><a href="#paths">Paths</a></li><li><a href="#what-a-request-holds">What a request holds</a></li><li><a href="#answers">Answers</a></li><li><a href="#forms-and-uploads">Forms and uploads</a></li><li><a href="#cookies">Cookies</a></li><li><a href="#files">Files</a></li><li><a href="#checks-and-logging">Checks and logging</a></li><li><a href="#limits-and-stopping">Limits and stopping</a></li><li><a href="#a-client">A client</a></li><li><a href="#https">HTTPS</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.65.1</span>
+    <span>Iris v0.66.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

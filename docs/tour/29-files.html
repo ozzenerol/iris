@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.65.1</span>
+    <span class="ver">v0.66.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -218,29 +218,8 @@ b.txt (file)
 logs (folder)
 FsError.exists</code></pre>
 <h2 id="walking-a-tree"><a href="#walking-a-tree">Walking a tree</a></h2>
-<p>There is no call that walks a whole tree: a function that lists a folder and calls itself for each folder in it does it. <code>path.join</code> makes each child's path:</p>
-<pre class="code run"><code><span class="k">import</span> fs, path
-
-!<span class="t">i64</span> <span class="f">walk</span>(<span class="t">str</span> dir, <span class="t">i64</span> depth) {
-    <span class="k">scoped</span> d := <span class="k">try</span> fs.<span class="f">readDir</span>(dir)
-    <span class="k">scoped</span> <span class="t">String</span> indent
-    <span class="k">for</span> _ <span class="k">in</span> <span class="n">0</span>..depth {
-        indent.<span class="f">append</span>(<span class="s">&quot;  &quot;</span>)
-    }
-    <span class="t">i64</span> total = <span class="n">0</span>
-    <span class="k">for</span> e <span class="k">in</span> d.entries {
-        <span class="k">scoped</span> <span class="t">String</span> p = path.<span class="f">join</span>(dir, e.name)
-        <span class="k">if</span> e.isDir {
-            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>indent<span class="e">}</span><span class="e">{</span>e.name<span class="e">}</span><span class="s">/&quot;</span>)
-            total += <span class="k">try</span> <span class="f">walk</span>(p, depth + <span class="n">1</span>)
-        } <span class="k">else</span> {
-            info := <span class="k">try</span> fs.<span class="f">stat</span>(p)
-            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>indent<span class="e">}</span><span class="e">{</span>e.name<span class="e">}</span><span class="s"> </span><span class="e">{</span>info.size<span class="e">}</span><span class="s">&quot;</span>)
-            total += info.size
-        }
-    }
-    <span class="k">return</span> total
-}
+<p><code>fs.walk(root)</code> gives the path of every file under a folder, in the folders under it too, as a <code>List</code> of <code>String</code>s. Each folder's names come in order, and a folder's files follow it. <code>freeEach</code> frees the paths and the list:</p>
+<pre class="code run"><code><span class="k">import</span> fs
 
 !<span class="t">void</span> <span class="f">main</span>() {
     root := <span class="s">&quot;/tmp/iris-tour-walk&quot;</span>
@@ -249,19 +228,86 @@ FsError.exists</code></pre>
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-walk/README&quot;</span>, <span class="s">&quot;read me</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-walk/src/main.iris&quot;</span>, <span class="s">&quot;void main() </span><span class="e">{{</span><span class="e">}}</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-walk/src/net/tcp.iris&quot;</span>, <span class="s">&quot;// tcp</span><span class="e">\n</span><span class="s">&quot;</span>)
-    total := <span class="k">try</span> <span class="f">walk</span>(root, <span class="n">0</span>)
+    files := <span class="k">try</span> fs.<span class="f">walk</span>(root)
+    <span class="k">defer</span> files.<span class="f">freeEach</span>()
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> f <span class="k">in</span> files {
+        info := <span class="k">try</span> fs.<span class="f">stat</span>(f)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f<span class="e">}</span><span class="s"> </span><span class="e">{</span>info.size<span class="e">}</span><span class="s">&quot;</span>)
+        total += info.size
+    }
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> bytes&quot;</span>)
     <span class="k">try</span> fs.<span class="f">removeAll</span>(root)
 }</code></pre>
-<pre class="out"><code>README 8
-src/
-  main.iris 15
-  net/
-    tcp.iris 7
+<pre class="out"><code>/tmp/iris-tour-walk/README 8
+/tmp/iris-tour-walk/src/main.iris 15
+/tmp/iris-tour-walk/src/net/tcp.iris 7
 30 bytes</code></pre>
+<p>A link is listed as a file and not followed, so a link to a folder above can't make the walk go round.</p>
+<p>When each file's size or time is wanted too, <code>fs.find(root)</code> gives the same files in the same order, each as a <code>Found</code> with its <code>path</code> and its <code>info</code>. It reads them relative to each open folder, which is quicker than a <code>fs.stat</code> of every path:</p>
+<pre class="code run"><code><span class="k">import</span> fs
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    root := <span class="s">&quot;/tmp/iris-tour-find&quot;</span>
+    <span class="k">try</span> fs.<span class="f">mkdirAll</span>(<span class="s">&quot;/tmp/iris-tour-find/logs&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-find/logs/app.log&quot;</span>, <span class="s">&quot;started</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-find/notes.txt&quot;</span>, <span class="s">&quot;todo</span><span class="e">\n</span><span class="s">&quot;</span>)
+    found := <span class="k">try</span> fs.<span class="f">find</span>(root)
+    <span class="k">defer</span> found.<span class="f">freeEach</span>()
+    <span class="k">for</span> f <span class="k">in</span> found {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f.path<span class="e">}</span><span class="s"> </span><span class="e">{</span>f.info.size<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(root)
+}</code></pre>
+<pre class="out"><code>/tmp/iris-tour-find/logs/app.log 8
+/tmp/iris-tour-find/notes.txt 5</code></pre>
+<h2 id="finding-files-by-name"><a href="#finding-files-by-name">Finding files by name</a></h2>
+<p><code>fs.glob(pattern)</code> gives the paths of the files that match a pattern, sorted. In each part of the pattern, <code>*</code> matches any run of characters, <code>?</code> one character, and <code>[abc]</code> one of those characters; <code>[a-z]</code> is a range and <code>[!abc]</code> any character but those. A part that is <code>**</code> matches any number of folders, none too. A name that starts with a dot is matched only by a pattern that starts with one:</p>
+<pre class="code run"><code><span class="k">import</span> fs
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    root := <span class="s">&quot;/tmp/iris-tour-glob&quot;</span>
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(root)
+    <span class="k">try</span> fs.<span class="f">mkdirAll</span>(<span class="s">&quot;/tmp/iris-tour-glob/src/net&quot;</span>)
+    <span class="k">for</span> name <span class="k">in</span> [<span class="s">&quot;src/main.iris&quot;</span>, <span class="s">&quot;src/net/tcp.iris&quot;</span>, <span class="s">&quot;src/net/udp.iris&quot;</span>, <span class="s">&quot;notes.txt&quot;</span>] {
+        <span class="k">scoped</span> <span class="t">String</span> p = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>root<span class="e">}</span><span class="s">/</span><span class="e">{</span>name<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">try</span> fs.<span class="f">writeAll</span>(p, <span class="s">&quot;&quot;</span>)
+    }
+    sources := <span class="k">try</span> fs.<span class="f">glob</span>(<span class="s">&quot;/tmp/iris-tour-glob/**/*.iris&quot;</span>)
+    <span class="k">defer</span> sources.<span class="f">freeEach</span>()
+    <span class="k">for</span> f <span class="k">in</span> sources {
+        <span class="f">print</span>(f)
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>fs.<span class="f">matches</span>(<span class="s">&quot;[tu]?p.iris&quot;</span>, <span class="s">&quot;udp.iris&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>fs.<span class="f">matches</span>(<span class="s">&quot;*.iris&quot;</span>, <span class="s">&quot;notes.txt&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(root)
+}</code></pre>
+<pre class="out"><code>/tmp/iris-tour-glob/src/main.iris
+/tmp/iris-tour-glob/src/net/tcp.iris
+/tmp/iris-tour-glob/src/net/udp.iris
+true false</code></pre>
+<p><code>fs.matches(pattern, name)</code> says whether one name matches one part of a pattern. A pattern that starts with a wildcard is taken from the working folder, and gives paths without <code>./</code> in front.</p>
+<h2 id="temporary-files-and-copies"><a href="#temporary-files-and-copies">Temporary files and copies</a></h2>
+<p><code>fs.tempDir(prefix)</code> makes a new folder with a name no other has, the prefix and six random characters, and gives its path; <code>fs.tempFile(prefix)</code> does the same for an empty file. They go in <code>$TMPDIR</code>, or <code>/tmp</code>, or in the folder given as <code>dir</code>. <code>fs.copy(from, to)</code> copies a file, with its permissions, and replaces what is at <code>to</code>:</p>
+<pre class="code run"><code><span class="k">import</span> fs, path, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> work = <span class="k">try</span> fs.<span class="f">tempDir</span>(<span class="s">&quot;deploy&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">str</span>.<span class="f">startsWith</span>(path.<span class="f">base</span>(work), <span class="s">&quot;deploy-&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>path.<span class="f">base</span>(work).len<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> conf = <span class="k">try</span> fs.<span class="f">tempFile</span>(<span class="s">&quot;proxy&quot;</span>, dir: work)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(conf, <span class="s">&quot;listen 8080</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> backup = path.<span class="f">join</span>(work, <span class="s">&quot;proxy.conf.bak&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">copy</span>(conf, backup)
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.<span class="f">readAll</span>(backup)
+    <span class="f">print</span>(text)
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(work)
+}</code></pre>
+<pre class="out"><code>true 13
+listen 8080
+</code></pre>
+<p>The program removes them when it is done; <code>removeAll</code> takes a folder with everything in it.</p>
 <h2 id="paths"><a href="#paths">Paths</a></h2>
 <p>The <code>path</code> module works on the text of a path and never looks at the disk. <code>path.join(a, b)</code> gives a new <code>String</code>; the others give a part of the path they are given, as a <code>str</code>:</p>
-<div class="table"><table><thead><tr><th>Call</th><th>Gives</th></tr></thead><tbody><tr><td><code>path.join(&quot;/srv&quot;, &quot;www&quot;)</code></td><td><code>/srv/www</code>, and <code>b</code> itself when <code>b</code> starts with <code>/</code></td></tr><tr><td><code>path.base(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>access.log</code></td></tr><tr><td><code>path.dir(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>/var/log/proxy</code>, and <code>.</code> when there is no folder</td></tr><tr><td><code>path.ext(&quot;access.log.gz&quot;)</code></td><td><code>.gz</code>, and <code>&quot;&quot;</code> when there is none</td></tr><tr><td><code>path.stem(&quot;access.log&quot;)</code></td><td><code>access</code></td></tr><tr><td><code>path.isAbs(&quot;/etc&quot;)</code></td><td><code>true</code></td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Call</th><th>Gives</th></tr></thead><tbody><tr><td><code>path.join(&quot;/srv&quot;, &quot;www&quot;)</code></td><td><code>/srv/www</code>, and <code>b</code> itself when <code>b</code> starts with <code>/</code></td></tr><tr><td><code>path.base(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>access.log</code></td></tr><tr><td><code>path.dir(&quot;/var/log/proxy/access.log&quot;)</code></td><td><code>/var/log/proxy</code>, and <code>.</code> when there is no folder</td></tr><tr><td><code>path.ext(&quot;access.log.gz&quot;)</code></td><td><code>.gz</code>, and <code>&quot;&quot;</code> when there is none</td></tr><tr><td><code>path.stem(&quot;access.log&quot;)</code></td><td><code>access</code></td></tr><tr><td><code>path.isAbs(&quot;/etc&quot;)</code></td><td><code>true</code></td></tr><tr><td><code>path.split(&quot;/srv/www/index.html&quot;)</code></td><td><code>/srv/www/</code> and <code>index.html</code></td></tr><tr><td><code>path.clean(&quot;/srv//www/../logs/&quot;)</code></td><td><code>/srv/logs</code></td></tr><tr><td><code>path.rel(&quot;/srv/www&quot;, &quot;/srv/logs/a.log&quot;)</code></td><td><code>../logs/a.log</code></td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">import</span> path
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -276,14 +322,57 @@ src/
 . |  | www
 /srv/www/index.html /etc/hosts true false</code></pre>
 <p>A name that starts with a dot, like <code>.bashrc</code>, has no extension. A <code>/</code> at the end of a path is ignored.</p>
+<p><code>path.split(p)</code> gives the folder and the name. The folder keeps its <code>/</code>, so the two put together are the path again, and a path without a <code>/</code> is all name. <code>path.clean(p)</code> gives a new <code>String</code> with the shortest path to the same place: no <code>.</code> parts, no doubled <code>/</code> and no <code>/</code> at the end, and each <code>..</code> takes out the part before it. <code>path.rel(base, target)</code> gives the path that leads from <code>base</code> to <code>target</code>, so that joining <code>base</code> and it gives <code>target</code>; it fails with <code>path.PathError.notRelative</code> when one of them starts at <code>/</code> and the other doesn't:</p>
+<pre class="code run"><code><span class="k">import</span> path
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    dir, name := path.<span class="f">split</span>(<span class="s">&quot;/srv/www/index.html&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>dir<span class="e">}</span><span class="s"> </span><span class="e">{</span>name<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> c = path.<span class="f">clean</span>(<span class="s">&quot;/srv//www/./../logs/&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> up = path.<span class="f">clean</span>(<span class="s">&quot;../a/../..&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c<span class="e">}</span><span class="s"> </span><span class="e">{</span>up<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> r = <span class="k">try</span> path.<span class="f">rel</span>(<span class="s">&quot;/srv/www&quot;</span>, <span class="s">&quot;/srv/logs/access.log&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> same = <span class="k">try</span> path.<span class="f">rel</span>(<span class="s">&quot;/srv&quot;</span>, <span class="s">&quot;/srv/&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r<span class="e">}</span><span class="s"> </span><span class="e">{</span>same<span class="e">}</span><span class="s">&quot;</span>)
+    _ = path.<span class="f">rel</span>(<span class="s">&quot;srv&quot;</span>, <span class="s">&quot;/srv&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
+    }
+}</code></pre>
+<pre class="out"><code>/srv/www/ index.html
+/srv/logs ../..
+../logs/access.log .
+PathError.notRelative</code></pre>
+<h2 id="the-working-folder"><a href="#the-working-folder">The working folder</a></h2>
+<p>A path that doesn't start with <code>/</code> is taken from the working folder. <code>os.cwd()</code> gives it and <code>os.chdir(path)</code> changes it, for the whole program. <code>os.home()</code> gives the user's home folder, <code>os.hostname()</code> the name of the machine, and <code>os.pid()</code> the program's process id:</p>
+<pre class="code run"><code><span class="k">import</span> fs, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> start = <span class="k">try</span> os.<span class="f">cwd</span>()
+    <span class="k">try</span> os.<span class="f">chdir</span>(<span class="s">&quot;/tmp&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;iris-tour-here.txt&quot;</span>, <span class="s">&quot;here&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>fs.<span class="f">exists</span>(<span class="s">&quot;/tmp/iris-tour-here.txt&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">remove</span>(<span class="s">&quot;iris-tour-here.txt&quot;</span>)
+    <span class="k">try</span> os.<span class="f">chdir</span>(start)
+    <span class="k">scoped</span> <span class="t">String</span> home = <span class="k">try</span> os.<span class="f">home</span>()
+    <span class="k">scoped</span> <span class="t">String</span> host = <span class="k">try</span> os.<span class="f">hostname</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>home.len &gt; <span class="n">0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>host.len &gt; <span class="n">0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>os.<span class="f">pid</span>() &gt; <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+    os.<span class="f">chdir</span>(<span class="s">&quot;/tmp/iris-tour-no-such-folder&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>true
+true true true
+OsError.notFound</code></pre>
+<p><code>os.home()</code> reads <code>$HOME</code>, and asks the system for the user's folder when it isn't set.</p>
     <nav class="pager"><a class="prev" href="28-json.html"><span>Previous</span>JSON</a><a class="next" href="30-flags.html"><span>Next</span>Command-line flags</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#paths">Paths</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#finding-files-by-name">Finding files by name</a></li><li><a href="#temporary-files-and-copies">Temporary files and copies</a></li><li><a href="#paths">Paths</a></li><li><a href="#the-working-folder">The working folder</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.65.1</span>
+    <span>Iris v0.66.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

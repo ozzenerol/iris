@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.65.1</span>
+    <span class="ver">v0.66.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -73,6 +73,22 @@ true 192 bytes</code></pre>
 }</code></pre>
 <pre class="out"><code>open read|write 1.5s 0.25 false</code></pre>
 <p>A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.</p>
+<h2 id="how-a-value-is-written"><a href="#how-a-value-is-written">How a value is written</a></h2>
+<p>A <code>:</code> after the value in the braces says how it is written: <code>{port:&gt;6}</code>. What follows the <code>:</code> is, in this order, each part optional:</p>
+<div class="table"><table><thead><tr><th>Part</th><th>What it does</th></tr></thead><tbody><tr><td>a fill character and <code>&lt;</code>, <code>&gt;</code> or <code>^</code></td><td>where the value goes in the width: left, right or centred; the fill is a space unless one is given before</td></tr><tr><td><code>+</code></td><td>a <code>+</code> before positive numbers</td></tr><tr><td><code>0</code></td><td>numbers padded with zeros after the sign</td></tr><tr><td>a width</td><td>at least this many characters; the rest is filled</td></tr><tr><td><code>.</code> and a number</td><td>for a float, the digits after the point; for text, the most characters kept</td></tr><tr><td><code>x</code>, <code>X</code>, <code>o</code> or <code>b</code></td><td>an integer in hex, upper-case hex, octal or binary</td></tr><tr><td><code>e</code> or <code>f</code></td><td>a float in exponent form or with a fixed point, 6 digits after it unless a precision is given</td></tr></tbody></table></div>
+<p>Numbers go to the right of the width and everything else to the left, unless the spec says another way. The width and the precision of text count characters, not bytes, so <code>Köln</code> is four wide:</p>
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span><span class="n">8080</span>:&gt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;GET&quot;</span>:&lt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;ok&quot;</span>:^<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;Köln&quot;</span>:*&gt;<span class="n">8</span><span class="e">}</span><span class="s">]&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">7</span>:<span class="n">03</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">42</span>:<span class="n">06</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">255</span>:x<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">255</span>:#&gt;6X<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">5</span>:08b<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">12</span>:+<span class="e">}</span><span class="s">&quot;</span>)
+    loss := <span class="n">0.256789</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>loss:.<span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>loss:.3e<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">2.5</span>:f<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1e-9</span>:e<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span><span class="s">&quot;ingress-controller&quot;</span>:.<span class="n">7</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="k">true</span>:&gt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="n">250ms</span>:&gt;<span class="n">8</span><span class="e">}</span><span class="s">]&quot;</span>)
+}</code></pre>
+<pre class="out"><code>[  8080] [GET   ] [  ok  ] [****Köln]
+007 -00042 ff ####FF 00000101 +12
+0.26 2.568e-01 2.500000 1.000000e-09
+[ingress] [  true] [   250ms]</code></pre>
+<p>A width works with any value that can be put into text, a struct with a <code>format</code> method included. The other parts must fit the value: <code>{1.5:x}</code> and <code>{&quot;a&quot;:+}</code> don't compile. A <code>:</code> inside parentheses, brackets or quotes is part of the value, so <code>{pad(text, width: 4)}</code> and <code>{line[0:2]}</code> work as they read. A constant's text can't have a spec; use <code>format</code> when the program runs.</p>
 <h2 id="a-struct-s-own-text"><a href="#a-struct-s-own-text">A struct's own text</a></h2>
 <p>A struct with a method <code>String format()</code> can be put into text. The method gives the text, and the <code>String</code> it returns is freed after the statement:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Ip4</span> {
@@ -160,11 +176,11 @@ Connection: close</code></pre>
     <nav class="pager"><a class="prev" href="06-text.html"><span>Previous</span>Text</a><a class="next" href="08-if-and-match.html"><span>Next</span>if and match</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#braces">Braces</a></li><li><a href="#what-can-be-put-into-text">What can be put into text</a></li><li><a href="#a-struct-s-own-text">A struct&#x27;s own text</a></li><li><a href="#format">format</a></li><li><a href="#text-passed-straight-to-a-function">Text passed straight to a function</a></li><li><a href="#building-text-a-part-at-a-time">Building text a part at a time</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#braces">Braces</a></li><li><a href="#what-can-be-put-into-text">What can be put into text</a></li><li><a href="#how-a-value-is-written">How a value is written</a></li><li><a href="#a-struct-s-own-text">A struct&#x27;s own text</a></li><li><a href="#format">format</a></li><li><a href="#text-passed-straight-to-a-function">Text passed straight to a function</a></li><li><a href="#building-text-a-part-at-a-time">Building text a part at a time</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.65.1</span>
+    <span>Iris v0.66.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>

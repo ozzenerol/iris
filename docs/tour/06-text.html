@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.65.1</span>
+    <span class="ver">v0.66.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -87,7 +87,27 @@ first byte 71, last 49</code></pre>
 2: 182
 3: 108
 4: 110</code></pre>
-<p><code>ö</code> is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for <code>&quot;ö&quot;</code> finds it, since no letter's bytes appear inside another's.</p>
+<p><code>ö</code> is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for <code>&quot;ö&quot;</code> finds it, since no letter's bytes appear inside another's. <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> put text in order byte by byte, with the shorter first when one starts the other, which for UTF-8 is the order of the code points: <code>&quot;Zebra&quot; &lt; &quot;apple&quot;</code>, as upper-case letters come first.</p>
+<p><code>runes()</code> goes over the characters instead, each a code point, an <code>i32</code>. <code>runeCount</code> counts them, and <code>validUtf8</code> says whether text is UTF-8 at all. A character literal beyond ASCII, such as <code>&#x27;ö&#x27;</code>, is its code point too:</p>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">void</span> <span class="f">main</span>() {
+    city := <span class="s">&quot;Köln 東京&quot;</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>city.len<span class="e">}</span><span class="s"> bytes, </span><span class="e">{</span>city.<span class="f">runeCount</span>()<span class="e">}</span><span class="s"> characters&quot;</span>)
+    <span class="k">for</span> r <span class="k">in</span> city.<span class="f">runes</span>() {
+        <span class="k">if</span> r &gt; <span class="n">127</span> {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r:x<span class="e">}</span><span class="s">&quot;</span>)
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="s">&#x27;ö&#x27;</span> == <span class="n">0xf6</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">str</span>.<span class="f">validUtf8</span>(<span class="s">&quot;Köln&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">str</span>.<span class="f">validUtf8</span>(<span class="s">&quot;K</span><span class="e">\xf6</span><span class="s">ln&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>12 bytes, 7 characters
+f6
+6771
+4eac
+true true false</code></pre>
+<p>Bytes that aren't UTF-8 come out of <code>runes()</code> as <code>str.REPLACEMENT</code>, one for each byte, so a loop over any text ends. <code>decodeRune(at)</code> gives the character at a byte and how many bytes it takes, <code>str.appendRune(&amp;s, r)</code> adds a character's bytes to a <code>String</code>, and <code>str.fromRune(r)</code> makes one. A character literal beyond ASCII can't be given to a <code>u8</code>, which is a byte: its UTF-8 bytes are the string <code>&quot;ö&quot;</code>.</p>
+<p><code>str.isDigit</code>, <code>isHexDigit</code>, <code>isLetter</code>, <code>isAlnum</code>, <code>isUpper</code>, <code>isLower</code> and <code>isPunct</code> say what kind of ASCII character a code point is, and <code>isSpace</code> knows Unicode's spaces as well. <code>str.toUpper</code> and <code>str.toLower</code> change one ASCII letter.</p>
 <h2 id="string"><a href="#string">String</a></h2>
 <p>A <code>String</code> owns its bytes. It can grow, and it must be freed when it is no longer needed. <code>.copy()</code> makes a <code>String</code> from a <code>str</code>, and <code>append</code> adds to the end:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
@@ -115,6 +135,21 @@ first byte 71, last 49</code></pre>
 }</code></pre>
 <pre class="out"><code>https true true</code></pre>
 <p>A function that gives back a <code>String</code> gives the caller a new one to free. <code>upper</code>, <code>replace</code> and <code>format</code> are such functions.</p>
+<p><code>insert</code> puts text in at a byte, <code>truncate</code> keeps the first bytes, <code>clear</code> empties a <code>String</code> and keeps its memory, and <code>reserve</code> makes room for more bytes, so that appending up to that many doesn't grow it again:</p>
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> line = <span class="s">&quot;200 OK&quot;</span>.<span class="f">copy</span>()
+    line.<span class="f">reserve</span>(<span class="n">64</span>)
+    line.<span class="f">insert</span>(<span class="n">0</span>, <span class="s">&quot;HTTP/1.1 &quot;</span>)
+    <span class="f">print</span>(line)
+    line.<span class="f">truncate</span>(<span class="n">8</span>)
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>line<span class="e">}</span><span class="s">]&quot;</span>)
+    line.<span class="f">clear</span>()
+    <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>line<span class="e">}</span><span class="s">] </span><span class="e">{</span>line.len<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>HTTP/1.1 200 OK
+[HTTP/1.1]
+[] 0</code></pre>
+<p>A place outside the <code>String</code> stops the program with a message that says where.</p>
 <h2 id="writing-text-in-the-program"><a href="#writing-text-in-the-program">Writing text in the program</a></h2>
 <p>A literal is written in double quotes. A backslash starts an escape:</p>
 <div class="table"><table><thead><tr><th>Escape</th><th>Is</th></tr></thead><tbody><tr><td><code>\n</code></td><td>a newline</td></tr><tr><td><code>\t</code></td><td>a tab</td></tr><tr><td><code>\r</code></td><td>a carriage return</td></tr><tr><td><code>\0</code></td><td>a zero byte</td></tr><tr><td><code>\\</code></td><td>a backslash</td></tr><tr><td><code>\&quot;</code></td><td>a double quote</td></tr><tr><td><code>\x41</code></td><td>the byte written in two hex digits</td></tr></tbody></table></div>
@@ -190,6 +225,27 @@ tcp | 0 | 0 | 0.0.0.0:22 | LISTEN</code></pre>
 <pre class="out"><code>GET content-length /api/v2/users/v2
 ------------</code></pre>
 <p><code>upper</code> and <code>lower</code> change ASCII letters only.</p>
+<p>More of the same kind:</p>
+<pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="s">&quot;/api/users&quot;</span>.<span class="f">trimPrefix</span>(<span class="s">&quot;/api&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;main.iris&quot;</span>.<span class="f">trimSuffix</span>(<span class="s">&quot;.iris&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    dir, file, _ := <span class="s">&quot;/var/log/nginx/access.log&quot;</span>.<span class="f">cutLast</span>(<span class="s">&quot;/&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>dir<span class="e">}</span><span class="s"> </span><span class="e">{</span>file<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> kv := <span class="s">&quot;key=a=b&quot;</span>.<span class="f">splitN</span>(<span class="s">&quot;=&quot;</span>, <span class="n">2</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>kv.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>kv.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> rows := <span class="s">&quot;GET /</span><span class="e">\r</span><span class="e">\n</span><span class="s">Host: lan</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>.<span class="f">lines</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.len<span class="e">}</span><span class="s"> lines, the second is [</span><span class="e">{</span>rows.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">]&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> id = <span class="s">&quot;42&quot;</span>.<span class="f">padLeft</span>(<span class="n">6</span>, <span class="s">&quot;0&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> name = <span class="s">&quot;x-request-id&quot;</span>.<span class="f">title</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>id<span class="e">}</span><span class="s"> </span><span class="e">{</span>name<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;Content-Length&quot;</span>.<span class="f">equalFold</span>(<span class="s">&quot;content-length&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>/users main
+/var/log/nginx access.log
+key -&gt; a=b
+2 lines, the second is [Host: lan]
+000042 X-Request-Id true</code></pre>
+<p><code>splitN</code> stops after a number of parts, and the last holds the rest. <code>lines</code> cuts at <code>\n</code> and <code>\r\n</code>, with no empty line for a line break at the very end. <code>padLeft</code> and <code>padRight</code> count characters, not bytes, and <code>reverse</code> turns the characters around.</p>
 <h2 id="reading-numbers-from-text"><a href="#reading-numbers-from-text">Reading numbers from text</a></h2>
 <p><code>parseInt</code> and <code>parseFloat</code> read a number and give an error when the text isn't one (errors are covered in <a href="18-errors.html">Errors</a>):</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
@@ -205,7 +261,7 @@ tcp | 0 | 0 | 0.0.0.0:22 | LISTEN</code></pre>
 }</code></pre>
 <pre class="out"><code>8080 0.25 -1
 ParseError.empty: no number in an empty text</code></pre>
-<p><code>parseInt</code> takes an optional sign and decimal digits; a number too large for an <code>i64</code> is <code>ParseError.tooBig</code>.</p>
+<p><code>parseInt</code> takes an optional sign and decimal digits; a number too large for an <code>i64</code> is <code>ParseError.tooBig</code>. <code>parseIntBase</code> reads other bases, from 2 to 36: <code>&quot;ff&quot;.parseIntBase(16)</code> is 255. To write a number in another base, see <a href="07-values-in-text.html">Values in text</a>.</p>
     <nav class="pager"><a class="prev" href="05-booleans-and-operators.html"><span>Previous</span>Booleans and operators</a><a class="next" href="07-values-in-text.html"><span>Next</span>Values in text</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -213,7 +269,7 @@ ParseError.empty: no number in an empty text</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.65.1</span>
+    <span>Iris v0.66.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>
