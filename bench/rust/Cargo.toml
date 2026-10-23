@@ -8,6 +8,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["http2"] }
 serde = { version = "1", features = ["derive"] }
 async-channel = "2"
+num-bigint = "0.4"
 
 [profile.release]
 opt-level = 3
@@ -74,3 +75,19 @@ path = "../strings/main.rs"
 [[bin]]
 name = "tcp-echo"
 path = "../tcp-echo/main.rs"
+
+[[bin]]
+name = "fmt-text"
+path = "../fmt-text/main.rs"
+
+[[bin]]
+name = "utf8"
+path = "../utf8/main.rs"
+
+[[bin]]
+name = "bigint"
+path = "../bigint/main.rs"
+
+[[bin]]
+name = "rwlock"
+path = "../rwlock/main.rs"

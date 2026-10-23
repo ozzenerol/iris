@@ -1,0 +1,26 @@
+import str
+
+const i64 REPEAT = 400000
+
+void main() {
+    // ASCII, Latin, Cyrillic, CJK and emoji, as real text mixes them
+    piece := "Köln, Москва и 東京 – ok 😀 "
+    scoped String text = "".copy()
+    text.reserve(piece.len * REPEAT)
+    for _ in 0..REPEAT {
+        text.append(piece)
+    }
+    i64 total = 0
+    for _ in 0..3 {
+        total += text.runeCount()
+        i64 sum = 0
+        for r in text.runes() {
+            sum += i64(r)
+        }
+        total += sum % 1000003
+        if text.validUtf8() {
+            total += 1
+        }
+    }
+    print("{text.len} {total}")
+}

@@ -46,7 +46,7 @@ import sync
 Atomic[i64] done
 
 void fetch(i64 id) {
-    sleep(2ms)  // a request to a backend
+    sleep(2ms) // a request to a backend
     done.add(1)
 }
 
@@ -55,7 +55,7 @@ void main() {
     for id in 0..20 {
         w.submit(id)
     }
-    w.finish()  // waits for every job, then stops the tasks
+    w.finish() // waits for every job, then stops the tasks
     print("{done.load()} fetched")
 }
 ```

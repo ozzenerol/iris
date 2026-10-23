@@ -11,6 +11,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "fannkuch-redux",
        "hashmap", "sort", "strings", "channels"]
+# the standard library against Go's and the best-known Rust crates
+LIB = ["fmt-text", "utf8", "bigint", "rwlock"]
 NET = ["http-hello", "http-json", "tcp-echo", "http2"]
 # the cores this process may use (a container may get any of the host's):
 # the first half runs servers, the rest the load, and one CPU program at a time
@@ -117,14 +119,14 @@ def main():
     ap.add_argument("--out", default=os.path.join(HERE, "results.json"))
     ap.add_argument("names", nargs="*")
     a = ap.parse_args()
-    names = [n for n in CPU + NET if not a.names or n in a.names]
+    names = [n for n in CPU + NET + LIB if not a.names or n in a.names]
     build(names, a.iris)
     data = json.load(open(a.out)) if os.path.exists(a.out) else {"results": {}}
     for n in names:
         r = {}
         for lang in ("iris", "iris_safe", "rust", "go"):
             b = f"{OUT}/{lang}-{n}"
-            if n in CPU:
+            if n in CPU or n in LIB:
                 t, mem, outs = timed(b, a.runs)
                 r[lang], r[lang + "_out"] = round(t, 3), sorted(outs)[0].strip()
             else:
@@ -133,7 +135,7 @@ def main():
                 mem = statistics.median(x[1] for x in runs)
             r[lang + "_mem"] = round(mem, 1)
             print(f"{n:15} {lang:5} {r[lang]}  {r[lang + '_mem']} MiB", flush=True)
-        if n in CPU and len({r["iris_out"], r["rust_out"]}) != 1:
+        if (n in CPU or n in LIB) and len({r["iris_out"], r["rust_out"]}) != 1:
             print(f"warning: {n}: iris and rust print different results", flush=True)
         data["results"][n] = r
     cpu = re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read())
