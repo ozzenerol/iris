@@ -1,0 +1,44 @@
+import xml
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+// A 30 MB document of items made in memory, read as events: elements,
+// attributes and bytes of text.
+!void main() {
+    String doc
+    defer doc.free()
+    doc.append("<catalog>")
+    i64 seed = 42
+    i64 i = 0
+    for doc.len < 30000000 {
+        r := next(&seed)
+        doc.append("<item id=\"{i}\" kind=\"k{r % 7}\"><name>Item {i} &amp; co</name><price>{r % 10000}</price><tags><tag>a{r % 13}</tag><tag>b&lt;{r % 5}&gt;</tag></tags></item>")
+        i += 1
+    }
+    doc.append("</catalog>")
+    i64 elements = 0
+    i64 attrs = 0
+    i64 text = 0
+    rd := xml.reader(doc)
+    for {
+        ev := rd.next() catch e {
+            if e.code == xml.XmlError.end {
+                break
+            }
+            return e
+        }
+        match ev.kind {
+            .start => {
+                elements += 1
+                attrs += ev.attrs.len
+            }
+            .text => text += ev.text.len
+            .end => {}
+        }
+        ev.free()
+    }
+    print("{elements} {attrs} {text}")
+}

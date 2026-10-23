@@ -12,7 +12,8 @@ OUT = os.path.join(HERE, "out")
 CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "fannkuch-redux",
        "hashmap", "sort", "strings", "channels"]
 # the standard library against Go's and the best-known Rust crates
-LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk"]
+LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
+       "xml-parse", "toml-parse", "zip", "tar", "template"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
 NET = ["http-hello", "http-json", "tcp-echo", "http2"]
@@ -37,11 +38,11 @@ def build(names, iris):
     for n in names:
         sh([iris, "build", "--mode=release-fast", "-o", f"{OUT}/iris-{n}", f"{HERE}/{n}/main.iris"])
         sh([iris, "build", "--mode=release-safe", "-o", f"{OUT}/iris_safe-{n}", f"{HERE}/{n}/main.iris"])
-        sh(["go", "build", "-o", f"{OUT}/go-{n}", f"{HERE}/{n}/main.go"])
+        sh(["go", "build", "-o", f"{OUT}/go-{n}", f"./{n}"], cwd=HERE)
     sh(["cargo", "build", "--release", "-q"], cwd=f"{HERE}/rust")
     for n in names:
         shutil.copy(f"{HERE}/rust/target/release/{n}", f"{OUT}/rust-{n}")
-    sh(["go", "build", "-o", f"{OUT}/echo-load", f"{HERE}/tools/echo-load/main.go"])
+    sh(["go", "build", "-o", f"{OUT}/echo-load", "./tools/echo-load"], cwd=HERE)
     sh(["cc", "-O2", "-o", f"{OUT}/memrun", f"{HERE}/tools/memrun.c"])
 
 

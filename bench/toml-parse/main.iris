@@ -1,0 +1,39 @@
+import toml
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+i64 countKeys(toml.Value *v) {
+    i64 n = 0
+    if v.kind == .table {
+        n += v.len()
+    }
+    if v.kind == .table || v.kind == .array {
+        for i in 0..v.len() {
+            n += countKeys(v.at(i))
+        }
+    }
+    return n
+}
+
+// A 2 MB document of tables made in memory, read 20 times into a Value,
+// counting the keys.
+!void main() {
+    String doc
+    defer doc.free()
+    i64 seed = 7
+    i64 i = 0
+    for doc.len < 2000000 {
+        r := next(&seed)
+        doc.append("[server_{i}]\nname = \"srv-{i}\"\nport = {8000 + r % 1000}\nenabled = true\nweight = {r % 100}.5\ntags = [\"a{r % 3}\", \"b\", \"c\"]\n\n[server_{i}.limits]\nmax = {r}\nburst = {r % 64}\n\n")
+        i += 1
+    }
+    i64 total = 0
+    for _ in 0..20 {
+        scoped toml.Value v = try toml.parse(doc)
+        total += countKeys(&v)
+    }
+    print("{total}")
+}
