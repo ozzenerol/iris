@@ -1,0 +1,10 @@
+// error: 9: sort[Point], made here, has the errors above
+struct Point {
+    i64 x
+    i64 y
+}
+
+void main() {
+    Point[2] points = [Point{x: 2}, Point{x: 1}]
+    sort(points)
+}

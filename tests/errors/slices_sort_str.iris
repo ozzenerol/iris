@@ -1,6 +1,0 @@
-// error: 5: sort[str], made here, has the errors above
-
-void main() {
-    str[] names = ["b", "a"]
-    sort(names)
-}
