@@ -1,0 +1,115 @@
+// expect: 5 entries
+// expect: file hello.txt 12 420 [hello, tar!
+// expect: ]
+// expect: dir docs/ 0 493 []
+// expect: file docs/readme.md 7 420 [# Docs
+// expect: ]
+// expect: symlink latest -> hello.txt
+// expect: file 307 chars 3 [abc]
+// expect: found: hello, tar!
+// expect: gzip: 5 entries, the long one intact: true
+// expect: TarError.broken: hello.txt: the header's checksum doesn't match
+// expect: TarError.broken: the archive ends inside docs/readme.md
+// expect: from disk: 3 entries [a.txt] [sub/] [sub/b.txt]
+// expect: TarError.unsafe: ../evil has .. in it, which would leave the folder
+// expect: extracted: alpha / beta
+// expect: run.sh mode 493
+
+import tar, compress, fs, path, time, str
+
+!void main() {
+    String long
+    defer long.free()
+    for i in 0..30 {
+        long.append("abcdefghi/")
+    }
+    long.append("end.txt")
+    tar.Writer w
+    defer w.free()
+    w.add("hello.txt", "hello, tar!\n", mtime: 1700000000)
+    w.addDir("docs/")
+    w.add("docs/readme.md", "# Docs\n")
+    w.addLink("latest", "hello.txt")
+    w.add(long, "abc")
+    w.finish()
+    scoped tar.Archive a = try tar.parse(w.out)
+    print("{a.entries.len} entries")
+    for e in a.entries {
+        match e.kind {
+            .file => {
+                if e.name.len > 100 {
+                    print("file {e.name.len} chars {e.size} [{e.data}]")
+                } else {
+                    print("file {e.name} {e.size} {e.mode} [{e.data}]")
+                }
+            }
+            .dir => print("dir {e.name} {e.size} {e.mode} []")
+            .symlink => print("symlink {e.name} -> {e.link}")
+            _ => print("other {e.name}")
+        }
+    }
+    print("found: {str.trimRight(a.find("hello.txt").data)}")
+    scoped String packed = try compress.gzip(w.out)
+    scoped tar.Archive z = try tar.parse(packed)
+    print("gzip: {z.entries.len} entries, the long one intact: {z.entries.at(4).name == long}")
+
+    scoped String bad = w.out.copy()
+    u8[] bytes = bad.ptr[0:bad.len]
+    bytes[137] = '5'
+    _ = tar.parse(bad) catch e {
+        print("{e.code}: {e.message}")
+        tar.Archive{}
+    }
+    _ = tar.parse(w.out[0:512 * 4 + 3]) catch e {
+        print("{e.code}: {e.message}")
+        tar.Archive{}
+    }
+
+    scoped String base = format("/tmp/iris-tar-{time.now().ns}")
+    scoped String src = path.join(base, "src")
+    scoped String sub = path.join(src, "sub")
+    try fs.mkdirAll(sub)
+    scoped String fa = path.join(src, "a.txt")
+    try fs.writeAll(fa, "alpha")
+    scoped String fb = path.join(sub, "b.txt")
+    try fs.writeAll(fb, "beta")
+    tar.Writer d
+    defer d.free()
+    try d.addTree(src)
+    d.finish()
+    scoped String file = path.join(base, "out.tar")
+    try fs.writeAll(file, d.out)
+    scoped tar.Archive back = try tar.open(file)
+    print("from disk: {back.entries.len} entries [{back.entries.at(0).name}] [{back.entries.at(1).name}] [{back.entries.at(2).name}]")
+
+    tar.Writer evil
+    defer evil.free()
+    evil.add("../evil", "x")
+    evil.add("run.sh", "#!/bin/sh\n", mode: 493)
+    evil.finish()
+    scoped tar.Archive ea = try tar.parse(evil.out)
+    scoped String dest = path.join(base, "dest")
+    ea.extract(dest) catch e {
+        print("{e.code}: {e.message}")
+    }
+    try back.extract(dest)
+    scoped String ra = path.join(dest, "a.txt")
+    scoped String rb = path.join(dest, "sub/b.txt")
+    scoped String ta = try fs.readAll(ra)
+    scoped String tb = try fs.readAll(rb)
+    print("extracted: {ta} / {tb}")
+    tar.Writer ok
+    defer ok.free()
+    ok.add("run.sh", "#!/bin/sh\n", mode: 493)
+    ok.finish()
+    scoped tar.Archive oa = try tar.parse(ok.out)
+    try oa.extract(dest)
+    tar.Writer again
+    defer again.free()
+    scoped String run = path.join(dest, "run.sh")
+    try again.addFile(run, "run.sh")
+    again.finish()
+    scoped tar.Archive ag = try tar.parse(again.out)
+    print("run.sh mode {ag.entries.at(0).mode}")
+    try fs.removeAll(base)
+}

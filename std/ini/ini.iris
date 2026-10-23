@@ -1,0 +1,212 @@
+// INI files: [sections] of key = value lines, with ; and # comments.
+//
+//     scoped ini.File f = try ini.parse(text)
+//     host := f.get("database", "host")
+
+import str
+
+// What reading fails with: syntax for a line that is neither a section, a
+// key = value nor a comment.
+pub enum IniError { syntax }
+
+// One [section] and its keys, in the order they were written. The keys
+// before the first [section] are in one named "".
+pub struct Section {
+    pub String name
+    pub List[String] keys
+    pub List[String] values
+}
+
+// Frees the section's text.
+pub void Section.free() {
+    self.name.free()
+    self.keys.freeEach()
+    self.values.freeEach()
+}
+
+// The value of key, and whether the section has it.
+pub (str, bool) Section.lookup(str key) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            return (self.values.at(i), true)
+        }
+    }
+    return ("", false)
+}
+
+// Sets key to value, adding it when the section doesn't have it.
+pub void Section.set(str key, str value) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            self.values.items()[i].free()
+            self.values.set(i, value.copy())
+            return
+        }
+    }
+    self.keys.push(key.copy())
+    self.values.push(value.copy())
+}
+
+// Takes key out; false when it wasn't there.
+pub bool Section.remove(str key) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            k := self.keys.remove(i)
+            k.free()
+            v := self.values.remove(i)
+            v.free()
+            return true
+        }
+    }
+    return false
+}
+
+// An INI file: its sections, in order. The first is always the one named ""
+// for the keys before any [section].
+pub struct File {
+    pub List[Section] sections
+}
+
+// Frees the sections.
+pub void File.free() => self.sections.freeEach()
+
+// The section called name, or null.
+pub Section *File.section(str name) {
+    for i in 0..self.sections.len {
+        if self.sections.at(i).name == name {
+            return &self.sections.items()[i]
+        }
+    }
+    return null
+}
+
+// The section called name, added at the end when there is none.
+Section *File.ensure(str name) {
+    s := self.section(name)
+    if s != null {
+        return s
+    }
+    self.sections.push(Section{name: name.copy()})
+    return &self.sections.items()[self.sections.len - 1]
+}
+
+// The value of key in section, and whether it is there.
+pub (str, bool) File.lookup(str section, str key) {
+    s := self.section(section)
+    if s == null {
+        return ("", false)
+    }
+    return s.lookup(key)
+}
+
+// The value of key in section, or "" when it isn't there.
+pub str File.get(str section, str key) {
+    v, _ := self.lookup(section, key)
+    return v
+}
+
+// Sets key in section to value, adding the section or the key as needed.
+pub void File.set(str section, str key, str value) => self.ensure(section).set(key, value)
+
+// Takes key out of section; false when it wasn't there.
+pub bool File.remove(str section, str key) {
+    s := self.section(section)
+    return s != null && s.remove(key)
+}
+
+// A value without its comment and quotes: "a ; b" stays a ; b, and a ; or #
+// after a space starts a comment.
+str cleanValue(str v) {
+    v = str.trim(v)
+    if v.len >= 2 && (v[0] == '"' || v[0] == '\'') {
+        q := v[0]
+        for i in 1..v.len {
+            if v[i] == q {
+                rest := str.trim(v[i + 1:])
+                if rest.len == 0 || rest[0] == ';' || rest[0] == '#' {
+                    return v[1:i]
+                }
+                break
+            }
+        }
+    }
+    for i in 1..v.len {
+        if (v[i] == ';' || v[i] == '#') && (v[i - 1] == ' ' || v[i - 1] == '\t') {
+            return str.trimRight(v[0:i])
+        }
+    }
+    return v
+}
+
+// Reads INI text. A key given twice keeps the last value.
+pub !File parse(str text) {
+    File f
+    errdefer f.free()
+    f.sections.push(Section{name: "".copy()})
+    Section *at = &f.sections.items()[0]
+    i64 n = 0
+    rest := text
+    for rest.len > 0 {
+        raw, after, _ := str.cut(rest, "\n")
+        rest = after
+        n += 1
+        line := str.trim(raw)
+        if line.len == 0 || line[0] == ';' || line[0] == '#' {
+            continue
+        }
+        if line[0] == '[' {
+            end := str.findLast(line, "]")
+            if end < 0 {
+                return error(IniError.syntax, "line {n}: a section's name has no closing ]")
+            }
+            at = f.ensure(str.trim(line[1:end]))
+            continue
+        }
+        eq := str.find(line, "=")
+        colon := str.find(line, ":")
+        sep := if eq < 0 || (colon >= 0 && colon < eq) { colon } else { eq }
+        if sep <= 0 {
+            return error(IniError.syntax, "line {n}: expected key = value, found \"{line}\"")
+        }
+        at.set(str.trimRight(line[0:sep]), cleanValue(line[sep + 1:]))
+    }
+    return f
+}
+
+// Whether a value needs quotes to be read back as it is.
+bool needsQuotes(str v) {
+    if v.len > 0 && (v[0] == ' ' || v[v.len - 1] == ' ' || v[0] == '"' || v[0] == '\'') {
+        return true
+    }
+    for i in 1..v.len {
+        if (v[i] == ';' || v[i] == '#') && (v[i - 1] == ' ' || v[i - 1] == '\t') {
+            return true
+        }
+    }
+    return false
+}
+
+// The file as INI text, a blank line before each section.
+pub String File.write() {
+    String out
+    for s in self.sections {
+        if s.name.len == 0 && s.keys.len == 0 {
+            continue
+        }
+        if s.name.len > 0 {
+            if out.len > 0 {
+                out.append("\n")
+            }
+            out.append("[{s.name}]\n")
+        }
+        for i in 0..s.keys.len {
+            v := s.values.at(i)
+            if needsQuotes(v) {
+                out.append("{s.keys.at(i)} = \"{v}\"\n")
+            } else {
+                out.append("{s.keys.at(i)} = {v}\n")
+            }
+        }
+    }
+    return out
+}

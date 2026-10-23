@@ -1,0 +1,37 @@
+// expect: TomlError.syntax: line 2: the key "a" is already defined
+// expect: TomlError.syntax: line 3: the table [x] is already defined
+// expect: TomlError.syntax: line 1: a string has no closing quote
+// expect: TomlError.syntax: line 1: expected a value, found "wat"
+// expect: TomlError.syntax: line 2: an inline table can't be added to
+// expect: TomlError.syntax: line 1: 0123 has a leading zero
+// expect: TomlError.syntax: line 1: expected a line break after the value, found "b"
+// expect: TomlError.syntax: line 2: a is not a table
+// expect: TomlError.syntax: line 1: 99999999999999999999 doesn't fit in i64
+// expect: ok
+
+import toml
+
+void main() {
+    bad := [
+        "a = 1\na = 2",
+        "[x]\nk = 1\n[x]",
+        "s = \"open",
+        "v = wat",
+        "t = {{a = 1}}\nt.b = 2",
+        "n = 0123",
+        "a = 1 b = 2",
+        "a = 1\n[a.b]",
+        "n = 99999999999999999999",
+    ]
+    for text in bad {
+        _ = toml.parse(text) catch e {
+            print("{e.code}: {e.message}")
+            toml.Value{}
+        }
+    }
+    scoped toml.Value ok = toml.parse("[a.b]\nx = 1\n[a]\ny = 2\n[[c]]\n[[c]]\n") catch e {
+        print(e.message)
+        toml.Value{}
+    }
+    print("ok")
+}

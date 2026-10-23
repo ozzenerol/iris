@@ -1,0 +1,584 @@
+// XML: reading it as a stream of events (a start tag with its attributes,
+// text, an end tag) or as a tree of Elements, and writing it. Comments,
+// processing instructions and the DOCTYPE line are skipped; DTDs are not
+// read, and a name with a prefix, like atom:id, is kept as it is.
+//
+//     scoped xml.Element root = try xml.parse(text)
+//     title := root.child("title").text
+
+import str
+
+// What reading fails with: syntax for text that isn't well-formed XML, end
+// when a Reader has no more events.
+pub enum XmlError { syntax, end }
+
+// What an Event is.
+pub enum Kind { start, end, text }
+
+// An attribute: name="value", with the value's entities decoded.
+pub struct Attr {
+    pub String name
+    pub String value
+}
+
+// Frees the attribute's text.
+pub void Attr.free() {
+    self.name.free()
+    self.value.free()
+}
+
+// One step through the document: a start tag with its attributes, an end
+// tag, or text (with its entities decoded, and CDATA as it is). An empty
+// tag, <br/>, gives a start and an end.
+pub struct Event {
+    pub Kind kind
+    // the tag's name, for start and end; it points into the text read
+    pub str name
+    pub List[Attr] attrs
+    pub String text
+}
+
+// The value of an attribute of a start tag, or "" when it has none.
+pub str Event.attr(str name) => attrOf(self.attrs, name)
+
+// Frees the event's text and attributes.
+pub void Event.free() {
+    self.attrs.freeEach()
+    self.text.free()
+}
+
+str attrOf(List[Attr] attrs, str name) {
+    for a in attrs {
+        if a.name == name {
+            return a.value
+        }
+    }
+    return ""
+}
+
+// Reads events from text, one at a time.
+pub struct Reader {
+    str t
+    i64 pos
+    i64 line
+    List[str] open
+    bool rootDone
+    str pending // the name of an empty tag whose end comes next
+    bool hasPending
+    // true to get text that is only spaces and line breaks too
+    pub bool keepSpace
+}
+
+// A Reader at the start of text.
+pub Reader reader(str text) => Reader{t: text, line: 1}
+
+// Frees what the reader keeps; it does this itself when it fails or ends.
+pub void Reader.free() => self.open.free()
+
+Error Reader.fail(str msg) => error(XmlError.syntax, "line {self.line}: {msg}")
+
+bool isSpace(u8 c) => c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+bool isNameChar(u8 c) => !isSpace(c) && c != '/' && c != '>' && c != '<' && c != '=' && c != '"' && c != '\'' && c != '!' && c != '?' && c != 0
+
+void Reader.lines(str s) {
+    for c in s {
+        if c == '\n' {
+            self.line += 1
+        }
+    }
+}
+
+void Reader.spaces() {
+    for self.pos < self.t.len && isSpace(self.t[self.pos]) {
+        if self.t[self.pos] == '\n' {
+            self.line += 1
+        }
+        self.pos += 1
+    }
+}
+
+// Skips to just past end, counting lines; false when end isn't there.
+bool Reader.skipPast(str end) {
+    at := str.find(self.t[self.pos:], end)
+    if at < 0 {
+        return false
+    }
+    self.lines(self.t[self.pos:self.pos + at])
+    self.pos += at + end.len
+    return true
+}
+
+str Reader.name() {
+    start := self.pos
+    for self.pos < self.t.len && isNameChar(self.t[self.pos]) {
+        self.pos += 1
+    }
+    return self.t[start:self.pos]
+}
+
+void appendByte(String *out, u8 c) {
+    u8[1] b = [c]
+    out.append(b[0:1])
+}
+
+void appendRune(String *out, u32 r) {
+    u8[4] b
+    i64 n
+    if r < 0x80 {
+        b[0] = u8(r)
+        n = 1
+    } else if r < 0x800 {
+        b[0] = u8(0xc0 | (r >> 6))
+        b[1] = u8(0x80 | (r & 0x3f))
+        n = 2
+    } else if r < 0x10000 {
+        b[0] = u8(0xe0 | (r >> 12))
+        b[1] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[2] = u8(0x80 | (r & 0x3f))
+        n = 3
+    } else {
+        b[0] = u8(0xf0 | (r >> 18))
+        b[1] = u8(0x80 | ((r >> 12) & 0x3f))
+        b[2] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[3] = u8(0x80 | (r & 0x3f))
+        n = 4
+    }
+    out.append(b[0:n])
+}
+
+// The character an entity stands for, added to out; false when XML has no
+// such entity.
+bool entity(String *out, str name) {
+    match name {
+        "lt" => out.append("<")
+        "gt" => out.append(">")
+        "amp" => out.append("&")
+        "quot" => out.append("\"")
+        "apos" => out.append("'")
+        _ => {
+            if name.len < 2 || name[0] != '#' {
+                return false
+            }
+            hex := name[1] == 'x'
+            digits := if hex { name[2:] } else { name[1:] }
+            if digits.len == 0 || digits.len > 8 {
+                return false
+            }
+            u32 r = 0
+            for c in digits {
+                u32 d = 0
+                if c >= '0' && c <= '9' {
+                    d = u32(c - '0')
+                } else if hex && c >= 'a' && c <= 'f' {
+                    d = u32(c - 'a') + 10
+                } else if hex && c >= 'A' && c <= 'F' {
+                    d = u32(c - 'A') + 10
+                } else {
+                    return false
+                }
+                r = r * (if hex { 16 } else { 10 }) + d
+            }
+            if r == 0 || r > 0x10ffff || (r >= 0xd800 && r <= 0xdfff) {
+                return false
+            }
+            appendRune(out, r)
+        }
+    }
+    return true
+}
+
+// s with its entities decoded, added to out.
+!void Reader.decode(String *out, str s) {
+    i64 i = 0
+    for i < s.len {
+        c := s[i]
+        if c != '&' {
+            start := i
+            for i < s.len && s[i] != '&' {
+                i += 1
+            }
+            out.append(s[start:i])
+            continue
+        }
+        end := str.find(s[i:], ";")
+        if end < 0 {
+            return self.fail("a & that starts no entity; write &amp;")
+        }
+        if !entity(out, s[i + 1:i + end]) {
+            return self.fail("an entity XML doesn't have: {s[i:i + end + 1]}")
+        }
+        i += end + 1
+    }
+}
+
+// The next event. At the end of the document it fails with XmlError.end.
+pub !Event Reader.next() {
+    ev := self.step() catch e {
+        self.open.free()
+        return e
+    }
+    return ev
+}
+
+!Event Reader.step() {
+    if self.hasPending {
+        self.hasPending = false
+        if self.open.len == 0 {
+            self.rootDone = true
+        }
+        return Event{kind: .end, name: self.pending}
+    }
+    for {
+        if self.pos >= self.t.len {
+            if self.open.len > 0 {
+                return self.fail("<{self.open.last()}> is not closed")
+            }
+            if !self.rootDone {
+                return self.fail("no root element")
+            }
+            return error(XmlError.end, "the end of the document")
+        }
+        t := self.t
+        if t[self.pos] != '<' {
+            start := self.pos
+            for self.pos < t.len && t[self.pos] != '<' {
+                self.pos += 1
+            }
+            raw := t[start:self.pos]
+            blank := str.trim(raw).len == 0
+            if self.open.len == 0 && !blank {
+                self.lines(raw)
+                return self.fail("text outside the root element")
+            }
+            if self.open.len == 0 || (blank && !self.keepSpace) {
+                self.lines(raw)
+                continue
+            }
+            Event ev = Event{kind: .text}
+            self.decode(&ev.text, raw) catch e {
+                ev.free()
+                return e
+            }
+            self.lines(raw)
+            return ev
+        }
+        rest := t[self.pos:]
+        if str.startsWith(rest, "<!--") {
+            self.pos += 4
+            if !self.skipPast("-->") {
+                return self.fail("a comment is not closed")
+            }
+            continue
+        }
+        if str.startsWith(rest, "<![CDATA[") {
+            if self.open.len == 0 {
+                return self.fail("CDATA outside the root element")
+            }
+            self.pos += 9
+            start := self.pos
+            if !self.skipPast("]]>") {
+                return self.fail("a CDATA section is not closed")
+            }
+            Event ev = Event{kind: .text}
+            ev.text.append(t[start:self.pos - 3])
+            return ev
+        }
+        if str.startsWith(rest, "<?") {
+            self.pos += 2
+            if !self.skipPast("?>") {
+                return self.fail("a processing instruction is not closed")
+            }
+            continue
+        }
+        if str.startsWith(rest, "<!") {
+            // <!DOCTYPE ...>, with any [internal subset] skipped
+            i64 depth = 0
+            for self.pos < t.len {
+                c := t[self.pos]
+                self.pos += 1
+                if c == '\n' {
+                    self.line += 1
+                } else if c == '[' {
+                    depth += 1
+                } else if c == ']' {
+                    depth -= 1
+                } else if c == '>' && depth <= 0 {
+                    break
+                }
+            }
+            continue
+        }
+        if str.startsWith(rest, "</") {
+            self.pos += 2
+            name := self.name()
+            self.spaces()
+            if self.pos >= t.len || t[self.pos] != '>' {
+                return self.fail("expected > after </{name}")
+            }
+            self.pos += 1
+            if self.open.len == 0 {
+                return self.fail("</{name}> has no start tag")
+            }
+            if self.open.last() != name {
+                return self.fail("</{name}> closes <{self.open.last()}>")
+            }
+            self.open.pop()
+            if self.open.len == 0 {
+                self.rootDone = true
+            }
+            return Event{kind: .end, name: name}
+        }
+        return try self.startTag()
+    }
+}
+
+// A start tag and its attributes, the pos on the <.
+!Event Reader.startTag() {
+    t := self.t
+    if self.rootDone {
+        return self.fail("a second root element")
+    }
+    self.pos += 1
+    name := self.name()
+    if name.len == 0 {
+        return self.fail("a < that starts no tag; write &lt;")
+    }
+    Event ev = Event{kind: .start, name: name}
+    errdefer ev.free()
+    for {
+        self.spaces()
+        if self.pos >= t.len {
+            return self.fail("<{name} is not closed")
+        }
+        c := t[self.pos]
+        if c == '/' && self.pos + 1 < t.len && t[self.pos + 1] == '>' {
+            self.pos += 2
+            self.pending = name
+            self.hasPending = true
+            return ev
+        }
+        if c == '>' {
+            self.pos += 1
+            self.open.push(name)
+            return ev
+        }
+        an := self.name()
+        if an.len == 0 {
+            return self.fail("expected an attribute or > in <{name}>")
+        }
+        self.spaces()
+        if self.pos >= t.len || t[self.pos] != '=' {
+            return self.fail("the attribute {an} needs a value")
+        }
+        self.pos += 1
+        self.spaces()
+        q := if self.pos < t.len { t[self.pos] } else { u8(0) }
+        if q != '"' && q != '\'' {
+            return self.fail("an attribute's value needs quotes")
+        }
+        self.pos += 1
+        start := self.pos
+        for self.pos < t.len && t[self.pos] != q {
+            if t[self.pos] == '<' {
+                return self.fail("a < in an attribute's value; write &lt;")
+            }
+            self.pos += 1
+        }
+        if self.pos >= t.len {
+            return self.fail("an attribute's value has no closing quote")
+        }
+        raw := t[start:self.pos]
+        self.pos += 1
+        for a in ev.attrs {
+            if a.name == an {
+                return self.fail("the attribute {an} is given twice")
+            }
+        }
+        Attr a = Attr{name: an.copy()}
+        self.decode(&a.value, raw) catch e {
+            a.free()
+            return e
+        }
+        self.lines(raw)
+        ev.attrs.push(a)
+    }
+}
+
+// ------------------------------------------------------------ the tree
+
+// An element: its name, attributes and children. A text child has no name
+// and its text in text; an element's own text is the text directly inside
+// it, joined.
+pub struct Element {
+    pub String name
+    pub String text
+    pub List[Attr] attrs
+    pub List[Element] children
+}
+
+// A new element with no attributes or children.
+pub Element element(str name) => Element{name: name.copy()}
+
+// Frees the element and everything in it.
+pub void Element.free() {
+    self.name.free()
+    self.text.free()
+    self.attrs.freeEach()
+    self.children.freeEach()
+}
+
+// Whether this is text rather than an element.
+pub bool Element.isText() => self.name.len == 0
+
+// The value of an attribute, or "" when it has none.
+pub str Element.attr(str name) => attrOf(self.attrs, name)
+
+// Sets an attribute, adding it when the element doesn't have it.
+pub void Element.set(str name, str value) {
+    for i in 0..self.attrs.len {
+        a := &self.attrs.items()[i]
+        if a.name == name {
+            a.value.free()
+            a.value = value.copy()
+            return
+        }
+    }
+    self.attrs.push(Attr{name: name.copy(), value: value.copy()})
+}
+
+// The first child element called name, or null.
+pub Element *Element.child(str name) {
+    for i in 0..self.children.len {
+        c := &self.children.items()[i]
+        if c.name == name {
+            return c
+        }
+    }
+    return null
+}
+
+// Adds a child element, which the element owns after.
+pub void Element.add(Element child) => self.children.push(child)
+
+// Adds text at the end of the element.
+pub void Element.addText(str text) {
+    self.text.append(text)
+    self.children.push(Element{text: text.copy()})
+}
+
+// All the text inside the element and the elements in it, in order.
+pub String Element.allText() {
+    String out
+    self.collect(&out)
+    return out
+}
+
+void Element.collect(String *out) {
+    for c in self.children {
+        if c.isText() {
+            out.append(c.text)
+        } else {
+            c.collect(out)
+        }
+    }
+}
+
+// Reads a document into its root element. Text that is only spaces and
+// line breaks is left out.
+pub !Element parse(str text) {
+    rd := reader(text)
+    List[Element] stack
+    defer stack.freeEach()
+    Element root
+    bool found = false
+    errdefer root.free()
+    for {
+        ev := rd.next() catch e {
+            if e.code == XmlError.end && found {
+                return root
+            }
+            return e
+        }
+        match ev.kind {
+            .start => stack.push(Element{name: ev.name.copy(), attrs: ev.attrs})
+            .text => {
+                top := &stack.items()[stack.len - 1]
+                top.text.append(ev.text)
+                top.children.push(Element{text: ev.text})
+            }
+            .end => {
+                el := stack.pop()
+                if stack.len == 0 {
+                    root = el
+                    found = true
+                } else {
+                    stack.items()[stack.len - 1].children.push(el)
+                }
+            }
+        }
+    }
+}
+
+// text with &, <, >, " and ' written as entities, for text or an
+// attribute's value.
+pub String escape(str text) {
+    String out
+    escapeTo(&out, text)
+    return out
+}
+
+void escapeTo(String *out, str text) {
+    i64 start = 0
+    for i in 0..text.len {
+        rep := match text[i] {
+            '&' => "&amp;"
+            '<' => "&lt;"
+            '>' => "&gt;"
+            '"' => "&quot;"
+            '\'' => "&apos;"
+            _ => ""
+        }
+        if rep.len > 0 {
+            out.append(text[start:i])
+            out.append(rep)
+            start = i + 1
+        }
+    }
+    out.append(text[start:])
+}
+
+// The element as XML text, on one line; one with no children is written
+// <name/>.
+pub String Element.write() {
+    String out
+    self.writeTo(&out)
+    return out
+}
+
+void Element.writeTo(String *out) {
+    if self.isText() {
+        escapeTo(out, self.text)
+        return
+    }
+    out.append("<")
+    out.append(self.name)
+    for a in self.attrs {
+        out.append(" ")
+        out.append(a.name)
+        out.append("=\"")
+        escapeTo(out, a.value)
+        out.append("\"")
+    }
+    if self.children.len == 0 {
+        out.append("/>")
+        return
+    }
+    out.append(">")
+    for c in self.children {
+        c.writeTo(out)
+    }
+    out.append("</")
+    out.append(self.name)
+    out.append(">")
+}

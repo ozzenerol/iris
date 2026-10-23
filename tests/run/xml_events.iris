@@ -1,0 +1,100 @@
+// expect: start feed [xmlns=http://www.w3.org/2005/Atom]
+// expect: start title []
+// expect: text [Tom & Jerry's <blog>]
+// expect: end title
+// expect: start link [href=https://example.com/?a=1&b=2] [rel=alternate]
+// expect: end link
+// expect: start entry []
+// expect: start atom:id []
+// expect: text [urn:1]
+// expect: end atom:id
+// expect: start content [type=html]
+// expect: text [<p>raw & ready</p>]
+// expect: end content
+// expect: start note []
+// expect: text [é é ☃]
+// expect: end note
+// expect: end entry
+// expect: end feed
+// expect: 18 events
+// expect: with spaces: 2 text events
+// expect: XmlError.syntax: line 1: </b> closes <a>
+// expect: XmlError.syntax: line 1: <a> is not closed
+// expect: XmlError.syntax: line 1: an entity XML doesn't have: &nbsp;
+// expect: XmlError.syntax: line 2: an attribute's value needs quotes
+// expect: XmlError.syntax: line 1: a second root element
+// expect: XmlError.syntax: line 1: the attribute a is given twice
+// expect: escaped: a &lt; b &amp;&amp; c &gt; &quot;d&quot; &apos;e&apos;
+
+import xml
+
+!void main() {
+    text := r"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE feed>
+<!-- a comment -->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Tom &amp; Jerry&apos;s &lt;blog&gt;</title>
+  <link href="https://example.com/?a=1&amp;b=2" rel='alternate'/>
+  <entry>
+    <atom:id>urn:1</atom:id>
+    <content type="html"><![CDATA[<p>raw & ready</p>]]></content>
+    <note>&#233; &#xE9; &#x2603;</note>
+  </entry>
+</feed>
+"""
+    rd := xml.reader(text)
+    i64 n = 0
+    for {
+        ev := rd.next() catch e {
+            if e.code == xml.XmlError.end {
+                break
+            }
+            return e
+        }
+        defer ev.free()
+        n += 1
+        match ev.kind {
+            .start => {
+                String attrs
+                defer attrs.free()
+                for a in ev.attrs {
+                    attrs.append(" [{a.name}={a.value}]")
+                }
+                if attrs.len == 0 {
+                    attrs.append(" []")
+                }
+                print("start {ev.name}{attrs}")
+            }
+            .end => print("end {ev.name}")
+            .text => print("text [{ev.text}]")
+        }
+    }
+    print("{n} events")
+    spaced := xml.reader("<a> <b/> x </a>")
+    spaced.keepSpace = true
+    i64 texts = 0
+    for {
+        ev := spaced.next() catch e {
+            break
+        }
+        if ev.kind == .text {
+            texts += 1
+        }
+        ev.free()
+    }
+    print("with spaces: {texts} text events")
+    for bad in ["<a></b>", "<a>", "<a>&nbsp;</a>", "<a\nb=c/>", "<a/><b/>", "<a a='1' a='2'/>"] {
+        r := xml.reader(bad)
+        for {
+            ev := r.next() catch e {
+                if e.code != xml.XmlError.end {
+                    print("{e.code}: {e.message}")
+                }
+                break
+            }
+            ev.free()
+        }
+    }
+    scoped String esc = xml.escape("a < b && c > \"d\" 'e'")
+    print("escaped: {esc}")
+}

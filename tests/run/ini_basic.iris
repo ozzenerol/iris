@@ -1,0 +1,65 @@
+// expect: 3 sections: [] [database] [server "web"]
+// expect: name: demo
+// expect: database.host: db.lan, port: 5432, user: [ada lovelace]
+// expect: missing: [] false
+// expect: path: [C:\data] note: [a ; not a comment]
+// expect: web: 8080 true
+// expect: IniError.syntax: line 2: expected key = value, found "oops"
+// expect: IniError.syntax: line 1: a section's name has no closing ]
+// expect: name = demo
+// expect: 
+// expect: [database]
+// expect: host = db.lan
+// expect: port = 6543
+// expect: user = ada lovelace
+// expect: 
+// expect: [server "web"]
+// expect: port = 8080
+// expect: tls = true
+// expect: 
+// expect: [cache]
+// expect: size = 64MiB
+// expect: back: 6543 64MiB
+
+import ini, str
+
+!void main() {
+    text := r"""
+; a comment
+# another one
+name = demo
+
+[database]
+host = db.lan
+port: 5432
+user = "ada lovelace"   ; who logs in
+path = C:\data
+note = "a ; not a comment"
+
+[server "web"]
+port=8080
+tls = true
+"""
+    scoped ini.File f = try ini.parse(text)
+    print("{f.sections.len} sections: [{f.sections.at(0).name}] [{f.sections.at(1).name}] [{f.sections.at(2).name}]")
+    print("name: {f.get("", "name")}")
+    print("database.host: {f.get("database", "host")}, port: {f.get("database", "port")}, user: [{f.get("database", "user")}]")
+    v, found := f.lookup("database", "nope")
+    print("missing: [{v}] {found}")
+    print("path: [{f.get("database", "path")}] note: [{f.get("database", "note")}]")
+    print("web: {f.get("server \"web\"", "port")} {f.get("server \"web\"", "tls")}")
+    for bad in ["a = 1\noops", "[open"] {
+        _ = ini.parse(bad) catch e {
+            print("{e.code}: {e.message}")
+            ini.File{}
+        }
+    }
+    f.set("database", "port", "6543")
+    f.set("cache", "size", "64MiB")
+    f.remove("database", "path")
+    f.remove("database", "note")
+    scoped String out = f.write()
+    print(str.trimRight(out))
+    scoped ini.File back = try ini.parse(out)
+    print("back: {back.get("database", "port")} {back.get("cache", "size")}")
+}

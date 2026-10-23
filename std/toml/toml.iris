@@ -1,0 +1,1202 @@
+// TOML 1.0: configuration files read into @json structs, as json.decode
+// reads JSON, or into a Value that holds any document; and written back.
+// Dates and times are kept as the text they were written in.
+//
+//     scoped Config c = try toml.decode[Config](text)
+//     scoped toml.Value doc = try toml.parse(text)
+
+import json, str
+
+// What reading TOML fails with: syntax when the text isn't TOML, and when
+// filling a struct, wrongType, missing and range as json.decode has them.
+pub enum TomlError { syntax, wrongType, missing, range }
+
+// What a Value holds.
+pub enum Kind { string, integer, float, boolean, datetime, array, table }
+
+// A TOML value. A table keeps its keys in the order they were written,
+// each with its value at the same place in items.
+pub struct Value {
+    pub Kind kind
+    // a string's text, or a date and time as written
+    pub String text
+    pub i64 int
+    pub f64 float
+    pub bool boolean
+    // an array's values, or a table's values
+    pub List[Value] items
+    // a table's keys
+    pub List[String] keys
+    // how a table was made, for the rules about defining it again
+    u8 how
+}
+
+// how: 0 a plain value, 1 a table named only on the way to another,
+// 2 a table with a [header], 3 a table made by a dotted key, 4 an inline
+// table, 5 an array of [[tables]]
+const IMPLICIT = 1
+const HEADER = 2
+const DOTTED = 3
+const INLINE = 4
+const TABLES = 5
+
+@builtin
+void tableOf()
+
+// A string.
+pub Value string(str s) => Value{kind: .string, text: s.copy()}
+
+// An integer.
+pub Value integer(i64 n) => Value{kind: .integer, int: n}
+
+// A floating point number.
+pub Value float(f64 f) => Value{kind: .float, float: f}
+
+// true or false.
+pub Value boolean(bool b) => Value{kind: .boolean, boolean: b}
+
+// A date, a time or both, as TOML writes them: 1979-05-27T07:32:00Z.
+pub Value datetime(str s) => Value{kind: .datetime, text: s.copy()}
+
+// An empty array.
+pub Value array() => Value{kind: .array}
+
+// An empty table.
+pub Value table() => Value{kind: .table}
+
+// The value of key in a table, or null when it has none.
+pub Value *Value.get(str key) {
+    if self.kind != .table {
+        return null
+    }
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            return &self.items.items()[i]
+        }
+    }
+    return null
+}
+
+// Value i of an array or a table, or null past the end.
+pub Value *Value.at(i64 i) {
+    if i < 0 || i >= self.items.len {
+        return null
+    }
+    return &self.items.items()[i]
+}
+
+// How many values an array or a table has.
+pub i64 Value.len() => self.items.len
+
+// Sets key in a table to v, which the table owns after.
+pub void Value.set(str key, Value v) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            self.items.items()[i].free()
+            self.items.set(i, v)
+            return
+        }
+    }
+    self.keys.push(key.copy())
+    self.items.push(v)
+}
+
+// Adds v at the end of an array, which owns it after.
+pub void Value.push(Value v) => self.items.push(v)
+
+// Frees the value and everything in it.
+pub void Value.free() {
+    self.text.free()
+    self.items.freeEach()
+    self.keys.freeEach()
+}
+
+// ------------------------------------------------------------ reading
+
+struct Parser {
+    str t
+    i64 pos
+    i64 line
+}
+
+Error Parser.fail(str msg) => error(TomlError.syntax, "line {self.line}: {msg}")
+
+bool isBare(u8 c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+
+bool isDigit(u8 c) => c >= '0' && c <= '9'
+
+u8 Parser.peek() => if self.pos < self.t.len { self.t[self.pos] } else { 0 }
+
+u8 Parser.peekAt(i64 n) => if self.pos + n < self.t.len { self.t[self.pos + n] } else { 0 }
+
+bool Parser.done() => self.pos >= self.t.len
+
+// Skips spaces and tabs.
+void Parser.spaces() {
+    for self.pos < self.t.len && (self.t[self.pos] == ' ' || self.t[self.pos] == '\t') {
+        self.pos += 1
+    }
+}
+
+// Skips a comment up to the line break.
+!void Parser.comment() {
+    if self.peek() != '#' {
+        return
+    }
+    for self.pos < self.t.len && self.t[self.pos] != '\n' {
+        c := self.t[self.pos]
+        if (c < 0x20 && c != '\t' && c != '\r') || c == 0x7f {
+            return self.fail("a control character in a comment")
+        }
+        self.pos += 1
+    }
+}
+
+// Takes a line break, \n or \r\n; false when there is none here.
+bool Parser.newline() {
+    if self.peek() == '\n' {
+        self.pos += 1
+        self.line += 1
+        return true
+    }
+    if self.peek() == '\r' && self.peekAt(1) == '\n' {
+        self.pos += 2
+        self.line += 1
+        return true
+    }
+    return false
+}
+
+// Skips spaces, comments and line breaks, as between the values of an array.
+!void Parser.blank() {
+    for {
+        self.spaces()
+        try self.comment()
+        if !self.newline() {
+            return
+        }
+    }
+}
+
+// The word at pos, for messages.
+str Parser.word() {
+    i64 end = self.pos
+    for end < self.t.len && self.t[end] != ' ' && self.t[end] != '\t' && self.t[end] != '\n' &&
+        self.t[end] != '\r' && self.t[end] != ',' && self.t[end] != ']' && self.t[end] != '}' {
+        end += 1
+    }
+    return self.t[self.pos:end]
+}
+
+// The end of a line after a value or a header: spaces, a comment, and a
+// line break or the end.
+!void Parser.lineEnd(str after) {
+    self.spaces()
+    try self.comment()
+    if self.done() || self.newline() {
+        return
+    }
+    return self.fail("expected a line break after {after}, found \"{self.word()}\"")
+}
+
+void appendByte(String *out, u8 c) {
+    u8[1] b = [c]
+    out.append(b[0:1])
+}
+
+void appendRune(String *out, u32 r) {
+    u8[4] b
+    i64 n
+    if r < 0x80 {
+        b[0] = u8(r)
+        n = 1
+    } else if r < 0x800 {
+        b[0] = u8(0xc0 | (r >> 6))
+        b[1] = u8(0x80 | (r & 0x3f))
+        n = 2
+    } else if r < 0x10000 {
+        b[0] = u8(0xe0 | (r >> 12))
+        b[1] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[2] = u8(0x80 | (r & 0x3f))
+        n = 3
+    } else {
+        b[0] = u8(0xf0 | (r >> 18))
+        b[1] = u8(0x80 | ((r >> 12) & 0x3f))
+        b[2] = u8(0x80 | ((r >> 6) & 0x3f))
+        b[3] = u8(0x80 | (r & 0x3f))
+        n = 4
+    }
+    out.append(b[0:n])
+}
+
+i64 hexDigit(u8 c) {
+    if c >= '0' && c <= '9' {
+        return i64(c - '0')
+    }
+    if c >= 'a' && c <= 'f' {
+        return i64(c - 'a') + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return i64(c - 'A') + 10
+    }
+    return -1
+}
+
+// An escape after a backslash in a basic string.
+!void Parser.escape(String *out) {
+    c := self.peek()
+    self.pos += 1
+    match c {
+        'b' => appendByte(out, 8)
+        't' => appendByte(out, '\t')
+        'n' => appendByte(out, '\n')
+        'f' => appendByte(out, 12)
+        'r' => appendByte(out, '\r')
+        '"' => appendByte(out, '"')
+        '\\' => appendByte(out, '\\')
+        'u', 'U' => {
+            n := if c == 'u' { 4 } else { 8 }
+            u32 r = 0
+            for _ in 0..n {
+                d := hexDigit(self.peek())
+                if d < 0 {
+                    return self.fail("a \\u escape needs {n} hex digits")
+                }
+                r = r * 16 + u32(d)
+                self.pos += 1
+            }
+            if r > 0x10ffff || (r >= 0xd800 && r <= 0xdfff) {
+                return self.fail("\\u{r} is not a Unicode scalar value")
+            }
+            appendRune(out, r)
+        }
+        _ => return self.fail("an escape TOML doesn't have")
+    }
+}
+
+bool badControl(u8 c) => (c < 0x20 && c != '\t') || c == 0x7f
+
+// A string in "quotes", the pos on the first quote.
+!String Parser.basic() {
+    self.pos += 1
+    String out
+    errdefer out.free()
+    for {
+        if self.done() || self.peek() == '\n' {
+            return self.fail("a string has no closing quote")
+        }
+        c := self.peek()
+        if c == '"' {
+            self.pos += 1
+            return out
+        }
+        if c == '\\' {
+            self.pos += 1
+            try self.escape(&out)
+            continue
+        }
+        if badControl(c) {
+            return self.fail("a control character in a string")
+        }
+        appendByte(&out, c)
+        self.pos += 1
+    }
+}
+
+// A string in 'quotes', taken as it is.
+!String Parser.literal() {
+    self.pos += 1
+    start := self.pos
+    for {
+        if self.done() || self.peek() == '\n' {
+            return self.fail("a string has no closing quote")
+        }
+        c := self.peek()
+        if c == '\'' {
+            s := self.t[start:self.pos]
+            self.pos += 1
+            return s.copy()
+        }
+        if badControl(c) {
+            return self.fail("a control character in a string")
+        }
+        self.pos += 1
+    }
+}
+
+// A string in three quotes, """ or ''', which may span lines.
+!String Parser.multiline(u8 q) {
+    self.pos += 3
+    self.newline() // a line break right after the quotes is not part of it
+    String out
+    errdefer out.free()
+    for {
+        if self.done() {
+            return self.fail("a string has no closing quotes")
+        }
+        c := self.peek()
+        if c == q && self.peekAt(1) == q && self.peekAt(2) == q {
+            // up to two more quotes before the closing three are part of it
+            i64 n = 3
+            for n < 5 && self.peekAt(n) == q {
+                n += 1
+            }
+            for _ in 3..n {
+                appendByte(&out, q)
+            }
+            self.pos += n
+            return out
+        }
+        if self.newline() {
+            out.append("\n")
+            continue
+        }
+        if c == '\\' && q == '"' {
+            // a backslash at the end of a line joins it to the next text
+            i64 k = self.pos + 1
+            for k < self.t.len && (self.t[k] == ' ' || self.t[k] == '\t') {
+                k += 1
+            }
+            if k < self.t.len && (self.t[k] == '\n' || self.t[k] == '\r') {
+                self.pos = k
+                for {
+                    self.spaces()
+                    if !self.newline() {
+                        break
+                    }
+                }
+                continue
+            }
+            self.pos += 1
+            try self.escape(&out)
+            continue
+        }
+        if badControl(c) {
+            return self.fail("a control character in a string")
+        }
+        appendByte(&out, c)
+        self.pos += 1
+    }
+}
+
+// A key, with its dotted parts: a.b."c.d" is a, b and c.d.
+!List[String] Parser.key() {
+    List[String] parts
+    errdefer parts.freeEach()
+    for {
+        self.spaces()
+        c := self.peek()
+        if c == '"' {
+            parts.push(try self.basic())
+        } else if c == '\'' {
+            parts.push(try self.literal())
+        } else {
+            start := self.pos
+            for self.pos < self.t.len && isBare(self.t[self.pos]) {
+                self.pos += 1
+            }
+            if self.pos == start {
+                return self.fail("expected a key, found \"{self.word()}\"")
+            }
+            parts.push(self.t[start:self.pos].copy())
+        }
+        self.spaces()
+        if self.peek() != '.' {
+            return parts
+        }
+        self.pos += 1
+    }
+}
+
+// The digits of n, from 2 for one with two digits; false when they aren't all
+// digits.
+bool digitsAt(str s, i64 at, i64 n) {
+    if at + n > s.len {
+        return false
+    }
+    for i in at..at + n {
+        if !isDigit(s[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+i64 twoDigits(str s, i64 at) => i64(s[at] - '0') * 10 + i64(s[at + 1] - '0')
+
+// HH:MM:SS with an optional fraction, at the pos; the end, or -1.
+i64 timeEnd(str s, i64 at) {
+    if !digitsAt(s, at, 2) || at + 8 > s.len || s[at + 2] != ':' || !digitsAt(s, at + 3, 2) ||
+        s[at + 5] != ':' || !digitsAt(s, at + 6, 2) {
+        return -1
+    }
+    if twoDigits(s, at) > 23 || twoDigits(s, at + 3) > 59 || twoDigits(s, at + 6) > 60 {
+        return -1
+    }
+    i64 end = at + 8
+    if end < s.len && s[end] == '.' {
+        end += 1
+        start := end
+        for end < s.len && isDigit(s[end]) {
+            end += 1
+        }
+        if end == start {
+            return -1
+        }
+    }
+    return end
+}
+
+// A date, a time or both, the pos on its first digit.
+!Value Parser.datetime() {
+    s := self.t
+    start := self.pos
+    i64 end
+    if digitsAt(s, start, 2) && start + 2 < s.len && s[start + 2] == ':' {
+        end = timeEnd(s, start)
+        if end < 0 {
+            return self.fail("\"{self.word()}\" is not a time")
+        }
+    } else {
+        if !digitsAt(s, start, 4) || start + 10 > s.len || s[start + 4] != '-' || !digitsAt(s, start + 5, 2) ||
+            s[start + 7] != '-' || !digitsAt(s, start + 8, 2) {
+            return self.fail("\"{self.word()}\" is not a date")
+        }
+        month := twoDigits(s, start + 5)
+        day := twoDigits(s, start + 8)
+        if month < 1 || month > 12 || day < 1 || day > 31 {
+            return self.fail("\"{self.word()}\" is not a date")
+        }
+        end = start + 10
+        if end < s.len && (s[end] == 'T' || s[end] == 't' || (s[end] == ' ' && digitsAt(s, end + 1, 2))) {
+            e := timeEnd(s, end + 1)
+            if e < 0 {
+                return self.fail("\"{self.word()}\" is not a date and time")
+            }
+            end = e
+            if end < s.len && (s[end] == 'Z' || s[end] == 'z') {
+                end += 1
+            } else if end < s.len && (s[end] == '+' || s[end] == '-') {
+                if !digitsAt(s, end + 1, 2) || end + 6 > s.len || s[end + 3] != ':' || !digitsAt(s, end + 4, 2) {
+                    return self.fail("\"{self.word()}\" has an offset TOML doesn't allow")
+                }
+                end += 6
+            }
+        }
+    }
+    self.pos = end
+    return datetime(s[start:end])
+}
+
+// Checks that each _ in a number has a digit on either side.
+bool underscoresOk(str s, bool hex) {
+    for i in 0..s.len {
+        if s[i] == '_' {
+            if i == 0 || i == s.len - 1 {
+                return false
+            }
+            a := s[i - 1]
+            b := s[i + 1]
+            ok := if hex { hexDigit(a) >= 0 && hexDigit(b) >= 0 } else { isDigit(a) && isDigit(b) }
+            if !ok {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+String withoutUnderscores(str s) {
+    String out
+    for i in 0..s.len {
+        if s[i] != '_' {
+            appendByte(&out, s[i])
+        }
+    }
+    return out
+}
+
+// An integer or a float, the pos on its first character.
+!Value Parser.number() {
+    start := self.pos
+    for self.pos < self.t.len && (isBare(self.t[self.pos]) || self.t[self.pos] == '+' || self.t[self.pos] == '.') {
+        self.pos += 1
+    }
+    tok := self.t[start:self.pos]
+    body := if tok.len > 0 && (tok[0] == '+' || tok[0] == '-') { tok[1:] } else { tok }
+    if body == "inf" || body == "nan" {
+        f := if body == "inf" { 1.0 / 0.0 } else { 0.0 / 0.0 }
+        return float(if tok[0] == '-' { -f } else { f })
+    }
+    if body.len > 2 && body[0] == '0' && (body[1] == 'x' || body[1] == 'o' || body[1] == 'b') {
+        if body.len != tok.len {
+            return self.fail("{tok} can't have a sign")
+        }
+        base := match body[1] {
+            'x' => 16
+            'o' => 8
+            _ => 2
+        }
+        digits := body[2:]
+        if !underscoresOk(digits, base == 16) {
+            return self.fail("{tok} is not a number")
+        }
+        i64 n
+        for c in digits {
+            if c == '_' {
+                continue
+            }
+            d := hexDigit(c)
+            if d < 0 || d >= base {
+                return self.fail("{tok} is not a number")
+            }
+            if n > (9223372036854775807 - d) / base {
+                return self.fail("{tok} doesn't fit in i64")
+            }
+            n = n * base + d
+        }
+        return integer(n)
+    }
+    if body.len == 0 || !isDigit(body[0]) || !underscoresOk(body, false) {
+        return self.fail("expected a value, found \"{tok}\"")
+    }
+    bool isFloat = false
+    for c in body {
+        if c == '.' || c == 'e' || c == 'E' {
+            isFloat = true
+        } else if !isDigit(c) && c != '_' && c != '+' && c != '-' {
+            return self.fail("expected a value, found \"{tok}\"")
+        }
+    }
+    // the integer part: no leading zeros
+    i64 intEnd
+    for intEnd < body.len && (isDigit(body[intEnd]) || body[intEnd] == '_') {
+        intEnd += 1
+    }
+    if intEnd > 1 && body[0] == '0' {
+        return self.fail("{tok} has a leading zero")
+    }
+    scoped String clean = withoutUnderscores(tok)
+    if isFloat {
+        // a dot needs digits on both sides
+        for i in 0..clean.len {
+            if clean[i] == '.' && (i == 0 || !isDigit(clean[i - 1]) || i + 1 >= clean.len || !isDigit(clean[i + 1])) {
+                return self.fail("{tok} is not a number")
+            }
+        }
+        f := str.parseFloat(clean) catch e {
+            return self.fail("{tok} is not a number")
+        }
+        return float(f)
+    }
+    n := str.parseInt(clean) catch e {
+        if e.code == str.ParseError.tooBig {
+            return self.fail("{tok} doesn't fit in i64")
+        }
+        return self.fail("{tok} is not a number")
+    }
+    return integer(n)
+}
+
+// A value, the pos on its first character.
+!Value Parser.value() {
+    c := self.peek()
+    if c == '"' {
+        if self.peekAt(1) == '"' && self.peekAt(2) == '"' {
+            return Value{kind: .string, text: try self.multiline('"')}
+        }
+        return Value{kind: .string, text: try self.basic()}
+    }
+    if c == '\'' {
+        if self.peekAt(1) == '\'' && self.peekAt(2) == '\'' {
+            return Value{kind: .string, text: try self.multiline('\'')}
+        }
+        return Value{kind: .string, text: try self.literal()}
+    }
+    if c == '[' {
+        return try self.array()
+    }
+    if c == '{' {
+        return try self.inline()
+    }
+    w := self.word()
+    if str.startsWith(w, "true") && (w.len == 4 || !isBare(w[4])) {
+        self.pos += 4
+        return boolean(true)
+    }
+    if str.startsWith(w, "false") && (w.len == 5 || !isBare(w[5])) {
+        self.pos += 5
+        return boolean(false)
+    }
+    if digitsAt(self.t, self.pos, 4) && self.peekAt(4) == '-' {
+        return try self.datetime()
+    }
+    if digitsAt(self.t, self.pos, 2) && self.peekAt(2) == ':' {
+        return try self.datetime()
+    }
+    if isDigit(c) || c == '+' || c == '-' || c == 'i' || c == 'n' {
+        return try self.number()
+    }
+    if self.done() || c == '\n' || c == '\r' {
+        return self.fail("expected a value after \"=\"")
+    }
+    return self.fail("expected a value, found \"{w}\"")
+}
+
+// An array in [brackets], the pos on the [.
+!Value Parser.array() {
+    self.pos += 1
+    Value a = array()
+    errdefer a.free()
+    for {
+        try self.blank()
+        if self.peek() == ']' {
+            self.pos += 1
+            return a
+        }
+        a.push(try self.value())
+        try self.blank()
+        c := self.peek()
+        if c == ',' {
+            self.pos += 1
+            continue
+        }
+        if c == ']' {
+            self.pos += 1
+            return a
+        }
+        if self.done() {
+            return self.fail("an array has no closing ]")
+        }
+        return self.fail("expected , or ] in an array, found \"{self.word()}\"")
+    }
+}
+
+// An inline table in {braces}, on one line, the pos on the {.
+!Value Parser.inline() {
+    self.pos += 1
+    Value t = table()
+    errdefer t.free()
+    t.how = INLINE
+    self.spaces()
+    if self.peek() == '}' {
+        self.pos += 1
+        return t
+    }
+    for {
+        try self.keyValue(&t)
+        self.spaces()
+        c := self.peek()
+        if c == ',' {
+            self.pos += 1
+            continue
+        }
+        if c == '}' {
+            self.pos += 1
+            return t
+        }
+        if self.done() || c == '\n' || c == '\r' {
+            return self.fail("an inline table has no closing }} on its line")
+        }
+        return self.fail("expected , or }} in an inline table, found \"{self.word()}\"")
+    }
+}
+
+// The child table key of t, made with how when it isn't there.
+!Value *Parser.child(Value *t, str key, u8 how) {
+    v := t.get(key)
+    if v == null {
+        Value n = table()
+        n.how = how
+        t.set(key, n)
+        return t.get(key)
+    }
+    if v.kind == .array && v.how == TABLES {
+        return v.at(v.len() - 1)
+    }
+    if v.kind != .table {
+        return self.fail("{key} is not a table")
+    }
+    if v.how == INLINE {
+        return self.fail("an inline table can't be added to")
+    }
+    return v
+}
+
+// key = value, into t.
+!void Parser.keyValue(Value *t) {
+    parts := try self.key()
+    defer parts.freeEach()
+    if self.peek() != '=' {
+        return self.fail("expected \"=\" after the key")
+    }
+    self.pos += 1
+    self.spaces()
+    Value *at = t
+    for i in 0..parts.len - 1 {
+        name := parts.at(i)
+        v := at.get(name)
+        if v != null && v.kind == .table && v.how != DOTTED && v.how != INLINE {
+            return self.fail("the table {name} is already defined")
+        }
+        if v != null && v.kind == .array {
+            return self.fail("the key \"{name}\" is already defined")
+        }
+        at = try self.child(at, name, DOTTED)
+    }
+    last := parts.last()
+    if at.get(last) != null {
+        return self.fail("the key \"{last}\" is already defined")
+    }
+    at.set(last, try self.value())
+}
+
+// A [table] or [[array of tables]] header: the table that the lines after
+// it go into.
+!Value *Parser.header(Value *root) {
+    many := self.peekAt(1) == '['
+    self.pos += if many { 2 } else { 1 }
+    parts := try self.key()
+    defer parts.freeEach()
+    if many {
+        if self.peek() != ']' || self.peekAt(1) != ']' {
+            return self.fail("expected ]] after the table's name")
+        }
+        self.pos += 2
+    } else {
+        if self.peek() != ']' {
+            return self.fail("expected ] after the table's name")
+        }
+        self.pos += 1
+    }
+    line := self.line
+    try self.lineEnd("the table's name")
+    // lineEnd took the line break, so messages name the header's line
+    after := self.line
+    self.line = line
+    defer self.line = after
+    Value *at = root
+    for i in 0..parts.len - 1 {
+        at = try self.child(at, parts.at(i), IMPLICIT)
+    }
+    last := parts.last()
+    v := at.get(last)
+    if many {
+        if v == null {
+            Value a = array()
+            a.how = TABLES
+            at.set(last, a)
+            v = at.get(last)
+        } else if v.kind != .array || v.how != TABLES {
+            return self.fail("{last} is not an array of tables")
+        }
+        Value n = table()
+        n.how = HEADER
+        v.push(n)
+        return v.at(v.len() - 1)
+    }
+    if v == null {
+        Value n = table()
+        n.how = HEADER
+        at.set(last, n)
+        return at.get(last)
+    }
+    if v.kind == .table && v.how == IMPLICIT {
+        v.how = HEADER
+        return v
+    }
+    if v.kind == .table {
+        return self.fail("the table [{last}] is already defined")
+    }
+    return self.fail("the key \"{last}\" is already defined")
+}
+
+// Reads a TOML document into a table.
+pub !Value parse(str text) {
+    p := Parser{t: text, line: 1}
+    Value root = table()
+    errdefer root.free()
+    root.how = HEADER
+    Value *at = &root
+    for {
+        try p.blank()
+        if p.done() {
+            return root
+        }
+        if p.peek() == '[' {
+            at = try p.header(&root)
+            continue
+        }
+        try p.keyValue(at)
+        try p.lineEnd("the value")
+    }
+}
+
+// ------------------------------------------------------------ writing
+
+// TOML text for a key: as it is when it is bare, else in quotes.
+void writeKey(String *out, str key) {
+    bool bare = key.len > 0
+    for c in key {
+        if !isBare(c) {
+            bare = false
+        }
+    }
+    if bare {
+        out.append(key)
+    } else {
+        writeString(out, key)
+    }
+}
+
+void writeString(String *out, str s) {
+    out.append("\"")
+    for c in s {
+        match c {
+            '"' => out.append("\\\"")
+            '\\' => out.append("\\\\")
+            '\n' => out.append("\\n")
+            '\t' => out.append("\\t")
+            '\r' => out.append("\\r")
+            _ => {
+                if c < 0x20 || c == 0x7f {
+                    out.append("\\u00")
+                    hex := "0123456789abcdef"
+                    hi := i64(c >> 4)
+                    lo := i64(c & 15)
+                    out.append(hex[hi:hi + 1])
+                    out.append(hex[lo:lo + 1])
+                } else {
+                    appendByte(out, c)
+                }
+            }
+        }
+    }
+    out.append("\"")
+}
+
+void writeFloat(String *out, f64 f) {
+    scoped String s = format("{f}")
+    out.append(s)
+    for c in s {
+        if c == '.' || c == 'e' || c == 'n' || c == 'i' {
+            return
+        }
+    }
+    out.append(".0")
+}
+
+// A value on one line: arrays and tables inline.
+void writeInline(String *out, Value *v) {
+    match v.kind {
+        .string => writeString(out, v.text)
+        .datetime => out.append(v.text)
+        .integer => out.append("{v.int}")
+        .float => writeFloat(out, v.float)
+        .boolean => out.append(if v.boolean { "true" } else { "false" })
+        .array => {
+            out.append("[")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(", ")
+                }
+                writeInline(out, v.at(i))
+            }
+            out.append("]")
+        }
+        .table => {
+            out.append("{{")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(", ")
+                }
+                writeKey(out, v.keys.at(i))
+                out.append(" = ")
+                writeInline(out, v.at(i))
+            }
+            out.append("}}")
+        }
+    }
+}
+
+// Whether v is written as [[tables]]: an array with only tables in it.
+bool isTables(Value *v) {
+    if v.kind != .array || v.len() == 0 {
+        return false
+    }
+    for i in 0..v.len() {
+        if v.at(i).kind != .table {
+            return false
+        }
+    }
+    return true
+}
+
+bool isSection(Value *v) => v.kind == .table || isTables(v)
+
+// The key = value lines of t, then its tables under their headers.
+void writeTable(String *out, Value *t, str path) {
+    for i in 0..t.len() {
+        v := t.at(i)
+        if isSection(v) {
+            continue
+        }
+        writeKey(out, t.keys.at(i))
+        out.append(" = ")
+        writeInline(out, v)
+        out.append("\n")
+    }
+    for i in 0..t.len() {
+        v := t.at(i)
+        if !isSection(v) {
+            continue
+        }
+        String sub
+        defer sub.free()
+        if path.len > 0 {
+            sub.append(path)
+            sub.append(".")
+        }
+        writeKey(&sub, t.keys.at(i))
+        if v.kind == .table {
+            bool plain = v.len() == 0
+            for k in 0..v.len() {
+                if !isSection(v.at(k)) {
+                    plain = true
+                }
+            }
+            if plain {
+                if out.len > 0 {
+                    out.append("\n")
+                }
+                out.append("[{sub}]\n")
+            }
+            writeTable(out, v, sub)
+            continue
+        }
+        for k in 0..v.len() {
+            if out.len > 0 {
+                out.append("\n")
+            }
+            out.append("[[{sub}]]\n")
+            writeTable(out, v.at(k), sub)
+        }
+    }
+}
+
+// TOML text for a table.
+pub String write(Value doc) {
+    String out
+    writeTable(&out, &doc, "")
+    return out
+}
+
+// ------------------------------------------------------------ structs
+
+// The value as JSON text, for json's decoder.
+void toJson(String *out, Value *v) {
+    match v.kind {
+        .string, .datetime => {
+            scoped String q = json.quote(v.text)
+            out.append(q)
+        }
+        .integer => out.append("{v.int}")
+        .float => {
+            f := v.float
+            if f != f || f - f != 0.0 {
+                out.append("null")
+            } else {
+                writeFloat(out, f)
+            }
+        }
+        .boolean => out.append(if v.boolean { "true" } else { "false" })
+        .array => {
+            out.append("[")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(",")
+                }
+                toJson(out, v.at(i))
+            }
+            out.append("]")
+        }
+        .table => {
+            out.append("{{")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(",")
+                }
+                scoped String q = json.quote(v.keys.at(i))
+                out.append(q)
+                out.append(":")
+                toJson(out, v.at(i))
+            }
+            out.append("}}")
+        }
+    }
+}
+
+// Reads a @json struct from TOML text: toml.decode[Config](text). Keys the
+// struct doesn't have are skipped, and fields whose keys are missing keep
+// their defaults. Dates and times go into String fields as text.
+pub !T decode[T](str text) {
+    scoped Value doc = try parse(text)
+    String j
+    defer j.free()
+    toJson(&j, &doc)
+    T v
+    json.decodeInto(tableOf(&v), j, &v) catch e {
+        code := match e.code {
+            json.JsonError.wrongType => TomlError.wrongType
+            json.JsonError.missing => TomlError.missing
+            json.JsonError.range => TomlError.range
+            _ => TomlError.syntax
+        }
+        return error(code, "{e.message}")
+    }
+    return v
+}
+
+// Reads the JSON that json.encode writes back into a Value.
+struct JsonReader {
+    str t
+    i64 pos
+}
+
+void JsonReader.spaces() {
+    for self.pos < self.t.len && (self.t[self.pos] == ' ' || self.t[self.pos] == '\n' || self.t[self.pos] == '\r' || self.t[self.pos] == '\t') {
+        self.pos += 1
+    }
+}
+
+!String JsonReader.string() {
+    self.pos += 1
+    String out
+    errdefer out.free()
+    for self.pos < self.t.len {
+        c := self.t[self.pos]
+        self.pos += 1
+        if c == '"' {
+            return out
+        }
+        if c != '\\' {
+            appendByte(&out, c)
+            continue
+        }
+        e := self.t[self.pos]
+        self.pos += 1
+        match e {
+            'n' => out.append("\n")
+            't' => out.append("\t")
+            'r' => out.append("\r")
+            'b' => appendByte(&out, 8)
+            'f' => appendByte(&out, 12)
+            'u' => {
+                u32 r = 0
+                for _ in 0..4 {
+                    r = r * 16 + u32(hexDigit(self.t[self.pos]))
+                    self.pos += 1
+                }
+                if r >= 0xd800 && r < 0xdc00 && self.pos + 6 <= self.t.len && self.t[self.pos] == '\\' {
+                    u32 lo = 0
+                    for k in 2..6 {
+                        lo = lo * 16 + u32(hexDigit(self.t[self.pos + k]))
+                    }
+                    self.pos += 6
+                    r = 0x10000 + ((r - 0xd800) << 10) + (lo - 0xdc00)
+                }
+                appendRune(&out, r)
+            }
+            _ => appendByte(&out, e)
+        }
+    }
+    return error(TomlError.syntax, "a JSON string has no closing quote")
+}
+
+// One value; null gives a Value whose how is 9, which is left out.
+!Value JsonReader.value() {
+    self.spaces()
+    if self.pos >= self.t.len {
+        return error(TomlError.syntax, "the JSON ends too soon")
+    }
+    c := self.t[self.pos]
+    if c == '"' {
+        return Value{kind: .string, text: try self.string()}
+    }
+    if c == '[' {
+        self.pos += 1
+        Value a = array()
+        errdefer a.free()
+        for {
+            self.spaces()
+            if self.t[self.pos] == ']' {
+                self.pos += 1
+                return a
+            }
+            v := try self.value()
+            if v.how == 9 {
+                return error(TomlError.wrongType, "TOML has no null for an array")
+            }
+            a.push(v)
+            self.spaces()
+            if self.t[self.pos] == ',' {
+                self.pos += 1
+            }
+        }
+    }
+    if c == '{' {
+        self.pos += 1
+        Value t = table()
+        errdefer t.free()
+        for {
+            self.spaces()
+            if self.t[self.pos] == '}' {
+                self.pos += 1
+                return t
+            }
+            scoped String key = try self.string()
+            self.spaces()
+            self.pos += 1 // :
+            v := try self.value()
+            if v.how == 9 {
+                v.free()
+            } else {
+                t.set(key, v)
+            }
+            self.spaces()
+            if self.t[self.pos] == ',' {
+                self.pos += 1
+            }
+        }
+    }
+    start := self.pos
+    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' &&
+        self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
+        self.pos += 1
+    }
+    w := self.t[start:self.pos]
+    if w == "true" || w == "false" {
+        return boolean(w == "true")
+    }
+    if w == "null" {
+        return Value{how: 9}
+    }
+    for b in w {
+        if b == '.' || b == 'e' || b == 'E' {
+            return float(try str.parseFloat(w))
+        }
+    }
+    return integer(try str.parseInt(w))
+}
+
+// TOML text for a @json struct, or for a Map or anything else json.encode
+// turns into a JSON object.
+pub !String encode[T](T v) {
+    scoped String j = json.encode(v)
+    r := JsonReader{t: j}
+    scoped Value doc = try r.value()
+    if doc.kind != .table {
+        return error(TomlError.wrongType, "a TOML document is a table, so only a struct can be written as one")
+    }
+    return write(doc)
+}

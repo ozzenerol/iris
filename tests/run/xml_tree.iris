@@ -1,0 +1,52 @@
+// expect: root: catalog, 2 books
+// expect: bk101: XML Developer's Guide by Gambardella, Matthew, 44.95
+// expect: bk102: Midnight Rain by Ralls, Kim, 5.95
+// expect: missing: [] true
+// expect: all text: [XML Developer's GuideGambardella, Matthew44.95]
+// expect: <catalog><book id="bk101"><title>XML Developer&apos;s Guide</title><author>Gambardella, Matthew</author><price>44.95</price></book><book id="bk102"><title>Midnight Rain</title><author>Ralls, Kim</author><price>5.95</price></book></catalog>
+// expect: <order id="7" note="&quot;rush&quot; &amp; wrap"><item qty="2">tea &lt;green&gt;</item><gift/></order>
+// expect: back: order 7, item 2, tea <green>
+
+import xml
+
+!void main() {
+    text := r"""<?xml version="1.0"?>
+<catalog>
+   <book id="bk101">
+      <title>XML Developer's Guide</title>
+      <author>Gambardella, Matthew</author>
+      <price>44.95</price>
+   </book>
+   <book id="bk102">
+      <title>Midnight Rain</title>
+      <author>Ralls, Kim</author>
+      <price>5.95</price>
+   </book>
+</catalog>
+"""
+    scoped xml.Element root = try xml.parse(text)
+    print("root: {root.name}, {root.children.len} books")
+    for b in root.children {
+        print("{b.attr("id")}: {b.child("title").text} by {b.child("author").text}, {b.child("price").text}")
+    }
+    first := root.child("book")
+    print("missing: [{first.attr("lang")}] {first.child("isbn") == null}")
+    scoped String all = first.allText()
+    print("all text: [{all}]")
+    scoped String back = root.write()
+    print(back)
+
+    scoped xml.Element order = xml.element("order")
+    order.set("id", "7")
+    order.set("note", "\"rush\" & wrap")
+    item := xml.element("item")
+    item.set("qty", "2")
+    item.addText("tea <green>")
+    order.add(item)
+    order.add(xml.element("gift"))
+    scoped String out = order.write()
+    print(out)
+    scoped xml.Element again = try xml.parse(out)
+    tea := again.child("item").text
+    print("back: {again.name} {again.attr("id")}, item {again.child("item").attr("qty")}, {tea}")
+}

@@ -1,0 +1,42 @@
+// expect: title = "a \"quoted\" title"
+// expect: ratio = 1.0
+// expect: "two words" = true
+// expect: list = [1, 2.5, "x", [true], {a = 1}]
+// expect: 
+// expect: [server]
+// expect: port = 8080
+// expect: 
+// expect: [server.tls]
+// expect: cert = "/etc/cert.pem"
+// expect: back: 8080 /etc/cert.pem 5
+
+import toml, str
+
+!void main() {
+    scoped toml.Value doc = toml.table()
+    doc.set("title", toml.string("a \"quoted\" title"))
+    doc.set("ratio", toml.float(1.0))
+    doc.set("two words", toml.boolean(true))
+    list := toml.array()
+    list.push(toml.integer(1))
+    list.push(toml.float(2.5))
+    list.push(toml.string("x"))
+    inner := toml.array()
+    inner.push(toml.boolean(true))
+    list.push(inner)
+    t := toml.table()
+    t.set("a", toml.integer(1))
+    list.push(t)
+    doc.set("list", list)
+    server := toml.table()
+    server.set("port", toml.integer(8080))
+    tls := toml.table()
+    tls.set("cert", toml.string("/etc/cert.pem"))
+    server.set("tls", tls)
+    doc.set("server", server)
+    scoped String text = toml.write(doc)
+    print(str.trimRight(text))
+    scoped toml.Value back = try toml.parse(text)
+    s := back.get("server")
+    print("back: {s.get("port").int} {s.get("tls").get("cert").text} {back.get("list").len()}")
+}

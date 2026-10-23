@@ -1,0 +1,378 @@
+// Zip archives: reading them from memory or a file, with each entry's
+// CRC-32 checked, writing them with stored or deflated entries, and putting
+// their files into a folder. Archives over 4 GiB (zip64) are not read.
+//
+//     scoped zip.Archive a = try zip.open("site.zip")
+//     scoped String page = try a.read(a.find("index.html"))
+
+import compress, fs, path, str, time
+
+// What zip fails with: broken for data that isn't a zip archive, crc for
+// an entry whose bytes don't match its CRC-32, unsupported for an entry that
+// is encrypted or compressed another way, unsafe for a name that would put a
+// file outside the folder it goes into.
+pub enum ZipError { broken, crc, unsupported, unsafe }
+
+// How an entry's bytes are kept: as they are, or deflated.
+pub enum Method { stored, deflated }
+
+// One file or folder of an archive.
+pub struct Entry {
+    pub String name
+    pub bool isDir
+    pub Method method
+    // the size of the file, and of its bytes in the archive
+    pub i64 size
+    pub i64 compressedSize
+    pub u32 crc
+    // when it was last changed, in seconds since 1970 (zip keeps it to two
+    // seconds, with no time zone)
+    pub i64 mtime
+    // the permission bits, 420 (0644) when the archive doesn't say
+    pub i64 mode
+    str raw // the bytes as stored, inside the archive's memory
+    u16 how // the compression method's number
+    u16 flags
+}
+
+// Frees the entry's name.
+pub void Entry.free() => self.name.free()
+
+// The entries of an archive, read from memory or a file.
+pub struct Archive {
+    pub List[Entry] entries
+    String bytes
+}
+
+// Frees the entries, and the bytes the archive read from a file.
+pub void Archive.free() {
+    self.entries.freeEach()
+    self.bytes.free()
+}
+
+// The entry called name, or null.
+pub Entry *Archive.find(str name) {
+    for i in 0..self.entries.len {
+        e := &self.entries.items()[i]
+        if e.name == name {
+            return e
+        }
+    }
+    return null
+}
+
+i64 get16(str s, i64 at) => i64(s[at]) | (i64(s[at + 1]) << 8)
+
+i64 get32(str s, i64 at) => get16(s, at) | (get16(s, at + 2) << 16)
+
+void put16(String *out, i64 v) {
+    u8[2] b = [u8(v & 255), u8((v >> 8) & 255)]
+    out.append(b[0:2])
+}
+
+void put32(String *out, i64 v) {
+    put16(out, v & 65535)
+    put16(out, (v >> 16) & 65535)
+}
+
+// MS-DOS date and time, as zip keeps them, from seconds since 1970.
+(i64, i64) dosTime(i64 unix) {
+    t := time.unix(unix)
+    if t.year() < 1980 {
+        return (33, 0) // 1980-01-01
+    }
+    date := ((t.year() - 1980) << 9) | (t.month() << 5) | t.day()
+    clock := (t.hour() << 11) | (t.minute() << 5) | (t.second() / 2)
+    return (date, clock)
+}
+
+i64 unixTime(i64 date, i64 clock) {
+    year := 1980 + (date >> 9)
+    month := (date >> 5) & 15
+    day := date & 31
+    if month < 1 || day < 1 {
+        return 0
+    }
+    return time.date(year, month, day, clock >> 11, (clock >> 5) & 63, (clock & 31) * 2).unix()
+}
+
+// ------------------------------------------------------------ reading
+
+!List[Entry] readEntries(str d) {
+    // the end of central directory record is in the last 64 KiB and 22 bytes
+    i64 end = -1
+    i64 i = d.len - 22
+    for i >= 0 && i >= d.len - 22 - 65535 {
+        if d[i] == 0x50 && d[i + 1] == 0x4b && d[i + 2] == 5 && d[i + 3] == 6 {
+            end = i
+            break
+        }
+        i -= 1
+    }
+    if end < 0 {
+        return error(ZipError.broken, "no end of central directory: this is not a zip archive")
+    }
+    count := get16(d, end + 10)
+    cdSize := get32(d, end + 12)
+    cdAt := get32(d, end + 16)
+    if count == 65535 || cdAt == 4294967295 {
+        return error(ZipError.unsupported, "a zip64 archive, which is not read")
+    }
+    if cdAt + cdSize > end {
+        return error(ZipError.broken, "the central directory is outside the archive")
+    }
+    List[Entry] out
+    errdefer out.freeEach()
+    at := cdAt
+    for _ in 0..count {
+        if at + 46 > end || get32(d, at) != 0x02014b50 {
+            return error(ZipError.broken, "a central directory entry that can't be read")
+        }
+        nameLen := get16(d, at + 28)
+        extraLen := get16(d, at + 30)
+        commentLen := get16(d, at + 32)
+        if at + 46 + nameLen > end {
+            return error(ZipError.broken, "a central directory entry that can't be read")
+        }
+        name := d[at + 46:at + 46 + nameLen]
+        Entry e = Entry{
+            flags: u16(get16(d, at + 8)),
+            how: u16(get16(d, at + 10)),
+            crc: u32(get32(d, at + 16)),
+            compressedSize: get32(d, at + 20),
+            size: get32(d, at + 24),
+            mtime: unixTime(get16(d, at + 14), get16(d, at + 12)),
+        }
+        e.method = if e.how == 8 { .deflated } else { .stored }
+        e.isDir = str.endsWith(name, "/")
+        madeBy := get16(d, at + 4) >> 8
+        attrs := get32(d, at + 38)
+        e.mode = if madeBy == 3 && (attrs >> 16) != 0 { (attrs >> 16) & 4095 } else if e.isDir { 493 } else { 420 }
+        local := get32(d, at + 42)
+        if local + 30 > d.len || get32(d, local) != 0x04034b50 {
+            return error(ZipError.broken, "{name}: its local header can't be read")
+        }
+        start := local + 30 + get16(d, local + 26) + get16(d, local + 28)
+        if start + e.compressedSize > d.len {
+            return error(ZipError.broken, "the archive ends inside {name}")
+        }
+        e.raw = d[start:start + e.compressedSize]
+        e.name = name.copy()
+        out.push(e)
+        at += 46 + nameLen + extraLen + commentLen
+    }
+    return out
+}
+
+// Reads an archive from memory. The entries point into data, which must
+// outlive the archive.
+pub !Archive parse(str data) => Archive{entries: try readEntries(data)}
+
+// Reads an archive from a file.
+pub !Archive open(str file) {
+    Archive a = Archive{bytes: try fs.readAll(file)}
+    errdefer a.free()
+    a.entries = try readEntries(a.bytes)
+    return a
+}
+
+// The bytes of an entry, decompressed, with their CRC-32 checked.
+pub !String Archive.read(Entry *e) {
+    if (e.flags & 1) != 0 {
+        return error(ZipError.unsupported, "{e.name} is encrypted")
+    }
+    String out
+    if e.how == 0 {
+        out = e.raw.copy()
+    } else if e.how == 8 {
+        out = compress.decompress(e.raw, .raw, if e.size > 0 { e.size } else { 1 }) catch err {
+            return error(ZipError.broken, "{e.name}: {err.message}")
+        }
+    } else {
+        return error(ZipError.unsupported, "{e.name} is compressed with method {e.how}, which is not read")
+    }
+    if out.len != e.size {
+        out.free()
+        return error(ZipError.broken, "{e.name}: its size doesn't match")
+    }
+    if compress.crc32(out) != e.crc {
+        out.free()
+        return error(ZipError.crc, "{e.name}: the CRC-32 doesn't match")
+    }
+    return out
+}
+
+@extern("chmod")
+i32 cChmod(u8 *path, u32 mode)
+
+// Whether a name stays inside the folder it is put in.
+!void checkSafe(str name) {
+    if path.isAbs(name) || str.contains(name, "\\") || (name.len > 1 && name[1] == ':') {
+        return error(ZipError.unsafe, "{name} is an absolute path")
+    }
+    rest := name
+    for {
+        part, after, more := str.cut(rest, "/")
+        if part == ".." {
+            return error(ZipError.unsafe, "{name} has .. in it, which would leave the folder")
+        }
+        if !more {
+            return
+        }
+        rest = after
+    }
+}
+
+// Puts the archive's files and folders into dir, made when it isn't there.
+// A name with .. in it, or an absolute one, fails with ZipError.unsafe before
+// anything is written.
+pub !void Archive.extract(str dir) {
+    for e in self.entries {
+        try checkSafe(e.name)
+    }
+    try fs.mkdirAll(dir)
+    for i in 0..self.entries.len {
+        e := &self.entries.items()[i]
+        scoped String to = path.join(dir, e.name)
+        if e.isDir {
+            try fs.mkdirAll(to)
+            continue
+        }
+        parent := path.dir(to)
+        if parent.len > 0 {
+            try fs.mkdirAll(parent)
+        }
+        scoped String data = try self.read(e)
+        try fs.writeAll(to, data)
+        scoped String z = format("{to}\0")
+        cChmod(z.ptr, u32(e.mode))
+    }
+}
+
+// ------------------------------------------------------------ writing
+
+// Builds an archive in memory: add entries, then finish. out is the
+// archive, to write to a file.
+pub struct Writer {
+    pub String out
+    String central
+    i64 count
+}
+
+// Frees the archive's bytes.
+pub void Writer.free() {
+    self.out.free()
+    self.central.free()
+}
+
+void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i64 mode) {
+    date, clock := dosTime(mtime)
+    offset := self.out.len
+    // bit 11: the name is UTF-8
+    put32(&self.out, 0x04034b50)
+    put16(&self.out, 20)
+    put16(&self.out, 0x0800)
+    put16(&self.out, how)
+    put16(&self.out, clock)
+    put16(&self.out, date)
+    put32(&self.out, i64(crc))
+    put32(&self.out, stored.len)
+    put32(&self.out, size)
+    put16(&self.out, name.len)
+    put16(&self.out, 0)
+    self.out.append(name)
+    self.out.append(stored)
+
+    put32(&self.central, 0x02014b50)
+    put16(&self.central, (3 << 8) | 20) // made on Unix, so the mode is kept
+    put16(&self.central, 20)
+    put16(&self.central, 0x0800)
+    put16(&self.central, how)
+    put16(&self.central, clock)
+    put16(&self.central, date)
+    put32(&self.central, i64(crc))
+    put32(&self.central, stored.len)
+    put32(&self.central, size)
+    put16(&self.central, name.len)
+    put16(&self.central, 0)
+    put16(&self.central, 0)
+    put16(&self.central, 0)
+    put16(&self.central, 0)
+    kind := if str.endsWith(name, "/") { 0x4000 | 0x10 } else { 0x8000 } // S_IFDIR and MS-DOS's folder bit, or S_IFREG
+    put32(&self.central, ((mode | (kind & 0xf000)) << 16) | (kind & 0x10))
+    put32(&self.central, offset)
+    self.central.append(name)
+    self.count += 1
+}
+
+// Adds a file with data as its bytes, deflated unless that wouldn't make it
+// smaller, or stored. mode is the permission bits (420 is 0644, 493 is
+// 0755) and mtime the time of change in seconds since 1970.
+pub !void Writer.add(str name, str data, Method method = .deflated, i64 mode = 420, i64 mtime = 0) {
+    if data.len >= 4294967295 || self.out.len >= 4294967295 {
+        return error(ZipError.unsupported, "{name}: an archive over 4 GiB needs zip64, which is not written")
+    }
+    crc := compress.crc32(data)
+    if method == .deflated {
+        scoped String packed = try compress.compress(data, .raw)
+        if packed.len < data.len {
+            self.entry(name, packed, 8, crc, data.len, mtime, mode)
+            return
+        }
+    }
+    self.entry(name, data, 0, crc, data.len, mtime, mode)
+}
+
+// Adds a folder; its name gets a / at the end when it has none.
+pub void Writer.addDir(str name, i64 mode = 493, i64 mtime = 0) {
+    if str.endsWith(name, "/") {
+        self.entry(name, "", 0, 0, 0, mtime, mode)
+        return
+    }
+    scoped String n = format("{name}/")
+    self.entry(n, "", 0, 0, 0, mtime, mode)
+}
+
+@extern("access")
+i32 cAccess(u8 *path, i32 how)
+
+// Adds the file at file as name (its own name when name is ""), with its
+// time of change, and mode 493 when it can be run, else 420.
+pub !void Writer.addFile(str file, str name = "", Method method = .deflated) {
+    scoped String data = try fs.readAll(file)
+    info := try fs.stat(file)
+    scoped String z = format("{file}\0")
+    mode := if cAccess(z.ptr, 1) == 0 { 493 } else { 420 }
+    try self.add(if name.len > 0 { name } else { path.base(file) }, data, method, mode, info.modified.unix())
+}
+
+// Adds the files and folders inside dir, with names relative to it, under
+// prefix when that isn't "".
+pub !void Writer.addTree(str dir, str prefix = "", Method method = .deflated) {
+    scoped fs.Dir d = try fs.readDir(dir)
+    for e in d.entries {
+        scoped String full = path.join(dir, e.name)
+        scoped String name = if prefix.len > 0 { format("{prefix}/{e.name}") } else { e.name.copy() }
+        if e.isDir {
+            info := try fs.stat(full)
+            self.addDir(name, mtime: info.modified.unix())
+            try self.addTree(full, name, method)
+        } else {
+            try self.addFile(full, name, method)
+        }
+    }
+}
+
+// Ends the archive with its central directory: out is then complete.
+pub void Writer.finish() {
+    at := self.out.len
+    self.out.append(self.central)
+    put32(&self.out, 0x06054b50)
+    put16(&self.out, 0)
+    put16(&self.out, 0)
+    put16(&self.out, self.count)
+    put16(&self.out, self.count)
+    put32(&self.out, self.central.len)
+    put32(&self.out, at)
+    put16(&self.out, 0)
+}
