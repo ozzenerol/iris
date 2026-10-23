@@ -1,0 +1,43 @@
+import net
+
+const i64 THREADS = 4
+
+void oneWay(net.Conn *to, net.Conn *from, chan[i64] done) {
+    _ = net.copy(to, from) catch e { 0 }
+    to.closeWrite() catch e { }
+    done <- 0
+}
+
+void handle(net.Conn client) {
+    defer client.close()
+    backend := net.dial("127.0.0.1", 9001) catch e {
+        return
+    }
+    defer backend.close()
+    done := chan[i64](1)
+    defer done.free()
+    spawn oneWay(&backend, &client, done)
+    _ = net.copy(&client, &backend) catch e { 0 }
+    client.closeWrite() catch e { }
+    _ = <-done
+}
+
+void serve() {
+    ln := net.listen(9000, "127.0.0.1", true) catch e {
+        print("listen: {e.message}")
+        return
+    }
+    for {
+        conn := ln.accept() catch e {
+            continue
+        }
+        spawn handle(conn)
+    }
+}
+
+void main() {
+    for _ in 1..THREADS {
+        thread serve()
+    }
+    serve()
+}

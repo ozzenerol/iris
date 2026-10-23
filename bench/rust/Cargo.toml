@@ -83,6 +83,10 @@ name = "tcp-echo"
 path = "../tcp-echo/main.rs"
 
 [[bin]]
+name = "tcp-proxy"
+path = "../tcp-proxy/main.rs"
+
+[[bin]]
 name = "fmt-text"
 path = "../fmt-text/main.rs"
 

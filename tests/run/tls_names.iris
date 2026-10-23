@@ -1,0 +1,147 @@
+// expect: peeked a.test
+// expect: then TLS still works: hello a.test
+// expect: a.test: CN=a.test
+// expect: x.b.test: CN=*.b.test
+// expect: localhost: CN=localhost
+// expect: no name: localhost
+// expect: after reload: hello a.test
+// expect: wrong file: NetError.tls true
+// expect: without a client certificate: NetError.tls
+// expect: with one: /CN=client one
+// expect: optional, without one: hello a.test
+// expect: TLS closeWrite: server read to the end: ping
+
+import net, str
+
+void serve(net.Listener ln, net.TlsConfig *config, i64 count) {
+    for _ in 0..count {
+        c := ln.accept() catch e {
+            return
+        }
+        c.setTimeout(2s)
+        c.acceptTls(config) catch e {
+            c.close()
+            continue
+        }
+        name := c.serverName()
+        scoped String who = c.peerSubject()
+        if who.len > 0 {
+            c.write("{who}\n") catch e { }
+        } else {
+            c.write("hello {name}\n") catch e { }
+        }
+        // reads to the end, for the closeWrite check
+        scoped String rest = c.readLine() catch e {
+            c.close()
+            continue
+        }
+        if rest.len > 0 {
+            c.write("server read to the end: {rest}\n") catch e { }
+        }
+        c.close()
+    }
+}
+
+!net.Conn tlsTo(u16 port, str name, str ca = "tests/data/tls/names-ca.pem", str cert = "", str key = "") {
+    c := try net.dial("127.0.0.1", port)
+    c.setTimeout(2s)
+    c.startTls(name, ca, cert: cert, key: key) catch e {
+        c.close()
+        return e
+    }
+    return c
+}
+
+!String lineFrom(u16 port, str name, str ca = "tests/data/tls/names-ca.pem") {
+    c := try tlsTo(port, name, ca)
+    defer c.close()
+    return try c.readLine()
+}
+
+// What the client's first message names, read before TLS starts.
+void sniffer(net.Listener ln, net.TlsConfig *config) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    name := c.peekServerName() catch e {
+        return
+    }
+    print("peeked {name}")
+    c.acceptTls(config) catch e {
+        print("handshake failed")
+        return
+    }
+    c.write("hello {c.serverName()}\n") catch e { }
+    u8[1] one
+    _ = c.read(one) catch e { 0 }
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer config.free()
+    try config.addCert("tests/data/tls/a.pem", "tests/data/tls/a.key")
+    try config.addCert("tests/data/tls/wild.pem", "tests/data/tls/wild.key")
+
+    sn := try net.listen(0, "127.0.0.1")
+    spawn sniffer(sn, &config)
+    scoped String first = try lineFrom(sn.port, "a.test")
+    print("then TLS still works: {first}")
+
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln, &config, 100)
+    for name in ["a.test", "x.b.test"] {
+        c := try tlsTo(ln.port, name)
+        scoped String s = c.peerSubject()
+        print("{name}: {s[1:]}")
+        c.close()
+    }
+    c := try tlsTo(ln.port, "localhost", "tests/data/tls/ca.pem")
+    scoped String s = c.peerSubject()
+    print("localhost: {s[1:]}")
+    c.close()
+    // a client that asks for no name gets the first certificate
+    raw := try net.dial("127.0.0.1", ln.port)
+    raw.startTls("", "tests/data/tls/ca.pem") catch e {
+        print("no name: {e.message}")
+    }
+    scoped String d = raw.peerSubject()
+    print("no name: {d[4:]}")
+    raw.close()
+
+    try config.reload()
+    scoped String again = try lineFrom(ln.port, "a.test")
+    print("after reload: {again}")
+    config.addCert("tests/data/tls/missing.pem", "tests/data/tls/a.key") catch e {
+        print("wrong file: {e.code} {str.contains(e.message, "missing.pem")}")
+    }
+
+    // client certificates
+    mtls := try net.tlsConfig("tests/data/tls/a.pem", "tests/data/tls/a.key")
+    defer mtls.free()
+    try mtls.verifyClients("tests/data/tls/names-ca.pem")
+    ml := try net.listen(0, "127.0.0.1")
+    spawn serve(ml, &mtls, 100)
+    no := try tlsTo(ml.port, "a.test")
+    line0 := no.readLine() catch e {
+        print("without a client certificate: {e.code}")
+        format("")
+    }
+    line0.free()
+    no.close()
+    yes := try tlsTo(ml.port, "a.test", cert: "tests/data/tls/client.pem", key: "tests/data/tls/client.key")
+    scoped String line = try yes.readLine()
+    print("with one: {line}")
+    yes.close()
+    try mtls.verifyClients("tests/data/tls/names-ca.pem", required: false)
+    scoped String opt = try lineFrom(ml.port, "a.test")
+    print("optional, without one: {opt}")
+
+    half := try tlsTo(ln.port, "a.test")
+    scoped String hello = try half.readLine()
+    try half.write("ping\n")
+    try half.closeWrite()
+    scoped String reply = try half.readLine()
+    print("TLS closeWrite: {reply}")
+    half.close()
+}

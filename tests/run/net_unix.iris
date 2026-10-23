@@ -1,0 +1,73 @@
+// expect: over the socket: ping
+// expect: got 1 descriptor with "here"
+// expect: the new owner serves: hello from the adopted listener
+// expect: wait: false, then true
+// expect: missing: NetError.notFound
+
+import fs, net, os
+
+void echoOnce(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    scoped String line = c.readLine() catch e {
+        return
+    }
+    c.write("{line}\n") catch e { }
+}
+
+void greet(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    c.write("hello from the adopted listener\n") catch e { }
+    c.close()
+}
+
+!void main() {
+    scoped String path = format("/tmp/iris-test-{os.pid()}.sock")
+    defer fs.remove(path) catch e { }
+    ln := try net.listenUnix(path)
+    spawn echoOnce(ln)
+    c := try net.dialUnix(path)
+    try c.write("ping\n")
+    scoped String back = try c.readLine()
+    print("over the socket: {back}")
+    c.close()
+
+    // a listening TCP socket handed to another task over a Unix socket, as
+    // one program hands its sockets to the next
+    tcp := try net.listen(0, "127.0.0.1")
+    sender := try net.dialUnix(path)
+    try sender.sendFds("here", [tcp.fd()])
+    u8[16] buf
+    i32[4] fds
+    receiver := try ln.accept()
+    n, k := try receiver.readFds(buf, fds)
+    print("got {k} descriptor with \"{buf[0:n]}\"")
+    tcp.close()
+    adopted := try net.adoptListener(fds[0])
+    spawn greet(adopted)
+    cl := try net.dial("127.0.0.1", adopted.port)
+    scoped String hello = try cl.readLine()
+    print("the new owner serves: {hello}")
+    cl.close()
+    sender.close()
+    receiver.close()
+
+    // waiting on a descriptor in the event loop
+    a := try net.dialUnix(path)
+    b := try ln.accept()
+    early := net.waitRead(b.fd(), 30ms)
+    try a.write("x")
+    print("wait: {early}, then {net.waitRead(b.fd(), 1s)}")
+    a.close()
+    b.close()
+    ln.close()
+
+    _ = net.dialUnix("/tmp/iris-no-such.sock") catch e {
+        print("missing: {e.code}")
+        net.Conn{}
+    }
+}

@@ -34,7 +34,8 @@ void rawClose(i32 fd)
 void rawShutdown(i32 fd)
 
 @extern("iris_tls_connect")
-u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen)
+u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen, u8 *cert, i64 certLen,
+    u8 *key, i64 keyLen)
 
 @extern("iris_tls_ctx_http2")
 void rawTlsHttp2(u8 *ctx)
@@ -59,6 +60,27 @@ i32 rawTlsWrite(u8 *ssl, u8 *data, i64 len, i64 timeout)
 
 @extern("iris_tls_close")
 void rawTlsClose(u8 *ssl)
+
+@extern("iris_tls_server_add")
+i32 rawTlsServerAdd(u8 *ctx, u8 *cert, i64 certLen, u8 *key, i64 keyLen)
+
+@extern("iris_tls_server_reload")
+i32 rawTlsServerReload(u8 *ctx)
+
+@extern("iris_tls_server_clients")
+i32 rawTlsServerClients(u8 *ctx, u8 *ca, i64 caLen, i32 required)
+
+@extern("iris_tls_server_alpn")
+i32 rawTlsServerAlpn(u8 *ctx, u8 *protos, i64 len)
+
+@extern("iris_tls_server_name")
+void rawTlsServerName(u8 *ssl, u8 **p, i64 *n)
+
+@extern("iris_tls_peer_subject")
+i32 rawTlsPeerSubject(u8 *ssl, String *out)
+
+@extern("iris_tls_close_write")
+i32 rawTlsCloseWrite(u8 *ssl, i64 timeout)
 
 @extern("iris_tls_message_ptr")
 u8 *tlsMessagePtr()
@@ -95,6 +117,8 @@ pub struct Listener {
 }
 
 // A connection. Reads go through a buffer, so lines can be read one at a time.
+// received and sent count the bytes that came in and went out, over TLS the
+// bytes of the data.
 pub struct Conn {
     i32 sock
     u8[] buf
@@ -102,6 +126,8 @@ pub struct Conn {
     i64 end
     u8 *tls
     Duration timeout
+    pub i64 received
+    pub i64 sent
 }
 
 // Each read and write after this fails with NetError.timeout when it waits
@@ -111,14 +137,21 @@ pub void Conn.setTimeout(Duration d) {
 }
 
 i64 Conn.rawRead(u8[] buf) {
-    if self.tls != null {
-        return rawTlsRead(self.tls, buf.ptr, buf.len, self.timeout)
+    n := if self.tls != null {
+        rawTlsRead(self.tls, buf.ptr, buf.len, self.timeout)
+    } else {
+        rawRead(self.sock, buf.ptr, buf.len, self.timeout)
     }
-    return rawRead(self.sock, buf.ptr, buf.len, self.timeout)
+    if n > 0 {
+        self.received += n
+    }
+    return n
 }
 
 // Listens on port (0 picks a free one; see .port) on host ("" for all
-// addresses). shared lets several threads listen on the same port.
+// addresses, IPv6 and IPv4). shared lets several threads, or programs,
+// listen on the same port. A Socket sets up the rest: options before it
+// binds, the backlog.
 pub !Listener listen(u16 port, str host = "", bool shared = false) {
     i32 err
     fd := rawListen(host.ptr, host.len, i64(port), if shared { 1 } else { 0 }, &err)
@@ -289,6 +322,7 @@ pub !void Conn.write(str data) {
     if code != 0 {
         return error(netCode(code), "writing: {reason(code)}")
     }
+    self.sent += data.len
 }
 
 // The address of the other side: the client on a server, the server on a
@@ -336,10 +370,11 @@ pub void Conn.close() {
 
 // Connects to host:port over TLS. The server's certificate must be valid
 // for host and signed by a certificate the system trusts, or one in the
-// file ca (PEM) when ca is given.
-pub !Conn dialTls(str host, u16 port, str ca = "") {
+// file ca (PEM) when ca is given. cert and key are the client's own
+// certificate and key (PEM files), for servers that ask for one.
+pub !Conn dialTls(str host, u16 port, str ca = "", str cert = "", str key = "") {
     c := try dial(host, port)
-    c.startTls(host, ca) catch e {
+    c.startTls(host, ca, cert: cert, key: key) catch e {
         c.close()
         return e
     }
@@ -348,9 +383,12 @@ pub !Conn dialTls(str host, u16 port, str ca = "") {
 
 // Starts TLS as the client on a connection that is open, as dialTls does.
 // protocols are offered to the server with ALPN, each with its length in
-// front: "\x02h2\x08http/1.1"; protocol() says which one it took.
-pub !void Conn.startTls(str host, str ca = "", str protocols = "") {
-    ssl := rawTlsConnect(self.sock, host.ptr, host.len, ca.ptr, ca.len, protocols.ptr, protocols.len)
+// front: "\x02h2\x08http/1.1"; protocol() says which one it took. cert and
+// key are the client's own certificate and key; key "" means the key is in
+// cert.
+pub !void Conn.startTls(str host, str ca = "", str protocols = "", str cert = "", str key = "") {
+    ssl := rawTlsConnect(self.sock, host.ptr, host.len, ca.ptr, ca.len, protocols.ptr, protocols.len, cert.ptr,
+        cert.len, key.ptr, key.len)
     if ssl == null {
         return error(NetError.tls, "{host}: {tlsMessage()}")
     }
@@ -366,13 +404,16 @@ pub str Conn.protocol() {
     return p[0:n]
 }
 
-// A server's certificate and key, for accepting TLS connections. It can be
-// shared by every thread.
+// A server's certificates and keys, for accepting TLS connections. It can be
+// shared by every thread, and changed while they use it: a handshake uses
+// what it was when the handshake started.
 pub struct TlsConfig {
     u8 *ctx
 }
 
-// Reads a certificate chain and its private key from PEM files.
+// Reads a certificate chain and its private key from PEM files. This is
+// the certificate for clients that ask for no name, or for a name no other
+// certificate has.
 pub !TlsConfig tlsConfig(str certFile, str keyFile) {
     ctx := rawTlsServerCtx(certFile.ptr, certFile.len, keyFile.ptr, keyFile.len)
     if ctx == null {
@@ -383,6 +424,43 @@ pub !TlsConfig tlsConfig(str certFile, str keyFile) {
 
 // Lets clients ask for HTTP/2 with ALPN; http's servers call it.
 pub void TlsConfig.offerHttp2() => rawTlsHttp2(self.ctx)
+
+// Adds a certificate and its key (PEM files), used for the clients that ask
+// for a name it has (SNI). Its names come from the certificate, wildcards
+// like *.example.com too.
+pub !void TlsConfig.addCert(str certFile, str keyFile) {
+    if rawTlsServerAdd(self.ctx, certFile.ptr, certFile.len, keyFile.ptr, keyFile.len) != 0 {
+        return error(NetError.tls, tlsMessage())
+    }
+}
+
+// Reads every certificate and key again from their files, as after they
+// were renewed. Connections that are open keep the ones they had. On an
+// error the config keeps the ones it had.
+pub !void TlsConfig.reload() {
+    if rawTlsServerReload(self.ctx) != 0 {
+        return error(NetError.tls, tlsMessage())
+    }
+}
+
+// Asks each client for a certificate signed by one in the file ca (PEM).
+// With required, a client without one fails the handshake; without it, the
+// client may send none. A certificate that isn't signed by ca always fails.
+// peerSubject says who the client is.
+pub !void TlsConfig.verifyClients(str ca, bool required = true) {
+    if rawTlsServerClients(self.ctx, ca.ptr, ca.len, if required { 1 } else { 0 }) != 0 {
+        return error(NetError.tls, tlsMessage())
+    }
+}
+
+// The protocols offered with ALPN, each with its length in front:
+// "\x02h2\x08http/1.1". The server takes the first of them that the client
+// offers too.
+pub !void TlsConfig.offerProtocols(str protocols) {
+    if rawTlsServerAlpn(self.ctx, protocols.ptr, protocols.len) != 0 {
+        return error(NetError.tls, tlsMessage())
+    }
+}
 
 // Frees the certificate and the key.
 pub void TlsConfig.free() {
@@ -397,6 +475,23 @@ pub !void Conn.acceptTls(TlsConfig *config) {
         return error(NetError.tls, tlsMessage())
     }
     self.tls = ssl
+}
+
+// The name the client asked for in its TLS handshake (SNI), on a server:
+// "" when it asked for none.
+pub str Conn.serverName() {
+    u8 *p
+    i64 n
+    rawTlsServerName(self.tls, &p, &n)
+    return p[0:n]
+}
+
+// The subject of the certificate the other side showed, as
+// "/CN=client.example.com"; "" when it showed none.
+pub String Conn.peerSubject() {
+    String out
+    _ = rawTlsPeerSubject(self.tls, &out)
+    return out
 }
 
 // Lets the other tasks run.

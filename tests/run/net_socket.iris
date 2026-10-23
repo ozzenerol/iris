@@ -1,0 +1,69 @@
+// expect: listening: true
+// expect: from 127.0.0.1, port matches: true
+// expect: keepalive on: true
+// expect: keepalive off: true
+// expect: every address, over IPv4: hi
+// expect: every address, over IPv6: hi
+// expect: v4 socket, IPv6 address: true
+// expect: in use: NetError.inUse
+
+import net
+import c "sys/socket.h"
+
+void greet(net.Listener ln) {
+    for {
+        conn := ln.accept() catch e {
+            return
+        }
+        conn.write("hi\n") catch e { }
+        conn.close()
+    }
+}
+
+!void main() {
+    s := try net.socket(net.Family.v4)
+    try s.setBuffers(read: 256KiB, write: 256KiB)
+    try s.bind(try net.ip("127.0.0.1"))
+    ln := try s.listen(backlog: 8)
+    print("listening: {ln.port > 0}")
+
+    // a client that picks the address and port it comes from
+    cs := try net.socket()
+    try cs.bind(try net.ip("127.0.0.1"))
+    local := cs.fd()
+    cl := try cs.connect(try net.ip("127.0.0.1", ln.port))
+    srv := try ln.accept()
+    who := srv.remoteAddr()
+    scoped String ip = who.ipText()
+    print("from {ip}, port matches: {who.port == cl.localAddr().port && cl.fd() == local}")
+    try cl.setKeepAlive(30s, 5s, 4)
+    print("keepalive on: {try cl.option(c.SOL_SOCKET, c.SO_KEEPALIVE) != 0}")
+    try cl.setOption(c.SOL_SOCKET, c.SO_KEEPALIVE, 0)
+    print("keepalive off: {try cl.option(c.SOL_SOCKET, c.SO_KEEPALIVE) == 0}")
+    cl.close()
+    srv.close()
+    ln.close()
+
+    // "" listens on IPv6 and IPv4 at once
+    all := try net.listen(0)
+    spawn greet(all)
+    for host in ["127.0.0.1", "::1"] {
+        conn := try net.dial(host, all.port)
+        scoped String line = try conn.readLine()
+        kind := if host == "::1" { "IPv6" } else { "IPv4" }
+        print("every address, over {kind}: {line}")
+        conn.close()
+    }
+
+    v4 := try net.socket(net.Family.v4)
+    v4.bind(try net.ip("::1")) catch e {
+        print("v4 socket, IPv6 address: {e.code == net.NetError.other}")
+    }
+    v4.close()
+
+    taken := try net.socket()
+    taken.bind(net.Addr{port: all.port}) catch e {
+        print("in use: {e.code}")
+    }
+    taken.close()
+}

@@ -19,8 +19,11 @@ ROWS = [
     ("http-json", "HTTP/1.1 JSON in and out, wrk"),
     ("tcp-echo", "TCP echo, 100 connections"),
     ("http2", "HTTP/2 hello, h2load"),
+    ("tcp-proxy", "TCP proxy, 64-byte messages, 100 connections"),
+    ("tcp-proxy-bulk", "TCP proxy, 256 KiB messages, 16 connections"),
 ]
-NET = {"http-hello", "http-json", "tcp-echo", "http2"}
+NET = {"http-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"}
+UNITS = {"tcp-echo": "msg/s", "tcp-proxy": "msg/s", "tcp-proxy-bulk": "MiB/s each way"}
 # the standard library against Go's and the best-known Rust crates
 LIB_ROWS = [
     ("fmt-text", "2M lines with widths, hex and precision", "`write!`", "`fmt.Fprintf`"),
@@ -40,7 +43,9 @@ LIB_ROWS = [
 ]
 
 
-def fmt(v, net):
+def fmt(v, net, name=""):
+    if name == "tcp-proxy-bulk":
+        return f"{v:,.0f}"
     return f"{v / 1000:,.0f}k" if net else f"{v:.2f}"
 
 
@@ -67,13 +72,16 @@ def main():
     print("| Benchmark | What it does | Iris | Iris safe | Rust | Go | Memory, MiB: Iris / Rust / Go |")
     print("|---|---|--:|--:|--:|--:|--:|")
     for name, what in ROWS:
-        r = res[name]
+        r = res.get(name)
+        if not r:
+            continue
         net = name in NET
         langs = ["iris", "iris_safe", "rust", "go"]
         vals = [r.get(l) for l in langs]
         best = max(v for v in vals if v is not None) if net else min(v for v in vals if v is not None)
-        unit = "msg/s" if name == "tcp-echo" else "req/s" if net else "s"
-        cells = " | ".join("" if v is None else f"**{fmt(v, net)}**" if v == best else fmt(v, net) for v in vals)
+        unit = UNITS.get(name, "req/s" if net else "s")
+        cells = " | ".join("" if v is None else f"**{fmt(v, net, name)}**" if v == best else fmt(v, net, name)
+                           for v in vals)
         mem = " / ".join(f"{r.get(l + '_mem', 0):.0f}" for l in ("iris", "rust", "go"))
         print(f"| {name} | {what} ({unit}) | {cells} | {mem} |")
 

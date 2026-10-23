@@ -175,13 +175,13 @@
    "go_mem": 20.1
   },
   "tcp-echo": {
-   "iris": 376600,
+   "iris": 366872,
    "iris_mem": 3.6,
-   "iris_safe": 372042,
-   "iris_safe_mem": 3.5,
-   "rust": 362349,
+   "iris_safe": 379794,
+   "iris_safe_mem": 3.6,
+   "rust": 363406,
    "rust_mem": 3.2,
-   "go": 288988,
+   "go": 291796,
    "go_mem": 5.1
   },
   "http2": {
@@ -389,6 +389,26 @@
    "go": 4.488,
    "go_out": "134574000",
    "go_mem": 9.7
+  },
+  "tcp-proxy": {
+   "iris": 189908,
+   "iris_mem": 4.1,
+   "iris_safe": 189971,
+   "iris_safe_mem": 4.1,
+   "rust": 187046,
+   "rust_mem": 4.4,
+   "go": 157028,
+   "go_mem": 6.1
+  },
+  "tcp-proxy-bulk": {
+   "iris": 7645,
+   "iris_mem": 3.2,
+   "iris_safe": 7911,
+   "iris_safe_mem": 3.1,
+   "rust": 2098,
+   "rust_mem": 3.0,
+   "go": 8352,
+   "go_mem": 4.9
   }
  },
  "setup": {
@@ -396,6 +416,6 @@
   "iris": "iris 0.66.0",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-10-23 17:50"
+  "date": "2026-10-23 19:35"
  }
 }

@@ -29,6 +29,8 @@ Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris 
 | http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **367k** | 364k | 341k | 143k | 6 / 10 / 20 |
 | tcp-echo | TCP echo, 100 connections (msg/s) | **377k** | 372k | 362k | 289k | 4 / 3 / 5 |
 | http2 | HTTP/2 hello, h2load (req/s) | **2,087k** | 2,054k | 744k | 148k | 22 / 13 / 44 |
+| tcp-proxy | TCP proxy, 64-byte messages, 100 connections (msg/s) | 190k | **190k** | 187k | 157k | 4 / 4 / 6 |
+| tcp-proxy-bulk | TCP proxy, 256 KiB messages, 16 connections (MiB/s each way) | 7,645 | 7,911 | 2,098 | **8,352** | 3 / 3 / 5 |
 
 In fib and spectral-norm, Iris makes the same machine code as C compiled by clang 19. Rust 1.99 compiles with LLVM 23, which does better on those two loops on this CPU; on an Intel Core i7-12650H they are level. `bench/README.md` says how to run them.
 

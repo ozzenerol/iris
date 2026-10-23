@@ -16,7 +16,9 @@ LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "so
        "xml-parse", "toml-parse", "zip", "tar", "template"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
-NET = ["http-hello", "http-json", "tcp-echo", "http2"]
+NET = ["http-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"]
+# a benchmark that runs another one's programs under a different load
+SAME_AS = {"tcp-proxy-bulk": "tcp-proxy"}
 # the cores this process may use (a container may get any of the host's):
 # the first half runs servers, the rest the load, and one CPU program at a time
 _CORES = sorted(os.sched_getaffinity(0))
@@ -35,6 +37,7 @@ def sh(cmd, **kw):
 
 def build(names, iris):
     os.makedirs(OUT, exist_ok=True)
+    names = sorted({SAME_AS.get(n, n) for n in names})
     for n in names:
         sh([iris, "build", "--mode=release-fast", "-o", f"{OUT}/iris-{n}", f"{HERE}/{n}/main.iris"])
         sh([iris, "build", "--mode=release-safe", "-o", f"{OUT}/iris_safe-{n}", f"{HERE}/{n}/main.iris"])
@@ -43,6 +46,7 @@ def build(names, iris):
     for n in names:
         shutil.copy(f"{HERE}/rust/target/release/{n}", f"{OUT}/rust-{n}")
     sh(["go", "build", "-o", f"{OUT}/echo-load", "./tools/echo-load"], cwd=HERE)
+    sh(["go", "build", "-o", f"{OUT}/echo-server", "./tools/echo-server"], cwd=HERE)
     sh(["cc", "-O2", "-o", f"{OUT}/memrun", f"{HERE}/tools/memrun.c"])
 
 
@@ -93,11 +97,20 @@ def load(name):
         if not re.search(r"(\d+) succeeded", out) or re.search(r" 0 succeeded", out):
             raise RuntimeError("h2load: no request succeeded\n" + out)
         return float(re.search(r"finished in [\d.]+s, ([\d.]+) req/s", out).group(1))
-    if name == "tcp-echo":
+    if name in ("tcp-echo", "tcp-proxy"):
         return float(sh(pin + [f"{OUT}/echo-load", "-c", "100", "-d", f"{LOAD_TIME}s"]))
+    if name == "tcp-proxy-bulk":
+        # 256 KiB messages: MiB/s through the proxy, each way
+        rate = float(sh(pin + [f"{OUT}/echo-load", "-c", "16", "-s", str(256 << 10), "-d", f"{LOAD_TIME}s"]))
+        return rate / 4
 
 
 def serve(binary, name):
+    backend = None
+    if name in ("tcp-proxy", "tcp-proxy-bulk"):
+        # the same backend for every proxy, on the load's cores
+        backend = subprocess.Popen(["taskset", "-c", LOAD_CORES, f"{OUT}/echo-server"])
+        wait_port(9001)
     p = subprocess.Popen(["taskset", "-c", SERVER_CORES, binary], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
     try:
@@ -112,6 +125,9 @@ def serve(binary, name):
     finally:
         p.send_signal(signal.SIGKILL)
         p.wait()
+        if backend:
+            backend.send_signal(signal.SIGKILL)
+            backend.wait()
         time.sleep(0.5)
 
 
@@ -128,7 +144,7 @@ def main():
     for n in names:
         r = {}
         for lang in ("iris", "iris_safe", "rust", "go"):
-            b = f"{OUT}/{lang}-{n}"
+            b = f"{OUT}/{lang}-{SAME_AS.get(n, n)}"
             if n in CPU or n in LIB:
                 t, mem, outs = timed(b, a.runs, SERVER_CORES if n in THREADED else None)
                 r[lang], r[lang + "_out"] = round(t, 3), sorted(outs)[0].strip()

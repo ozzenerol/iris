@@ -1,0 +1,126 @@
+// expect: backend read 1048576 bytes, sum ok: true
+// expect: proxy: up 1048576, down 1048582
+// expect: client read 1048582 bytes: back 1048576 + "done\r\n"
+// expect: sniffed: ssh
+// expect: limit: 3 then "abc"
+
+import net
+
+// Reads everything until the client ends its writes, then answers with the
+// same bytes and "done" and ends its own.
+void backend(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    String all
+    defer all.free()
+    for {
+        n := c.read(buf) catch e {
+            return
+        }
+        if n == 0 {
+            break
+        }
+        all.append(buf[0:n])
+    }
+    i64 sum = 0
+    for i in 0..all.len {
+        sum += i64(all[i])
+    }
+    print("backend read {all.len} bytes, sum ok: {sum == expectedSum()}")
+    c.write(all) catch e { }
+    c.write("done\r\n") catch e { }
+    c.closeWrite() catch e { }
+}
+
+i64 expectedSum() {
+    i64 sum = 0
+    for i in 0..1MiB {
+        sum += i % 251
+    }
+    return sum
+}
+
+void pipe(net.Conn *to, net.Conn *from, chan[i64] done) {
+    n := net.copy(to, from) catch e {
+        done <- -1
+        return
+    }
+    to.closeWrite() catch e { }
+    done <- n
+}
+
+void proxy(net.Listener ln, u16 backendPort) {
+    client := ln.accept() catch e {
+        return
+    }
+    defer client.close()
+    server := net.dial("127.0.0.1", backendPort) catch e {
+        return
+    }
+    defer server.close()
+    done := chan[i64](2)
+    defer done.free()
+    spawn pipe(&server, &client, done)
+    pipe(&client, &server, done)
+    _ = <-done
+    print("proxy: up {server.sent}, down {client.sent}")
+}
+
+void writer(net.Conn *c) {
+    u8[] data = alloc(u8, 1MiB)
+    defer free(data)
+    for i in 0..data.len {
+        data[i] = u8(i % 251)
+    }
+    c.write(data) catch e { }
+    c.closeWrite() catch e { }
+}
+
+!void main() {
+    back := try net.listen(0, "127.0.0.1")
+    spawn backend(back)
+    front := try net.listen(0, "127.0.0.1")
+    spawn proxy(front, back.port)
+
+    c := try net.dial("127.0.0.1", front.port)
+    spawn writer(&c)
+    String got
+    defer got.free()
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    for {
+        n := try c.read(buf)
+        if n == 0 {
+            break
+        }
+        got.append(buf[0:n])
+    }
+    tail := if got[got.len - 6:] == "done\r\n" { "\"done\\r\\n\"" } else { "?" }
+    print("client read {got.len} bytes: back {got.len - 6} + {tail}")
+    sleep(20ms)
+    c.close()
+
+    // the first bytes say what a connection is, and copy sends them on
+    sniff := try net.listen(0, "127.0.0.1")
+    s := try net.dial("127.0.0.1", sniff.port)
+    try s.write("SSH-2.0-test\r\nabcdef")
+    a := try sniff.accept()
+    head := try a.peek(4)
+    print("sniffed: {if head == "SSH-" { "ssh" } else { "other" }}")
+    sink := try net.listen(0, "127.0.0.1")
+    out := try net.dial("127.0.0.1", sink.port)
+    inside := try sink.accept()
+    scoped String line = try a.readLine()
+    n := try net.copy(&out, &a, limit: 3)
+    u8[8] small
+    k := try inside.read(small)
+    print("limit: {n} then \"{small[0:k]}\"")
+    s.close()
+    a.close()
+    out.close()
+    inside.close()
+}

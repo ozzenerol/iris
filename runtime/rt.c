@@ -2500,6 +2500,8 @@ int iris_str_parse_float(const char *p, int64_t n, double *out) {
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/un.h>
+#include <stddef.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
@@ -4080,6 +4082,7 @@ static int netCode(int e) {
     case ECONNRESET: case EPIPE: case ENOTCONN: return 2;
     case ETIMEDOUT: return 3;
     case EADDRINUSE: return 5;
+    case ENOENT: return 4;          /* a Unix socket's file */
     default: return 6;
     }
 }
@@ -4101,7 +4104,40 @@ int iris_net_listen(const char *host, int64_t hostLen, int64_t port, int shared,
     hints.ai_flags = AI_PASSIVE;
     char portStr[16];
     snprintf(portStr, sizeof portStr, "%lld", (long long)port);
-    int rc = getaddrinfo(h && *h ? h : NULL, portStr, &hints, &res);
+    if (h && !*h) {
+        /* every address: one IPv6 socket that takes IPv4 too, where the
+           system has IPv6 (getaddrinfo gives 0.0.0.0 first, IPv4 only) */
+        free(h);
+        h = NULL;
+        hints.ai_family = AF_INET6;
+        if (getaddrinfo(NULL, portStr, &hints, &res) == 0 && res) {
+            int fd = socket(AF_INET6, SOCK_STREAM, 0);
+            if (fd >= 0) {
+                int one = 1, off = 0;
+                setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+                if (shared) setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
+                if (bind(fd, res->ai_addr, res->ai_addrlen) == 0 && listen(fd, 1024) == 0) {
+                    freeaddrinfo(res);
+                    nonBlocking(fd);
+                    fdForget(fd);
+                    *err = 0;
+                    return fd;
+                }
+                int e = errno;
+                close(fd);
+                if (e == EADDRINUSE) {
+                    freeaddrinfo(res);
+                    *err = 5;
+                    return -1;
+                }
+            }
+            freeaddrinfo(res);
+            res = NULL;
+        }
+        hints.ai_family = AF_INET;
+    }
+    int rc = getaddrinfo(h, portStr, &hints, &res);
     free(h);
     if (rc != 0 || !res) {
         *err = 4;
@@ -4629,6 +4665,355 @@ void iris_net_close(int fd) {
     if (fd >= 0) {
         fdForget(fd);
         close(fd);
+    }
+}
+
+/* ---------------------------------------------------------------- sockets (0.67)
+
+   net.Socket: a TCP socket the program sets up itself, options set before
+   it binds, listens or connects. Calls that set or read an option give 0 or
+   errno; iris_errno_text gives errno's text. */
+
+int iris_net_errno_code(int e) { return netCode(e); }
+
+void iris_errno_text(int e, IrisString *out) {
+    const char *s = strerror(e);
+    iris_string_append(out, s, (int64_t)strlen(s));
+}
+
+/* A TCP socket: IPv6 that takes IPv4 too (family 0), IPv4 (1), or IPv6
+   only (2). Family 0 falls back to IPv4 where there is no IPv6. */
+int iris_sock_open(int family, int *err) {
+    int fam = family == 1 ? AF_INET : AF_INET6;
+    int fd = socket(fam, SOCK_STREAM, 0);
+    if (fd < 0 && family == 0) {
+        fam = AF_INET;
+        fd = socket(fam, SOCK_STREAM, 0);
+    }
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    int one = 1;
+    if (fam == AF_INET6) {
+        int only = family == 2;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, sizeof only);
+    }
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    nonBlocking(fd);
+    fdForget(fd);
+    *err = 0;
+    return fd;
+}
+
+static int sockFamily(int fd) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    memset(&ss, 0, sizeof ss);
+    if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) return AF_INET6;
+    return ss.ss_family;
+}
+
+/* ip as an address for a socket of family: an IPv4 address on an IPv4
+   socket, and :: (any) as 0.0.0.0. -1 when it can't be one. */
+static int sockAddrFor(int fd, const uint8_t *ip, int64_t port, struct sockaddr_storage *ss, socklen_t *sl) {
+    int fam = sockFamily(fd);
+    if (fam == AF_INET) {
+        static const uint8_t any[16] = {0};
+        uint8_t v4[16];
+        if (memcmp(ip, any, 16) == 0) {
+            memset(v4, 0, 16);
+            v4[10] = v4[11] = 0xff;
+            ip = v4;
+        } else if (!isMapped(ip)) {
+            return -1;
+        }
+    }
+    *sl = toSockaddr(ip, port, fam, ss);
+    return 0;
+}
+
+/* 0, or errno */
+int iris_sock_bind(int fd, const uint8_t *ip, int64_t port) {
+    struct sockaddr_storage ss;
+    socklen_t sl;
+    if (sockAddrFor(fd, ip, port, &ss, &sl) != 0) return EAFNOSUPPORT;
+    return bind(fd, (struct sockaddr *)&ss, sl) == 0 ? 0 : errno;
+}
+
+int iris_sock_listen(int fd, int64_t backlog) {
+    return listen(fd, backlog > 0x7fffffff ? 0x7fffffff : (int)backlog) == 0 ? 0 : errno;
+}
+
+/* Connects a non-blocking socket and waits for it: 0, or a net code. */
+static int connectWait(int fd, const struct sockaddr_storage *ss, socklen_t sl, int64_t timeout) {
+    if (connect(fd, (const struct sockaddr *)ss, sl) != 0) {
+        if (errno != EINPROGRESS) return netCode(errno);
+        if (!waitFdUntil(fd, 1, deadlineOf(timeout))) return 3;
+        int soerr = 0;
+        socklen_t el = sizeof soerr;
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &el);
+        if (soerr != 0) return netCode(soerr);
+    }
+    return 0;
+}
+
+/* 0, or a net code */
+int iris_sock_connect(int fd, const uint8_t *ip, int64_t port, int64_t timeout) {
+    struct sockaddr_storage ss;
+    socklen_t sl;
+    if (sockAddrFor(fd, ip, port, &ss, &sl) != 0) return 6;
+    return connectWait(fd, &ss, sl, timeout);
+}
+
+int iris_sock_set(int fd, int level, int name, int value) {
+    return setsockopt(fd, level, name, &value, sizeof value) == 0 ? 0 : errno;
+}
+
+int iris_sock_get(int fd, int level, int name, int *value) {
+    socklen_t len = sizeof *value;
+    *value = 0;
+    return getsockopt(fd, level, name, value, &len) == 0 ? 0 : errno;
+}
+
+/* Raw bytes, for options that aren't an int (SO_LINGER, TCP_INFO...). */
+int iris_sock_set_bytes(int fd, int level, int name, const void *p, int64_t n) {
+    return setsockopt(fd, level, name, p, (socklen_t)n) == 0 ? 0 : errno;
+}
+
+int iris_sock_get_bytes(int fd, int level, int name, void *p, int64_t *n) {
+    socklen_t len = (socklen_t)*n;
+    int rc = getsockopt(fd, level, name, p, &len);
+    *n = len;
+    return rc == 0 ? 0 : errno;
+}
+
+int iris_sock_nodelay(int fd, int on) { return iris_sock_set(fd, IPPROTO_TCP, TCP_NODELAY, on); }
+
+/* Keepalive probes after idle seconds without traffic, every interval
+   seconds, count of them before the connection is dropped; 0 leaves the
+   system's value. idle 0 turns keepalive off. */
+int iris_sock_keepalive(int fd, int64_t idle, int64_t interval, int64_t count) {
+    if (idle <= 0) return iris_sock_set(fd, SOL_SOCKET, SO_KEEPALIVE, 0);
+    int e = iris_sock_set(fd, SOL_SOCKET, SO_KEEPALIVE, 1);
+#ifdef __APPLE__
+    if (!e) e = iris_sock_set(fd, IPPROTO_TCP, TCP_KEEPALIVE, (int)idle);
+#else
+    if (!e) e = iris_sock_set(fd, IPPROTO_TCP, TCP_KEEPIDLE, (int)idle);
+#endif
+    if (!e && interval > 0) e = iris_sock_set(fd, IPPROTO_TCP, TCP_KEEPINTVL, (int)interval);
+    if (!e && count > 0) e = iris_sock_set(fd, IPPROTO_TCP, TCP_KEEPCNT, (int)count);
+    return e;
+}
+
+/* The kernel's buffers, in bytes; 0 leaves one as it is. */
+int iris_sock_buffers(int fd, int64_t rd, int64_t wr) {
+    int e = 0;
+    if (rd > 0) e = iris_sock_set(fd, SOL_SOCKET, SO_RCVBUF, rd > 0x7fffffff ? 0x7fffffff : (int)rd);
+    if (!e && wr > 0) e = iris_sock_set(fd, SOL_SOCKET, SO_SNDBUF, wr > 0x7fffffff ? 0x7fffffff : (int)wr);
+    return e;
+}
+
+/* A descriptor made elsewhere (inherited, received, from C) handed to the
+   event loop: 0, or errno. */
+int iris_net_adopt(int fd) {
+    if (fd < 0 || fcntl(fd, F_GETFL, 0) < 0) return EBADF;
+    nonBlocking(fd);
+    fdForget(fd);
+    return 0;
+}
+
+/* Peeks at the next n bytes, leaving them in the socket for whoever reads
+   next, OpenSSL or splice included: how many there are, fewer than n only
+   when the other side ended its writes (seen on Linux; elsewhere the
+   timeout ends the wait), or -code. A wait for the first byte uses the
+   event loop; one for the rest, which comes within a round trip, polls
+   with growing sleeps, since the socket stays readable meanwhile. */
+int64_t iris_net_peek(int fd, char *buf, int64_t n, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout), pause = 1000000;
+    for (;;) {
+        ssize_t k = recv(fd, buf, (size_t)n, MSG_PEEK);
+        if (k == 0) return 0;
+        if (k < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return -netCode(errno);
+            if (!waitFdUntil(fd, 0, deadline)) return -3;
+            continue;
+        }
+        if (k >= n) return k;
+#ifdef POLLRDHUP
+        struct pollfd pf = {fd, POLLIN | POLLRDHUP, 0};
+        if (poll(&pf, 1, 0) == 1 && (pf.revents & (POLLRDHUP | POLLHUP))) return k;
+#endif
+        if (deadline > 0 && nowNs() + pause > deadline) return -3;
+        iris_sleep(pause);
+        if (pause < 50000000) pause *= 2;
+    }
+}
+
+/* Ends this side's writes; reads go on until the other side ends its own. */
+void iris_net_shutdown_write(int fd) {
+    if (fd >= 0) shutdown(fd, SHUT_WR);
+}
+
+/* Waits in the event loop until fd can be read (write 0) or written: 1, or
+   0 when timeout passed first. For descriptors used through import c,
+   after a call on them said it would block. */
+int iris_net_wait(int fd, int write, int64_t timeout) {
+    return waitFdUntil(fd, write, deadlineOf(timeout)) ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------- Unix sockets
+
+   A path starting with @ is in Linux's abstract namespace, with no file. */
+
+static int unixAddr(const char *path, int64_t len, struct sockaddr_un *a, socklen_t *sl) {
+    memset(a, 0, sizeof *a);
+    a->sun_family = AF_UNIX;
+    if (len <= 0 || len >= (int64_t)sizeof a->sun_path || memchr(path, 0, (size_t)len)) return -1;
+    memcpy(a->sun_path, path, (size_t)len);
+#ifdef __linux__
+    if (path[0] == '@') a->sun_path[0] = 0;
+#endif
+    *sl = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)len + (path[0] == '@' ? 0 : 1));
+    return 0;
+}
+
+int iris_unix_listen(const char *path, int64_t len, int *err) {
+    struct sockaddr_un a;
+    socklen_t sl;
+    if (unixAddr(path, len, &a, &sl) != 0) {
+        *err = 4;
+        return -1;
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    if (bind(fd, (struct sockaddr *)&a, sl) != 0 || listen(fd, 1024) != 0) {
+        *err = errno == EADDRINUSE ? 5 : errno == ENOENT ? 4 : netCode(errno);
+        close(fd);
+        return -1;
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    *err = 0;
+    return fd;
+}
+
+int iris_unix_dial(const char *path, int64_t len, int *err, int64_t timeout) {
+    struct sockaddr_un a;
+    socklen_t sl;
+    if (unixAddr(path, len, &a, &sl) != 0) {
+        *err = 4;
+        return -1;
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    memcpy(&ss, &a, sl);
+    int code = connectWait(fd, &ss, sl, timeout);
+    if (code != 0) {
+        *err = code;
+        close(fd);
+        return -1;
+    }
+    *err = 0;
+    return fd;
+}
+
+/* Sends data with descriptors over a Unix socket, the descriptors with its
+   first byte: 0, or a net code. */
+int iris_unix_send_fds(int fd, const char *data, int64_t len, const int *fds, int64_t n, int64_t timeout) {
+    if (len <= 0 || n < 0 || n > 250) return 6;
+    int64_t deadline = deadlineOf(timeout);
+    union {
+        char buf[CMSG_SPACE(250 * sizeof(int))];
+        struct cmsghdr align;
+    } u;
+    memset(&u, 0, sizeof u);
+    struct iovec iov = {(void *)data, (size_t)len};
+    struct msghdr m = {0};
+    m.msg_iov = &iov;
+    m.msg_iovlen = 1;
+    if (n > 0) {
+        m.msg_control = u.buf;
+        m.msg_controllen = CMSG_SPACE((size_t)n * sizeof(int));
+        struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN((size_t)n * sizeof(int));
+        memcpy(CMSG_DATA(c), fds, (size_t)n * sizeof(int));
+    }
+    for (;;) {
+#ifdef MSG_NOSIGNAL
+        ssize_t w = sendmsg(fd, &m, MSG_NOSIGNAL);
+#else
+        ssize_t w = sendmsg(fd, &m, 0);
+#endif
+        if (w > 0) {
+            /* the descriptors went with the first bytes; the rest is plain */
+            return w < len ? iris_net_write(fd, data + w, len - w, timeout) : 0;
+        }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            if (!waitFdUntil(fd, 1, deadline)) return 3;
+            continue;
+        }
+        return netCode(errno);
+    }
+}
+
+/* Reads bytes and the descriptors that came with them, up to cap of them
+   (more are closed): bytes read, 0 at the end, or -code. */
+int64_t iris_unix_recv_fds(int fd, char *buf, int64_t len, int *fds, int64_t cap, int64_t *got, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    union {
+        char buf[CMSG_SPACE(250 * sizeof(int))];
+        struct cmsghdr align;
+    } u;
+    *got = 0;
+    for (;;) {
+        struct iovec iov = {buf, (size_t)len};
+        struct msghdr m = {0};
+        m.msg_iov = &iov;
+        m.msg_iovlen = 1;
+        m.msg_control = u.buf;
+        m.msg_controllen = sizeof u.buf;
+#ifdef MSG_CMSG_CLOEXEC
+        ssize_t r = recvmsg(fd, &m, MSG_CMSG_CLOEXEC);
+#else
+        ssize_t r = recvmsg(fd, &m, 0);
+#endif
+        if (r >= 0) {
+            for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
+                if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
+                int k = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+                int *in = (int *)CMSG_DATA(c);
+                for (int i = 0; i < k; i++) {
+                    if (*got < cap) {
+#ifndef MSG_CMSG_CLOEXEC
+                        fcntl(in[i], F_SETFD, FD_CLOEXEC);
+#endif
+                        fds[(*got)++] = in[i];
+                    } else {
+                        close(in[i]);
+                    }
+                }
+            }
+            return r;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 0, deadline)) return -3;
+            continue;
+        }
+        return -netCode(errno);
     }
 }
 
@@ -5851,6 +6236,20 @@ static struct {
                                             const unsigned char *, unsigned int, void *), void *);
     int (*sslSetAlpnProtos)(void *, const unsigned char *, unsigned int);
     void (*sslGetAlpn)(const void *, const unsigned char **, unsigned int *);
+    /* several certificates, client certificates (0.67) */
+    long (*ctxCallbackCtrl)(void *, int, void (*)(void));
+    const char *(*getServername)(const void *, int);
+    void *(*setSslCtx)(void *, void *);
+    void *(*ctxGetCert)(const void *);
+    int (*checkHost)(void *, const char *, size_t, unsigned, char **);
+    int (*ctxSessionId)(void *, const unsigned char *, unsigned);
+    void *(*loadClientCaFile)(const char *);
+    void (*ctxSetClientCaList)(void *, void *);
+    void *(*getPeerCert)(const void *);
+    void *(*x509Subject)(const void *);
+    char *(*nameOneline)(const void *, char *, int);
+    void (*x509Free)(void *);
+    uint64_t (*ctxSetOptions)(void *, uint64_t);
 } ossl;
 
 static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
@@ -5957,6 +6356,20 @@ static void osslLoad(void) {
     SYM(crypto, errString, "ERR_error_string_n");
     SYM(crypto, errClear, "ERR_clear_error");
     SYM(crypto, verifyString, "X509_verify_cert_error_string");
+    SYM(ssl, ctxCallbackCtrl, "SSL_CTX_callback_ctrl");
+    SYM(ssl, getServername, "SSL_get_servername");
+    SYM(ssl, setSslCtx, "SSL_set_SSL_CTX");
+    SYM(ssl, ctxGetCert, "SSL_CTX_get0_certificate");
+    SYM(ssl, ctxSessionId, "SSL_CTX_set_session_id_context");
+    SYM(ssl, loadClientCaFile, "SSL_load_client_CA_file");
+    SYM(ssl, ctxSetClientCaList, "SSL_CTX_set_client_CA_list");
+    SYM(crypto, checkHost, "X509_check_host");
+    SYM(crypto, x509Subject, "X509_get_subject_name");
+    SYM(crypto, nameOneline, "X509_NAME_oneline");
+    SYM(crypto, x509Free, "X509_free");
+    *(void **)&ossl.getPeerCert = dlsym(ssl, "SSL_get1_peer_certificate");     /* OpenSSL 3 */
+    if (!ossl.getPeerCert) SYM(ssl, getPeerCert, "SSL_get_peer_certificate");
+    SYM(ssl, ctxSetOptions, "SSL_CTX_set_options");
 #undef SYM
     *(void **)&ossl.ctxSetAlpnSelect = dlsym(ssl, "SSL_CTX_set_alpn_select_cb");
     *(void **)&ossl.sslSetAlpnProtos = dlsym(ssl, "SSL_set_alpn_protos");
@@ -5980,13 +6393,33 @@ static bool tlsReady(void) {
 enum { TLS_VERIFY_PEER = 1, TLS_CTRL_MIN_VERSION = 123, TLS_V12 = 0x0303, TLS_CTRL_SNI = 55,
        TLS_WANT_READ = 2, TLS_WANT_WRITE = 3, TLS_ERROR_SYSCALL = 5, TLS_ZERO_RETURN = 6 };
 
-/* A context for clients: the system's certificates, or the ones in ca. */
-static void *newClientCtx(const char *ca) {
+/* A context for clients: the system's certificates, or the ones in ca;
+   with a certificate and key of its own when cert isn't NULL. NULL with the
+   message set on an error. */
+static void *newClientCtx(const char *ca, const char *cert, const char *key) {
     void *ctx = ossl.ctxNew(ossl.clientMethod());
-    if (!ctx) return NULL;
+    if (!ctx) {
+        tlsSayOpenssl("starting TLS");
+        return NULL;
+    }
     ossl.ctxCtrl(ctx, TLS_CTRL_MIN_VERSION, TLS_V12, NULL);
     ossl.ctxSetVerify(ctx, TLS_VERIFY_PEER, NULL);
+    char what[300];
     if (ca ? ossl.ctxLoadVerify(ctx, ca, NULL) != 1 : ossl.ctxDefaultPaths(ctx) != 1) {
+        snprintf(what, sizeof what, "reading the certificates to trust %s", ca ? ca : "");
+        tlsSayOpenssl(what);
+        ossl.ctxFree(ctx);
+        return NULL;
+    }
+    if (cert && ossl.ctxUseChain(ctx, cert) != 1) {
+        snprintf(what, sizeof what, "reading the certificate %s", cert);
+        tlsSayOpenssl(what);
+        ossl.ctxFree(ctx);
+        return NULL;
+    }
+    if (cert && (ossl.ctxUseKey(ctx, key, 1) != 1 || ossl.ctxCheckKey(ctx) != 1)) {
+        snprintf(what, sizeof what, "reading the key %s", key);
+        tlsSayOpenssl(what);
         ossl.ctxFree(ctx);
         return NULL;
     }
@@ -5996,7 +6429,7 @@ static void *newClientCtx(const char *ca) {
 static int lockedClientCtx;
 static void *sharedClientCtx(void) {
     spinLock(&lockedClientCtx);
-    if (!clientCtx) clientCtx = newClientCtx(NULL);
+    if (!clientCtx) clientCtx = newClientCtx(NULL, NULL, NULL);
     void *c = clientCtx;
     spinUnlock(&lockedClientCtx);
     return c;
@@ -6063,23 +6496,27 @@ static bool tlsWait(void *ssl, int r) {
 
 /* The client side of a handshake on a connected socket: the server must
    have a certificate for host. ca, when not empty, is a file of the
-   certificates to trust instead of the system's. NULL on an error, with
-   the message set. */
+   certificates to trust instead of the system's; cert and key, when not
+   empty, the client's own certificate. NULL on an error, with the message
+   set. */
 void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca, int64_t caLen, const char *alpn,
-                       int64_t alpnLen) {
+                       int64_t alpnLen, const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
     if (!tlsReady()) return NULL;
     char *h = cpath(host, hostLen), *caPath = caLen > 0 ? cpath(ca, caLen) : NULL;
-    void *ctx = caPath ? newClientCtx(caPath) : sharedClientCtx();
+    char *certPath = certLen > 0 ? cpath(cert, certLen) : NULL, *keyPath = keyLen > 0 ? cpath(key, keyLen) : NULL;
+    bool own = caPath || certPath;
+    void *ctx = own ? newClientCtx(caPath, certPath, keyPath ? keyPath : certPath) : sharedClientCtx();
+    if (!ctx && !own) tlsSayOpenssl("starting TLS");
     void *ssl = ctx ? ossl.sslNew(ctx) : NULL;
+    if (ctx && !ssl) tlsSayOpenssl("starting TLS");
+    if (own && ctx) ossl.ctxFree(ctx);      /* the connection keeps its own reference */
+    free(caPath);
+    free(certPath);
+    free(keyPath);
     if (!ssl) {
-        tlsSayOpenssl(caPath ? "reading the certificates to trust" : "starting TLS");
         free(h);
-        free(caPath);
-        if (caPath && ctx) ossl.ctxFree(ctx);
         return NULL;
     }
-    if (caPath) ossl.ctxFree(ctx);      /* the connection keeps its own reference */
-    free(caPath);
     ossl.sslSetFd(ssl, fd);
     ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);
     ossl.sslSet1Host(ssl, h);
@@ -6111,37 +6548,6 @@ void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca
     return ssl;
 }
 
-/* A server's certificate chain and key, from PEM files. */
-void *iris_tls_server_ctx(const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
-    if (!tlsReady()) return NULL;
-    char *c = cpath(cert, certLen), *k = cpath(key, keyLen);
-    void *ctx = ossl.ctxNew(ossl.serverMethod());
-    bool ok = ctx != NULL;
-    if (ok) {
-        ossl.ctxCtrl(ctx, TLS_CTRL_MIN_VERSION, TLS_V12, NULL);
-        if (ossl.ctxUseChain(ctx, c) != 1) {
-            char what[300];
-            snprintf(what, sizeof what, "reading the certificate %s", c);
-            tlsSayOpenssl(what);
-            ok = false;
-        } else if (ossl.ctxUseKey(ctx, k, 1) != 1 || ossl.ctxCheckKey(ctx) != 1) {
-            char what[300];
-            snprintf(what, sizeof what, "reading the key %s", k);
-            tlsSayOpenssl(what);
-            ok = false;
-        }
-    } else {
-        tlsSayOpenssl("starting TLS");
-    }
-    free(c);
-    free(k);
-    if (!ok && ctx) {
-        ossl.ctxFree(ctx);
-        ctx = NULL;
-    }
-    return ctx;
-}
-
 /* The server picks the first of its protocols that the client offers. */
 static int alpnSelect(void *ssl, const unsigned char **out, unsigned char *outLen, const unsigned char *in,
                       unsigned int inLen, void *arg) {
@@ -6159,10 +6565,263 @@ static int alpnSelect(void *ssl, const unsigned char **out, unsigned char *outLe
     return 3;                           /* SSL_TLSEXT_ERR_NOACK: no protocol, the connection goes on */
 }
 
-/* Lets clients of a server context ask for HTTP/2. */
-void iris_tls_ctx_http2(void *ctx) {
-    static const unsigned char protos[] = "\x02h2\x08http/1.1";
-    if (ctx && ossl.ctxSetAlpnSelect) ossl.ctxSetAlpnSelect(ctx, alpnSelect, (void *)protos);
+/* A server's TLS setup: its certificates (files, read again on reload),
+   the CA its clients' certificates must be signed by, and the protocols it
+   offers with ALPN. What OpenSSL uses is built from that as a generation,
+   one context per certificate; a change builds a new one and swaps it in,
+   so handshakes going on keep theirs. The first certificate is the default
+   and the others are picked by the name the client asks for (SNI). */
+
+typedef struct {
+    int refs;                   /* the server's own, and one per handshake */
+    int n;
+    void **ctxs;
+    void **leafs;               /* each context's certificate, for names */
+    unsigned char *alpn;        /* NUL after the last protocol */
+} TlsGen;
+
+typedef struct {
+    int lock;
+    TlsGen *gen;
+    int n;
+    char **certs, **keys;
+    char *clientCa;
+    int clientRequired;
+    unsigned char *alpn;
+} TlsServer;
+
+enum { TLS_VERIFY_FAIL_NO_CERT = 2, TLS_CTRL_SERVERNAME_CB = 53, TLS_CTRL_SERVERNAME_ARG = 54 };
+
+static void genRelease(TlsGen *g) {
+    if (!g || __atomic_sub_fetch(&g->refs, 1, __ATOMIC_ACQ_REL) != 0) return;
+    for (int i = 0; i < g->n; i++) {
+        if (g->ctxs[i]) ossl.ctxFree(g->ctxs[i]);
+    }
+    free(g->ctxs);
+    free(g->leafs);
+    free(g->alpn);
+    free(g);
+}
+
+/* Picks the certificate for the name the client asked for: the first whose
+   names cover it, else the default. */
+static int pickCert(void *ssl, int *alert, void *arg) {
+    (void)alert;
+    TlsGen *g = arg;
+    const char *name = ossl.getServername(ssl, 0);
+    if (!name || g->n < 2) return 0;
+    size_t len = strlen(name);
+    for (int i = 0; i < g->n; i++) {
+        if (g->leafs[i] && ossl.checkHost(g->leafs[i], name, len, 0, NULL) == 1) {
+            if (i > 0) ossl.setSslCtx(ssl, g->ctxs[i]);
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void *serverCtx(TlsServer *s, TlsGen *g, const char *cert, const char *key) {
+    void *ctx = ossl.ctxNew(ossl.serverMethod());
+    if (!ctx) {
+        tlsSayOpenssl("starting TLS");
+        return NULL;
+    }
+    char what[300];
+    ossl.ctxCtrl(ctx, TLS_CTRL_MIN_VERSION, TLS_V12, NULL);
+    ossl.ctxSessionId(ctx, (const unsigned char *)"iris", 4);
+    /* a renegotiation would call pickCert after the handshake let go of
+       its generation */
+    ossl.ctxSetOptions(ctx, 1u << 30 /* SSL_OP_NO_RENEGOTIATION */);
+    if (ossl.ctxUseChain(ctx, cert) != 1) {
+        snprintf(what, sizeof what, "reading the certificate %s", cert);
+        goto fail;
+    }
+    if (ossl.ctxUseKey(ctx, key, 1) != 1 || ossl.ctxCheckKey(ctx) != 1) {
+        snprintf(what, sizeof what, "reading the key %s", key);
+        goto fail;
+    }
+    if (s->clientCa) {
+        if (ossl.ctxLoadVerify(ctx, s->clientCa, NULL) != 1) {
+            snprintf(what, sizeof what, "reading the certificates to trust %s", s->clientCa);
+            goto fail;
+        }
+        ossl.ctxSetVerify(ctx, TLS_VERIFY_PEER | (s->clientRequired ? TLS_VERIFY_FAIL_NO_CERT : 0), NULL);
+        void *names = ossl.loadClientCaFile(s->clientCa);
+        if (names) ossl.ctxSetClientCaList(ctx, names);
+    }
+    if (g->alpn && ossl.ctxSetAlpnSelect) ossl.ctxSetAlpnSelect(ctx, alpnSelect, g->alpn);
+    return ctx;
+fail:
+    tlsSayOpenssl(what);
+    ossl.ctxFree(ctx);
+    return NULL;
+}
+
+/* Builds a generation from the server's settings and swaps it in: 0, or -1
+   with the message set and the old one kept. */
+static int serverBuild(TlsServer *s) {
+    TlsGen *g = calloc(1, sizeof *g);
+    if (!g) outOfMemory();
+    g->refs = 1;
+    g->ctxs = calloc((size_t)s->n, sizeof(void *));
+    g->leafs = calloc((size_t)s->n, sizeof(void *));
+    if (!g->ctxs || !g->leafs) outOfMemory();
+    if (s->alpn) {
+        size_t len = strlen((const char *)s->alpn);
+        g->alpn = malloc(len + 1);
+        if (!g->alpn) outOfMemory();
+        memcpy(g->alpn, s->alpn, len + 1);
+    }
+    for (int i = 0; i < s->n; i++) {
+        g->ctxs[i] = serverCtx(s, g, s->certs[i], s->keys[i]);
+        g->n = i + 1;
+        if (!g->ctxs[i]) {
+            genRelease(g);
+            return -1;
+        }
+        g->leafs[i] = ossl.ctxGetCert(g->ctxs[i]);
+    }
+    ossl.ctxCallbackCtrl(g->ctxs[0], TLS_CTRL_SERVERNAME_CB, (void (*)(void))pickCert);
+    ossl.ctxCtrl(g->ctxs[0], TLS_CTRL_SERVERNAME_ARG, 0, g);
+    spinLock(&s->lock);
+    TlsGen *old = s->gen;
+    s->gen = g;
+    spinUnlock(&s->lock);
+    genRelease(old);
+    return 0;
+}
+
+static void serverAddFiles(TlsServer *s, char *cert, char *key) {
+    char **c = realloc(s->certs, (size_t)(s->n + 1) * sizeof(char *));
+    if (!c) outOfMemory();
+    s->certs = c;
+    char **k = realloc(s->keys, (size_t)(s->n + 1) * sizeof(char *));
+    if (!k) outOfMemory();
+    s->keys = k;
+    s->certs[s->n] = cert;
+    s->keys[s->n] = key;
+    s->n++;
+}
+
+/* A server with one certificate chain and its key, from PEM files. */
+void *iris_tls_server_ctx(const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
+    if (!tlsReady()) return NULL;
+    char *c = cpath(cert, certLen), *k = cpath(key, keyLen);
+    if (!c || !k) {
+        tlsSay("a file name with a NUL in it");
+        free(c);
+        free(k);
+        return NULL;
+    }
+    TlsServer *s = calloc(1, sizeof *s);
+    if (!s) outOfMemory();
+    serverAddFiles(s, c, k);
+    if (serverBuild(s) != 0) {
+        free(c);
+        free(k);
+        free(s->certs);
+        free(s->keys);
+        free(s);
+        return NULL;
+    }
+    return s;
+}
+
+/* Another certificate, used for the names it has: 0, or -1. */
+int iris_tls_server_add(void *server, const char *cert, int64_t certLen, const char *key, int64_t keyLen) {
+    TlsServer *s = server;
+    char *c = cpath(cert, certLen), *k = cpath(key, keyLen);
+    if (!c || !k) {
+        tlsSay("a file name with a NUL in it");
+        free(c);
+        free(k);
+        return -1;
+    }
+    serverAddFiles(s, c, k);
+    if (serverBuild(s) != 0) {
+        s->n--;
+        free(c);
+        free(k);
+        return -1;
+    }
+    return 0;
+}
+
+/* Reads every certificate and key again. */
+int iris_tls_server_reload(void *server) { return serverBuild(server); }
+
+/* Asks clients for a certificate signed by one in ca; required makes a
+   client without one fail the handshake. */
+int iris_tls_server_clients(void *server, const char *ca, int64_t caLen, int required) {
+    TlsServer *s = server;
+    char *path = cpath(ca, caLen), *old = s->clientCa;
+    int oldRequired = s->clientRequired;
+    if (!path) {
+        tlsSay("a file name with a NUL in it");
+        return -1;
+    }
+    s->clientCa = path;
+    s->clientRequired = required;
+    if (serverBuild(s) != 0) {
+        s->clientCa = old;
+        s->clientRequired = oldRequired;
+        free(path);
+        return -1;
+    }
+    free(old);
+    return 0;
+}
+
+/* The protocols to offer with ALPN, each with its length in front. */
+int iris_tls_server_alpn(void *server, const char *protos, int64_t len) {
+    TlsServer *s = server;
+    if (memchr(protos, 0, (size_t)len)) {
+        tlsSay("a protocol list with a 0 byte in it");
+        return -1;
+    }
+    for (int64_t i = 0; i < len; i += 1 + (unsigned char)protos[i]) {
+        if (i + 1 + (unsigned char)protos[i] > len) {
+            tlsSay("a protocol list whose lengths don't add up");
+            return -1;
+        }
+    }
+    if (s->alpn && strlen((const char *)s->alpn) == (size_t)len && memcmp(s->alpn, protos, (size_t)len) == 0) {
+        return 0;
+    }
+    unsigned char *old = s->alpn, *p = malloc((size_t)len + 1);
+    if (!p) outOfMemory();
+    memcpy(p, protos, (size_t)len);
+    p[len] = 0;
+    s->alpn = len > 0 ? p : NULL;
+    if (len == 0) free(p);
+    if (serverBuild(s) != 0) {
+        free(s->alpn);
+        s->alpn = old;
+        return -1;
+    }
+    free(old);
+    return 0;
+}
+
+/* Lets clients of a server ask for HTTP/2. */
+void iris_tls_ctx_http2(void *server) {
+    static const char protos[] = "\x02h2\x08http/1.1";
+    if (server) iris_tls_server_alpn(server, protos, (int64_t)sizeof protos - 1);
+}
+
+void iris_tls_ctx_free(void *server) {
+    TlsServer *s = server;
+    if (!s || ossl.loaded != 1) return;
+    genRelease(s->gen);
+    for (int i = 0; i < s->n; i++) {
+        free(s->certs[i]);
+        free(s->keys[i]);
+    }
+    free(s->certs);
+    free(s->keys);
+    free(s->clientCa);
+    free(s->alpn);
+    free(s);
 }
 
 /* The protocol the two sides picked with ALPN: "" for none. */
@@ -6174,30 +6833,63 @@ void iris_tls_alpn(void *ssl, const char **p, int64_t *n) {
     *n = data ? len : 0;
 }
 
-void iris_tls_ctx_free(void *ctx) {
-    if (ctx && ossl.loaded == 1) ossl.ctxFree(ctx);
+/* The name the client asked for (SNI): "" when it sent none. */
+void iris_tls_server_name(void *ssl, const char **p, int64_t *n) {
+    const char *name = ssl ? ossl.getServername(ssl, 0) : NULL;
+    *p = name ? name : "";
+    *n = name ? (int64_t)strlen(name) : 0;
+}
+
+/* The subject of the other side's certificate, "/CN=..." : 0 when it sent
+   none. */
+int iris_tls_peer_subject(void *ssl, IrisString *out) {
+    void *x = ssl ? ossl.getPeerCert(ssl) : NULL;
+    if (!x) return 0;
+    char buf[512];
+    char *t = ossl.nameOneline(ossl.x509Subject(x), buf, sizeof buf);
+    if (t) iris_string_append(out, t, (int64_t)strlen(t));
+    ossl.x509Free(x);
+    return 1;
 }
 
 /* The server side of a handshake on an accepted socket. */
-void *iris_tls_accept(void *ctx, int fd, int64_t timeout) {
+void *iris_tls_accept(void *server, int fd, int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
     if (!tlsReady()) return NULL;
-    void *ssl = ossl.sslNew(ctx);
+    TlsServer *s = server;
+    spinLock(&s->lock);
+    TlsGen *g = s->gen;
+    __atomic_add_fetch(&g->refs, 1, __ATOMIC_ACQ_REL);
+    spinUnlock(&s->lock);
+    void *ssl = ossl.sslNew(g->ctxs[0]);
     if (!ssl) {
         tlsSayOpenssl("starting TLS");
+        genRelease(g);
         return NULL;
     }
     ossl.sslSetFd(ssl, fd);
     for (;;) {
-        PipeGuard g;
-        pipeHold(&g);
+        PipeGuard pg;
+        pipeHold(&pg);
         int r = ossl.sslAccept(ssl);
-        pipeRelease(&g);
-        if (r == 1) return ssl;
+        pipeRelease(&pg);
+        if (r == 1) {
+            genRelease(g);      /* the connection holds its contexts itself */
+            return ssl;
+        }
         bool timedOut = false;
         if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
-        tlsSayOpenssl(timedOut ? "the TLS handshake timed out" : "the TLS handshake failed");
+        long v = ossl.sslVerifyResult(ssl);
+        if (v != 0) {
+            char what[400];
+            snprintf(what, sizeof what, "the client's certificate can't be trusted: %s", ossl.verifyString(v));
+            tlsSay(what);
+            if (ossl.errClear) ossl.errClear();
+        } else {
+            tlsSayOpenssl(timedOut ? "the TLS handshake timed out" : "the TLS handshake failed");
+        }
         ossl.sslFree(ssl);
+        genRelease(g);
         return NULL;
     }
 }
@@ -6256,6 +6948,184 @@ void iris_tls_close(void *ssl) {
     pipeRelease(&g);
     if (ossl.errClear) ossl.errClear();
     ossl.sslFree(ssl);
+}
+
+/* Ends this side's writes over TLS: close_notify, then the socket's write
+   side. Reads go on. 0, or a net code. */
+int iris_tls_close_write(void *ssl, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        PipeGuard g;
+        pipeHold(&g);
+        int r = ossl.sslShutdown(ssl);
+        pipeRelease(&g);
+        if (r >= 0) break;
+        bool timedOut = false;
+        if (tlsWaitUntil(ssl, r, deadline, &timedOut)) continue;
+        if (ossl.errClear) ossl.errClear();
+        if (timedOut) return 3;
+        break;              /* the other side is gone: nothing left to end */
+    }
+    shutdown(ossl.sslGetFd(ssl), SHUT_WR);
+    return 0;
+}
+
+/* ---------------------------------------------------------------- copying between connections (0.67)
+
+   net.copy on Linux moves the bytes from one socket to the other through a
+   pipe with splice, so they never come up to the program. Each thread keeps
+   a few empty pipes for it. A splice into a socket the other side closed
+   raises SIGPIPE, which splice can't be told not to; a thread that splices
+   keeps SIGPIPE blocked from then on, and one that comes is taken back. */
+
+#ifdef __linux__
+static _Thread_local int pipeFree[16][2];
+static _Thread_local int pipeFreeN;
+static _Thread_local bool pipeBlocked;
+
+static bool pipeGet(int p[2]) {
+    if (pipeFreeN > 0) {
+        pipeFreeN--;
+        p[0] = pipeFree[pipeFreeN][0];
+        p[1] = pipeFree[pipeFreeN][1];
+        return true;
+    }
+    return pipe2(p, O_NONBLOCK | O_CLOEXEC) == 0;
+}
+
+static void pipePut(int p[2], bool empty) {
+    if (empty && pipeFreeN < 16) {
+        pipeFree[pipeFreeN][0] = p[0];
+        pipeFree[pipeFreeN][1] = p[1];
+        pipeFreeN++;
+        return;
+    }
+    close(p[0]);
+    close(p[1]);
+}
+
+static void sigpipeQuiet(void) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    if (!pipeBlocked) {
+        pthread_sigmask(SIG_BLOCK, &set, NULL);
+        pipeBlocked = true;
+    }
+}
+
+static void sigpipeTake(void) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGPIPE);
+    struct timespec zero = {0, 0};
+    sigtimedwait(&set, NULL, &zero);
+}
+#endif
+
+/* Copies from one socket to another until the first ends or limit bytes
+   (0 for no limit) have gone: the bytes copied. *err is 0, or a net code,
+   and *side says which socket failed: 0 reading, 1 writing.
+
+   Small messages go through buf with a plain read, which waits in the
+   event loop for data. A read that fills buf means a stream is flowing,
+   and on Linux the copy then moves the bytes with splice through a pipe,
+   in the kernel, waiting between splices, until several splices in a row
+   move little; then it reads again. */
+int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limit, int64_t readTimeout,
+                       int64_t writeTimeout, int *err, int *side) {
+    *err = 0;
+    *side = 0;
+    int64_t total = 0;
+#ifdef __linux__
+    /* a copy holds a pipe only while bytes are in it, so a thread needs as
+       many pipes as copies moving a stream at once */
+    int p[2] = {-1, -1};
+    int64_t inPipe = 0;
+    bool stream = false;
+    int small = 0;          /* splices in a row that moved under 4 KiB */
+#endif
+    for (;;) {
+#ifdef __linux__
+        if (stream || inPipe > 0) {
+            if (inPipe == 0) {
+                if (limit > 0 && total >= limit) break;
+                if (p[0] < 0) {
+                    if (!pipeGet(p)) {
+                        stream = false;
+                        continue;
+                    }
+                    sigpipeQuiet();
+                }
+                size_t want = limit > 0 && limit - total < (1 << 16) ? (size_t)(limit - total) : (size_t)1 << 16;
+                ssize_t n = splice(from, NULL, p[1], NULL, want, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
+                if (n == 0) break;
+                if (n < 0) {
+                    if (errno == EAGAIN || errno == EINTR) {
+                        pipePut(p, true);
+                        p[0] = p[1] = -1;
+                        if (small >= 8) {
+                            /* small messages again: back to reads, which wait in the loop */
+                            stream = false;
+                            small = 0;
+                            continue;
+                        }
+                        /* a stream that paused: wait for it here */
+                        if (!waitFdUntil(from, 0, deadlineOf(readTimeout))) {
+                            *err = 3;
+                            break;
+                        }
+                        continue;
+                    }
+                    *err = netCode(errno);
+                    break;
+                }
+                inPipe = n;
+                small = n < 4096 ? small + 1 : 0;
+            }
+            ssize_t m = splice(p[0], NULL, to, NULL, (size_t)inPipe, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
+            if (m < 0) {
+                if (errno == EAGAIN || errno == EINTR) {
+                    if (!waitFdUntil(to, 1, deadlineOf(writeTimeout))) {
+                        *err = 3;
+                        *side = 1;
+                        break;
+                    }
+                    continue;
+                }
+                if (errno == EPIPE) sigpipeTake();
+                *err = netCode(errno);
+                *side = 1;
+                break;
+            }
+            inPipe -= m;
+            total += m;
+            continue;
+        }
+#endif
+        if (limit > 0 && total >= limit) break;
+        int64_t want = limit > 0 && limit - total < bufLen ? limit - total : bufLen;
+        int64_t n = iris_net_read(from, buf, want, readTimeout);
+        if (n == 0) break;
+        if (n < 0) {
+            *err = (int)-n;
+            break;
+        }
+        int code = iris_net_write(to, buf, n, writeTimeout);
+        if (code != 0) {
+            *err = code;
+            *side = 1;
+            break;
+        }
+        total += n;
+#ifdef __linux__
+        stream = n == bufLen;
+#endif
+    }
+#ifdef __linux__
+    if (p[0] >= 0) pipePut(p, inPipe == 0);
+#endif
+    return total;
 }
 
 /* ---------------------------------------------------------------- random and crypto */

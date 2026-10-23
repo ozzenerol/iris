@@ -1,0 +1,472 @@
+// Sockets the program sets up itself, socket options, half-closing,
+// copying between connections, Unix sockets and passing descriptors.
+
+@extern("iris_errno_text")
+void rawErrnoText(i32 e, String *out)
+
+@extern("iris_net_errno_code")
+i32 rawErrnoCode(i32 e)
+
+@extern("iris_sock_open")
+i32 rawSockOpen(i32 family, i32 *err)
+
+@extern("iris_sock_bind")
+i32 rawSockBind(i32 fd, u8 *ip, i64 port)
+
+@extern("iris_sock_listen")
+i32 rawSockListen(i32 fd, i64 backlog)
+
+@extern("iris_sock_connect")
+i32 rawSockConnect(i32 fd, u8 *ip, i64 port, i64 timeout)
+
+@extern("iris_sock_set")
+i32 rawSockSet(i32 fd, i32 level, i32 name, i32 value)
+
+@extern("iris_sock_get")
+i32 rawSockGet(i32 fd, i32 level, i32 name, i32 *value)
+
+@extern("iris_sock_set_bytes")
+i32 rawSockSetBytes(i32 fd, i32 level, i32 name, u8 *p, i64 n)
+
+@extern("iris_sock_get_bytes")
+i32 rawSockGetBytes(i32 fd, i32 level, i32 name, u8 *p, i64 *n)
+
+@extern("iris_sock_nodelay")
+i32 rawSockNoDelay(i32 fd, i32 on)
+
+@extern("iris_sock_keepalive")
+i32 rawSockKeepAlive(i32 fd, i64 idle, i64 interval, i64 count)
+
+@extern("iris_sock_buffers")
+i32 rawSockBuffers(i32 fd, i64 rd, i64 wr)
+
+@extern("iris_net_adopt")
+i32 rawAdopt(i32 fd)
+
+@extern("iris_net_peek")
+i64 rawPeek(i32 fd, u8 *buf, i64 n, i64 timeout)
+
+@extern("iris_net_shutdown_write")
+void rawShutdownWrite(i32 fd)
+
+@extern("iris_net_wait")
+i32 rawWait(i32 fd, i32 write, i64 timeout)
+
+@extern("iris_net_relay")
+i64 rawRelay(i32 to, i32 from, u8 *buf, i64 bufLen, i64 limit, i64 readTimeout, i64 writeTimeout, i32 *err,
+    i32 *side)
+
+@extern("iris_unix_listen")
+i32 rawUnixListen(u8 *path, i64 len, i32 *err)
+
+@extern("iris_unix_dial")
+i32 rawUnixDial(u8 *path, i64 len, i32 *err, i64 timeout)
+
+@extern("iris_unix_send_fds")
+i32 rawSendFds(i32 fd, u8 *data, i64 len, i32 *fds, i64 n, i64 timeout)
+
+@extern("iris_unix_recv_fds")
+i64 rawRecvFds(i32 fd, u8 *buf, i64 len, i32 *fds, i64 cap, i64 *got, i64 timeout)
+
+!void optionFail(i32 e, str what) {
+    if e != 0 {
+        scoped String text
+        rawErrnoText(e, &text)
+        return error(NetError.other, "{what}: {text}")
+    }
+}
+
+// Sets an option of the socket fd that is an int, as setsockopt does:
+// level and name are C's, from import c ("sys/socket.h",
+// "netinet/tcp.h"...).
+pub !void setOption(i32 fd, i32 level, i32 name, i32 value) {
+    try optionFail(rawSockSet(fd, level, name, value), "setting option {name}")
+}
+
+// The value of an option of the socket fd that is an int.
+pub !i32 option(i32 fd, i32 level, i32 name) {
+    i32 v
+    try optionFail(rawSockGet(fd, level, name, &v), "reading option {name}")
+    return v
+}
+
+// Sets an option that isn't an int, such as SO_LINGER's struct, from its
+// bytes.
+pub !void setOptionBytes(i32 fd, i32 level, i32 name, u8[] value) {
+    try optionFail(rawSockSetBytes(fd, level, name, value.ptr, value.len), "setting option {name}")
+}
+
+// Reads an option that isn't an int into buf: the number of bytes it took.
+pub !i64 optionBytes(i32 fd, i32 level, i32 name, u8[] buf) {
+    n := buf.len
+    try optionFail(rawSockGetBytes(fd, level, name, buf.ptr, &n), "reading option {name}")
+    return n
+}
+
+// Waits until fd can be read, letting the other tasks run: false when
+// timeout (0 for none) passed first. For sockets and pipes used through
+// import c, after a call on them failed with EAGAIN.
+pub bool waitRead(i32 fd, Duration timeout = 0s) => rawWait(fd, 0, timeout) == 1
+
+// Waits until fd can be written, as waitRead does.
+pub bool waitWrite(i32 fd, Duration timeout = 0s) => rawWait(fd, 1, timeout) == 1
+
+// The kind of address a Socket has: any is IPv6 that takes IPv4 too
+// (IPv4 alone where there is no IPv6), v4 and v6 one of them only.
+pub enum Family { any, v4, v6 }
+
+// A TCP socket that doesn't listen or connect yet, for the options that
+// have to be set before: SO_REUSEPORT, IP_TRANSPARENT, TCP_FASTOPEN,
+// buffer sizes, a source address with bind. listen or connect turns it
+// into a Listener or a Conn. It starts with SO_REUSEADDR and TCP_NODELAY
+// on.
+pub struct Socket {
+    i32 sock
+}
+
+// A new TCP socket of family.
+pub !Socket socket(Family family = Family.any) {
+    i32 err
+    kind := match family {
+        Family.any => 0
+        Family.v4 => 1
+        Family.v6 => 2
+    }
+    fd := rawSockOpen(i32(kind), &err)
+    if fd < 0 {
+        return error(netCode(err), "making a socket: {reason(err)}")
+    }
+    return Socket{sock: fd}
+}
+
+// The socket's file descriptor, for options and calls through import c.
+pub i32 Socket.fd() => self.sock
+
+// Sets an option that is an int, as setOption does.
+pub !void Socket.setOption(i32 level, i32 name, i32 value) => try setOption(self.sock, level, name, value)
+
+// The value of an option that is an int.
+pub !i32 Socket.option(i32 level, i32 name) => try option(self.sock, level, name)
+
+// Turns TCP_NODELAY on or off.
+pub !void Socket.setNoDelay(bool on) {
+    try optionFail(rawSockNoDelay(self.sock, if on { 1 } else { 0 }), "setting TCP_NODELAY")
+}
+
+// The kernel's buffers for reading and writing, in bytes; 0 leaves one as
+// it is. Set before listening, they also set the TCP window scale.
+pub !void Socket.setBuffers(i64 read = 0, i64 write = 0) {
+    try optionFail(rawSockBuffers(self.sock, read, write), "setting the buffers")
+}
+
+// Binds the socket to addr: Addr{port: 8080} for every address, or an IP
+// of this machine. On a client, the address its connection comes from.
+pub !void Socket.bind(Addr addr) {
+    e := rawSockBind(self.sock, &addr.ip[0], i64(addr.port))
+    if e != 0 {
+        scoped String where = addr.format()
+        scoped String text
+        rawErrnoText(e, &text)
+        return error(netCode(rawErrnoCode(e)), "binding to {where}: {text}")
+    }
+}
+
+// Listens, with room for backlog connections that wait to be accepted.
+// The Listener owns the socket from then on.
+pub !Listener Socket.listen(i64 backlog = 1024) {
+    try optionFail(rawSockListen(self.sock, backlog), "listening")
+    return Listener{sock: self.sock, port: u16(rawPort(self.sock))}
+}
+
+// Connects to addr, waiting at most timeout when it isn't 0. The Conn owns
+// the socket from then on.
+pub !Conn Socket.connect(Addr addr, Duration timeout = 0s) {
+    code := rawSockConnect(self.sock, &addr.ip[0], i64(addr.port), timeout)
+    if code != 0 {
+        scoped String where = addr.format()
+        return error(netCode(code), "connecting to {where}: {reason(code)}")
+    }
+    return Conn{sock: self.sock, buf: alloc(u8, 16KiB)}
+}
+
+// Closes a socket that didn't listen or connect.
+pub void Socket.close() => rawClose(self.sock)
+
+// Sets an option of the listening socket that is an int.
+pub !void Listener.setOption(i32 level, i32 name, i32 value) => try setOption(self.sock, level, name, value)
+
+// The value of an option of the listening socket that is an int.
+pub !i32 Listener.option(i32 level, i32 name) => try option(self.sock, level, name)
+
+// Sets an option of the connection that is an int, as setOption does:
+// conn.setOption(c.IPPROTO_TCP, c.TCP_KEEPIDLE, 30).
+pub !void Conn.setOption(i32 level, i32 name, i32 value) => try setOption(self.sock, level, name, value)
+
+// The value of an option of the connection that is an int.
+pub !i32 Conn.option(i32 level, i32 name) => try option(self.sock, level, name)
+
+// Turns TCP_NODELAY on or off. net's connections start with it on, so
+// small writes go out at once.
+pub !void Conn.setNoDelay(bool on) {
+    try optionFail(rawSockNoDelay(self.sock, if on { 1 } else { 0 }), "setting TCP_NODELAY")
+}
+
+// Turns TCP keepalive on: probes after idle without traffic, every
+// interval, count of them unanswered before the connection is dropped. 0
+// for interval or count keeps the system's. idle 0s turns keepalive off.
+// Times are in whole seconds.
+pub !void Conn.setKeepAlive(Duration idle, Duration interval = 0s, i64 count = 0) {
+    code := rawSockKeepAlive(self.sock, idle / 1s, interval / 1s, count)
+    try optionFail(code, "setting keepalive")
+}
+
+// The kernel's buffers for reading and writing, in bytes; 0 leaves one as
+// it is.
+pub !void Conn.setBuffers(i64 read = 0, i64 write = 0) {
+    try optionFail(rawSockBuffers(self.sock, read, write), "setting the buffers")
+}
+
+// A listening socket made elsewhere, inherited from the program that
+// started this one or received with readFds, as a Listener.
+pub !Listener adoptListener(i32 fd) {
+    try optionFail(rawAdopt(fd), "taking descriptor {fd}")
+    return Listener{sock: fd, port: u16(rawPort(fd))}
+}
+
+// A connected socket made elsewhere as a Conn.
+pub !Conn adoptConn(i32 fd) {
+    try optionFail(rawAdopt(fd), "taking descriptor {fd}")
+    return Conn{sock: fd, buf: alloc(u8, 16KiB)}
+}
+
+// The next n bytes, without taking them: the reads after still get them,
+// and so do acceptTls and copy. Fewer than n only when the other side has
+// ended its writes, or the timeout passed. They stay valid until the next
+// read. For deciding what a connection is from its first bytes.
+pub !str Conn.peek(i64 n) {
+    if self.tls == null && self.start == self.end {
+        // left in the socket, where TLS and splice find them
+        if n > self.buf.len {
+            free(self.buf)
+            self.buf = alloc(u8, n)
+        }
+        got := rawPeek(self.sock, self.buf.ptr, n, self.timeout)
+        if got < 0 {
+            return error(netCode(i32(-got)), "reading: {reason(i32(-got))}")
+        }
+        return self.buf[0:got]
+    }
+    if n > self.buf.len - self.start {
+        u8[] bigger = alloc(u8, if n > self.buf.len { n } else { self.buf.len })
+        for i in self.start..self.end {
+            bigger[i - self.start] = self.buf[i]
+        }
+        self.end -= self.start
+        self.start = 0
+        free(self.buf)
+        self.buf = bigger
+    }
+    for self.end - self.start < n {
+        got := self.rawRead(self.buf[self.end:])
+        if got < 0 {
+            return error(netCode(i32(-got)), "reading: {reason(i32(-got))}")
+        }
+        if got == 0 {
+            break
+        }
+        self.end += got
+    }
+    if self.end - self.start > n {
+        return self.buf[self.start:self.start + n]
+    }
+    return self.buf[self.start:self.end]
+}
+
+// The name a TLS client asks for (SNI), read from its first message with
+// peek, so the connection can be routed with TLS still in it. "" when the
+// connection doesn't start with a TLS ClientHello, or it names no host.
+// Valid until the next read.
+pub !str Conn.peekServerName() {
+    head := try self.peek(5)
+    if head.len < 5 || head[0] != 0x16 {
+        return ""
+    }
+    record := try self.peek(5 + (i64(head[3]) << 8 | i64(head[4])))
+    return helloServerName(record)
+}
+
+// The host name in a TLS record that holds a ClientHello; "" when it has
+// none.
+pub str helloServerName(str record) {
+    if record.len < 43 || record[0] != 0x16 || record[5] != 1 {
+        return ""
+    }
+    at := 43
+    if at >= record.len {
+        return ""
+    }
+    at += 1 + i64(record[at]) // session id
+    if at + 2 > record.len {
+        return ""
+    }
+    at += 2 + (i64(record[at]) << 8 | i64(record[at + 1])) // cipher suites
+    if at >= record.len {
+        return ""
+    }
+    at += 1 + i64(record[at]) // compression methods
+    if at + 2 > record.len {
+        return ""
+    }
+    end := at + 2 + (i64(record[at]) << 8 | i64(record[at + 1]))
+    at += 2
+    if end > record.len {
+        end = record.len
+    }
+    for at + 4 <= end {
+        kind := i64(record[at]) << 8 | i64(record[at + 1])
+        size := i64(record[at + 2]) << 8 | i64(record[at + 3])
+        at += 4
+        if at + size > end {
+            return ""
+        }
+        if kind == 0 {
+            // server_name: the list's length, then each name's kind, length and bytes
+            i := at + 2
+            for i + 3 <= at + size {
+                len := i64(record[i + 1]) << 8 | i64(record[i + 2])
+                if record[i] == 0 && i + 3 + len <= at + size {
+                    return record[i + 3:i + 3 + len]
+                }
+                i += 3 + len
+            }
+            return ""
+        }
+        at += size
+    }
+    return ""
+}
+
+// Ends this side's writes, so the other side reads the end of the data,
+// while reads here go on until the other side ends its own. Over TLS it
+// sends close_notify first. close still has to be called.
+pub !void Conn.closeWrite() {
+    if self.tls != null {
+        code := rawTlsCloseWrite(self.tls, self.timeout)
+        if code != 0 {
+            return error(netCode(code), "ending the writes: {reason(code)}")
+        }
+        return
+    }
+    rawShutdownWrite(self.sock)
+}
+
+// Copies what from reads to to, until from's other side ends its writes,
+// or limit bytes (0 for none): the number of bytes copied. Bytes from
+// already took in go first. On Linux, without TLS on either, a stream of
+// bytes goes from socket to socket in the kernel (splice). Each wait
+// for from to have data, or for to to take it, is limited by that
+// connection's timeout. It doesn't end to's writes; closeWrite does.
+// received and sent keep counting through an error.
+pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) {
+    i64 total = 0
+    if from.start < from.end {
+        n := from.end - from.start
+        if limit > 0 && n > limit {
+            n = limit
+        }
+        to.write(from.buf[from.start:from.start + n]) catch e {
+            return error(e.code, "copying: {e.message}")
+        }
+        from.start += n
+        total += n
+    }
+    if limit > 0 && total >= limit {
+        return total
+    }
+    left := if limit > 0 { limit - total } else { 0 }
+    if to.tls == null && from.tls == null {
+        i32 err
+        i32 side
+        n := rawRelay(to.sock, from.sock, from.buf.ptr, from.buf.len, left, from.timeout, to.timeout, &err, &side)
+        from.received += n
+        to.sent += n
+        total += n
+        if err != 0 {
+            what := if side == 0 { "reading" } else { "writing" }
+            return error(netCode(err), "copying: {what}: {reason(err)}")
+        }
+        return total
+    }
+    for limit == 0 || total < limit {
+        want := from.buf.len
+        if limit > 0 && limit - total < want {
+            want = limit - total
+        }
+        n := from.rawRead(from.buf[0:want])
+        if n < 0 {
+            return error(netCode(i32(-n)), "copying: reading: {reason(i32(-n))}")
+        }
+        if n == 0 {
+            break
+        }
+        to.write(from.buf[0:n]) catch e {
+            return error(e.code, "copying: {e.message}")
+        }
+        total += n
+    }
+    return total
+}
+
+// Listens on a Unix socket at path, a file the socket makes; it must not
+// exist yet. On Linux, a path starting with @ is a name with no file.
+pub !Listener listenUnix(str path) {
+    i32 err
+    fd := rawUnixListen(path.ptr, path.len, &err)
+    if fd < 0 {
+        return error(netCode(err), "listening on {path}: {reason(err)}")
+    }
+    return Listener{sock: fd}
+}
+
+// Connects to the Unix socket at path, waiting at most timeout when it
+// isn't 0.
+pub !Conn dialUnix(str path, Duration timeout = 0s) {
+    i32 err
+    fd := rawUnixDial(path.ptr, path.len, &err, timeout)
+    if fd < 0 {
+        return error(netCode(err), "connecting to {path}: {reason(err)}")
+    }
+    return Conn{sock: fd, buf: alloc(u8, 16KiB)}
+}
+
+// Sends data, and file descriptors with it, over a Unix socket: the other
+// side gets copies of them with readFds. data can't be empty. At most 250
+// descriptors.
+pub !void Conn.sendFds(str data, i32[] fds) {
+    if data.len == 0 {
+        return error(NetError.other, "sending descriptors: the data can't be empty")
+    }
+    code := rawSendFds(self.sock, data.ptr, data.len, fds.ptr, fds.len, self.timeout)
+    if code != 0 {
+        return error(netCode(code), "sending descriptors: {reason(code)}")
+    }
+    self.sent += data.len
+}
+
+// Reads into buf, and the descriptors that came with the bytes into fds:
+// the number of bytes (0 when the other side has closed) and of
+// descriptors. Descriptors past fds's length are closed. Bytes taken in
+// before, with peek or readLine, come first, without descriptors.
+pub !(i64, i64) Conn.readFds(u8[] buf, i32[] fds) {
+    if self.start < self.end {
+        n := try self.read(buf)
+        return (n, 0)
+    }
+    i64 got
+    n := rawRecvFds(self.sock, buf.ptr, buf.len, fds.ptr, fds.len, &got, self.timeout)
+    if n < 0 {
+        return error(netCode(i32(-n)), "reading descriptors: {reason(i32(-n))}")
+    }
+    self.received += n
+    return (n, got)
+}
