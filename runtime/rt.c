@@ -1332,6 +1332,118 @@ void iris_fs_close(int fd) {
     if (fd >= 0) close(fd);
 }
 
+/* ---------------------------------------------------------------- fs (0.66) */
+#include <pwd.h>
+
+/* Copies a file's bytes to another path, replaced if it is there, with the
+   permissions of the first. 0, or a code. */
+int iris_fs_copy(const char *from, int64_t fn, const char *to, int64_t tn) {
+    char *a = cpath(from, fn), *b = cpath(to, tn);
+    int code = 1;
+    if (!a || !b) goto done;
+    int in = open(a, O_RDONLY | O_CLOEXEC);
+    if (in < 0) {
+        code = fsCode(errno);
+        goto done;
+    }
+    struct stat st;
+    if (fstat(in, &st) != 0 || S_ISDIR(st.st_mode)) {
+        code = S_ISDIR(st.st_mode) ? 4 : fsCode(errno);
+        close(in);
+        goto done;
+    }
+    int out = open(b, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, st.st_mode & 07777);
+    if (out < 0) {
+        code = fsCode(errno);
+        close(in);
+        goto done;
+    }
+    char buf[65536];
+    code = 0;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r < 0) {
+            code = fsCode(errno);
+            break;
+        }
+        if (r == 0) break;
+        if ((code = iris_fs_write_fd(out, buf, r)) != 0) break;
+    }
+    if (!code) fchmod(out, st.st_mode & 07777);
+    close(in);
+    if (close(out) != 0 && !code) code = 5;
+done:
+    free(a);
+    free(b);
+    return code;
+}
+
+/* A new file (folder set: a folder) named prefix-XXXXXX in dir, or in
+   $TMPDIR or /tmp when dir is empty. Its path goes in out. 0, or a code. */
+int iris_fs_temp(const char *prefix, int64_t pn, const char *dir, int64_t dn, int folder, IrisString *out) {
+    if (memchr(prefix, '/', (size_t)pn) || memchr(prefix, 0, (size_t)pn) || memchr(dir, 0, (size_t)dn)) return 5;
+    const char *base = dir;
+    size_t bn = (size_t)dn;
+    if (bn == 0) {
+        base = getenv("TMPDIR");
+        if (!base || !*base) base = "/tmp";
+        bn = strlen(base);
+    }
+    while (bn > 1 && base[bn - 1] == '/') bn--;
+    size_t len = bn + 1 + (size_t)pn + 8;
+    char *t = malloc(len);
+    if (!t) outOfMemory();
+    snprintf(t, len, "%.*s/%.*s-XXXXXX", (int)bn, base, (int)pn, prefix);
+    int code = 0;
+    if (folder) {
+        if (!mkdtemp(t)) code = fsCode(errno);
+    } else {
+        int fd = mkstemp(t);
+        if (fd < 0) code = fsCode(errno);
+        else close(fd);
+    }
+    if (!code) iris_string_append(out, t, (int64_t)strlen(t));
+    free(t);
+    return code;
+}
+
+/* The working folder, into out. 0, or a code. */
+int iris_os_cwd(IrisString *out) {
+    char buf[4096];
+    if (!getcwd(buf, sizeof buf)) return fsCode(errno);
+    iris_string_append(out, buf, (int64_t)strlen(buf));
+    return 0;
+}
+
+int iris_os_chdir(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int code = chdir(p) == 0 ? 0 : fsCode(errno);
+    free(p);
+    return code;
+}
+
+int iris_os_hostname(IrisString *out) {
+    char buf[256];
+    if (gethostname(buf, sizeof buf) != 0) return 5;
+    buf[sizeof buf - 1] = 0;
+    iris_string_append(out, buf, (int64_t)strlen(buf));
+    return 0;
+}
+
+/* $HOME, or the home folder in the user database. 0, or 1 for none. */
+int iris_os_home(IrisString *out) {
+    const char *h = getenv("HOME");
+    if (!h || !*h) {
+        struct passwd *pw = getpwuid(getuid());
+        h = pw ? pw->pw_dir : NULL;
+    }
+    if (!h || !*h) return 1;
+    iris_string_append(out, h, (int64_t)strlen(h));
+    return 0;
+}
+
 /* 0 a line, 1 end of input, 2 an error */
 int iris_io_read_line(IrisString *out) {
     int c;

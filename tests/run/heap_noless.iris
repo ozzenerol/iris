@@ -1,0 +1,6 @@
+// panic: a Heap needs a less function: Heap[T]{less: f}
+
+void main() {
+    Heap[i64] h
+    h.push(1)
+}

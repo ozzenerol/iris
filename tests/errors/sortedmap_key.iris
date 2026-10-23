@@ -1,0 +1,12 @@
+// error: 11: SortedMap[Point, i64].set, made here, has the errors above
+
+struct Point {
+    i64 x
+}
+
+bool left(Point a, Point b) => a.x < b.x
+
+void main() {
+    m := SortedMap[Point, i64]{less: left}
+    m.set(Point{x: 1}, 1)
+}

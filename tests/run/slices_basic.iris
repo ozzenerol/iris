@@ -1,0 +1,70 @@
+// expect: 1 2 3 5 8 9
+// expect: 3 true
+// expect: 4 false
+// expect: 9 8 5 3 2 1
+// expect: true false 2 -1
+// expect: 1 9
+// expect: 4ms 36ms
+// expect: zoe ana
+// expect: 10.0.0.12 10.0.0.13 10.0.0.11
+// expect: 0 false
+// expect: 2 3 7
+
+import str
+
+struct Upstream {
+    str addr
+    i64 load
+}
+
+bool lighter(Upstream a, Upstream b) => a.load < b.load
+bool longer(str a, str b) => a.len > b.len
+
+String join(i64[] xs) {
+    String s
+    for i, x in xs {
+        scoped String part = format("{if i > 0 { " " } else { "" }}{x}")
+        s.append(part)
+    }
+    return s
+}
+
+void main() {
+    i64[] xs = [5, 3, 9, 1, 8, 2]
+    sort(xs)
+    scoped String a = join(xs)
+    print(a)
+    at, found := binarySearch(xs, 5)
+    print("{at} {found}")
+    at2, found2 := binarySearch(xs, 6)
+    print("{at2} {found2}")
+    reverse(xs)
+    scoped String b = join(xs)
+    print(b)
+    print("{contains(xs, 8)} {contains(xs, 7)} {indexOf(xs, 5)} {indexOf(xs, 4)}")
+    print("{min(xs)} {max(xs)}")
+    Duration[3] ds = [36ms, 4ms, 12ms]
+    print("{min(ds[:])} {max(ds[:])}")
+    str[] names = ["bo", "zoe", "ana"]
+    sortBy(names, longer)
+    print("{names[0]} {names[1]}")
+
+    List[Upstream] ups
+    defer ups.free()
+    ups.push(Upstream{addr: "10.0.0.11", load: 9})
+    ups.push(Upstream{addr: "10.0.0.12", load: 1})
+    ups.push(Upstream{addr: "10.0.0.13", load: 4})
+    sortBy(ups.items(), lighter)
+    print("{ups.at(0).addr} {ups.at(1).addr} {ups.at(2).addr}")
+
+    i64[] none = []
+    e, f := binarySearch(none, 3)
+    print("{e} {f}")
+    List[i64] l
+    defer l.free()
+    for v in [7, 2, 3] {
+        l.push(v)
+    }
+    sort(l.items())
+    print("{l.at(0)} {l.at(1)} {l.at(2)}")
+}

@@ -1,0 +1,40 @@
+// expect: true true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: OsError.notFound
+// expect: true
+// expect: /home/ada
+// expect: true
+
+import os, fs, path, str
+
+!void main() {
+    scoped String start = try os.cwd()
+    print("{start.len > 0} {str.startsWith(start, "/")}")
+    scoped String dir = try fs.tempDir("iris-os")
+    try os.chdir(dir)
+    scoped String now = try os.cwd()
+    // /tmp can be a link, as on macOS, so compare the ends
+    print("{str.endsWith(now, path.base(dir))}")
+    try fs.writeAll("here.txt", "x")
+    scoped String inside = format("{dir}/here.txt")
+    print("{fs.exists(inside)}")
+    try os.chdir(start)
+    scoped String back = try os.cwd()
+    print("{back == start}")
+    print("{os.pid() > 0}")
+    os.chdir("/no/such/folder/here") catch e {
+        print("{e.code}")
+    }
+    scoped String host = try os.hostname()
+    print("{host.len > 0}")
+    try os.setenv("HOME", "/home/ada")
+    scoped String home = try os.home()
+    print(home)
+    try os.unsetenv("HOME")
+    scoped String fallback = try os.home()
+    print("{fallback.len > 0}")
+    try fs.removeAll(dir)
+}

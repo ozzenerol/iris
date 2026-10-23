@@ -1,0 +1,8 @@
+// panic: pop on an empty Heap
+
+bool lower(i64 a, i64 b) => a < b
+
+void main() {
+    Heap[i64] h = Heap[i64]{less: lower}
+    _ = h.pop()
+}

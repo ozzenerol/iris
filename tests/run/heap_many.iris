@@ -1,0 +1,25 @@
+// expect: sorted 20000
+
+bool lower(i64 a, i64 b) => a < b
+
+void main() {
+    scoped Heap[i64] h = Heap[i64]{less: lower}
+    u64 x = 88172645463325252
+    for i in 0..20000 {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        h.push(i64(x % 100000))
+    }
+    prev := -1
+    n := 0
+    for h.len > 0 {
+        v := h.pop()
+        if v < prev {
+            print("out of order")
+        }
+        prev = v
+        n += 1
+    }
+    print("sorted {n}")
+}

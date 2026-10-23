@@ -1,6 +1,6 @@
 # Collections
 
-`List` keeps values in order and grows as values are added; `Map` keeps a value for each key, and `Set` keeps each value once. All three are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.
+`List` keeps values in order and grows as values are added; `Map` keeps a value for each key, and `Set` keeps each value once. `Deque` is a queue open at both ends, `Heap` gives back the value that goes first, and `SortedMap` keeps its keys in order. All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.
 
 ## List
 
@@ -324,3 +324,143 @@ void main() {
 ```
 
 The `defer` runs last, so the loop frees the values first and the map after them.
+
+## Functions on slices
+
+`sort`, `reverse`, `contains`, `indexOf`, `min`, `max` and `binarySearch` work on any slice. A list passes its values with `items()`, and the list itself changes:
+
+```iris run
+void main() {
+    i64[] ms = [36, 4, 12, 90, 7]
+    sort(ms)
+    print("{ms[0]} {ms[4]}, min {min(ms)}, max {max(ms)}")
+    at, found := binarySearch(ms, 12)
+    where, there := binarySearch(ms, 50)
+    print("12 at {at} {found}, 50 would go at {where} {there}")
+    print("{contains(ms, 90)} {indexOf(ms, 7)} {indexOf(ms, 8)}")
+    List[u16] ports
+    defer ports.free()
+    for p in [443, 22, 8080] {
+        ports.push(u16(p))
+    }
+    sort(ports.items())
+    reverse(ports.items())
+    print("{ports.at(0)} {ports.at(1)} {ports.at(2)}")
+}
+```
+
+```output
+4 90, min 4, max 90
+12 at 2 true, 50 would go at 4 false
+true 1 -1
+8080 443 22
+```
+
+`sort`, `min`, `max` and `binarySearch` compare with `<`, so they take numbers and `Duration`s. `binarySearch` needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. `contains` and `indexOf` compare with `==`. For other values, `sortBy(xs, less)` sorts with a function that says whether its first value goes before its second, as `List.sort` does, and `binarySearchBy(xs, v, less)` searches a slice sorted that way. Both sorts keep equal values in their order. `min` or `max` of an empty slice stops the program.
+
+## Deque
+
+A `Deque[T]` is a queue open at both ends. `push` and `pop` add and take at the back, `pushFront` and `popFront` at the front, and each takes the same time however many values there are. `first` and `last` give the values at the ends, and `at(i)` the one at i, counting from the front:
+
+```iris run
+void main() {
+    // jobs waiting for a worker; a retry goes to the front
+    Deque[str] jobs
+    defer jobs.free()
+    jobs.push("resize 1.png")
+    jobs.push("resize 2.png")
+    jobs.push("resize 3.png")
+    next := jobs.popFront()
+    print("working on {next}")
+    jobs.pushFront(next)
+    print("{jobs.len} waiting, first {jobs.first()}, last {jobs.last()}")
+    for j in jobs {
+        print(j)
+    }
+}
+```
+
+```output
+working on resize 1.png
+3 waiting, first resize 1.png, last resize 3.png
+resize 1.png
+resize 2.png
+resize 3.png
+```
+
+A loop goes from the front to the back. Taking a value from an empty deque stops the program, as `List.pop` does. `clear`, `free` and `freeEach` work as they do on a `List`.
+
+## Heap
+
+A `Heap[T]` gives back its values in order, the one that goes first each time, without sorting all of them. The order comes from a `less` function, given when the heap is made:
+
+```iris run
+struct Timer {
+    str name
+    Duration due
+}
+
+bool sooner(Timer a, Timer b) => a.due < b.due
+
+void main() {
+    Heap[Timer] timers = Heap[Timer]{less: sooner}
+    defer timers.free()
+    timers.push(Timer{name: "health check", due: 30s})
+    timers.push(Timer{name: "flush logs", due: 5s})
+    timers.push(Timer{name: "rotate keys", due: 1h})
+    print("next: {timers.peek().name}")
+    for timers.len > 0 {
+        t := timers.pop()
+        print("{t.due} {t.name}")
+    }
+}
+```
+
+```output
+next: flush logs
+5s flush logs
+30s health check
+1h0m0s rotate keys
+```
+
+`push` adds a value and `pop` takes out the one that goes first; both take time that grows with the logarithm of the count. `peek` gives that value without taking it out, and `len` is the count. With a `less` that says `a > b`, the largest comes first. A heap without a `less` stops the program when a value is pushed.
+
+## SortedMap
+
+A `SortedMap[K, V]` is a map that keeps its keys in order. Like a heap, it is made with a `less` function, which says whether one key goes before another. A loop goes over the keys in order, `first` and `last` give the ends, and `range(from, to)` gives the keys from `from` up to `to`, without `to`:
+
+```iris run
+import str
+
+bool before(str a, str b) => str.compare(a, b) < 0
+
+void main() {
+    // bytes sent to each client, by name
+    SortedMap[str, i64] sent = SortedMap[str, i64]{less: before}
+    defer sent.free()
+    sent.set("web-3", 900)
+    sent.set("api-1", 1200)
+    sent.set("web-1", 300)
+    sent.set("db-1", 50)
+    for name, n in sent {
+        print("{name} {n}")
+    }
+    k, v, _ := sent.first()
+    print("first {k} {v}")
+    for name, _ in sent.range("web", "wf") {
+        print("a web host: {name}")
+    }
+}
+```
+
+```output
+api-1 1200
+db-1 50
+web-1 300
+web-3 900
+first api-1 1200
+a web host: web-1
+a web host: web-3
+```
+
+`set`, `get`, `getOr`, `has` and `remove` work as on a `Map`, and take time that grows with the logarithm of the count. Two keys where neither goes before the other are the same key. Keys can be what a `Map` takes, and a `str` or `String` key is copied into the map. The map must not change during a loop over it.

@@ -1,0 +1,160 @@
+// Functions on slices. They work on a List through its items():
+// sort(list.items()). The ones without a less function compare with < and
+// ==, so they take numbers and Durations; sortBy and binarySearchBy take
+// any type.
+
+// Sorts the values from small to large. Values that are equal keep their
+// order.
+pub void sort[T](T[] xs) {
+    if xs.len <= 16 {
+        // the short ones here, so a T without < is an error at the call
+        for i in 1..xs.len {
+            v := xs[i]
+            k := i
+            for k > 0 && v < xs[k - 1] {
+                xs[k] = xs[k - 1]
+                k -= 1
+            }
+            xs[k] = v
+        }
+        return
+    }
+    T[] tmp = alloc(T, xs.len)
+    defer free(tmp)
+    sortSmall(xs, tmp, 0, xs.len)
+}
+
+void insertionSort[T](T[] xs, i64 lo, i64 hi) {
+    for i in lo + 1..hi {
+        v := xs[i]
+        k := i
+        for k > lo && v < xs[k - 1] {
+            xs[k] = xs[k - 1]
+            k -= 1
+        }
+        xs[k] = v
+    }
+}
+
+void sortSmall[T](T[] xs, T[] tmp, i64 lo, i64 hi) {
+    if hi - lo <= 16 {
+        insertionSort(xs, lo, hi)
+        return
+    }
+    mid := lo + (hi - lo) / 2
+    sortSmall(xs, tmp, lo, mid)
+    sortSmall(xs, tmp, mid, hi)
+    if !(xs[mid] < xs[mid - 1]) {
+        return
+    }
+    a := lo
+    b := mid
+    for k in lo..hi {
+        if a < mid && (b >= hi || !(xs[b] < xs[a])) {
+            tmp[k] = xs[a]
+            a += 1
+        } else {
+            tmp[k] = xs[b]
+            b += 1
+        }
+    }
+    for k in lo..hi {
+        xs[k] = tmp[k]
+    }
+}
+
+// Sorts the values: less says whether a goes before b. Values that are
+// equal keep their order.
+pub void sortBy[T](T[] xs, bool(T, T) less) {
+    if xs.len < 2 {
+        return
+    }
+    T[] tmp = alloc(T, xs.len)
+    defer free(tmp)
+    sortRange(xs, tmp, 0, xs.len, less)
+}
+
+// Where v is in a sorted slice, and whether it is there. When it isn't,
+// the place is where it would go to keep the slice sorted.
+pub (i64, bool) binarySearch[T](T[] xs, T v) {
+    lo := 0
+    hi := xs.len
+    for lo < hi {
+        mid := lo + (hi - lo) / 2
+        if xs[mid] < v {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return (lo, lo < xs.len && xs[lo] == v)
+}
+
+// binarySearch for a slice sorted with less.
+pub (i64, bool) binarySearchBy[T](T[] xs, T v, bool(T, T) less) {
+    lo := 0
+    hi := xs.len
+    for lo < hi {
+        mid := lo + (hi - lo) / 2
+        if less(xs[mid], v) {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return (lo, lo < xs.len && !less(v, xs[lo]))
+}
+
+// Turns the order around.
+pub void reverse[T](T[] xs) {
+    i := 0
+    j := xs.len - 1
+    for i < j {
+        v := xs[i]
+        xs[i] = xs[j]
+        xs[j] = v
+        i += 1
+        j -= 1
+    }
+}
+
+// Whether a value equal to v is in the slice. T needs ==.
+pub bool contains[T](T[] xs, T v) => indexOf(xs, v) >= 0
+
+// Where the first value equal to v is, or -1. T needs ==.
+pub i64 indexOf[T](T[] xs, T v) {
+    for i, x in xs {
+        if x == v {
+            return i
+        }
+    }
+    return -1
+}
+
+// The smallest value. An empty slice stops the program.
+pub T min[T](T[] xs) {
+    if xs.len == 0 {
+        panic("min of an empty slice")
+    }
+    best := xs[0]
+    for x in xs {
+        if x < best {
+            best = x
+        }
+    }
+    return best
+}
+
+// The largest value. An empty slice stops the program.
+pub T max[T](T[] xs) {
+    if xs.len == 0 {
+        panic("max of an empty slice")
+    }
+    best := xs[0]
+    for x in xs {
+        if x > best {
+            best = x
+        }
+    }
+    return best
+}

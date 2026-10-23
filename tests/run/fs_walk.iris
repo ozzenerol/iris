@@ -1,0 +1,49 @@
+// expect: a.txt
+// expect: logs/2026/feb.log
+// expect: logs/2026/jan.log
+// expect: logs/old.log
+// expect: src/main.iris
+// expect: src/util/str.iris
+// expect: glob *.txt: a.txt
+// expect: glob logs/*.log: logs/old.log
+// expect: glob **/*.log: logs/2026/feb.log logs/2026/jan.log logs/old.log
+// expect: glob src/**: src/main.iris src/util/str.iris
+// expect: glob src/????.iris: src/main.iris
+// expect: glob logs/2026/[fj]*.log: logs/2026/feb.log logs/2026/jan.log
+// expect: glob nothing/*:
+// expect: FsError.notFound
+
+import fs, path, str
+
+!void main() {
+    scoped String base = try fs.tempDir("iris-walk")
+    for name in ["a.txt", "logs/old.log", "logs/2026/jan.log", "logs/2026/feb.log", "src/main.iris", "src/util/str.iris"] {
+        scoped String p = path.join(base, name)
+        scoped String folder = path.dir(p).copy()
+        try fs.mkdirAll(folder)
+        try fs.writeAll(p, name)
+    }
+    List[String] all = try fs.walk(base)
+    defer all.freeEach()
+    for f in all {
+        print(f.ptr[base.len + 1:f.len])
+    }
+    for pattern in ["*.txt", "logs/*.log", "**/*.log", "src/**", "src/????.iris", "logs/2026/[fj]*.log", "nothing/*"] {
+        scoped String full = path.join(base, pattern)
+        scoped List[String] found = try fs.glob(full)
+        String line = format("glob {pattern}:")
+        for f in found {
+            line.append(" ")
+            line.append(f.ptr[base.len + 1:f.len])
+            f.free()
+        }
+        print(line)
+        line.free()
+    }
+    _ = fs.walk("/tmp/iris-no-such-folder-here") catch e {
+        print("{e.code}")
+        List[String] none
+        none
+    }
+    try fs.removeAll(base)
+}

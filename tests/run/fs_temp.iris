@@ -1,0 +1,36 @@
+// expect: true true false
+// expect: true true
+// expect: 0
+// expect: copied 11 bytes: hello world
+// expect: FsError.notFound
+// expect: FsError.isDir
+// expect: gone
+
+import fs, path, str
+
+!void main() {
+    scoped String dir = try fs.tempDir("iris-test")
+    scoped String other = try fs.tempDir("iris-test")
+    info := try fs.stat(dir)
+    print("{info.isDir} {str.startsWith(path.base(dir), "iris-test")} {dir == other}")
+    scoped String file = try fs.tempFile("notes", dir: dir)
+    scoped String file2 = try fs.tempFile("notes", dir: dir)
+    print("{path.dir(file) == dir.ptr[0:dir.len]} {file != file2}")
+    fi := try fs.stat(file)
+    print("{fi.size}")
+    try fs.writeAll(file, "hello world")
+    scoped String to = path.join(dir, "copy.txt")
+    try fs.copy(file, to)
+    scoped String text = try fs.readAll(to)
+    print("copied {text.len} bytes: {text}")
+    scoped String missing = path.join(dir, "missing")
+    fs.copy(missing, to) catch e {
+        print("{e.code}")
+    }
+    fs.copy(file, dir) catch e {
+        print("{e.code}")
+    }
+    try fs.removeAll(dir)
+    try fs.removeAll(other)
+    print(if fs.exists(dir) { "still there" } else { "gone" })
+}

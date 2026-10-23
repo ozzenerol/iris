@@ -1,0 +1,61 @@
+// expect: 5 1 5
+// expect: 0 1 2 3 4
+// expect: pop 5, popFront 0, 3 left
+// expect: 1 2 3
+// expect: -2 -1 1 2 3 9
+// expect: 1000 0 999
+// expect: 0 empty
+
+void show(Deque[i64] *d) {
+    String s
+    for v in d {
+        if s.len > 0 {
+            s.append(" ")
+        }
+        scoped String part = format("{v}")
+        s.append(part)
+    }
+    print(s)
+    s.free()
+}
+
+void main() {
+    Deque[i64] d
+    defer d.free()
+    for i in 1..6 {
+        d.push(i)
+    }
+    print("{d.len} {d.first()} {d.last()}")
+    d.pushFront(0)
+    String line
+    for i in 0..5 {
+        scoped String part = format("{if i > 0 { " " } else { "" }}{d.at(i)}")
+        line.append(part)
+    }
+    print(line)
+    line.free()
+    a := d.pop()
+    b := d.popFront()
+    _ = d.popFront()
+    print("pop {a}, popFront {b}, {d.len} left")
+    d.pushFront(1)
+    _ = d.pop()
+    show(&d)
+    d.pushFront(-1)
+    d.pushFront(-2)
+    d.push(9)
+    d.set(2, 1)
+    show(&d)
+    d.clear()
+    // wraps around many times as it grows
+    for i in 0..1000 {
+        if i % 2 == 0 {
+            d.push(i)
+        } else {
+            d.pushFront(i)
+        }
+    }
+    print("{d.len} {d.at(500)} {d.first()}")
+    d.clear()
+    print("{d.len} empty")
+}

@@ -1,0 +1,41 @@
+// expect: [/a/c] [a/c] [.] [/] [..] [../..] [a] [/a] [.] [/]
+// expect: [b/c] [.] [../c] [../../x] [d] [..] [b]
+// expect: error: can't make /a relative to b
+// expect: [/home/ada/] [notes.txt] [] [a] [./] [x] [/] [] [] []
+
+import path
+
+void main() {
+    String s
+    for p in ["/a/b/../c", "a//b/./../c/", "", "/../..", "..", "../a/../..", "a/.", "//a//", "./", "/./"] {
+        scoped String c = path.clean(p)
+        scoped String part = format("{if s.len > 0 { " " } else { "" }}[{c}]")
+        s.append(part)
+    }
+    print(s)
+    s.free()
+    String r
+    for pair in [("/a", "/a/b/c"), ("a/b", "a/b"), ("a/b", "a/c"), ("/a/b/c", "/a/x"), ("a/../b", "a/../b/c/../d"), ("x/y", "x"), (".", "b")] {
+        from, to := pair
+        rel := path.rel(from, to) catch e {
+            "?".copy()
+        }
+        scoped String part = format("{if r.len > 0 { " " } else { "" }}[{rel}]")
+        r.append(part)
+        rel.free()
+    }
+    print(r)
+    r.free()
+    _ = path.rel("b", "/a") catch e {
+        print("error: {e.message}")
+        "".copy()
+    }
+    String t
+    for p in ["/home/ada/notes.txt", "a", "./x", "/", ""] {
+        d, n := path.split(p)
+        scoped String part = format("{if t.len > 0 { " " } else { "" }}[{d}] [{n}]")
+        t.append(part)
+    }
+    print(t)
+    t.free()
+}
