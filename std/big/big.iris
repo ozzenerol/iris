@@ -180,6 +180,47 @@ List[u32] magMul(u32[] a, u32[] b) {
     return out
 }
 
+// a divided by 10^9, as text in decimal needs: a constant divisor, which
+// the compiler turns into a multiplication.
+(List[u32], u32) magDivBillion(u32[] a) {
+    List[u32] q
+    q.reserve(a.len)
+    for _ in 0..a.len {
+        q.push(0)
+    }
+    qs := q.items()
+    u64 rem = 0
+    i := a.len - 1
+    for i >= 0 {
+        u64 cur = rem << 32 | u64(a[i])
+        u64 d = cur / 1000000000
+        qs[i] = u32(d)
+        rem = cur - d * 1000000000
+        i -= 1
+    }
+    trim(&q)
+    return (q, u32(rem))
+}
+
+// a times a one-limb m, in one pass.
+List[u32] magMulSmall(u32[] a, u32 m) {
+    List[u32] out
+    if m == 0 || a.len == 0 {
+        return out
+    }
+    out.reserve(a.len + 1)
+    u64 carry = 0
+    for i in 0..a.len {
+        u64 t = u64(a[i]) * u64(m) + carry
+        out.push(u32(t & 0xffffffff))
+        carry = t >> 32
+    }
+    if carry != 0 {
+        out.push(u32(carry))
+    }
+    return out
+}
+
 // a divided by a one-limb d: the quotient, and the remainder.
 (List[u32], u32) magDivSmall(u32[] a, u32 d) {
     List[u32] q
@@ -368,7 +409,16 @@ pub Int Int.sub(Int b) {
 }
 
 // The number times b.
-pub Int Int.mul(Int b) => make(self.negative != b.negative, magMul(self.mag.items(), b.mag.items()))
+pub Int Int.mul(Int b) {
+    neg := self.negative != b.negative
+    if b.mag.len == 1 {
+        return make(neg, magMulSmall(self.mag.items(), b.mag.at(0)))
+    }
+    if self.mag.len == 1 {
+        return make(neg, magMulSmall(b.mag.items(), self.mag.at(0)))
+    }
+    return make(neg, magMul(self.mag.items(), b.mag.items()))
+}
 
 // The number divided by b, rounded toward zero, and the remainder, which
 // has the number's sign, as with integers. b must not be 0.
@@ -601,7 +651,7 @@ pub String Int.text(i64 base = 10) {
     scoped List[u8] digits
     digitText := "0123456789abcdefghijklmnopqrstuvwxyz"
     for cur.len > 0 {
-        q, rem := magDivSmall(cur.items(), chunk)
+        q, rem := if base == 10 { magDivBillion(cur.items()) } else { magDivSmall(cur.items(), chunk) }
         cur.free()
         cur = q
         u32 r = rem

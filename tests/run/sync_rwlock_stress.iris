@@ -1,0 +1,62 @@
+// expect: violations 0, writes 8000
+// Four threads and four tasks read and write long enough to wait in the
+// lock's queues; no reader may see a writer, and no two writers may meet.
+import sync
+
+sync.RwLock lock
+Atomic[i64] writers
+Atomic[i64] readers
+Atomic[i64] violations
+i64 writes = 0
+sync.WaitGroup group
+
+i64 busy(i64 n) {
+    i64 x = 0
+    for i in 0..n {
+        x += i * 7 % 13
+    }
+    return x
+}
+
+void work(i64 seed) {
+    defer group.done()
+    for i in 0..2000 {
+        if (i + seed) % 4 == 0 {
+            lock.writeLock()
+            if writers.add(1) != 1 || readers.load() != 0 {
+                violations.add(1)
+            }
+            writes += 1
+            _ = busy(200)
+            writers.sub(1)
+            lock.writeUnlock()
+        } else {
+            lock.readLock()
+            readers.add(1)
+            if writers.load() != 0 {
+                violations.add(1)
+            }
+            _ = busy(100)
+            readers.sub(1)
+            lock.readUnlock()
+        }
+        if i % 64 == 0 {
+            sleep(0ms)
+        }
+    }
+}
+
+void main() {
+    group.add(16)
+    ths := [thread work(0), thread work(1), thread work(2), thread work(3), thread work(4), thread work(5),
+        thread work(6), thread work(7)]
+    for s in 8..16 {
+        spawn work(s)
+    }
+    group.wait()
+    for t in ths {
+        t.join()
+    }
+    print("violations {violations.load()}, writes {writes}")
+    group.free()
+}

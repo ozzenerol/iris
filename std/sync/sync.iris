@@ -117,87 +117,46 @@ pub bool Once.done() => self.finished.load() == 1
 // before the next writer, so neither waits for ever. An RwLock can't be
 // copied.
 pub struct RwLock {
-    Mutex lock
-    i64 readers
-    bool writing
-    List[chan[bool]] readQueue
-    List[chan[bool]] writeQueue
+    Mutex keep // not used: it only stops the RwLock being copied
+    i64[8] state // the runtime's lock word and queues
 }
 
+@extern("iris_rw_read_lock")
+void rawReadLock(i64 *l)
+
+@extern("iris_rw_read_unlock")
+i32 rawReadUnlock(i64 *l)
+
+@extern("iris_rw_write_lock")
+void rawWriteLock(i64 *l)
+
+@extern("iris_rw_write_unlock")
+i32 rawWriteUnlock(i64 *l)
+
 // Waits until no writer has the lock or waits for it, then reads.
-pub void RwLock.readLock() {
-    self.lock.lock()
-    if !self.writing && self.writeQueue.len == 0 {
-        self.readers += 1
-        self.lock.unlock()
-        return
-    }
-    ch := chan[bool](1)
-    self.readQueue.push(ch)
-    self.lock.unlock()
-    _ = <-ch // the waker counted this reader in
-    ch.free()
-}
+pub void RwLock.readLock() => rawReadLock(&self.state[0])
 
 // One reader is finished.
 pub void RwLock.readUnlock() {
-    self.lock.lock()
-    if self.readers <= 0 {
-        self.lock.unlock()
+    if rawReadUnlock(&self.state[0]) == 0 {
         panic("readUnlock of an RwLock that isn't read-locked")
     }
-    self.readers -= 1
-    if self.readers == 0 && self.writeQueue.len > 0 {
-        self.writing = true
-        w := self.writeQueue.remove(0)
-        w <- true
-    }
-    self.lock.unlock()
 }
 
 // Waits until no one reads or writes, then writes.
-pub void RwLock.writeLock() {
-    self.lock.lock()
-    if !self.writing && self.readers == 0 {
-        self.writing = true
-        self.lock.unlock()
-        return
-    }
-    ch := chan[bool](1)
-    self.writeQueue.push(ch)
-    self.lock.unlock()
-    _ = <-ch // the waker set writing for this writer
-    ch.free()
-}
+pub void RwLock.writeLock() => rawWriteLock(&self.state[0])
 
 // The writer is finished: the waiting readers go first, then the next
 // writer.
 pub void RwLock.writeUnlock() {
-    self.lock.lock()
-    if !self.writing {
-        self.lock.unlock()
+    if rawWriteUnlock(&self.state[0]) == 0 {
         panic("writeUnlock of an RwLock that isn't write-locked")
     }
-    self.writing = false
-    if self.readQueue.len > 0 {
-        self.readers += self.readQueue.len
-        for ch in self.readQueue {
-            ch <- true
-        }
-        self.readQueue.clear()
-    } else if self.writeQueue.len > 0 {
-        self.writing = true
-        w := self.writeQueue.remove(0)
-        w <- true
-    }
-    self.lock.unlock()
 }
 
-// Gives the RwLock's memory back; nothing may hold it or wait on it.
-pub void RwLock.free() {
-    self.readQueue.free()
-    self.writeQueue.free()
-}
+// Gives the RwLock's memory back: it holds none, so this only marks the end
+// of its use.
+pub void RwLock.free() {}
 
 // A job for the workers, or the sign to stop.
 struct Job[T] {

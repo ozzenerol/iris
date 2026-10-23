@@ -13,6 +13,8 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
        "hashmap", "sort", "strings", "channels"]
 # the standard library against Go's and the best-known Rust crates
 LIB = ["fmt-text", "utf8", "bigint", "rwlock"]
+# CPU programs that run threads get the server's cores rather than one
+THREADED = {"rwlock"}
 NET = ["http-hello", "http-json", "tcp-echo", "http2"]
 # the cores this process may use (a container may get any of the host's):
 # the first half runs servers, the rest the load, and one CPU program at a time
@@ -43,13 +45,13 @@ def build(names, iris):
     sh(["cc", "-O2", "-o", f"{OUT}/memrun", f"{HERE}/tools/memrun.c"])
 
 
-def timed(binary, runs):
+def timed(binary, runs, cores=None):
     """Median wall time, median peak memory (MiB) and the outputs."""
     times, mems, outs = [], [], set()
     for _ in range(runs):
         mem = f"{OUT}/mem.txt"
         t = time.perf_counter()
-        out = sh(["taskset", "-c", CPU_CORE, f"{OUT}/memrun", mem, binary])
+        out = sh(["taskset", "-c", cores or CPU_CORE, f"{OUT}/memrun", mem, binary])
         times.append(time.perf_counter() - t)
         mems.append(int(open(mem).read()) / 1024)
         outs.add(out)
@@ -127,7 +129,7 @@ def main():
         for lang in ("iris", "iris_safe", "rust", "go"):
             b = f"{OUT}/{lang}-{n}"
             if n in CPU or n in LIB:
-                t, mem, outs = timed(b, a.runs)
+                t, mem, outs = timed(b, a.runs, SERVER_CORES if n in THREADED else None)
                 r[lang], r[lang + "_out"] = round(t, 3), sorted(outs)[0].strip()
             else:
                 runs = [serve(b, n) for _ in range(max(1, a.runs // 2))]

@@ -109,7 +109,7 @@ static const char *llType(IR *ir, Type *t) {
         }
     case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD: return "ptr";
     case TY_ATOMIC: return t->elem->kind == TY_BOOL ? "i8" : llType(ir, t->elem);
-    case TY_MUTEX: return "[3 x i64]";
+    case TY_MUTEX: return "[4 x i64]";
     case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
@@ -1044,26 +1044,54 @@ static void emitFmtSpec(IR *ir, Node *spec, int sink, const char *dst) {
     Type *t = val->type;
     bool integer = t->kind == TY_INT && t != &tyDuration;
     bool number = integer || t->kind == TY_FLOAT;
-    const char *slot = allocaFor(ir, &tyString, "fmt");
-    ins(ir, "store %%String zeroinitializer, ptr %s", slot);
-    if (integer && (fs.type || fs.plus)) {
+    char align = fs.align ? fs.align : number ? '>' : '<';
+    if (integer) {
+        /* formatted into a buffer of the runtime's and padded from there */
         Val v = emitExpr(ir, val);
         int base = fs.type == 'x' || fs.type == 'X' ? 16 : fs.type == 'o' ? 8 : fs.type == 'b' ? 2 : 10;
-        ins(ir, "call void @iris_fmt_int(ptr %s, i64 %s, i32 %d, i32 %d, i32 %d, i32 %d)", slot, toI64(ir, v),
-            t->isSigned ? 1 : 0, base, fs.type == 'X' ? 1 : 0, fs.plus ? 1 : 0);
-    } else if (t->kind == TY_FLOAT && (fs.prec >= 0 || fs.type || fs.plus)) {
+        ins(ir, "call void @iris_write_int_spec(i32 %d, ptr %s, i64 %s, i32 %d, i32 %d, i32 %d, i32 %d, i64 %lld, i32 %d, "
+                "i32 %d, i32 %d)",
+            sink, dst, toI64(ir, v), t->isSigned ? 1 : 0, base, fs.type == 'X' ? 1 : 0, fs.plus ? 1 : 0,
+            (long long)fs.width, fs.fill, align, fs.zero ? 1 : 0);
+        return;
+    }
+    if (t->kind == TY_FLOAT && (fs.prec >= 0 || fs.type)) {
         Val v = emitExpr(ir, val);
         const char *x = v.s;
         if (t->bits == 32) {
             x = tmp(ir);
             ins(ir, "%s = fpext float %s to double", x, v.s);
         }
-        ins(ir, "call void @iris_fmt_float(ptr %s, double %s, i32 %d, i32 %lld, i32 %d, i32 %d)", slot, x, t->bits,
-            (long long)fs.prec, fs.type, fs.plus ? 1 : 0);
+        ins(ir, "call void @iris_write_float_spec(i32 %d, ptr %s, double %s, i32 %d, i32 %lld, i32 %d, i32 %d, i64 %lld, "
+                "i32 %d, i32 %d, i32 %d)",
+            sink, dst, x, t->bits, (long long)fs.prec, fs.type, fs.plus ? 1 : 0, (long long)fs.width, fs.fill, align,
+            fs.zero ? 1 : 0);
+        return;
+    }
+    if (t->kind == TY_SLICE) {
+        /* text: padded straight from its bytes */
+        Val v = emitExpr(ir, val);
+        const char *ptr, *len;
+        sliceParts(ir, v, &ptr, &len);
+        ins(ir, "call void @iris_write_str_spec(i32 %d, ptr %s, ptr %s, i64 %s, i64 %lld, i32 %d, i32 %d, i64 %lld)", sink,
+            dst, ptr, len, (long long)fs.width, fs.fill, align, (long long)fs.prec);
+        return;
+    }
+    /* anything else is written as usual into a String of its own, then
+     * padded (iris_write_padded frees the String) */
+    const char *slot = allocaFor(ir, &tyString, "fmt");
+    ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+    if (t->kind == TY_FLOAT && fs.plus) {
+        Val v = emitExpr(ir, val);
+        const char *x = v.s;
+        if (t->bits == 32) {
+            x = tmp(ir);
+            ins(ir, "%s = fpext float %s to double", x, v.s);
+        }
+        ins(ir, "call void @iris_fmt_float(ptr %s, double %s, i32 %d, i32 -1, i32 0, i32 1)", slot, x, t->bits);
     } else {
         emitText(ir, val, 3, slot);
     }
-    char align = fs.align ? fs.align : number ? '>' : '<';
     ins(ir, "call void @iris_write_padded(i32 %d, ptr %s, ptr %s, i64 %lld, i32 %d, i32 %d, i32 %d, i64 %lld)", sink,
         dst, slot, (long long)fs.width, fs.fill, align, fs.zero ? 1 : 0, (long long)(number ? -1 : fs.prec));
 }
@@ -3942,6 +3970,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_free(ptr)\n"
            "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
            "declare void @iris_fmt_int(ptr, i64, i32, i32, i32, i32)\n"
+           "declare void @iris_write_int_spec(i32, ptr, i64, i32, i32, i32, i32, i64, i32, i32, i32)\n"
+           "declare void @iris_write_float_spec(i32, ptr, double, i32, i32, i32, i32, i64, i32, i32, i32)\n"
+           "declare void @iris_write_str_spec(i32, ptr, ptr, i64, i64, i32, i32, i64)\n"
            "declare void @iris_string_reserve(ptr, i64)\n"
            "declare void @iris_string_truncate(ptr, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_insert(ptr, i64, ptr, i64, ptr, i32, i32, ptr)\n"

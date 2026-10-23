@@ -721,6 +721,95 @@ int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
     return (int64_t)(op == 0 ? x + y : op == 1 ? x - y : x * y);
 }
 
+/* str.validUtf8: ASCII 8 bytes at a time, then each sequence checked as
+   decodeRune does (no overlong forms, surrogates or values past U+10FFFF).
+   With count, the characters of valid text are counted on the way: -1 when
+   it isn't valid. */
+static int64_t utf8Scan(const unsigned char *p, int64_t n, bool count) {
+    int64_t i = 0, chars = 0;
+    while (i < n) {
+        if (i + 8 <= n) {
+            uint64_t w;
+            memcpy(&w, p + i, 8);
+            if (!(w & 0x8080808080808080ULL)) {
+                i += 8;
+                chars += 8;
+                continue;
+            }
+        }
+        unsigned char b = p[i];
+        chars++;
+        if (b < 0x80) {
+            i++;
+            continue;
+        }
+        if (b >= 0xc2 && b <= 0xdf) {
+            if (i + 1 >= n || (p[i + 1] & 0xc0) != 0x80) return -1;
+            i += 2;
+        } else if (b >= 0xe0 && b <= 0xef) {
+            if (i + 2 >= n) return -1;
+            unsigned char c1 = p[i + 1];
+            if ((c1 & 0xc0) != 0x80 || (p[i + 2] & 0xc0) != 0x80) return -1;
+            if (b == 0xe0 && c1 < 0xa0) return -1;       /* overlong */
+            if (b == 0xed && c1 >= 0xa0) return -1;      /* a surrogate */
+            i += 3;
+        } else if (b >= 0xf0 && b <= 0xf4) {
+            if (i + 3 >= n) return -1;
+            unsigned char c1 = p[i + 1];
+            if ((c1 & 0xc0) != 0x80 || (p[i + 2] & 0xc0) != 0x80 || (p[i + 3] & 0xc0) != 0x80) return -1;
+            if (b == 0xf0 && c1 < 0x90) return -1;       /* overlong */
+            if (b == 0xf4 && c1 >= 0x90) return -1;      /* past U+10FFFF */
+            i += 4;
+        } else {
+            return -1;
+        }
+    }
+    (void)count;
+    return chars;
+}
+
+int iris_utf8_valid(const unsigned char *p, int64_t n) { return utf8Scan(p, n, false) >= 0; }
+
+/* str.runeCount: the characters of valid text in the same pass, or -1. */
+int64_t iris_utf8_count(const unsigned char *p, int64_t n) { return utf8Scan(p, n, true); }
+
+/* str.decodeRune past ASCII: the character at p[at] and its length in
+   *len; 0xFFFD and 1 for bytes that aren't UTF-8. */
+__attribute__((always_inline)) int32_t iris_utf8_decode(const unsigned char *p, int64_t n, int64_t at,
+                                                               int64_t *len) {
+    unsigned char b = p[at];
+    int64_t left = n - at;
+    if (b >= 0xc2 && b <= 0xdf) {
+        if (left >= 2 && (p[at + 1] & 0xc0) == 0x80) {
+            *len = 2;
+            return (int32_t)(b & 0x1f) << 6 | (p[at + 1] & 0x3f);
+        }
+    } else if (b >= 0xe0 && b <= 0xef) {
+        if (left >= 3) {
+            unsigned char c1 = p[at + 1], c2 = p[at + 2];
+            if ((c1 & 0xc0) == 0x80 && (c2 & 0xc0) == 0x80 && !(b == 0xe0 && c1 < 0xa0) && !(b == 0xed && c1 >= 0xa0)) {
+                *len = 3;
+                return (int32_t)(b & 0x0f) << 12 | (int32_t)(c1 & 0x3f) << 6 | (c2 & 0x3f);
+            }
+        }
+    } else if (b >= 0xf0 && b <= 0xf4) {
+        if (left >= 4) {
+            unsigned char c1 = p[at + 1], c2 = p[at + 2], c3 = p[at + 3];
+            if ((c1 & 0xc0) == 0x80 && (c2 & 0xc0) == 0x80 && (c3 & 0xc0) == 0x80 && !(b == 0xf0 && c1 < 0x90) &&
+                !(b == 0xf4 && c1 >= 0x90)) {
+                *len = 4;
+                return (int32_t)(b & 0x07) << 18 | (int32_t)(c1 & 0x3f) << 12 | (int32_t)(c2 & 0x3f) << 6 | (c3 & 0x3f);
+            }
+        }
+    } else if (b < 0x80) {
+        *len = 1;
+        return b;
+    }
+    *len = 1;
+    return 0xfffd;
+}
+
+
 /* {n:x}, {n:+}: an integer in a base, with its sign; into s. */
 void iris_fmt_int(IrisString *s, int64_t v, int isSigned, int base, int upper, int plus) {
     const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
@@ -745,13 +834,16 @@ void iris_fmt_int(IrisString *s, int64_t v, int isSigned, int base, int upper, i
    read back the same, as plain text does. */
 void iris_write_float(int sink, IrisString *dst, double v, int bits);
 
+static int fmtFixedBuf(char *buf, double v, int prec, int plus);
+
 void iris_fmt_float(IrisString *s, double v, int bits, int prec, int kind, int plus) {
     char buf[512];
     int n;
     if (kind == 'e') {
         n = snprintf(buf, sizeof buf, plus ? "%+.*e" : "%.*e", prec < 0 ? 6 : prec, v);
     } else if (prec >= 0 || kind == 'f') {
-        n = snprintf(buf, sizeof buf, plus ? "%+.*f" : "%.*f", prec < 0 ? 6 : prec, v);
+        n = fmtFixedBuf(buf, v, prec < 0 ? 6 : prec, plus);
+        if (n < 0) n = snprintf(buf, sizeof buf, plus ? "%+.*f" : "%.*f", prec < 0 ? 6 : prec, v);
     } else {
         if (plus && !(v < 0) && !(v != v)) {
             iris_string_append(s, "+", 1);
@@ -762,6 +854,89 @@ void iris_fmt_float(IrisString *s, double v, int bits, int prec, int kind, int p
     if (n < 0) n = 0;
     if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
     iris_string_append(s, buf, n);
+}
+
+/* An integer as {n:spec} writes it, into buf (at least 72 bytes); gives
+   where the text starts, which ends at buf + 72. */
+static char *fmtIntBuf(char *buf, int64_t v, int isSigned, int base, int upper, int plus) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    bool neg = isSigned && v < 0;
+    uint64_t u = neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    char *p = buf + 72;
+    if (base == 10) {
+        p = u64Digits(u, p);
+    } else {
+        do {
+            *--p = digits[u % (uint64_t)base];
+            u /= (uint64_t)base;
+        } while (u);
+    }
+    if (neg) {
+        *--p = '-';
+    } else if (plus) {
+        *--p = '+';
+    }
+    return p;
+}
+
+/* v with prec digits after the point, exactly as printf's %.*f writes it,
+   into buf (at least 64 bytes): v is m * 2^e, so v * 10^prec is an integer
+   division that 128-bit numbers do exactly, rounded half to even. Gives
+   the length, or -1 when v is out of the range this covers. */
+static int fmtFixedBuf(char *buf, double v, int prec, int plus) {
+    if (prec < 0 || prec > 19 || v != v || v - v != 0) return -1;
+    bool neg = signbit(v);
+    double a = fabs(v);
+    int e2;
+    double frac = frexp(a, &e2);                    /* a = frac * 2^e2, frac in [0.5, 1) */
+    uint64_t m = (uint64_t)ldexp(frac, 53);         /* a = m * 2^(e2 - 53) */
+    int shift = 53 - e2;                            /* a = m / 2^shift */
+    static const uint64_t pow10[20] = {1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL, 10000000ULL,
+                                       100000000ULL, 1000000000ULL, 10000000000ULL, 100000000000ULL,
+                                       1000000000000ULL, 10000000000000ULL, 100000000000000ULL,
+                                       1000000000000000ULL, 10000000000000000ULL, 100000000000000000ULL,
+                                       1000000000000000000ULL, 10000000000000000000ULL};
+    unsigned __int128 x = (unsigned __int128)m * pow10[prec];
+    unsigned __int128 q;
+    if (a == 0) {
+        q = 0;
+    } else if (shift <= 0) {
+        if (shift < -10) return -1;
+        q = x << -shift;
+    } else if (shift >= 127) {
+        q = 0;                                      /* far below a unit of the last digit */
+    } else {
+        q = x >> shift;
+        unsigned __int128 rem = x - (q << shift), half = (unsigned __int128)1 << (shift - 1);
+        if (rem > half || (rem == half && (q & 1))) q++;
+    }
+    if (q >> 64) return -1;
+    uint64_t n = (uint64_t)q;
+    char digits[32];
+    char *end = digits + sizeof digits;
+    char *d = u64Digits(n, end);
+    int len = (int)(end - d);
+    int k = 0;
+    if (neg) buf[k++] = '-';
+    else if (plus) buf[k++] = '+';
+    if (len <= prec) {
+        buf[k++] = '0';
+        if (prec > 0) {
+            buf[k++] = '.';
+            for (int i = 0; i < prec - len; i++) buf[k++] = '0';
+            memcpy(buf + k, d, (size_t)len);
+            k += len;
+        }
+    } else {
+        memcpy(buf + k, d, (size_t)(len - prec));
+        k += len - prec;
+        if (prec > 0) {
+            buf[k++] = '.';
+            memcpy(buf + k, d + len - prec, (size_t)prec);
+            k += prec;
+        }
+    }
+    return k;
 }
 
 /* The bytes of the first n characters of p (UTF-8), and how many there are. */
@@ -790,15 +965,55 @@ static void putRepeated(int sink, IrisString *dst, const char *unit, int ulen, i
     }
 }
 
+static void padBytes(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                     int zero, int64_t maxChars);
+
 /* The text in s padded to width characters with fill, by align ('<', '>'
    or '^'); zero puts zeros after a sign instead; maxChars cuts text. Frees s. */
 void iris_write_padded(int sink, IrisString *dst, IrisString *s, int64_t width, int fill, int align, int zero,
                        int64_t maxChars) {
-    int64_t len = s->len, chars;
+    padBytes(sink, dst, s->ptr ? s->ptr : "", s->len, width, fill, align, zero, maxChars);
+    iris_string_free(s);
+}
+
+/* {n:spec} for an integer, straight into the sink. */
+void iris_write_int_spec(int sink, IrisString *dst, int64_t v, int isSigned, int base, int upper, int plus,
+                         int64_t width, int fill, int align, int zero) {
+    char buf[72];
+    char *p = fmtIntBuf(buf, v, isSigned, base, upper, plus);
+    padBytes(sink, dst, p, buf + 72 - p, width, fill, align, zero, -1);
+}
+
+/* {x:.2} and {x:f} for a float, straight into the sink when it can. */
+void iris_write_float_spec(int sink, IrisString *dst, double v, int bits, int prec, int kind, int plus,
+                           int64_t width, int fill, int align, int zero) {
+    char buf[64];
+    int n = kind != 'e' ? fmtFixedBuf(buf, v, prec < 0 ? 6 : prec, plus) : -1;
+    if (n >= 0) {
+        padBytes(sink, dst, buf, n, width, fill, align, zero, -1);
+        return;
+    }
+    IrisString s = {0};
+    iris_fmt_float(&s, v, bits, prec, kind, plus);
+    iris_write_padded(sink, dst, &s, width, fill, align, zero, -1);
+}
+
+/* {s:>10} for text, straight into the sink. */
+void iris_write_str_spec(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                         int64_t maxChars) {
+    padBytes(sink, dst, p ? p : "", len, width, fill, align, 0, maxChars);
+}
+
+static void padBytes(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                     int zero, int64_t maxChars) {
+    int64_t chars;
     if (maxChars >= 0) {
-        len = runePrefix(s->ptr, s->len, maxChars, &chars);
+        len = runePrefix(p, len, maxChars, &chars);
+    } else if (width > 0) {
+        runePrefix(p, len, INT64_MAX, &chars);
     } else {
-        runePrefix(s->ptr, s->len, INT64_MAX, &chars);
+        put(sink, dst, p, (size_t)len);
+        return;
     }
     int64_t pad = width > chars ? width - chars : 0;
     char unit[4];
@@ -825,7 +1040,6 @@ void iris_write_padded(int sink, IrisString *dst, IrisString *s, int64_t width, 
         unit[3] = (char)(0x80 | (fill & 0x3f));
         ulen = 4;
     }
-    const char *p = s->ptr ? s->ptr : "";
     if (zero) {
         /* -0042: the sign first */
         int64_t sign = len > 0 && (p[0] == '-' || p[0] == '+') ? 1 : 0;
@@ -838,7 +1052,6 @@ void iris_write_padded(int sink, IrisString *dst, IrisString *s, int64_t width, 
         put(sink, dst, p, (size_t)len);
         putRepeated(sink, dst, unit, ulen, pad - before);
     }
-    iris_string_free(s);
 }
 
 /* A float in the fewest digits that read back as the same value, written
@@ -1964,10 +2177,28 @@ typedef struct Sched {
 static _Thread_local Sched *mySched;
 static int liveThreads = 1;
 
+/* A hint to the CPU that this is a spin loop. */
+static inline void cpuRelax(void) {
+#if defined(__x86_64__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+void iris_cpu_pause(void) { cpuRelax(); }
+
+/* Held for a few instructions at a time: spin a little before giving the
+   CPU away. */
 static void spinLock(int *l) {
     while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
+        int spins = 0;
         while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
-            sched_yield();
+            if (++spins < 128) {
+                cpuRelax();
+            } else {
+                sched_yield();
+            }
         }
     }
 }
@@ -3000,14 +3231,39 @@ typedef struct {
     int lock;
     int locked;
     Waiter *head, *tail;
+    void *owner;                /* the holder's thread (its mainTask), when locked */
 } Mutex;
+
+/* This thread, as a Mutex's owner. */
+static inline void *thisThread(void) { return (void *)&mainTask; }
 
 void iris_mutex_lock(Mutex *m) {
     spinLock(&m->lock);
     if (!m->locked) {
         m->locked = 1;
+        m->owner = thisThread();
         spinUnlock(&m->lock);
         return;
+    }
+    /* held by another thread: it is likely to let go within a moment, and
+       waiting a moment costs less than sleeping and being woken. Held by
+       a task of this thread, it can't let go while this one spins. */
+    if (m->owner != thisThread()) {
+        for (int i = 0; i < 100; i++) {
+            spinUnlock(&m->lock);
+            cpuRelax();
+            if (!__atomic_load_n(&m->locked, __ATOMIC_RELAXED)) {
+                spinLock(&m->lock);
+                if (!m->locked) {
+                    m->locked = 1;
+                    m->owner = thisThread();
+                    spinUnlock(&m->lock);
+                    return;
+                }
+            } else {
+                spinLock(&m->lock);
+            }
+        }
     }
     int claimed = 0;
     Waiter w = {.task = current, .claimed = &claimed};
@@ -3019,12 +3275,16 @@ void iris_mutex_lock(Mutex *m) {
     m->tail = &w;
     spinUnlock(&m->lock);
     schedule();                 /* unlock gave it the lock */
+    m->owner = thisThread();
 }
 
 bool iris_mutex_try_lock(Mutex *m) {
     spinLock(&m->lock);
     bool got = !m->locked;
     m->locked = 1;
+    if (got) {
+        m->owner = thisThread();
+    }
     spinUnlock(&m->lock);
     return got;
 }
@@ -3043,13 +3303,181 @@ void iris_mutex_unlock(Mutex *m, const char *file, int line, int col, const char
         }
         claim(w);
         Task *t = w->task;
+        m->owner = NULL;        /* the waiter sets itself when it runs */
         spinUnlock(&m->lock);
         wakeTask(t);
         return;
     }
     m->locked = 0;
+    m->owner = NULL;
     spinUnlock(&m->lock);
 }
+
+/* The spins below are short on purpose: four threads hammering one lock
+   went 5 times faster with 3 tries than with 100, since a thread that
+   sleeps stops fighting over the lock's cache line. */
+/* sync.RwLock: many readers or one writer. One atomic word holds the
+   readers, a writer bit and a bit that says tasks are waiting; while that
+   bit is set every caller goes the slow way, under the queue lock, so the
+   queues and the word agree. Readers and writers that can't enter spin a
+   moment, then wait in a queue. A writer that leaves lets the waiting
+   readers in first, then the next writer, so neither side waits for ever. */
+#define RW_READERS 0x3fffffffLL
+#define RW_WRITER (1LL << 30)
+#define RW_WAITERS (1LL << 31)
+#define RW_PENDING (1LL << 32)          /* a writer spins for the lock: readers keep out */
+
+typedef struct {
+    int64_t state;
+    int qlock;
+    WaitQueue readQ, writeQ;
+} RwLock;
+
+/* Someone left and tasks wait: after readers the next writer is woken,
+   after a writer the waiting readers are. A woken task tries again, ahead
+   of newcomers; nothing is handed over before it runs, so a woken task
+   that runs late holds no one up. */
+static void rwWakeNext(RwLock *l, bool readersFirst) {
+    spinLock(&l->qlock);
+    Waiter *wake[64];
+    int n = 0;
+    if (l->readQ.head && (readersFirst || !l->writeQ.head)) {
+        while (l->readQ.head && n < 64) {
+            Waiter *r = takeWaiter(&l->readQ);
+            if (!r) break;
+            wake[n++] = r;
+        }
+    } else if (l->writeQ.head) {
+        Waiter *w = takeWaiter(&l->writeQ);
+        if (w) wake[n++] = w;
+    }
+    if (!l->readQ.head && !l->writeQ.head) {
+        __atomic_fetch_and(&l->state, ~RW_WAITERS, __ATOMIC_ACQ_REL);
+    }
+    spinUnlock(&l->qlock);
+    for (int i = 0; i < n; i++) wakeTask(wake[i]->task);
+}
+
+/* Marks that tasks wait, against the state s just seen; false when the
+   state changed meanwhile and must be looked at again. */
+static bool rwMarkWaiting(RwLock *l, int64_t s) {
+    return (s & RW_WAITERS) ||
+           __atomic_compare_exchange_n(&l->state, &s, s | RW_WAITERS, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+}
+
+void iris_rw_read_lock(RwLock *l) {
+    /* an add always succeeds, where a compare-and-swap retries under
+       contention; taken back when a writer holds the lock or waits */
+    if (!(__atomic_load_n(&l->state, __ATOMIC_RELAXED) & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+        int64_t old = __atomic_fetch_add(&l->state, 1, __ATOMIC_ACQUIRE);
+        if (!(old & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            return;
+        }
+        int64_t back = __atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
+        if ((back & RW_WAITERS) && (back & RW_READERS) == 0) rwWakeNext(l, false);
+    }
+    for (int i = 0; i < 3; i++) {
+        int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+        if (!(s & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            if (__atomic_compare_exchange_n(&l->state, &s, s + 1, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+            continue;
+        }
+        cpuRelax();
+    }
+    bool woken = false;
+    for (;;) {
+        spinLock(&l->qlock);
+        for (;;) {
+            int64_t s = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+            /* a woken reader goes in when no writer holds the lock; a new
+               one also waits behind writers that wait */
+            if (!(s & RW_WRITER) && (woken || (!(s & RW_PENDING) && !l->writeQ.head))) {
+                if (__atomic_compare_exchange_n(&l->state, &s, s + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    spinUnlock(&l->qlock);
+                    return;
+                }
+                continue;
+            }
+            if (rwMarkWaiting(l, s)) break;
+        }
+        int claimed = 0;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&l->readQ, &w);
+        spinUnlock(&l->qlock);
+        schedule();
+        woken = true;
+    }
+}
+
+int iris_rw_read_unlock(RwLock *l) {
+    int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+    if ((s & RW_READERS) == 0) return 0;
+    s = __atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
+    if ((s & RW_WAITERS) && (s & RW_READERS) == 0) rwWakeNext(l, false);
+    return 1;
+}
+
+void iris_rw_write_lock(RwLock *l) {
+    for (int i = 0; i < 3; i++) {
+        int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+        if (s == 0) {
+            if (__atomic_compare_exchange_n(&l->state, &s, RW_WRITER, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+            continue;
+        }
+        if (!(s & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            /* only readers: keep new ones out and wait for these to leave */
+            if (!__atomic_compare_exchange_n(&l->state, &s, s | RW_PENDING, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                continue;
+            }
+            for (int k = 0; k < 5; k++) {
+                int64_t t = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+                /* not past tasks in the queue: they go first, by rwWakeNext */
+                if ((t & (RW_READERS | RW_WRITER | RW_WAITERS)) == 0 &&
+                    __atomic_compare_exchange_n(&l->state, &t, (t & ~RW_PENDING) | RW_WRITER, false, __ATOMIC_ACQ_REL,
+                                                __ATOMIC_RELAXED)) {
+                    return;
+                }
+                cpuRelax();
+            }
+            /* too long: let go, and let in the readers that waited for this */
+            int64_t old = __atomic_fetch_and(&l->state, ~RW_PENDING, __ATOMIC_ACQ_REL);
+            if (old & RW_WAITERS) rwWakeNext(l, true);
+            break;
+        }
+        cpuRelax();
+    }
+    bool woken = false;
+    for (;;) {
+        spinLock(&l->qlock);
+        for (;;) {
+            int64_t s = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+            if ((s & (RW_WRITER | RW_READERS)) == 0 && (woken || (!l->writeQ.head && !l->readQ.head))) {
+                if (__atomic_compare_exchange_n(&l->state, &s, s | RW_WRITER, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    spinUnlock(&l->qlock);
+                    return;
+                }
+                continue;
+            }
+            if (rwMarkWaiting(l, s)) break;
+        }
+        int claimed = 0;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&l->writeQ, &w);
+        spinUnlock(&l->qlock);
+        schedule();
+        woken = true;
+    }
+}
+
+int iris_rw_write_unlock(RwLock *l) {
+    int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+    if (!(s & RW_WRITER)) return 0;
+    int64_t old = __atomic_fetch_and(&l->state, ~RW_WRITER, __ATOMIC_RELEASE);
+    if (old & RW_WAITERS) rwWakeNext(l, true);
+    return 1;
+}
+
+int iris_rw_size(void) { return (int)sizeof(RwLock); }
 
 /* ---------------------------------------------------------------- net */
 

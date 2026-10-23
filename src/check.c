@@ -467,7 +467,7 @@ static int64_t typeSize(Type *t) {
     case TY_INT: case TY_FLOAT: return t->bits / 8;
     case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD: return 8;
     case TY_ATOMIC: return typeSize(t->elem);
-    case TY_MUTEX: return 24;
+    case TY_MUTEX: return 32;
     case TY_SLICE: return 16;
     case TY_STRING: return 24;
     case TY_ERRVAL: case TY_ERRCODE: return 8;

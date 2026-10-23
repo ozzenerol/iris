@@ -1,9 +1,9 @@
 import big
 
 !void main() {
-    // 5000! by multiplication, and its decimal text
+    // 20000! by multiplication, and its decimal text
     big.Int f = big.from(1)
-    for i in 2..5001 {
+    for i in 2..20001 {
         k := big.from(i)
         next := f.mul(k)
         f.free()
@@ -18,7 +18,7 @@ import big
     scoped m := p.sub(big.from(159))
     scoped e := try big.parse("65537")
     i64 check = 0
-    for i in 0..100 {
+    for i in 0..300 {
         scoped b := big.from(i + 3)
         scoped bb := b.pow(300)
         scoped r := bb.modPow(e, m)

@@ -304,28 +304,13 @@ pub (i32, i64) decodeRune(str s, i64 at) {
     if at < 0 || at >= s.len {
         return (REPLACEMENT, 0)
     }
-    b0 := i32(s[at])
-    if b0 < 0x80 {
-        return (b0, 1)
-    }
-    i64 n = if b0 >> 5 == 6 { 2 } else if b0 >> 4 == 14 { 3 } else if b0 >> 3 == 30 { 4 } else { 0 }
-    if n == 0 || at + n > s.len {
-        return (REPLACEMENT, 1)
-    }
-    i32 r = if n == 2 { b0 & 0x1f } else if n == 3 { b0 & 0x0f } else { b0 & 0x07 }
-    for k in 1..n {
-        b := i32(s[at + k])
-        if b >> 6 != 2 {
-            return (REPLACEMENT, 1)
-        }
-        r = r << 6 | (b & 0x3f)
-    }
-    // too long a form, a surrogate, or past the last code point
-    if (n == 2 && r < 0x80) || (n == 3 && r < 0x800) || (n == 4 && r < 0x10000) || (r >= 0xd800 && r <= 0xdfff) || r > 0x10ffff {
-        return (REPLACEMENT, 1)
-    }
+    i64 n
+    r := rawDecode(s.ptr, s.len, at, &n)
     return (r, n)
 }
+
+@extern("iris_utf8_decode")
+i32 rawDecode(u8 *p, i64 len, i64 at, i64 *n)
 
 // The characters of a text, for a loop: for r in s.runes() { }.
 pub struct Runes {
@@ -340,6 +325,11 @@ pub (i32, bool) Runes.next(i64 *at) {
     if *at >= self.text.len {
         return (0, false)
     }
+    b := self.text[*at]
+    if b < 0x80 {
+        *at += 1
+        return (i32(b), true)
+    }
     r, n := decodeRune(self.text, *at)
     *at += n
     return (r, true)
@@ -348,6 +338,10 @@ pub (i32, bool) Runes.next(i64 *at) {
 // How many characters (code points) s has; bytes that aren't UTF-8 count
 // one each.
 pub i64 runeCount(str s) {
+    valid := rawCount(s.ptr, s.len)
+    if valid >= 0 {
+        return valid
+    }
     i64 count = 0
     i64 at = 0
     for at < s.len {
@@ -362,22 +356,14 @@ pub i64 runeCount(str s) {
     return count
 }
 
+@extern("iris_utf8_valid")
+i32 rawValid(u8 *p, i64 n)
+
+@extern("iris_utf8_count")
+i64 rawCount(u8 *p, i64 n)
+
 // Whether s is all UTF-8.
-pub bool validUtf8(str s) {
-    i64 at = 0
-    for at < s.len {
-        if s[at] < 0x80 {
-            at += 1
-            continue
-        }
-        r, n := decodeRune(s, at)
-        if r == REPLACEMENT && n == 1 {
-            return false
-        }
-        at += n
-    }
-    return true
-}
+pub bool validUtf8(str s) => rawValid(s.ptr, s.len) == 1
 
 // Adds the UTF-8 bytes of character r to out; a value that isn't a
 // character adds REPLACEMENT.

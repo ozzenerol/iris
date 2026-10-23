@@ -193,13 +193,69 @@
    "rust_mem": 13.5,
    "go": 149090,
    "go_mem": 43.9
+  },
+  "fmt-text": {
+   "iris": 0.243,
+   "iris_out": "90888890 4830859398",
+   "iris_mem": 88.5,
+   "iris_safe": 0.234,
+   "iris_safe_out": "90888890 4830859398",
+   "iris_safe_mem": 88.5,
+   "rust": 0.431,
+   "rust_out": "90888890 4830859398",
+   "rust_mem": 88.5,
+   "go": 0.734,
+   "go_out": "90888890 4830859398",
+   "go_mem": 390.7
+  },
+  "utf8": {
+   "iris": 0.074,
+   "iris_out": "16800000 31109154",
+   "iris_mem": 17.6,
+   "iris_safe": 0.075,
+   "iris_safe_out": "16800000 31109154",
+   "iris_safe_mem": 17.6,
+   "rust": 0.053,
+   "rust_out": "16800000 31109154",
+   "rust_mem": 17.9,
+   "go": 0.115,
+   "go_out": "16800000 31109154",
+   "go_mem": 18.1
+  },
+  "bigint": {
+   "iris": 0.178,
+   "iris_out": "77338 181920632023 614105",
+   "iris_mem": 2.5,
+   "iris_safe": 0.193,
+   "iris_safe_out": "77338 181920632023 614105",
+   "iris_safe_mem": 2.6,
+   "rust": 0.067,
+   "rust_out": "77338 181920632023 614105",
+   "rust_mem": 2.4,
+   "go": 0.038,
+   "go_out": "77338 181920632023 614105",
+   "go_mem": 6.9
+  },
+  "rwlock": {
+   "iris": 0.051,
+   "iris_out": "400000",
+   "iris_mem": 2.0,
+   "iris_safe": 0.051,
+   "iris_safe_out": "400000",
+   "iris_safe_mem": 2.1,
+   "rust": 0.088,
+   "rust_out": "400000",
+   "rust_mem": 2.0,
+   "go": 0.019,
+   "go_out": "400000",
+   "go_mem": 1.8
   }
  },
  "setup": {
   "machine": "iris-testbench, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
-  "iris": "iris 0.65.0",
+  "iris": "iris 0.65.1",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-10-23 13:20"
+  "date": "2026-10-23 14:37"
  }
 }
