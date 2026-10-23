@@ -24,7 +24,7 @@ const INCLUDE = 4
 struct Cond {
     List[String] left
     bool negate
-    u8 op // 0 none, 1 ==, 2 !=
+    u8 op              // 0 none, 1 ==, 2 !=
     List[String] right // a name, when rightText is unset
     String rightText
     bool rightIsText
@@ -40,13 +40,13 @@ void Cond.free() {
 struct Node {
     u8 kind
     i64 line
-    String text // TEXT's text, INCLUDE's name
+    String text       // TEXT's text, INCLUDE's name
     List[String] name // VALUE's and FOR's list
     bool raw
     Cond cond
     List[Node] body
     List[Node] other // IF's else, FOR's else
-    String key // FOR's names: {{ for key, item in list }}, key "" without one
+    String key       // FOR's names: {{ for key, item in list }}, key "" without one
     String item
 }
 
@@ -416,7 +416,7 @@ pub !Template load(str dir, str main = "") {
 
 // A value from the data, as JSON has them.
 struct Value {
-    u8 kind // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
+    u8 kind     // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
     String text // a string's text, a number as written
     bool b
     List[Value] items
@@ -591,8 +591,7 @@ Value JsonReader.value() {
         return o
     }
     start := self.pos
-    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' &&
-        self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
+    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' && self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
         self.pos += 1
     }
     w := self.t[start:self.pos]
@@ -676,7 +675,6 @@ String joined(List[String] *name) {
     }
     return out
 }
-
 
 // text with &, <, >, " and ' written as entities, for HTML.
 pub String escape(str text) {

@@ -181,8 +181,7 @@ bool Parser.newline() {
 // The word at pos, for messages.
 str Parser.word() {
     i64 end = self.pos
-    for end < self.t.len && self.t[end] != ' ' && self.t[end] != '\t' && self.t[end] != '\n' &&
-        self.t[end] != '\r' && self.t[end] != ',' && self.t[end] != ']' && self.t[end] != '}' {
+    for end < self.t.len && self.t[end] != ' ' && self.t[end] != '\t' && self.t[end] != '\n' && self.t[end] != '\r' && self.t[end] != ',' && self.t[end] != ']' && self.t[end] != '}' {
         end += 1
     }
     return self.t[self.pos:end]
@@ -426,8 +425,7 @@ i64 twoDigits(str s, i64 at) => i64(s[at] - '0') * 10 + i64(s[at + 1] - '0')
 
 // HH:MM:SS with an optional fraction, at the pos; the end, or -1.
 i64 timeEnd(str s, i64 at) {
-    if !digitsAt(s, at, 2) || at + 8 > s.len || s[at + 2] != ':' || !digitsAt(s, at + 3, 2) ||
-        s[at + 5] != ':' || !digitsAt(s, at + 6, 2) {
+    if !digitsAt(s, at, 2) || at + 8 > s.len || s[at + 2] != ':' || !digitsAt(s, at + 3, 2) || s[at + 5] != ':' || !digitsAt(s, at + 6, 2) {
         return -1
     }
     if twoDigits(s, at) > 23 || twoDigits(s, at + 3) > 59 || twoDigits(s, at + 6) > 60 {
@@ -458,8 +456,7 @@ i64 timeEnd(str s, i64 at) {
             return self.fail("\"{self.word()}\" is not a time")
         }
     } else {
-        if !digitsAt(s, start, 4) || start + 10 > s.len || s[start + 4] != '-' || !digitsAt(s, start + 5, 2) ||
-            s[start + 7] != '-' || !digitsAt(s, start + 8, 2) {
+        if !digitsAt(s, start, 4) || start + 10 > s.len || s[start + 4] != '-' || !digitsAt(s, start + 5, 2) || s[start + 7] != '-' || !digitsAt(s, start + 8, 2) {
             return self.fail("\"{self.word()}\" is not a date")
         }
         month := twoDigits(s, start + 5)
@@ -1170,8 +1167,7 @@ void JsonReader.spaces() {
         }
     }
     start := self.pos
-    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' &&
-        self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
+    for self.pos < self.t.len && self.t[self.pos] != ',' && self.t[self.pos] != ']' && self.t[self.pos] != '}' && self.t[self.pos] != ' ' && self.t[self.pos] != '\n' {
         self.pos += 1
     }
     w := self.t[start:self.pos]
