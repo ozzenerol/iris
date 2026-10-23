@@ -91,6 +91,8 @@ path = "../bigint/main.rs"
 [[bin]]
 name = "rwlock"
 path = "../rwlock/main.rs"
+
+[[bin]]
 name = "heap"
 path = "../heap/main.rs"
 
