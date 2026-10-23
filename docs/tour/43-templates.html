@@ -38,7 +38,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.67.1</span>
+    <span class="ver">v0.68.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -243,15 +243,58 @@ User=shop</code></pre>
 }</code></pre>
 <pre class="out"><code>TemplateError.syntax: line 1: {{ if }} has no {{ end }}
 TemplateError.missing: line 2: subtitle is not in the data</code></pre>
+<h2 id="serving-pages"><a href="#serving-pages">Serving pages</a></h2>
+<p>A web server parses its templates in <code>main</code>, keeps them where its handlers can reach them, and renders one for each request. <code>res.html</code> answers with the page and sets the <code>Content-Type</code> to HTML (see <a href="33-http.html">HTTP</a>):</p>
+<pre class="code run"><code><span class="k">import</span> http, net, template
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Hello</span> {
+    <span class="t">String</span> name
+}
+
+template.<span class="t">Template</span> page
+
+!<span class="t">void</span> <span class="f">hello</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    name := req.<span class="f">query</span>(<span class="s">&quot;name&quot;</span>)
+    <span class="k">scoped</span> <span class="t">Hello</span> h = <span class="t">Hello</span>{name: (<span class="k">if</span> name.len &gt; <span class="n">0</span> { name } <span class="k">else</span> { <span class="s">&quot;stranger&quot;</span> }).<span class="f">copy</span>()}
+    <span class="k">scoped</span> <span class="t">String</span> html = <span class="k">try</span> page.<span class="f">render</span>(h)
+    res.<span class="f">html</span>(html)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, net.<span class="t">Listener</span> ln) {
+    r.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;server: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    page = <span class="k">try</span> template.<span class="f">parse</span>(<span class="s">r&quot;&quot;&quot;&lt;p&gt;Hello, {{ name }}!&lt;/p&gt;&quot;&quot;&quot;</span>)
+    <span class="k">defer</span> page.<span class="f">free</span>()
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">get</span>(<span class="s">&quot;/&quot;</span>, hello)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;r, ln)
+
+    <span class="k">for</span> query <span class="k">in</span> [<span class="s">&quot;&quot;</span>, <span class="s">&quot;?name=Ada&quot;</span>, <span class="s">&quot;?name=&lt;b&gt;Ada&lt;/b&gt;&quot;</span>] {
+        <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/</span><span class="e">{</span>query<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">scoped</span> http.<span class="t">Reply</span> reply = <span class="k">try</span> http.<span class="f">get</span>(url)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reply.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span>reply.body<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>text/html; charset=utf-8: &lt;p&gt;Hello, stranger!&lt;/p&gt;
+text/html; charset=utf-8: &lt;p&gt;Hello, Ada!&lt;/p&gt;
+text/html; charset=utf-8: &lt;p&gt;Hello, &amp;lt;b&amp;gt;Ada&amp;lt;/b&amp;gt;!&lt;/p&gt;</code></pre>
+<p>The tags in the last name came out as text, so a visitor can't add HTML to the page. <code>req.query</code> gives the value as it was sent; a browser writes <code>&lt;</code> as <code>%3C</code>, and <code>url.decode</code> turns it back (see <a href="40-encodings-and-ids.html#urls">Encodings and ids</a>).</p>
 <p><code>template.escape(text)</code> escapes any text for HTML the same way, for the rare page built without a template.</p>
     <nav class="pager"><a class="prev" href="42-compression-and-archives.html"><span>Previous</span>Compression and archives</a><a class="next" href="44-postgres-and-redis.html"><span>Next</span>PostgreSQL and Redis</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#filling-in-values">Filling in values</a></li><li><a href="#conditions">Conditions</a></li><li><a href="#loops">Loops</a></li><li><a href="#data-from-a-map">Data from a Map</a></li><li><a href="#pages-made-of-parts">Pages made of parts</a></li><li><a href="#mistakes-in-a-template">Mistakes in a template</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#filling-in-values">Filling in values</a></li><li><a href="#conditions">Conditions</a></li><li><a href="#loops">Loops</a></li><li><a href="#data-from-a-map">Data from a Map</a></li><li><a href="#pages-made-of-parts">Pages made of parts</a></li><li><a href="#mistakes-in-a-template">Mistakes in a template</a></li><li><a href="#serving-pages">Serving pages</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.67.1</span>
+    <span>Iris v0.68.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../std/index.html">Library</a>
     <a href="../roadmap.html">Roadmap</a>
