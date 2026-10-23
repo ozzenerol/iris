@@ -356,7 +356,7 @@ true 1 -1
 8080 443 22
 ```
 
-`sort`, `min`, `max` and `binarySearch` compare with `<`, so they take numbers and `Duration`s. `binarySearch` needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. `contains` and `indexOf` compare with `==`. For other values, `sortBy(xs, less)` sorts with a function that says whether its first value goes before its second, as `List.sort` does, and `binarySearchBy(xs, v, less)` searches a slice sorted that way. Both sorts keep equal values in their order. `min` or `max` of an empty slice stops the program.
+`sort`, `min`, `max` and `binarySearch` compare with `<`, so they take numbers and `Duration`s. `binarySearch` needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. `contains` and `indexOf` compare with `==`. For other values, `sortBy(xs, less)` sorts with a function that says whether its first value goes before its second, as `List.sort` does, and `binarySearchBy(xs, v, less)` searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; `List.sort` keeps them in their order. `min` or `max` of an empty slice stops the program.
 
 ## Deque
 

@@ -3,10 +3,11 @@
 // ==, so they take numbers and Durations; sortBy and binarySearchBy take
 // any type.
 
-// Sorts the values from small to large. Values that are equal keep their
-// order.
+// Sorts the values from small to large, in place: it needs no memory of
+// its own. Values that are equal may change places; List.sort keeps them in
+// their order.
 pub void sort[T](T[] xs) {
-    if xs.len <= 16 {
+    if xs.len <= 20 {
         // the short ones here, so a T without < is an error at the call
         for i in 1..xs.len {
             v := xs[i]
@@ -19,16 +20,80 @@ pub void sort[T](T[] xs) {
         }
         return
     }
-    T[] tmp = alloc(T, xs.len)
-    defer free(tmp)
-    sortSmall(xs, tmp, 0, xs.len)
+    quicksort(xs, 0, xs.len, Ascending[T]{}, true, depthLimit(xs.len))
 }
 
-void insertionSort[T](T[] xs, i64 lo, i64 hi) {
+// Sorts the values in place: less says whether a goes before b. Values
+// that are equal may change places; List.sort keeps them in their order.
+pub void sortBy[T](T[] xs, bool(T, T) less) {
+    quicksort(xs, 0, xs.len, Using[T]{f: less}, true, depthLimit(xs.len))
+}
+
+// The orders the sorts are made with: c.less(a, b), so that < is compiled
+// into the sort and a function is called through its pointer.
+struct Ascending[T] {
+    u8 none
+}
+
+bool Ascending[T].less(T a, T b) => a < b
+
+struct Using[T] {
+    bool(T, T) f
+}
+
+bool Using[T].less(T a, T b) => self.f(a, b)
+
+// Twice the bits of n: past this many levels the sort turns to heapsort,
+// so no order of the values makes it slow.
+i64 depthLimit(i64 n) {
+    d := 0
+    for n > 1 {
+        n >>= 1
+        d += 2
+    }
+    return d
+}
+
+// A quicksort that looks for patterns: a pivot from three or nine values,
+// a partition without branches on what c says, values equal to an earlier
+// pivot set aside at once, and heapsort when it goes too deep.
+void quicksort[T, C](T[] xs, i64 lo, i64 hi, C c, bool leftmost, i64 limit) {
+    for {
+        n := hi - lo
+        if n <= 20 {
+            insertionSort(xs, lo, hi, c)
+            return
+        }
+        if limit == 0 {
+            heapSort(xs, lo, hi, c)
+            return
+        }
+        limit -= 1
+        choosePivot(xs, lo, hi, c)
+        // the value before lo goes before none here; when it isn't before
+        // the pivot either, it equals the pivot, and so do all the values
+        // that don't go after it: they are in place
+        if !leftmost && !c.less(xs[lo - 1], xs[lo]) {
+            lo = partitionEqual(xs, lo, hi, c)
+            continue
+        }
+        mid := partition(xs, lo, hi, c)
+        if mid - lo < hi - mid {
+            quicksort(xs, lo, mid, c, leftmost, limit)
+            lo = mid + 1
+            leftmost = false
+        } else {
+            quicksort(xs, mid + 1, hi, c, false, limit)
+            hi = mid
+        }
+    }
+}
+
+void insertionSort[T, C](T[] xs, i64 lo, i64 hi, C c) {
     for i in lo + 1..hi {
         v := xs[i]
         k := i
-        for k > lo && v < xs[k - 1] {
+        for k > lo && c.less(v, xs[k - 1]) {
             xs[k] = xs[k - 1]
             k -= 1
         }
@@ -36,42 +101,151 @@ void insertionSort[T](T[] xs, i64 lo, i64 hi) {
     }
 }
 
-void sortSmall[T](T[] xs, T[] tmp, i64 lo, i64 hi) {
-    if hi - lo <= 16 {
-        insertionSort(xs, lo, hi)
-        return
+// Which of a, b and c holds the middle value.
+i64 median[T, C](T[] xs, i64 a, i64 b, i64 m, C c) {
+    if c.less(xs[b], xs[a]) {
+        t := a
+        a = b
+        b = t
     }
-    mid := lo + (hi - lo) / 2
-    sortSmall(xs, tmp, lo, mid)
-    sortSmall(xs, tmp, mid, hi)
-    if !(xs[mid] < xs[mid - 1]) {
-        return
+    // xs[a] <= xs[b]
+    if c.less(xs[m], xs[a]) {
+        return a
     }
-    a := lo
-    b := mid
-    for k in lo..hi {
-        if a < mid && (b >= hi || !(xs[b] < xs[a])) {
-            tmp[k] = xs[a]
-            a += 1
-        } else {
-            tmp[k] = xs[b]
-            b += 1
+    if c.less(xs[b], xs[m]) {
+        return b
+    }
+    return m
+}
+
+// Puts the pivot at xs[lo]: the middle of three values, or of three
+// middles of three for a long run.
+void choosePivot[T, C](T[] xs, i64 lo, i64 hi, C c) {
+    n := hi - lo
+    mid := lo + n / 2
+    i64 p = 0
+    if n > 128 {
+        s := n / 8
+        a := median(xs, lo, lo + s, lo + 2 * s, c)
+        b := median(xs, mid - s, mid, mid + s, c)
+        d := median(xs, hi - 1 - 2 * s, hi - 1 - s, hi - 1, c)
+        p = median(xs, a, b, d, c)
+    } else {
+        p = median(xs, lo, mid, hi - 1, c)
+    }
+    v := xs[p]
+    xs[p] = xs[lo]
+    xs[lo] = v
+}
+
+// Splits the values after the pivot at xs[lo] into those before it and the
+// rest, and puts the pivot between them: its place. Blocks of values from
+// both ends are compared first, and the ones on the wrong side are swapped
+// after, so no branch waits on what c says.
+i64 partition[T, C](T[] xs, i64 lo, i64 hi, C c) {
+    p := xs[lo]
+    l := lo + 1
+    r := hi
+    u8[64] offL
+    u8[64] offR
+    i64 numL = 0
+    i64 numR = 0
+    i64 startL = 0
+    i64 startR = 0
+    // [lo + 1, l) go before p, [r, hi) don't, and the rest is still to see
+    for r - l > 2 * 64 {
+        if numL == 0 {
+            startL = 0
+            for i in 0..64 {
+                offL[numL] = u8(i)
+                numL = pick(c.less(xs[l + i], p), numL, numL + 1)
+            }
+        }
+        if numR == 0 {
+            startR = 0
+            for i in 0..64 {
+                offR[numR] = u8(i)
+                numR = pick(c.less(xs[r - 1 - i], p), numR + 1, numR)
+            }
+        }
+        num := if numL < numR { numL } else { numR }
+        for k in 0..num {
+            a := l + i64(offL[startL + k])
+            b := r - 1 - i64(offR[startR + k])
+            v := xs[a]
+            xs[a] = xs[b]
+            xs[b] = v
+        }
+        numL -= num
+        numR -= num
+        startL += num
+        startR += num
+        if numL == 0 {
+            l += 64
+        }
+        if numR == 0 {
+            r -= 64
         }
     }
-    for k in lo..hi {
-        xs[k] = tmp[k]
+    // what is left, fewer than three blocks
+    i := l
+    for j in l..r {
+        v := xs[j]
+        before := c.less(v, p)
+        xs[j] = xs[i]
+        xs[i] = v
+        i = pick(before, i + 1, i)
+    }
+    xs[lo] = xs[i - 1]
+    xs[i - 1] = p
+    return i - 1
+}
+
+// Puts the values that don't go after the pivot at xs[lo] first: where the
+// others start.
+i64 partitionEqual[T, C](T[] xs, i64 lo, i64 hi, C c) {
+    p := xs[lo]
+    i := lo + 1
+    for j in lo + 1..hi {
+        v := xs[j]
+        after := c.less(p, v)
+        xs[j] = xs[i]
+        xs[i] = v
+        i = pick(after, i, i + 1)
+    }
+    return i
+}
+
+void heapSort[T, C](T[] xs, i64 lo, i64 hi, C c) {
+    n := hi - lo
+    i := n / 2
+    for i > 0 {
+        i -= 1
+        siftDown(xs, lo, i, n, c)
+    }
+    end := n
+    for end > 1 {
+        end -= 1
+        v := xs[lo]
+        xs[lo] = xs[lo + end]
+        xs[lo + end] = v
+        siftDown(xs, lo, 0, end, c)
     }
 }
 
-// Sorts the values: less says whether a goes before b. Values that are
-// equal keep their order.
-pub void sortBy[T](T[] xs, bool(T, T) less) {
-    if xs.len < 2 {
-        return
+void siftDown[T, C](T[] xs, i64 lo, i64 i, i64 n, C c) {
+    v := xs[lo + i]
+    for {
+        k := 2 * i + 1
+        break if k >= n
+        if k + 1 < n && c.less(xs[lo + k], xs[lo + k + 1]) {
+            k += 1
+        }
+        break if !c.less(v, xs[lo + k])
+        xs[lo + i] = xs[lo + k]
+        i = k
     }
-    T[] tmp = alloc(T, xs.len)
-    defer free(tmp)
-    sortRange(xs, tmp, 0, xs.len, less)
+    xs[lo + i] = v
 }
 
 // Where v is in a sorted slice, and whether it is there. When it isn't,
@@ -157,4 +331,16 @@ pub T max[T](T[] xs) {
         }
     }
     return best
+}
+
+test "heapsort, for a sort that goes too deep" {
+    i64[] xs = alloc(i64, 1000)
+    defer free(xs)
+    for i in 0..xs.len {
+        xs[i] = (i * 7919) % 1009
+    }
+    quicksort(xs, 0, xs.len, Ascending[i64]{}, true, 0)
+    for i in 1..xs.len {
+        expect(xs[i - 1] <= xs[i], "{xs[i - 1]} before {xs[i]}")
+    }
 }

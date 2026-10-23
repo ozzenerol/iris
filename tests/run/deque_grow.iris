@@ -1,0 +1,55 @@
+// expect: ok
+
+// Growing while the values wrap round the end of the memory, with few or
+// many of them past the end, and past the size where it grows by half.
+void main() {
+    good := true
+    for front in [1, 3, 5, 7] {
+        Deque[i64] d
+        d.reserve(8)
+        // head moves back by front, then the rest goes at the back
+        for i in 0..front {
+            d.pushFront(-1 - i)
+        }
+        for i in 0..8 - front {
+            d.push(i)
+        }
+        d.push(100)
+        good = good && d.len == 9 && d.first() == i64(-front) && d.last() == 100
+        for i in 0..front {
+            good = good && d.at(i) == i64(-front + i)
+        }
+        for i in 0..8 - front {
+            good = good && d.at(front + i) == i
+        }
+        d.free()
+    }
+    Deque[i64] big
+    defer big.free()
+    for i in 0..300000 {
+        if i % 3 == 0 {
+            big.pushFront(i)
+        } else {
+            big.push(i)
+        }
+        if i % 7 == 0 {
+            _ = big.popFront()
+        }
+    }
+    // the front holds the multiples of 3 still there, newest first
+    prev := i64.max
+    i := 0
+    for i < big.len && big.at(i) % 3 == 0 {
+        good = good && big.at(i) < prev
+        prev = big.at(i)
+        i += 1
+    }
+    prev = -1
+    for i < big.len {
+        v := big.at(i)
+        good = good && v % 3 != 0 && v > prev
+        prev = v
+        i += 1
+    }
+    print(if good { "ok" } else { "bad" })
+}

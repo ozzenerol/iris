@@ -1,0 +1,72 @@
+// expect: ok 200000
+
+bool lower(i64 a, i64 b) => a < b
+
+// Random sets and removes, checked against a Map: order, first, last,
+// ranges, and the map emptied and filled again.
+void main() {
+    scoped SortedMap[i64, i64] m = SortedMap[i64, i64]{less: lower}
+    scoped Map[i64, i64] ref
+    u64 x = 88172645463325252
+    good := true
+    ops := 0
+    for round in 0..4 {
+        for i in 0..50000 {
+            x ^= x << 13
+            x ^= x >> 7
+            x ^= x << 17
+            k := i64(x % 20000)
+            // the last round mostly removes, and ends empty
+            if (x >> 40) % 3 == 0 || round == 3 {
+                gone := m.remove(k)
+                good = good && gone == ref.remove(k)
+            } else {
+                m.set(k, k + i64(round))
+                ref.set(k, k + i64(round))
+            }
+            ops += 1
+        }
+        if round == 3 {
+            for k in 0..20000 {
+                _ = m.remove(k)
+                _ = ref.remove(k)
+            }
+        }
+        good = good && m.len == ref.len
+        prev := -1
+        n := 0
+        for k, v in m {
+            want, there := ref.get(k)
+            good = good && there && want == v && k > prev
+            prev = k
+            n += 1
+        }
+        good = good && n == ref.len
+        if m.len > 0 {
+            f, _, _ := m.first()
+            l, _, _ := m.last()
+            scoped List[i64] keys = ref.keys()
+            sort(keys.items())
+            good = good && f == keys.at(0) && l == keys.last()
+            c := 0
+            for k, _ in m.range(5000, 6000) {
+                good = good && k >= 5000 && k < 6000
+                c += 1
+            }
+            e := 0
+            for k in 5000..6000 {
+                if ref.has(k) {
+                    e += 1
+                }
+            }
+            good = good && c == e
+        }
+    }
+    _, _, any := m.first()
+    good = good && !any && m.len == 0
+    for k in 0..1000 {
+        m.set(k, k)
+    }
+    good = good && m.len == 1000 && m.getOr(999, 0) == 999
+    print("{if good { "ok" } else { "bad" }} {ops}")
+}
