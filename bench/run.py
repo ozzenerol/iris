@@ -2,7 +2,7 @@
 # Builds every benchmark in Iris, Rust and Go, runs them and writes results.json.
 #   python3 bench/run.py [--iris PATH] [--runs N] [name...]
 # CPU benchmarks: median wall time and peak memory of N runs. Servers run on
-# cores 0-3 and the load generator (wrk, h2load, echo-load) on cores 4-7; their
+# half the cores and the load generator (wrk, h2load, echo-load) on the rest; their
 # memory is the server's peak. Iris is built twice: release-fast, and
 # release-safe, which keeps the bounds checks as Rust does.
 import argparse, json, os, platform, re, shutil, signal, socket, statistics, subprocess, sys, time
@@ -12,8 +12,12 @@ OUT = os.path.join(HERE, "out")
 CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "fannkuch-redux",
        "hashmap", "sort", "strings", "channels"]
 NET = ["http-hello", "http-json", "tcp-echo", "http2"]
-SERVER_CORES = "0-3"
-LOAD_CORES = "4-7"
+# the cores this process may use (a container may get any of the host's):
+# the first half runs servers, the rest the load, and one CPU program at a time
+_CORES = sorted(os.sched_getaffinity(0))
+SERVER_CORES = ",".join(map(str, _CORES[:len(_CORES) // 2]))
+LOAD_CORES = ",".join(map(str, _CORES[len(_CORES) // 2:]))
+CPU_CORE = str(_CORES[min(2, len(_CORES) - 1)])
 LOAD_TIME = 10
 ORDER = json.dumps({"id": 7, "customer": "Ana Pop", "items": [
     {"name": "cable", "qty": 2, "price": 4.5}, {"name": "router", "qty": 1, "price": 89.99},
@@ -43,7 +47,7 @@ def timed(binary, runs):
     for _ in range(runs):
         mem = f"{OUT}/mem.txt"
         t = time.perf_counter()
-        out = sh(["taskset", "-c", "2", f"{OUT}/memrun", mem, binary])
+        out = sh(["taskset", "-c", CPU_CORE, f"{OUT}/memrun", mem, binary])
         times.append(time.perf_counter() - t)
         mems.append(int(open(mem).read()) / 1024)
         outs.add(out)

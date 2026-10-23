@@ -78,6 +78,7 @@ struct HPage {
     uint32_t blockSize, capacity, bumped;
     uint16_t cls;
     uint8_t where;                      /* 0 nowhere, 1 its class's list, 2 the full list, 3 free pages */
+    uint8_t zeroed;                     /* the blocks not given out yet are zero: fresh from the system */
     _Atomic int full;
     _Atomic int delayed;                /* on the heap's delayed stack */
     _Atomic(Heap *) heap;
@@ -192,6 +193,7 @@ static bool heapGrow(Heap *h) {
     for (size_t i = SEG_PAGES - 1; i >= 1; i--) {
         HPage *pg = &s->pages[i];
         pg->start = seg + i * PAGE_SIZE;
+        pg->zeroed = 1;
         atomic_store(&pg->heap, h);
         listPushPage(&h->freePages, pg, 3);
         h->nFree++;
@@ -221,8 +223,10 @@ static void retirePage(Heap *h, HPage *pg) {
     atomic_store(&pg->full, 0);
     pg->free = NULL;
     pg->bumped = 0;
+    pg->zeroed = 0;
     if (h->nFree >= 64) {
         madvise(pg->start, PAGE_SIZE, MADV_DONTNEED);
+        pg->zeroed = 1;
     }
     listPushPage(&h->freePages, pg, 3);
     h->nFree++;
@@ -261,13 +265,19 @@ static void drainDelayed(Heap *h) {
     }
 }
 
+/* whether the last block taken was zero already: never given out, on a
+   page fresh from the system */
+static _Thread_local bool tookZeroed;
+
 static void *takeBlock(HPage *pg) {
     void *b = pg->free;
     if (b) {
         pg->free = *(void **)b;
+        tookZeroed = false;
     } else {
         b = pg->start + (size_t)pg->bumped * pg->blockSize;
         pg->bumped++;
+        tookZeroed = pg->zeroed;
     }
     pg->used++;
     return b;
@@ -363,8 +373,23 @@ void *iris_calloc(size_t count, size_t size) {
     if (size && count > SIZE_MAX / size) return NULL;
     size_t n = count * size;
     if (n > SMALL_MAX) return calloc(count, size);
-    void *p = iris_malloc(n);
-    if (p) memset(p, 0, n);
+    Heap *h = myHeap;
+    if (!h && !(h = heapNew())) return calloc(count, size);
+    int cls = classOf(n);
+    HPage *pg = h->cur[cls];
+    void *p;
+    if (pg && pg->free) {
+        p = pg->free;
+        pg->free = *(void **)p;
+        pg->used++;
+    } else {
+        p = mallocSlow(h, cls);
+        if (!p) return calloc(count, size);
+        if (tookZeroed) {
+            return p;   /* untouched memory: zeroing it would only fault its pages in */
+        }
+    }
+    memset(p, 0, n);
     return p;
 }
 
@@ -452,9 +477,11 @@ void iris_out_of_memory(void) {
 /* Makes room for n more bytes. p may point into s itself (s.append(s[2:]))
    and moves with the buffer. */
 __attribute__((noinline)) static void stringGrow(IrisString *s, const char **p, int64_t n) {
-    int64_t cap = s->cap ? s->cap * 2 : 16;
+    /* doubles while small; past 1 MiB grows by half, so a big String
+       keeps less unused room (realloc moves big blocks without copying) */
+    int64_t cap = s->cap ? s->cap : 16;
     while (cap < s->len + n) {
-        cap *= 2;
+        cap = cap < (1 << 20) ? cap * 2 : cap + cap / 2;
     }
     bool inside = s->ptr && *p >= s->ptr && *p < s->ptr + s->len;
     int64_t at = inside ? *p - s->ptr : 0;
@@ -1939,7 +1966,7 @@ enum {
     RING_FEAT_EXT_ARG = 1 << 8,
     RING_ENTER_GETEVENTS = 1 << 0,
     RING_ENTER_EXT_ARG = 1 << 3,
-    RING_ENTRIES = 1024,
+    RING_ENTRIES = 256,         /* a full ring is submitted and refilled */
 };
 
 typedef struct {

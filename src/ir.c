@@ -495,11 +495,18 @@ static void nullCheck(IR *ir, const char *p, Node *at) {
 
 /* calloc called straight from the program, so LLVM sees an allocation it
  * can inline around; out of memory stops the program as iris_alloc does. */
-static const char *emitCalloc(IR *ir, const char *size, const char *count) {
+static const char *emitCalloc(IR *ir, const char *size, const char *count, int64_t bytes) {
     const char *p = tmp(ir), *z = tmp(ir), *total = tmp(ir);
-    /* malloc and a memset LLVM can see: stores that follow take its place */
+    /* small: malloc and a memset LLVM can see, so stores that follow take
+     * its place; big: iris_calloc, which doesn't touch memory that is zero
+     * already */
+    bool big = bytes >= 256;
     ins(ir, "%s = mul i64 %s, %s", total, size, count);
-    ins(ir, "%s = call ptr @iris_malloc(i64 %s)", p, total);
+    if (big) {
+        ins(ir, "%s = call ptr @iris_calloc(i64 %s, i64 %s)", p, count, size);
+    } else {
+        ins(ir, "%s = call ptr @iris_malloc(i64 %s)", p, total);
+    }
     ins(ir, "%s = icmp eq ptr %s, null", z, p);
     int fail = newLabel(ir), ok = newLabel(ir);
     ins(ir, "br i1 %s, label %%L%d, label %%L%d, !prof !0", z, fail, ok);
@@ -511,7 +518,9 @@ static const char *emitCalloc(IR *ir, const char *size, const char *count) {
     ir->terminated = true;
     sbPrintf(&ir->body, "L%d:\n", ok);
     ir->terminated = false;
-    ins(ir, "call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %s, i1 false)", p, total);
+    if (!big) {
+        ins(ir, "call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %s, i1 false)", p, total);
+    }
     return p;
 }
 
@@ -1545,7 +1554,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
         }
         if (count->isConst && count->cval > 0 && count->cval < (INT64_C(1) << 31)) {
             /* a count known when compiling: no checks are needed */
-            return makeSlice(ir, emitCalloc(ir, size, n.s), n.s, e->type);
+            return makeSlice(ir, emitCalloc(ir, size, n.s, count->cval * typeSizeOf(t)), n.s, e->type);
         }
         ins(ir, "%s = call ptr @iris_alloc(i64 %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", p, size, n.s,
             ir->fileStr, e->line, e->col, fnName(ir));
@@ -3046,7 +3055,7 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     const char *szp = tmp(ir), *sz = tmp(ir);
     ins(ir, "%s = getelementptr %s, ptr null, i64 1", szp, envTy);
     ins(ir, "%s = ptrtoint ptr %s to i64", sz, szp);
-    const char *mem = emitCalloc(ir, sz, "1");
+    const char *mem = emitCalloc(ir, sz, "1", 0);
     if (indirect) {
         const char *f0 = tmp(ir);
         ins(ir, "%s = getelementptr %s, ptr %s, i32 0, i32 0", f0, envTy, mem);
@@ -3862,6 +3871,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_out_of_memory() noreturn\n"
            "declare noalias ptr @iris_malloc(i64)\n"
+           "declare noalias ptr @iris_calloc(i64, i64)\n"
            "declare void @iris_free(ptr)\n"
            "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"

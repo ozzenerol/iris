@@ -20,7 +20,9 @@ void growSlice()
 // Adds a value at the end.
 pub void List[T].push(T value) {
     if self.len == self.buf.len {
-        self.reserve(if self.buf.len == 0 { 8 } else { self.buf.len * 2 })
+        // doubles while small; past 1 MiB grows by half, to keep less unused room
+        n := self.buf.len
+        self.reserve(if n == 0 { 8 } else if n * sizeof(T) < 1MiB { n * 2 } else { n + n / 2 })
     }
     self.buf[self.len] = value
     self.len += 1
