@@ -216,3 +216,23 @@ pub void Multipart.free() {
     self.body.free()
     self.boundary.free()
 }
+
+// value with %XX (and + in a query) decoded, kept with the request, which
+// frees it; value itself when there is nothing to decode or it isn't valid.
+str Request.decoded(str value, bool query) {
+    if !str.contains(value, "%") && !(query && str.contains(value, "+")) {
+        return value
+    }
+    String v
+    if query {
+        v = url.decode(value) catch e {
+            return value
+        }
+    } else {
+        v = url.decodePath(value) catch e {
+            return value
+        }
+    }
+    self.kept.push(v)
+    return v
+}

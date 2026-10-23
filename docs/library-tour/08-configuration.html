@@ -180,13 +180,13 @@ bodyBytes = 1048576
         &quot;&quot;&quot;</span>
     <span class="k">scoped</span> toml.<span class="t">Value</span> doc = <span class="k">try</span> toml.<span class="f">parse</span>(text)
     services := doc.<span class="f">get</span>(<span class="s">&quot;services&quot;</span>)
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..services.<span class="f">len</span>() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..services.len {
         s := services.<span class="f">at</span>(i)
         port := s.<span class="f">get</span>(<span class="s">&quot;port&quot;</span>)
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>services.keys.<span class="f">at</span>(i)<span class="e">}</span><span class="s">: </span><span class="e">{</span>s.<span class="f">get</span>(<span class="s">&quot;replicas&quot;</span>).int<span class="e">}</span><span class="s"> replicas, has a port: </span><span class="e">{</span>port != <span class="k">null</span><span class="e">}</span><span class="s">&quot;</span>)
     }
     queues := services.<span class="f">get</span>(<span class="s">&quot;worker&quot;</span>).<span class="f">get</span>(<span class="s">&quot;queues&quot;</span>)
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..queues.<span class="f">len</span>() {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..queues.len {
         <span class="f">print</span>(<span class="s">&quot;queue </span><span class="e">{</span>queues.<span class="f">at</span>(i).text<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
@@ -279,9 +279,10 @@ port 9000, timeout 10s, debug true</code></pre>
 
 <span class="a">@json</span>
 <span class="k">struct</span> <span class="t">Config</span> {
-    <span class="t">String</span> listen
+    <span class="t">String</span> listen = <span class="s">&quot;127.0.0.1&quot;</span>
     <span class="t">u16</span> port = <span class="n">8080</span>
     <span class="t">i64</span> workers = <span class="n">4</span>
+    <span class="t">String</span> logLevel = <span class="s">&quot;info&quot;</span>
 }
 
 !<span class="t">Config</span> <span class="f">load</span>(<span class="t">str</span> text) {
@@ -301,9 +302,9 @@ port 9000, timeout 10s, debug true</code></pre>
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">try</span> os.<span class="f">setenv</span>(<span class="s">&quot;APP_WORKERS&quot;</span>, <span class="s">&quot;16&quot;</span>)
     <span class="k">scoped</span> <span class="t">Config</span> c = <span class="k">try</span> <span class="f">load</span>(<span class="s">&quot;listen = </span><span class="e">\&quot;</span><span class="s">0.0.0.0</span><span class="e">\&quot;</span><span class="e">\n</span><span class="s">port = 80</span><span class="e">\n</span><span class="s">&quot;</span>)
-    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.listen<span class="e">}</span><span class="s">:</span><span class="e">{</span>c.port<span class="e">}</span><span class="s"> with </span><span class="e">{</span>c.workers<span class="e">}</span><span class="s"> workers&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.listen<span class="e">}</span><span class="s">:</span><span class="e">{</span>c.port<span class="e">}</span><span class="s"> with </span><span class="e">{</span>c.workers<span class="e">}</span><span class="s"> workers, logging </span><span class="e">{</span>c.logLevel<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
-<pre class="out"><code>0.0.0.0:80 with 16 workers</code></pre>
+<pre class="out"><code>0.0.0.0:80 with 16 workers, logging info</code></pre>
 <p>A field the file leaves out keeps the default from the struct, the file changes it, and the environment has the last word.</p>
     <nav class="pager"><a class="prev" href="07-terminal.html"><span>Previous</span>Terminal output and input</a><a class="next" href="09-regular-expressions.html"><span>Next</span>Regular expressions</a></nav>
   </article>

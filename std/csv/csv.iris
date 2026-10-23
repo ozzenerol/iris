@@ -35,7 +35,7 @@ pub struct Reader {
 pub Reader reader(str text) => Reader{text: text, line: 1}
 
 // The next record. At the end it fails with CsvError.end.
-pub !Record Reader.read() {
+pub !Record Reader.next() {
     if self.pos >= self.text.len {
         return error(CsvError.end, "no more records")
     }
@@ -103,7 +103,7 @@ pub !List[Record] parse(str text) {
     errdefer out.freeEach()
     rd := reader(text)
     for {
-        r := rd.read() catch e {
+        r := rd.next() catch e {
             if e.code == CsvError.end {
                 return out
             }

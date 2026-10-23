@@ -237,11 +237,7 @@ user</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">Rules</span> r = <span class="f">rules</span>()
-    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;api-1&quot;</span>, <span class="s">&quot;Api&quot;</span>, <span class="s">&quot;db&quot;</span>]
-    <span class="t">str</span>[<span class="n">3</span>] ports = [<span class="s">&quot;8080&quot;</span>, <span class="s">&quot;80&quot;</span>, <span class="s">&quot;54321x&quot;</span>]
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
-        name := names[i]
-        port := ports[i]
+    <span class="k">for</span> (name, port) <span class="k">in</span> [(<span class="s">&quot;api-1&quot;</span>, <span class="s">&quot;8080&quot;</span>), (<span class="s">&quot;Api&quot;</span>, <span class="s">&quot;80&quot;</span>), (<span class="s">&quot;db&quot;</span>, <span class="s">&quot;54321x&quot;</span>)] {
         <span class="k">if</span> !r.name.<span class="f">matches</span>(name) {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s">: a name is lower case letters, digits and -&quot;</span>)
         } <span class="k">else</span> <span class="k">if</span> !r.port.<span class="f">matches</span>(port) {

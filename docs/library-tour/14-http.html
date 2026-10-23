@@ -91,7 +91,7 @@ try {
 }</code></pre>
 <pre class="out"><code>200 hello</code></pre>
 <h2 id="paths"><a href="#paths">Paths</a></h2>
-<p><code>:name</code> in a path takes one part of it, and <code>*name</code> all the rest. The handler reads them with <code>req.param</code>. <code>req.query</code> gives a value from the query, after the <code>?</code>, and <code>&quot;&quot;</code> when it isn't there:</p>
+<p><code>:name</code> in a path takes one part of it, and <code>*name</code> all the rest. The handler reads them with <code>req.param</code>. <code>req.query</code> gives a value from the query, after the <code>?</code>, and <code>&quot;&quot;</code> when it isn't there. Both give the value with its <code>%XX</code> decoded, and <code>req.query</code> turns <code>+</code> into a space too, as browsers send it:</p>
 <pre class="code run"><code><span class="k">import</span> http, net, <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">user</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {

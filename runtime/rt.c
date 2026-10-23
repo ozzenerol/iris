@@ -485,7 +485,16 @@ __attribute__((noinline)) static void stringGrow(IrisString *s, const char **p, 
     }
     bool inside = s->ptr && *p >= s->ptr && *p < s->ptr + s->len;
     int64_t at = inside ? *p - s->ptr : 0;
-    char *q = realloc(s->ptr, (size_t)cap);
+    char *q;
+    if (s->cap == 0 && s->ptr) {
+        /* borrowed text, such as a field's default: copied, not moved */
+        q = malloc((size_t)cap);
+        if (q) {
+            memcpy(q, s->ptr, (size_t)s->len);
+        }
+    } else {
+        q = realloc(s->ptr, (size_t)cap);
+    }
     if (!q) {
         outOfMemory();
     }
@@ -533,7 +542,15 @@ void iris_string_append(IrisString *s, const char *p, int64_t n) {
 /* s.reserve(n): room for n more bytes, so appends up to that don't grow it. */
 void iris_string_reserve(IrisString *s, int64_t n) {
     if (n > 0 && s->len + n > s->cap) {
-        char *q = realloc(s->ptr, (size_t)(s->len + n));
+        char *q;
+        if (s->cap == 0 && s->ptr) {
+            q = malloc((size_t)(s->len + n));
+            if (q) {
+                memcpy(q, s->ptr, (size_t)s->len);
+            }
+        } else {
+            q = realloc(s->ptr, (size_t)(s->len + n));
+        }
         if (!q) {
             outOfMemory();
         }
@@ -582,8 +599,12 @@ void iris_string_insert(IrisString *s, int64_t at, const char *p, int64_t n, con
     if (copy && copy != small) free(copy);
 }
 
+/* A String with no room of its own (cap 0) borrows its text, as a field's
+ * default does, and has nothing to free. */
 void iris_string_free(IrisString *s) {
-    free(s->ptr);
+    if (s->cap) {
+        free(s->ptr);
+    }
     s->ptr = NULL;
     s->len = s->cap = 0;
 }

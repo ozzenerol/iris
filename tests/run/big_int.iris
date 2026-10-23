@@ -35,7 +35,7 @@ import big
     scoped inv := big.from(3).modPow(ex, m)
     print("{inv}")
     scoped g := big.from(84).gcd(big.from(-36))
-    print("{g} {a.cmp(b)} {b.sign()} {big.from(-5).shr(1)} {big.from(5).shl(70)}")
+    print("{g} {a.compare(b)} {b.sign()} {big.from(-5).shr(1)} {big.from(5).shl(70)}")
     print("{(try big.parse("-9223372036854775808")).toI64() catch 0} {f.toI64() catch -1}")
     scoped bad := big.parse("12x") catch e {
         print("{e.code}: {e.message}")

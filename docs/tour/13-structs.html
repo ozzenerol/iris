@@ -82,6 +82,22 @@ try {
 <pre class="out"><code>localhost:8080 false 30s
 localhost:9000 true 30s</code></pre>
 <p>A default is a value known when compiling. Defaults apply wherever a value is made without one: a field left out of a literal, a variable or a global declared with no value (<code>Config c</code>), the items of an array of structs, and a struct inside another struct. Memory from <code>alloc</code> is the exception: it is all zeros, as it comes.</p>
+<p>A <code>String</code> field can have text as its default. The field borrows that text, so making the value allocates nothing, and freeing the field frees nothing. The first change to the field copies the text into memory of its own, and from then on it is an ordinary <code>String</code>:</p>
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Server</span> {
+    <span class="t">String</span> name = <span class="s">&quot;edge&quot;</span>
+    <span class="t">u16</span> port = <span class="n">443</span>
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Server</span>{}
+    t := <span class="t">Server</span>{port: <span class="n">8443</span>}
+    t.name.<span class="f">append</span>(<span class="s">&quot;-2&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.name<span class="e">}</span><span class="s">:</span><span class="e">{</span>s.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>t.name<span class="e">}</span><span class="s">:</span><span class="e">{</span>t.port<span class="e">}</span><span class="s">&quot;</span>)
+    s.name.<span class="f">free</span>()
+    t.name.<span class="f">free</span>()
+}</code></pre>
+<pre class="out"><code>edge:443 edge-2:8443</code></pre>
+<p>This suits <code>@json</code> structs read from a file, whose fields keep their defaults when the file leaves them out (see <a href="../library-tour/08-configuration.html">Configuration files</a>).</p>
 <p>When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Endpoint</span> {
     <span class="t">str</span> host

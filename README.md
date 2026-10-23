@@ -23,10 +23,10 @@ Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris 
 | binary-trees | binary trees, depth 21 (s) | 6.35 | **6.33** | 8.28 | 17.39 | 130 / 258 / 276 |
 | hashmap | 10M inserts and lookups, int keys (s) | **0.90** | 0.95 | 1.14 | 2.12 | 418 / 410 / 366 |
 | sort | quicksort of 10M ints (s) | **0.57** | 0.58 | 0.59 | 0.60 | 78 / 78 / 78 |
-| strings | build, count, split, replace (s) | **0.18** | 0.19 | 0.27 | 0.49 | 187 / 187 / 239 |
+| strings | build, count, split, replace (s) | **0.18** | 0.18 | 0.26 | 0.46 | 186 / 187 / 230 |
 | channels | ping-pong, then 1000 tasks on one channel (s) | 0.22 | **0.22** | 10.67 | 0.57 | 6 / 3 / 4 |
-| http-hello | HTTP/1.1 hello, wrk (req/s) | 381k | **395k** | 372k | 230k | 5 / 10 / 19 |
-| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **367k** | 365k | 333k | 144k | 6 / 11 / 20 |
+| http-hello | HTTP/1.1 hello, wrk (req/s) | 384k | **389k** | 371k | 228k | 6 / 11 / 19 |
+| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **366k** | 364k | 337k | 143k | 6 / 11 / 21 |
 | tcp-echo | TCP echo, 100 connections (msg/s) | 367k | **380k** | 363k | 292k | 4 / 3 / 5 |
 | http2 | HTTP/2 hello, h2load (req/s) | **2,044k** | 2,037k | 744k | 149k | 22 / 14 / 43 |
 | tcp-proxy | TCP proxy, 64-byte messages, 100 connections (msg/s) | 190k | **190k** | 187k | 157k | 4 / 4 / 6 |

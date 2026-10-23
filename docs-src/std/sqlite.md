@@ -22,7 +22,7 @@ import sqlite
 
 ```output
 id 1
-SqlError.constraint
+SqliteError.constraint
 1 changed
 ```
 
@@ -30,7 +30,7 @@ The values are `.int`, `.float`, `.text` and `.none` for NULL. Without values, t
 
 ## Rows into structs
 
-`sqlite.all` runs a query and gives a `List` of `@json` structs, each field filled from the column of the same name; `sqlite.one` gives the first row, or fails with `SqlError.noRows`:
+`sqlite.all` runs a query and gives a `List` of `@json` structs, each field filled from the column of the same name; `sqlite.one` gives the first row, or fails with `SqliteError.noRows`:
 
 ```iris run
 import sqlite

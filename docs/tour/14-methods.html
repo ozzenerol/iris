@@ -127,7 +127,7 @@ try {
 <p>A method that can fail returns <code>!T</code> like any function, and a function that makes a value and can fail returns <code>!Type</code>.</p>
 <h2 id="methods-the-language-uses"><a href="#methods-the-language-uses">Methods the language uses</a></h2>
 <p>Some method names make a struct work with parts of the language:</p>
-<div class="table"><table><thead><tr><th>Method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code> calls it, and so does <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>the struct's text, when it is put into text with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td>a <code>for</code> loop's values, one round at a time</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code> calls it, and so does <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>the struct's text, when it is put into text with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td>a <code>for</code> loop's values, one round at a time</td></tr><tr><td><code>i64 len()</code></td><td><code>x.len</code>, as a <code>List</code>, a <code>String</code> and a slice have it</td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">PortRange</span> {
     <span class="t">u16</span> first
     <span class="t">u16</span> last
@@ -155,6 +155,21 @@ try {
 8080
 8081
 8082</code></pre>
+<p>A struct with a <code>len()</code> method and no <code>len</code> field can be read with <code>.len</code>, so every kind of collection gives its length the same way:</p>
+<pre class="code run"><code><span class="k">struct</span> <span class="t">Ring</span> {
+    <span class="t">i64</span>[<span class="n">8</span>] items
+    <span class="t">i64</span> start
+    <span class="t">i64</span> count
+}
+
+<span class="t">i64</span> <span class="t">Ring</span>.<span class="f">len</span>() =&gt; <span class="k">self</span>.count
+
+<span class="t">void</span> <span class="f">main</span>() {
+    r := <span class="t">Ring</span>{count: <span class="n">3</span>}
+    p := &amp;r
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>r.<span class="f">len</span>()<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>3 3 3</code></pre>
 <p>Methods with the names an interface lists let the struct be used where that interface is wanted (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="methods-through-embedding"><a href="#methods-through-embedding">Methods through embedding</a></h2>
 <p>The methods of an embedded struct can be called on the outer one, and get the embedded struct as <code>self</code>:</p>

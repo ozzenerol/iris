@@ -1,0 +1,43 @@
+// expect: localhost:9000 prod
+// expect: db.lan:8080 dev
+// expect: localhost.internal dev
+// expect: anon! 5
+// expect: anon
+// expect: anon
+
+import json, toml
+
+@json
+struct Config {
+    String host = "localhost"
+    u16 port = 8080
+    String mode = "dev"
+}
+
+struct Plain {
+    String name = "anon"
+    i64 n
+}
+
+!void main() {
+    scoped Config a = try toml.decode[Config]("port = 9000\nmode = \"prod\"")
+    print("{a.host}:{a.port} {a.mode}")
+    scoped Config b = try json.decode(Config, r"""{"host": "db.lan"}""")
+    print("{b.host}:{b.port} {b.mode}")
+    Config c
+    c.host.append(".internal")
+    print("{c.host} {c.mode}")
+    c.free()
+    x := 5
+    p := Plain{n: x}
+    p.name.append("!")
+    print("{p.name} {p.n}")
+    p.name.free()
+    q := Plain{}
+    print(q.name)
+    q.name.free()
+    List[Plain] ps
+    ps.push(Plain{n: 1})
+    print("{ps.at(0).name}")
+    ps.free()
+}

@@ -73,9 +73,9 @@ import toml
     db := doc.get("database")
     print("{doc.get("title").text}: {db.get("host").text}, pool {db.get("pool").get("max").int}")
     ports := doc.get("ports")
-    print("{ports.len()} ports, the first {ports.at(0).int}, a {ports.at(0).kind}")
+    print("{ports.len} ports, the first {ports.at(0).int}, a {ports.at(0).kind}")
     print("no user: {db.get("user") == null}")
-    for i in 0..db.len() {
+    for i in 0..db.len {
         print("{db.keys.at(i)} is a {db.at(i).kind}")
     }
 }

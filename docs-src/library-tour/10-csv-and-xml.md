@@ -16,7 +16,7 @@ import csv
     for r in rows.items()[1:] {
         print("{r.at(0)}:{r.at(1)} [{r.at(2)}]")
     }
-    print("{rows.len} records, {rows.at(0).len()} fields each")
+    print("{rows.len} records, {rows.at(0).len} fields each")
 }
 ```
 
@@ -28,7 +28,7 @@ cache:6379 [says "hi"]
 
 The first record is the header here, so the loop starts after it. `freeEach` frees every record and then the list.
 
-A large file is read a record at a time with `csv.reader(text)`, whose `read` gives the next record and fails with `CsvError.end` when there are no more. `sep` sets another separator, and `line` is the line the next record starts on, for messages about bad input:
+A large file is read a record at a time with `csv.reader(text)`, whose `next` gives the next record and fails with `CsvError.end` when there are no more. `sep` sets another separator, and `line` is the line the next record starts on, for messages about bad input:
 
 ```iris run
 import csv
@@ -37,11 +37,11 @@ import csv
     text := "name;bytes\nindex.html;5120\nlogo.png;20480\napp.js;x\n"
     rd := csv.reader(text)
     rd.sep = ";"
-    scoped csv.Record header = try rd.read()
+    scoped csv.Record header = try rd.next()
     i64 total = 0
     for {
         at := rd.line
-        r := rd.read() catch e {
+        r := rd.next() catch e {
             if e.code != csv.CsvError.end {
                 print("{e.message}")
             }

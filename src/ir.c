@@ -2613,6 +2613,11 @@ static Val emitStructLit(IR *ir, Node *e) {
         }
         if (!value && f->kind == N_FIELD) {
             value = f->b;
+            if (value && f->type->kind == TY_STRING) {
+                /* a String's default: the text, borrowed */
+                acc = structSet(ir, t, acc, i, val(constValue(ir, value, f->type), f->type), e);
+                continue;
+            }
         }
         if (!value) {
             if (f->type && hasDefaults(f->type)) {
@@ -2764,6 +2769,12 @@ static Val emitExpr(IR *ir, Node *e) {
     case N_CALL:
         return emitCall(ir, e);
     case N_FIELD_ACCESS: {
+        if (e->builtin == 4 && e->a->type && e->a->type->kind == TY_TUPLE) {
+            Val v = emitExpr(ir, e->a);
+            const char *r = tmp(ir);
+            ins(ir, "%s = extractvalue %s %s, %llu", r, llType(ir, v.t), v.s, (unsigned long long)e->ival);
+            return val(r, e->type);
+        }
         if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin == 3) {
             Val v = emitExpr(ir, e->a);
             const char *r = tmp(ir);
@@ -3797,6 +3808,14 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
     case TY_SLICE: {
         const char *g = stringConst(ir, v->text, v->textLen);
         return fmt(ir, "{ ptr %s, i64 %zu }", g, v->textLen);
+    }
+    case TY_STRING: {
+        /* a String field's default: it borrows the text, with no room of its own */
+        if (v->kind != N_STRING || !v->textLen) {
+            return "zeroinitializer";
+        }
+        const char *g = stringConst(ir, v->text, v->textLen);
+        return fmt(ir, "{ ptr %s, i64 %zu, i64 0 }", g, v->textLen);
     }
     case TY_BOOL:
         return v->cval ? "true" : "false";

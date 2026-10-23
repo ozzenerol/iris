@@ -54,6 +54,30 @@ localhost:9000 true 30s
 
 A default is a value known when compiling. Defaults apply wherever a value is made without one: a field left out of a literal, a variable or a global declared with no value (`Config c`), the items of an array of structs, and a struct inside another struct. Memory from `alloc` is the exception: it is all zeros, as it comes.
 
+A `String` field can have text as its default. The field borrows that text, so making the value allocates nothing, and freeing the field frees nothing. The first change to the field copies the text into memory of its own, and from then on it is an ordinary `String`:
+
+```iris run
+struct Server {
+    String name = "edge"
+    u16 port = 443
+}
+
+void main() {
+    s := Server{}
+    t := Server{port: 8443}
+    t.name.append("-2")
+    print("{s.name}:{s.port} {t.name}:{t.port}")
+    s.name.free()
+    t.name.free()
+}
+```
+
+```output
+edge:443 edge-2:8443
+```
+
+This suits `@json` structs read from a file, whose fields keep their defaults when the file leaves them out (see [Configuration files](../library-tour/08-configuration.html)).
+
 When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:
 
 ```iris run

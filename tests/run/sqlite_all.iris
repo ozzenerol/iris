@@ -1,6 +1,6 @@
 // expect: 2 ada zoe
 // expect: zoe 41
-// expect: SqlError.noRows
+// expect: SqliteError.noRows
 
 import sqlite
 

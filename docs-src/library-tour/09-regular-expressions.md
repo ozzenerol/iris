@@ -276,11 +276,7 @@ void Rules.free() {
 
 void main() {
     scoped Rules r = rules()
-    str[3] names = ["api-1", "Api", "db"]
-    str[3] ports = ["8080", "80", "54321x"]
-    for i in 0..3 {
-        name := names[i]
-        port := ports[i]
+    for (name, port) in [("api-1", "8080"), ("Api", "80"), ("db", "54321x")] {
         if !r.name.matches(name) {
             print("{name}: a name is lower case letters, digits and -")
         } else if !r.port.matches(port) {

@@ -774,7 +774,7 @@ String withoutUnderscores(str s) {
         return t.get(key)
     }
     if v.kind == .array && v.how == TABLES {
-        return v.at(v.len() - 1)
+        return v.at(v.len - 1)
     }
     if v.kind != .table {
         return self.fail("{key} is not a table")
@@ -855,7 +855,7 @@ String withoutUnderscores(str s) {
         Value n = table()
         n.how = HEADER
         v.push(n)
-        return v.at(v.len() - 1)
+        return v.at(v.len - 1)
     }
     if v == null {
         Value n = table()
@@ -959,7 +959,7 @@ void writeInline(String *out, Value *v) {
         .boolean => out.append(if v.boolean { "true" } else { "false" })
         .array => {
             out.append("[")
-            for i in 0..v.len() {
+            for i in 0..v.len {
                 if i > 0 {
                     out.append(", ")
                 }
@@ -969,7 +969,7 @@ void writeInline(String *out, Value *v) {
         }
         .table => {
             out.append("{{")
-            for i in 0..v.len() {
+            for i in 0..v.len {
                 if i > 0 {
                     out.append(", ")
                 }
@@ -984,10 +984,10 @@ void writeInline(String *out, Value *v) {
 
 // Whether v is written as [[tables]]: an array with only tables in it.
 bool isTables(Value *v) {
-    if v.kind != .array || v.len() == 0 {
+    if v.kind != .array || v.len == 0 {
         return false
     }
-    for i in 0..v.len() {
+    for i in 0..v.len {
         if v.at(i).kind != .table {
             return false
         }
@@ -999,7 +999,7 @@ bool isSection(Value *v) => v.kind == .table || isTables(v)
 
 // The key = value lines of t, then its tables under their headers.
 void writeTable(String *out, Value *t, str path) {
-    for i in 0..t.len() {
+    for i in 0..t.len {
         v := t.at(i)
         if isSection(v) {
             continue
@@ -1009,7 +1009,7 @@ void writeTable(String *out, Value *t, str path) {
         writeInline(out, v)
         out.append("\n")
     }
-    for i in 0..t.len() {
+    for i in 0..t.len {
         v := t.at(i)
         if !isSection(v) {
             continue
@@ -1022,8 +1022,8 @@ void writeTable(String *out, Value *t, str path) {
         }
         writeKey(&sub, t.keys.at(i))
         if v.kind == .table {
-            bool plain = v.len() == 0
-            for k in 0..v.len() {
+            bool plain = v.len == 0
+            for k in 0..v.len {
                 if !isSection(v.at(k)) {
                     plain = true
                 }
@@ -1037,7 +1037,7 @@ void writeTable(String *out, Value *t, str path) {
             writeTable(out, v, sub)
             continue
         }
-        for k in 0..v.len() {
+        for k in 0..v.len {
             if out.len > 0 {
                 out.append("\n")
             }
@@ -1075,7 +1075,7 @@ void toJson(String *out, Value *v) {
         .boolean => out.append(if v.boolean { "true" } else { "false" })
         .array => {
             out.append("[")
-            for i in 0..v.len() {
+            for i in 0..v.len {
                 if i > 0 {
                     out.append(",")
                 }
@@ -1085,7 +1085,7 @@ void toJson(String *out, Value *v) {
         }
         .table => {
             out.append("{{")
-            for i in 0..v.len() {
+            for i in 0..v.len {
                 if i > 0 {
                     out.append(",")
                 }

@@ -58,7 +58,7 @@ try {
     db := <span class="k">try</span> pg.<span class="f">pool</span>(address, <span class="n">20</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT version()&quot;</span>)
-    <span class="k">defer</span> rows.<span class="f">free</span>()
+    <span class="k">defer</span> rows.<span class="f">close</span>()
     _ = rows.<span class="f">next</span>()
     <span class="f">print</span>(rows.<span class="f">text</span>(<span class="n">0</span>)[<span class="n">0</span>:<span class="n">13</span>])
 }</code></pre>
@@ -80,10 +80,8 @@ try {
             stock int NOT NULL DEFAULT 0
         );
         &quot;&quot;&quot;</span>)
-    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;green tea&quot;</span>, <span class="s">&quot;lemon cake&quot;</span>, <span class="s">&quot;coffee&quot;</span>]
-    <span class="t">f64</span>[<span class="n">3</span>] prices = [<span class="n">3.5</span>, <span class="n">4.25</span>, <span class="n">2.8</span>]
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
-        _ = <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price, stock) VALUES ($1, $2, $3)&quot;</span>, [.<span class="f">text</span>(names[i]), .<span class="f">float</span>(prices[i]), .<span class="f">int</span>(<span class="n">10</span>)])
+    <span class="k">for</span> (name, price) <span class="k">in</span> [(<span class="s">&quot;green tea&quot;</span>, <span class="n">3.5</span>), (<span class="s">&quot;lemon cake&quot;</span>, <span class="n">4.25</span>), (<span class="s">&quot;coffee&quot;</span>, <span class="n">2.8</span>)] {
+        _ = <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price, stock) VALUES ($1, $2, $3)&quot;</span>, [.<span class="f">text</span>(name), .<span class="f">float</span>(price), .<span class="f">int</span>(<span class="n">10</span>)])
     }
     n := <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE products SET stock = stock - 1 WHERE price &lt; $1&quot;</span>, [.<span class="f">float</span>(<span class="n">4.0</span>)])
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> rows changed&quot;</span>)
@@ -96,7 +94,7 @@ try {
 PgError.constraint: duplicate key value violates unique constraint &quot;products_name_key&quot;: Key (name)=(coffee) already exists. (23505)</code></pre>
 <p>A statement that the server refuses fails with <code>PgError.failed</code>, or <code>PgError.constraint</code> for a <code>UNIQUE</code>, <code>NOT NULL</code>, foreign key or <code>CHECK</code> that isn't met. The message has the server's text, with its SQLSTATE code in brackets.</p>
 <h2 id="reading-rows"><a href="#reading-rows">Reading rows</a></h2>
-<p><code>query</code> gives <code>pg.Rows</code>. <code>pg.all[T](rows)</code> reads every row into a <code>@json</code> struct, each field from the column of the same name, and <code>pg.one[T](rows)</code> reads the first row, or fails with <code>PgError.noRows</code>:</p>
+<p><code>pg.all[T](&amp;db, sql, values)</code> runs a query and reads every row into a <code>@json</code> struct, each field from the column of the same name, and <code>pg.one[T]</code> reads the first row, or fails with <code>PgError.noRows</code>. Both take a <code>Pool</code>, a <code>Conn</code> or a transaction, as <code>sqlite.all</code> and <code>sqlite.one</code> take a <code>Db</code>:</p>
 <pre class="code"><code><span class="k">import</span> os, pg
 
 <span class="a">@json</span>
@@ -110,7 +108,7 @@ PgError.constraint: duplicate key value violates unique constraint &quot;product
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
-    products := <span class="k">try</span> pg.all[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE stock &gt; $1 ORDER BY price&quot;</span>, [.<span class="f">int</span>(<span class="n">0</span>)]))
+    products := <span class="k">try</span> pg.all[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM products WHERE stock &gt; $1 ORDER BY price&quot;</span>, [.<span class="f">int</span>(<span class="n">0</span>)])
     <span class="k">defer</span> {
         <span class="k">for</span> p <span class="k">in</span> products {
             p.<span class="f">free</span>()
@@ -120,9 +118,9 @@ PgError.constraint: duplicate key value violates unique constraint &quot;product
     <span class="k">for</span> p <span class="k">in</span> products {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.id<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>p.price<span class="e">}</span><span class="s">, </span><span class="e">{</span>p.stock<span class="e">}</span><span class="s"> left&quot;</span>)
     }
-    <span class="k">scoped</span> <span class="t">Product</span> cake = <span class="k">try</span> pg.one[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE name = $1&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;lemon cake&quot;</span>)]))
+    <span class="k">scoped</span> <span class="t">Product</span> cake = <span class="k">try</span> pg.one[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM products WHERE name = $1&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;lemon cake&quot;</span>)])
     <span class="f">print</span>(<span class="s">&quot;cake is </span><span class="e">{</span>cake.id<span class="e">}</span><span class="s">&quot;</span>)
-    _ = pg.one[<span class="t">Product</span>](<span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT * FROM products WHERE id = $1&quot;</span>, [.<span class="f">int</span>(<span class="n">99</span>)])) <span class="k">catch</span> e {
+    _ = pg.one[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM products WHERE id = $1&quot;</span>, [.<span class="f">int</span>(<span class="n">99</span>)]) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="t">Product</span>{}
     }
@@ -132,14 +130,14 @@ PgError.constraint: duplicate key value violates unique constraint &quot;product
 2 lemon cake: 4.25, 10 left
 cake is 2
 PgError.noRows</code></pre>
-<p><code>Rows</code> can be read one row at a time too: <code>next</code> moves to the next row, and <code>int</code>, <code>float</code>, <code>bool</code>, <code>text</code> and <code>isNull</code> read a column by its number, from 0. The whole result has come back from the server by the time <code>query</code> returns, so <code>len</code> is the number of rows:</p>
+<p><code>query</code> gives <code>pg.Rows</code>, which can be read one row at a time too: <code>next</code> moves to the next row, and <code>int</code>, <code>float</code>, <code>bool</code>, <code>text</code> and <code>isNull</code> read a column by its number, from 0. The whole result has come back from the server by the time <code>query</code> returns, so <code>len</code> is the number of rows. <code>close</code> gives their memory back:</p>
 <pre class="code"><code><span class="k">import</span> os, pg
 
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT count(*), sum(stock), avg(price)::float8 FROM products&quot;</span>)
-    <span class="k">defer</span> rows.<span class="f">free</span>()
+    <span class="k">defer</span> rows.<span class="f">close</span>()
     _ = rows.<span class="f">next</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> products, </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> in stock, </span><span class="e">{</span>rows.<span class="f">float</span>(<span class="n">2</span>):.<span class="n">2</span><span class="e">}</span><span class="s"> on average&quot;</span>)
 }</code></pre>
@@ -152,7 +150,7 @@ PgError.noRows</code></pre>
 !<span class="t">bool</span> <span class="f">order</span>(pg.<span class="t">Pool</span> *db, <span class="t">str</span> product, <span class="t">i64</span> count) {
     <span class="k">scoped</span> tx := <span class="k">try</span> db.<span class="f">begin</span>()
     rows := <span class="k">try</span> tx.<span class="f">query</span>(<span class="s">&quot;SELECT stock FROM products WHERE name = $1 FOR UPDATE&quot;</span>, [.<span class="f">text</span>(product)])
-    <span class="k">defer</span> rows.<span class="f">free</span>()
+    <span class="k">defer</span> rows.<span class="f">close</span>()
     <span class="k">if</span> !rows.<span class="f">next</span>() || rows.<span class="f">int</span>(<span class="n">0</span>) &lt; count {
         <span class="k">return</span> <span class="k">false</span>
     }
@@ -167,7 +165,7 @@ PgError.noRows</code></pre>
     <span class="f">print</span>(<span class="s">&quot;4 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">4</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;50 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">50</span>)<span class="e">}</span><span class="s">&quot;</span>)
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT stock FROM products WHERE name = &#x27;coffee&#x27;&quot;</span>)
-    <span class="k">defer</span> rows.<span class="f">free</span>()
+    <span class="k">defer</span> rows.<span class="f">close</span>()
     _ = rows.<span class="f">next</span>()
     <span class="f">print</span>(<span class="s">&quot;coffee left: </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
@@ -236,10 +234,8 @@ job: resize 2.png</code></pre>
     db := <span class="k">try</span> redis.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;REDIS_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;redis://localhost:6379&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     _ = <span class="k">try</span> db.<span class="f">del</span>([<span class="s">&quot;scores&quot;</span>])
-    <span class="t">str</span>[<span class="n">3</span>] names = [<span class="s">&quot;ada&quot;</span>, <span class="s">&quot;linus&quot;</span>, <span class="s">&quot;grace&quot;</span>]
-    <span class="t">str</span>[<span class="n">3</span>] scores = [<span class="s">&quot;310&quot;</span>, <span class="s">&quot;120&quot;</span>, <span class="s">&quot;450&quot;</span>]
-    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
-        <span class="k">scoped</span> redis.<span class="t">Reply</span> r = <span class="k">try</span> db.<span class="f">do</span>([<span class="s">&quot;ZADD&quot;</span>, <span class="s">&quot;scores&quot;</span>, scores[i], names[i]])
+    <span class="k">for</span> (name, score) <span class="k">in</span> [(<span class="s">&quot;ada&quot;</span>, <span class="s">&quot;310&quot;</span>), (<span class="s">&quot;linus&quot;</span>, <span class="s">&quot;120&quot;</span>), (<span class="s">&quot;grace&quot;</span>, <span class="s">&quot;450&quot;</span>)] {
+        <span class="k">scoped</span> redis.<span class="t">Reply</span> r = <span class="k">try</span> db.<span class="f">do</span>([<span class="s">&quot;ZADD&quot;</span>, <span class="s">&quot;scores&quot;</span>, score, name])
     }
     <span class="k">scoped</span> redis.<span class="t">Reply</span> top = <span class="k">try</span> db.<span class="f">do</span>([<span class="s">&quot;ZREVRANGE&quot;</span>, <span class="s">&quot;scores&quot;</span>, <span class="s">&quot;0&quot;</span>, <span class="s">&quot;1&quot;</span>, <span class="s">&quot;WITHSCORES&quot;</span>])
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..top.items.len / <span class="n">2</span> {

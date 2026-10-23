@@ -25,7 +25,7 @@ import csv, str
     print(str.trimRight(line))
     rd := csv.reader(line)
     rd.sep = ";"
-    back := try rd.read()
+    back := try rd.next()
     defer back.free()
     print("[{back.at(0)}] [{back.at(1)}] [{back.at(2)}] [{back.at(3)}]")
 }

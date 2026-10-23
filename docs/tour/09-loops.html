@@ -113,7 +113,7 @@ listening on 8082</code></pre>
 stopping in 6s
 stopping in 2s</code></pre>
 <h2 id="over-items"><a href="#over-items">Over items</a></h2>
-<p><code>for x in items</code> goes over the items of an array, a slice, a <code>str</code> (its bytes), a <code>List</code> or a <code>Map</code>. With two names, an array, a slice or a <code>str</code> gives each item's index first:</p>
+<p><code>for x in items</code> goes over the items of an array, a slice, a <code>str</code> (its bytes), a <code>List</code> or a <code>Map</code>. With two names, an array, a slice or a <code>str</code> gives each item's index first. Names in parentheses take a tuple apart, as <code>for (name, port) in [(&quot;api&quot;, 8080)]</code> does (see <a href="16-tuples-and-aliases.html">Tuples</a>):</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports = [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>, <span class="n">8080</span>]
     <span class="k">for</span> p <span class="k">in</span> ports {

@@ -131,7 +131,7 @@ path /v1/users, query page=2&amp;q=lo%20ve, fragment top
 <pre class="out"><code>/search?q=tea%20%26%20cake%20%3D%205%2F5
 q = green tea
 max = 10%</code></pre>
-<p>A <code>%</code> not followed by two hex digits fails with <code>UrlError.invalid</code>.</p>
+<p>A <code>%</code> not followed by two hex digits fails with <code>UrlError.invalid</code>. In a path, <code>+</code> is a plus sign, so a part of a path is read with <code>url.decodePath</code>, which leaves it as it is. An HTTP handler gets both kinds decoded already, with <code>req.query</code> and <code>req.param</code>.</p>
 <h2 id="uuids"><a href="#uuids">UUIDs</a></h2>
 <p>A UUID is a 16-byte id, written as 36 characters, that a program can make without asking a database for the next number. <code>uuid.v4()</code> is fully random. <code>uuid.v7()</code> starts with the time in milliseconds, so ids made later sort after ones made earlier, which keeps a database index in order. <code>format</code> writes either as text:</p>
 <pre class="code run"><code><span class="k">import</span> uuid

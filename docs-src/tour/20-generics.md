@@ -127,7 +127,7 @@ void main() {
     idle.push("10.0.0.11:5432")
     idle.push("10.0.0.12:5432")
     conn, ok := idle.pop()
-    print("{conn} {ok}, {idle.len()} left")
+    print("{conn} {ok}, {idle.len} left")
     scoped Stack[i32] freeFds
     _, any := freeFds.pop()
     print("{any}")

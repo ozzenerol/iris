@@ -100,7 +100,7 @@ stopping in 2s
 
 ## Over items
 
-`for x in items` goes over the items of an array, a slice, a `str` (its bytes), a `List` or a `Map`. With two names, an array, a slice or a `str` gives each item's index first:
+`for x in items` goes over the items of an array, a slice, a `str` (its bytes), a `List` or a `Map`. With two names, an array, a slice or a `str` gives each item's index first. Names in parentheses take a tuple apart, as `for (name, port) in [("api", 8080)]` does (see [Tuples](16-tuples-and-aliases.html)):
 
 ```iris run
 void main() {

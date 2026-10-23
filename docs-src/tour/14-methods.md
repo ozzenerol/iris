@@ -114,6 +114,7 @@ Some method names make a struct work with parts of the language:
 | `void free()` | `scoped` calls it, and so does `List.freeEach` on each item |
 | `String format()` | the struct's text, when it is put into text with braces |
 | `(T, bool) next(i64 *at)` | a `for` loop's values, one round at a time |
+| `i64 len()` | `x.len`, as a `List`, a `String` and a slice have it |
 
 ```iris run
 struct PortRange {
@@ -146,6 +147,28 @@ scanning 8080-8082
 8080
 8081
 8082
+```
+
+A struct with a `len()` method and no `len` field can be read with `.len`, so every kind of collection gives its length the same way:
+
+```iris run
+struct Ring {
+    i64[8] items
+    i64 start
+    i64 count
+}
+
+i64 Ring.len() => self.count
+
+void main() {
+    r := Ring{count: 3}
+    p := &r
+    print("{r.len} {p.len} {r.len()}")
+}
+```
+
+```output
+3 3 3
 ```
 
 Methods with the names an interface lists let the struct be used where that interface is wanted (see [Interfaces](21-interfaces.html)).

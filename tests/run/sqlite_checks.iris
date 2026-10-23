@@ -1,10 +1,10 @@
-// expect: SqlError.failed: exec with values runs one statement, and the SQL has more after it
+// expect: SqliteError.failed: exec with values runs one statement, and the SQL has more after it
 // expect: 1 rows
-// expect: SqlError.failed: the column age has 300, which doesn't fit in u8
-// expect: SqlError.failed: the column age has -1, which doesn't fit in u8
+// expect: SqliteError.failed: the column age has 300, which doesn't fit in u8
+// expect: SqliteError.failed: the column age has -1, which doesn't fit in u8
 // expect: 0 1 2147483647
-// expect: SqlError.failed: the column small has 2147483648, which doesn't fit in i32
-// expect: SqlError.failed: the column kind has 'fish', which isn't one of the enum's values
+// expect: SqliteError.failed: the column small has 2147483648, which doesn't fit in i32
+// expect: SqliteError.failed: the column kind has 'fish', which isn't one of the enum's values
 
 import sqlite
 

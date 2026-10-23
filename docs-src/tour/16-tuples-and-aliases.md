@@ -33,6 +33,49 @@ The values go into new variables with `:=`, or into existing ones with `=`. `_` 
 pair := hostPort("db.lan:5432") // error: this gives 2 values; unpack them into names: a, b := ...
 ```
 
+When only one of the values is wanted, `.0`, `.1` and on pick it out by its place, from 0:
+
+```iris run
+(str, str) hostPort(str addr) {
+    for i, c in addr {
+        if c == ':' {
+            return (addr[0:i], addr[i + 1:])
+        }
+    }
+    return (addr, "")
+}
+
+void main() {
+    print("the port is {hostPort("db.lan:5432").1}")
+    kind := "text/html; charset=utf-8".cut(";").0
+    print(kind)
+}
+```
+
+```output
+the port is 5432
+text/html
+```
+
+A list of tuples, written as `[(a, b), ...]`, is taken apart in a `for` loop by putting names in parentheses. Each round, the tuple goes into those names, as `:=` would put it:
+
+```iris run
+void main() {
+    for (name, port) in [("api", 8080), ("db", 5432)] {
+        print("{name} listens on {port}")
+    }
+    for i, (name, port) in [("cache", 6379)] {
+        print("{i}: {name}:{port}")
+    }
+}
+```
+
+```output
+api listens on 8080
+db listens on 5432
+0: cache:6379
+```
+
 Writing several values on the right of `:=` or `=` makes a tuple too, so two variables change in one step:
 
 ```iris run

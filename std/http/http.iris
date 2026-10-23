@@ -60,12 +60,12 @@ pub void Response.header(str name, str value) {
     self.headers.append("\r\n")
 }
 
-// The value of :name or *name in the Router's pattern that matched, ""
-// when there is none.
+// The value of :name or *name in the Router's pattern that matched, with
+// %XX decoded, "" when there is none.
 pub str Request.param(str name) {
     for i in 0..self.paramNames.len {
         if self.paramNames.at(i) == name {
-            return self.paramValues.at(i)
+            return self.decoded(self.paramValues.at(i), false)
         }
     }
     return ""
@@ -77,8 +77,8 @@ pub str Request.route() {
     return p
 }
 
-// A value from the query, as sent (%XX not decoded): query("full") is "1"
-// for /users/7?full=1, and "" when it isn't there.
+// A value from the query, with %XX and + decoded: query("q") is "tea &
+// cake" for /search?q=tea+%26+cake, and "" when it isn't there.
 pub str Request.query(str name) {
     _, q, found := str.cut(self.path, "?")
     if !found {
@@ -88,8 +88,8 @@ pub str Request.query(str name) {
     for rest.len > 0 {
         pair, after, _ := str.cut(rest, "&")
         key, value, _ := str.cut(pair, "=")
-        if key == name {
-            return value
+        if self.decoded(key, true) == name {
+            return self.decoded(value, true)
         }
         rest = after
     }

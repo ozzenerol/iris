@@ -36,7 +36,7 @@ The values are `.int`, `.float`, `.text`, `.bool` and `.none` for NULL.
 
 ## Rows into structs
 
-`pg.all` reads every row of a query into `@json` structs, each field from the column of the same name, and `pg.one` reads the first row or fails with `PgError.noRows`:
+`pg.all` runs a query and reads every row into `@json` structs, each field from the column of the same name, and `pg.one` reads the first row or fails with `PgError.noRows`. Both take a `Pool`, a `Conn` or a `Tx`:
 
 ```iris
 @json
@@ -47,7 +47,7 @@ struct User {
 }
 
 !void printAdults(pg.Pool *db) {
-    users := try pg.all[User](try db.query("SELECT * FROM users WHERE age >= $1 ORDER BY name", [.int(18)]))
+    users := try pg.all[User](&db, "SELECT * FROM users WHERE age >= $1 ORDER BY name", [.int(18)])
     defer {
         for u in users {
             u.free()
@@ -60,7 +60,7 @@ struct User {
 }
 ```
 
-`query` gives `Rows`, which can also be read one row at a time with `next` and `int`, `float`, `bool`, `text` and `isNull`, by column number from 0.
+`query` gives `Rows`, which can also be read one row at a time with `next` and `int`, `float`, `bool`, `text` and `isNull`, by column number from 0, and `close` ends them.
 
 ## Transactions
 

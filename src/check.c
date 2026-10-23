@@ -126,6 +126,7 @@ typedef struct {
     int enumKinds;          /* enums numbered so far */
     bool inDefer;           /* checking the statement of a defer */
     bool fieldType;         /* resolveType: the whole type of a struct field, where u16be can be */
+    bool recvChecked;       /* checkMethodCall: the receiver has its type already (x.len as x.len()) */
     /* generics */
     struct Instance *instances;
     NodeList *instOut;      /* instances for the IR writer: the file's list2 */
@@ -2657,6 +2658,7 @@ static void checkBlock(Checker *c, Node *block, bool newScope);
 static Type *checkMatch(Checker *c, Node *m, Type *expected, bool wantValue);
 static Type *checkIf(Checker *c, Node *n, Type *expected, bool wantValue);
 static Type *checkCall(Checker *c, Node *e, Type *expected);
+static Type *checkMethodCall(Checker *c, Node *e);
 
 static Type *setType(Node *e, Type *t) {
     e->type = t;
@@ -2964,6 +2966,21 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
         return setType(e, &tyStr);
     }
     if (isErr(t)) return setType(e, t);
+    if (e->name[0] >= '0' && e->name[0] <= '9') {
+        /* t.0: one value of a tuple */
+        if (t->kind != TY_TUPLE) {
+            error(c, e, "%s isn't a tuple, so it has no value %s", t->name, e->name);
+            return setType(e, &tyError);
+        }
+        long i = strtol(e->name, NULL, 10);
+        if (i >= t->nelems) {
+            error(c, e, "%s has %d values, from .0 to .%d", t->name, t->nelems, t->nelems - 1);
+            return setType(e, &tyError);
+        }
+        e->builtin = 4;
+        e->ival = (uint64_t)i;
+        return setType(e, t->elems[i]);
+    }
     if (e->a->kind == N_IDENT && e->a->ref && (e->a->ref->kind == N_STRUCT || e->a->ref->kind == N_TYPEDEF)) {
         error(c, e, "%s is a type; methods are called on values", e->a->name);
         return setType(e, &tyError);
@@ -3018,7 +3035,21 @@ static Type *checkFieldAccess(Checker *c, Node **slot, Type *expected) {
     if (!n) {
         Node *mpath[16];
         int mn;
-        if (findMethod(st, e->name, mpath, &mn, 16)) {
+        Node *m = findMethod(st, e->name, mpath, &mn, 16);
+        if (m && strcmp(e->name, "len") == 0 &&
+            (m->list.len == 0 || (m->list.len == 1 && strcmp(m->list.items[0]->name, "self") == 0))) {
+            /* x.len with a len() method: the length, as a List's .len is */
+            Node *callee = like(c, N_FIELD_ACCESS, e);
+            callee->name = e->name;
+            callee->a = e->a;
+            e->kind = N_CALL;
+            e->a = callee;
+            e->name = NULL;
+            e->list = (NodeList){0};
+            c->recvChecked = true;
+            return checkMethodCall(c, e);
+        }
+        if (m) {
             error(c, e, "%s is a method; call it with ()", e->name);
         } else {
             error(c, e, "%s has no field %s", st->name, e->name);
@@ -4059,7 +4090,8 @@ Node *textMethod(Program *prog, const char *name) {
  * pointer. */
 static Type *checkMethodCall(Checker *c, Node *e) {
     Node *callee = e->a;
-    Type *t = checkExpr(c, &callee->a, NULL);
+    Type *t = c->recvChecked ? callee->a->type : checkExpr(c, &callee->a, NULL);
+    c->recvChecked = false;
     if (isErr(t)) {
         for (int i = 0; i < e->list.len; i++) {
             Node **a = &e->list.items[i];
@@ -4417,8 +4449,76 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
     return setType(e, res);
 }
 
+/* Whether a type as written names a type parameter not known yet. */
+static bool mentionsUnknown(Node *tn, NodeList *params, Type **args) {
+    if (!tn) {
+        return false;
+    }
+    if (tn->kind == N_T_NAME) {
+        for (int i = 0; i < params->len; i++) {
+            if (!args[i] && strcmp(params->items[i]->name, tn->name) == 0) {
+                return true;
+            }
+        }
+    }
+    if (mentionsUnknown(tn->a, params, args) || mentionsUnknown(tn->b, params, args)) {
+        return true;
+    }
+    for (int i = 0; i < tn->list.len; i++) {
+        if (mentionsUnknown(tn->list.items[i], params, args)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* f[A](x, y) for a function with more type parameters than written: the
+ * rest come from the arguments whose parameters use them, read from copies
+ * so the arguments themselves are checked once, against the parameters. */
+static bool inferRest(Checker *c, Node *e, Node *d, Type **args) {
+    int pos = 0;
+    for (int i = 0; i < e->list.len; i++) {
+        Node *arg = e->list.items[i];
+        Node *param = NULL;
+        if (arg->kind == N_NAMED_ARG) {
+            for (int j = 0; j < d->list.len; j++) {
+                if (strcmp(d->list.items[j]->name, arg->name) == 0) param = d->list.items[j];
+            }
+            arg = arg->a;
+        } else if (pos < d->list.len) {
+            param = d->list.items[pos];
+            if (!(param->flags & F_REST)) {
+                pos++;
+            }
+        }
+        if (!param) {
+            continue;
+        }
+        Node *tn = param->flags & F_REST ? param->a->a : param->a;
+        if (!mentionsUnknown(tn, &d->list2, args) || arg->kind == N_INTERP) {
+            continue;
+        }
+        Node *copy = cloneNode(c->arena, arg);
+        int before = gErrors;
+        checkExpr(c, &copy, NULL);
+        if (gErrors != before) {
+            return false;
+        }
+        infer(tn, copy->type, &d->list2, args);
+    }
+    for (int i = 0; i < d->list2.len; i++) {
+        if (!args[i]) {
+            error(c, e, "the type %s of %s can't be worked out from the arguments; write %s[...](...)",
+                  d->list2.items[i]->name, d->name, d->name);
+            return false;
+        }
+    }
+    return true;
+}
+
 /* A call of a generic function: the types come from [...] after its name,
- * or are worked out from the arguments. */
+ * or are worked out from the arguments. The first types can be written
+ * and the rest worked out: all[User](&db, sql). */
 static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
     int n = d->list2.len;
     Type *args[16] = {0};
@@ -4427,13 +4527,17 @@ static Type *checkGenericCall(Checker *c, Node *e, Node *d, Node *typeArgs) {
         return setType(e, &tyError);
     }
     if (typeArgs) {
-        if (typeArgs->list.len != n) {
-            error(c, typeArgs, "%s takes %d type%s, not %d", d->name, n, n == 1 ? "" : "s", typeArgs->list.len);
+        int k = typeArgs->list.len;
+        if (k > n) {
+            error(c, typeArgs, "%s takes %d type%s, not %d", d->name, n, n == 1 ? "" : "s", k);
             return setType(e, &tyError);
         }
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < k; i++) {
             args[i] = typeFromExpr(c, typeArgs->list.items[i], true);
             if (isErr(args[i])) return setType(e, &tyError);
+        }
+        if (k < n && !inferRest(c, e, d, args)) {
+            return setType(e, &tyError);
         }
     }
     bool bad = false;
@@ -6325,6 +6429,17 @@ static void checkFunctionBody(Checker *c, Node *f) {
     c->module = outerModule;
 }
 
+/* A field's default. A String field takes text written in the program,
+ * which it borrows (cap 0): nothing is made or freed for it. */
+static void checkFieldDefault(Checker *c, Node *f) {
+    if (f->type->kind == TY_STRING && f->b->kind == N_STRING) {
+        checkExpr(c, &f->b, &tyStr);
+        return;
+    }
+    checkGlobalValue(c, &f->b, valueType(f->type));
+    checkBitfieldValue(c, f, f->b);
+}
+
 static void checkGlobalValue(Checker *c, Node **slot, Type *t) {
     checkExpr(c, slot, t);
     if (t) {
@@ -6736,8 +6851,7 @@ bool checkProgram(Arena *a, Program *prog) {
         for (int j = 0; j < d->list.len; j++) {
             Node *f = d->list.items[j];
             if (f->kind == N_FIELD && f->b && f->type) {
-                checkGlobalValue(&c, &f->b, valueType(f->type));
-                checkBitfieldValue(&c, f, f->b);
+                checkFieldDefault(&c, f);
             }
         }
     }
@@ -6803,8 +6917,7 @@ bool checkProgram(Arena *a, Program *prog) {
             if (f->kind == N_FIELD && f->b && f->type) {
                 c.scope = d->type->scope;
                 c.module = d->module;
-                checkGlobalValue(&c, &f->b, valueType(f->type));
-                checkBitfieldValue(&c, f, f->b);
+                checkFieldDefault(&c, f);
             }
         }
     }

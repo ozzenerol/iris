@@ -49,7 +49,7 @@ try {
 <h1>Networking</h1>
 <p class="lede">The <code>net</code> module has TCP, UDP, TLS and Unix sockets. A call that waits for the network lets the other tasks on its thread run, so a server can hold many connections with one task each and no callbacks. This chapter goes from a server and a client to the parts a proxy needs: socket options, half-closing, copying between connections and looking at the first bytes.</p>
 <h2 id="a-server-and-a-client"><a href="#a-server-and-a-client">A server and a client</a></h2>
-<p><code>net.listen</code> gives a <code>Listener</code>, and its <code>accept</code> waits for the next connection. <code>net.dial</code> connects. A <code>Conn</code> reads with <code>read</code>, <code>readLine</code> and <code>readExactly</code>, and writes with <code>write</code>. Each connection the server accepts gets a task of its own:</p>
+<p><code>net.listen</code> gives a <code>Listener</code>, and its <code>accept</code> waits for the next connection. <code>net.dial</code> connects. A <code>Conn</code> reads with <code>read</code>, <code>readLine</code>, <code>readExactly</code>, and <code>readAll</code>, which reads until the other side closes, and writes with <code>write</code>. Each connection the server accepts gets a task of its own:</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> c) {

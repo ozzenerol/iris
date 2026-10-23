@@ -131,7 +131,13 @@ i64 hexDigit(u8 c) {
 
 // The text with %XX turned back into bytes and + into spaces, as query
 // values are sent.
-pub !String decode(str text) {
+pub !String decode(str text) => try decodeWith(text, true)
+
+// The text with %XX turned back into bytes, for a part of a path, where +
+// is a +.
+pub !String decodePath(str text) => try decodeWith(text, false)
+
+!String decodeWith(str text, bool plusIsSpace) {
     String out
     errdefer out.free()
     i := 0
@@ -149,7 +155,7 @@ pub !String decode(str text) {
             u8[1] b = [u8(hi * 16 + lo)]
             out.append(b)
             i += 3
-        } else if c == '+' {
+        } else if c == '+' && plusIsSpace {
             out.append(" ")
             i += 1
         } else {

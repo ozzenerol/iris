@@ -84,7 +84,7 @@ void main() {
     t.row(["worker", "[green]running[/]", "71", "1.2 GiB"])
     t.row(["cron", "[red]stopped[/]", "0", "-"])
     t.print()
-    print("{t.len()} services")
+    print("{t.len} services")
 }
 ```
 

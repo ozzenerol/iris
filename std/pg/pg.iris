@@ -4,7 +4,7 @@
 //     db := try pg.pool("postgres://ada:secret@localhost/shop")
 //     defer db.close()
 //     try db.exec("INSERT INTO users (name, age) VALUES ($1, $2)", [.text("Ada"), .int(36)])
-//     users := try pg.all[User](try db.query("SELECT * FROM users WHERE age > $1", [.int(30)]))
+//     users := try pg.all[User](&db, "SELECT * FROM users WHERE age > $1", [.int(30)])
 //
 // Values go apart from the SQL ($1, $2, ...), so they can't change what the
 // SQL means. Results come back as text and are read with Rows.int, text
@@ -459,12 +459,15 @@ pub struct Rows {
     pub i64 affected
 }
 
-// Frees the rows.
-pub void Rows.free() {
+// Gives the rows' memory back, as sqlite's Rows.close does.
+pub void Rows.close() {
     self.names.freeEach()
     self.cells.freeEach()
     self.nulls.free()
 }
+
+// close, for scoped.
+pub void Rows.free() => self.close()
 
 // How many rows there are.
 pub i64 Rows.len() => if self.ncols > 0 { self.cells.len / self.ncols } else { 0 }
@@ -478,7 +481,7 @@ pub str Rows.name(i64 col) => if col >= 0 && col < self.names.len { self.names.a
 // Moves to the next row: false when there are no more. The first call
 // moves to the first row.
 pub bool Rows.next() {
-    if self.at >= self.len() {
+    if self.at >= self.len {
         return false
     }
     self.at += 1
@@ -527,10 +530,17 @@ pub !void scan[T](Rows *rows, T *out) {
     }
 }
 
-// Every row as a @json struct: pg.all[User](try db.query("SELECT ...")).
-// The rows are freed; the values' Strings are the caller's.
-pub !List[T] all[T](Rows rows) {
-    defer rows.free()
+// What all and one run a query on: a Pool, a Conn or a Tx.
+pub interface Querier {
+    !Rows query(str sql, Value[] args)
+}
+
+// Every row of a query as @json structs: pg.all[User](&db, "SELECT ...",
+// [.int(18)]), on a Pool, a Conn or a Tx. The values' Strings are the
+// caller's to free.
+pub !List[T] all[T, D: Querier](D *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
     List[T] out
     for rows.next() {
         T v
@@ -543,9 +553,11 @@ pub !List[T] all[T](Rows rows) {
     return out
 }
 
-// The first row as a @json struct; no rows fails with PgError.noRows.
-pub !T one[T](Rows rows) {
-    defer rows.free()
+// The first row of a query as a @json struct: pg.one[User](&db, "SELECT
+// ... WHERE id = $1", [.int(7)]). No rows fails with PgError.noRows.
+pub !T one[T, D: Querier](D *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
     if !rows.next() {
         return error(PgError.noRows, "the query has no rows")
     }
@@ -611,7 +623,7 @@ pub !Rows Conn.query(str sql, Value[] args = []) {
 // Reads what the server sends until it is ready again.
 !Rows Conn.results() {
     Rows rows
-    errdefer rows.free()
+    errdefer rows.close()
     bool failed = false
     Error first = error(PgError.failed, "")
     for {

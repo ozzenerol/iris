@@ -4,7 +4,7 @@ The `net` module has TCP, UDP, TLS and Unix sockets. A call that waits for the n
 
 ## A server and a client
 
-`net.listen` gives a `Listener`, and its `accept` waits for the next connection. `net.dial` connects. A `Conn` reads with `read`, `readLine` and `readExactly`, and writes with `write`. Each connection the server accepts gets a task of its own:
+`net.listen` gives a `Listener`, and its `accept` waits for the next connection. `net.dial` connects. A `Conn` reads with `read`, `readLine`, `readExactly`, and `readAll`, which reads until the other side closes, and writes with `write`. Each connection the server accepts gets a task of its own:
 
 ```iris run
 import net

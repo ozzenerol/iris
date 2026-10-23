@@ -285,7 +285,7 @@ template.<span class="t">Template</span> page
 <pre class="out"><code>text/html; charset=utf-8: &lt;p&gt;Hello, stranger!&lt;/p&gt;
 text/html; charset=utf-8: &lt;p&gt;Hello, Ada!&lt;/p&gt;
 text/html; charset=utf-8: &lt;p&gt;Hello, &amp;lt;b&amp;gt;Ada&amp;lt;/b&amp;gt;!&lt;/p&gt;</code></pre>
-<p>The tags in the last name came out as text, so a visitor can't add HTML to the page. <code>req.query</code> gives the value as it was sent; a browser writes <code>&lt;</code> as <code>%3C</code>, and <code>url.decode</code> turns it back (see <a href="11-encodings-and-ids.html#urls">Encodings and ids</a>).</p>
+<p>The tags in the last name came out as text, so a visitor can't add HTML to the page. A browser sends <code>&lt;</code> as <code>%3C</code>, and <code>req.query</code> gives it back as <code>&lt;</code>, so the escaping is what keeps the page safe.</p>
 <p><code>template.escape(text)</code> escapes any text for HTML the same way, for the rare page built without a template.</p>
     <nav class="pager"><a class="prev" href="11-encodings-and-ids.html"><span>Previous</span>Encodings and ids</a><a class="next" href="13-compression-and-archives.html"><span>Next</span>Compression and archives</a></nav>
   </article>

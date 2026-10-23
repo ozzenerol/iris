@@ -312,6 +312,21 @@ pub !String Conn.readExactly(i64 n) {
     return out
 }
 
+// Everything the other side sends until it closes, as a new String.
+// NetError.tooLong when limit isn't 0 and more than limit bytes come.
+pub !String Conn.readAll(i64 limit = 0) {
+    String out
+    errdefer out.free()
+    for try self.fill() {
+        if limit > 0 && out.len + (self.end - self.start) > limit {
+            return error(NetError.tooLong, "reading: more than {limit} bytes")
+        }
+        out.append(self.buf[self.start:self.end])
+        self.start = self.end
+    }
+    return out
+}
+
 // Writes all of data.
 pub !void Conn.write(str data) {
     code := if self.tls != null {

@@ -1,0 +1,36 @@
+// expect: q=[tea & cake] page=[2] missing=[] bad=[%zz]
+// expect: file=[my notes/a+b.txt]
+// expect: decodePath: a+b c
+
+import http, net, url
+
+void search(http.Request *req, http.Response *res) {
+    res.text("q=[{req.query("q")}] page=[{req.query("page")}] missing=[{req.query("x")}] bad=[{req.query("bad")}]")
+}
+
+void file(http.Request *req, http.Response *res) {
+    res.text("file=[{req.param("path")}]")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/search", search)
+    r.get("/files/*path", file)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String a = format("http://127.0.0.1:{ln.port}/search?q=tea+%26+cake&p%61ge=2&bad=%zz")
+    scoped http.Reply ra = try http.get(a)
+    print(ra.body)
+    scoped String b = format("http://127.0.0.1:{ln.port}/files/my%20notes/a+b.txt")
+    scoped http.Reply rb = try http.get(b)
+    print(rb.body)
+    scoped String p = try url.decodePath("a+b%20c")
+    print("decodePath: {p}")
+}

@@ -5,7 +5,7 @@
 // What database calls fail with: failed, busy (the database is locked),
 // constraint (a UNIQUE, NOT NULL or other constraint), and noRows (one found
 // nothing).
-pub enum SqlError { failed, busy, constraint, noRows }
+pub enum SqliteError { failed, busy, constraint, noRows }
 
 // A value for a ? in SQL: .int(36), .float(1.5), .text("ada"), .blob(bytes)
 // for bytes kept as they are, or .none for NULL.
@@ -74,9 +74,9 @@ void tableOf()
 str message() => messagePtr()[0:messageLen()]
 
 Error sqlError(i32 kind) => match kind {
-    2 => error(SqlError.busy, "{message()}")
-    3 => error(SqlError.constraint, "{message()}")
-    _ => error(SqlError.failed, "{message()}")
+    2 => error(SqliteError.busy, "{message()}")
+    3 => error(SqliteError.constraint, "{message()}")
+    _ => error(SqliteError.failed, "{message()}")
 }
 
 // An open database.
@@ -113,7 +113,7 @@ pub void Db.close() {
     want := rawParams(stmt)
     if want != args.len {
         rawFinalize(stmt)
-        return error(SqlError.failed, "the SQL has {want} ? but {args.len} value{if args.len == 1 { "" } else { "s" }} were given")
+        return error(SqliteError.failed, "the SQL has {want} ? but {args.len} value{if args.len == 1 { "" } else { "s" }} were given")
     }
     for i in 0..args.len {
         k := match args[i] {
@@ -151,7 +151,7 @@ pub !void Db.exec(str sql, Value[] args = []) {
                 if next != null {
                     rawFinalize(next)
                 }
-                return error(SqlError.failed, "exec with values runs one statement, and the SQL has more after it")
+                return error(SqliteError.failed, "exec with values runs one statement, and the SQL has more after it")
             }
         }
         for {
@@ -176,7 +176,7 @@ pub !Rows Db.query(str sql, Value[] args = []) {
     i64 at
     stmt := try self.prepare(sql, &at, args)
     if stmt == null {
-        return error(SqlError.failed, "the query is empty")
+        return error(SqliteError.failed, "the query is empty")
     }
     return Rows{stmt: stmt}
 }
@@ -258,11 +258,14 @@ pub void Rows.close() {
     self.stmt = null
 }
 
+// close, for scoped.
+pub void Rows.free() => self.close()
+
 // Fills a @json struct from the row: each field from the column of the
 // same name (or its @json name). A NULL column leaves the field as it is.
 pub !void scan[T](Rows *rows, T *out) {
     if rawScan(rows.stmt, tableOf(out), out) != 0 {
-        return error(SqlError.failed, "{message()}")
+        return error(SqliteError.failed, "{message()}")
     }
 }
 
@@ -291,12 +294,12 @@ pub !List[T] all[T](Db *db, str sql, Value[] args = []) {
 }
 
 // The first row of a query, as a @json struct. A query with no rows fails
-// with SqlError.noRows.
+// with SqliteError.noRows.
 pub !T one[T](Db *db, str sql, Value[] args = []) {
     rows := try db.query(sql, args)
     defer rows.close()
     if !(try rows.next()) {
-        return error(SqlError.noRows, "the query has no rows")
+        return error(SqliteError.noRows, "the query has no rows")
     }
     T v
     scan(&rows, &v) catch e {

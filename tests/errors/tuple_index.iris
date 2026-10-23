@@ -1,0 +1,9 @@
+// error: 6: (i64, i64) has 2 values, from .0 to .1
+// error: 8: i64 isn't a tuple, so it has no value 0
+
+void main() {
+    a, b := 1, 2
+    x := (a, b).2
+    y := 5
+    z := y.0
+}

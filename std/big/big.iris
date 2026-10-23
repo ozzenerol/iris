@@ -219,7 +219,7 @@ pub Int Int.abs() {
 
 // Compares with b: below 0 when the number is less, 0 when equal, above 0
 // when greater.
-pub i64 Int.cmp(Int b) {
+pub i64 Int.compare(Int b) {
     if self.negative != b.negative {
         return if self.negative { -1 } else { 1 }
     }
@@ -228,7 +228,7 @@ pub i64 Int.cmp(Int b) {
 }
 
 // Whether the number equals b.
-pub bool Int.equal(Int b) => self.cmp(b) == 0
+pub bool Int.equal(Int b) => self.compare(b) == 0
 
 // The number plus b.
 pub Int Int.add(Int b) {

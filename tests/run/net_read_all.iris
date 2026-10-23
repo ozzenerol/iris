@@ -1,0 +1,30 @@
+// expect: 100000 bytes, the same: true
+// expect: NetError.tooLong: reading: more than 1000 bytes
+
+import net, str
+
+void serve(net.Listener ln, str data) {
+    for _ in 0..2 {
+        c := ln.accept() catch e {
+            return
+        }
+        c.write(data) catch e { }
+        c.close()
+    }
+}
+
+!void main() {
+    scoped String data = str.repeat("0123456789", 10000)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln, data)
+    c := try net.dial("127.0.0.1", ln.port)
+    scoped String got = try c.readAll()
+    c.close()
+    print("{got.len} bytes, the same: {got == data}")
+    d := try net.dial("127.0.0.1", ln.port)
+    defer d.close()
+    _ = d.readAll(limit: 1000) catch e {
+        print("{e.code}: {e.message}")
+        "".copy()
+    }
+}

@@ -1,0 +1,26 @@
+// expect: [Content-Type: text/html] 4 7 true
+// expect: true
+// expect: 1a
+// expect: 2b
+// expect: api:8080
+// expect: db:5432
+// expect: 0 a=1
+// expect: 1 b=2
+
+(str, (i64, bool)) nested() => ("n", (7, true))
+(i64, i64) pair() => (3, 4)
+void main() {
+    line := "Content-Type: text/html; charset=utf-8"
+    kind := line.cut(";").0
+    print("[{kind}] {pair().1} {nested().1.0} {nested().1.1}")
+    print("{line.cut(": ").2}")
+    for t in [(1, "a"), (2, "b")] {
+        print("{t.0}{t.1}")
+    }
+    for (name, port) in [("api", 8080), ("db", 5432)] {
+        print("{name}:{port}")
+    }
+    for i, (k, v) in [("a", 1), ("b", 2)] {
+        print("{i} {k}={v}")
+    }
+}

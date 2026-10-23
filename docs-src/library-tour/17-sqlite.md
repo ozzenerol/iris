@@ -109,7 +109,7 @@ old is 2
 1 deleted
 ```
 
-With values, `exec` runs one statement: SQL with another statement after it fails with `SqlError.failed`, before anything runs. The number of values must match the number of `?`.
+With values, `exec` runs one statement: SQL with another statement after it fails with `SqliteError.failed`, before anything runs. The number of values must match the number of `?`.
 
 ## Bytes
 
@@ -182,7 +182,7 @@ struct Host {
 1 db 5432
 ```
 
-`sqlite.one[T]` gives the first row. When the query finds nothing, it fails with `SqlError.noRows`:
+`sqlite.one[T]` gives the first row. When the query finds nothing, it fails with `SqliteError.noRows`:
 
 ```iris run
 import sqlite
@@ -209,10 +209,10 @@ struct Host {
 
 ```output
 found dns, id 2
-SqlError.noRows
+SqliteError.noRows
 ```
 
-A field can be an integer, a float, a `bool` (0 is `false`), a `String`, or a plain enum, read from the text of its value's name. Text that isn't one of the names fails with `SqlError.failed`:
+A field can be an integer, a float, a `bool` (0 is `false`), a `String`, or a plain enum, read from the text of its value's name. Text that isn't one of the names fails with `SqliteError.failed`:
 
 ```iris run
 import sqlite
@@ -252,7 +252,7 @@ struct Check {
 ```output
 api: up, tls true
 cache: down, tls false
-SqlError.failed: the column state has 'flapping', which isn't one of the enum's values
+SqliteError.failed: the column state has 'flapping', which isn't one of the enum's values
 ```
 
 A number that doesn't fit its field fails the same way, instead of being cut down to fit:
@@ -278,7 +278,7 @@ struct Route {
 ```
 
 ```output
-SqlError.failed: the column ttl has 300, which doesn't fit in u8
+SqliteError.failed: the column ttl has 300, which doesn't fit in u8
 ```
 
 When `all` or `one` fails partway, they free what they had read, so nothing is left for the caller.
@@ -439,7 +439,7 @@ import sqlite
 after 5:
   1: 45
   2: 95
-20 failed: SqlError.constraint
+20 failed: SqliteError.constraint
 after 20:
   1: 45
   2: 95
@@ -449,7 +449,7 @@ The second move took 20 from link 1, then failed on link 2, whose `CHECK` allows
 
 ## Errors
 
-The errors are values of `sqlite.SqlError`, and the message says whether the SQL itself is wrong (`in the SQL`) or failed while it ran (`running the SQL`), then gives SQLite's reason:
+The errors are values of `sqlite.SqliteError`, and the message says whether the SQL itself is wrong (`in the SQL`) or failed while it ran (`running the SQL`), then gives SQLite's reason:
 
 | Code | When |
 |---|---|
@@ -482,10 +482,10 @@ import sqlite
 ```
 
 ```output
-SqlError.constraint: running the SQL: UNIQUE constraint failed: hosts.name
-SqlError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
-SqlError.failed: in the SQL: near "SELEKT": syntax error
-SqlError.failed: the SQL has 1 ? but 2 values were given
+SqliteError.constraint: running the SQL: UNIQUE constraint failed: hosts.name
+SqliteError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
+SqliteError.failed: in the SQL: near "SELEKT": syntax error
+SqliteError.failed: the SQL has 1 ? but 2 values were given
 ```
 
 A `Db` can be shared by threads; each call waits for the database on the thread that makes it. `IRIS_SQLITE` names another copy of SQLite to load instead of the system's.

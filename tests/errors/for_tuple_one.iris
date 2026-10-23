@@ -1,0 +1,6 @@
+// error: 4: (...) in a for loop takes a tuple apart, so it needs two names or more
+
+void main() {
+    for (a) in [(1, 2)] {
+    }
+}

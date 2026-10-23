@@ -125,7 +125,7 @@ q = green tea
 max = 10%
 ```
 
-A `%` not followed by two hex digits fails with `UrlError.invalid`.
+A `%` not followed by two hex digits fails with `UrlError.invalid`. In a path, `+` is a plus sign, so a part of a path is read with `url.decodePath`, which leaves it as it is. An HTTP handler gets both kinds decoded already, with `req.query` and `req.param`.
 
 ## UUIDs
 

@@ -1020,6 +1020,25 @@ static Node *parsePostfix(Parser *p) {
             n->flags |= F_POSTFIX;
             n->a = e;
             e = n;
+        } else if (t->kind == P_DOT && (peekAt(p, 1)->kind == T_INT || peekAt(p, 1)->kind == T_FLOAT)) {
+            /* t.0: one value of a tuple; t.0.1 comes as the number 0.1 */
+            next(p);
+            Token *num = next(p);
+            const char *text = tokText(p, num);
+            const char *dot = strchr(text, '.');
+            for (int part = 0; part < (dot ? 2 : 1); part++) {
+                const char *from = part ? dot + 1 : text;
+                size_t len = part || !dot ? strlen(from) : (size_t)(dot - text);
+                for (size_t i = 0; i < len; i++) {
+                    if (from[i] < '0' || from[i] > '9') {
+                        fail(p, num, "after '.', a number picks a value of a tuple: t.0, t.1");
+                    }
+                }
+                Node *f = node(p, N_FIELD_ACCESS, num);
+                f->a = e;
+                f->name = arenaStrndup(p->arena, from, len);
+                e = f;
+            }
         } else if (t->kind == P_DOT) {
             next(p);
             Token *name = expectIdent(p, "a field or method name after '.'");
@@ -1351,18 +1370,56 @@ static Node *parseSelect(Parser *p) {
     return s;
 }
 
+/* Whether a for loop's head is names before in: i, x in, or with a tuple
+ * taken apart, (a, b) in and i, (a, b) in. */
+static bool forInAhead(Parser *p) {
+    for (int k = 0;; k++) {
+        TokKind kind = peekAt(p, k)->kind;
+        if (kind == K_IN) {
+            return k > 0;
+        }
+        if (kind != T_IDENT && kind != P_COMMA && kind != P_LPAREN && kind != P_RPAREN) {
+            return false;
+        }
+    }
+}
+
 static Node *parseFor(Parser *p) {
     Token *t = expect(p, K_FOR);
     Node *n = node(p, N_FOR, t);
-    if (at(p, T_IDENT) && (peekAt(p, 1)->kind == K_IN ||
-                           (peekAt(p, 1)->kind == P_COMMA && peekAt(p, 2)->kind == T_IDENT &&
-                            peekAt(p, 3)->kind == K_IN))) {
+    NodeList takeApart = {0};
+    if (forInAhead(p)) {
         n->flags |= F_FOR_IN;
         do {
-            Token *v = next(p);
-            Node *id = node(p, N_IDENT, v);
-            id->name = tokText(p, v);
-            push(p, &n->list, id);
+            if (at(p, P_LPAREN)) {
+                /* (a, b): the value is a tuple, taken apart into names at the
+                 * start of each round, as a, b := value */
+                Token *open = next(p);
+                Node *d = node(p, N_DEFINE, open);
+                do {
+                    Token *v = expectIdent(p, "a name");
+                    Node *id = node(p, N_IDENT, v);
+                    id->name = tokText(p, v);
+                    push(p, &d->list, id);
+                } while (accept(p, P_COMMA));
+                expect(p, P_RPAREN);
+                if (d->list.len < 2) {
+                    fail(p, open, "(...) in a for loop takes a tuple apart, so it needs two names or more");
+                }
+                Node *hidden = node(p, N_IDENT, open);
+                char name[32];
+                snprintf(name, sizeof name, "tuple$%d$%d", open->line, open->col);
+                hidden->name = arenaStrndup(p->arena, name, strlen(name));
+                d->b = node(p, N_IDENT, open);
+                d->b->name = hidden->name;
+                push(p, &n->list, hidden);
+                push(p, &takeApart, d);
+            } else {
+                Token *v = expectIdent(p, "a name");
+                Node *id = node(p, N_IDENT, v);
+                id->name = tokText(p, v);
+                push(p, &n->list, id);
+            }
         } while (accept(p, P_COMMA));
         expect(p, K_IN);
         n->a = parseHeadExpr(p);
@@ -1370,6 +1427,13 @@ static Node *parseFor(Parser *p) {
         n->a = parseHeadExpr(p);
     }
     n->c = parseBlock(p);
+    if (takeApart.len) {
+        NodeList body = takeApart;
+        for (int i = 0; i < n->c->list.len; i++) {
+            push(p, &body, n->c->list.items[i]);
+        }
+        n->c->list = body;
+    }
     return n;
 }
 

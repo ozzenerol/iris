@@ -65,7 +65,7 @@ void serve(http.Router *r, net.Listener ln) {
 
 ## Paths
 
-`:name` in a path takes one part of it, and `*name` all the rest. The handler reads them with `req.param`. `req.query` gives a value from the query, after the `?`, and `""` when it isn't there:
+`:name` in a path takes one part of it, and `*name` all the rest. The handler reads them with `req.param`. `req.query` gives a value from the query, after the `?`, and `""` when it isn't there. Both give the value with its `%XX` decoded, and `req.query` turns `+` into a space too, as browsers send it:
 
 ```iris run
 import http, net, str

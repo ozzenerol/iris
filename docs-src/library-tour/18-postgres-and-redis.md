@@ -16,7 +16,7 @@ import os, pg
     db := try pg.pool(address, 20)
     defer db.close()
     rows := try db.query("SELECT version()")
-    defer rows.free()
+    defer rows.close()
     _ = rows.next()
     print(rows.text(0)[0:13])
 }
@@ -47,10 +47,8 @@ import os, pg
             stock int NOT NULL DEFAULT 0
         );
         """)
-    str[3] names = ["green tea", "lemon cake", "coffee"]
-    f64[3] prices = [3.5, 4.25, 2.8]
-    for i in 0..3 {
-        _ = try db.exec("INSERT INTO products (name, price, stock) VALUES ($1, $2, $3)", [.text(names[i]), .float(prices[i]), .int(10)])
+    for (name, price) in [("green tea", 3.5), ("lemon cake", 4.25), ("coffee", 2.8)] {
+        _ = try db.exec("INSERT INTO products (name, price, stock) VALUES ($1, $2, $3)", [.text(name), .float(price), .int(10)])
     }
     n := try db.exec("UPDATE products SET stock = stock - 1 WHERE price < $1", [.float(4.0)])
     print("{n} rows changed")
@@ -70,7 +68,7 @@ A statement that the server refuses fails with `PgError.failed`, or `PgError.con
 
 ## Reading rows
 
-`query` gives `pg.Rows`. `pg.all[T](rows)` reads every row into a `@json` struct, each field from the column of the same name, and `pg.one[T](rows)` reads the first row, or fails with `PgError.noRows`:
+`pg.all[T](&db, sql, values)` runs a query and reads every row into a `@json` struct, each field from the column of the same name, and `pg.one[T]` reads the first row, or fails with `PgError.noRows`. Both take a `Pool`, a `Conn` or a transaction, as `sqlite.all` and `sqlite.one` take a `Db`:
 
 ```iris
 import os, pg
@@ -86,7 +84,7 @@ struct Product {
 !void main() {
     db := try pg.pool(os.env("DATABASE_URL") catch "postgres://localhost/shop")
     defer db.close()
-    products := try pg.all[Product](try db.query("SELECT * FROM products WHERE stock > $1 ORDER BY price", [.int(0)]))
+    products := try pg.all[Product](&db, "SELECT * FROM products WHERE stock > $1 ORDER BY price", [.int(0)])
     defer {
         for p in products {
             p.free()
@@ -96,9 +94,9 @@ struct Product {
     for p in products {
         print("{p.id} {p.name}: {p.price}, {p.stock} left")
     }
-    scoped Product cake = try pg.one[Product](try db.query("SELECT * FROM products WHERE name = $1", [.text("lemon cake")]))
+    scoped Product cake = try pg.one[Product](&db, "SELECT * FROM products WHERE name = $1", [.text("lemon cake")])
     print("cake is {cake.id}")
-    _ = pg.one[Product](try db.query("SELECT * FROM products WHERE id = $1", [.int(99)])) catch e {
+    _ = pg.one[Product](&db, "SELECT * FROM products WHERE id = $1", [.int(99)]) catch e {
         print("{e.code}")
         Product{}
     }
@@ -113,7 +111,7 @@ cake is 2
 PgError.noRows
 ```
 
-`Rows` can be read one row at a time too: `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. The whole result has come back from the server by the time `query` returns, so `len` is the number of rows:
+`query` gives `pg.Rows`, which can be read one row at a time too: `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. The whole result has come back from the server by the time `query` returns, so `len` is the number of rows. `close` gives their memory back:
 
 ```iris
 import os, pg
@@ -122,7 +120,7 @@ import os, pg
     db := try pg.pool(os.env("DATABASE_URL") catch "postgres://localhost/shop")
     defer db.close()
     rows := try db.query("SELECT count(*), sum(stock), avg(price)::float8 FROM products")
-    defer rows.free()
+    defer rows.close()
     _ = rows.next()
     print("{rows.int(0)} products, {rows.int(1)} in stock, {rows.float(2):.2} on average")
 }
@@ -143,7 +141,7 @@ import os, pg
 !bool order(pg.Pool *db, str product, i64 count) {
     scoped tx := try db.begin()
     rows := try tx.query("SELECT stock FROM products WHERE name = $1 FOR UPDATE", [.text(product)])
-    defer rows.free()
+    defer rows.close()
     if !rows.next() || rows.int(0) < count {
         return false
     }
@@ -158,7 +156,7 @@ import os, pg
     print("4 coffees: {try order(&db, "coffee", 4)}")
     print("50 coffees: {try order(&db, "coffee", 50)}")
     rows := try db.query("SELECT stock FROM products WHERE name = 'coffee'")
-    defer rows.free()
+    defer rows.close()
     _ = rows.next()
     print("coffee left: {rows.int(0)}")
 }
@@ -253,10 +251,8 @@ import os, redis
     db := try redis.connect(os.env("REDIS_URL") catch "redis://localhost:6379")
     defer db.close()
     _ = try db.del(["scores"])
-    str[3] names = ["ada", "linus", "grace"]
-    str[3] scores = ["310", "120", "450"]
-    for i in 0..3 {
-        scoped redis.Reply r = try db.do(["ZADD", "scores", scores[i], names[i]])
+    for (name, score) in [("ada", "310"), ("linus", "120"), ("grace", "450")] {
+        scoped redis.Reply r = try db.do(["ZADD", "scores", score, name])
     }
     scoped redis.Reply top = try db.do(["ZREVRANGE", "scores", "0", "1", "WITHSCORES"])
     for i in 0..top.items.len / 2 {

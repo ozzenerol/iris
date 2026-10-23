@@ -1,7 +1,7 @@
 // expect: id 1
-// expect: SqlError.constraint: running the SQL: UNIQUE constraint failed: users.name
-// expect: SqlError.failed: the SQL has 1 ? but 0 values were given
-// expect: SqlError.failed: in the SQL: near "SELEKT": syntax error
+// expect: SqliteError.constraint: running the SQL: UNIQUE constraint failed: users.name
+// expect: SqliteError.failed: the SQL has 1 ? but 0 values were given
+// expect: SqliteError.failed: in the SQL: near "SELEKT": syntax error
 // expect: 1 ada age name 3
 // expect: 2 zoe ? name 3
 // expect: 1 ada 36 admin 9.5 true

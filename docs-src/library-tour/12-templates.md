@@ -308,6 +308,6 @@ text/html; charset=utf-8: <p>Hello, Ada!</p>
 text/html; charset=utf-8: <p>Hello, &lt;b&gt;Ada&lt;/b&gt;!</p>
 ```
 
-The tags in the last name came out as text, so a visitor can't add HTML to the page. `req.query` gives the value as it was sent; a browser writes `<` as `%3C`, and `url.decode` turns it back (see [Encodings and ids](11-encodings-and-ids.html#urls)).
+The tags in the last name came out as text, so a visitor can't add HTML to the page. A browser sends `<` as `%3C`, and `req.query` gives it back as `<`, so the escaping is what keeps the page safe.
 
 `template.escape(text)` escapes any text for HTML the same way, for the rare page built without a template.

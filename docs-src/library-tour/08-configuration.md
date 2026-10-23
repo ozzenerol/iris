@@ -163,13 +163,13 @@ import toml
         """
     scoped toml.Value doc = try toml.parse(text)
     services := doc.get("services")
-    for i in 0..services.len() {
+    for i in 0..services.len {
         s := services.at(i)
         port := s.get("port")
         print("{services.keys.at(i)}: {s.get("replicas").int} replicas, has a port: {port != null}")
     }
     queues := services.get("worker").get("queues")
-    for i in 0..queues.len() {
+    for i in 0..queues.len {
         print("queue {queues.at(i).text}")
     }
 }
@@ -295,9 +295,10 @@ import os, toml
 
 @json
 struct Config {
-    String listen
+    String listen = "127.0.0.1"
     u16 port = 8080
     i64 workers = 4
+    String logLevel = "info"
 }
 
 !Config load(str text) {
@@ -317,12 +318,12 @@ struct Config {
 !void main() {
     try os.setenv("APP_WORKERS", "16")
     scoped Config c = try load("listen = \"0.0.0.0\"\nport = 80\n")
-    print("{c.listen}:{c.port} with {c.workers} workers")
+    print("{c.listen}:{c.port} with {c.workers} workers, logging {c.logLevel}")
 }
 ```
 
 ```output
-0.0.0.0:80 with 16 workers
+0.0.0.0:80 with 16 workers, logging info
 ```
 
 A field the file leaves out keeps the default from the struct, the file changes it, and the environment has the last word.

@@ -59,24 +59,24 @@ try {
     <span class="k">for</span> r <span class="k">in</span> rows.<span class="f">items</span>()[<span class="n">1</span>:] {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">:</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> [</span><span class="e">{</span>r.<span class="f">at</span>(<span class="n">2</span>)<span class="e">}</span><span class="s">]&quot;</span>)
     }
-    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.len<span class="e">}</span><span class="s"> records, </span><span class="e">{</span>rows.<span class="f">at</span>(<span class="n">0</span>).<span class="f">len</span>()<span class="e">}</span><span class="s"> fields each&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.len<span class="e">}</span><span class="s"> records, </span><span class="e">{</span>rows.<span class="f">at</span>(<span class="n">0</span>).len<span class="e">}</span><span class="s"> fields each&quot;</span>)
 }</code></pre>
 <pre class="out"><code>db:5432 [primary, in rack 3]
 cache:6379 [says &quot;hi&quot;]
 3 records, 3 fields each</code></pre>
 <p>The first record is the header here, so the loop starts after it. <code>freeEach</code> frees every record and then the list.</p>
-<p>A large file is read a record at a time with <code>csv.reader(text)</code>, whose <code>read</code> gives the next record and fails with <code>CsvError.end</code> when there are no more. <code>sep</code> sets another separator, and <code>line</code> is the line the next record starts on, for messages about bad input:</p>
+<p>A large file is read a record at a time with <code>csv.reader(text)</code>, whose <code>next</code> gives the next record and fails with <code>CsvError.end</code> when there are no more. <code>sep</code> sets another separator, and <code>line</code> is the line the next record starts on, for messages about bad input:</p>
 <pre class="code run"><code><span class="k">import</span> csv
 
 !<span class="t">void</span> <span class="f">main</span>() {
     text := <span class="s">&quot;name;bytes</span><span class="e">\n</span><span class="s">index.html;5120</span><span class="e">\n</span><span class="s">logo.png;20480</span><span class="e">\n</span><span class="s">app.js;x</span><span class="e">\n</span><span class="s">&quot;</span>
     rd := csv.<span class="f">reader</span>(text)
     rd.sep = <span class="s">&quot;;&quot;</span>
-    <span class="k">scoped</span> csv.<span class="t">Record</span> header = <span class="k">try</span> rd.<span class="f">read</span>()
+    <span class="k">scoped</span> csv.<span class="t">Record</span> header = <span class="k">try</span> rd.<span class="f">next</span>()
     <span class="t">i64</span> total = <span class="n">0</span>
     <span class="k">for</span> {
         at := rd.line
-        r := rd.<span class="f">read</span>() <span class="k">catch</span> e {
+        r := rd.<span class="f">next</span>() <span class="k">catch</span> e {
             <span class="k">if</span> e.code != csv.<span class="t">CsvError</span>.end {
                 <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
             }

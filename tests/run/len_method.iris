@@ -1,0 +1,30 @@
+// expect: 2 2 2
+// expect: 2 3 3
+// expect: 3
+// expect: 2 rows
+
+import csv, term, toml
+
+struct Bag {
+    List[i64] xs
+}
+
+i64 Bag.len() => self.xs.len
+
+!void main() {
+    Bag b
+    defer b.xs.free()
+    b.xs.push(1)
+    b.xs.push(2)
+    bp := &b
+    print("{b.len} {bp.len} {b.len()}")
+    rows := try csv.parse("a,b,c\nd,e,f\n")
+    defer rows.freeEach()
+    print("{rows.len} {rows.at(0).len} {rows.at(1).len}")
+    scoped toml.Value doc = try toml.parse("xs = [1, 2, 3]")
+    print("{doc.get("xs").len}")
+    scoped t := term.table(["A"])
+    t.row(["1"])
+    t.row(["2"])
+    print("{t.len} rows")
+}

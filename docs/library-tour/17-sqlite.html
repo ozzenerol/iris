@@ -122,7 +122,7 @@ starts: 2</code></pre>
 <pre class="out"><code>db is 1
 old is 2
 1 deleted</code></pre>
-<p>With values, <code>exec</code> runs one statement: SQL with another statement after it fails with <code>SqlError.failed</code>, before anything runs. The number of values must match the number of <code>?</code>.</p>
+<p>With values, <code>exec</code> runs one statement: SQL with another statement after it fails with <code>SqliteError.failed</code>, before anything runs. The number of values must match the number of <code>?</code>.</p>
 <h2 id="bytes"><a href="#bytes">Bytes</a></h2>
 <p>A BLOB column keeps bytes as they are, for certificates, hashes or packed data. <code>.blob(bytes)</code> puts a <code>u8[]</code> into one, and <code>rows.bytes(col)</code> reads it back; like <code>text</code>, what it gives is valid until the next <code>next</code>. A <code>String</code> field of a struct read with <code>all</code> or <code>one</code> gets the bytes too:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
@@ -178,7 +178,7 @@ api.example.com: 6 bytes</code></pre>
 }</code></pre>
 <pre class="out"><code>2 cache 6379
 1 db 5432</code></pre>
-<p><code>sqlite.one[T]</code> gives the first row. When the query finds nothing, it fails with <code>SqlError.noRows</code>:</p>
+<p><code>sqlite.one[T]</code> gives the first row. When the query finds nothing, it fails with <code>SqliteError.noRows</code>:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -200,8 +200,8 @@ api.example.com: 6 bytes</code></pre>
     }
 }</code></pre>
 <pre class="out"><code>found dns, id 2
-SqlError.noRows</code></pre>
-<p>A field can be an integer, a float, a <code>bool</code> (0 is <code>false</code>), a <code>String</code>, or a plain enum, read from the text of its value's name. Text that isn't one of the names fails with <code>SqlError.failed</code>:</p>
+SqliteError.noRows</code></pre>
+<p>A field can be an integer, a float, a <code>bool</code> (0 is <code>false</code>), a <code>String</code>, or a plain enum, read from the text of its value's name. Text that isn't one of the names fails with <code>SqliteError.failed</code>:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="k">enum</span> <span class="t">State</span> { up, down }
@@ -236,7 +236,7 @@ SqlError.noRows</code></pre>
 }</code></pre>
 <pre class="out"><code>api: up, tls true
 cache: down, tls false
-SqlError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t one of the enum&#x27;s values</code></pre>
+SqliteError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t one of the enum&#x27;s values</code></pre>
 <p>A number that doesn't fit its field fails the same way, instead of being cut down to fit:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
@@ -255,7 +255,7 @@ SqlError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t one
         <span class="t">Route</span>{}
     }
 }</code></pre>
-<pre class="out"><code>SqlError.failed: the column ttl has 300, which doesn&#x27;t fit in u8</code></pre>
+<pre class="out"><code>SqliteError.failed: the column ttl has 300, which doesn&#x27;t fit in u8</code></pre>
 <p>When <code>all</code> or <code>one</code> fails partway, they free what they had read, so nothing is left for the caller.</p>
 <h2 id="row-by-row"><a href="#row-by-row">Row by row</a></h2>
 <p><code>db.query</code> gives <code>Rows</code>, which are read one row at a time. <code>next</code> moves to the next row and gives <code>false</code> when there are no more. <code>int</code>, <code>float</code> and <code>text</code> read a column by its number, from 0, and <code>isNull</code> says whether it is NULL. <code>close</code> ends the query:</p>
@@ -376,13 +376,13 @@ new: no port yet</code></pre>
 <pre class="out"><code>after 5:
   1: 45
   2: 95
-20 failed: SqlError.constraint
+20 failed: SqliteError.constraint
 after 20:
   1: 45
   2: 95</code></pre>
 <p>The second move took 20 from link 1, then failed on link 2, whose <code>CHECK</code> allows no more than 100. The rollback put link 1 back.</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
-<p>The errors are values of <code>sqlite.SqlError</code>, and the message says whether the SQL itself is wrong (<code>in the SQL</code>) or failed while it ran (<code>running the SQL</code>), then gives SQLite's reason:</p>
+<p>The errors are values of <code>sqlite.SqliteError</code>, and the message says whether the SQL itself is wrong (<code>in the SQL</code>) or failed while it ran (<code>running the SQL</code>), then gives SQLite's reason:</p>
 <div class="table"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody><tr><td><code>failed</code></td><td>the SQL is wrong, a table is missing, or the wrong number of values was given</td></tr><tr><td><code>busy</code></td><td>another program kept the database locked for more than 5 seconds</td></tr><tr><td><code>constraint</code></td><td>a <code>UNIQUE</code>, <code>NOT NULL</code>, <code>CHECK</code> or other constraint isn't met</td></tr><tr><td><code>noRows</code></td><td><code>sqlite.one</code> found nothing</td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
@@ -404,10 +404,10 @@ after 20:
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
-<pre class="out"><code>SqlError.constraint: running the SQL: UNIQUE constraint failed: hosts.name
-SqlError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
-SqlError.failed: in the SQL: near &quot;SELEKT&quot;: syntax error
-SqlError.failed: the SQL has 1 ? but 2 values were given</code></pre>
+<pre class="out"><code>SqliteError.constraint: running the SQL: UNIQUE constraint failed: hosts.name
+SqliteError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
+SqliteError.failed: in the SQL: near &quot;SELEKT&quot;: syntax error
+SqliteError.failed: the SQL has 1 ? but 2 values were given</code></pre>
 <p>A <code>Db</code> can be shared by threads; each call waits for the database on the thread that makes it. <code>IRIS_SQLITE</code> names another copy of SQLite to load instead of the system's.</p>
 <p>For a database server, <a href="18-postgres-and-redis.html">PostgreSQL and Redis</a> covers <code>pg</code> and <code>redis</code>.</p>
     <nav class="pager"><a class="prev" href="16-email.html"><span>Previous</span>Sending email</a><a class="next" href="18-postgres-and-redis.html"><span>Next</span>PostgreSQL and Redis</a></nav>
