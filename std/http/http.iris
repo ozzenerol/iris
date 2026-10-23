@@ -47,7 +47,13 @@ pub struct Response {
 }
 
 // Adds a header to the answer: res.header("Cache-Control", "no-store").
+// Content-Type replaces the type the answer has, as send does.
 pub void Response.header(str name, str value) {
+    if sameName(name, "Content-Type") {
+        self.contentType.free()
+        self.contentType = value.copy()
+        return
+    }
     self.headers.append(name)
     self.headers.append(": ")
     self.headers.append(value)
@@ -137,6 +143,18 @@ pub void Response.text(str body) {
     self.body = body.copy()
     self.contentType.free()
     self.contentType = "text/plain; charset=utf-8".copy()
+}
+
+// Answers with HTML.
+pub void Response.html(str body) => self.send(body, "text/html; charset=utf-8")
+
+// Answers with body as contentType, for any type text, json and html
+// don't cover: res.send(csv, "text/csv").
+pub void Response.send(str body, str contentType) {
+    self.body.free()
+    self.body = body.copy()
+    self.contentType.free()
+    self.contentType = contentType.copy()
 }
 
 // Answers with an error, as JSON: {"error": "message"}.

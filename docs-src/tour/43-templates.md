@@ -258,4 +258,56 @@ TemplateError.syntax: line 1: {{ if }} has no {{ end }}
 TemplateError.missing: line 2: subtitle is not in the data
 ```
 
+## Serving pages
+
+A web server parses its templates in `main`, keeps them where its handlers can reach them, and renders one for each request. `res.html` answers with the page and sets the `Content-Type` to HTML (see [HTTP](33-http.html)):
+
+```iris run
+import http, net, template
+
+@json
+struct Hello {
+    String name
+}
+
+template.Template page
+
+!void hello(http.Request *req, http.Response *res) {
+    name := req.query("name")
+    scoped Hello h = Hello{name: (if name.len > 0 { name } else { "stranger" }).copy()}
+    scoped String html = try page.render(h)
+    res.html(html)
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    page = try template.parse(r"""<p>Hello, {{ name }}!</p>""")
+    defer page.free()
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    for query in ["", "?name=Ada", "?name=<b>Ada</b>"] {
+        scoped String url = format("http://127.0.0.1:{ln.port}/{query}")
+        scoped http.Reply reply = try http.get(url)
+        print("{reply.header("Content-Type")}: {reply.body}")
+    }
+}
+```
+
+```output
+text/html; charset=utf-8: <p>Hello, stranger!</p>
+text/html; charset=utf-8: <p>Hello, Ada!</p>
+text/html; charset=utf-8: <p>Hello, &lt;b&gt;Ada&lt;/b&gt;!</p>
+```
+
+The tags in the last name came out as text, so a visitor can't add HTML to the page. `req.query` gives the value as it was sent; a browser writes `<` as `%3C`, and `url.decode` turns it back (see [Encodings and ids](40-encodings-and-ids.html#urls)).
+
 `template.escape(text)` escapes any text for HTML the same way, for the rare page built without a template.

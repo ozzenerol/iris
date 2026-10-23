@@ -77,7 +77,7 @@ void main() {
 -1
 ```
 
-`try` is part of an expression, so it can sit where the value is needed: `return try f(x) + 1`, `print("{try load()}")`. Everything that was set up with `defer` and `scoped` still runs on the way out, so passing an error up never leaks (see [Memory](19-memory.html)).
+`try` is part of an expression, so it can sit where the value is needed: `return try f(x) + 1`, `print("{try load()}")`. Everything that was set up with `defer` and `scoped` still runs on the way out, so passing an error up never leaks (see [Memory](19-memory.html)). The error keeps its message and trace while that code runs, even when the code makes and catches errors of its own, as a rollback can.
 
 ## catch with a value
 

@@ -25,10 +25,10 @@ Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris 
 | sort | quicksort of 10M ints (s) | **0.57** | 0.58 | 0.59 | 0.60 | 78 / 78 / 78 |
 | strings | build, count, split, replace (s) | **0.18** | 0.19 | 0.27 | 0.49 | 187 / 187 / 239 |
 | channels | ping-pong, then 1000 tasks on one channel (s) | 0.22 | **0.22** | 10.67 | 0.57 | 6 / 3 / 4 |
-| http-hello | HTTP/1.1 hello, wrk (req/s) | 384k | **398k** | 368k | 230k | 5 / 10 / 19 |
-| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **367k** | 364k | 341k | 143k | 6 / 10 / 20 |
-| tcp-echo | TCP echo, 100 connections (msg/s) | **377k** | 372k | 362k | 289k | 4 / 3 / 5 |
-| http2 | HTTP/2 hello, h2load (req/s) | **2,087k** | 2,054k | 744k | 148k | 22 / 13 / 44 |
+| http-hello | HTTP/1.1 hello, wrk (req/s) | 381k | **395k** | 372k | 230k | 5 / 10 / 19 |
+| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **367k** | 365k | 333k | 144k | 6 / 11 / 20 |
+| tcp-echo | TCP echo, 100 connections (msg/s) | 367k | **380k** | 363k | 292k | 4 / 3 / 5 |
+| http2 | HTTP/2 hello, h2load (req/s) | **2,044k** | 2,037k | 744k | 149k | 22 / 14 / 43 |
 | tcp-proxy | TCP proxy, 64-byte messages, 100 connections (msg/s) | 190k | **190k** | 187k | 157k | 4 / 4 / 6 |
 | tcp-proxy-bulk | TCP proxy, 256 KiB messages, 16 connections (MiB/s each way) | 7,645 | 7,911 | 2,098 | **8,352** | 3 / 3 / 5 |
 

@@ -17,6 +17,7 @@
 #include "iris.h"
 
 #include <math.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2262,6 +2263,151 @@ static void runFrame(IR *ir, DeferFrame *f, bool isError) {
     }
 }
 
+/* Whether code can change the current error: make one, catch one, pass
+ * one on, or wait, which lets other tasks of the thread make theirs. Calls
+ * are followed into the functions they call; what can't be seen into (C
+ * functions, function values, dyn) counts as yes. */
+static int touchLowest; /* the lowest depth of a function found being worked out */
+
+static bool funcTouchesErrors(Node *f, int depth);
+
+static bool touchesErrors(Node *n, int depth) {
+    if (!n) {
+        return false;
+    }
+    switch (n->kind) {
+    case N_TRY: case N_CATCH: case N_SELECT: case N_SELECT_ARM: case N_ASM: case N_SPAWN: case N_THREAD:
+        return true;
+    case N_UNARY:
+        if (n->op == P_LARROW) {
+            return true; /* taking from a channel waits */
+        }
+        break;
+    case N_ASSIGN:
+        if (n->op == P_LARROW) {
+            return true;
+        }
+        break;
+    case N_INTERP:
+        for (int i = 0; i < n->list.len; i++) {
+            Type *t = n->list.items[i]->type;
+            if (t && (t->kind == TY_STRUCT || (t->kind == TY_PTR && t->elem && t->elem->kind == TY_STRUCT))) {
+                return true; /* its format method */
+            }
+        }
+        break;
+    case N_CALL:
+        switch (n->builtin) {
+        case BI_NONE: case BI_PRINT: case BI_PANIC: case BI_FORMAT: case BI_ALLOC: case BI_FREE:
+        case BI_STR_COPY: case BI_STRING_APPEND: case BI_STRING_FREE: case BI_STRING_RESERVE:
+        case BI_STRING_INSERT: case BI_STRING_TRUNCATE: case BI_STRING_CLEAR: case BI_ENUM_NEW:
+        case BI_FLAGS_HAS: case BI_ATOMIC_LOAD: case BI_ATOMIC_STORE: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB:
+        case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK: case BI_CHAN_FREE:
+        case BI_JSON_ENCODE: case BI_JSON_FREE: case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: case BI_GROW:
+        case BI_TABLE_OF: case BI_ARENA_ALLOC:
+            break;
+        default:
+            return true;
+        }
+        if (n->builtin == BI_NONE && !(n->ref && n->ref->kind == N_FUNC)) {
+            return true; /* through a value we can't follow */
+        }
+        break;
+    default:
+        break;
+    }
+    if (n->kind != N_FUNC && n->ref && n->ref->kind == N_FUNC && n->ref != n && funcTouchesErrors(n->ref, depth)) {
+        return true;
+    }
+    if (n->kind == N_FUNC) {
+        return false; /* a function declared inside isn't run here */
+    }
+    if (touchesErrors(n->a, depth) || touchesErrors(n->b, depth) || touchesErrors(n->c, depth) ||
+        touchesErrors(n->d, depth)) {
+        return true;
+    }
+    for (int i = 0; i < n->list.len; i++) {
+        if (touchesErrors(n->list.items[i], depth)) {
+            return true;
+        }
+    }
+    for (int i = 0; i < n->list2.len; i++) {
+        if (touchesErrors(n->list2.items[i], depth)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool funcTouchesErrors(Node *f, int depth) {
+    if (f->touchesErrors >= 2) {
+        return f->touchesErrors == 3;
+    }
+    if (f->touchesErrors == 1) {
+        /* a call back into a function still being worked out: the answer
+         * holds unless that function turns out to touch them */
+        if (f->touchDepth < touchLowest) {
+            touchLowest = f->touchDepth;
+        }
+        return false;
+    }
+    if ((f->flags & (F_EXTERN | F_INTRINSIC)) || (f->type && f->type->kind == TY_FUNC && f->type->elem &&
+                                                   f->type->elem->kind == TY_RESULT)) {
+        f->touchesErrors = 3; /* C code, or a function that can fail */
+        return true;
+    }
+    f->touchesErrors = 1;
+    f->touchDepth = depth;
+    int saved = touchLowest;
+    touchLowest = INT_MAX;
+    bool yes = false;
+    for (int i = 0; i < f->list.len && !yes; i++) {
+        yes = touchesErrors(f->list.items[i], depth + 1); /* default values of parameters */
+    }
+    yes = yes || touchesErrors(f->a, depth + 1) || touchesErrors(f->b, depth + 1) || touchesErrors(f->c, depth + 1) ||
+          touchesErrors(f->d, depth + 1);
+    if (yes) {
+        f->touchesErrors = 3;
+    } else if (touchLowest >= depth) {
+        f->touchesErrors = 2; /* only leaned on itself, or on nothing */
+    } else {
+        f->touchesErrors = 0; /* leaned on a caller that isn't done: ask again later */
+    }
+    if (touchLowest > saved) {
+        touchLowest = saved;
+    }
+    return yes;
+}
+
+/* Whether the frames up to stop hold code that could change the current
+ * error, so the error has to be kept while they run. */
+static bool defersRunCode(IR *ir, DeferFrame *stop, bool isError) {
+    for (DeferFrame *f = ir->defers; f && f != stop; f = f->outer) {
+        for (int i = 0; i < f->items.len; i++) {
+            Node *d = f->items.items[i];
+            if (d->kind == N_VAR) {
+                Type *t = d->type;
+                if (t->kind == TY_STRING || t->kind == TY_CHAN || !d->ref) {
+                    continue; /* freed by the runtime */
+                }
+                touchLowest = INT_MAX;
+                if (funcTouchesErrors(d->ref, 0)) {
+                    return true;
+                }
+                continue;
+            }
+            if (d->kind == N_ERRDEFER && !isError) {
+                continue;
+            }
+            touchLowest = INT_MAX;
+            if (touchesErrors(d->a, 0)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Runs the frames from the innermost up to (not including) stop. */
 static void runDefers(IR *ir, DeferFrame *stop, bool isError) {
     for (DeferFrame *f = ir->defers; f && f != stop; f = f->outer) {
@@ -2286,7 +2432,16 @@ static void traceAdd(IR *ir, Node *at) {
 /* Leaves the function with an error: deferred code first, errdefer too. */
 static void returnError(IR *ir, const char *err) {
     freeTemps(ir, 0);
-    runDefers(ir, NULL, true);
+    if (defersRunCode(ir, NULL, true)) {
+        /* the deferred code may make errors of its own, or wait while other
+         * tasks do: the error that leaves keeps its message and trace */
+        const char *k = tmp(ir);
+        ins(ir, "%s = call i64 @iris_error_keep()", k);
+        runDefers(ir, NULL, true);
+        ins(ir, "call void @iris_error_back(i64 %s)", k);
+    } else {
+        runDefers(ir, NULL, true);
+    }
     Type *rt = ir->func->type;
     if (rt->elem->kind == TY_VOID) {
         ins(ir, "ret i64 %s", err);
@@ -4007,6 +4162,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare ptr @iris_error_message_ptr()\n"
            "declare void @iris_error_save(ptr, ptr)\n"
            "declare void @iris_error_restore(ptr, ptr)\n"
+           "declare i64 @iris_error_keep()\n"
+           "declare void @iris_error_back(i64)\n"
            "declare i64 @iris_error_message_len()\n"
            "declare void @iris_error_report(i64) noreturn\n"
            "declare ptr @iris_enum_name(i64, i32)\n"

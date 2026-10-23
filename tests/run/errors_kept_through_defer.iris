@@ -1,0 +1,118 @@
+// expect: scoped: the stock is too low
+// expect: defer: the stock is too low
+// expect: errdefer: the stock is too low
+// expect: passed up: the stock is too low
+// expect: waiting defer: the stock is too low
+// expect: recursive free: the stock is too low
+// expect: function value: the stock is too low
+// stderr: error: Stock.low: the stock is too low
+// stderr: at check
+// stderr: at order
+// stderr: at main
+// exit: 1
+
+enum Stock { low, other }
+
+!void fails(str why) {
+    return error(Stock.other, why)
+}
+
+// A value whose free makes and catches an error, as a rollback can.
+struct Tx {
+    i64 id
+}
+
+void Tx.free() {
+    fails("rollback failed") catch e { }
+}
+
+!void withScoped() {
+    scoped Tx tx
+    return error(Stock.low, "the stock is too low")
+}
+
+!void withDefer() {
+    defer fails("cleanup failed") catch e { }
+    return error(Stock.low, "the stock is too low")
+}
+
+!void withErrdefer() {
+    errdefer fails("undo failed") catch e { }
+    return error(Stock.low, "the stock is too low")
+}
+
+!void check() {
+    return error(Stock.low, "the stock is too low")
+}
+
+!void order() {
+    scoped Tx tx
+    try check()
+}
+
+// Another task makes its own errors while this one waits in a defer.
+void noisy() {
+    for _ in 0..5 {
+        fails("another task's error") catch e { }
+        sleep(1ms)
+    }
+}
+
+!void waits() {
+    defer sleep(10ms)
+    return error(Stock.low, "the stock is too low")
+}
+
+// Frees that call each other, with the error made two levels down.
+struct Shelf {
+    List[Box] boxes
+}
+
+struct Box {
+    List[Shelf] inner
+    bool last
+}
+
+void Shelf.free() {
+    for b in self.boxes {
+        b.free()
+    }
+    self.boxes.free()
+}
+
+void Box.free() {
+    for s in self.inner {
+        s.free()
+    }
+    self.inner.free()
+    if self.last {
+        fails("the last box failed") catch e { }
+    }
+}
+
+!void withShelf() {
+    scoped Shelf s
+    s.boxes.push(Box{last: true})
+    return error(Stock.low, "the stock is too low")
+}
+
+void cleanup() {
+    fails("cleanup failed") catch e { }
+}
+
+!void withValue(void() f) {
+    defer f()
+    return error(Stock.low, "the stock is too low")
+}
+
+!void main() {
+    withScoped() catch e { print("scoped: {e.message}") }
+    withDefer() catch e { print("defer: {e.message}") }
+    withErrdefer() catch e { print("errdefer: {e.message}") }
+    order() catch e { print("passed up: {e.message}") }
+    spawn noisy()
+    waits() catch e { print("waiting defer: {e.message}") }
+    withShelf() catch e { print("recursive free: {e.message}") }
+    withValue(cleanup) catch e { print("function value: {e.message}") }
+    try order()
+}

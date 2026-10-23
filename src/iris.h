@@ -212,6 +212,10 @@ struct Node {
     int slot;               /* the LLVM element that holds the field */
     int bitOff, bitWidth;   /* bitfields: the lowest bit and how many bits; bitWidth 0 otherwise */
     int64_t offset;         /* where the field (or its bitfield's unit) starts, in bytes */
+    /* functions, for the IR writer: whether calling one can make an error or
+     * let other tasks run (0 not known yet, 1 being worked out, 2 no, 3 yes) */
+    int touchesErrors;
+    int touchDepth;
 };
 
 Node *newNode(Arena *a, NodeKind kind, int line, int col);

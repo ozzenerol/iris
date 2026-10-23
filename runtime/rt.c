@@ -1599,7 +1599,91 @@ void iris_write_errcode(int sink, IrisString *dst, int64_t code) {
 
 void iris_error_begin(void) { msgNextLen = 0; }
 
+/* The current error is kept while deferred code runs on the way out of a
+ * function: that code may make and catch errors of its own, or wait while
+ * other tasks of the thread make theirs. Keeping costs nothing until the
+ * message or trace is about to change: then a copy is made for each keeper
+ * that has none yet, and given back when the deferred code is done. A
+ * keeper is known by the generation of the error it kept. */
+typedef struct {
+    size_t msgLen;
+    int traceLen, traceDropped;
+    Frame trace[];
+} Kept;
+
+typedef struct {
+    uint64_t gen;
+    Kept *copy;
+} Keeper;
+
+static _Thread_local uint64_t errGen;
+static _Thread_local Keeper *keepers;
+static _Thread_local int keepersLen, keepersCap;
+
+static Kept *keptCopy(void) {
+    Kept *k = malloc(sizeof(Kept) + (size_t)traceLen * sizeof(Frame) + msgCurLen);
+    if (!k) {
+        return NULL;
+    }
+    k->msgLen = msgCurLen;
+    k->traceLen = traceLen;
+    k->traceDropped = traceDropped;
+    memcpy(k->trace, trace, (size_t)traceLen * sizeof(Frame));
+    memcpy((char *)(k->trace + traceLen), msgCur, msgCurLen);
+    return k;
+}
+
+/* Called before the message or the trace changes. */
+static inline void errorChanging(void) {
+    for (int i = 0; i < keepersLen; i++) {
+        if (!keepers[i].copy) {
+            keepers[i].copy = keptCopy();
+        }
+    }
+    errGen++;
+}
+
+int64_t iris_error_keep(void) {
+    if (keepersLen == keepersCap) {
+        int cap = keepersCap ? keepersCap * 2 : 8;
+        Keeper *k = realloc(keepers, (size_t)cap * sizeof(Keeper));
+        if (!k) {
+            outOfMemory();
+        }
+        keepers = k;
+        keepersCap = cap;
+    }
+    keepers[keepersLen++] = (Keeper){errGen, NULL};
+    return (int64_t)errGen;
+}
+
+void iris_error_back(int64_t gen) {
+    int i = keepersLen - 1;
+    while (i >= 0 && keepers[i].gen != (uint64_t)gen) {
+        i--;
+    }
+    if (i < 0) {
+        return;
+    }
+    Kept *k = keepers[i].copy;
+    memmove(keepers + i, keepers + i + 1, (size_t)(keepersLen - i - 1) * sizeof(Keeper));
+    keepersLen--;
+    if (!k) {
+        return; /* nothing changed */
+    }
+    errorChanging();
+    memcpy(msgCur, (char *)(k->trace + k->traceLen), k->msgLen);
+    msgCurLen = k->msgLen;
+    memcpy(trace, k->trace, (size_t)k->traceLen * sizeof(Frame));
+    traceLen = k->traceLen;
+    traceDropped = k->traceDropped;
+    free(k);
+}
+
 static void addFrame(const char *file, int line, int col, const char *fn) {
+    if (keepersLen) {
+        errorChanging();
+    }
     if (traceLen < TRACE_MAX) {
         trace[traceLen++] = (Frame){file, fn, line, col};
     } else {
@@ -1610,6 +1694,9 @@ static void addFrame(const char *file, int line, int col, const char *fn) {
 /* A new error: its message becomes the current one and its trace starts
  * where it was made. */
 int64_t iris_error_finish(int64_t code, const char *file, int line, int col, const char *fn) {
+    if (keepersLen) {
+        errorChanging();
+    }
     memcpy(msgCur, msgNext, msgNextLen);
     msgCurLen = msgNextLen;
     traceLen = 0;
@@ -1628,6 +1715,9 @@ void iris_error_save(char *buf, int64_t *len) {
 }
 
 void iris_error_restore(const char *buf, const int64_t *len) {
+    if (keepersLen) {
+        errorChanging();
+    }
     memcpy(msgCur, buf, (size_t)*len);
     msgCurLen = (size_t)*len;
 }

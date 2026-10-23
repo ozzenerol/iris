@@ -140,7 +140,7 @@ A path no pattern has gets 404, with the text `not found` and a newline, which `
 
 ## Answers
 
-`res.text(s)` answers with text and `res.json(s)` with JSON; each sets the `Content-Type`. The status is 200 unless `res.status` says another. `res.error(status, message)` sets the status and answers with `{"error": message}`, and `res.header(name, value)` adds a header.
+`res.text(s)` answers with text, `res.json(s)` with JSON and `res.html(s)` with HTML; each sets the `Content-Type`. `res.send(s, type)` answers with any other type, such as `text/csv`. The status is 200 unless `res.status` says another. `res.error(status, message)` sets the status and answers with `{"error": message}`, and `res.header(name, value)` adds a header. A `Content-Type` given with `header` replaces the type the answer had, so there is only ever one.
 
 A handler can return `!void`. An error that leaves it is answered with 500 and the error's message, so `try` can be used in a handler like anywhere else.
 

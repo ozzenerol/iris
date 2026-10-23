@@ -1,0 +1,80 @@
+// expect: HTTP/1.1 200 text/html; charset=utf-8 [<p>Hello, Ada</p>]
+// expect: HTTP/1.1 200 text/csv [a,b]
+// expect: HTTP/1.1 200 text/calendar [BEGIN:VCALENDAR]
+// expect: HTTP/1.1 200 text/plain; charset=utf-8 [plain]
+// expect: one Content-Type: true
+// expect: HTTP/2 200 text/html; charset=utf-8 [<p>Hello, Ada</p>]
+// expect: HTTP/2 200 text/calendar [BEGIN:VCALENDAR]
+
+import http, net, str
+
+void page(http.Request *req, http.Response *res) {
+    res.html("<p>Hello, Ada</p>")
+}
+
+void csv(http.Request *req, http.Response *res) {
+    res.send("a,b", "text/csv")
+}
+
+// A header given after the body replaces the type it set.
+void calendar(http.Request *req, http.Response *res) {
+    res.text("BEGIN:VCALENDAR")
+    res.header("content-type", "text/calendar")
+}
+
+void plain(http.Request *req, http.Response *res) {
+    res.text("plain")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void show(http.Client *c, str base, str path) {
+    scoped String url = format("{base}{path}")
+    scoped http.Reply r = try c.get(url)
+    print("{r.protocol} {r.status} {r.header("Content-Type")} [{r.body}]")
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/page", page)
+    r.get("/csv", csv)
+    r.get("/calendar", calendar)
+    r.get("/plain", plain)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+
+    http.Client c
+    c.noHttp2 = true
+    defer c.close()
+    for path in ["/page", "/csv", "/calendar", "/plain"] {
+        try show(&c, base, path)
+    }
+
+    conn := try net.dial("127.0.0.1", ln.port)
+    defer conn.close()
+    try conn.write("GET /calendar HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    i64 types = 0
+    for {
+        scoped String line = try conn.readLine()
+        if line.len == 0 {
+            break
+        }
+        scoped String low = line.lower()
+        if low.startsWith("content-type:") {
+            types += 1
+        }
+    }
+    print("one Content-Type: {types == 1}")
+
+    http.Client h2
+    h2.priorKnowledge = true
+    defer h2.close()
+    try show(&h2, base, "/page")
+    try show(&h2, base, "/calendar")
+}
