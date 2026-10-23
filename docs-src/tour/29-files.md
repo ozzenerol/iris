@@ -282,6 +282,30 @@ import fs
 
 A link is listed as a file and not followed, so a link to a folder above can't make the walk go round.
 
+When each file's size or time is wanted too, `fs.find(root)` gives the same files in the same order, each as a `Found` with its `path` and its `info`. It reads them relative to each open folder, which is quicker than a `fs.stat` of every path:
+
+```iris run
+import fs
+
+!void main() {
+    root := "/tmp/iris-tour-find"
+    try fs.mkdirAll("/tmp/iris-tour-find/logs")
+    try fs.writeAll("/tmp/iris-tour-find/logs/app.log", "started\n")
+    try fs.writeAll("/tmp/iris-tour-find/notes.txt", "todo\n")
+    found := try fs.find(root)
+    defer found.freeEach()
+    for f in found {
+        print("{f.path} {f.info.size}")
+    }
+    try fs.removeAll(root)
+}
+```
+
+```output
+/tmp/iris-tour-find/logs/app.log 8
+/tmp/iris-tour-find/notes.txt 5
+```
+
 ## Finding files by name
 
 `fs.glob(pattern)` gives the paths of the files that match a pattern, sorted. In each part of the pattern, `*` matches any run of characters, `?` one character, and `[abc]` one of those characters; `[a-z]` is a range and `[!abc]` any character but those. A part that is `**` matches any number of folders, none too. A name that starts with a dot is matched only by a pattern that starts with one:

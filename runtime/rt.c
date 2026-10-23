@@ -725,7 +725,7 @@ int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
    decodeRune does (no overlong forms, surrogates or values past U+10FFFF).
    With count, the characters of valid text are counted on the way: -1 when
    it isn't valid. */
-static int64_t utf8Scan(const unsigned char *p, int64_t n, bool count) {
+static int64_t utf8ScanScalar(const unsigned char *p, int64_t n, bool count) {
     int64_t i = 0, chars = 0;
     while (i < n) {
         if (i + 8 <= n) {
@@ -766,6 +766,119 @@ static int64_t utf8Scan(const unsigned char *p, int64_t n, bool count) {
     }
     (void)count;
     return chars;
+}
+
+/* UTF-8 checked 16 bytes at a time: Keiser and Lemire's lookup algorithm
+   ("Validating UTF-8 in less than one instruction per byte", 2021), as
+   simdjson has it. Three table lookups on nibbles flag every error a byte
+   pair can have; a fourth check catches 3- and 4-byte sequences whose
+   continuation bytes are missing or extra. */
+#if defined(__x86_64__)
+#include <immintrin.h>
+
+#define TOO_SHORT (1 << 0)
+#define TOO_LONG (1 << 1)
+#define OVERLONG_3 (1 << 2)
+#define TOO_LARGE (1 << 3)
+#define SURROGATE (1 << 4)
+#define OVERLONG_2 (1 << 5)
+#define TOO_LARGE_1000 (1 << 6)
+#define OVERLONG_4 (1 << 6)
+#define TWO_CONTS (1 << 7)
+#define CARRY (TOO_SHORT | TOO_LONG | TWO_CONTS)
+
+__attribute__((target("ssse3"))) static inline __m128i prevBytes(__m128i cur, __m128i prev, int n) {
+    switch (n) {
+    case 1: return _mm_alignr_epi8(cur, prev, 15);
+    case 2: return _mm_alignr_epi8(cur, prev, 14);
+    default: return _mm_alignr_epi8(cur, prev, 13);
+    }
+}
+
+__attribute__((target("ssse3"))) static int utf8ValidSsse3(const unsigned char *p, int64_t n, int64_t *done) {
+    const __m128i t1 = _mm_setr_epi8(TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG,
+                                     TWO_CONTS, TWO_CONTS, TWO_CONTS, TWO_CONTS, TOO_SHORT | OVERLONG_2, TOO_SHORT,
+                                     TOO_SHORT | OVERLONG_3 | SURROGATE,
+                                     TOO_SHORT | TOO_LARGE | TOO_LARGE_1000 | OVERLONG_4);
+    const __m128i t2 = _mm_setr_epi8(CARRY | OVERLONG_3 | OVERLONG_2 | OVERLONG_4, CARRY | OVERLONG_2, CARRY, CARRY,
+                                     CARRY | TOO_LARGE, CARRY | TOO_LARGE | TOO_LARGE_1000,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000, CARRY | TOO_LARGE | TOO_LARGE_1000,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000, CARRY | TOO_LARGE | TOO_LARGE_1000,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000, CARRY | TOO_LARGE | TOO_LARGE_1000,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000 | SURROGATE,
+                                     CARRY | TOO_LARGE | TOO_LARGE_1000, CARRY | TOO_LARGE | TOO_LARGE_1000);
+    const __m128i t3 = _mm_setr_epi8(TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT,
+                                     TOO_SHORT,
+                                     TOO_LONG | OVERLONG_2 | TWO_CONTS | OVERLONG_3 | TOO_LARGE_1000 | OVERLONG_4,
+                                     TOO_LONG | OVERLONG_2 | TWO_CONTS | OVERLONG_3 | TOO_LARGE,
+                                     TOO_LONG | OVERLONG_2 | TWO_CONTS | SURROGATE | TOO_LARGE,
+                                     TOO_LONG | OVERLONG_2 | TWO_CONTS | SURROGATE | TOO_LARGE, TOO_SHORT, TOO_SHORT,
+                                     TOO_SHORT, TOO_SHORT);
+    const __m128i nib = _mm_set1_epi8(0x0f);
+    /* bytes that start a sequence the block's end cuts short */
+    const __m128i maxEnd = _mm_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, (char)(0xf0 - 1),
+                                         (char)(0xe0 - 1), (char)(0xc0 - 1));
+    __m128i prev = _mm_setzero_si128(), err = _mm_setzero_si128(), prevIncomplete = _mm_setzero_si128();
+    int64_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        __m128i in = _mm_loadu_si128((const __m128i *)(p + i));
+        if (_mm_movemask_epi8(in) == 0) {
+            /* ASCII: only a sequence left open by the last block is wrong */
+            err = _mm_or_si128(err, prevIncomplete);
+            prevIncomplete = _mm_setzero_si128();
+            prev = in;
+            continue;
+        }
+        __m128i p1 = prevBytes(in, prev, 1);
+        __m128i b1h = _mm_shuffle_epi8(t1, _mm_and_si128(_mm_srli_epi16(p1, 4), nib));
+        __m128i b1l = _mm_shuffle_epi8(t2, _mm_and_si128(p1, nib));
+        __m128i b2h = _mm_shuffle_epi8(t3, _mm_and_si128(_mm_srli_epi16(in, 4), nib));
+        __m128i sc = _mm_and_si128(_mm_and_si128(b1h, b1l), b2h);
+        __m128i p2 = prevBytes(in, prev, 2), p3 = prevBytes(in, prev, 3);
+        __m128i third = _mm_subs_epu8(p2, _mm_set1_epi8((char)(0xe0 - 0x80)));
+        __m128i fourth = _mm_subs_epu8(p3, _mm_set1_epi8((char)(0xf0 - 0x80)));
+        __m128i must23 = _mm_and_si128(_mm_or_si128(third, fourth), _mm_set1_epi8((char)0x80));
+        err = _mm_or_si128(err, _mm_xor_si128(must23, sc));
+        prevIncomplete = _mm_subs_epu8(in, maxEnd);
+        prev = in;
+    }
+    *done = i;
+    /* what is left, and a sequence the last block left open, go to the
+       scalar check from the start of that sequence */
+    return _mm_movemask_epi8(_mm_cmpeq_epi8(err, _mm_setzero_si128())) == 0xffff;
+}
+
+/* the characters of valid UTF-8: the bytes that don't continue one */
+static int64_t utf8CountSse2(const unsigned char *p, int64_t n) {
+    int64_t count = 0, i = 0;
+    const __m128i limit = _mm_set1_epi8((char)0xbf);       /* continuation bytes are 0x80 to 0xbf */
+    for (; i + 16 <= n; i += 16) {
+        __m128i in = _mm_loadu_si128((const __m128i *)(p + i));
+        /* signed: continuation bytes are -128 to -65, all others above */
+        __m128i notCont = _mm_cmpgt_epi8(in, limit);
+        count += __builtin_popcount((unsigned)_mm_movemask_epi8(notCont));
+    }
+    for (; i < n; i++) count += (p[i] & 0xc0) != 0x80;
+    return count;
+}
+#endif
+
+static int64_t utf8Scan(const unsigned char *p, int64_t n, bool count) {
+#if defined(__x86_64__)
+    if (n >= 32 && __builtin_cpu_supports("ssse3")) {
+        int64_t done;
+        if (!utf8ValidSsse3(p, n, &done)) return -1;
+        /* back to the start of the character the last block may have cut,
+           and the rest checked one character at a time */
+        int64_t j = done;
+        for (int k = 0; k < 3 && j > 0 && (p[j - 1] & 0xc0) == 0x80; k++) j--;
+        if (j > 0 && p[j - 1] >= 0xc0) j--;
+        if (utf8ScanScalar(p + j, n - j, false) < 0) return -1;
+        return count ? utf8CountSse2(p, n) : 1;
+    }
+#endif
+    return utf8ScanScalar(p, n, count);
 }
 
 int iris_utf8_valid(const unsigned char *p, int64_t n) { return utf8Scan(p, n, false) >= 0; }
@@ -1952,6 +2065,31 @@ int iris_fs_dir_next(void *dir, IrisString *name, int *isDir) {
         if (fstatat(fd, e->d_name, &st, 0) == 0) *isDir = S_ISDIR(st.st_mode);
         return 1;
     }
+    return 0;
+}
+
+/* fs.find: a name's size, kind and time, relative to the open folder, so
+   the system doesn't look the folder's path up again for each file. */
+int iris_fs_dir_stat(void *dir, const char *name, int64_t n, int64_t *size, int *isDir, int64_t *modified) {
+    char small[256];
+    char *p = n < (int64_t)sizeof small ? small : malloc((size_t)n + 1);
+    if (!p) outOfMemory();
+    memcpy(p, name, (size_t)n);
+    p[n] = 0;
+    struct stat st;
+    int r = fstatat(dirfd((DIR *)dir), p, &st, AT_SYMLINK_NOFOLLOW);
+    int err = errno;
+    if (p != small) free(p);
+    if (r != 0) {
+        return fsCode(err);
+    }
+    *size = (int64_t)st.st_size;
+    *isDir = S_ISDIR(st.st_mode) ? 1 : 0;
+#ifdef __APPLE__
+    *modified = (int64_t)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+#else
+    *modified = (int64_t)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+#endif
     return 0;
 }
 

@@ -1,0 +1,34 @@
+// expect: a/b/deep.txt 4 false
+// expect: a/one.txt 3 false
+// expect: link.txt 3 false
+// expect: top.txt 6 false
+// expect: 4 files, 16 bytes, the same paths as walk: true
+// find gives each file with its information, in walk's order.
+import fs, os
+
+!void main() {
+    scoped String root = try fs.tempDir("iris-find")
+    defer fs.removeAll(root) catch e { }
+    scoped String ab = format("{root}/a/b")
+    try fs.mkdirAll(ab)
+    scoped String p1 = format("{root}/a/b/deep.txt")
+    try fs.writeAll(p1, "deep")
+    scoped String p2 = format("{root}/a/one.txt")
+    try fs.writeAll(p2, "one")
+    scoped String p3 = format("{root}/top.txt")
+    try fs.writeAll(p3, "top!!!")
+    scoped String p4 = format("{root}/link.txt")
+    try fs.writeAll(p4, "lnk")
+    found := try fs.find(root)
+    defer found.freeEach()
+    walked := try fs.walk(root)
+    defer walked.freeEach()
+    i64 bytes = 0
+    bool same = found.len == walked.len
+    for i, f in found.items() {
+        print("{f.path[root.len + 1:]} {f.info.size} {f.info.isDir}")
+        bytes += f.info.size
+        same = same && f.path == walked.at(i)
+    }
+    print("{found.len} files, {bytes} bytes, the same paths as walk: {same}")
+}

@@ -83,6 +83,9 @@ u8 *rawDirOpen(u8 *path, i64 pathLen, i32 *err)
 @extern("iris_fs_dir_next")
 i32 rawDirNext(u8 *dir, String *name, i32 *isDir)
 
+@extern("iris_fs_dir_stat")
+i32 rawDirStat(u8 *dir, u8 *name, i64 n, i64 *size, i32 *isDir, i64 *modified)
+
 @extern("iris_fs_dir_close")
 void rawDirClose(u8 *dir)
 
@@ -435,6 +438,71 @@ pub !List[String] walk(str root) {
         return e
     }
     return out
+}
+
+// A file that find found: its path, joined to the root, and its size,
+// kind and time of change.
+pub struct Found {
+    pub String path
+    pub Info info
+}
+
+// Gives the path back.
+pub void Found.free() {
+    self.path.free()
+}
+
+// Every file under a folder and the folders in it, with its size and time,
+// as walk finds them and in the same order. Each file's information is
+// read relative to its open folder, which costs less than a stat of its
+// whole path. Links are listed as files and not followed. The caller frees
+// the list with freeEach.
+pub !List[Found] find(str root) {
+    List[Found] out
+    findInto(root, &out) catch e {
+        out.freeEach()
+        return e
+    }
+    return out
+}
+
+!void findInto(str dir, List[Found] *out) {
+    i32 err
+    d := rawDirOpen(dir.ptr, dir.len, &err)
+    if err != 0 {
+        return fsError(err, dir)
+    }
+    defer rawDirClose(d)
+    scoped List[Entry] items
+    defer {
+        for e in items {
+            e.name.free()
+        }
+    }
+    for {
+        String name
+        i32 isDir
+        if rawDirNext(d, &name, &isDir) == 0 {
+            break
+        }
+        items.push(Entry{name: name, isDir: isDir != 0})
+    }
+    items.sort(byName)
+    for e in items {
+        if e.isDir {
+            scoped String sub = joinPath(dir, e.name)
+            try findInto(sub, out)
+            continue
+        }
+        i64 size
+        i32 isDir
+        i64 modified
+        code := rawDirStat(d, e.name.ptr, e.name.len, &size, &isDir, &modified)
+        if code != 0 {
+            return fsError(code, e.name)
+        }
+        out.push(Found{path: joinPath(dir, e.name), info: Info{size: size, isDir: isDir != 0, modified: time.Time{ns: modified}}})
+    }
 }
 
 String joinPath(str a, str b) {

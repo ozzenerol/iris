@@ -19,12 +19,11 @@ import fs
             }
         }
     }
-    files := try fs.walk(root)
+    files := try fs.find(root)
     defer files.freeEach()
     i64 bytes = 0
     for f in files {
-        info := try fs.stat(f)
-        bytes += info.size
+        bytes += f.info.size
     }
     print("{files.len} {bytes}")
     try fs.removeAll(root)
