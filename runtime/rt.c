@@ -8649,7 +8649,92 @@ void iris_z_free(void *handle) {
     free(z);
 }
 
+#ifdef __x86_64__
+/* CRC-32 (the zip polynomial) one byte at a time, and the table for it */
+static uint32_t crcTable[8][256];
+static pthread_once_t crcOnce = PTHREAD_ONCE_INIT;
+static void crcTables(void) {
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; k++) c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
+        crcTable[0][i] = c;
+    }
+    for (int t = 1; t < 8; t++)
+        for (int i = 0; i < 256; i++) crcTable[t][i] = (crcTable[t - 1][i] >> 8) ^ crcTable[0][crcTable[t - 1][i] & 0xff];
+}
+
+/* slicing by 8: c is the running value, already inverted */
+static uint32_t crcSlice(uint32_t c, const uint8_t *p, int64_t n) {
+    while (n >= 8) {
+        uint32_t a, b;
+        memcpy(&a, p, 4);
+        memcpy(&b, p + 4, 4);
+        a ^= c;
+        c = crcTable[7][a & 0xff] ^ crcTable[6][(a >> 8) & 0xff] ^ crcTable[5][(a >> 16) & 0xff] ^ crcTable[4][a >> 24] ^
+            crcTable[3][b & 0xff] ^ crcTable[2][(b >> 8) & 0xff] ^ crcTable[1][(b >> 16) & 0xff] ^ crcTable[0][b >> 24];
+        p += 8;
+        n -= 8;
+    }
+    while (n-- > 0) c = crcTable[0][(c ^ *p++) & 0xff] ^ (c >> 8);
+    return c;
+}
+
+#define CRC_HW __attribute__((target("pclmul,sse4.1")))
+
+CRC_HW static inline __m128i crcFold(__m128i a, __m128i b, __m128i k) {
+    return _mm_xor_si128(_mm_xor_si128(b, _mm_clmulepi64_si128(a, k, 0x00)), _mm_clmulepi64_si128(a, k, 0x11));
+}
+
+/* folds 64 bytes at a time with carry-less multiplies, then reduces to 32
+   bits (Intel's "Fast CRC Computation Using PCLMULQDQ"); n is at least 64.
+   c is the running value, already inverted. */
+CRC_HW static uint32_t crcClmul(uint32_t c, const uint8_t *p, int64_t n) {
+    __m128i x3 = _mm_loadu_si128((const __m128i *)p), x2 = _mm_loadu_si128((const __m128i *)(p + 16)),
+            x1 = _mm_loadu_si128((const __m128i *)(p + 32)), x0 = _mm_loadu_si128((const __m128i *)(p + 48));
+    x3 = _mm_xor_si128(x3, _mm_cvtsi32_si128((int)c));
+    p += 64;
+    n -= 64;
+    __m128i k12 = _mm_set_epi64x(0x1c6e41596, 0x154442bd4);
+    while (n >= 64) {
+        x3 = crcFold(x3, _mm_loadu_si128((const __m128i *)p), k12);
+        x2 = crcFold(x2, _mm_loadu_si128((const __m128i *)(p + 16)), k12);
+        x1 = crcFold(x1, _mm_loadu_si128((const __m128i *)(p + 32)), k12);
+        x0 = crcFold(x0, _mm_loadu_si128((const __m128i *)(p + 48)), k12);
+        p += 64;
+        n -= 64;
+    }
+    __m128i k34 = _mm_set_epi64x(0x0ccaa009e, 0x1751997d0);
+    __m128i x = crcFold(x3, x2, k34);
+    x = crcFold(x, x1, k34);
+    x = crcFold(x, x0, k34);
+    while (n >= 16) {
+        x = crcFold(x, _mm_loadu_si128((const __m128i *)p), k34);
+        p += 16;
+        n -= 16;
+    }
+    __m128i low32 = _mm_set_epi32(0, 0, 0, -1);
+    x = _mm_xor_si128(_mm_clmulepi64_si128(x, k34, 0x10), _mm_srli_si128(x, 8));
+    x = _mm_xor_si128(_mm_clmulepi64_si128(_mm_and_si128(x, low32), _mm_set_epi64x(0, 0x163cd6124), 0x00),
+                      _mm_srli_si128(x, 4));
+    __m128i pu = _mm_set_epi64x(0x1f7011641, 0x1db710641);   /* Barrett: u', then P(x) */
+    __m128i t1 = _mm_clmulepi64_si128(_mm_and_si128(x, low32), pu, 0x10);
+    __m128i t2 = _mm_clmulepi64_si128(_mm_and_si128(t1, low32), pu, 0x00);
+    c = (uint32_t)_mm_extract_epi32(_mm_xor_si128(x, t2), 1);
+    return crcSlice(c, p, n);
+}
+
+#endif
+
 int64_t iris_crc32(int64_t crc, const char *p, int64_t n) {
+#ifdef __x86_64__
+    pthread_once(&crcOnce, crcTables);
+    uint32_t c = ~(uint32_t)crc;
+    if (n >= 64 && __builtin_cpu_supports("pclmul") && __builtin_cpu_supports("sse4.1"))
+        c = crcClmul(c, (const uint8_t *)p, n);
+    else
+        c = crcSlice(c, (const uint8_t *)p, n);
+    return (int64_t)(uint32_t)~c;
+#else
     if (!zReady()) return 0;
     unsigned long c = (unsigned long)crc;
     while (n > 0) {
@@ -8659,6 +8744,7 @@ int64_t iris_crc32(int64_t crc, const char *p, int64_t n) {
         n -= part;
     }
     return (int64_t)c;
+#endif
 }
 
 int64_t iris_adler32(int64_t a, const char *p, int64_t n) {
@@ -8712,12 +8798,541 @@ static bool zrReady(void) {
     return true;
 }
 
+/* Raw deflate (RFC 1951) of a whole buffer: LZ77 with hash chains and
+   lazy matching, as zlib's levels 4 to 9 do, with matches compared 8 bytes
+   at a time and a long match only partly put in the hash table, as
+   zlib-ng's medium strategy does. Each block is written with dynamic
+   Huffman codes, the fixed ones or stored, whichever is smallest. */
+
+#define DF_WSIZE 32768
+#define DF_WMASK (DF_WSIZE - 1)
+#define DF_HBITS 15
+#define DF_HSIZE (1 << DF_HBITS)
+#define DF_MINMATCH 3
+#define DF_MAXMATCH 258
+#define DF_BLOCK 16384                  /* symbols a block holds */
+
+typedef struct {
+    uint8_t *out;
+    int64_t len, cap;
+    uint64_t bits;
+    int nbits;
+} DfOut;
+
+static void dfReserve(DfOut *o, int64_t more) {
+    if (o->len + more > o->cap) {
+        int64_t cap = o->cap ? o->cap * 2 : 4096;
+        while (cap < o->len + more) cap *= 2;
+        uint8_t *q = realloc(o->out, (size_t)cap);
+        if (!q) outOfMemory();
+        o->out = q;
+        o->cap = cap;
+    }
+}
+
+/* the low n bits of v, the lowest first */
+static inline void dfPut(DfOut *o, uint64_t v, int n) {
+    o->bits |= v << o->nbits;
+    o->nbits += n;
+    if (o->nbits >= 32) {
+        dfReserve(o, 8);
+        uint32_t w = (uint32_t)o->bits;
+        memcpy(o->out + o->len, &w, 4);
+        o->len += 4;
+        o->bits >>= 32;
+        o->nbits -= 32;
+    }
+}
+
+static void dfAlign(DfOut *o) {
+    dfReserve(o, 8);
+    while (o->nbits > 0) {
+        o->out[o->len++] = (uint8_t)o->bits;
+        o->bits >>= 8;
+        o->nbits = o->nbits > 8 ? o->nbits - 8 : 0;
+    }
+    o->bits = 0;
+    o->nbits = 0;
+}
+
+static const uint16_t dfLenBase[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+                                       35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+static const uint8_t dfLenExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+static const uint16_t dfDistBase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769,
+                                        1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+static const uint8_t dfDistExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+static const uint8_t dfClOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+
+static uint8_t dfLenCode[259];          /* match length -> length code - 257 */
+static uint8_t dfDistCodeLo[512];       /* distance - 1 below 512 -> code; above, (d - 1) >> 7 */
+static pthread_once_t dfOnce = PTHREAD_ONCE_INIT;
+
+static void dfTables(void) {
+    for (int c = 0; c < 29; c++) {
+        int top = c == 28 ? 258 : dfLenBase[c] + (1 << dfLenExtra[c]) - 1;
+        for (int l = dfLenBase[c]; l <= top && l <= 258; l++) dfLenCode[l] = (uint8_t)c;
+    }
+    dfLenCode[258] = 28;
+    for (int c = 0; c < 30; c++) {
+        int top = dfDistBase[c] + (1 << dfDistExtra[c]) - 1;
+        for (int d = dfDistBase[c]; d <= top && d <= 32768; d++) {
+            if (d - 1 < 256) dfDistCodeLo[d - 1] = (uint8_t)c;
+            else dfDistCodeLo[256 + ((d - 1) >> 7)] = (uint8_t)c;
+        }
+    }
+}
+
+static inline int dfDistCode(int d) {
+    return d - 1 < 256 ? dfDistCodeLo[d - 1] : dfDistCodeLo[256 + ((d - 1) >> 7)];
+}
+
+/* Code lengths of at most maxBits for the symbols' frequencies: Moffat
+   and Katajainen's in-place minimum redundancy on the sorted frequencies,
+   then the longest codes shortened as miniz does, keeping the code
+   complete. Symbols with no uses get 0. */
+static void dfLengths(const uint32_t *freq, int n, int maxBits, uint8_t *lens) {
+    int idx[288], used = 0;
+    uint32_t a[288];
+    for (int i = 0; i < n; i++) {
+        lens[i] = 0;
+        if (freq[i]) idx[used++] = i;
+    }
+    if (used == 0) return;
+    if (used == 1) {
+        lens[idx[0]] = 1;
+        return;
+    }
+    /* by frequency, the rarest first (insertion sort: n is at most 288) */
+    for (int i = 1; i < used; i++) {
+        int s = idx[i], j = i - 1;
+        while (j >= 0 && freq[idx[j]] > freq[s]) {
+            idx[j + 1] = idx[j];
+            j--;
+        }
+        idx[j + 1] = s;
+    }
+    for (int i = 0; i < used; i++) a[i] = freq[idx[i]];
+    /* Moffat-Katajainen */
+    int root = 0, leaf = 2, next;
+    a[0] += a[1];
+    for (next = 1; next < used - 1; next++) {
+        if (leaf >= used || a[root] < a[leaf]) {
+            a[next] = a[root];
+            a[root++] = (uint32_t)next;
+        } else {
+            a[next] = a[leaf++];
+        }
+        if (leaf >= used || (root < next && a[root] < a[leaf])) {
+            a[next] += a[root];
+            a[root++] = (uint32_t)next;
+        } else {
+            a[next] += a[leaf++];
+        }
+    }
+    a[used - 2] = 0;
+    for (next = used - 3; next >= 0; next--) a[next] = a[a[next]] + 1;
+    int avbl = 1, usedNodes = 0, depth = 0;
+    root = used - 2;
+    next = used - 1;
+    while (avbl > 0) {
+        while (root >= 0 && (int)a[root] == depth) {
+            usedNodes++;
+            root--;
+        }
+        while (avbl > usedNodes) {
+            a[next--] = (uint32_t)depth;
+            avbl--;
+        }
+        avbl = 2 * usedNodes;
+        depth++;
+        usedNodes = 0;
+    }
+    /* a[i] is now the length of the i-th rarest; count them by length */
+    int count[33] = {0};
+    for (int i = 0; i < used; i++) count[a[i] > 32 ? 32 : a[i]]++;
+    for (int i = maxBits + 1; i <= 32; i++) {
+        count[maxBits] += count[i];
+        count[i] = 0;
+    }
+    uint32_t total = 0;
+    for (int i = maxBits; i > 0; i--) total += (uint32_t)count[i] << (maxBits - i);
+    while (total != (1u << maxBits)) {
+        count[maxBits]--;
+        for (int i = maxBits - 1; i > 0; i--) {
+            if (count[i]) {
+                count[i]--;
+                count[i + 1] += 2;
+                break;
+            }
+        }
+        total--;
+    }
+    /* the longest lengths to the rarest symbols */
+    int k = 0;
+    for (int len = maxBits; len > 0; len--) {
+        for (int c = 0; c < count[len]; c++) lens[idx[k++]] = (uint8_t)len;
+    }
+}
+
+/* Canonical codes for the lengths, bit-reversed as deflate writes them. */
+static void dfCodes(const uint8_t *lens, int n, uint16_t *codes) {
+    int count[16] = {0}, next[16];
+    for (int i = 0; i < n; i++) count[lens[i]]++;
+    count[0] = 0;
+    int code = 0;
+    for (int b = 1; b < 16; b++) {
+        code = (code + count[b - 1]) << 1;
+        next[b] = code;
+    }
+    for (int i = 0; i < n; i++) {
+        int l = lens[i];
+        if (!l) {
+            codes[i] = 0;
+            continue;
+        }
+        unsigned c = (unsigned)next[l]++, r = 0;
+        for (int b = 0; b < l; b++) r |= ((c >> b) & 1) << (l - 1 - b);
+        codes[i] = (uint16_t)r;
+    }
+}
+
+/* A block's symbols: a literal, or a length (3..258) and a distance. */
+typedef struct {
+    uint16_t len;                       /* 0 for a literal */
+    uint16_t val;                       /* the byte, or the distance */
+} DfSym;
+
+typedef struct {
+    uint32_t lfreq[286], dfreq[30];
+    DfSym sym[DF_BLOCK];
+    int n;
+    int64_t start;                      /* where the block's bytes start in the input */
+} DfBlock;
+
+static void dfWriteSyms(DfOut *o, const DfBlock *b, const uint16_t *lc, const uint8_t *ll, const uint16_t *dc,
+                        const uint8_t *dl) {
+    for (int i = 0; i < b->n; i++) {
+        DfSym s = b->sym[i];
+        if (!s.len) {
+            dfPut(o, lc[s.val], ll[s.val]);
+            continue;
+        }
+        int c = dfLenCode[s.len];
+        dfPut(o, lc[257 + c], ll[257 + c]);
+        if (dfLenExtra[c]) dfPut(o, (uint64_t)(s.len - dfLenBase[c]), dfLenExtra[c]);
+        int d = dfDistCode(s.val);
+        dfPut(o, dc[d], dl[d]);
+        if (dfDistExtra[d]) dfPut(o, (uint64_t)(s.val - dfDistBase[d]), dfDistExtra[d]);
+    }
+    dfPut(o, lc[256], ll[256]);
+}
+
+/* bits of the block's symbols with these lengths, the end-of-block too */
+static uint64_t dfCost(const DfBlock *b, const uint8_t *ll, const uint8_t *dl) {
+    uint64_t bits = ll[256];
+    for (int i = 0; i < 256; i++) bits += (uint64_t)b->lfreq[i] * ll[i];
+    for (int c = 0; c < 29; c++) bits += (uint64_t)b->lfreq[257 + c] * (ll[257 + c] + dfLenExtra[c]);
+    for (int c = 0; c < 30; c++) bits += (uint64_t)b->dfreq[c] * (dl[c] + dfDistExtra[c]);
+    return bits;
+}
+
+static void dfFlush(DfOut *o, DfBlock *b, const uint8_t *in, int64_t end, bool last) {
+    b->lfreq[256] = 1;
+    /* dynamic codes */
+    uint8_t ll[286], dl[30], cll[19];
+    uint32_t dfreq[30];
+    memcpy(dfreq, b->dfreq, sizeof dfreq);
+    int dused = 0;
+    for (int i = 0; i < 30; i++) dused += dfreq[i] != 0;
+    if (dused == 0) dfreq[0] = 1;       /* one code of one bit when no distance is used */
+    dfLengths(b->lfreq, 286, 15, ll);
+    dfLengths(dfreq, 30, 15, dl);
+    int hlit = 286, hdist = 30;
+    while (hlit > 257 && !ll[hlit - 1]) hlit--;
+    while (hdist > 1 && !dl[hdist - 1]) hdist--;
+    /* the lengths, run-length coded with 16, 17 and 18 */
+    uint8_t all[316], rle[316], rleExtra[316];
+    int nall = 0, nrle = 0;
+    for (int i = 0; i < hlit; i++) all[nall++] = ll[i];
+    for (int i = 0; i < hdist; i++) all[nall++] = dl[i];
+    uint32_t clfreq[19] = {0};
+    for (int i = 0; i < nall;) {
+        int v = all[i], run = 1;
+        while (i + run < nall && all[i + run] == v) run++;
+        int left = run;
+        if (v == 0) {
+            while (left >= 11) {
+                int k = left > 138 ? 138 : left;
+                rle[nrle] = 18;
+                rleExtra[nrle++] = (uint8_t)(k - 11);
+                clfreq[18]++;
+                left -= k;
+            }
+            if (left >= 3) {
+                rle[nrle] = 17;
+                rleExtra[nrle++] = (uint8_t)(left - 3);
+                clfreq[17]++;
+                left = 0;
+            }
+        } else {
+            rle[nrle] = (uint8_t)v;
+            rleExtra[nrle++] = 0;
+            clfreq[v]++;
+            left--;
+            while (left >= 3) {
+                int k = left > 6 ? 6 : left;
+                rle[nrle] = 16;
+                rleExtra[nrle++] = (uint8_t)(k - 3);
+                clfreq[16]++;
+                left -= k;
+            }
+        }
+        while (left-- > 0) {
+            rle[nrle] = (uint8_t)v;
+            rleExtra[nrle++] = 0;
+            clfreq[v]++;
+        }
+        i += run;
+    }
+    dfLengths(clfreq, 19, 7, cll);
+    int hclen = 19;
+    while (hclen > 4 && !cll[dfClOrder[hclen - 1]]) hclen--;
+    uint64_t dynBits = 3 + 5 + 5 + 4 + 3 * (uint64_t)hclen + dfCost(b, ll, dl);
+    for (int i = 0; i < nrle; i++) {
+        dynBits += cll[rle[i]] + (rle[i] == 16 ? 2 : rle[i] == 17 ? 3 : rle[i] == 18 ? 7 : 0);
+    }
+    /* fixed codes */
+    uint8_t fll[288], fdl[30];
+    for (int i = 0; i < 288; i++) fll[i] = i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8;
+    for (int i = 0; i < 30; i++) fdl[i] = 5;
+    uint64_t fixBits = 3 + dfCost(b, fll, fdl);
+    /* stored: whole bytes, at most 65535 to a block */
+    int64_t raw = end - b->start;
+    uint64_t storedBits = (uint64_t)(((raw + 65534) / 65535 + (raw == 0)) * 5 + raw) * 8 + 7;
+    if (storedBits <= dynBits && storedBits <= fixBits) {
+        int64_t at = b->start;
+        do {
+            int64_t k = end - at > 65535 ? 65535 : end - at;
+            bool fin = last && at + k == end;
+            dfPut(o, fin ? 1 : 0, 3);
+            dfAlign(o);
+            dfReserve(o, 4 + k);
+            o->out[o->len++] = (uint8_t)k;
+            o->out[o->len++] = (uint8_t)(k >> 8);
+            o->out[o->len++] = (uint8_t)~k;
+            o->out[o->len++] = (uint8_t)(~k >> 8);
+            memcpy(o->out + o->len, in + at, (size_t)k);
+            o->len += k;
+            at += k;
+        } while (at < end);
+    } else if (fixBits <= dynBits) {
+        uint16_t flc[288], fdc[30];
+        dfCodes(fll, 288, flc);
+        dfCodes(fdl, 30, fdc);
+        dfPut(o, (last ? 1 : 0) | 1 << 1, 3);
+        dfWriteSyms(o, b, flc, fll, fdc, fdl);
+    } else {
+        uint16_t lc[286], dc[30], clc[19];
+        dfCodes(ll, 286, lc);
+        dfCodes(dl, 30, dc);
+        dfCodes(cll, 19, clc);
+        dfPut(o, (last ? 1 : 0) | 2 << 1, 3);
+        dfPut(o, (uint64_t)(hlit - 257), 5);
+        dfPut(o, (uint64_t)(hdist - 1), 5);
+        dfPut(o, (uint64_t)(hclen - 4), 4);
+        for (int i = 0; i < hclen; i++) dfPut(o, cll[dfClOrder[i]], 3);
+        for (int i = 0; i < nrle; i++) {
+            int s = rle[i];
+            dfPut(o, clc[s], cll[s]);
+            if (s == 16) dfPut(o, rleExtra[i], 2);
+            else if (s == 17) dfPut(o, rleExtra[i], 3);
+            else if (s == 18) dfPut(o, rleExtra[i], 7);
+        }
+        dfWriteSyms(o, b, lc, ll, dc, dl);
+    }
+    memset(b->lfreq, 0, sizeof b->lfreq);
+    memset(b->dfreq, 0, sizeof b->dfreq);
+    b->n = 0;
+    b->start = end;
+}
+
+/* zlib's level settings: a match this long or more searches less; lazy
+   matching only below lazy; a match this long ends the search; the most
+   chain links followed */
+static const struct {
+    int good, lazy, nice, chain;
+} dfLevels[10] = {{0, 0, 0, 0},     {4, 4, 8, 4},       {4, 5, 16, 8},      {4, 6, 32, 32},
+                  {4, 4, 16, 16},   {8, 16, 32, 32},    {8, 12, 128, 128},  {8, 32, 128, 256},
+                  {32, 128, 258, 1024}, {32, 258, 258, 4096}};
+
+/* 4 bytes hashed: a chain holds positions that agree in their first 4,
+   which makes the chains much shorter than 3 would */
+static inline uint32_t dfHash(const uint8_t *p, int shift) {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return (v * 2654435761u) >> shift;
+}
+
+/* how many bytes at a and b are the same, up to max */
+static inline int dfMatchLen(const uint8_t *a, const uint8_t *b, int max) {
+    int n = 0;
+    while (n + 8 <= max) {
+        uint64_t x, y;
+        memcpy(&x, a + n, 8);
+        memcpy(&y, b + n, 8);
+        uint64_t d = x ^ y;
+        if (d) return n + (__builtin_ctzll(d) >> 3);
+        n += 8;
+    }
+    while (n < max && a[n] == b[n]) n++;
+    return n;
+}
+
+typedef struct {
+    int32_t head[DF_HSIZE];
+    int32_t prev[DF_WSIZE];
+    int shift;      /* 32 less the hash's bits: fewer for a small input */
+    DfBlock block;
+} DfState;
+
+/* Empties the hash table, using as much of it as the input needs: a small
+   input clears a small table. */
+static void dfReset(DfState *st, int64_t n) {
+    int bits = 10;
+    while (bits < DF_HBITS && ((int64_t)1 << bits) < n) bits++;
+    st->shift = 32 - bits;
+    memset(st->head, 0xff, sizeof st->head[0] << bits);   /* -1: no position yet */
+}
+
+static inline void dfInsert(DfState *st, const uint8_t *in, int64_t i) {
+    uint32_t h = dfHash(in + i, st->shift);
+    st->prev[i & DF_WMASK] = st->head[h];
+    st->head[h] = (int32_t)i;
+}
+
+static int dfLongest(DfState *st, const uint8_t *in, int64_t n, int64_t i, int prevLen, int good, int nice,
+                     int chain, int *dist) {
+    int64_t cur = st->head[dfHash(in + i, st->shift)];
+    int max = n - i > DF_MAXMATCH ? DF_MAXMATCH : (int)(n - i);
+    if (nice > max) nice = max;
+    int best = prevLen;
+    if (best >= max) return best;       /* nothing longer fits */
+    if (prevLen >= good) chain >>= 2;
+    int64_t limit = i > DF_WSIZE ? i - DF_WSIZE : -1;
+    /* the 4 bytes that end the best match so far: a candidate must have
+       them to be longer, so most are passed over on one compare */
+    uint32_t endWant, startWant;
+    int endAt = best >= 3 ? best - 3 : 0;
+    memcpy(&endWant, in + i + endAt, 4);
+    memcpy(&startWant, in + i, 4);
+    /* every link goes to an earlier position in the window, so the walk
+       ends at the window's start, at -1, or when chain runs out */
+    while (cur > limit) {
+        int64_t next = st->prev[cur & DF_WMASK];
+        __builtin_prefetch(in + (next > 0 ? next : 0) + endAt);
+        uint32_t endHave, startHave;
+        memcpy(&endHave, in + cur + endAt, 4);
+        memcpy(&startHave, in + cur, 4);
+        if (endHave == endWant && startHave == startWant) {
+            int l = dfMatchLen(in + cur, in + i, max);
+            if (l > best) {
+                best = l;
+                *dist = (int)(i - cur);
+                if (l >= nice) break;
+                endAt = best - 3;
+                memcpy(&endWant, in + i + endAt, 4);
+            }
+        }
+        if (--chain <= 0) break;
+        cur = next;
+    }
+    return best;
+}
+
+static inline void dfLiteral(DfBlock *b, uint8_t c) {
+    b->sym[b->n].len = 0;
+    b->sym[b->n++].val = c;
+    b->lfreq[c]++;
+}
+
+static inline void dfMatch(DfBlock *b, int len, int dist) {
+    b->sym[b->n].len = (uint16_t)len;
+    b->sym[b->n++].val = (uint16_t)dist;
+    b->lfreq[257 + dfLenCode[len]]++;
+    b->dfreq[dfDistCode(dist)]++;
+}
+
+/* The raw deflate of in[0..n] at a level from 1 to 9, appended to o. */
+static void dfDeflate(const uint8_t *in, int64_t n, int level, DfOut *o) {
+    pthread_once(&dfOnce, dfTables);
+    if (level < 1) level = 1;
+    if (level > 9) level = 9;
+    int good = dfLevels[level].good, lazy = dfLevels[level].lazy, nice = dfLevels[level].nice,
+        chain = dfLevels[level].chain;
+    DfState *st = malloc(sizeof *st);
+    if (!st) outOfMemory();
+    dfReset(st, n);
+    DfBlock *b = &st->block;
+    memset(b->lfreq, 0, sizeof b->lfreq);
+    memset(b->dfreq, 0, sizeof b->dfreq);
+    b->n = 0;
+    b->start = 0;
+    int prevLen = DF_MINMATCH - 1, prevDist = 0;
+    bool pending = false;               /* a literal at i - 1 still to place */
+    int64_t i = 0;
+    while (i < n) {
+        int curLen = DF_MINMATCH - 1, curDist = 0;
+        if (i + 4 <= n) {
+            if (prevLen < lazy) curLen = dfLongest(st, in, n, i, prevLen, good, nice, chain, &curDist);
+            if (curLen <= prevLen) curLen = DF_MINMATCH - 1;
+            if (curLen == DF_MINMATCH && curDist > 4096) curLen = DF_MINMATCH - 1;    /* too far to pay */
+            dfInsert(st, in, i);
+        }
+        if (pending && prevLen >= DF_MINMATCH && curLen <= prevLen) {
+            /* the match at i - 1 is as good as any later one */
+            dfMatch(b, prevLen, prevDist);
+            int64_t end = i - 1 + prevLen;
+            /* the positions the match covers go into the hash table, but
+               only the first few of a long one, as zlib-ng does */
+            int64_t stop = prevLen > 32 ? i + 4 : end;
+            for (int64_t k = i + 1; k < stop && k + 4 <= n; k++) dfInsert(st, in, k);
+            if (prevLen > 32 && end - 1 > i + 4 && end - 1 + 4 <= n) dfInsert(st, in, end - 1);
+            i = end;
+            pending = false;
+            prevLen = DF_MINMATCH - 1;
+        } else {
+            if (pending) dfLiteral(b, in[i - 1]);
+            pending = true;
+            prevLen = curLen;
+            prevDist = curDist;
+            i++;
+        }
+        if (b->n >= DF_BLOCK - 2) dfFlush(o, b, in, i - (pending ? 1 : 0), false);
+    }
+    if (pending) dfLiteral(b, in[n - 1]);
+    dfFlush(o, b, in, n, true);
+    dfAlign(o);
+    free(st);
+}
+
 static _Thread_local ZStream *zipDef, *zipInf;
 static _Thread_local int zipLevel;
 
 /* Deflates n bytes (raw deflate, at level) onto the end of out: 0, or -1
    with the message set. */
 int iris_zip_deflate(const char *in, int64_t n, int level, IrisString *out) {
+    if (n > 0xffffffffLL) {
+        zSay("an entry over 4 GiB", NULL);
+        return -1;
+    }
+    if (level != 0) {
+        /* the runtime's own deflate (above): zip writes whole entries */
+        DfOut o = {0};
+        dfDeflate((const uint8_t *)in, n, level < 0 ? 6 : level, &o);
+        iris_string_append(out, (const char *)o.out, o.len);
+        free(o.out);
+        return 0;
+    }
     if (!zrReady()) return -1;
     if (n > 0xffffffffLL) {
         zSay("an entry over 4 GiB", NULL);

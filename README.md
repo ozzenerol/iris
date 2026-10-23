@@ -8,29 +8,48 @@ Servers, clients, databases (SQLite, PostgreSQL, Redis), JSON, regular expressio
 
 ## Speed
 
-`bench/` has 15 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers. These are the results on an AMD Ryzen 7 5700X with Linux: Iris 0.65.1 with clang 19, Rust 1.99 and Go 1.27. A time is the median of 5 runs, in seconds. A server runs for 10 seconds, twice, on 4 cores, with the load generator on the other 4. Memory is the peak, in MiB. The fastest is in bold.
+`bench/` has 15 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers. These are the results on an AMD Ryzen 7 5700X with Linux: Iris 0.66.0 with clang 19, Rust 1.99 and Go 1.27. A time is the median of 5 runs, in seconds. A server runs for 10 seconds, twice, on 4 cores, with the load generator on the other 4. Memory is the peak, in MiB. The fastest is in bold.
 
 Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris safe"), which checks every index and slice as Rust does. Rust is built with `--release`, LTO and one codegen unit, and Go with `go build`.
 
 | Benchmark | What it does | Iris | Iris safe | Rust | Go | Memory, MiB: Iris / Rust / Go |
 |---|---|--:|--:|--:|--:|--:|
-| fib | recursive fibonacci(42) (s) | 0.53 | 0.53 | **0.47** | 1.07 | 2 / 2 / 2 |
-| sieve | sieve of Eratosthenes to 100M (s) | **0.54** | **0.54** | **0.54** | 0.56 | 97 / 97 / 97 |
-| nbody | n-body, 50M steps (s) | 1.75 | 1.75 | **1.71** | 2.56 | 2 / 2 / 2 |
+| fib | recursive fibonacci(42) (s) | 0.53 | 0.53 | **0.47** | 1.08 | 2 / 2 / 2 |
+| sieve | sieve of Eratosthenes to 100M (s) | 0.54 | 0.54 | **0.54** | 0.56 | 97 / 97 / 97 |
+| nbody | n-body, 50M steps (s) | 1.75 | 1.75 | **1.72** | 2.56 | 2 / 2 / 2 |
 | spectral-norm | spectral norm, n = 5500 (s) | 1.20 | 1.20 | **0.94** | 1.20 | 2 / 2 / 2 |
 | mandelbrot | mandelbrot, 4000 x 4000 (s) | **0.79** | **0.79** | 0.80 | 0.81 | 2 / 2 / 2 |
-| fannkuch-redux | fannkuch-redux, n = 11 (s) | **1.29** | 1.30 | 1.41 | 1.86 | 2 / 2 / 2 |
-| binary-trees | binary trees, depth 21 (s) | 6.30 | **6.27** | 8.24 | 17.44 | 130 / 258 / 276 |
-| hashmap | 10M inserts and lookups, int keys (s) | **0.91** | 0.96 | 1.14 | 2.11 | 418 / 410 / 365 |
-| sort | quicksort of 10M ints (s) | **0.58** | 0.58 | 0.59 | 0.60 | 78 / 78 / 78 |
-| strings | build, count, split, replace (s) | **0.19** | 0.20 | 0.27 | 0.49 | 197 / 187 / 239 |
-| channels | ping-pong, then 1000 tasks on one channel (s) | 0.21 | **0.21** | 10.92 | 0.57 | 6 / 3 / 4 |
-| http-hello | HTTP/1.1 hello, wrk (req/s) | **385k** | 384k | 371k | 224k | 5 / 10 / 18 |
-| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **363k** | 361k | 337k | 142k | 6 / 10 / 20 |
-| tcp-echo | TCP echo, 100 connections (msg/s) | **377k** | 367k | 367k | 290k | 4 / 3 / 5 |
-| http2 | HTTP/2 hello, h2load (req/s) | **2,065k** | 2,039k | 729k | 149k | 22 / 14 / 44 |
+| fannkuch-redux | fannkuch-redux, n = 11 (s) | **1.29** | 1.30 | 1.41 | 1.64 | 2 / 2 / 2 |
+| binary-trees | binary trees, depth 21 (s) | 6.35 | **6.33** | 8.28 | 17.39 | 130 / 258 / 276 |
+| hashmap | 10M inserts and lookups, int keys (s) | **0.90** | 0.95 | 1.14 | 2.12 | 418 / 410 / 366 |
+| sort | quicksort of 10M ints (s) | **0.57** | 0.58 | 0.59 | 0.60 | 78 / 78 / 78 |
+| strings | build, count, split, replace (s) | **0.18** | 0.19 | 0.27 | 0.49 | 187 / 187 / 239 |
+| channels | ping-pong, then 1000 tasks on one channel (s) | 0.22 | **0.22** | 10.67 | 0.57 | 6 / 3 / 4 |
+| http-hello | HTTP/1.1 hello, wrk (req/s) | 384k | **398k** | 368k | 230k | 5 / 10 / 19 |
+| http-json | HTTP/1.1 JSON in and out, wrk (req/s) | **367k** | 364k | 341k | 143k | 6 / 10 / 20 |
+| tcp-echo | TCP echo, 100 connections (msg/s) | **377k** | 372k | 362k | 289k | 4 / 3 / 5 |
+| http2 | HTTP/2 hello, h2load (req/s) | **2,087k** | 2,054k | 744k | 148k | 22 / 13 / 44 |
 
 In fib and spectral-norm, Iris makes the same machine code as C compiled by clang 19. Rust 1.99 compiles with LLVM 23, which does better on those two loops on this CPU; on an Intel Core i7-12650H they are level. `bench/README.md` says how to run them.
+
+`bench/` also has 14 library benchmarks: the same work done with Iris's standard library, the best-known Rust crate for it, and Go's standard library (or the usual package). Times are in seconds.
+
+| Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
+|---|---|--:|--:|--:|---|---|
+| fmt-text | 2M lines with widths, hex and precision | **0.242** | 0.430 | 0.728 | `write!` | `fmt.Fprintf` |
+| utf8 | count, walk and check 16 MB of UTF-8 | **0.050** | 0.051 | 0.114 | `chars`, `from_utf8` | `unicode/utf8` |
+| bigint | 20000!, its digits, 300 modular powers | 0.062 | 0.071 | **0.037** | num-bigint | `math/big` |
+| rwlock | 4 threads reading and writing | 0.052 | 0.110 | **0.020** | `RwLock` | `sync.RWMutex` |
+| heap | 2M pushes and pops | **0.178** | 0.223 | 0.481 | `BinaryHeap` | `container/heap` |
+| sortedmap | 1M inserts, lookups and range scans | **0.261** | 0.281 | 0.376 | `BTreeMap` | a sorted slice |
+| deque | 27M pushes and pops at both ends | **0.091** | 0.096 | 0.176 | `VecDeque` | a ring buffer |
+| sort-by | 5M structs by a key | **0.207** | 0.222 | 0.579 | `sort_unstable_by_key` | `slices.SortFunc` |
+| fs-walk | make, walk and remove 50k files | 0.765 | **0.762** | 0.998 | `std::fs` | `filepath.WalkDir` |
+| xml-parse | 30 MB of XML as events | **0.099** | 0.117 | 0.742 | quick-xml | `encoding/xml` |
+| toml-parse | a 2 MB TOML file, 20 times | **0.834** | 1.205 | 3.956 | toml | BurntSushi/toml |
+| zip | 2000 files deflated and read back | 0.257 | 0.267 | **0.202** | zip | `archive/zip` |
+| tar | 2000 files into a tar and back | **0.031** | 0.036 | 0.141 | tar | `archive/tar` |
+| template | a 1000-row HTML page, 2000 times | **0.469** | 0.621 | 4.488 | minijinja | `html/template` |
 
 ## Building and installing
 
