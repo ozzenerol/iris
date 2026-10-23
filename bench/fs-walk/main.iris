@@ -1,0 +1,31 @@
+import fs
+
+// 50 folders of 10 folders of 100 files: 50,000 files
+!void main() {
+    scoped String root = try fs.tempDir("iris-bench-walk")
+    scoped String data = "x".copy()
+    for i in 0..99 {
+        data.append("x")
+    }
+    i64 n = 0
+    for a in 0..50 {
+        for b in 0..10 {
+            scoped String dir = format("{root}/d{a}/e{b}")
+            try fs.mkdirAll(dir)
+            for c in 0..100 {
+                scoped String p = format("{dir}/f{c}.txt")
+                try fs.writeAll(p, data.ptr[0:n % 100 + 1])
+                n += 1
+            }
+        }
+    }
+    files := try fs.walk(root)
+    defer files.freeEach()
+    i64 bytes = 0
+    for f in files {
+        info := try fs.stat(f)
+        bytes += info.size
+    }
+    print("{files.len} {bytes}")
+    try fs.removeAll(root)
+}

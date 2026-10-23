@@ -56,6 +56,41 @@ open read|write 1.5s 0.25 false
 
 A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.
 
+## How a value is written
+
+A `:` after the value in the braces says how it is written: `{port:>6}`. What follows the `:` is, in this order, each part optional:
+
+| Part | What it does |
+|---|---|
+| a fill character and `<`, `>` or `^` | where the value goes in the width: left, right or centred; the fill is a space unless one is given before |
+| `+` | a `+` before positive numbers |
+| `0` | numbers padded with zeros after the sign |
+| a width | at least this many characters; the rest is filled |
+| `.` and a number | for a float, the digits after the point; for text, the most characters kept |
+| `x`, `X`, `o` or `b` | an integer in hex, upper-case hex, octal or binary |
+| `e` or `f` | a float in exponent form or with a fixed point, 6 digits after it unless a precision is given |
+
+Numbers go to the right of the width and everything else to the left, unless the spec says another way. The width and the precision of text count characters, not bytes, so `Köln` is four wide:
+
+```iris run
+void main() {
+    print("[{8080:>6}] [{"GET":<6}] [{"ok":^6}] [{"Köln":*>8}]")
+    print("{7:03} {-42:06} {255:x} {255:#>6X} {5:08b} {12:+}")
+    loss := 0.256789
+    print("{loss:.2} {loss:.3e} {2.5:f} {1e-9:e}")
+    print("[{"ingress-controller":.7}] [{true:>6}] [{250ms:>8}]")
+}
+```
+
+```output
+[  8080] [GET   ] [  ok  ] [****Köln]
+007 -00042 ff ####FF 00000101 +12
+0.26 2.568e-01 2.500000 1.000000e-09
+[ingress] [  true] [   250ms]
+```
+
+A width works with any value that can be put into text, a struct with a `format` method included. The other parts must fit the value: `{1.5:x}` and `{"a":+}` don't compile. A `:` inside parentheses, brackets or quotes is part of the value, so `{pad(text, width: 4)}` and `{line[0:2]}` work as they read. A constant's text can't have a spec; use `format` when the program runs.
+
 ## A struct's own text
 
 A struct with a method `String format()` can be put into text. The method gives the text, and the `String` it returns is freed after the statement:

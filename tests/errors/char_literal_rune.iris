@@ -1,0 +1,4 @@
+// error: 3: a character literal holds one character; use a string for more
+void main() {
+    a := 'ab'
+}

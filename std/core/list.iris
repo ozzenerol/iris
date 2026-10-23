@@ -148,6 +148,20 @@ pub void List[T].clear() {
     self.len = 0
 }
 
+// Makes the list n long: new items are zero, and items past n are dropped
+// (their memory isn't freed; free them first when they own any).
+pub void List[T].resize(i64 n) {
+    if n < 0 {
+        panic("resize to {n}")
+    }
+    self.reserve(n)
+    for i in self.len..n {
+        T zero
+        self.buf[i] = zero
+    }
+    self.len = n
+}
+
 // Gives the list's memory back; the list is empty after.
 pub void List[T].free() {
     free(self.buf)

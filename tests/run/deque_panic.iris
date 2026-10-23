@@ -1,0 +1,8 @@
+// panic: popFront on an empty Deque
+
+void main() {
+    Deque[str] d
+    d.push("a")
+    _ = d.pop()
+    _ = d.popFront()
+}

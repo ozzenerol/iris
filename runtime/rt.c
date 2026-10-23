@@ -530,6 +530,58 @@ void iris_string_append(IrisString *s, const char *p, int64_t n) {
     s->len += n;
 }
 
+/* s.reserve(n): room for n more bytes, so appends up to that don't grow it. */
+void iris_string_reserve(IrisString *s, int64_t n) {
+    if (n > 0 && s->len + n > s->cap) {
+        char *q = realloc(s->ptr, (size_t)(s->len + n));
+        if (!q) {
+            outOfMemory();
+        }
+        s->ptr = q;
+        s->cap = s->len + n;
+    }
+}
+
+/* s.truncate(n): the first n bytes are kept. */
+void iris_string_truncate(IrisString *s, int64_t n, const char *file, int line, int col, const char *fn) {
+    if (n < 0 || n > s->len) {
+        char msg[96];
+        int k = snprintf(msg, sizeof msg, "truncate to %lld bytes of a String of %lld", (long long)n, (long long)s->len);
+        stop(msg, (size_t)k, file, line, col, fn);
+    }
+    s->len = n;
+}
+
+/* s.insert(at, text): the text put in before byte at; the text may be part
+   of s itself. */
+void iris_string_insert(IrisString *s, int64_t at, const char *p, int64_t n, const char *file, int line, int col,
+                        const char *fn) {
+    if (at < 0 || at > s->len) {
+        char msg[96];
+        int k = snprintf(msg, sizeof msg, "insert at byte %lld of a String of %lld", (long long)at, (long long)s->len);
+        stop(msg, (size_t)k, file, line, col, fn);
+    }
+    if (n <= 0) {
+        return;
+    }
+    char small[256];
+    char *copy = NULL;
+    if (s->ptr && p >= s->ptr && p < s->ptr + s->len) {
+        copy = n <= (int64_t)sizeof small ? small : malloc((size_t)n);
+        if (!copy) outOfMemory();
+        memcpy(copy, p, (size_t)n);
+        p = copy;
+    }
+    if (s->len + n > s->cap) {
+        const char *none = NULL;
+        stringGrow(s, &none, n);
+    }
+    memmove(s->ptr + at + n, s->ptr + at, (size_t)(s->len - at));
+    memcpy(s->ptr + at, p, (size_t)n);
+    s->len += n;
+    if (copy && copy != small) free(copy);
+}
+
 void iris_string_free(IrisString *s) {
     free(s->ptr);
     s->ptr = NULL;
@@ -641,6 +693,651 @@ void iris_write_duration(int sink, IrisString *dst, int64_t d) {
     }
     #undef FRAC
     put(sink, dst, buf, (size_t)n);
+}
+
+/* math.addChecked and the others: op 0 +, 1 -, 2 *. */
+int64_t iris_math_checked(int64_t a, int64_t b, int op, bool *ok) {
+    long long r;
+    bool over = op == 0 ? __builtin_add_overflow(a, b, &r) : op == 1 ? __builtin_sub_overflow(a, b, &r)
+                                                                     : __builtin_mul_overflow(a, b, &r);
+    *ok = !over;
+    return over ? 0 : r;
+}
+
+int64_t iris_math_saturate(int64_t a, int64_t b, int op) {
+    long long r;
+    bool over = op == 0 ? __builtin_add_overflow(a, b, &r) : op == 1 ? __builtin_sub_overflow(a, b, &r)
+                                                                     : __builtin_mul_overflow(a, b, &r);
+    if (!over) {
+        return r;
+    }
+    /* the true result's sign says which end */
+    bool negative = op == 0 ? a < 0 : op == 1 ? a < b : (a < 0) != (b < 0);
+    return negative ? INT64_MIN : INT64_MAX;
+}
+
+int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
+    uint64_t x = (uint64_t)a, y = (uint64_t)b;
+    return (int64_t)(op == 0 ? x + y : op == 1 ? x - y : x * y);
+}
+
+/* str.validUtf8: ASCII 8 bytes at a time, then each sequence checked as
+   decodeRune does (no overlong forms, surrogates or values past U+10FFFF).
+   With count, the characters of valid text are counted on the way: -1 when
+   it isn't valid. */
+static int64_t utf8Scan(const unsigned char *p, int64_t n, bool count) {
+    int64_t i = 0, chars = 0;
+    while (i < n) {
+        if (i + 8 <= n) {
+            uint64_t w;
+            memcpy(&w, p + i, 8);
+            if (!(w & 0x8080808080808080ULL)) {
+                i += 8;
+                chars += 8;
+                continue;
+            }
+        }
+        unsigned char b = p[i];
+        chars++;
+        if (b < 0x80) {
+            i++;
+            continue;
+        }
+        if (b >= 0xc2 && b <= 0xdf) {
+            if (i + 1 >= n || (p[i + 1] & 0xc0) != 0x80) return -1;
+            i += 2;
+        } else if (b >= 0xe0 && b <= 0xef) {
+            if (i + 2 >= n) return -1;
+            unsigned char c1 = p[i + 1];
+            if ((c1 & 0xc0) != 0x80 || (p[i + 2] & 0xc0) != 0x80) return -1;
+            if (b == 0xe0 && c1 < 0xa0) return -1;       /* overlong */
+            if (b == 0xed && c1 >= 0xa0) return -1;      /* a surrogate */
+            i += 3;
+        } else if (b >= 0xf0 && b <= 0xf4) {
+            if (i + 3 >= n) return -1;
+            unsigned char c1 = p[i + 1];
+            if ((c1 & 0xc0) != 0x80 || (p[i + 2] & 0xc0) != 0x80 || (p[i + 3] & 0xc0) != 0x80) return -1;
+            if (b == 0xf0 && c1 < 0x90) return -1;       /* overlong */
+            if (b == 0xf4 && c1 >= 0x90) return -1;      /* past U+10FFFF */
+            i += 4;
+        } else {
+            return -1;
+        }
+    }
+    (void)count;
+    return chars;
+}
+
+int iris_utf8_valid(const unsigned char *p, int64_t n) { return utf8Scan(p, n, false) >= 0; }
+
+/* str.runeCount: the characters of valid text in the same pass, or -1. */
+int64_t iris_utf8_count(const unsigned char *p, int64_t n) { return utf8Scan(p, n, true); }
+
+/* str.decodeRune past ASCII: the character at p[at] and its length in
+   *len; 0xFFFD and 1 for bytes that aren't UTF-8. */
+__attribute__((always_inline)) int32_t iris_utf8_decode(const unsigned char *p, int64_t n, int64_t at,
+                                                               int64_t *len) {
+    unsigned char b = p[at];
+    int64_t left = n - at;
+    if (b >= 0xc2 && b <= 0xdf) {
+        if (left >= 2 && (p[at + 1] & 0xc0) == 0x80) {
+            *len = 2;
+            return (int32_t)(b & 0x1f) << 6 | (p[at + 1] & 0x3f);
+        }
+    } else if (b >= 0xe0 && b <= 0xef) {
+        if (left >= 3) {
+            unsigned char c1 = p[at + 1], c2 = p[at + 2];
+            if ((c1 & 0xc0) == 0x80 && (c2 & 0xc0) == 0x80 && !(b == 0xe0 && c1 < 0xa0) && !(b == 0xed && c1 >= 0xa0)) {
+                *len = 3;
+                return (int32_t)(b & 0x0f) << 12 | (int32_t)(c1 & 0x3f) << 6 | (c2 & 0x3f);
+            }
+        }
+    } else if (b >= 0xf0 && b <= 0xf4) {
+        if (left >= 4) {
+            unsigned char c1 = p[at + 1], c2 = p[at + 2], c3 = p[at + 3];
+            if ((c1 & 0xc0) == 0x80 && (c2 & 0xc0) == 0x80 && (c3 & 0xc0) == 0x80 && !(b == 0xf0 && c1 < 0x90) &&
+                !(b == 0xf4 && c1 >= 0x90)) {
+                *len = 4;
+                return (int32_t)(b & 0x07) << 18 | (int32_t)(c1 & 0x3f) << 12 | (int32_t)(c2 & 0x3f) << 6 | (c3 & 0x3f);
+            }
+        }
+    } else if (b < 0x80) {
+        *len = 1;
+        return b;
+    }
+    *len = 1;
+    return 0xfffd;
+}
+
+
+/* ---------------------------------------------------------------- big
+
+   The arithmetic of big.Int on magnitudes: 64-bit limbs, the lowest first.
+   Each kernel writes into room its caller made and gives the length of
+   the result without zero limbs at the top. */
+
+static inline uint64_t divWord(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *rem) {
+#if defined(__x86_64__)
+    uint64_t q, r;
+    __asm__("divq %4" : "=a"(q), "=d"(r) : "a"(lo), "d"(hi), "rm"(d));
+    *rem = r;
+    return q;
+#else
+    unsigned __int128 x = (unsigned __int128)hi << 64 | lo;
+    *rem = (uint64_t)(x % d);
+    return (uint64_t)(x / d);
+#endif
+}
+
+static int64_t bnTrim(const uint64_t *a, int64_t n) {
+    while (n > 0 && a[n - 1] == 0) n--;
+    return n;
+}
+
+int64_t iris_bn_cmp(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn) {
+    if (an != bn) return an < bn ? -1 : 1;
+    for (int64_t i = an - 1; i >= 0; i--) {
+        if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    return 0;
+}
+
+/* out has room for max(an, bn) + 1 */
+int64_t iris_bn_add(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    if (an < bn) {
+        const uint64_t *t = a; a = b; b = t;
+        int64_t k = an; an = bn; bn = k;
+    }
+    unsigned char carry = 0;
+    int64_t i = 0;
+    for (; i < bn; i++) {
+        uint64_t s;
+        unsigned char c1 = __builtin_add_overflow(a[i], b[i], &s);
+        unsigned char c2 = __builtin_add_overflow(s, (uint64_t)carry, &out[i]);
+        carry = c1 | c2;
+    }
+    for (; i < an; i++) {
+        carry = __builtin_add_overflow(a[i], (uint64_t)carry, &out[i]);
+    }
+    out[an] = carry;
+    return bnTrim(out, an + 1);
+}
+
+/* a - b for a at least b; out has room for an */
+int64_t iris_bn_sub(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    unsigned char borrow = 0;
+    int64_t i = 0;
+    for (; i < bn; i++) {
+        uint64_t d;
+        unsigned char b1 = __builtin_sub_overflow(a[i], b[i], &d);
+        unsigned char b2 = __builtin_sub_overflow(d, (uint64_t)borrow, &out[i]);
+        borrow = b1 | b2;
+    }
+    for (; i < an; i++) {
+        borrow = __builtin_sub_overflow(a[i], (uint64_t)borrow, &out[i]);
+    }
+    return bnTrim(out, an);
+}
+
+/* out has room for an + 1 */
+int64_t iris_bn_mul_small(const uint64_t *a, int64_t an, uint64_t m, uint64_t *out) {
+    uint64_t carry = 0;
+    for (int64_t i = 0; i < an; i++) {
+        unsigned __int128 t = (unsigned __int128)a[i] * m + carry;
+        out[i] = (uint64_t)t;
+        carry = (uint64_t)(t >> 64);
+    }
+    out[an] = carry;
+    return bnTrim(out, an + 1);
+}
+
+/* out has room for an + bn and doesn't overlap a or b */
+int64_t iris_bn_mul(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    memset(out, 0, (size_t)(an + bn) * sizeof(uint64_t));
+    for (int64_t i = 0; i < an; i++) {
+        uint64_t ai = a[i], carry = 0;
+        if (!ai) continue;
+        uint64_t *r = out + i;
+        for (int64_t j = 0; j < bn; j++) {
+            unsigned __int128 t = (unsigned __int128)ai * b[j] + r[j] + carry;
+            r[j] = (uint64_t)t;
+            carry = (uint64_t)(t >> 64);
+        }
+        r[bn] = carry;
+    }
+    return bnTrim(out, an + bn);
+}
+
+/* a divided by one word d into q (room for an); gives the remainder */
+uint64_t iris_bn_div_small(const uint64_t *a, int64_t an, uint64_t d, uint64_t *q, int64_t *qn) {
+    uint64_t rem = 0;
+    for (int64_t i = an - 1; i >= 0; i--) {
+        q[i] = divWord(rem, a[i], d, &rem);
+    }
+    *qn = bnTrim(q, an);
+    return rem;
+}
+
+/* a divided by b (bn of 2 or more, a at least b), Knuth's algorithm D:
+   q has room for an - bn + 1, r for bn. */
+void iris_bn_divmod(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *q, int64_t *qn,
+                    uint64_t *r, int64_t *rn) {
+    int s = __builtin_clzll(b[bn - 1]);
+    uint64_t *v = malloc((size_t)bn * sizeof(uint64_t));
+    uint64_t *u = malloc((size_t)(an + 1) * sizeof(uint64_t));
+    if (!v || !u) outOfMemory();
+    for (int64_t i = bn - 1; i > 0; i--) v[i] = s ? b[i] << s | b[i - 1] >> (64 - s) : b[i];
+    v[0] = b[0] << s;
+    u[an] = s ? a[an - 1] >> (64 - s) : 0;
+    for (int64_t i = an - 1; i > 0; i--) u[i] = s ? a[i] << s | a[i - 1] >> (64 - s) : a[i];
+    u[0] = a[0] << s;
+    int64_t m = an - bn;
+    for (int64_t j = m; j >= 0; j--) {
+        uint64_t rhat, qhat;
+        if (u[j + bn] == v[bn - 1]) {
+            /* the top words are equal: the digit is the largest one, and
+               when rhat overflows the test below can't lower it */
+            qhat = ~(uint64_t)0;
+            rhat = u[j + bn - 1] + v[bn - 1];
+            if (rhat < v[bn - 1]) goto mulsub;
+        } else {
+            qhat = divWord(u[j + bn], u[j + bn - 1], v[bn - 1], &rhat);
+        }
+        for (;;) {
+            unsigned __int128 p = (unsigned __int128)qhat * v[bn - 2];
+            if ((uint64_t)(p >> 64) > rhat || ((uint64_t)(p >> 64) == rhat && (uint64_t)p > u[j + bn - 2])) {
+                qhat--;
+                uint64_t old = rhat;
+                rhat += v[bn - 1];
+                if (rhat < old) break;      /* rhat overflowed: qhat is right now */
+            } else {
+                break;
+            }
+        }
+    mulsub:;
+        /* u[j..j+bn] -= qhat * v */
+        uint64_t borrow = 0, carry = 0;
+        for (int64_t i = 0; i < bn; i++) {
+            unsigned __int128 p = (unsigned __int128)qhat * v[i] + carry;
+            carry = (uint64_t)(p >> 64);
+            uint64_t lo = (uint64_t)p;
+            uint64_t t = u[i + j] - lo;
+            uint64_t b1 = u[i + j] < lo;
+            uint64_t t2 = t - borrow;
+            uint64_t b2 = t < borrow;
+            u[i + j] = t2;
+            borrow = b1 + b2;
+        }
+        uint64_t top = u[j + bn];
+        uint64_t t = top - carry;
+        uint64_t b1 = top < carry;
+        uint64_t t2 = t - borrow;
+        uint64_t b2 = t < borrow;
+        u[j + bn] = t2;
+        if (b1 | b2) {
+            /* qhat was one too many: add v back */
+            qhat--;
+            unsigned char c = 0;
+            for (int64_t i = 0; i < bn; i++) {
+                uint64_t s1;
+                unsigned char c1 = __builtin_add_overflow(u[i + j], v[i], &s1);
+                unsigned char c2 = __builtin_add_overflow(s1, (uint64_t)c, &u[i + j]);
+                c = c1 | c2;
+            }
+            u[j + bn] += c;
+        }
+        q[j] = qhat;
+    }
+    *qn = bnTrim(q, m + 1);
+    for (int64_t i = 0; i < bn; i++) r[i] = s ? u[i] >> s | u[i + 1] << (64 - s) : u[i];
+    *rn = bnTrim(r, bn);
+    free(u);
+    free(v);
+}
+
+/* a shifted left by bits into out (room for an + bits/64 + 1) */
+int64_t iris_bn_shl(const uint64_t *a, int64_t an, int64_t bits, uint64_t *out) {
+    int64_t words = bits / 64;
+    int s = (int)(bits % 64);
+    memset(out, 0, (size_t)words * sizeof(uint64_t));
+    uint64_t carry = 0;
+    for (int64_t i = 0; i < an; i++) {
+        out[i + words] = s ? a[i] << s | carry : a[i];
+        carry = s ? a[i] >> (64 - s) : 0;
+    }
+    out[an + words] = carry;
+    return bnTrim(out, an + words + 1);
+}
+
+/* a shifted right by bits into out (room for an) */
+int64_t iris_bn_shr(const uint64_t *a, int64_t an, int64_t bits, uint64_t *out) {
+    int64_t words = bits / 64;
+    int s = (int)(bits % 64);
+    if (words >= an) return 0;
+    for (int64_t i = words; i < an; i++) {
+        uint64_t lo = a[i] >> s;
+        uint64_t hi = s && i + 1 < an ? a[i + 1] << (64 - s) : 0;
+        out[i - words] = lo | hi;
+    }
+    return bnTrim(out, an - words);
+}
+
+/* a = a * m + add in place; a has room for one more word; gives the length */
+int64_t iris_bn_mul_add_small(uint64_t *a, int64_t an, uint64_t m, uint64_t add) {
+    uint64_t carry = add;
+    for (int64_t i = 0; i < an; i++) {
+        unsigned __int128 t = (unsigned __int128)a[i] * m + carry;
+        a[i] = (uint64_t)t;
+        carry = (uint64_t)(t >> 64);
+    }
+    a[an] = carry;
+    return bnTrim(a, an + 1);
+}
+
+/* (hi, lo) divided by d, for d with its top bit set and hi below d, by
+   multiplying with v, d's reciprocal (Moeller and Granlund, "Improved
+   division by invariant integers", algorithm 4): two multiplications in
+   place of a division. */
+static inline uint64_t divPreinv(uint64_t hi, uint64_t lo, uint64_t d, uint64_t v, uint64_t *rem) {
+    unsigned __int128 q = (unsigned __int128)v * hi;
+    q += ((unsigned __int128)(hi + 1) << 64) | lo;
+    uint64_t q1 = (uint64_t)(q >> 64), q0 = (uint64_t)q;
+    uint64_t r = lo - q1 * d;
+    if (r > q0) {
+        q1--;
+        r += d;
+    }
+    if (r >= d) {
+        q1++;
+        r -= d;
+    }
+    *rem = r;
+    return q1;
+}
+
+/* the magnitude in decimal into out (room for an * 20 + 1); gives the
+   length. 19 digits a pass. */
+int64_t iris_bn_text10(const uint64_t *limbs, int64_t n, char *out) {
+    int64_t words = bnTrim(limbs, n);
+    uint64_t *w = malloc((size_t)(words ? words : 1) * sizeof(uint64_t));
+    int64_t cap = n * 64 / 63 + 4, count = 0;
+    uint64_t *chunks = malloc((size_t)cap * sizeof(uint64_t));
+    if (!w || !chunks) outOfMemory();
+    memcpy(w, limbs, (size_t)words * sizeof(uint64_t));
+    const uint64_t ten19 = 10000000000000000000ULL;     /* above 2^63: normalized as divPreinv needs */
+    const uint64_t inv = (uint64_t)((((unsigned __int128)~ten19) << 64 | ~(uint64_t)0) / ten19);
+    while (words > 0) {
+        uint64_t rem = 0;
+        for (int64_t i = words - 1; i >= 0; i--) {
+            w[i] = divPreinv(rem, w[i], ten19, inv, &rem);
+        }
+        chunks[count++] = rem;
+        while (words > 0 && w[words - 1] == 0) words--;
+    }
+    int64_t len = 0;
+    char tmp[24];
+    char *end = tmp + sizeof tmp;
+    if (count == 0) {
+        out[len++] = '0';
+    } else {
+        char *d = u64Digits(chunks[count - 1], end);
+        memcpy(out, d, (size_t)(end - d));
+        len = end - d;
+        for (int64_t c = count - 2; c >= 0; c--) {
+            char *p = u64Digits(chunks[c], end);
+            int64_t k = end - p;
+            memset(out + len, '0', (size_t)(19 - k));
+            memcpy(out + len + 19 - k, p, (size_t)k);
+            len += 19;
+        }
+    }
+    free(w);
+    free(chunks);
+    return len;
+}
+
+/* {n:x}, {n:+}: an integer in a base, with its sign; into s. */
+void iris_fmt_int(IrisString *s, int64_t v, int isSigned, int base, int upper, int plus) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    bool neg = isSigned && v < 0;
+    uint64_t u = neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    char buf[72];
+    char *end = buf + sizeof buf, *p = end;
+    do {
+        *--p = digits[u % (uint64_t)base];
+        u /= (uint64_t)base;
+    } while (u);
+    if (neg) {
+        *--p = '-';
+    } else if (plus) {
+        *--p = '+';
+    }
+    iris_string_append(s, p, end - p);
+}
+
+/* {x:.2}, {x:e}, {x:+}: a float with that many digits after the point, or
+   in exponent form; into s. Without a precision, the fewest digits that
+   read back the same, as plain text does. */
+void iris_write_float(int sink, IrisString *dst, double v, int bits);
+
+static int fmtFixedBuf(char *buf, double v, int prec, int plus);
+
+void iris_fmt_float(IrisString *s, double v, int bits, int prec, int kind, int plus) {
+    char buf[512];
+    int n;
+    if (kind == 'e') {
+        n = snprintf(buf, sizeof buf, plus ? "%+.*e" : "%.*e", prec < 0 ? 6 : prec, v);
+    } else if (prec >= 0 || kind == 'f') {
+        n = fmtFixedBuf(buf, v, prec < 0 ? 6 : prec, plus);
+        if (n < 0) n = snprintf(buf, sizeof buf, plus ? "%+.*f" : "%.*f", prec < 0 ? 6 : prec, v);
+    } else {
+        if (plus && !(v < 0) && !(v != v)) {
+            iris_string_append(s, "+", 1);
+        }
+        iris_write_float(3, s, v, bits);
+        return;
+    }
+    if (n < 0) n = 0;
+    if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
+    iris_string_append(s, buf, n);
+}
+
+/* An integer as {n:spec} writes it, into buf (at least 72 bytes); gives
+   where the text starts, which ends at buf + 72. */
+static char *fmtIntBuf(char *buf, int64_t v, int isSigned, int base, int upper, int plus) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    bool neg = isSigned && v < 0;
+    uint64_t u = neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    char *p = buf + 72;
+    if (base == 10) {
+        p = u64Digits(u, p);
+    } else {
+        do {
+            *--p = digits[u % (uint64_t)base];
+            u /= (uint64_t)base;
+        } while (u);
+    }
+    if (neg) {
+        *--p = '-';
+    } else if (plus) {
+        *--p = '+';
+    }
+    return p;
+}
+
+/* v with prec digits after the point, exactly as printf's %.*f writes it,
+   into buf (at least 64 bytes): v is m * 2^e, so v * 10^prec is an integer
+   division that 128-bit numbers do exactly, rounded half to even. Gives
+   the length, or -1 when v is out of the range this covers. */
+static int fmtFixedBuf(char *buf, double v, int prec, int plus) {
+    if (prec < 0 || prec > 19 || v != v || v - v != 0) return -1;
+    bool neg = signbit(v);
+    double a = fabs(v);
+    int e2;
+    double frac = frexp(a, &e2);                    /* a = frac * 2^e2, frac in [0.5, 1) */
+    uint64_t m = (uint64_t)ldexp(frac, 53);         /* a = m * 2^(e2 - 53) */
+    int shift = 53 - e2;                            /* a = m / 2^shift */
+    static const uint64_t pow10[20] = {1ULL, 10ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL, 1000000ULL, 10000000ULL,
+                                       100000000ULL, 1000000000ULL, 10000000000ULL, 100000000000ULL,
+                                       1000000000000ULL, 10000000000000ULL, 100000000000000ULL,
+                                       1000000000000000ULL, 10000000000000000ULL, 100000000000000000ULL,
+                                       1000000000000000000ULL, 10000000000000000000ULL};
+    unsigned __int128 x = (unsigned __int128)m * pow10[prec];
+    unsigned __int128 q;
+    if (a == 0) {
+        q = 0;
+    } else if (shift <= 0) {
+        if (shift < -10) return -1;
+        q = x << -shift;
+    } else if (shift >= 127) {
+        q = 0;                                      /* far below a unit of the last digit */
+    } else {
+        q = x >> shift;
+        unsigned __int128 rem = x - (q << shift), half = (unsigned __int128)1 << (shift - 1);
+        if (rem > half || (rem == half && (q & 1))) q++;
+    }
+    if (q >> 64) return -1;
+    uint64_t n = (uint64_t)q;
+    char digits[32];
+    char *end = digits + sizeof digits;
+    char *d = u64Digits(n, end);
+    int len = (int)(end - d);
+    int k = 0;
+    if (neg) buf[k++] = '-';
+    else if (plus) buf[k++] = '+';
+    if (len <= prec) {
+        buf[k++] = '0';
+        if (prec > 0) {
+            buf[k++] = '.';
+            for (int i = 0; i < prec - len; i++) buf[k++] = '0';
+            memcpy(buf + k, d, (size_t)len);
+            k += len;
+        }
+    } else {
+        memcpy(buf + k, d, (size_t)(len - prec));
+        k += len - prec;
+        if (prec > 0) {
+            buf[k++] = '.';
+            memcpy(buf + k, d + len - prec, (size_t)prec);
+            k += prec;
+        }
+    }
+    return k;
+}
+
+/* The bytes of the first n characters of p (UTF-8), and how many there are. */
+static int64_t runePrefix(const char *p, int64_t len, int64_t n, int64_t *count) {
+    int64_t i = 0, c = 0;
+    while (i < len && c < n) {
+        unsigned char b = (unsigned char)p[i];
+        i += b < 0x80 ? 1 : b >> 5 == 6 ? 2 : b >> 4 == 14 ? 3 : b >> 3 == 30 ? 4 : 1;
+        c++;
+    }
+    if (i > len) i = len;
+    *count = c;
+    return i;
+}
+
+static void putRepeated(int sink, IrisString *dst, const char *unit, int ulen, int64_t times) {
+    char buf[256];
+    while (times > 0) {
+        int k = 0;
+        while (times > 0 && k + ulen <= (int)sizeof buf) {
+            memcpy(buf + k, unit, (size_t)ulen);
+            k += ulen;
+            times--;
+        }
+        put(sink, dst, buf, (size_t)k);
+    }
+}
+
+static void padBytes(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                     int zero, int64_t maxChars);
+
+/* The text in s padded to width characters with fill, by align ('<', '>'
+   or '^'); zero puts zeros after a sign instead; maxChars cuts text. Frees s. */
+void iris_write_padded(int sink, IrisString *dst, IrisString *s, int64_t width, int fill, int align, int zero,
+                       int64_t maxChars) {
+    padBytes(sink, dst, s->ptr ? s->ptr : "", s->len, width, fill, align, zero, maxChars);
+    iris_string_free(s);
+}
+
+/* {n:spec} for an integer, straight into the sink. */
+void iris_write_int_spec(int sink, IrisString *dst, int64_t v, int isSigned, int base, int upper, int plus,
+                         int64_t width, int fill, int align, int zero) {
+    char buf[72];
+    char *p = fmtIntBuf(buf, v, isSigned, base, upper, plus);
+    padBytes(sink, dst, p, buf + 72 - p, width, fill, align, zero, -1);
+}
+
+/* {x:.2} and {x:f} for a float, straight into the sink when it can. */
+void iris_write_float_spec(int sink, IrisString *dst, double v, int bits, int prec, int kind, int plus,
+                           int64_t width, int fill, int align, int zero) {
+    char buf[64];
+    int n = kind != 'e' ? fmtFixedBuf(buf, v, prec < 0 ? 6 : prec, plus) : -1;
+    if (n >= 0) {
+        padBytes(sink, dst, buf, n, width, fill, align, zero, -1);
+        return;
+    }
+    IrisString s = {0};
+    iris_fmt_float(&s, v, bits, prec, kind, plus);
+    iris_write_padded(sink, dst, &s, width, fill, align, zero, -1);
+}
+
+/* {s:>10} for text, straight into the sink. */
+void iris_write_str_spec(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                         int64_t maxChars) {
+    padBytes(sink, dst, p ? p : "", len, width, fill, align, 0, maxChars);
+}
+
+static void padBytes(int sink, IrisString *dst, const char *p, int64_t len, int64_t width, int fill, int align,
+                     int zero, int64_t maxChars) {
+    int64_t chars;
+    if (maxChars >= 0) {
+        len = runePrefix(p, len, maxChars, &chars);
+    } else if (width > 0) {
+        runePrefix(p, len, INT64_MAX, &chars);
+    } else {
+        put(sink, dst, p, (size_t)len);
+        return;
+    }
+    int64_t pad = width > chars ? width - chars : 0;
+    char unit[4];
+    int ulen;
+    if (zero) {
+        unit[0] = '0';
+        ulen = 1;
+    } else if (fill < 0x80) {
+        unit[0] = (char)fill;
+        ulen = 1;
+    } else if (fill < 0x800) {
+        unit[0] = (char)(0xc0 | fill >> 6);
+        unit[1] = (char)(0x80 | (fill & 0x3f));
+        ulen = 2;
+    } else if (fill < 0x10000) {
+        unit[0] = (char)(0xe0 | fill >> 12);
+        unit[1] = (char)(0x80 | (fill >> 6 & 0x3f));
+        unit[2] = (char)(0x80 | (fill & 0x3f));
+        ulen = 3;
+    } else {
+        unit[0] = (char)(0xf0 | fill >> 18);
+        unit[1] = (char)(0x80 | (fill >> 12 & 0x3f));
+        unit[2] = (char)(0x80 | (fill >> 6 & 0x3f));
+        unit[3] = (char)(0x80 | (fill & 0x3f));
+        ulen = 4;
+    }
+    if (zero) {
+        /* -0042: the sign first */
+        int64_t sign = len > 0 && (p[0] == '-' || p[0] == '+') ? 1 : 0;
+        put(sink, dst, p, (size_t)sign);
+        putRepeated(sink, dst, unit, ulen, pad);
+        put(sink, dst, p + sign, (size_t)(len - sign));
+    } else {
+        int64_t before = align == '>' ? pad : align == '^' ? pad / 2 : 0;
+        putRepeated(sink, dst, unit, ulen, before);
+        put(sink, dst, p, (size_t)len);
+        putRepeated(sink, dst, unit, ulen, pad - before);
+    }
 }
 
 /* A float in the fewest digits that read back as the same value, written
@@ -851,6 +1548,15 @@ void iris_error_report(int64_t code) {
     }
     iris_string_free(&s);
     exit(1);
+}
+
+/* a < b for text: the bytes as unsigned numbers, then the shorter first;
+   for UTF-8 that is the order of the code points. */
+int iris_str_cmp(const char *a, int64_t na, const char *b, int64_t nb) {
+    int64_t n = na < nb ? na : nb;
+    int c = n > 0 ? memcmp(a, b, (size_t)n) : 0;
+    if (c != 0) return c < 0 ? -1 : 1;
+    return na < nb ? -1 : na > nb ? 1 : 0;
 }
 
 int iris_str_eq(const char *a, int64_t na, const char *b, int64_t nb) {
@@ -1332,6 +2038,118 @@ void iris_fs_close(int fd) {
     if (fd >= 0) close(fd);
 }
 
+/* ---------------------------------------------------------------- fs (0.66) */
+#include <pwd.h>
+
+/* Copies a file's bytes to another path, replaced if it is there, with the
+   permissions of the first. 0, or a code. */
+int iris_fs_copy(const char *from, int64_t fn, const char *to, int64_t tn) {
+    char *a = cpath(from, fn), *b = cpath(to, tn);
+    int code = 1;
+    if (!a || !b) goto done;
+    int in = open(a, O_RDONLY | O_CLOEXEC);
+    if (in < 0) {
+        code = fsCode(errno);
+        goto done;
+    }
+    struct stat st;
+    if (fstat(in, &st) != 0 || S_ISDIR(st.st_mode)) {
+        code = S_ISDIR(st.st_mode) ? 4 : fsCode(errno);
+        close(in);
+        goto done;
+    }
+    int out = open(b, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, st.st_mode & 07777);
+    if (out < 0) {
+        code = fsCode(errno);
+        close(in);
+        goto done;
+    }
+    char buf[65536];
+    code = 0;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r < 0) {
+            code = fsCode(errno);
+            break;
+        }
+        if (r == 0) break;
+        if ((code = iris_fs_write_fd(out, buf, r)) != 0) break;
+    }
+    if (!code) fchmod(out, st.st_mode & 07777);
+    close(in);
+    if (close(out) != 0 && !code) code = 5;
+done:
+    free(a);
+    free(b);
+    return code;
+}
+
+/* A new file (folder set: a folder) named prefix-XXXXXX in dir, or in
+   $TMPDIR or /tmp when dir is empty. Its path goes in out. 0, or a code. */
+int iris_fs_temp(const char *prefix, int64_t pn, const char *dir, int64_t dn, int folder, IrisString *out) {
+    if (memchr(prefix, '/', (size_t)pn) || memchr(prefix, 0, (size_t)pn) || memchr(dir, 0, (size_t)dn)) return 5;
+    const char *base = dir;
+    size_t bn = (size_t)dn;
+    if (bn == 0) {
+        base = getenv("TMPDIR");
+        if (!base || !*base) base = "/tmp";
+        bn = strlen(base);
+    }
+    while (bn > 1 && base[bn - 1] == '/') bn--;
+    size_t len = bn + 1 + (size_t)pn + 8;
+    char *t = malloc(len);
+    if (!t) outOfMemory();
+    snprintf(t, len, "%.*s/%.*s-XXXXXX", (int)bn, base, (int)pn, prefix);
+    int code = 0;
+    if (folder) {
+        if (!mkdtemp(t)) code = fsCode(errno);
+    } else {
+        int fd = mkstemp(t);
+        if (fd < 0) code = fsCode(errno);
+        else close(fd);
+    }
+    if (!code) iris_string_append(out, t, (int64_t)strlen(t));
+    free(t);
+    return code;
+}
+
+/* The working folder, into out. 0, or a code. */
+int iris_os_cwd(IrisString *out) {
+    char buf[4096];
+    if (!getcwd(buf, sizeof buf)) return fsCode(errno);
+    iris_string_append(out, buf, (int64_t)strlen(buf));
+    return 0;
+}
+
+int iris_os_chdir(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int code = chdir(p) == 0 ? 0 : fsCode(errno);
+    free(p);
+    return code;
+}
+
+int iris_os_hostname(IrisString *out) {
+    char buf[256];
+    if (gethostname(buf, sizeof buf) != 0) return 5;
+    buf[sizeof buf - 1] = 0;
+    iris_string_append(out, buf, (int64_t)strlen(buf));
+    return 0;
+}
+
+/* $HOME, or the home folder in the user database. 0, or 1 for none. */
+int iris_os_home(IrisString *out) {
+    const char *h = getenv("HOME");
+    if (!h || !*h) {
+        struct passwd *pw = getpwuid(getuid());
+        h = pw ? pw->pw_dir : NULL;
+    }
+    if (!h || !*h) return 1;
+    iris_string_append(out, h, (int64_t)strlen(h));
+    return 0;
+}
+
 /* 0 a line, 1 end of input, 2 an error */
 int iris_io_read_line(IrisString *out) {
     int c;
@@ -1766,10 +2584,28 @@ typedef struct Sched {
 static _Thread_local Sched *mySched;
 static int liveThreads = 1;
 
+/* A hint to the CPU that this is a spin loop. */
+static inline void cpuRelax(void) {
+#if defined(__x86_64__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+void iris_cpu_pause(void) { cpuRelax(); }
+
+/* Held for a few instructions at a time: spin a little before giving the
+   CPU away. */
 static void spinLock(int *l) {
     while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
+        int spins = 0;
         while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
-            sched_yield();
+            if (++spins < 128) {
+                cpuRelax();
+            } else {
+                sched_yield();
+            }
         }
     }
 }
@@ -2802,14 +3638,39 @@ typedef struct {
     int lock;
     int locked;
     Waiter *head, *tail;
+    void *owner;                /* the holder's thread (its mainTask), when locked */
 } Mutex;
+
+/* This thread, as a Mutex's owner. */
+static inline void *thisThread(void) { return (void *)&mainTask; }
 
 void iris_mutex_lock(Mutex *m) {
     spinLock(&m->lock);
     if (!m->locked) {
         m->locked = 1;
+        m->owner = thisThread();
         spinUnlock(&m->lock);
         return;
+    }
+    /* held by another thread: it is likely to let go within a moment, and
+       waiting a moment costs less than sleeping and being woken. Held by
+       a task of this thread, it can't let go while this one spins. */
+    if (m->owner != thisThread()) {
+        for (int i = 0; i < 100; i++) {
+            spinUnlock(&m->lock);
+            cpuRelax();
+            if (!__atomic_load_n(&m->locked, __ATOMIC_RELAXED)) {
+                spinLock(&m->lock);
+                if (!m->locked) {
+                    m->locked = 1;
+                    m->owner = thisThread();
+                    spinUnlock(&m->lock);
+                    return;
+                }
+            } else {
+                spinLock(&m->lock);
+            }
+        }
     }
     int claimed = 0;
     Waiter w = {.task = current, .claimed = &claimed};
@@ -2821,12 +3682,16 @@ void iris_mutex_lock(Mutex *m) {
     m->tail = &w;
     spinUnlock(&m->lock);
     schedule();                 /* unlock gave it the lock */
+    m->owner = thisThread();
 }
 
 bool iris_mutex_try_lock(Mutex *m) {
     spinLock(&m->lock);
     bool got = !m->locked;
     m->locked = 1;
+    if (got) {
+        m->owner = thisThread();
+    }
     spinUnlock(&m->lock);
     return got;
 }
@@ -2845,13 +3710,181 @@ void iris_mutex_unlock(Mutex *m, const char *file, int line, int col, const char
         }
         claim(w);
         Task *t = w->task;
+        m->owner = NULL;        /* the waiter sets itself when it runs */
         spinUnlock(&m->lock);
         wakeTask(t);
         return;
     }
     m->locked = 0;
+    m->owner = NULL;
     spinUnlock(&m->lock);
 }
+
+/* The spins below are short on purpose: four threads hammering one lock
+   went 5 times faster with 3 tries than with 100, since a thread that
+   sleeps stops fighting over the lock's cache line. */
+/* sync.RwLock: many readers or one writer. One atomic word holds the
+   readers, a writer bit and a bit that says tasks are waiting; while that
+   bit is set every caller goes the slow way, under the queue lock, so the
+   queues and the word agree. Readers and writers that can't enter spin a
+   moment, then wait in a queue. A writer that leaves lets the waiting
+   readers in first, then the next writer, so neither side waits for ever. */
+#define RW_READERS 0x3fffffffLL
+#define RW_WRITER (1LL << 30)
+#define RW_WAITERS (1LL << 31)
+#define RW_PENDING (1LL << 32)          /* a writer spins for the lock: readers keep out */
+
+typedef struct {
+    int64_t state;
+    int qlock;
+    WaitQueue readQ, writeQ;
+} RwLock;
+
+/* Someone left and tasks wait: after readers the next writer is woken,
+   after a writer the waiting readers are. A woken task tries again, ahead
+   of newcomers; nothing is handed over before it runs, so a woken task
+   that runs late holds no one up. */
+static void rwWakeNext(RwLock *l, bool readersFirst) {
+    spinLock(&l->qlock);
+    Waiter *wake[64];
+    int n = 0;
+    if (l->readQ.head && (readersFirst || !l->writeQ.head)) {
+        while (l->readQ.head && n < 64) {
+            Waiter *r = takeWaiter(&l->readQ);
+            if (!r) break;
+            wake[n++] = r;
+        }
+    } else if (l->writeQ.head) {
+        Waiter *w = takeWaiter(&l->writeQ);
+        if (w) wake[n++] = w;
+    }
+    if (!l->readQ.head && !l->writeQ.head) {
+        __atomic_fetch_and(&l->state, ~RW_WAITERS, __ATOMIC_ACQ_REL);
+    }
+    spinUnlock(&l->qlock);
+    for (int i = 0; i < n; i++) wakeTask(wake[i]->task);
+}
+
+/* Marks that tasks wait, against the state s just seen; false when the
+   state changed meanwhile and must be looked at again. */
+static bool rwMarkWaiting(RwLock *l, int64_t s) {
+    return (s & RW_WAITERS) ||
+           __atomic_compare_exchange_n(&l->state, &s, s | RW_WAITERS, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+}
+
+void iris_rw_read_lock(RwLock *l) {
+    /* an add always succeeds, where a compare-and-swap retries under
+       contention; taken back when a writer holds the lock or waits */
+    if (!(__atomic_load_n(&l->state, __ATOMIC_RELAXED) & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+        int64_t old = __atomic_fetch_add(&l->state, 1, __ATOMIC_ACQUIRE);
+        if (!(old & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            return;
+        }
+        int64_t back = __atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
+        if ((back & RW_WAITERS) && (back & RW_READERS) == 0) rwWakeNext(l, false);
+    }
+    for (int i = 0; i < 3; i++) {
+        int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+        if (!(s & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            if (__atomic_compare_exchange_n(&l->state, &s, s + 1, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+            continue;
+        }
+        cpuRelax();
+    }
+    bool woken = false;
+    for (;;) {
+        spinLock(&l->qlock);
+        for (;;) {
+            int64_t s = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+            /* a woken reader goes in when no writer holds the lock; a new
+               one also waits behind writers that wait */
+            if (!(s & RW_WRITER) && (woken || (!(s & RW_PENDING) && !l->writeQ.head))) {
+                if (__atomic_compare_exchange_n(&l->state, &s, s + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    spinUnlock(&l->qlock);
+                    return;
+                }
+                continue;
+            }
+            if (rwMarkWaiting(l, s)) break;
+        }
+        int claimed = 0;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&l->readQ, &w);
+        spinUnlock(&l->qlock);
+        schedule();
+        woken = true;
+    }
+}
+
+int iris_rw_read_unlock(RwLock *l) {
+    int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+    if ((s & RW_READERS) == 0) return 0;
+    s = __atomic_sub_fetch(&l->state, 1, __ATOMIC_RELEASE);
+    if ((s & RW_WAITERS) && (s & RW_READERS) == 0) rwWakeNext(l, false);
+    return 1;
+}
+
+void iris_rw_write_lock(RwLock *l) {
+    for (int i = 0; i < 3; i++) {
+        int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+        if (s == 0) {
+            if (__atomic_compare_exchange_n(&l->state, &s, RW_WRITER, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+            continue;
+        }
+        if (!(s & (RW_WRITER | RW_WAITERS | RW_PENDING))) {
+            /* only readers: keep new ones out and wait for these to leave */
+            if (!__atomic_compare_exchange_n(&l->state, &s, s | RW_PENDING, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                continue;
+            }
+            for (int k = 0; k < 5; k++) {
+                int64_t t = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+                /* not past tasks in the queue: they go first, by rwWakeNext */
+                if ((t & (RW_READERS | RW_WRITER | RW_WAITERS)) == 0 &&
+                    __atomic_compare_exchange_n(&l->state, &t, (t & ~RW_PENDING) | RW_WRITER, false, __ATOMIC_ACQ_REL,
+                                                __ATOMIC_RELAXED)) {
+                    return;
+                }
+                cpuRelax();
+            }
+            /* too long: let go, and let in the readers that waited for this */
+            int64_t old = __atomic_fetch_and(&l->state, ~RW_PENDING, __ATOMIC_ACQ_REL);
+            if (old & RW_WAITERS) rwWakeNext(l, true);
+            break;
+        }
+        cpuRelax();
+    }
+    bool woken = false;
+    for (;;) {
+        spinLock(&l->qlock);
+        for (;;) {
+            int64_t s = __atomic_load_n(&l->state, __ATOMIC_ACQUIRE);
+            if ((s & (RW_WRITER | RW_READERS)) == 0 && (woken || (!l->writeQ.head && !l->readQ.head))) {
+                if (__atomic_compare_exchange_n(&l->state, &s, s | RW_WRITER, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    spinUnlock(&l->qlock);
+                    return;
+                }
+                continue;
+            }
+            if (rwMarkWaiting(l, s)) break;
+        }
+        int claimed = 0;
+        Waiter w = {.task = current, .claimed = &claimed};
+        queuePush(&l->writeQ, &w);
+        spinUnlock(&l->qlock);
+        schedule();
+        woken = true;
+    }
+}
+
+int iris_rw_write_unlock(RwLock *l) {
+    int64_t s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+    if (!(s & RW_WRITER)) return 0;
+    int64_t old = __atomic_fetch_and(&l->state, ~RW_WRITER, __ATOMIC_RELEASE);
+    if (old & RW_WAITERS) rwWakeNext(l, true);
+    return 1;
+}
+
+int iris_rw_size(void) { return (int)sizeof(RwLock); }
 
 /* ---------------------------------------------------------------- net */
 

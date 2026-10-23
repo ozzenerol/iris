@@ -1,0 +1,31 @@
+import sync
+
+const i64 ROUNDS = 1000000
+
+sync.RwLock lock
+i64 counter = 0
+
+void work(i64 id) {
+    i64 seen = 0
+    for i in 0..ROUNDS {
+        if i % 10 == 0 {
+            lock.writeLock()
+            counter += 1
+            lock.writeUnlock()
+        } else {
+            lock.readLock()
+            seen += counter
+            lock.readUnlock()
+        }
+    }
+    _ = seen
+}
+
+void main() {
+    ths := [thread work(0), thread work(1), thread work(2), thread work(3)]
+    for t in ths {
+        t.join()
+    }
+    print("{counter}")
+    lock.free()
+}

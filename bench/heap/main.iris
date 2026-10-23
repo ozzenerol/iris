@@ -1,0 +1,27 @@
+const i64 N = 2000000
+
+bool lower(i64 a, i64 b) => a < b
+
+void main() {
+    scoped Heap[i64] h = Heap[i64]{less: lower}
+    u64 x = 88172645463325252
+    for i in 0..N {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        h.push(i64(x % 1000000000))
+    }
+    first := h.peek()
+    prev := first
+    i64 sum = 0
+    for h.len > 0 {
+        v := h.pop()
+        if v < prev {
+            print("not in order")
+            return
+        }
+        prev = v
+        sum += v
+    }
+    print("{first} {prev} {sum}")
+}

@@ -1,0 +1,50 @@
+// expect: 4 true 30
+// expect: false 0 -1
+// expect: api 3
+// expect: db 30
+// expect: queue 2
+// expect: web 1
+// expect: first api 3, last web 1
+// expect: range: db queue
+// expect: true false 3
+// expect: api queue web
+// expect: 0 true
+// expect: false false
+
+import str
+
+bool before(str a, str b) => str.compare(a, b) < 0
+
+void main() {
+    SortedMap[str, i64] m = SortedMap[str, i64]{less: before}
+    defer m.free()
+    m.set("web", 1)
+    m.set("db", 3)
+    m.set("api", 3)
+    m.set("queue", 2)
+    m.set("db", 30)
+    v, found := m.get("db")
+    print("{m.len} {found} {v}")
+    _, there := m.get("cache")
+    print("{there} {m.getOr("cache", 0)} {m.getOr("x", -1)}")
+    for k, n in m {
+        print("{k} {n}")
+    }
+    k1, v1, _ := m.first()
+    k2, v2, _ := m.last()
+    print("first {k1} {v1}, last {k2} {v2}")
+    String r = "range:".copy()
+    for k, _ in m.range("b", "r") {
+        r.append(" ")
+        r.append(k)
+    }
+    print(r)
+    r.free()
+    print("{m.remove("db")} {m.remove("db")} {m.len}")
+    scoped List[str] keys = m.keys()
+    print("{keys.at(0)} {keys.at(1)} {keys.at(2)}")
+    m.clear()
+    _, _, any := m.first()
+    print("{m.len} {!any}")
+    print("{m.has("api")} {m.has("web")}")
+}

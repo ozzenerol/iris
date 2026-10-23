@@ -1,0 +1,89 @@
+// A priority queue: pop always takes out the value that goes first. Which
+// one that is comes from less, given when the heap is made:
+// Heap[Job]{less: sooner}. less(a, b) says whether a goes before b. A new
+// Heap is empty; free gives its memory back.
+pub struct Heap[T] {
+    pub bool(T, T) less
+    List[T] vals
+    pub i64 len
+}
+
+void Heap[T].needLess() {
+    if self.less == null {
+        panic("a Heap needs a less function: Heap[T]{{less: f}}")
+    }
+}
+
+// Adds a value.
+pub void Heap[T].push(T value) {
+    self.needLess()
+    self.vals.push(value)
+    xs := self.vals.buf
+    i := self.vals.len - 1
+    for i > 0 {
+        up := (i - 1) / 2
+        break if !self.less(value, xs[up])
+        xs[i] = xs[up]
+        i = up
+    }
+    xs[i] = value
+    self.len = self.vals.len
+}
+
+// The value that goes first, without taking it out.
+pub T Heap[T].peek() {
+    if self.len == 0 {
+        panic("peek on an empty Heap")
+    }
+    return self.vals.buf[0]
+}
+
+// Takes out the value that goes first.
+pub T Heap[T].pop() {
+    if self.len == 0 {
+        panic("pop on an empty Heap")
+    }
+    xs := self.vals.buf
+    top := xs[0]
+    last := self.vals.pop()
+    n := self.vals.len
+    self.len = n
+    if n == 0 {
+        return top
+    }
+    i := 0
+    for {
+        c := 2 * i + 1
+        break if c >= n
+        if c + 1 < n && self.less(xs[c + 1], xs[c]) {
+            c += 1
+        }
+        break if !self.less(xs[c], last)
+        xs[i] = xs[c]
+        i = c
+    }
+    xs[i] = last
+    return top
+}
+
+// The values, in no particular order. It is valid until the heap changes.
+pub T[] Heap[T].items() => self.vals.items()
+
+// Takes every value out and keeps the memory.
+pub void Heap[T].clear() {
+    self.vals.clear()
+    self.len = 0
+}
+
+// Gives the heap's memory back; the heap is empty after.
+pub void Heap[T].free() {
+    self.vals.free()
+    self.len = 0
+}
+
+// Frees each value, then the heap: for a heap of Strings or of structs with
+// a free method.
+pub void Heap[T].freeEach() {
+    self.vals.freeEach()
+    self.len = 0
+}

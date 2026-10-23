@@ -1,0 +1,51 @@
+// expect: readers 1 and 2 hold it together
+// expect: the writer waits for both
+// expect: writer in
+// expect: a reader that came after the writer waits for it
+// Two readers share the lock; a writer waits for both, and a reader that
+// comes while a writer waits goes after it.
+import sync
+
+sync.RwLock lock
+chan[str] events
+
+void reader(str name, Duration hold) {
+    lock.readLock()
+    events <- name
+    sleep(hold)
+    lock.readUnlock()
+}
+
+void writer() {
+    lock.writeLock()
+    events <- "writer"
+    sleep(20ms)
+    lock.writeUnlock()
+}
+
+void lateReader() {
+    lock.readLock()
+    events <- "late"
+    lock.readUnlock()
+}
+
+void main() {
+    events = chan[str](8)
+    spawn reader("one", 40ms)
+    spawn reader("two", 40ms)
+    sleep(5ms)
+    spawn writer()
+    sleep(5ms)
+    spawn lateReader()
+    a := <-events
+    b := <-events
+    print("readers {if a == "one" { 1 } else { 2 }} and {if b == "two" { 2 } else { 1 }} hold it together")
+    print("the writer waits for both")
+    c := <-events
+    print("{c} in")
+    d := <-events
+    print("a reader that came after the {c} waits for it")
+    _ = d
+    lock.free()
+    events.free()
+}

@@ -1,0 +1,6 @@
+// error: 3: a character beyond ASCII is a code point, an i32, not u8; for its UTF-8 bytes use a string
+void main() {
+    u8 b = 'ö'
+    i32 c = '東'
+    i64 d = 'é'
+}

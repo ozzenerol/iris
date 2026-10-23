@@ -1,0 +1,18 @@
+// expect: true false true true true true true
+// expect: apple 1
+// <, <=, > and >= on text: byte by byte, the shorter first; in generic code too.
+T smallest[T](T[] items) {
+    T best = items[0]
+    for x in items {
+        if x < best {
+            best = x
+        }
+    }
+    return best
+}
+
+void main() {
+    scoped String b = "beta".copy()
+    print("{"alpha" < "beta"} {"b" < "ab"} {"ab" < "abc"} {"abc" <= "abc"} {b > "alpha"} {"Zebra" < "apple"} {"é" > "z"}")
+    print("{smallest(["pear", "apple", "fig"])} {smallest([3, 1, 2])}")
+}

@@ -61,7 +61,7 @@ pub i64 count(str s, str sub) {
     }
 }
 
-bool isSpace(u8 c) => c == ' ' || c == '\t' || c == '\n' || c == '\r'
+bool spaceByte(u8 c) => c == ' ' || c == '\t' || c == '\n' || c == '\r'
 
 // s without spaces, tabs and line breaks at either end.
 pub str trim(str s) => trimRight(trimLeft(s))
@@ -69,7 +69,7 @@ pub str trim(str s) => trimRight(trimLeft(s))
 // s without spaces, tabs and line breaks at the start.
 pub str trimLeft(str s) {
     i64 i
-    for i < s.len && isSpace(s[i]) {
+    for i < s.len && spaceByte(s[i]) {
         i += 1
     }
     return s[i:]
@@ -78,7 +78,7 @@ pub str trimLeft(str s) {
 // s without spaces, tabs and line breaks at the end.
 pub str trimRight(str s) {
     i64 n = s.len
-    for n > 0 && isSpace(s[n - 1]) {
+    for n > 0 && spaceByte(s[n - 1]) {
         n -= 1
     }
     return s[0:n]
@@ -133,11 +133,11 @@ pub List[str] fields(str s) {
     List[str] out
     i := 0
     for i < s.len {
-        for i < s.len && isSpace(s[i]) {
+        for i < s.len && spaceByte(s[i]) {
             i += 1
         }
         start := i
-        for i < s.len && !isSpace(s[i]) {
+        for i < s.len && !spaceByte(s[i]) {
             i += 1
         }
         if i > start {
@@ -257,4 +257,328 @@ pub !f64 parseFloat(str s) {
         return error(ParseError.notNumber, "'{s}' is not a number")
     }
     return v
+}
+
+// The integer written in s in a base from 2 to 36, with an optional - or
+// + in front: "ff" in base 16 is 255.
+pub !i64 parseIntBase(str s, i64 base) {
+    if base < 2 || base > 36 {
+        return error(ParseError.notNumber, "base {base} isn't from 2 to 36")
+    }
+    if s.len == 0 {
+        return error(ParseError.empty, "no number in an empty text")
+    }
+    bool negative = s[0] == '-'
+    i64 start = if s[0] == '-' || s[0] == '+' { 1 } else { 0 }
+    if start == s.len {
+        return error(ParseError.notNumber, "'{s}' is not a number")
+    }
+    u64 n = 0
+    u64 limit = if negative { 9223372036854775808 } else { 9223372036854775807 }
+    for i in start..s.len {
+        c := s[i]
+        i64 d = if c >= '0' && c <= '9' { i64(c - '0') } else if c >= 'a' && c <= 'z' { i64(c - 'a') + 10 } else if c >= 'A' && c <= 'Z' { i64(c - 'A') + 10 } else { 99 }
+        if d >= base {
+            return error(ParseError.notNumber, "'{s}' is not a number in base {base}")
+        }
+        if n > (limit - u64(d)) / u64(base) {
+            return error(ParseError.tooBig, "'{s}' doesn't fit in i64")
+        }
+        n = n * u64(base) + u64(d)
+    }
+    if negative {
+        // the smallest i64 has no positive twin
+        return if n == 9223372036854775808 { -9223372036854775807 - 1 } else { -i64(n) }
+    }
+    return i64(n)
+}
+
+// ------------------------------------------------------------ UTF-8
+
+// The character that replaces bytes that aren't UTF-8.
+pub const i32 REPLACEMENT = 0xfffd
+
+// The character (code point) that starts at byte at of s, and how many
+// bytes it takes. Bytes that aren't UTF-8 give REPLACEMENT and 1.
+pub (i32, i64) decodeRune(str s, i64 at) {
+    if at < 0 || at >= s.len {
+        return (REPLACEMENT, 0)
+    }
+    i64 n
+    r := rawDecode(s.ptr, s.len, at, &n)
+    return (r, n)
+}
+
+@extern("iris_utf8_decode")
+i32 rawDecode(u8 *p, i64 len, i64 at, i64 *n)
+
+// The characters of a text, for a loop: for r in s.runes() { }.
+pub struct Runes {
+    pub str text
+}
+
+// The characters of s, one code point at a time.
+pub Runes runes(str s) => Runes{text: s}
+
+// for r in s.runes(): the next character.
+pub (i32, bool) Runes.next(i64 *at) {
+    if *at >= self.text.len {
+        return (0, false)
+    }
+    b := self.text[*at]
+    if b < 0x80 {
+        *at += 1
+        return (i32(b), true)
+    }
+    r, n := decodeRune(self.text, *at)
+    *at += n
+    return (r, true)
+}
+
+// How many characters (code points) s has; bytes that aren't UTF-8 count
+// one each.
+pub i64 runeCount(str s) {
+    valid := rawCount(s.ptr, s.len)
+    if valid >= 0 {
+        return valid
+    }
+    i64 count = 0
+    i64 at = 0
+    for at < s.len {
+        if s[at] < 0x80 {
+            at += 1
+        } else {
+            _, n := decodeRune(s, at)
+            at += n
+        }
+        count += 1
+    }
+    return count
+}
+
+@extern("iris_utf8_valid")
+i32 rawValid(u8 *p, i64 n)
+
+@extern("iris_utf8_count")
+i64 rawCount(u8 *p, i64 n)
+
+// Whether s is all UTF-8.
+pub bool validUtf8(str s) => rawValid(s.ptr, s.len) == 1
+
+// Adds the UTF-8 bytes of character r to out; a value that isn't a
+// character adds REPLACEMENT.
+pub void appendRune(String *out, i32 r) {
+    i32 c = if r < 0 || r > 0x10ffff || (r >= 0xd800 && r <= 0xdfff) { REPLACEMENT } else { r }
+    u8[4] b
+    i64 n
+    if c < 0x80 {
+        b[0] = u8(c)
+        n = 1
+    } else if c < 0x800 {
+        b[0] = u8(0xc0 | c >> 6)
+        b[1] = u8(0x80 | (c & 0x3f))
+        n = 2
+    } else if c < 0x10000 {
+        b[0] = u8(0xe0 | c >> 12)
+        b[1] = u8(0x80 | (c >> 6 & 0x3f))
+        b[2] = u8(0x80 | (c & 0x3f))
+        n = 3
+    } else {
+        b[0] = u8(0xf0 | c >> 18)
+        b[1] = u8(0x80 | (c >> 12 & 0x3f))
+        b[2] = u8(0x80 | (c >> 6 & 0x3f))
+        b[3] = u8(0x80 | (c & 0x3f))
+        n = 4
+    }
+    out.append(b[0:n])
+}
+
+// Character r as a new String.
+pub String fromRune(i32 r) {
+    String out
+    appendRune(&out, r)
+    return out
+}
+
+// Whether c is a decimal digit, 0 to 9.
+pub bool isDigit(i32 c) => c >= '0' && c <= '9'
+
+// Whether c is a hex digit: 0 to 9, a to f or A to F.
+pub bool isHexDigit(i32 c) => isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+// Whether c is an ASCII letter, a to z or A to Z.
+pub bool isLetter(i32 c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+
+// Whether c is an ASCII letter or digit.
+pub bool isAlnum(i32 c) => isLetter(c) || isDigit(c)
+
+// Whether c is an upper-case ASCII letter.
+pub bool isUpper(i32 c) => c >= 'A' && c <= 'Z'
+
+// Whether c is a lower-case ASCII letter.
+pub bool isLower(i32 c) => c >= 'a' && c <= 'z'
+
+// Whether c is white space: space, tab, a line break, or one of Unicode's
+// spaces such as the no-break space.
+pub bool isSpace(i32 c) {
+    if c == ' ' || (c >= 9 && c <= 13) {
+        return true
+    }
+    return c == 0x85 || c == 0xa0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200a) || c == 0x2028 || c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000
+}
+
+// Whether c is ASCII punctuation: !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~.
+pub bool isPunct(i32 c) => (c >= '!' && c <= '/') || (c >= ':' && c <= '@') || (c >= '[' && c <= '`') || (c >= '{' && c <= '~')
+
+// c in upper case, for ASCII letters; anything else as it is.
+pub i32 toUpper(i32 c) => if isLower(c) { c - 32 } else { c }
+
+// c in lower case, for ASCII letters; anything else as it is.
+pub i32 toLower(i32 c) => if isUpper(c) { c + 32 } else { c }
+
+// ------------------------------------------------------------ more text
+
+// s with fill in front until it is width characters wide; s itself when it
+// is that wide already.
+pub String padLeft(str s, i64 width, str fill = " ") {
+    String out
+    n := width - runeCount(s)
+    pad(&out, n, fill)
+    out.append(s)
+    return out
+}
+
+// s with fill after it until it is width characters wide.
+pub String padRight(str s, i64 width, str fill = " ") {
+    String out
+    out.append(s)
+    pad(&out, width - runeCount(s), fill)
+    return out
+}
+
+// n characters of fill, repeating it, onto out.
+void pad(String *out, i64 n, str fill) {
+    if n <= 0 || fill.len == 0 {
+        return
+    }
+    fn := runeCount(fill)
+    i64 left = n
+    for left >= fn {
+        out.append(fill)
+        left -= fn
+    }
+    // the first characters of fill for the rest
+    i64 at = 0
+    for left > 0 {
+        _, k := decodeRune(fill, at)
+        out.append(fill[at:at + k])
+        at += k
+        left -= 1
+    }
+}
+
+// The parts of s between each sep, at most n of them: the last part holds
+// the rest. n of 0 or less gives all parts, as split does.
+pub List[str] splitN(str s, str sep, i64 n) {
+    List[str] out
+    if n <= 0 {
+        return split(s, sep)
+    }
+    if sep.len == 0 {
+        out.push(s)
+        return out
+    }
+    str rest = s
+    for out.len < n - 1 {
+        part, after, more := cut(rest, sep)
+        if !more {
+            break
+        }
+        out.push(part)
+        rest = after
+    }
+    out.push(rest)
+    return out
+}
+
+// s without prefix at its start, when it starts with it; s otherwise.
+pub str trimPrefix(str s, str prefix) => if startsWith(s, prefix) { s[prefix.len:] } else { s }
+
+// s without suffix at its end, when it ends with it; s otherwise.
+pub str trimSuffix(str s, str suffix) => if endsWith(s, suffix) { s[0:s.len - suffix.len] } else { s }
+
+// The text before and after the last sep, and whether sep was found.
+pub (str, str, bool) cutLast(str s, str sep) {
+    i := findLast(s, sep)
+    if i < 0 {
+        return (s, "", false)
+    }
+    return (s[0:i], s[i + sep.len:], true)
+}
+
+// The lines of s, without their line breaks (\n or \r\n). A line break at
+// the very end doesn't make an empty last line. They point into s.
+pub List[str] lines(str s) {
+    List[str] out
+    str rest = s
+    for rest.len > 0 {
+        line, after, found := cut(rest, "\n")
+        out.push(trimSuffix(line, "\r"))
+        if !found {
+            break
+        }
+        rest = after
+    }
+    return out
+}
+
+// Whether a and b are the same text when ASCII letters are compared
+// without their case: "Content-Type" and "content-type".
+pub bool equalFold(str a, str b) {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        if a[i] != b[i] && toLower(i32(a[i])) != toLower(i32(b[i])) {
+            return false
+        }
+    }
+    return true
+}
+
+// A copy of s with the first ASCII letter of each word in upper case.
+pub String title(str s) {
+    String out = s.copy()
+    u8[] bytes = out.ptr[0:out.len]
+    bool start = true
+    for i in 0..bytes.len {
+        c := i32(bytes[i])
+        if start && isLower(c) {
+            bytes[i] = u8(c - 32)
+        }
+        start = isSpace(c) || c == '-' || c == '_'
+    }
+    return out
+}
+
+// s with its characters in the opposite order.
+pub String reverse(str s) {
+    String out
+    out.reserve(s.len)
+    i64 end = s.len
+    for end > 0 {
+        // back to the start of the character before end
+        start := end - 1
+        for start > 0 && s[start] >> 6 == 2 && end - start < 4 {
+            start -= 1
+        }
+        _, n := decodeRune(s, start)
+        if start + n != end {
+            // bytes that aren't UTF-8: one at a time
+            start = end - 1
+        }
+        out.append(s[start:end])
+        end = start
+    }
+    return out
 }

@@ -1,0 +1,512 @@
+// Whole numbers of any size: adding, multiplying, dividing, powers, and
+// reading and writing them in any base from 2 to 36. Each operation gives
+// a new Int, which its caller frees.
+
+// What reading or converting a number fails with: invalid for text that
+// isn't a number, tooBig for a value that doesn't fit in an i64.
+pub enum BigError { invalid, tooBig }
+
+// A whole number of any size. Its zero value is 0.
+pub struct Int {
+    bool negative
+    List[u64] mag // the magnitude, 64 bits a limb, the lowest first, no zero limbs at the top
+}
+
+// The runtime's kernels on magnitudes (see runtime/rt.c, big): each writes
+// into room made by its caller and gives the length without zero limbs.
+@extern("iris_bn_cmp")
+i64 rawCmp(u64 *a, i64 an, u64 *b, i64 bn)
+
+@extern("iris_bn_add")
+i64 rawAdd(u64 *a, i64 an, u64 *b, i64 bn, u64 *out)
+
+@extern("iris_bn_sub")
+i64 rawSub(u64 *a, i64 an, u64 *b, i64 bn, u64 *out)
+
+@extern("iris_bn_mul")
+i64 rawMul(u64 *a, i64 an, u64 *b, i64 bn, u64 *out)
+
+@extern("iris_bn_mul_small")
+i64 rawMulSmall(u64 *a, i64 an, u64 m, u64 *out)
+
+@extern("iris_bn_div_small")
+u64 rawDivSmall(u64 *a, i64 an, u64 d, u64 *q, i64 *qn)
+
+@extern("iris_bn_divmod")
+void rawDivMod(u64 *a, i64 an, u64 *b, i64 bn, u64 *q, i64 *qn, u64 *r, i64 *rn)
+
+@extern("iris_bn_shl")
+i64 rawShl(u64 *a, i64 an, i64 bits, u64 *out)
+
+@extern("iris_bn_shr")
+i64 rawShr(u64 *a, i64 an, i64 bits, u64 *out)
+
+@extern("iris_bn_mul_add_small")
+i64 rawMulAddSmall(u64 *a, i64 an, u64 m, u64 add)
+
+@extern("iris_bn_text10")
+i64 rawText10(u64 *limbs, i64 n, u8 *out)
+
+// Gives the number's memory back.
+pub void Int.free() {
+    self.mag.free()
+}
+
+// The limbs' first item, for the kernels; any pointer when there are none.
+u64 *ptrOf(List[u64] *m) {
+    if m.len == 0 {
+        m.reserve(1)
+    }
+    return m.items().ptr
+}
+
+// A magnitude of room n, filled by a kernel that gives its length.
+List[u64] room(i64 n) {
+    List[u64] out
+    out.resize(if n > 0 { n } else { 1 })
+    return out
+}
+
+Int make(bool neg, List[u64] mag) {
+    return Int{negative: neg && mag.len > 0, mag: mag}
+}
+
+// v as an Int.
+pub Int from(i64 v) {
+    Int out
+    out.negative = v < 0
+    u64 m = if v < 0 { u64(-(v + 1)) + 1 } else { u64(v) }
+    if m != 0 {
+        out.mag.push(m)
+    }
+    return out
+}
+
+// A copy of the number.
+pub Int Int.copy() {
+    Int out
+    out.negative = self.negative
+    out.mag.reserve(self.mag.len)
+    for d in self.mag {
+        out.mag.push(d)
+    }
+    return out
+}
+
+// Whether the number is 0.
+pub bool Int.isZero() => self.mag.len == 0
+
+// -1, 0 or 1, as the number is below, at or above 0.
+pub i64 Int.sign() => if self.mag.len == 0 { 0 } else if self.negative { -1 } else { 1 }
+
+// How many bits the magnitude takes: 0 for 0, 8 for 255.
+pub i64 Int.bitLen() {
+    if self.mag.len == 0 {
+        return 0
+    }
+    top := self.mag.at(self.mag.len - 1)
+    i64 n = 0
+    u64 v = top
+    for v != 0 {
+        n += 1
+        v >>= 1
+    }
+    return (self.mag.len - 1) * 64 + n
+}
+
+// The number as an i64; BigError.tooBig when it doesn't fit.
+pub !i64 Int.toI64() {
+    if self.mag.len > 1 {
+        return error(BigError.tooBig, "the number has {self.bitLen()} bits, more than an i64 holds")
+    }
+    u64 m = if self.mag.len == 1 { self.mag.at(0) } else { 0 }
+    if self.negative {
+        if m > 9223372036854775808 {
+            return error(BigError.tooBig, "the number is below the smallest i64")
+        }
+        return if m == 9223372036854775808 { -9223372036854775807 - 1 } else { -i64(m) }
+    }
+    if m > 9223372036854775807 {
+        return error(BigError.tooBig, "the number is above the largest i64")
+    }
+    return i64(m)
+}
+
+// ------------------------------------------------------------ magnitudes
+
+i64 magCmp(List[u64] *a, List[u64] *b) => rawCmp(ptrOf(a), a.len, ptrOf(b), b.len)
+
+List[u64] magAdd(List[u64] *a, List[u64] *b) {
+    n := if a.len > b.len { a.len } else { b.len }
+    out := room(n + 1)
+    out.resize(rawAdd(ptrOf(a), a.len, ptrOf(b), b.len, ptrOf(&out)))
+    return out
+}
+
+// a - b, for a at least b.
+List[u64] magSub(List[u64] *a, List[u64] *b) {
+    out := room(a.len)
+    out.resize(rawSub(ptrOf(a), a.len, ptrOf(b), b.len, ptrOf(&out)))
+    return out
+}
+
+List[u64] magMul(List[u64] *a, List[u64] *b) {
+    if a.len == 0 || b.len == 0 {
+        List[u64] none
+        return none
+    }
+    if b.len == 1 {
+        out := room(a.len + 1)
+        out.resize(rawMulSmall(ptrOf(a), a.len, b.at(0), ptrOf(&out)))
+        return out
+    }
+    if a.len == 1 {
+        out := room(b.len + 1)
+        out.resize(rawMulSmall(ptrOf(b), b.len, a.at(0), ptrOf(&out)))
+        return out
+    }
+    out := room(a.len + b.len)
+    out.resize(rawMul(ptrOf(a), a.len, ptrOf(b), b.len, ptrOf(&out)))
+    return out
+}
+
+// a divided by b, rounded toward zero, and the remainder.
+(List[u64], List[u64]) magDivMod(List[u64] *a, List[u64] *b) {
+    if magCmp(a, b) < 0 {
+        List[u64] q
+        List[u64] r
+        for d in *a {
+            r.push(d)
+        }
+        return (q, r)
+    }
+    if b.len == 1 {
+        q := room(a.len)
+        i64 qn
+        rem := rawDivSmall(ptrOf(a), a.len, b.at(0), ptrOf(&q), &qn)
+        q.resize(qn)
+        List[u64] r
+        if rem != 0 {
+            r.push(rem)
+        }
+        return (q, r)
+    }
+    q := room(a.len - b.len + 1)
+    r := room(b.len)
+    i64 qn
+    i64 rn
+    rawDivMod(ptrOf(a), a.len, ptrOf(b), b.len, ptrOf(&q), &qn, ptrOf(&r), &rn)
+    q.resize(qn)
+    r.resize(rn)
+    return (q, r)
+}
+
+// ------------------------------------------------------------ arithmetic
+
+// The number with its sign turned around.
+pub Int Int.negate() {
+    out := self.copy()
+    out.negative = !out.negative && out.mag.len > 0
+    return out
+}
+
+// The number without its sign.
+pub Int Int.abs() {
+    out := self.copy()
+    out.negative = false
+    return out
+}
+
+// Compares with b: below 0 when the number is less, 0 when equal, above 0
+// when greater.
+pub i64 Int.cmp(Int b) {
+    if self.negative != b.negative {
+        return if self.negative { -1 } else { 1 }
+    }
+    c := magCmp(&self.mag, &b.mag)
+    return if self.negative { -c } else { c }
+}
+
+// Whether the number equals b.
+pub bool Int.equal(Int b) => self.cmp(b) == 0
+
+// The number plus b.
+pub Int Int.add(Int b) {
+    if self.negative == b.negative {
+        return make(self.negative, magAdd(&self.mag, &b.mag))
+    }
+    c := magCmp(&self.mag, &b.mag)
+    if c == 0 {
+        Int zero
+        return zero
+    }
+    if c > 0 {
+        return make(self.negative, magSub(&self.mag, &b.mag))
+    }
+    return make(b.negative, magSub(&b.mag, &self.mag))
+}
+
+// The number minus b.
+pub Int Int.sub(Int b) {
+    // b with its sign turned, without copying it
+    flipped := Int{negative: !b.negative && b.mag.len > 0, mag: b.mag}
+    return self.add(flipped)
+}
+
+// The number times b.
+pub Int Int.mul(Int b) => make(self.negative != b.negative, magMul(&self.mag, &b.mag))
+
+// The number divided by b, rounded toward zero, and the remainder, which
+// has the number's sign, as with integers. b must not be 0.
+pub (Int, Int) Int.divMod(Int b) {
+    if b.mag.len == 0 {
+        panic("division by zero")
+    }
+    q, r := magDivMod(&self.mag, &b.mag)
+    return (make(self.negative != b.negative, q), make(self.negative, r))
+}
+
+// The number divided by b, rounded toward zero. b must not be 0.
+pub Int Int.div(Int b) {
+    q, r := self.divMod(b)
+    r.free()
+    return q
+}
+
+// The remainder of the number divided by b, with the number's sign.
+pub Int Int.rem(Int b) {
+    q, r := self.divMod(b)
+    q.free()
+    return r
+}
+
+// The number to the power e, for an e of 0 or more.
+pub Int Int.pow(i64 e) {
+    if e < 0 {
+        panic("pow with exponent {e}")
+    }
+    Int result = from(1)
+    Int base = self.copy()
+    i64 k = e
+    for k > 0 {
+        if k & 1 == 1 {
+            next := result.mul(base)
+            result.free()
+            result = next
+        }
+        k >>= 1
+        if k > 0 {
+            sq := base.mul(base)
+            base.free()
+            base = sq
+        }
+    }
+    base.free()
+    return result
+}
+
+// The number to the power e, modulo m: for e of 0 or more and m above 0,
+// without the full power ever being made.
+pub Int Int.modPow(Int e, Int m) {
+    if m.sign() <= 0 || e.negative {
+        panic("modPow needs an exponent of 0 or more and a modulus above 0")
+    }
+    Int result = from(1)
+    Int base = self.rem(m)
+    if base.negative {
+        fixed := base.add(m)
+        base.free()
+        base = fixed
+    }
+    bits := e.bitLen()
+    for i in 0..bits {
+        if (e.mag.at(i / 64) >> u64(i % 64)) & 1 == 1 {
+            t := result.mul(base)
+            result.free()
+            result = t.rem(m)
+            t.free()
+        }
+        if i + 1 < bits {
+            t := base.mul(base)
+            base.free()
+            base = t.rem(m)
+            t.free()
+        }
+    }
+    base.free()
+    if m.mag.len == 1 && m.mag.at(0) == 1 {
+        result.free()
+        Int zero
+        return zero
+    }
+    return result
+}
+
+// The greatest common divisor of the number and b, never negative.
+pub Int Int.gcd(Int b) {
+    Int x = self.abs()
+    Int y = b.abs()
+    for !y.isZero() {
+        t := x.rem(y)
+        x.free()
+        x = y
+        y = t
+    }
+    y.free()
+    return x
+}
+
+// The number times 2 to the power n, for an n of 0 or more.
+pub Int Int.shl(i64 n) {
+    if n < 0 {
+        panic("shl by {n}")
+    }
+    Int out
+    out.negative = self.negative
+    if self.mag.len == 0 {
+        return out
+    }
+    out.mag = room(self.mag.len + n / 64 + 1)
+    out.mag.resize(rawShl(ptrOf(&self.mag), self.mag.len, n, ptrOf(&out.mag)))
+    return out
+}
+
+// The number divided by 2 to the power n, rounded toward zero, for an n
+// of 0 or more.
+pub Int Int.shr(i64 n) {
+    if n < 0 {
+        panic("shr by {n}")
+    }
+    Int out
+    if n / 64 >= self.mag.len {
+        return out
+    }
+    out.mag = room(self.mag.len)
+    out.mag.resize(rawShr(ptrOf(&self.mag), self.mag.len, n, ptrOf(&out.mag)))
+    out.negative = self.negative && out.mag.len > 0
+    return out
+}
+
+// ------------------------------------------------------------ text
+
+// The number written in s in a base from 2 to 36, with an optional - or +
+// in front; BigError.invalid when it isn't one. _ between digits is
+// allowed: "1_000_000".
+pub !Int parse(str s, i64 base = 10) {
+    if base < 2 || base > 36 {
+        return error(BigError.invalid, "base {base} isn't from 2 to 36")
+    }
+    i64 start = if s.len > 0 && (s[0] == '-' || s[0] == '+') { 1 } else { 0 }
+    if start == s.len {
+        return error(BigError.invalid, "'{s}' is not a number")
+    }
+    Int out
+    errdefer out.free()
+    // digits a chunk at a time: as many as fit in a u64 multiplier
+    u64 chunkMul = 1
+    for chunkMul <= 18446744073709551615 / u64(base) {
+        chunkMul *= u64(base)
+    }
+    u64 acc = 0
+    u64 accMul = 1
+    bool any = false
+    for i in start..s.len {
+        c := s[i]
+        if c == '_' && any && i + 1 < s.len && s[i + 1] != '_' {
+            continue
+        }
+        i64 d = if c >= '0' && c <= '9' { i64(c - '0') } else if c >= 'a' && c <= 'z' { i64(c - 'a') + 10 } else if c >= 'A' && c <= 'Z' { i64(c - 'A') + 10 } else { 99 }
+        if d >= base {
+            return error(BigError.invalid, "'{s}' is not a number in base {base}")
+        }
+        any = true
+        acc = acc * u64(base) + u64(d)
+        accMul *= u64(base)
+        if accMul == chunkMul {
+            mulAddSmall(&out.mag, accMul, acc)
+            acc = 0
+            accMul = 1
+        }
+    }
+    if accMul > 1 {
+        mulAddSmall(&out.mag, accMul, acc)
+    }
+    out.negative = s[0] == '-' && out.mag.len > 0
+    return out
+}
+
+// m = m * mul + add, in place.
+void mulAddSmall(List[u64] *m, u64 mul, u64 add) {
+    n := m.len
+    m.resize(n + 1)
+    m.resize(rawMulAddSmall(m.items().ptr, n, mul, add))
+}
+
+// The number written in a base from 2 to 36, with lower-case letters past
+// 9 and a - in front when it is negative.
+pub String Int.text(i64 base = 10) {
+    if base < 2 || base > 36 {
+        panic("base {base} isn't from 2 to 36")
+    }
+    String out
+    if self.mag.len == 0 {
+        out.append("0")
+        return out
+    }
+    if base == 10 {
+        // in C, 19 digits a pass
+        u8[] buf = alloc(u8, self.mag.len * 20 + 2)
+        defer free(buf)
+        i64 at = 0
+        if self.negative {
+            buf[0] = '-'
+            at = 1
+        }
+        n := rawText10(ptrOf(&self.mag), self.mag.len, &buf[at])
+        out.append(buf[0:at + n])
+        return out
+    }
+    // other bases: the largest power of base in a u64, divided out at a time
+    u64 chunk = 1
+    i64 chunkDigits = 0
+    for chunk <= 18446744073709551615 / u64(base) {
+        chunk *= u64(base)
+        chunkDigits += 1
+    }
+    scoped List[u64] cur = self.copy().mag
+    scoped List[u8] digits
+    digitText := "0123456789abcdefghijklmnopqrstuvwxyz"
+    for cur.len > 0 {
+        q := room(cur.len)
+        i64 qn
+        r := rawDivSmall(ptrOf(&cur), cur.len, chunk, ptrOf(&q), &qn)
+        q.resize(qn)
+        cur.free()
+        cur = q
+        // the low chunk's digits, zero-padded unless it is the top one
+        for k in 0..chunkDigits {
+            if cur.len == 0 && r == 0 && k > 0 {
+                break
+            }
+            digits.push(digitText[i64(r % u64(base))])
+            r /= u64(base)
+        }
+    }
+    for digits.len > 1 && digits.at(digits.len - 1) == '0' {
+        _ = digits.pop()
+    }
+    if self.negative {
+        out.append("-")
+    }
+    out.reserve(digits.len)
+    i := digits.len - 1
+    for i >= 0 {
+        u8[1] one = [digits.at(i)]
+        out.append(one[0:1])
+        i -= 1
+    }
+    return out
+}
+
+// The number in decimal, so that "{n}" writes it.
+pub String Int.format() => self.text(10)

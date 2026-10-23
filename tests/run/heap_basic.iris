@@ -1,0 +1,46 @@
+// expect: 1 9 7
+// expect: 1 2 3 4 5 6 7 8 9
+// expect: 0 left
+// expect: urgent 1, deploy 2, backup 5
+// expect: 9 8 7
+
+struct Job {
+    str name
+    i64 priority
+}
+
+bool lower(i64 a, i64 b) => a < b
+bool higher(i64 a, i64 b) => a > b
+bool sooner(Job a, Job b) => a.priority < b.priority
+
+void main() {
+    Heap[i64] h = Heap[i64]{less: lower}
+    defer h.free()
+    for v in [5, 3, 9, 1, 7, 2, 8, 6, 4] {
+        h.push(v)
+    }
+    print("{h.peek()} {h.len} {h.len - 2}")
+    String s
+    for h.len > 0 {
+        scoped String part = format("{if s.len > 0 { " " } else { "" }}{h.pop()}")
+        s.append(part)
+    }
+    print(s)
+    s.free()
+    print("{h.len} left")
+
+    scoped Heap[Job] jobs = Heap[Job]{less: sooner}
+    jobs.push(Job{name: "backup", priority: 5})
+    jobs.push(Job{name: "urgent", priority: 1})
+    jobs.push(Job{name: "deploy", priority: 2})
+    a := jobs.pop()
+    b := jobs.pop()
+    c := jobs.pop()
+    print("{a.name} {a.priority}, {b.name} {b.priority}, {c.name} {c.priority}")
+
+    scoped Heap[i64] top = Heap[i64]{less: higher}
+    for i in 0..10 {
+        top.push(i)
+    }
+    print("{top.pop()} {top.pop()} {top.pop()}")
+}

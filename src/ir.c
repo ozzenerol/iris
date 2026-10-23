@@ -109,7 +109,7 @@ static const char *llType(IR *ir, Type *t) {
         }
     case TY_PTR: case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD: return "ptr";
     case TY_ATOMIC: return t->elem->kind == TY_BOOL ? "i8" : llType(ir, t->elem);
-    case TY_MUTEX: return "[3 x i64]";
+    case TY_MUTEX: return "[4 x i64]";
     case TY_FLOAT: return t->bits == 32 ? "float" : "double";
     case TY_DYN: return "{ ptr, ptr }";
     case TY_SLICE: return "{ ptr, i64 }";
@@ -934,6 +934,16 @@ static Val emitCompare(IR *ir, TokKind op, Val a, Val b) {
         }
         return val(eq, &tyBool);
     }
+    if (a.t->kind == TY_SLICE) {
+        /* text: byte by byte, then the shorter first */
+        const char *pa, *la, *pb, *lb;
+        sliceParts(ir, a, &pa, &la);
+        sliceParts(ir, b, &pb, &lb);
+        const char *c = tmp(ir), *r = tmp(ir);
+        ins(ir, "%s = call i32 @iris_str_cmp(ptr %s, i64 %s, ptr %s, i64 %s)", c, pa, la, pb, lb);
+        ins(ir, "%s = icmp %s i32 %s, 0", r, op == P_LT ? "slt" : op == P_LE ? "sle" : op == P_GT ? "sgt" : "sge", c);
+        return val(r, &tyBool);
+    }
     const char *cc;
     bool s = a.t->isSigned;
     switch (op) {
@@ -1032,6 +1042,70 @@ static bool interpReadsStrings(Node *interp) {
     return false;
 }
 
+static void emitText(IR *ir, Node *arg, int sink, const char *dst);
+
+/* {value:spec}: the value is written into a String of its own, as the
+ * spec says for numbers and as usual for the rest, then padded to the
+ * width into the sink (iris_write_padded frees the String). */
+static void emitFmtSpec(IR *ir, Node *spec, int sink, const char *dst) {
+    FmtSpec fs;
+    fmtSpecParse(spec->text, spec->textLen, &fs);
+    Node *val = spec->a;
+    Type *t = val->type;
+    bool integer = t->kind == TY_INT && t != &tyDuration;
+    bool number = integer || t->kind == TY_FLOAT;
+    char align = fs.align ? fs.align : number ? '>' : '<';
+    if (integer) {
+        /* formatted into a buffer of the runtime's and padded from there */
+        Val v = emitExpr(ir, val);
+        int base = fs.type == 'x' || fs.type == 'X' ? 16 : fs.type == 'o' ? 8 : fs.type == 'b' ? 2 : 10;
+        ins(ir, "call void @iris_write_int_spec(i32 %d, ptr %s, i64 %s, i32 %d, i32 %d, i32 %d, i32 %d, i64 %lld, i32 %d, "
+                "i32 %d, i32 %d)",
+            sink, dst, toI64(ir, v), t->isSigned ? 1 : 0, base, fs.type == 'X' ? 1 : 0, fs.plus ? 1 : 0,
+            (long long)fs.width, fs.fill, align, fs.zero ? 1 : 0);
+        return;
+    }
+    if (t->kind == TY_FLOAT && (fs.prec >= 0 || fs.type)) {
+        Val v = emitExpr(ir, val);
+        const char *x = v.s;
+        if (t->bits == 32) {
+            x = tmp(ir);
+            ins(ir, "%s = fpext float %s to double", x, v.s);
+        }
+        ins(ir, "call void @iris_write_float_spec(i32 %d, ptr %s, double %s, i32 %d, i32 %lld, i32 %d, i32 %d, i64 %lld, "
+                "i32 %d, i32 %d, i32 %d)",
+            sink, dst, x, t->bits, (long long)fs.prec, fs.type, fs.plus ? 1 : 0, (long long)fs.width, fs.fill, align,
+            fs.zero ? 1 : 0);
+        return;
+    }
+    if (t->kind == TY_SLICE) {
+        /* text: padded straight from its bytes */
+        Val v = emitExpr(ir, val);
+        const char *ptr, *len;
+        sliceParts(ir, v, &ptr, &len);
+        ins(ir, "call void @iris_write_str_spec(i32 %d, ptr %s, ptr %s, i64 %s, i64 %lld, i32 %d, i32 %d, i64 %lld)", sink,
+            dst, ptr, len, (long long)fs.width, fs.fill, align, (long long)fs.prec);
+        return;
+    }
+    /* anything else is written as usual into a String of its own, then
+     * padded (iris_write_padded frees the String) */
+    const char *slot = allocaFor(ir, &tyString, "fmt");
+    ins(ir, "store %%String zeroinitializer, ptr %s", slot);
+    if (t->kind == TY_FLOAT && fs.plus) {
+        Val v = emitExpr(ir, val);
+        const char *x = v.s;
+        if (t->bits == 32) {
+            x = tmp(ir);
+            ins(ir, "%s = fpext float %s to double", x, v.s);
+        }
+        ins(ir, "call void @iris_fmt_float(ptr %s, double %s, i32 %d, i32 -1, i32 0, i32 1)", slot, x, t->bits);
+    } else {
+        emitText(ir, val, 3, slot);
+    }
+    ins(ir, "call void @iris_write_padded(i32 %d, ptr %s, ptr %s, i64 %lld, i32 %d, i32 %d, i32 %d, i64 %lld)", sink,
+        dst, slot, (long long)fs.width, fs.fill, align, fs.zero ? 1 : 0, (long long)(number ? -1 : fs.prec));
+}
+
 /* Writes the pieces of text to a runtime sink: 1 stdout, 2 the panic
  * message, 3 the String at dst. */
 static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
@@ -1043,6 +1117,10 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
         n = arg->list.len;
     }
     for (int i = 0; i < n; i++) {
+        if (list[i]->kind == N_FMTSPEC) {
+            emitFmtSpec(ir, list[i], sink, dst);
+            continue;
+        }
         Val v = emitExpr(ir, list[i]);
         if (v.t->kind == TY_SLICE) {
             const char *ptr, *len;
@@ -1810,6 +1888,33 @@ static Val emitBuiltin(IR *ir, Node *e) {
         }
         br(ir, ok);
         placeLabel(ir, ok);
+        return val("", &tyVoid);
+    }
+    case BI_STRING_RESERVE:
+    case BI_STRING_INSERT:
+    case BI_STRING_TRUNCATE:
+    case BI_STRING_CLEAR: {
+        Node *recv = e->a->a;
+        const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+        if (e->builtin == BI_STRING_CLEAR) {
+            const char *lenp = tmp(ir);
+            ins(ir, "%s = getelementptr %%String, ptr %s, i32 0, i32 1", lenp, addr);
+            ins(ir, "store i64 0, ptr %s", lenp);
+            return val("", &tyVoid);
+        }
+        Val n = emitExpr(ir, e->list.items[0]);
+        if (e->builtin == BI_STRING_RESERVE) {
+            ins(ir, "call void @iris_string_reserve(ptr %s, i64 %s)", addr, n.s);
+        } else if (e->builtin == BI_STRING_TRUNCATE) {
+            ins(ir, "call void @iris_string_truncate(ptr %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", addr, n.s,
+                ir->fileStr, e->line, e->col, fnName(ir));
+        } else {
+            Val v = emitExpr(ir, e->list.items[1]);
+            const char *ptr, *len;
+            sliceParts(ir, v, &ptr, &len);
+            ins(ir, "call void @iris_string_insert(ptr %s, i64 %s, ptr %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", addr,
+                n.s, ptr, len, ir->fileStr, e->line, e->col, fnName(ir));
+        }
         return val("", &tyVoid);
     }
     case BI_STRING_APPEND:
@@ -3868,12 +3973,22 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_bool(i32, ptr, i32)\n"
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
+           "declare i32 @iris_str_cmp(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_out_of_memory() noreturn\n"
            "declare noalias ptr @iris_malloc(i64)\n"
            "declare noalias ptr @iris_calloc(i64, i64)\n"
            "declare void @iris_free(ptr)\n"
            "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
+           "declare void @iris_fmt_int(ptr, i64, i32, i32, i32, i32)\n"
+           "declare void @iris_write_int_spec(i32, ptr, i64, i32, i32, i32, i32, i64, i32, i32, i32)\n"
+           "declare void @iris_write_float_spec(i32, ptr, double, i32, i32, i32, i32, i64, i32, i32, i32)\n"
+           "declare void @iris_write_str_spec(i32, ptr, ptr, i64, i64, i32, i32, i64)\n"
+           "declare void @iris_string_reserve(ptr, i64)\n"
+           "declare void @iris_string_truncate(ptr, i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_string_insert(ptr, i64, ptr, i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_fmt_float(ptr, double, i32, i32, i32, i32)\n"
+           "declare void @iris_write_padded(i32, ptr, ptr, i64, i32, i32, i32, i64)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare ptr @iris_arena_alloc(ptr, i64, i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_string_append(ptr, ptr, i64)\n"

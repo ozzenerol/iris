@@ -193,6 +193,25 @@ void main() {
 320 bytes of headers
 ```
 
+The `math` module has what wraps around, or stops at the ends, on purpose in every build: `math.addWrap` and `mulWrap` wrap, as a hash needs; `math.addSat` and `mulSat` stop at the largest or smallest `i64`; and `math.addChecked` and `mulChecked` give the result and whether it fit:
+
+```iris run
+import math
+
+void main() {
+    total, ok := math.addChecked(9223372036854775800, 10)
+    print("{ok} {math.addSat(9223372036854775800, 10)} {math.mulWrap(4294967296, 4294967296)}")
+    print("{math.gcd(84, 36)} {math.isqrt(99)} {math.ipow(3, 4)} {math.divFloor(-7, 2)} {math.mod(-7, 3)}")
+}
+```
+
+```output
+false 9223372036854775807 0
+12 9 81 -4 2
+```
+
+`/` rounds toward zero and `%` takes the sign of the left side, so `-7 / 2` is `-3` and `-7 % 3` is `-1`; `math.divFloor` and `math.mod` round down instead, which a calendar or a ring buffer wants. Numbers too big for an `i64` are the `big` module's (see [the library](../std/index.html#big)).
+
 ## Converting
 
 A value converts to another integer type on its own when that type holds every value it could have: `u8` to `u16`, `i32` to `i64`, `u32` to `i64`. Every other conversion is written out, with the type's name used like a function:

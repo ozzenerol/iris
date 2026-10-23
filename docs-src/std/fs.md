@@ -112,4 +112,33 @@ import fs
 2 entries, 1 a folder
 ```
 
-The entries come in the order the system gives them, without `.` and `..`. Paths are joined and taken apart with the `path` module.
+The entries are sorted by name, without `.` and `..`. Paths are joined and taken apart with the `path` module.
+
+## Walking, finding and copying
+
+`walk` gives the path of every file under a folder, `glob` the files that match a pattern with `*`, `?`, `[abc]` and `**`, and `copy` copies a file. `tempDir` and `tempFile` make a folder or a file with a name no other has:
+
+```iris run
+import fs, path
+
+!void main() {
+    scoped String root = try fs.tempDir("iris-fs")
+    scoped String logs = path.join(root, "logs")
+    try fs.mkdir(logs)
+    scoped String a = path.join(logs, "a.log")
+    scoped String b = path.join(root, "b.log")
+    try fs.writeAll(a, "a")
+    try fs.copy(a, b)
+    all := try fs.walk(root)
+    defer all.freeEach()
+    scoped String pattern = path.join(root, "**/*.log")
+    logged := try fs.glob(pattern)
+    defer logged.freeEach()
+    print("{all.len} files, {logged.len} logs, {fs.matches("*.log", "a.log")}")
+    try fs.removeAll(root)
+}
+```
+
+```output
+2 files, 2 logs, true
+```

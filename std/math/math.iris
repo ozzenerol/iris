@@ -86,3 +86,128 @@ pub bool isNaN(f64 x) => x != x
 
 // Infinity.
 pub f64 inf() => 1.0 / 0.0
+
+// ------------------------------------------------------------ integers
+
+// x, kept from lo to hi: lo when below it, hi when above.
+pub T clamp[T](T x, T lo, T hi) => if x < lo { lo } else if x > hi { hi } else { x }
+
+// x without its sign. The smallest i64 has no positive twin and overflows.
+pub i64 absInt(i64 x) => if x < 0 { -x } else { x }
+
+// The greatest common divisor of a and b, never negative; 0 for 0 and 0.
+pub i64 gcd(i64 a, i64 b) {
+    u64 x = if a < 0 { u64(-(a + 1)) + 1 } else { u64(a) }
+    u64 y = if b < 0 { u64(-(b + 1)) + 1 } else { u64(b) }
+    for y != 0 {
+        t := x % y
+        x = y
+        y = t
+    }
+    return i64(x)
+}
+
+// The least common multiple of a and b, never negative; 0 when either is 0.
+pub i64 lcm(i64 a, i64 b) {
+    if a == 0 || b == 0 {
+        return 0
+    }
+    return absInt(a / gcd(a, b) * b)
+}
+
+// The square root of x, rounded down; x must not be negative.
+pub i64 isqrt(i64 x) {
+    if x < 0 {
+        panic("isqrt of {x}")
+    }
+    i64 r = i64(sqrt(f64(x)))
+    // the float is close; step to the exact floor, comparing by division
+    // so that nothing overflows near the largest i64
+    for r > 0 && r > x / r {
+        r -= 1
+    }
+    for r + 1 <= x / (r + 1) {
+        r += 1
+    }
+    return r
+}
+
+// base to the power exp, for an exp of 0 or more.
+pub i64 ipow(i64 base, i64 exp) {
+    if exp < 0 {
+        panic("ipow with exponent {exp}")
+    }
+    i64 result = 1
+    i64 b = base
+    i64 e = exp
+    for e > 0 {
+        if e & 1 == 1 {
+            result *= b
+        }
+        e >>= 1
+        if e > 0 {
+            b *= b
+        }
+    }
+    return result
+}
+
+// a divided by b, rounded down rather than toward zero: -7 / 2 is -4.
+pub i64 divFloor(i64 a, i64 b) {
+    q := a / b
+    return if (a % b != 0) && ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// The remainder of a divided by b, with the sign of b: -7 mod 3 is 2.
+pub i64 mod(i64 a, i64 b) {
+    r := a % b
+    return if r != 0 && ((r < 0) != (b < 0)) { r + b } else { r }
+}
+
+@extern("iris_math_checked")
+i64 rawChecked(i64 a, i64 b, i32 op, bool *ok)
+
+@extern("iris_math_saturate")
+i64 rawSaturate(i64 a, i64 b, i32 op)
+
+@extern("iris_math_wrap")
+i64 rawWrap(i64 a, i64 b, i32 op)
+
+// a + b, and false when it doesn't fit in an i64.
+pub (i64, bool) addChecked(i64 a, i64 b) {
+    bool ok
+    r := rawChecked(a, b, 0, &ok)
+    return (r, ok)
+}
+
+// a - b, and false when it doesn't fit in an i64.
+pub (i64, bool) subChecked(i64 a, i64 b) {
+    bool ok
+    r := rawChecked(a, b, 1, &ok)
+    return (r, ok)
+}
+
+// a * b, and false when it doesn't fit in an i64.
+pub (i64, bool) mulChecked(i64 a, i64 b) {
+    bool ok
+    r := rawChecked(a, b, 2, &ok)
+    return (r, ok)
+}
+
+// a + b, or the largest or smallest i64 when it doesn't fit.
+pub i64 addSat(i64 a, i64 b) => rawSaturate(a, b, 0)
+
+// a - b, or the largest or smallest i64 when it doesn't fit.
+pub i64 subSat(i64 a, i64 b) => rawSaturate(a, b, 1)
+
+// a * b, or the largest or smallest i64 when it doesn't fit.
+pub i64 mulSat(i64 a, i64 b) => rawSaturate(a, b, 2)
+
+// a + b, wrapping around past the ends of i64, in every build.
+pub i64 addWrap(i64 a, i64 b) => rawWrap(a, b, 0)
+
+// a - b, wrapping around past the ends of i64, in every build.
+pub i64 subWrap(i64 a, i64 b) => rawWrap(a, b, 1)
+
+// a * b, wrapping around past the ends of i64, in every build.
+pub i64 mulWrap(i64 a, i64 b) => rawWrap(a, b, 2)

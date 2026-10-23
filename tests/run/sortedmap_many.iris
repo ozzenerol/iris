@@ -1,0 +1,68 @@
+// expect: 5000 ok
+// expect: 2500 ok
+// expect: range 100 ok
+// expect: 0 0
+
+bool lower(i64 a, i64 b) => a < b
+
+void main() {
+    scoped SortedMap[i64, i64] m = SortedMap[i64, i64]{less: lower}
+    // keys in a scrambled order: i * 7919 mod 10007 runs over all of 0..10006
+    for i in 0..5000 {
+        k := (i * 7919) % 10007
+        m.set(k, k * 2)
+    }
+    prev := -1
+    n := 0
+    good := true
+    for k, v in m {
+        good = good && k > prev && v == k * 2
+        prev = k
+        n += 1
+    }
+    print("{m.len} {if good && n == 5000 { "ok" } else { "bad" }}")
+    for i in 0..5000 {
+        if i % 2 == 0 {
+            _ = m.remove((i * 7919) % 10007)
+        }
+    }
+    prev = -1
+    n = 0
+    for k, _ in m {
+        good = good && k > prev && m.has(k)
+        prev = k
+        n += 1
+    }
+    for i in 0..5000 {
+        if i % 2 == 0 {
+            good = good && !m.has((i * 7919) % 10007)
+        }
+    }
+    print("{m.len} {if good && n == 2500 { "ok" } else { "bad" }}")
+    // put the removed ones back, then count a range
+    for i in 0..5000 {
+        if i % 2 == 0 {
+            k := (i * 7919) % 10007
+            m.set(k, k * 2)
+        }
+    }
+    count := 0
+    for k, _ in m.range(1000, 1200) {
+        good = good && k >= 1000 && k < 1200
+        count += 1
+    }
+    expected := 0
+    for k in 1000..1200 {
+        if m.has(k) {
+            expected += 1
+        }
+    }
+    print("range {count - expected + 100} {if good { "ok" } else { "bad" }}")
+    for i in 0..5000 {
+        _ = m.remove((i * 7919) % 10007)
+    }
+    for k, _ in m {
+        print("left {k}")
+    }
+    print("{m.len} {m.getOr(5, 0)}")
+}

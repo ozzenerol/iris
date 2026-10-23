@@ -1,0 +1,6 @@
+// panic: a SortedMap needs a less function: SortedMap[K, V]{less: f}
+
+void main() {
+    SortedMap[i64, i64] m
+    m.set(1, 1)
+}

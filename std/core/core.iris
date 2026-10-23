@@ -1,3 +1,5 @@
-// The names every program has without an import: List, Map, Set and Arena,
-// and the built-in functions print, format, alloc, free, sizeof, sleep,
-// after, panic and the others.
+// The names every program has without an import: List, Map, Set, Deque,
+// Heap, SortedMap and Arena, the functions on slices (sort, sortBy,
+// binarySearch, reverse, contains, indexOf, min, max), and the built-in
+// functions print, format, alloc, free, sizeof, sleep, after, panic and the
+// others.

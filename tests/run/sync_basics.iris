@@ -1,0 +1,68 @@
+// expect: total 36, setup ran 1 time, shared 8000, once true
+// expect: semaphore ok
+// expect: workers summed 5050
+// sync: WaitGroup, Once and RwLock across threads and tasks, Semaphore and Workers.
+import sync
+
+sync.WaitGroup group
+Atomic[i64] total
+sync.Once setup
+Atomic[i64] setups
+sync.RwLock table
+i64 shared = 0
+
+void init() {
+    setups.add(1)
+}
+
+void worker(i64 id) {
+    defer group.done()
+    setup.run(init)
+    for i in 0..1000 {
+        table.writeLock()
+        shared += 1
+        table.writeUnlock()
+        table.readLock()
+        _ = shared
+        table.readUnlock()
+    }
+    total.add(id)
+}
+
+void fetch(i64 n) {
+    sleep(1ms)
+    total.add(n)
+}
+
+void main() {
+    group.add(8)
+    threads := [thread worker(1), thread worker(2), thread worker(3), thread worker(4)]
+    for i in 5..9 {
+        spawn worker(i)
+    }
+    group.wait()
+    for t in threads {
+        t.join()
+    }
+    print("total {total.load()}, setup ran {setups.load()} time, shared {shared}, once {setup.done()}")
+
+    sem := sync.semaphore(2)
+    defer sem.free()
+    sem.acquire()
+    sem.acquire()
+    sem.release()
+    sem.acquire()
+    sem.release()
+    sem.release()
+    print("semaphore ok")
+
+    total.store(0)
+    w := sync.workers(4, fetch)
+    for n in 1..101 {
+        w.submit(n)
+    }
+    w.finish()
+    print("workers summed {total.load()}")
+    group.free()
+    table.free()
+}

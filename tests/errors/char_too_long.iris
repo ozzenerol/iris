@@ -1,4 +1,4 @@
-// error: 4: a character literal holds one byte; use a string for more
+// error: 4: a character literal holds one character; use a string for more
 
 void main() {
     c := 'ab'

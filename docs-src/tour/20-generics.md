@@ -61,14 +61,14 @@ A generic function is checked with each set of types it is used with, as if it h
 T peak[T](T[] samples) {
     T best = samples[0]
     for s in samples {
-        if s > best {    // error: '>' can't compare str values
+        if s > best {    // error: '>' can't compare bool values
             best = s
         }
     }
     return best
 }
 
-peak(["web1", "web2"])   // error: peak[str], made here, has the errors above
+peak([true, false])   // error: peak[bool], made here, has the errors above
 ```
 
 To say ahead which types a parameter takes, and give the function methods to call on it, a type parameter can have an interface as its bound (see [Interfaces](21-interfaces.html)).

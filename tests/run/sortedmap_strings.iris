@@ -1,0 +1,26 @@
+// expect: alpha=1 beta=2 gamma=3
+// expect: 2
+
+import str
+
+bool before(String a, String b) => str.compare(a, b) < 0
+
+void main() {
+    scoped SortedMap[String, i64] m = SortedMap[String, i64]{less: before}
+    for i, name in ["gamma", "alpha", "beta"] {
+        String k = name.copy()
+        m.set(k, if name == "gamma" { 3 } else if name == "alpha" { 1 } else { 2 })
+        // the map keeps its own copy
+        k.free()
+        _ = i
+    }
+    String s
+    for k, v in m {
+        scoped String part = format("{if s.len > 0 { " " } else { "" }}{k}={v}")
+        s.append(part)
+    }
+    print(s)
+    s.free()
+    scoped String key = "beta".copy()
+    print("{m.getOr(key, 0)}")
+}

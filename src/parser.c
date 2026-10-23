@@ -265,6 +265,9 @@ static int decodeEscape(const char *s, const char *e, char *out) {
     }
 }
 
+static int utf8Len(const char *s, size_t n);
+static int utf8Decode(const char *s, int len);
+
 static Node *parseChar(Parser *p, Token *t) {
     Node *n = node(p, N_CHAR, t);
     const char *s = t->s + 1, *e = t->s + t->len - 1;
@@ -277,9 +280,18 @@ static Node *parseChar(Parser *p, Token *t) {
         if (!used || s + 1 + used != e) {
             fail(p, t, "unknown escape in character literal");
         }
+    } else if ((unsigned char)*s >= 0x80) {
+        /* 'ö': a character beyond ASCII is its code point, an i32 */
+        int len = utf8Len(s, (size_t)(e - s));
+        if (len < 2 || e - s != len) {
+            fail(p, t, "a character literal holds one character; use a string for more");
+        }
+        n->ival = (uint64_t)utf8Decode(s, len);
+        n->name = "rune";
+        return n;
     } else {
         if (e - s != 1) {
-            fail(p, t, "a character literal holds one byte; use a string for more");
+            fail(p, t, "a character literal holds one character; use a string for more");
         }
         c = *s;
     }
@@ -288,6 +300,91 @@ static Node *parseChar(Parser *p, Token *t) {
 }
 
 static Node *parseExprIn(Parser *p, const char *start, const char *end, int line, int col);
+
+/* The length of the UTF-8 character at s, at most n. */
+static int utf8Len(const char *s, size_t n) {
+    unsigned char c = (unsigned char)s[0];
+    int len = c < 0x80 ? 1 : c >> 5 == 6 ? 2 : c >> 4 == 14 ? 3 : c >> 3 == 30 ? 4 : 1;
+    return (size_t)len > n ? 1 : len;
+}
+
+static int utf8Decode(const char *s, int len) {
+    const unsigned char *u = (const unsigned char *)s;
+    if (len == 1) return u[0];
+    if (len == 2) return (u[0] & 0x1f) << 6 | (u[1] & 0x3f);
+    if (len == 3) return (u[0] & 0x0f) << 12 | (u[1] & 0x3f) << 6 | (u[2] & 0x3f);
+    return (u[0] & 0x07) << 18 | (u[1] & 0x3f) << 12 | (u[2] & 0x3f) << 6 | (u[3] & 0x3f);
+}
+
+bool fmtSpecParse(const char *s, size_t n, FmtSpec *out) {
+    *out = (FmtSpec){.fill = ' ', .prec = -1};
+    size_t i = 0;
+    if (n == 0) return false;
+    int first = utf8Len(s, n);
+    if ((size_t)first < n && strchr("<>^", s[first]) && s[first]) {
+        out->fill = utf8Decode(s, first);
+        out->align = s[first];
+        i = (size_t)first + 1;
+    } else if (strchr("<>^", s[0])) {
+        out->align = s[0];
+        i = 1;
+    }
+    if (i < n && s[i] == '+') {
+        out->plus = true;
+        i++;
+    }
+    if (i < n && s[i] == '0') {
+        out->zero = true;
+        i++;
+    }
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        out->width = out->width * 10 + (s[i] - '0');
+        if (out->width > 4096) return false;
+        i++;
+    }
+    if (i < n && s[i] == '.') {
+        i++;
+        if (i >= n || s[i] < '0' || s[i] > '9') return false;
+        out->prec = 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            out->prec = out->prec * 10 + (s[i] - '0');
+            if (out->prec > 4096) return false;
+            i++;
+        }
+    }
+    if (i < n && strchr("xXobef", s[i]) && s[i]) {
+        out->type = s[i];
+        i++;
+    }
+    return i == n;
+}
+
+/* Where the spec of a value in text starts: the last ':' that isn't inside
+ * brackets, parentheses, braces or quotes, when what follows reads as a
+ * spec. NULL when there is none. */
+static const char *specColon(const char *s, const char *e) {
+    const char *colon = NULL;
+    int depth = 0;
+    for (const char *c = s; c < e; c++) {
+        if (*c == '"' || *c == '\'') {
+            char q = *c;
+            for (c++; c < e && *c != q; c++) {
+                if (*c == '\\') c++;
+            }
+        } else if (*c == '(' || *c == '[' || *c == '{') {
+            depth++;
+        } else if (*c == ')' || *c == ']' || *c == '}') {
+            depth--;
+        } else if (*c == ':' && depth == 0) {
+            colon = c;
+        }
+    }
+    FmtSpec spec;
+    if (!colon || colon == s || !fmtSpecParse(colon + 1, (size_t)(e - colon - 1), &spec)) {
+        return NULL;
+    }
+    return colon;
+}
 
 /* A string literal: plain, triple-quoted or raw. Text in braces is an
  * expression; the result is N_STRING without any, N_INTERP with. */
@@ -493,7 +590,18 @@ static Node *parseString(Parser *p, Token *t) {
                 part->text = sbFinish(&lit, p->arena);
                 push(p, &interp->list, part);
             }
-            push(p, &interp->list, parseExprIn(p, es, x, exprLine, exprCol));
+            const char *colon = specColon(es, x);
+            if (colon) {
+                /* {value:spec}: how the value is written */
+                Node *f = newNode(p->arena, N_FMTSPEC, exprLine, exprCol);
+                f->src = p->src;
+                f->a = parseExprIn(p, es, colon, exprLine, exprCol);
+                f->text = arenaStrndup(p->arena, colon + 1, (size_t)(x - colon - 1));
+                f->textLen = (size_t)(x - colon - 1);
+                push(p, &interp->list, f);
+            } else {
+                push(p, &interp->list, parseExprIn(p, es, x, exprLine, exprCol));
+            }
             line = xl;
             col = xc + 1;
             c = x + 1;

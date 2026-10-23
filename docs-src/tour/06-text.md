@@ -72,7 +72,36 @@ void main() {
 4: 110
 ```
 
-`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's.
+`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's. `<`, `<=`, `>` and `>=` put text in order byte by byte, with the shorter first when one starts the other, which for UTF-8 is the order of the code points: `"Zebra" < "apple"`, as upper-case letters come first.
+
+`runes()` goes over the characters instead, each a code point, an `i32`. `runeCount` counts them, and `validUtf8` says whether text is UTF-8 at all. A character literal beyond ASCII, such as `'ö'`, is its code point too:
+
+```iris run
+import str
+
+void main() {
+    city := "Köln 東京"
+    print("{city.len} bytes, {city.runeCount()} characters")
+    for r in city.runes() {
+        if r > 127 {
+            print("{r:x}")
+        }
+    }
+    print("{'ö' == 0xf6} {str.validUtf8("Köln")} {str.validUtf8("K\xf6ln")}")
+}
+```
+
+```output
+12 bytes, 7 characters
+f6
+6771
+4eac
+true true false
+```
+
+Bytes that aren't UTF-8 come out of `runes()` as `str.REPLACEMENT`, one for each byte, so a loop over any text ends. `decodeRune(at)` gives the character at a byte and how many bytes it takes, `str.appendRune(&s, r)` adds a character's bytes to a `String`, and `str.fromRune(r)` makes one. A character literal beyond ASCII can't be given to a `u8`, which is a byte: its UTF-8 bytes are the string `"ö"`.
+
+`str.isDigit`, `isHexDigit`, `isLetter`, `isAlnum`, `isUpper`, `isLower` and `isPunct` say what kind of ASCII character a code point is, and `isSpace` knows Unicode's spaces as well. `str.toUpper` and `str.toLower` change one ASCII letter.
 
 ## String
 
@@ -123,6 +152,29 @@ https true true
 ```
 
 A function that gives back a `String` gives the caller a new one to free. `upper`, `replace` and `format` are such functions.
+
+`insert` puts text in at a byte, `truncate` keeps the first bytes, `clear` empties a `String` and keeps its memory, and `reserve` makes room for more bytes, so that appending up to that many doesn't grow it again:
+
+```iris run
+void main() {
+    scoped String line = "200 OK".copy()
+    line.reserve(64)
+    line.insert(0, "HTTP/1.1 ")
+    print(line)
+    line.truncate(8)
+    print("[{line}]")
+    line.clear()
+    print("[{line}] {line.len}")
+}
+```
+
+```output
+HTTP/1.1 200 OK
+[HTTP/1.1]
+[] 0
+```
+
+A place outside the `String` stops the program with a message that says where.
 
 ## Writing text in the program
 
@@ -262,6 +314,35 @@ GET content-length /api/v2/users/v2
 
 `upper` and `lower` change ASCII letters only.
 
+More of the same kind:
+
+```iris run
+import str
+
+void main() {
+    print("{"/api/users".trimPrefix("/api")} {"main.iris".trimSuffix(".iris")}")
+    dir, file, _ := "/var/log/nginx/access.log".cutLast("/")
+    print("{dir} {file}")
+    scoped kv := "key=a=b".splitN("=", 2)
+    print("{kv.at(0)} -> {kv.at(1)}")
+    scoped rows := "GET /\r\nHost: lan\r\n".lines()
+    print("{rows.len} lines, the second is [{rows.at(1)}]")
+    scoped String id = "42".padLeft(6, "0")
+    scoped String name = "x-request-id".title()
+    print("{id} {name} {"Content-Length".equalFold("content-length")}")
+}
+```
+
+```output
+/users main
+/var/log/nginx access.log
+key -> a=b
+2 lines, the second is [Host: lan]
+000042 X-Request-Id true
+```
+
+`splitN` stops after a number of parts, and the last holds the rest. `lines` cuts at `\n` and `\r\n`, with no empty line for a line break at the very end. `padLeft` and `padRight` count characters, not bytes, and `reverse` turns the characters around.
+
 ## Reading numbers from text
 
 `parseInt` and `parseFloat` read a number and give an error when the text isn't one (errors are covered in [Errors](18-errors.html)):
@@ -285,4 +366,4 @@ void main() {
 ParseError.empty: no number in an empty text
 ```
 
-`parseInt` takes an optional sign and decimal digits; a number too large for an `i64` is `ParseError.tooBig`.
+`parseInt` takes an optional sign and decimal digits; a number too large for an `i64` is `ParseError.tooBig`. `parseIntBase` reads other bases, from 2 to 36: `"ff".parseIntBase(16)` is 255. To write a number in another base, see [Values in text](07-values-in-text.html).

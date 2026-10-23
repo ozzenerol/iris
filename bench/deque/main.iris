@@ -1,0 +1,28 @@
+const i64 N = 10000000
+
+void main() {
+    scoped Deque[i64] d
+    i64 sum = 0
+    i64 most = 0
+    for i in 0..N {
+        d.push(i)
+        d.pushFront(i)
+        if i % 3 == 2 {
+            sum += d.popFront()
+            sum += d.pop()
+        }
+        if d.len > most {
+            most = d.len
+        }
+    }
+    for i in 0..d.len {
+        sum += d.at(i) % 7
+    }
+    for d.len > 0 {
+        sum += d.popFront()
+        if d.len > 0 {
+            sum -= d.pop()
+        }
+    }
+    print("{most} {sum}")
+}
