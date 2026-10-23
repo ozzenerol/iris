@@ -1189,8 +1189,7 @@ void JsonReader.spaces() {
     return integer(try str.parseInt(w))
 }
 
-// TOML text for a @json struct, or for a Map or anything else json.encode
-// turns into a JSON object.
+// TOML text for a @json struct.
 pub !String encode[T](T v) {
     scoped String j = json.encode(v)
     r := JsonReader{t: j}
