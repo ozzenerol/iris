@@ -74,3 +74,23 @@ path = "../strings/main.rs"
 [[bin]]
 name = "tcp-echo"
 path = "../tcp-echo/main.rs"
+
+[[bin]]
+name = "heap"
+path = "../heap/main.rs"
+
+[[bin]]
+name = "sortedmap"
+path = "../sortedmap/main.rs"
+
+[[bin]]
+name = "deque"
+path = "../deque/main.rs"
+
+[[bin]]
+name = "sort-by"
+path = "../sort-by/main.rs"
+
+[[bin]]
+name = "fs-walk"
+path = "../fs-walk/main.rs"

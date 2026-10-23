@@ -1,0 +1,29 @@
+const i64 N = 5000000
+
+struct Order {
+    i64 key
+    i64 id
+    f64 total
+}
+
+bool byKey(Order a, Order b) => a.key < b.key
+
+void main() {
+    Order[] xs = alloc(Order, N)
+    defer free(xs)
+    u64 x = 88172645463325252
+    for i in 0..N {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        xs[i] = Order{key: i64(x >> 1), id: i, total: f64(i % 1000)}
+    }
+    sortBy(xs, byKey)
+    for i in 1..N {
+        if xs[i - 1].key > xs[i].key {
+            print("not sorted")
+            return
+        }
+    }
+    print("{xs[0].key} {xs[N / 2].key} {xs[N - 1].key}")
+}
