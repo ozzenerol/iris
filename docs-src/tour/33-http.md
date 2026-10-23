@@ -130,6 +130,9 @@ A path no pattern has gets 404, with the text `not found` and a newline, which `
 | `req.body` | the body, as text |
 | `req.param("id")` | a part of the path, from the pattern |
 | `req.query("page")` | a value from the query |
+| `req.form("email")` | a field of a form in the body |
+| `req.file("photo")` | a file sent in a form |
+| `req.cookie("session")` | a cookie the client sent |
 | `req.header("Authorization")` | a header, by its name in any case |
 | `req.protocol` | `"HTTP/1.1"` or `"HTTP/2"` |
 | `req.received` | when it came in, by `time.clock()` |
@@ -194,6 +197,155 @@ at /backends/1
 400 {"error": "the required field \"addr\" is missing"}
 400 {"error": "line 1, column 1: expected an object, found something else"}
 ```
+
+## Forms and uploads
+
+`req.form(name)` gives a field of a form in the body, sent as `application/x-www-form-urlencoded` (with its `%XX` and `+` decoded) or as `multipart/form-data`. `req.file(name)` gives a file sent in a multipart form, as an `http.Part` with its `filename`, `contentType` and `data`, and whether there is one. Both give text that points into the request, valid until the handler returns.
+
+A client builds a multipart body with `http.multipart()`: `field` adds a field, `file` a file, and `finish` ends it. `contentType()` is the `Content-Type` to send it with:
+
+```iris run
+import http, net
+
+void upload(http.Request *req, http.Response *res) {
+    f, ok := req.file("photo")
+    if !ok {
+        res.error(400, "no photo")
+        return
+    }
+    res.text("{req.form("title")}: {f.filename}, {f.contentType}, {f.data.len} bytes")
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.post("/photos", upload)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    scoped http.Multipart form = http.multipart()
+    form.field("title", "The harbour at dawn")
+    form.file("photo", "harbour.jpg", "image/jpeg", "not really a jpeg")
+    form.finish()
+    scoped String url = format("http://127.0.0.1:{ln.port}/photos")
+    scoped String contentType = form.contentType()
+    scoped http.Reply reply = try http.post(url, contentType, form.body)
+    print("{reply.status} {reply.body}")
+    scoped http.Reply none = try http.post(url, "application/x-www-form-urlencoded", "title=No+photo")
+    print("{none.status} {none.body}")
+}
+```
+
+```output
+200 The harbour at dawn: harbour.jpg, image/jpeg, 17 bytes
+400 {"error": "no photo"}
+```
+
+The whole body is read before the handler runs, so an upload counts against the Router's `maxBody`, 16 MiB unless it is set. `http.parseMultipart(body, contentType)` gives every part of a multipart body, in order.
+
+## Cookies
+
+`req.cookie(name)` gives the value of a cookie the client sent, `""` when it sent none. `res.setCookie(c)` adds a `Set-Cookie` header for an `http.Cookie`, and `res.clearCookie(name)` tells the browser to remove one:
+
+| Field | What it sets | Default |
+|---|---|---|
+| `name`, `value` | the cookie | |
+| `path` | the paths it is sent to | `"/"` |
+| `domain` | the hosts it is sent to | this host only |
+| `maxAge` | how long it is kept; `0s` until the browser closes | `0s` |
+| `secure` | sent only over HTTPS | `false` |
+| `httpOnly` | not readable by JavaScript | `true` |
+| `sameSite` | `.lax`, `.strict`, `.none`, or `.unset` to leave it out | `.lax` |
+
+The value is sent as it is, so it should be plain text without spaces, quotes, commas or semicolons; `base64` or `url.encode` makes any value fit.
+
+```iris run
+import http, net, str
+
+void login(http.Request *req, http.Response *res) {
+    res.setCookie(http.Cookie{name: "session", value: "7f3a9c", maxAge: 8h, secure: true})
+    res.clearCookie("guest")
+    res.text("welcome back, {req.cookie("user")}")
+}
+
+void serve(net.Listener ln) {
+    http.serveOn(ln, login) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    try c.write("GET / HTTP/1.1\r\nHost: localhost\r\nCookie: user=ada; theme=dark\r\nConnection: close\r\n\r\n")
+    for {
+        scoped String line = c.readLine() catch e {
+            break
+        }
+        if str.startsWith(line, "Set-Cookie") || str.startsWith(line, "welcome") {
+            print(line)
+        }
+    }
+}
+```
+
+```output
+Set-Cookie: session=7f3a9c; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Lax
+Set-Cookie: guest=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax
+welcome back, ada
+```
+
+## Files
+
+`res.file(path)` answers with a file, its `Content-Type` from its extension, and with 404 when there is no such file. `res.fileFrom(dir, name)` does the same for a file inside `dir`, and answers 404 for a name with a `..` part or an absolute one, so a route like `/static/*path` can't send a file from outside `dir`. `http.mimeType(name)` gives the type it uses, `application/octet-stream` for an extension it doesn't know:
+
+```iris run
+import http, fs, net, str
+
+!void static(http.Request *req, http.Response *res) {
+    try res.fileFrom("/tmp/iris-tour-site", req.param("path"))
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    try fs.mkdirAll("/tmp/iris-tour-site")
+    try fs.writeAll("/tmp/iris-tour-site/style.css", "h1 {{ color: teal }}\n")
+    http.Router r
+    defer r.free()
+    r.get("/static/*path", static)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+    for name in ["style.css", "missing.js", "../etc/passwd"] {
+        scoped String url = format("http://127.0.0.1:{ln.port}/static/{name}")
+        scoped http.Reply reply = try http.get(url)
+        print("{reply.status} {reply.header("Content-Type")}: {str.trim(reply.body)}")
+    }
+    print(http.mimeType("logo.SVG"))
+    try fs.removeAll("/tmp/iris-tour-site")
+}
+```
+
+```output
+200 text/css; charset=utf-8: h1 { color: teal }
+404 text/plain; charset=utf-8: not found
+404 text/plain; charset=utf-8: not found
+image/svg+xml
+```
+
+HTML pages are often made with the `template` module (see [the library](../std/index.html#template)).
 
 ## Checks and logging
 

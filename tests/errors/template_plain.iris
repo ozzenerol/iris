@@ -1,0 +1,11 @@
+// error: 10: Template.render[Plain], made here, has the errors above
+import template
+
+struct Plain {
+    i64 x
+}
+
+!void main() {
+    scoped template.Template t = try template.parse("x")
+    s := try t.render(Plain{x: 1})
+}

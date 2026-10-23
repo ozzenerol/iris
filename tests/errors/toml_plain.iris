@@ -1,0 +1,13 @@
+// error: 11: decode[Plain], made here, has the errors above
+// error: 12: encode[Plain], made here, has the errors above
+import toml
+
+struct Plain {
+    i64 x
+}
+
+!void main() {
+    Plain q
+    p := try toml.decode[Plain]("x = 1")
+    s := try toml.encode(q)
+}
