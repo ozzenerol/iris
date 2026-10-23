@@ -119,6 +119,78 @@ QUIT
 
 The `bcc` address got the mail with `RCPT TO`, and isn't in any header. The body has a plain text part and an HTML part, each encoded so that any text gets through. Every mail also gets a `Date` and a `Message-ID`.
 
+## Attachments
+
+`attachments` holds the files sent with a mail, each a `smtp.Attachment` with the `name` the reader sees, the bytes in `data`, and the `contentType`. Without a type, a file goes as `application/octet-stream`, and `http.mimeType(name)` gives the usual type for a name. The bytes can be anything, so a file is read with `fs.readAll` and passed as it is.
+
+An attachment with an `id` is part of the HTML instead of a file to save: `<img src="cid:logo">` shows the attachment whose id is `logo`, as company logos in mails are. This program sends both kinds to a small server like the one above, which prints how the mail is built:
+
+```iris run
+import fs, net, smtp
+
+void serve(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    c.write("220 test server\r\n") catch e { return }
+    bool inData = false
+    for {
+        scoped String line = c.readLine() catch e {
+            return
+        }
+        if inData {
+            if line == "." {
+                inData = false
+                c.write("250 queued\r\n") catch e { return }
+            } else if line.startsWith("Content-Type:") || line.startsWith("Content-Disposition:") {
+                shown, _, _ := line.cut("; boundary")
+                print(shown)
+            }
+        } else if line == "DATA" {
+            inData = true
+            c.write("354 go on\r\n") catch e { return }
+        } else if line == "QUIT" {
+            c.write("221 bye\r\n") catch e { }
+            return
+        } else {
+            c.write("250 ok\r\n") catch e { return }
+        }
+    }
+}
+
+!void main() {
+    try fs.writeAll("/tmp/iris-tour-invoice.pdf", "%PDF-1.7 ...")
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln)
+    scoped String pdf = try fs.readAll("/tmp/iris-tour-invoice.pdf")
+    scoped String server = format("smtp://127.0.0.1:{ln.port}")
+    try smtp.send(server, smtp.Mail{
+        from: "Shop <billing@example.com>",
+        to: ["ada@example.com"],
+        subject: "Invoice 1041",
+        html: r"""<img src="cid:logo"><p>Your invoice is attached.</p>""",
+        attachments: [
+            smtp.Attachment{name: "logo.png", data: "\x89PNG...", contentType: "image/png", id: "logo"},
+            smtp.Attachment{name: "invoice-1041.pdf", data: pdf, contentType: "application/pdf"},
+        ],
+    })
+    try fs.remove("/tmp/iris-tour-invoice.pdf")
+}
+```
+
+```output
+Content-Type: multipart/mixed
+Content-Type: multipart/related
+Content-Type: text/html; charset=utf-8
+Content-Type: image/png; name="logo.png"
+Content-Disposition: inline; filename="logo.png"
+Content-Type: application/pdf; name="invoice-1041.pdf"
+Content-Disposition: attachment; filename="invoice-1041.pdf"
+```
+
+The HTML and the logo go together as `multipart/related`, and the PDF after them as a file of its own. A name with characters beyond ASCII, such as `résumé.pdf`, is encoded so every mail program shows it. A line break in a name, a type or an id is an error, as it is in the headers.
+
 ## Several mails
 
 `smtp.connect(address)` gives a `smtp.Client` that sends many mails on one connection, which is much faster than connecting for each. `close` ends it:

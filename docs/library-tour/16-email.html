@@ -138,6 +138,68 @@ DATA
   Content-Type: text/html
 QUIT</code></pre>
 <p>The <code>bcc</code> address got the mail with <code>RCPT TO</code>, and isn't in any header. The body has a plain text part and an HTML part, each encoded so that any text gets through. Every mail also gets a <code>Date</code> and a <code>Message-ID</code>.</p>
+<h2 id="attachments"><a href="#attachments">Attachments</a></h2>
+<p><code>attachments</code> holds the files sent with a mail, each a <code>smtp.Attachment</code> with the <code>name</code> the reader sees, the bytes in <code>data</code>, and the <code>contentType</code>. Without a type, a file goes as <code>application/octet-stream</code>, and <code>http.mimeType(name)</code> gives the usual type for a name. The bytes can be anything, so a file is read with <code>fs.readAll</code> and passed as it is.</p>
+<p>An attachment with an <code>id</code> is part of the HTML instead of a file to save: <code>&lt;img src=&quot;cid:logo&quot;&gt;</code> shows the attachment whose id is <code>logo</code>, as company logos in mails are. This program sends both kinds to a small server like the one above, which prints how the mail is built:</p>
+<pre class="code run"><code><span class="k">import</span> fs, net, smtp
+
+<span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+    <span class="t">bool</span> inData = <span class="k">false</span>
+    <span class="k">for</span> {
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="k">if</span> inData {
+            <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
+                inData = <span class="k">false</span>
+                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            } <span class="k">else</span> <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Type:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Disposition:&quot;</span>) {
+                shown, _, _ := line.<span class="f">cut</span>(<span class="s">&quot;; boundary&quot;</span>)
+                <span class="f">print</span>(shown)
+            }
+        } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;DATA&quot;</span> {
+            inData = <span class="k">true</span>
+            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+        } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;QUIT&quot;</span> {
+            c.<span class="f">write</span>(<span class="s">&quot;221 bye</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
+            <span class="k">return</span>
+        } <span class="k">else</span> {
+            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+        }
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>, <span class="s">&quot;%PDF-1.7 ...&quot;</span>)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(ln)
+    <span class="k">scoped</span> <span class="t">String</span> pdf = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> server = <span class="f">format</span>(<span class="s">&quot;smtp://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{
+        from: <span class="s">&quot;Shop &lt;billing@example.com&gt;&quot;</span>,
+        to: [<span class="s">&quot;ada@example.com&quot;</span>],
+        subject: <span class="s">&quot;Invoice 1041&quot;</span>,
+        html: <span class="s">r&quot;&quot;&quot;&lt;img src=&quot;cid:logo&quot;&gt;&lt;p&gt;Your invoice is attached.&lt;/p&gt;&quot;&quot;&quot;</span>,
+        attachments: [
+            smtp.<span class="t">Attachment</span>{name: <span class="s">&quot;logo.png&quot;</span>, data: <span class="s">&quot;</span><span class="e">\x89</span><span class="s">PNG...&quot;</span>, contentType: <span class="s">&quot;image/png&quot;</span>, id: <span class="s">&quot;logo&quot;</span>},
+            smtp.<span class="t">Attachment</span>{name: <span class="s">&quot;invoice-1041.pdf&quot;</span>, data: pdf, contentType: <span class="s">&quot;application/pdf&quot;</span>},
+        ],
+    })
+    <span class="k">try</span> fs.<span class="f">remove</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>)
+}</code></pre>
+<pre class="out"><code>Content-Type: multipart/mixed
+Content-Type: multipart/related
+Content-Type: text/html; charset=utf-8
+Content-Type: image/png; name=&quot;logo.png&quot;
+Content-Disposition: inline; filename=&quot;logo.png&quot;
+Content-Type: application/pdf; name=&quot;invoice-1041.pdf&quot;
+Content-Disposition: attachment; filename=&quot;invoice-1041.pdf&quot;</code></pre>
+<p>The HTML and the logo go together as <code>multipart/related</code>, and the PDF after them as a file of its own. A name with characters beyond ASCII, such as <code>résumé.pdf</code>, is encoded so every mail program shows it. A line break in a name, a type or an id is an error, as it is in the headers.</p>
 <h2 id="several-mails"><a href="#several-mails">Several mails</a></h2>
 <p><code>smtp.connect(address)</code> gives a <code>smtp.Client</code> that sends many mails on one connection, which is much faster than connecting for each. <code>close</code> ends it:</p>
 <pre class="code"><code><span class="k">import</span> smtp
@@ -158,7 +220,7 @@ QUIT</code></pre>
     <nav class="pager"><a class="prev" href="15-networking.html"><span>Previous</span>Networking</a><a class="next" href="17-sqlite.html"><span>Next</span>SQLite</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-mail">A mail</a></li><li><a href="#the-server-s-address">The server&#x27;s address</a></li><li><a href="#what-goes-over-the-wire">What goes over the wire</a></li><li><a href="#several-mails">Several mails</a></li><li><a href="#errors">Errors</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-mail">A mail</a></li><li><a href="#the-server-s-address">The server&#x27;s address</a></li><li><a href="#what-goes-over-the-wire">What goes over the wire</a></li><li><a href="#attachments">Attachments</a></li><li><a href="#several-mails">Several mails</a></li><li><a href="#errors">Errors</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

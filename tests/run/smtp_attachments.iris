@@ -1,0 +1,150 @@
+// expect: Content-Type: multipart/mixed
+// expect:   Content-Type: multipart/related
+// expect:     Content-Type: multipart/alternative
+// expect:       Content-Type: text/plain; charset=utf-8
+// expect:       Content-Type: text/html; charset=utf-8
+// expect:     Content-Type: image/png; name="logo.png"
+// expect:     Content-Disposition: inline; filename="logo.png"
+// expect:     Content-ID: <logo>
+// expect:   Content-Type: application/pdf; name="report.pdf"
+// expect:   Content-Disposition: attachment; filename="report.pdf"
+// expect:   Content-Type: application/octet-stream; name*=UTF-8''r%C3%A9sum%C3%A9%20%22final%22.bin
+// expect:   Content-Disposition: attachment; filename*=UTF-8''r%C3%A9sum%C3%A9%20%22final%22.bin
+// expect: 5 parts back: logo 4 bytes, pdf 9 bytes, all 256 bytes the same: true
+// expect: only text and a file: multipart/mixed, then text/plain
+// expect: SmtpError.rejected: the mail's attachment's name has a line break in it
+// expect: SmtpError.rejected: an attachment needs a name or an id
+
+import base64, net, smtp, str
+
+// A server that takes one mail and gives back its text.
+void serve(net.Listener ln, chan[String] out) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    String mail
+    talk(c, &mail) catch e { }
+    out <- mail
+}
+
+!void talk(net.Conn c, String *mail) {
+    try c.write("220 test\r\n")
+    bool data = false
+    for {
+        scoped String l = try c.readLine()
+        if data {
+            if l == "." {
+                data = false
+                try c.write("250 queued\r\n")
+            } else {
+                mail.append(l)
+                mail.append("\n")
+            }
+        } else if l == "DATA" {
+            data = true
+            try c.write("354 go on\r\n")
+        } else if l == "QUIT" {
+            try c.write("221 bye\r\n")
+            return
+        } else {
+            try c.write("250 ok\r\n")
+        }
+    }
+}
+
+!String send(smtp.Mail m) {
+    ln := try net.listen(0, "127.0.0.1")
+    defer ln.close()
+    out := chan[String](1)
+    defer out.free()
+    spawn serve(ln, out)
+    scoped String server = format("smtp://127.0.0.1:{ln.port}")
+    smtp.send(server, m) catch e {
+        print("{e.code}: {e.message}")
+    }
+    return <-out
+}
+
+// The headers that say how the mail is built, indented by how deep they are.
+void shape(str mail) {
+    i64 depth = 0
+    scoped lines := mail.lines()
+    for l in lines {
+        if l.startsWith("Content-Type: multipart/") {
+            kind, _, _ := l.cut(";")
+            scoped String pad = "  ".repeat(depth)
+            print("{pad}{kind}")
+            depth += 1
+        } else if l.startsWith("Content-Type:") || l.startsWith("Content-Disposition:") || l.startsWith("Content-ID:") {
+            scoped String pad = "  ".repeat(depth)
+            print("{pad}{l}")
+        } else if l.startsWith("--") && l.endsWith("--") {
+            depth -= 1
+        }
+    }
+}
+
+// The bytes of each base64 part, in order.
+!List[String] parts(str mail) {
+    List[String] out
+    scoped lines := mail.lines()
+    i := 0
+    for i < lines.len {
+        if lines.at(i) == "Content-Transfer-Encoding: base64" {
+            i += 2
+            String b
+            defer b.free()
+            for i < lines.len && lines.at(i).len > 0 && !lines.at(i).startsWith("--") {
+                b.append(lines.at(i))
+                i += 1
+            }
+            out.push(try base64.decode(b))
+        } else {
+            i += 1
+        }
+    }
+    return out
+}
+
+!void main() {
+    u8[256] all
+    for i in 0..256 {
+        all[i] = u8(i)
+    }
+    scoped String mail = try send(smtp.Mail{
+        from: "reports@example.com",
+        to: ["ada@example.com"],
+        subject: "October",
+        text: "The report is attached.",
+        html: "<img src=\"cid:logo\"><p>The report is attached.</p>",
+        attachments: [
+            smtp.Attachment{name: "logo.png", data: "\x89PNG", contentType: "image/png", id: "logo"},
+            smtp.Attachment{name: "report.pdf", data: "%PDF-1.7\n", contentType: "application/pdf"},
+            smtp.Attachment{name: "résumé \"final\".bin", data: all[:]},
+        ],
+    })
+    shape(mail)
+    scoped got := try parts(mail)
+    print("{got.len} parts back: logo {got.at(2).len} bytes, pdf {got.at(3).len} bytes, all 256 bytes the same: {got.at(4) == all[:]}")
+    for g in got {
+        g.free()
+    }
+
+    scoped String simple = try send(smtp.Mail{from: "a@example.com", to: ["b@example.com"], subject: "x", text: "hi",
+        attachments: [smtp.Attachment{name: "a.txt", data: "a", contentType: "text/plain"}]})
+    scoped sl := simple.lines()
+    i64 at = 0
+    for i in 0..sl.len {
+        if sl.at(i).startsWith("Content-Type: multipart/mixed") {
+            at = i
+        }
+    }
+    kind, _, _ := sl.at(at + 3).cut(";")
+    print("only text and a file: multipart/mixed, then {kind.trimPrefix("Content-Type: ")}")
+
+    scoped String bad = try send(smtp.Mail{from: "a@example.com", to: ["b@example.com"], subject: "x", text: "hi",
+        attachments: [smtp.Attachment{name: "a\r\nBcc: x@example.com", data: "a"}]})
+    scoped String none = try send(smtp.Mail{from: "a@example.com", to: ["b@example.com"], subject: "x", text: "hi",
+        attachments: [smtp.Attachment{data: "a"}]})
+}

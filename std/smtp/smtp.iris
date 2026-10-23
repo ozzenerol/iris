@@ -14,6 +14,11 @@
 //         subject: "disk 91% full on db1",
 //         text: "/var is at 91%.",
 //     })
+//
+// Files go along as attachments, read with fs.readAll:
+//
+//     scoped String pdf = try fs.readAll("report.pdf")
+//     mail.attachments = [smtp.Attachment{name: "report.pdf", data: pdf, contentType: "application/pdf"}]
 
 import base64, net, str, time, url, uuid
 
@@ -26,7 +31,8 @@ pub enum SmtpError { connect, auth, rejected, protocol }
 
 // A mail. from, to and subject are needed, and text, html or both: with
 // both, the mail program shows the one it can. cc goes in the header for
-// everyone to see; bcc gets the mail without being shown.
+// everyone to see; bcc gets the mail without being shown. attachments are
+// files sent along with it.
 pub struct Mail {
     pub str from
     pub str[] to
@@ -36,6 +42,18 @@ pub struct Mail {
     pub str subject
     pub str text
     pub str html
+    pub Attachment[] attachments
+}
+
+// A file sent with a mail: its name as the reader sees it, its bytes, and
+// its type ("" is application/octet-stream; http.mimeType gives one from
+// the name). With an id, the file is part of the HTML instead of a file
+// to save: <img src="cid:logo"> shows the attachment whose id is "logo".
+pub struct Attachment {
+    pub str name
+    pub str data
+    pub str contentType
+    pub str id
 }
 
 // A connection to a mail server, for sending several mails. One task
@@ -207,6 +225,17 @@ pub !void Client.send(Mail m) {
     try checkLine("from", m.from)
     try checkLine("subject", m.subject)
     try checkLine("replyTo", m.replyTo)
+    for a in m.attachments {
+        if a.name.len == 0 && a.id.len == 0 {
+            return error(SmtpError.rejected, "an attachment needs a name or an id")
+        }
+        try checkLine("attachment's name", a.name)
+        try checkLine("attachment's contentType", a.contentType)
+        try checkLine("attachment's id", a.id)
+        if str.contains(a.id, "<") || str.contains(a.id, ">") || str.contains(a.contentType, "\"") {
+            return error(SmtpError.rejected, "an attachment's id can't have < or >, nor its contentType a quote")
+        }
+    }
     scoped String ok = try self.command("MAIL FROM:<{bare(m.from)}>\r\n", 250)
     for list in [m.to, m.cc, m.bcc] {
         for to in list {
@@ -265,26 +294,117 @@ String message(Mail m, str host) {
     scoped String subject = headerText(m.subject)
     out.append("Subject: {subject}\r\n")
     out.append("MIME-Version: 1.0\r\n")
+    bool files = false
+    for a in m.attachments {
+        if a.id.len == 0 {
+            files = true
+        }
+    }
+    if !files {
+        related(&out, m)
+        return out
+    }
+    // multipart/mixed: the body, then each file
+    scoped String boundary = uuid.v4().format()
+    out.append("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n")
+    out.append("--{boundary}\r\n")
+    related(&out, m)
+    for a in m.attachments {
+        if a.id.len == 0 {
+            out.append("--{boundary}\r\n")
+            attachment(&out, a)
+        }
+    }
+    out.append("--{boundary}--\r\n")
+    return out
+}
+
+// The body with the files that are part of its HTML, as multipart/related,
+// or the body alone when there are none.
+void related(String *out, Mail m) {
+    bool inline = false
+    for a in m.attachments {
+        if a.id.len > 0 {
+            inline = true
+        }
+    }
+    if !inline {
+        body(out, m)
+        return
+    }
+    scoped String boundary = uuid.v4().format()
+    out.append("Content-Type: multipart/related; boundary=\"{boundary}\"\r\n\r\n")
+    out.append("--{boundary}\r\n")
+    body(out, m)
+    for a in m.attachments {
+        if a.id.len > 0 {
+            out.append("--{boundary}\r\n")
+            attachment(out, a)
+        }
+    }
+    out.append("--{boundary}--\r\n")
+}
+
+// The text and the HTML, as multipart/alternative when there are both.
+void body(String *out, Mail m) {
     if m.html.len > 0 && m.text.len > 0 {
         scoped String boundary = uuid.v4().format()
         out.append("Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n")
         out.append("--{boundary}\r\n")
-        part(&out, "text/plain", m.text)
+        part(out, "text/plain", m.text)
         out.append("--{boundary}\r\n")
-        part(&out, "text/html", m.html)
+        part(out, "text/html", m.html)
         out.append("--{boundary}--\r\n")
     } else if m.html.len > 0 {
-        part(&out, "text/html", m.html)
+        part(out, "text/html", m.html)
     } else {
-        part(&out, "text/plain", m.text)
+        part(out, "text/plain", m.text)
     }
-    return out
 }
 
 void part(String *out, str kind, str body) {
     out.append("Content-Type: {kind}; charset=utf-8\r\n")
     out.append("Content-Transfer-Encoding: base64\r\n\r\n")
-    scoped String b = base64.encode(body)
+    base64Lines(out, body)
+}
+
+// A file: its type and name, how it is shown, and its bytes in base64.
+void attachment(String *out, Attachment a) {
+    kind := if a.contentType.len > 0 { a.contentType } else { "application/octet-stream" }
+    out.append("Content-Type: {kind}")
+    if a.name.len > 0 {
+        param(out, "name", a.name)
+    }
+    out.append("\r\n")
+    out.append(if a.id.len > 0 { "Content-Disposition: inline" } else { "Content-Disposition: attachment" })
+    if a.name.len > 0 {
+        param(out, "filename", a.name)
+    }
+    out.append("\r\n")
+    if a.id.len > 0 {
+        out.append("Content-ID: <{a.id}>\r\n")
+    }
+    out.append("Content-Transfer-Encoding: base64\r\n\r\n")
+    base64Lines(out, a.data)
+}
+
+// ; key="value", or for a value with bytes beyond ASCII or a quote,
+// ; key*=UTF-8''value with %XX (RFC 2231).
+void param(String *out, str key, str value) {
+    for i in 0..value.len {
+        c := value[i]
+        if c >= 0x80 || c < 0x20 || c == '"' || c == '\\' {
+            scoped String e = url.encode(value)
+            out.append("; {key}*=UTF-8''{e}")
+            return
+        }
+    }
+    out.append("; {key}=\"{value}\"")
+}
+
+// data in base64, in lines of 76 characters.
+void base64Lines(String *out, str data) {
+    scoped String b = base64.encode(data)
     i := 0
     for i < b.len {
         end := i + 76 if i + 76 < b.len else b.len

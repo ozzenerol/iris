@@ -20,3 +20,21 @@ import smtp
 With both `text` and `html`, the mail carries both, and the mail program shows the one it can. A subject with characters beyond ASCII is encoded as mail headers need. `bcc` recipients get the mail without being named in it.
 
 A server that refuses a recipient fails the send with `SmtpError.rejected` and its reply, and the `Client` can send the next mail. A line break in `from`, `subject` or an address is an error, so text from users can't add headers.
+
+## Attachments
+
+`attachments` sends files along with the mail: each `Attachment` has a `name`, its bytes in `data` and a `contentType` (`application/octet-stream` when it is empty). An attachment with an `id` is shown inside the HTML, as `<img src="cid:id">`, instead of as a file to save:
+
+```iris
+scoped String pdf = try fs.readAll("invoice.pdf")
+try smtp.send(server, smtp.Mail{
+    from: "billing@example.com",
+    to: ["ada@example.com"],
+    subject: "Invoice 1041",
+    html: r"""<img src="cid:logo"><p>Your invoice is attached.</p>""",
+    attachments: [
+        smtp.Attachment{name: "logo.png", data: logo, contentType: "image/png", id: "logo"},
+        smtp.Attachment{name: "invoice.pdf", data: pdf, contentType: "application/pdf"},
+    ],
+})
+```
