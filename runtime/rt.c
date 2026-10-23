@@ -8529,3 +8529,132 @@ int64_t iris_adler32(int64_t a, const char *p, int64_t n) {
     }
     return (int64_t)c;
 }
+
+/* ---------------------------------------------------------------- archives (0.66)
+
+   zip's deflate and inflate: one raw stream for each thread, reset for each
+   entry, so an archive of many small files sets zlib up once, and the bytes
+   go straight into the String. */
+
+static struct {
+    int (*deflateReset)(ZStream *);
+    int (*inflateReset)(ZStream *);
+    unsigned long (*deflateBound)(ZStream *, unsigned long);
+} zr;
+static pthread_once_t zrOnce = PTHREAD_ONCE_INIT;
+
+static void zrLoad(void) {
+#ifdef __APPLE__
+    static const char *const names[] = {"/usr/lib/libz.1.dylib", "/usr/lib/libz.dylib",
+                                        "/opt/homebrew/opt/zlib/lib/libz.1.dylib", NULL};
+#else
+    static const char *const names[] = {"libz.so.1", "libz.so", NULL};
+#endif
+    const char *env = getenv("IRIS_ZLIB");
+    void *h = env && *env ? dlopen(env, RTLD_NOW) : NULL;
+    for (int i = 0; !h && names[i]; i++) h = dlopen(names[i], RTLD_NOW);
+    if (!h) return;
+    *(void **)&zr.deflateReset = dlsym(h, "deflateReset");
+    *(void **)&zr.inflateReset = dlsym(h, "inflateReset");
+    *(void **)&zr.deflateBound = dlsym(h, "deflateBound");
+}
+
+static bool zrReady(void) {
+    if (!zReady()) return false;
+    pthread_once(&zrOnce, zrLoad);
+    if (!zr.deflateReset || !zr.inflateReset || !zr.deflateBound) {
+        zSay("this zlib has no deflateReset, inflateReset or deflateBound", NULL);
+        return false;
+    }
+    return true;
+}
+
+static _Thread_local ZStream *zipDef, *zipInf;
+static _Thread_local int zipLevel;
+
+/* Deflates n bytes (raw deflate, at level) onto the end of out: 0, or -1
+   with the message set. */
+int iris_zip_deflate(const char *in, int64_t n, int level, IrisString *out) {
+    if (!zrReady()) return -1;
+    if (n > 0xffffffffLL) {
+        zSay("an entry over 4 GiB", NULL);
+        return -1;
+    }
+    if (zipDef && zipLevel != level) {
+        zl.deflateEnd(zipDef);
+        free(zipDef);
+        zipDef = NULL;
+    }
+    if (!zipDef) {
+        zipDef = calloc(1, sizeof *zipDef);
+        if (zl.deflateInit2(zipDef, level, 8, -15, 8, 0, zl.version(), (int)sizeof(ZStream)) != 0) {
+            zSay("starting zlib", zipDef->msg);
+            free(zipDef);
+            zipDef = NULL;
+            return -1;
+        }
+        zipLevel = level;
+    } else {
+        zr.deflateReset(zipDef);
+    }
+    int64_t bound = (int64_t)zr.deflateBound(zipDef, (unsigned long)n);
+    if (out->len + bound > out->cap) {
+        const char *none = NULL;
+        stringGrow(out, &none, bound);
+    }
+    zipDef->next_in = (const unsigned char *)in;
+    zipDef->avail_in = (unsigned)n;
+    zipDef->next_out = (unsigned char *)out->ptr + out->len;
+    zipDef->avail_out = (unsigned)bound;
+    int rc = zl.deflate(zipDef, 4);              /* Z_FINISH */
+    if (rc != 1) {
+        zSay("compressing", zipDef->msg);
+        return -1;
+    }
+    out->len += bound - zipDef->avail_out;
+    return 0;
+}
+
+/* Inflates raw deflate data that should come out as size bytes onto the
+   end of out: 0, or -1 when it is broken or comes out another size. */
+int iris_zip_inflate(const char *in, int64_t n, int64_t size, IrisString *out) {
+    if (!zrReady()) return -1;
+    if (n > 0xffffffffLL || size > 0xffffffffLL) {
+        zSay("an entry over 4 GiB", NULL);
+        return -1;
+    }
+    if (!zipInf) {
+        zipInf = calloc(1, sizeof *zipInf);
+        if (zl.inflateInit2(zipInf, -15, zl.version(), (int)sizeof(ZStream)) != 0) {
+            zSay("starting zlib", zipInf->msg);
+            free(zipInf);
+            zipInf = NULL;
+            return -1;
+        }
+    } else {
+        zr.inflateReset(zipInf);
+    }
+    /* one byte more than size, so data that comes out larger is seen */
+    if (out->len + size + 1 > out->cap) {
+        const char *none = NULL;
+        stringGrow(out, &none, size + 1);
+    }
+    zipInf->next_in = (const unsigned char *)in;
+    zipInf->avail_in = (unsigned)n;
+    zipInf->next_out = (unsigned char *)out->ptr + out->len;
+    zipInf->avail_out = (unsigned)(size + 1);
+    int rc = zl.inflate(zipInf, 4);              /* Z_FINISH */
+    int64_t got = size + 1 - (int64_t)zipInf->avail_out;
+    if (rc != 1 || got != size) {
+        zSay(rc == 1 || rc == -5 ? "it comes out another size than the archive says" : "the compressed data is broken",
+             rc == 1 || rc == -5 ? NULL : zipInf->msg);
+        return -1;
+    }
+    out->len += got;
+    return 0;
+}
+
+/* Cuts a String back to len bytes. */
+void iris_zip_truncate(IrisString *s, int64_t len) {
+    if (len >= 0 && len < s->len) s->len = len;
+}

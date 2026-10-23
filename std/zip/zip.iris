@@ -185,8 +185,9 @@ pub !String Archive.read(Entry *e) {
     if e.how == 0 {
         out = e.raw.copy()
     } else if e.how == 8 {
-        out = compress.decompress(e.raw, .raw, if e.size > 0 { e.size } else { 1 }) catch err {
-            return error(ZipError.broken, "{e.name}: {err.message}")
+        if rawInflate(e.raw.ptr, e.raw.len, e.size, &out) != 0 {
+            out.free()
+            return error(ZipError.broken, "{e.name}: {messagePtr()[0:messageLen()]}")
         }
     } else {
         return error(ZipError.unsupported, "{e.name} is compressed with method {e.how}, which is not read")
@@ -255,6 +256,8 @@ pub !void Archive.extract(str dir) {
 // archive, to write to a file.
 pub struct Writer {
     pub String out
+    // how hard deflate works, from 1 (fastest) to 9 (smallest); 0 is 6
+    pub i64 level
     String central
     i64 count
 }
@@ -265,9 +268,23 @@ pub void Writer.free() {
     self.central.free()
 }
 
-void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i64 mode) {
-    date, clock := dosTime(mtime)
-    offset := self.out.len
+@extern("iris_zip_deflate")
+i32 rawDeflate(u8 *data, i64 n, i32 level, String *out)
+
+@extern("iris_zip_inflate")
+i32 rawInflate(u8 *data, i64 n, i64 size, String *out)
+
+@extern("iris_zip_truncate")
+void truncate(String *s, i64 len)
+
+@extern("iris_z_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_z_message_len")
+i64 messageLen()
+
+// A local file header; its compressed size can be patched after.
+void Writer.local(str name, i64 how, u32 crc, i64 stored, i64 size, i64 date, i64 clock) {
     // bit 11: the name is UTF-8
     put32(&self.out, 0x04034b50)
     put16(&self.out, 20)
@@ -276,13 +293,15 @@ void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i
     put16(&self.out, clock)
     put16(&self.out, date)
     put32(&self.out, i64(crc))
-    put32(&self.out, stored.len)
+    put32(&self.out, stored)
     put32(&self.out, size)
     put16(&self.out, name.len)
     put16(&self.out, 0)
     self.out.append(name)
-    self.out.append(stored)
+}
 
+// The entry's record in the central directory.
+void Writer.record(str name, i64 how, u32 crc, i64 stored, i64 size, i64 date, i64 clock, i64 mode, i64 offset) {
     put32(&self.central, 0x02014b50)
     put16(&self.central, (3 << 8) | 20) // made on Unix, so the mode is kept
     put16(&self.central, 20)
@@ -291,7 +310,7 @@ void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i
     put16(&self.central, clock)
     put16(&self.central, date)
     put32(&self.central, i64(crc))
-    put32(&self.central, stored.len)
+    put32(&self.central, stored)
     put32(&self.central, size)
     put16(&self.central, name.len)
     put16(&self.central, 0)
@@ -305,6 +324,14 @@ void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i
     self.count += 1
 }
 
+void Writer.entry(str name, str stored, i64 how, u32 crc, i64 size, i64 mtime, i64 mode) {
+    date, clock := dosTime(mtime)
+    offset := self.out.len
+    self.local(name, how, crc, stored.len, size, date, clock)
+    self.out.append(stored)
+    self.record(name, how, crc, stored.len, size, date, clock, mode, offset)
+}
+
 // Adds a file with data as its bytes, deflated unless that wouldn't make it
 // smaller, or stored. mode is the permission bits (420 is 0644, 493 is
 // 0755) and mtime the time of change in seconds since 1970.
@@ -313,12 +340,27 @@ pub !void Writer.add(str name, str data, Method method = .deflated, i64 mode = 4
         return error(ZipError.unsupported, "{name}: an archive over 4 GiB needs zip64, which is not written")
     }
     crc := compress.crc32(data)
-    if method == .deflated {
-        scoped String packed = try compress.compress(data, .raw)
-        if packed.len < data.len {
-            self.entry(name, packed, 8, crc, data.len, mtime, mode)
+    if method == .deflated && data.len > 0 {
+        // deflated straight into the archive after its header, whose size is
+        // filled in after; stored instead when that comes out no smaller
+        date, clock := dosTime(mtime)
+        offset := self.out.len
+        self.local(name, 8, crc, 0, data.len, date, clock)
+        start := self.out.len
+        if rawDeflate(data.ptr, data.len, i32(if self.level >= 1 && self.level <= 9 { self.level } else { 6 }), &self.out) != 0 {
+            truncate(&self.out, offset)
+            return error(ZipError.broken, "{name}: {messagePtr()[0:messageLen()]}")
+        }
+        packed := self.out.len - start
+        if packed < data.len {
+            u8[] b = self.out.ptr[0:self.out.len]
+            for k in 0..4 {
+                b[offset + 18 + k] = u8((packed >> (k * 8)) & 255)
+            }
+            self.record(name, 8, crc, packed, data.len, date, clock, mode, offset)
             return
         }
+        truncate(&self.out, offset)
     }
     self.entry(name, data, 0, crc, data.len, mtime, mode)
 }
