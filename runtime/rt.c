@@ -810,6 +810,292 @@ __attribute__((always_inline)) int32_t iris_utf8_decode(const unsigned char *p, 
 }
 
 
+/* ---------------------------------------------------------------- big
+
+   The arithmetic of big.Int on magnitudes: 64-bit limbs, the lowest first.
+   Each kernel writes into room its caller made and gives the length of
+   the result without zero limbs at the top. */
+
+static inline uint64_t divWord(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *rem) {
+#if defined(__x86_64__)
+    uint64_t q, r;
+    __asm__("divq %4" : "=a"(q), "=d"(r) : "a"(lo), "d"(hi), "rm"(d));
+    *rem = r;
+    return q;
+#else
+    unsigned __int128 x = (unsigned __int128)hi << 64 | lo;
+    *rem = (uint64_t)(x % d);
+    return (uint64_t)(x / d);
+#endif
+}
+
+static int64_t bnTrim(const uint64_t *a, int64_t n) {
+    while (n > 0 && a[n - 1] == 0) n--;
+    return n;
+}
+
+int64_t iris_bn_cmp(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn) {
+    if (an != bn) return an < bn ? -1 : 1;
+    for (int64_t i = an - 1; i >= 0; i--) {
+        if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    return 0;
+}
+
+/* out has room for max(an, bn) + 1 */
+int64_t iris_bn_add(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    if (an < bn) {
+        const uint64_t *t = a; a = b; b = t;
+        int64_t k = an; an = bn; bn = k;
+    }
+    unsigned char carry = 0;
+    int64_t i = 0;
+    for (; i < bn; i++) {
+        uint64_t s;
+        unsigned char c1 = __builtin_add_overflow(a[i], b[i], &s);
+        unsigned char c2 = __builtin_add_overflow(s, (uint64_t)carry, &out[i]);
+        carry = c1 | c2;
+    }
+    for (; i < an; i++) {
+        carry = __builtin_add_overflow(a[i], (uint64_t)carry, &out[i]);
+    }
+    out[an] = carry;
+    return bnTrim(out, an + 1);
+}
+
+/* a - b for a at least b; out has room for an */
+int64_t iris_bn_sub(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    unsigned char borrow = 0;
+    int64_t i = 0;
+    for (; i < bn; i++) {
+        uint64_t d;
+        unsigned char b1 = __builtin_sub_overflow(a[i], b[i], &d);
+        unsigned char b2 = __builtin_sub_overflow(d, (uint64_t)borrow, &out[i]);
+        borrow = b1 | b2;
+    }
+    for (; i < an; i++) {
+        borrow = __builtin_sub_overflow(a[i], (uint64_t)borrow, &out[i]);
+    }
+    return bnTrim(out, an);
+}
+
+/* out has room for an + 1 */
+int64_t iris_bn_mul_small(const uint64_t *a, int64_t an, uint64_t m, uint64_t *out) {
+    uint64_t carry = 0;
+    for (int64_t i = 0; i < an; i++) {
+        unsigned __int128 t = (unsigned __int128)a[i] * m + carry;
+        out[i] = (uint64_t)t;
+        carry = (uint64_t)(t >> 64);
+    }
+    out[an] = carry;
+    return bnTrim(out, an + 1);
+}
+
+/* out has room for an + bn and doesn't overlap a or b */
+int64_t iris_bn_mul(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *out) {
+    memset(out, 0, (size_t)(an + bn) * sizeof(uint64_t));
+    for (int64_t i = 0; i < an; i++) {
+        uint64_t ai = a[i], carry = 0;
+        if (!ai) continue;
+        uint64_t *r = out + i;
+        for (int64_t j = 0; j < bn; j++) {
+            unsigned __int128 t = (unsigned __int128)ai * b[j] + r[j] + carry;
+            r[j] = (uint64_t)t;
+            carry = (uint64_t)(t >> 64);
+        }
+        r[bn] = carry;
+    }
+    return bnTrim(out, an + bn);
+}
+
+/* a divided by one word d into q (room for an); gives the remainder */
+uint64_t iris_bn_div_small(const uint64_t *a, int64_t an, uint64_t d, uint64_t *q, int64_t *qn) {
+    uint64_t rem = 0;
+    for (int64_t i = an - 1; i >= 0; i--) {
+        q[i] = divWord(rem, a[i], d, &rem);
+    }
+    *qn = bnTrim(q, an);
+    return rem;
+}
+
+/* a divided by b (bn of 2 or more, a at least b), Knuth's algorithm D:
+   q has room for an - bn + 1, r for bn. */
+void iris_bn_divmod(const uint64_t *a, int64_t an, const uint64_t *b, int64_t bn, uint64_t *q, int64_t *qn,
+                    uint64_t *r, int64_t *rn) {
+    int s = __builtin_clzll(b[bn - 1]);
+    uint64_t *v = malloc((size_t)bn * sizeof(uint64_t));
+    uint64_t *u = malloc((size_t)(an + 1) * sizeof(uint64_t));
+    if (!v || !u) outOfMemory();
+    for (int64_t i = bn - 1; i > 0; i--) v[i] = s ? b[i] << s | b[i - 1] >> (64 - s) : b[i];
+    v[0] = b[0] << s;
+    u[an] = s ? a[an - 1] >> (64 - s) : 0;
+    for (int64_t i = an - 1; i > 0; i--) u[i] = s ? a[i] << s | a[i - 1] >> (64 - s) : a[i];
+    u[0] = a[0] << s;
+    int64_t m = an - bn;
+    for (int64_t j = m; j >= 0; j--) {
+        uint64_t rhat, qhat;
+        if (u[j + bn] == v[bn - 1]) {
+            /* the top words are equal: the digit is the largest one, and
+               when rhat overflows the test below can't lower it */
+            qhat = ~(uint64_t)0;
+            rhat = u[j + bn - 1] + v[bn - 1];
+            if (rhat < v[bn - 1]) goto mulsub;
+        } else {
+            qhat = divWord(u[j + bn], u[j + bn - 1], v[bn - 1], &rhat);
+        }
+        for (;;) {
+            unsigned __int128 p = (unsigned __int128)qhat * v[bn - 2];
+            if ((uint64_t)(p >> 64) > rhat || ((uint64_t)(p >> 64) == rhat && (uint64_t)p > u[j + bn - 2])) {
+                qhat--;
+                uint64_t old = rhat;
+                rhat += v[bn - 1];
+                if (rhat < old) break;      /* rhat overflowed: qhat is right now */
+            } else {
+                break;
+            }
+        }
+    mulsub:;
+        /* u[j..j+bn] -= qhat * v */
+        uint64_t borrow = 0, carry = 0;
+        for (int64_t i = 0; i < bn; i++) {
+            unsigned __int128 p = (unsigned __int128)qhat * v[i] + carry;
+            carry = (uint64_t)(p >> 64);
+            uint64_t lo = (uint64_t)p;
+            uint64_t t = u[i + j] - lo;
+            uint64_t b1 = u[i + j] < lo;
+            uint64_t t2 = t - borrow;
+            uint64_t b2 = t < borrow;
+            u[i + j] = t2;
+            borrow = b1 + b2;
+        }
+        uint64_t top = u[j + bn];
+        uint64_t t = top - carry;
+        uint64_t b1 = top < carry;
+        uint64_t t2 = t - borrow;
+        uint64_t b2 = t < borrow;
+        u[j + bn] = t2;
+        if (b1 | b2) {
+            /* qhat was one too many: add v back */
+            qhat--;
+            unsigned char c = 0;
+            for (int64_t i = 0; i < bn; i++) {
+                uint64_t s1;
+                unsigned char c1 = __builtin_add_overflow(u[i + j], v[i], &s1);
+                unsigned char c2 = __builtin_add_overflow(s1, (uint64_t)c, &u[i + j]);
+                c = c1 | c2;
+            }
+            u[j + bn] += c;
+        }
+        q[j] = qhat;
+    }
+    *qn = bnTrim(q, m + 1);
+    for (int64_t i = 0; i < bn; i++) r[i] = s ? u[i] >> s | u[i + 1] << (64 - s) : u[i];
+    *rn = bnTrim(r, bn);
+    free(u);
+    free(v);
+}
+
+/* a shifted left by bits into out (room for an + bits/64 + 1) */
+int64_t iris_bn_shl(const uint64_t *a, int64_t an, int64_t bits, uint64_t *out) {
+    int64_t words = bits / 64;
+    int s = (int)(bits % 64);
+    memset(out, 0, (size_t)words * sizeof(uint64_t));
+    uint64_t carry = 0;
+    for (int64_t i = 0; i < an; i++) {
+        out[i + words] = s ? a[i] << s | carry : a[i];
+        carry = s ? a[i] >> (64 - s) : 0;
+    }
+    out[an + words] = carry;
+    return bnTrim(out, an + words + 1);
+}
+
+/* a shifted right by bits into out (room for an) */
+int64_t iris_bn_shr(const uint64_t *a, int64_t an, int64_t bits, uint64_t *out) {
+    int64_t words = bits / 64;
+    int s = (int)(bits % 64);
+    if (words >= an) return 0;
+    for (int64_t i = words; i < an; i++) {
+        uint64_t lo = a[i] >> s;
+        uint64_t hi = s && i + 1 < an ? a[i + 1] << (64 - s) : 0;
+        out[i - words] = lo | hi;
+    }
+    return bnTrim(out, an - words);
+}
+
+/* a = a * m + add in place; a has room for one more word; gives the length */
+int64_t iris_bn_mul_add_small(uint64_t *a, int64_t an, uint64_t m, uint64_t add) {
+    uint64_t carry = add;
+    for (int64_t i = 0; i < an; i++) {
+        unsigned __int128 t = (unsigned __int128)a[i] * m + carry;
+        a[i] = (uint64_t)t;
+        carry = (uint64_t)(t >> 64);
+    }
+    a[an] = carry;
+    return bnTrim(a, an + 1);
+}
+
+/* (hi, lo) divided by d, for d with its top bit set and hi below d, by
+   multiplying with v, d's reciprocal (Moeller and Granlund, "Improved
+   division by invariant integers", algorithm 4): two multiplications in
+   place of a division. */
+static inline uint64_t divPreinv(uint64_t hi, uint64_t lo, uint64_t d, uint64_t v, uint64_t *rem) {
+    unsigned __int128 q = (unsigned __int128)v * hi;
+    q += ((unsigned __int128)(hi + 1) << 64) | lo;
+    uint64_t q1 = (uint64_t)(q >> 64), q0 = (uint64_t)q;
+    uint64_t r = lo - q1 * d;
+    if (r > q0) {
+        q1--;
+        r += d;
+    }
+    if (r >= d) {
+        q1++;
+        r -= d;
+    }
+    *rem = r;
+    return q1;
+}
+
+/* the magnitude in decimal into out (room for an * 20 + 1); gives the
+   length. 19 digits a pass. */
+int64_t iris_bn_text10(const uint64_t *limbs, int64_t n, char *out) {
+    int64_t words = bnTrim(limbs, n);
+    uint64_t *w = malloc((size_t)(words ? words : 1) * sizeof(uint64_t));
+    int64_t cap = n * 64 / 63 + 4, count = 0;
+    uint64_t *chunks = malloc((size_t)cap * sizeof(uint64_t));
+    if (!w || !chunks) outOfMemory();
+    memcpy(w, limbs, (size_t)words * sizeof(uint64_t));
+    const uint64_t ten19 = 10000000000000000000ULL;     /* above 2^63: normalized as divPreinv needs */
+    const uint64_t inv = (uint64_t)((((unsigned __int128)~ten19) << 64 | ~(uint64_t)0) / ten19);
+    while (words > 0) {
+        uint64_t rem = 0;
+        for (int64_t i = words - 1; i >= 0; i--) {
+            w[i] = divPreinv(rem, w[i], ten19, inv, &rem);
+        }
+        chunks[count++] = rem;
+        while (words > 0 && w[words - 1] == 0) words--;
+    }
+    int64_t len = 0;
+    char tmp[24];
+    char *end = tmp + sizeof tmp;
+    if (count == 0) {
+        out[len++] = '0';
+    } else {
+        char *d = u64Digits(chunks[count - 1], end);
+        memcpy(out, d, (size_t)(end - d));
+        len = end - d;
+        for (int64_t c = count - 2; c >= 0; c--) {
+            char *p = u64Digits(chunks[c], end);
+            int64_t k = end - p;
+            memset(out + len, '0', (size_t)(19 - k));
+            memcpy(out + len + 19 - k, p, (size_t)k);
+            len += 19;
+        }
+    }
+    free(w);
+    free(chunks);
+    return len;
+}
+
 /* {n:x}, {n:+}: an integer in a base, with its sign; into s. */
 void iris_fmt_int(IrisString *s, int64_t v, int isSigned, int base, int upper, int plus) {
     const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
