@@ -21,15 +21,49 @@ ROWS = [
     ("http2", "HTTP/2 hello, h2load"),
 ]
 NET = {"http-hello", "http-json", "tcp-echo", "http2"}
+# the standard library against Go's and the best-known Rust crates
+LIB_ROWS = [
+    ("fmt-text", "2M lines with widths, hex and precision", "`write!`", "`fmt.Fprintf`"),
+    ("utf8", "count, walk and check 16 MB of UTF-8", "`chars`, `from_utf8`", "`unicode/utf8`"),
+    ("bigint", "20000!, its digits, 300 modular powers", "num-bigint", "`math/big`"),
+    ("rwlock", "4 threads reading and writing", "`RwLock`", "`sync.RWMutex`"),
+    ("heap", "2M pushes and pops", "`BinaryHeap`", "`container/heap`"),
+    ("sortedmap", "1M inserts, lookups and range scans", "`BTreeMap`", "a sorted slice"),
+    ("deque", "27M pushes and pops at both ends", "`VecDeque`", "a ring buffer"),
+    ("sort-by", "5M structs by a key", "`sort_unstable_by_key`", "`slices.SortFunc`"),
+    ("fs-walk", "make, walk and remove 50k files", "`std::fs`", "`filepath.WalkDir`"),
+    ("xml-parse", "30 MB of XML as events", "quick-xml", "`encoding/xml`"),
+    ("toml-parse", "a 2 MB TOML file, 20 times", "toml", "BurntSushi/toml"),
+    ("zip", "2000 files deflated and read back", "zip", "`archive/zip`"),
+    ("tar", "2000 files into a tar and back", "tar", "`archive/tar`"),
+    ("template", "a 1000-row HTML page, 2000 times", "minijinja", "`html/template`"),
+]
 
 
 def fmt(v, net):
     return f"{v / 1000:,.0f}k" if net else f"{v:.2f}"
 
 
+def lib_table(res):
+    print("| Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |")
+    print("|---|---|--:|--:|--:|---|---|")
+    for name, what, rust, go in LIB_ROWS:
+        r = res.get(name)
+        if not r:
+            continue
+        vals = [r["iris"], r["rust"], r["go"]]
+        best = min(vals)
+        cells = " | ".join(f"**{v:.3f}**" if v == best else f"{v:.3f}" for v in vals)
+        print(f"| {name} | {what} | {cells} | {rust} | {go} |")
+
+
 def main():
-    data = json.load(open(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "results.json")))
+    args = [a for a in sys.argv[1:] if a != "--lib"]
+    data = json.load(open(args[0] if args else os.path.join(HERE, "results.json")))
     res = data["results"]
+    if "--lib" in sys.argv:
+        lib_table(res)
+        return
     print("| Benchmark | What it does | Iris | Iris safe | Rust | Go | Memory, MiB: Iris / Rust / Go |")
     print("|---|---|--:|--:|--:|--:|--:|")
     for name, what in ROWS:
