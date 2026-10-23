@@ -2875,7 +2875,7 @@ static Type *checkBinary(Checker *c, Node *e, Type *expected) {
             if (!isComparable(t)) {
                 error(c, e, "'%s' can't compare %s values", opName, t->name);
             }
-        } else if (!isNumber(t)) {
+        } else if (!isNumber(t) && !isStr(t)) {
             error(c, e, "'%s' can't compare %s values", opName, t->name);
         }
         return setType(e, &tyBool);

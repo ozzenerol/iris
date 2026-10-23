@@ -934,6 +934,16 @@ static Val emitCompare(IR *ir, TokKind op, Val a, Val b) {
         }
         return val(eq, &tyBool);
     }
+    if (a.t->kind == TY_SLICE) {
+        /* text: byte by byte, then the shorter first */
+        const char *pa, *la, *pb, *lb;
+        sliceParts(ir, a, &pa, &la);
+        sliceParts(ir, b, &pb, &lb);
+        const char *c = tmp(ir), *r = tmp(ir);
+        ins(ir, "%s = call i32 @iris_str_cmp(ptr %s, i64 %s, ptr %s, i64 %s)", c, pa, la, pb, lb);
+        ins(ir, "%s = icmp %s i32 %s, 0", r, op == P_LT ? "slt" : op == P_LE ? "sle" : op == P_GT ? "sgt" : "sge", c);
+        return val(r, &tyBool);
+    }
     const char *cc;
     bool s = a.t->isSigned;
     switch (op) {
@@ -3963,6 +3973,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_bool(i32, ptr, i32)\n"
            "declare void @iris_print_end()\n"
            "declare i32 @iris_str_eq(ptr, i64, ptr, i64)\n"
+           "declare i32 @iris_str_cmp(ptr, i64, ptr, i64)\n"
            "declare ptr @iris_alloc(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_out_of_memory() noreturn\n"
            "declare noalias ptr @iris_malloc(i64)\n"

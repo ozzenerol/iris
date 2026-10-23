@@ -72,7 +72,7 @@ void main() {
 4: 110
 ```
 
-`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's.
+`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's. `<`, `<=`, `>` and `>=` put text in order byte by byte, with the shorter first when one starts the other, which for UTF-8 is the order of the code points: `"Zebra" < "apple"`, as upper-case letters come first.
 
 `runes()` goes over the characters instead, each a code point, an `i32`. `runeCount` counts them, and `validUtf8` says whether text is UTF-8 at all. A character literal beyond ASCII, such as `'ö'`, is its code point too:
 

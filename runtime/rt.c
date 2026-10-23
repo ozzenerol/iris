@@ -1550,6 +1550,15 @@ void iris_error_report(int64_t code) {
     exit(1);
 }
 
+/* a < b for text: the bytes as unsigned numbers, then the shorter first;
+   for UTF-8 that is the order of the code points. */
+int iris_str_cmp(const char *a, int64_t na, const char *b, int64_t nb) {
+    int64_t n = na < nb ? na : nb;
+    int c = n > 0 ? memcmp(a, b, (size_t)n) : 0;
+    if (c != 0) return c < 0 ? -1 : 1;
+    return na < nb ? -1 : na > nb ? 1 : 0;
+}
+
 int iris_str_eq(const char *a, int64_t na, const char *b, int64_t nb) {
     return na == nb && (na == 0 || memcmp(a, b, (size_t)na) == 0);
 }
