@@ -18,17 +18,20 @@ pub enum Kind { string, integer, float, boolean, datetime, array, table }
 // each with its value at the same place in items.
 pub struct Value {
     pub Kind kind
+    pub bool boolean
+    // how a table was made, for the rules about defining it again
+    u8 how
     // a string's text, or a date and time as written
     pub String text
     pub i64 int
     pub f64 float
-    pub bool boolean
     // an array's values, or a table's values
     pub List[Value] items
     // a table's keys
     pub List[String] keys
-    // how a table was made, for the rules about defining it again
-    u8 how
+    // where each key is, once a table has many (one Map, made then): keys
+    // are only added, so it catches up with them when it is used
+    Map[str, i64][] index
 }
 
 // how: 0 a plain value, 1 a table named only on the way to another,
@@ -69,12 +72,30 @@ pub Value *Value.get(str key) {
     if self.kind != .table {
         return null
     }
-    for i in 0..self.keys.len {
-        if self.keys.at(i) == key {
-            return &self.items.items()[i]
+    i := self.find(key)
+    return if i < 0 { null } else { &self.items.items()[i] }
+}
+
+// Where key is in keys, or -1.
+i64 Value.find(str key) {
+    n := self.keys.len
+    if n < 16 {
+        for i in 0..n {
+            if self.keys.at(i) == key {
+                return i
+            }
         }
+        return -1
     }
-    return null
+    if self.index.len == 0 {
+        self.index = alloc(Map[str, i64], 1)
+    }
+    m := &self.index[0]
+    for i in m.len..n {
+        m.set(self.keys.at(i), i)
+    }
+    i, found := m.get(key)
+    return if found { i } else { -1 }
 }
 
 // Value i of an array or a table, or null past the end.
@@ -90,12 +111,11 @@ pub i64 Value.len() => self.items.len
 
 // Sets key in a table to v, which the table owns after.
 pub void Value.set(str key, Value v) {
-    for i in 0..self.keys.len {
-        if self.keys.at(i) == key {
-            self.items.items()[i].free()
-            self.items.set(i, v)
-            return
-        }
+    i := self.find(key)
+    if i >= 0 {
+        self.items.items()[i].free()
+        self.items.set(i, v)
+        return
     }
     self.keys.push(key.copy())
     self.items.push(v)
@@ -109,6 +129,11 @@ pub void Value.free() {
     self.text.free()
     self.items.freeEach()
     self.keys.freeEach()
+    if self.index.len > 0 {
+        self.index[0].free()
+        free(self.index)
+        self.index = alloc(Map[str, i64], 0)
+    }
 }
 
 // ------------------------------------------------------------ reading
@@ -117,6 +142,15 @@ struct Parser {
     str t
     i64 pos
     i64 line
+    // the parts of the last key read; they point into t, or into decoded
+    // for a key in quotes with escapes
+    List[str] parts
+    List[String] decoded
+}
+
+void Parser.free() {
+    self.parts.free()
+    self.decoded.freeEach()
 }
 
 Error Parser.fail(str msg) => error(TomlError.syntax, "line {self.line}: {msg}")
@@ -297,8 +331,17 @@ bool badControl(u8 c) => (c < 0x20 && c != '\t') || c == 0x7f
         if badControl(c) {
             return self.fail("a control character in a string")
         }
-        appendByte(&out, c)
-        self.pos += 1
+        // the plain characters up to the next quote, backslash or control
+        // character, at once
+        start := self.pos
+        for self.pos < self.t.len {
+            d := self.t[self.pos]
+            if d == '"' || d == '\\' || badControl(d) {
+                break
+            }
+            self.pos += 1
+        }
+        out.append(self.t[start:self.pos])
     }
 }
 
@@ -378,17 +421,21 @@ bool badControl(u8 c) => (c < 0x20 && c != '\t') || c == 0x7f
     }
 }
 
-// A key, with its dotted parts: a.b."c.d" is a, b and c.d.
-!List[String] Parser.key() {
-    List[String] parts
-    errdefer parts.freeEach()
+// A key, with its dotted parts, into parts: a.b."c.d" is a, b and c.d.
+!void Parser.key() {
+    self.parts.clear()
     for {
         self.spaces()
         c := self.peek()
         if c == '"' {
-            parts.push(try self.basic())
+            k := try self.basic()
+            self.decoded.push(k)
+            self.parts.push(k)
         } else if c == '\'' {
-            parts.push(try self.literal())
+            start := self.pos + 1
+            k := try self.literal()
+            k.free()
+            self.parts.push(self.t[start:self.pos - 1])
         } else {
             start := self.pos
             for self.pos < self.t.len && isBare(self.t[self.pos]) {
@@ -397,11 +444,11 @@ bool badControl(u8 c) => (c < 0x20 && c != '\t') || c == 0x7f
             if self.pos == start {
                 return self.fail("expected a key, found \"{self.word()}\"")
             }
-            parts.push(self.t[start:self.pos].copy())
+            self.parts.push(self.t[start:self.pos])
         }
         self.spaces()
         if self.peek() != '.' {
-            return parts
+            return
         }
         self.pos += 1
     }
@@ -573,7 +620,25 @@ String withoutUnderscores(str s) {
     if intEnd > 1 && body[0] == '0' {
         return self.fail("{tok} has a leading zero")
     }
-    scoped String clean = withoutUnderscores(tok)
+    bool under = false
+    bool digits = true
+    for c in body {
+        if c == '_' {
+            under = true
+        }
+        if !isDigit(c) {
+            digits = false
+        }
+    }
+    if !isFloat && digits && body.len < 19 {
+        // most integers: short, no _, nothing to copy
+        i64 n
+        for c in body {
+            n = n * 10 + i64(c - '0')
+        }
+        return integer(if tok[0] == '-' { -n } else { n })
+    }
+    scoped String clean = if under { withoutUnderscores(tok) } else { tok.copy() }
     if isFloat {
         // a dot needs digits on both sides
         for i in 0..clean.len {
@@ -722,8 +787,8 @@ String withoutUnderscores(str s) {
 
 // key = value, into t.
 !void Parser.keyValue(Value *t) {
-    parts := try self.key()
-    defer parts.freeEach()
+    try self.key()
+    parts := self.parts
     if self.peek() != '=' {
         return self.fail("expected \"=\" after the key")
     }
@@ -753,8 +818,8 @@ String withoutUnderscores(str s) {
 !Value *Parser.header(Value *root) {
     many := self.peekAt(1) == '['
     self.pos += if many { 2 } else { 1 }
-    parts := try self.key()
-    defer parts.freeEach()
+    try self.key()
+    parts := self.parts
     if many {
         if self.peek() != ']' || self.peekAt(1) != ']' {
             return self.fail("expected ]] after the table's name")
@@ -811,6 +876,7 @@ String withoutUnderscores(str s) {
 // Reads a TOML document into a table.
 pub !Value parse(str text) {
     p := Parser{t: text, line: 1}
+    defer p.free()
     Value root = table()
     errdefer root.free()
     root.how = HEADER
