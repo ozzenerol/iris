@@ -530,6 +530,58 @@ void iris_string_append(IrisString *s, const char *p, int64_t n) {
     s->len += n;
 }
 
+/* s.reserve(n): room for n more bytes, so appends up to that don't grow it. */
+void iris_string_reserve(IrisString *s, int64_t n) {
+    if (n > 0 && s->len + n > s->cap) {
+        char *q = realloc(s->ptr, (size_t)(s->len + n));
+        if (!q) {
+            outOfMemory();
+        }
+        s->ptr = q;
+        s->cap = s->len + n;
+    }
+}
+
+/* s.truncate(n): the first n bytes are kept. */
+void iris_string_truncate(IrisString *s, int64_t n, const char *file, int line, int col, const char *fn) {
+    if (n < 0 || n > s->len) {
+        char msg[96];
+        int k = snprintf(msg, sizeof msg, "truncate to %lld bytes of a String of %lld", (long long)n, (long long)s->len);
+        stop(msg, (size_t)k, file, line, col, fn);
+    }
+    s->len = n;
+}
+
+/* s.insert(at, text): the text put in before byte at; the text may be part
+   of s itself. */
+void iris_string_insert(IrisString *s, int64_t at, const char *p, int64_t n, const char *file, int line, int col,
+                        const char *fn) {
+    if (at < 0 || at > s->len) {
+        char msg[96];
+        int k = snprintf(msg, sizeof msg, "insert at byte %lld of a String of %lld", (long long)at, (long long)s->len);
+        stop(msg, (size_t)k, file, line, col, fn);
+    }
+    if (n <= 0) {
+        return;
+    }
+    char small[256];
+    char *copy = NULL;
+    if (s->ptr && p >= s->ptr && p < s->ptr + s->len) {
+        copy = n <= (int64_t)sizeof small ? small : malloc((size_t)n);
+        if (!copy) outOfMemory();
+        memcpy(copy, p, (size_t)n);
+        p = copy;
+    }
+    if (s->len + n > s->cap) {
+        const char *none = NULL;
+        stringGrow(s, &none, n);
+    }
+    memmove(s->ptr + at + n, s->ptr + at, (size_t)(s->len - at));
+    memcpy(s->ptr + at, p, (size_t)n);
+    s->len += n;
+    if (copy && copy != small) free(copy);
+}
+
 void iris_string_free(IrisString *s) {
     free(s->ptr);
     s->ptr = NULL;
@@ -641,6 +693,32 @@ void iris_write_duration(int sink, IrisString *dst, int64_t d) {
     }
     #undef FRAC
     put(sink, dst, buf, (size_t)n);
+}
+
+/* math.addChecked and the others: op 0 +, 1 -, 2 *. */
+int64_t iris_math_checked(int64_t a, int64_t b, int op, bool *ok) {
+    long long r;
+    bool over = op == 0 ? __builtin_add_overflow(a, b, &r) : op == 1 ? __builtin_sub_overflow(a, b, &r)
+                                                                     : __builtin_mul_overflow(a, b, &r);
+    *ok = !over;
+    return over ? 0 : r;
+}
+
+int64_t iris_math_saturate(int64_t a, int64_t b, int op) {
+    long long r;
+    bool over = op == 0 ? __builtin_add_overflow(a, b, &r) : op == 1 ? __builtin_sub_overflow(a, b, &r)
+                                                                     : __builtin_mul_overflow(a, b, &r);
+    if (!over) {
+        return r;
+    }
+    /* the true result's sign says which end */
+    bool negative = op == 0 ? a < 0 : op == 1 ? a < b : (a < 0) != (b < 0);
+    return negative ? INT64_MIN : INT64_MAX;
+}
+
+int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
+    uint64_t x = (uint64_t)a, y = (uint64_t)b;
+    return (int64_t)(op == 0 ? x + y : op == 1 ? x - y : x * y);
 }
 
 /* {n:x}, {n:+}: an integer in a base, with its sign; into s. */

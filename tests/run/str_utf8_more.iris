@@ -1,0 +1,55 @@
+// expect: 12 bytes, 7 characters, valid true
+// expect:     4b [K]
+// expect:     f6 [ö]
+// expect:     6c [l]
+// expect:     6e [n]
+// expect:     20 [ ]
+// expect:   6771 [東]
+// expect:   4eac [京]
+// expect: 246 2 false
+// expect: 😀 4
+// expect: [007] [ok...] [  Köln]
+// expect: 2 [a] [b=c=d]
+// expect: /users main
+// expect: /var/log/nginx access.log true
+// expect: 4 [one] [] [four]
+// expect: true false
+// expect: X-Forwarded-For Hello World !nlöK
+// expect: true false true 81
+// expect: 255 -5 -1
+// UTF-8 in str, character classes, and the newer text functions.
+import str
+
+void main() {
+    city := "Köln 東京"
+    print("{city.len} bytes, {city.runeCount()} characters, valid {city.validUtf8()}")
+    for r in city.runes() {
+        printRune(r)
+    }
+    r, n := city.decodeRune(1)
+    print("{r} {n} {str.validUtf8("\xff")}")
+    scoped String e = str.fromRune(0x1F600)
+    print("{e} {e.len}")
+    scoped String a = "7".padLeft(3, "0")
+    scoped String b = "ok".padRight(5, ".")
+    scoped String c = "Köln".padLeft(6)
+    print("[{a}] [{b}] [{c}]")
+    scoped parts := "a=b=c=d".splitN("=", 2)
+    print("{parts.len} [{parts.at(0)}] [{parts.at(1)}]")
+    print("{"/api/users".trimPrefix("/api")} {"main.iris".trimSuffix(".iris")}")
+    dir, file, ok := "/var/log/nginx/access.log".cutLast("/")
+    print("{dir} {file} {ok}")
+    scoped ls := "one\r\ntwo\n\nfour\n".lines()
+    print("{ls.len} [{ls.at(0)}] [{ls.at(2)}] [{ls.at(3)}]")
+    print("{"Content-Type".equalFold("content-type")} {"a".equalFold("b")}")
+    scoped String t = "x-forwarded-for hello world".title()
+    scoped String rv = "Köln!".reverse()
+    print("{t} {rv}")
+    print("{str.isDigit('7')} {str.isLetter('ö')} {str.isSpace(0xa0)} {str.toUpper('q')}")
+    print("{"ff".parseIntBase(16) catch -1} {"-101".parseIntBase(2) catch -1} {"zz".parseIntBase(10) catch -1}")
+}
+
+void printRune(i32 r) {
+    scoped String s = str.fromRune(r)
+    print("{r:>6x} [{s}]")
+}

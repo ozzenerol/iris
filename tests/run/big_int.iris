@@ -1,0 +1,46 @@
+// expect: -864197532086419753208641975320
+// expect: 1111111110111111111011111111100
+// expect: -121932631137021795226185032733622923332237463801111263526900
+// expect: -8 -9000000000900000000090
+// expect: 1606938044258990275541962092341162602522202993782792835301376
+// expect: 100000000000000000000000000000000000000000000000000 201
+// expect: 333333336
+// expect: 12 1 -1 -2 5902958103587056517120
+// expect: -9223372036854775808 -1
+// expect: BigError.invalid: '12x' is not a number in base 10
+// expect: 65535
+// big: arithmetic, division, powers, modPow, gcd, shifts, bases and errors.
+import big
+
+!void main() {
+    scoped a := try big.parse("123456789012345678901234567890")
+    scoped b := try big.parse("-987654321098765432109876543210")
+    scoped s := a.add(b)
+    scoped d := a.sub(b)
+    scoped p := a.mul(b)
+    print("{s}\n{d}\n{p}")
+    q, r := b.divMod(a)
+    defer {
+        q.free()
+        r.free()
+    }
+    print("{q} {r}")
+    scoped two := big.from(2)
+    scoped f := two.pow(200)
+    print("{f}")
+    scoped hx := f.text(16)
+    print("{hx} {f.bitLen()}")
+    scoped m := try big.parse("1000000007")
+    scoped ex := try big.parse("1000000005")
+    scoped inv := big.from(3).modPow(ex, m)
+    print("{inv}")
+    scoped g := big.from(84).gcd(big.from(-36))
+    print("{g} {a.cmp(b)} {b.sign()} {big.from(-5).shr(1)} {big.from(5).shl(70)}")
+    print("{(try big.parse("-9223372036854775808")).toI64() catch 0} {f.toI64() catch -1}")
+    scoped bad := big.parse("12x") catch e {
+        print("{e.code}: {e.message}")
+        big.from(0)
+    }
+    scoped big2 := try big.parse("ff_ff", 16)
+    print("{big2}")
+}

@@ -1359,6 +1359,10 @@ static void completion(StrBuf *out, J *id, Program *prog, Source *src, const cha
         putItem(&r, &first, "len", 5, "i64");
         putItem(&r, &first, "append", 2, "void String.append(str text)");
         putItem(&r, &first, "free", 2, "void String.free()");
+        putItem(&r, &first, "reserve", 2, "void String.reserve(i64 n)");
+        putItem(&r, &first, "insert", 2, "void String.insert(i64 at, str text)");
+        putItem(&r, &first, "truncate", 2, "void String.truncate(i64 n)");
+        putItem(&r, &first, "clear", 2, "void String.clear()");
         putItem(&r, &first, "copy", 2, "String String.copy()");
         textMethods(&r, &first, prog);
     } else if (t && t->kind == TY_SLICE) {

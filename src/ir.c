@@ -1852,6 +1852,33 @@ static Val emitBuiltin(IR *ir, Node *e) {
         placeLabel(ir, ok);
         return val("", &tyVoid);
     }
+    case BI_STRING_RESERVE:
+    case BI_STRING_INSERT:
+    case BI_STRING_TRUNCATE:
+    case BI_STRING_CLEAR: {
+        Node *recv = e->a->a;
+        const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
+        if (e->builtin == BI_STRING_CLEAR) {
+            const char *lenp = tmp(ir);
+            ins(ir, "%s = getelementptr %%String, ptr %s, i32 0, i32 1", lenp, addr);
+            ins(ir, "store i64 0, ptr %s", lenp);
+            return val("", &tyVoid);
+        }
+        Val n = emitExpr(ir, e->list.items[0]);
+        if (e->builtin == BI_STRING_RESERVE) {
+            ins(ir, "call void @iris_string_reserve(ptr %s, i64 %s)", addr, n.s);
+        } else if (e->builtin == BI_STRING_TRUNCATE) {
+            ins(ir, "call void @iris_string_truncate(ptr %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", addr, n.s,
+                ir->fileStr, e->line, e->col, fnName(ir));
+        } else {
+            Val v = emitExpr(ir, e->list.items[1]);
+            const char *ptr, *len;
+            sliceParts(ir, v, &ptr, &len);
+            ins(ir, "call void @iris_string_insert(ptr %s, i64 %s, ptr %s, i64 %s, ptr %s, i32 %d, i32 %d, ptr %s)", addr,
+                n.s, ptr, len, ir->fileStr, e->line, e->col, fnName(ir));
+        }
+        return val("", &tyVoid);
+    }
     case BI_STRING_APPEND:
     case BI_STRING_FREE: {
         Node *recv = e->a->a;
@@ -3915,6 +3942,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_free(ptr)\n"
            "declare ptr @iris_grow(ptr, i64, i64, i64, i64)\n"
            "declare void @iris_fmt_int(ptr, i64, i32, i32, i32, i32)\n"
+           "declare void @iris_string_reserve(ptr, i64)\n"
+           "declare void @iris_string_truncate(ptr, i64, ptr, i32, i32, ptr)\n"
+           "declare void @iris_string_insert(ptr, i64, ptr, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_fmt_float(ptr, double, i32, i32, i32, i32)\n"
            "declare void @iris_write_padded(i32, ptr, ptr, i64, i32, i32, i32, i64)\n"
            "declare ptr @iris_alloc_aligned(i64, i64, i64, ptr, i32, i32, ptr)\n"

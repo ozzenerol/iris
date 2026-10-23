@@ -265,6 +265,9 @@ static int decodeEscape(const char *s, const char *e, char *out) {
     }
 }
 
+static int utf8Len(const char *s, size_t n);
+static int utf8Decode(const char *s, int len);
+
 static Node *parseChar(Parser *p, Token *t) {
     Node *n = node(p, N_CHAR, t);
     const char *s = t->s + 1, *e = t->s + t->len - 1;
@@ -277,9 +280,18 @@ static Node *parseChar(Parser *p, Token *t) {
         if (!used || s + 1 + used != e) {
             fail(p, t, "unknown escape in character literal");
         }
+    } else if ((unsigned char)*s >= 0x80) {
+        /* 'ö': a character beyond ASCII is its code point, an i32 */
+        int len = utf8Len(s, (size_t)(e - s));
+        if (len < 2 || e - s != len) {
+            fail(p, t, "a character literal holds one character; use a string for more");
+        }
+        n->ival = (uint64_t)utf8Decode(s, len);
+        n->name = "rune";
+        return n;
     } else {
         if (e - s != 1) {
-            fail(p, t, "a character literal holds one byte; use a string for more");
+            fail(p, t, "a character literal holds one character; use a string for more");
         }
         c = *s;
     }

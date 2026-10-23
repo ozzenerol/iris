@@ -3280,6 +3280,16 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
                     return setType(e, d->type);
                 }
             }
+            if (e->kind == N_CHAR && e->name) {
+                /* 'ö': a code point, which a byte would mistake for one of
+                 * its UTF-8 bytes */
+                if (expected && isInt(expected) && expected->bits < 32) {
+                    error(c, e, "a character beyond ASCII is a code point, an i32, not %s; for its UTF-8 bytes use a string",
+                          expected->name);
+                    return setType(e, &tyError);
+                }
+                return setType(e, expected && isInt(expected) && fitsIn(v, expected) ? expected : &tyI32);
+            }
             if (e->kind == N_CHAR && !(expected && isInt(expected) && fitsIn(v, expected))) {
                 return setType(e, &tyU8);
             }
@@ -4079,7 +4089,9 @@ static Type *checkMethodCall(Checker *c, Node *e) {
     }
     if (isStr(t) || t->kind == TY_STRING) {
         /* the functions of std/str, as methods: s.startsWith("/api") is str.startsWith(s, "/api") */
-        Node *fn = strcmp(name, "append") && strcmp(name, "free") ? textMethod(c->prog, name) : NULL;
+        bool own = !strcmp(name, "append") || !strcmp(name, "free") || !strcmp(name, "reserve") ||
+                   !strcmp(name, "insert") || !strcmp(name, "truncate") || !strcmp(name, "clear");
+        Node *fn = !own ? textMethod(c->prog, name) : NULL;
         if (fn) {
             if (t->kind == TY_STRING) {
                 coerce(c, &callee->a, &tyStr, "the text");
@@ -4118,6 +4130,36 @@ static Type *checkMethodCall(Checker *c, Node *e) {
                 }
                 e->builtin = BI_STRING_FREE;
             }
+            return setType(e, &tyVoid);
+        }
+        if (!strcmp(name, "reserve") || !strcmp(name, "insert") || !strcmp(name, "truncate") || !strcmp(name, "clear")) {
+            if (t->kind == TY_STRING && !addressable(recv)) {
+                error(c, recv, "%s changes the String, so it must be called on a variable", name);
+                return setType(e, &tyError);
+            }
+            int want = name[0] == 'c' ? 0 : name[0] == 'i' ? 2 : 1;
+            bool named = false;
+            for (int i = 0; i < e->list.len; i++) named = named || e->list.items[i]->kind == N_NAMED_ARG;
+            if (e->list.len != want || named) {
+                error(c, e, "%s", name[0] == 'c' ? "clear takes no arguments"
+                                 : name[0] == 'i' ? "insert takes where, in bytes, and the text: s.insert(0, \"> \")"
+                                 : name[0] == 'r' ? "reserve takes how many more bytes to make room for"
+                                                  : "truncate takes how many bytes to keep");
+                return setType(e, &tyError);
+            }
+            if (want >= 1) {
+                Type *nt = checkExpr(c, &e->list.items[0], &tyI64);
+                if (!isErr(nt)) coerce(c, &e->list.items[0], &tyI64, name[0] == 'i' ? "where" : "the count");
+            }
+            if (want == 2 && !checkTempText(c, &e->list.items[1], &tyStr)) {
+                Type *at = checkExpr(c, &e->list.items[1], &tyStr);
+                if (!isErr(at)) {
+                    coerce(c, &e->list.items[1], &tyStr, "the text to insert");
+                    markTempString(&e->list.items[1], &tyStr);
+                }
+            }
+            e->builtin = name[0] == 'r' ? BI_STRING_RESERVE : name[0] == 'i' ? BI_STRING_INSERT
+                         : name[0] == 't' ? BI_STRING_TRUNCATE : BI_STRING_CLEAR;
             return setType(e, &tyVoid);
         }
     }

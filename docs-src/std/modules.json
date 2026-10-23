@@ -3,7 +3,8 @@
     {"title": "Core", "modules": [
       {"name": "core", "title": "Collections", "summary": "List, Map, Set and Arena, which every program has without an import."},
       {"name": "str", "title": "Text", "summary": "Searching, cutting, trimming and changing text, and reading numbers from it."},
-      {"name": "math", "title": "Maths", "summary": "Constants and functions on floating point numbers."},
+      {"name": "math", "title": "Maths", "summary": "Constants and functions on floating point numbers, and integer maths: gcd, square roots, powers, floor division, and checked, saturating and wrapping arithmetic."},
+      {"name": "big", "title": "Big numbers", "summary": "Whole numbers of any size, with division, powers, modular powers and any base from 2 to 36."},
       {"name": "random", "title": "Random numbers", "summary": "Numbers and bytes from the system's random source, and seeded generators."},
       {"name": "time", "title": "Time", "summary": "The time of day, dates, a clock for measuring, and Durations."},
       {"name": "pool", "title": "Pools", "summary": "Connections, or anything costly to open, shared by tasks and threads."}

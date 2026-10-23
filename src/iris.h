@@ -397,7 +397,8 @@ Node *textMethod(Program *prog, const char *name);
 /* What a call does when it isn't a call to a user function. */
 enum {
     BI_NONE, BI_PRINT, BI_PANIC, BI_FORMAT, BI_ALLOC, BI_FREE,
-    BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE, BI_ERROR,
+    BI_STR_COPY, BI_STRING_APPEND, BI_STRING_FREE, BI_STRING_RESERVE, BI_STRING_INSERT, BI_STRING_TRUNCATE,
+    BI_STRING_CLEAR, BI_ERROR,
     BI_ENUM_NEW,            /* a value of a data enum: ref is the member */
     BI_FLAGS_HAS,
     BI_DYN_CALL,            /* a call through dyn: ival is the method's place in the interface */

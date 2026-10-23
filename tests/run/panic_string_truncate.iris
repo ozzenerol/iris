@@ -1,0 +1,5 @@
+// panic: truncate to 9 bytes of a String of 3
+void main() {
+    scoped String s = "abc".copy()
+    s.truncate(9)
+}

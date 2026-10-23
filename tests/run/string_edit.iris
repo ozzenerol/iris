@@ -1,0 +1,22 @@
+// expect: hello, world! 13
+// expect: worldhello, world!
+// expect: [world]
+// expect: [] 0
+// expect: again 0
+// String.reserve, insert, truncate and clear.
+void main() {
+    scoped String s = "world".copy()
+    s.reserve(100)
+    s.insert(0, "hello ")
+    s.insert(s.len, "!")
+    s.insert(5, ",")
+    print("{s} {s.len}")
+    s.insert(0, s[7:12])
+    print(s)
+    s.truncate(5)
+    print("[{s}]")
+    s.clear()
+    print("[{s}] {s.len}")
+    s.append("again {s.len}")
+    print(s)
+}
