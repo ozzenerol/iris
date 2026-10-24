@@ -65,6 +65,7 @@ try {
 <pre class="code"><code>curl localhost:8080/</code></pre>
 <pre class="out"><code>hello</code></pre>
 <p>Each connection gets its own task and <code>serve</code> uses every CPU core, so a handler that waits for a database or another server doesn't hold up the others.</p>
+<p>The request belongs to the server. Its path, headers and body are gone when the handler returns, so a value kept longer, in a Map, on a channel or in a task the handler starts, has to be a copy: <code>seen.push(req.path.copy())</code>.</p>
 <p>The examples in this chapter run the server and a client in one program, so they can show the reply. <code>net.listen(0, &quot;127.0.0.1&quot;)</code> opens a port the system picks. <code>serveOn</code> answers on it in a task started with <code>spawn</code>, and the client calls it with <code>http.get</code>.</p>
 <pre class="code run"><code><span class="k">import</span> http, net
 

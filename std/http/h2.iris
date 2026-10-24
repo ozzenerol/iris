@@ -492,8 +492,6 @@ i64 fillRequest(Request *req, List[String] *names, List[String] *values, i64 *le
     str authority = ""
     bool regular = false
     *length = -1
-    req.names = alloc(String, 64)
-    req.values = alloc(String, 64)
     for i in 0..names.len {
         n := names.at(i)
         v := values.at(i)
@@ -529,19 +527,13 @@ i64 fillRequest(Request *req, List[String] *names, List[String] *values, i64 *le
                 return E_PROTOCOL
             }
         }
-        if req.count < 64 {
-            req.names[req.count] = n.copy()
-            req.values[req.count] = v.copy()
-            req.count += 1
-        }
+        req.addHeader(n, v)
     }
     if method.len == 0 || scheme.len == 0 || path.len == 0 {
         return E_PROTOCOL
     }
-    if authority.len > 0 && req.count < 64 {
-        req.names[req.count] = "host".copy()
-        req.values[req.count] = authority.copy()
-        req.count += 1
+    if authority.len > 0 {
+        req.addHeader("host", authority)
     }
     req.method = method.copy()
     req.path = path.copy()

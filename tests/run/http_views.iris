@@ -1,0 +1,103 @@
+// expect: /big a 20000
+// expect: /slow b 3000
+// expect: /one c 0
+// expect: /two d 15000
+// expect: /ws websocket hi
+// expect: ok
+// expect: ok
+// expect: kept /keep/1 /keep/2
+
+import http, net, str, time
+
+List[String] kept
+
+void show(http.Request *req, http.Response *res) {
+    scoped String body = format("{req.route()} {req.header("X-A")} {req.body.len}")
+    res.text(body)
+}
+
+void keep(http.Request *req, http.Response *res) {
+    // the request's text is gone after the handler; a copy stays
+    kept.push(req.path.copy())
+    res.text("ok")
+}
+
+!void socket(http.WebSocket *ws, http.Request *req) {
+    scoped http.Message m = try ws.read()
+    scoped String back = format("{req.route()} {req.header("Upgrade")} {m.data}")
+    try ws.send(back)
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+// Reads one answer and prints its body.
+!void answer(net.Conn *c) {
+    i64 length = 0
+    for {
+        scoped String line = try c.readLine()
+        if line.len == 0 {
+            break
+        }
+        name, value, _ := str.cut(line, ": ")
+        if name == "Content-Length" {
+            length = try str.parseInt(value)
+        }
+    }
+    scoped String body = try c.readExactly(length)
+    print(body)
+}
+
+!void main() {
+    defer kept.freeEach()
+    http.Router r
+    defer r.free()
+    r.post("/big", show)
+    r.post("/slow", show)
+    r.get("/one", show)
+    r.post("/two", show)
+    r.get("/keep/*rest", keep)
+    r.websocket("/ws", socket)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+
+    // a body bigger than the connection's buffer
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    scoped String big = str.repeat("x", 20000)
+    try c.write("POST /big HTTP/1.1\r\nX-A: a\r\nContent-Length: 20000\r\n\r\n")
+    try c.write(big)
+    try answer(&c)
+
+    // a body that comes in pieces
+    try c.write("POST /slow HTTP/1.1\r\nX-A: b\r\nContent-Length: 3000\r\n\r\n")
+    scoped String part = str.repeat("y", 1000)
+    for i in 0..3 {
+        sleep(10ms)
+        try c.write(part)
+    }
+    try answer(&c)
+
+    // two requests at once, the second's body moved to the buffer's front
+    scoped String pad = str.repeat("p", 1500)
+    scoped String body = str.repeat("z", 15000)
+    scoped String both = format("GET /one HTTP/1.1\r\nX-A: c\r\nX-Pad: {pad}\r\n\r\nPOST /two HTTP/1.1\r\nX-A: d\r\nContent-Length: 15000\r\n\r\n{body}")
+    try c.write(both)
+    try answer(&c)
+    try answer(&c)
+
+    // a WebSocket reads the connection while its request is in use
+    scoped String url = format("ws://127.0.0.1:{ln.port}/ws")
+    ws := try http.dialWebSocket(url)
+    try ws.send("hi")
+    scoped http.Message m = try ws.read()
+    print(m.data)
+    ws.close()
+
+    try c.write("GET /keep/1 HTTP/1.1\r\n\r\nGET /keep/2 HTTP/1.1\r\n\r\n")
+    try answer(&c)
+    try answer(&c)
+    print("kept {kept.at(0)} {kept.at(1)}")
+}
+

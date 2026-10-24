@@ -27,6 +27,9 @@ i64 rawRead(i32 fd, u8 *buf, i64 len, i64 timeout)
 @extern("iris_net_write")
 i32 rawWrite(i32 fd, u8 *buf, i64 len, i64 timeout)
 
+@extern("iris_mem_move")
+void memMove(u8 *dst, u8 *src, i64 n)
+
 @extern("iris_net_close")
 void rawClose(i32 fd)
 
@@ -326,6 +329,42 @@ pub !String Conn.readAll(i64 limit = 0) {
     }
     return out
 }
+
+// The bytes read from the connection and not taken yet, as a view of its
+// buffer: no copy, valid until the next read. With readMore and skip, a
+// protocol can look at what came before it takes it.
+pub str Conn.buffered() => self.buf[self.start:self.end]
+
+// Reads more into the buffer and keeps what buffered() had, moved to the
+// front when the buffer's end is reached. False when the other side has
+// closed or the buffer is full.
+pub !bool Conn.readMore() {
+    if self.start == self.end {
+        self.start = 0
+        self.end = 0
+    } else if self.end == self.buf.len {
+        if self.start == 0 {
+            return false
+        }
+        memMove(&self.buf[0], &self.buf[self.start], self.end - self.start)
+        self.end -= self.start
+        self.start = 0
+    }
+    n := self.rawRead(self.buf[self.end:])
+    if n < 0 {
+        return error(netCode(i32(-n)), "reading: {reason(i32(-n))}")
+    }
+    self.end += n
+    return n > 0
+}
+
+// Takes the first n bytes of buffered(), at most all of them.
+pub void Conn.skip(i64 n) {
+    self.start = if n < self.end - self.start { self.start + n } else { self.end }
+}
+
+// The size of the read buffer: how much buffered() can hold.
+pub i64 Conn.bufferSize() => self.buf.len
 
 // Writes all of data.
 pub !void Conn.write(str data) {

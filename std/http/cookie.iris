@@ -64,11 +64,14 @@ pub void Response.clearCookie(str name, str path = "/") {
 // The value of the cookie called name that the request sent, "" when it
 // sent none.
 pub str Request.cookie(str name) {
-    for i in 0..self.count {
-        if !sameName(self.names[i], "Cookie") {
+    lines := self.head
+    for lines.len > 0 {
+        n, value, next := nextHeader(lines)
+        lines = next
+        if !sameName(n, "Cookie") {
             continue
         }
-        str rest = self.values[i]
+        str rest = value
         for rest.len > 0 {
             pair, after, _ := str.cut(rest, ";")
             rest = after

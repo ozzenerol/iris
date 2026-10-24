@@ -17,7 +17,8 @@ pub enum HttpError { badUrl, badReply, tooBig, badRequest }
 // that returns void can be given as well.
 pub type Handler = !void(Request *, Response *)
 
-// A request, as the handler sees it.
+// A request, as the handler sees it. It and its text are gone when the
+// handler returns: copy what is kept longer, as req.path.copy().
 pub struct Request {
     pub String method
     pub String path
@@ -27,12 +28,14 @@ pub struct Request {
     // who sent the request: the client's address and port, or the
     // proxy's when there is one in front
     pub net.Addr remote
-    String[] names
-    String[] values
-    i64 count
+    // the header lines, "Name: value", each ending in \n or \r\n: a
+    // view of the connection's buffer, or of own
+    str head
+    String own
     List[str] paramNames
     List[str] paramValues
     List[String] kept // form values decoded by form, freed with the request
+    bool views        // method, path, head and body point into the connection's buffer
     // when the request came in, by time.clock(): time.clock() - req.received
     // is how long it has taken
     pub Duration received
@@ -41,7 +44,7 @@ pub struct Request {
 // The answer the handler fills in. It is sent when the handler returns.
 pub struct Response {
     pub i32 status
-    String contentType
+    String contentType = "text/plain; charset=utf-8"
     String body
     String headers
 }
@@ -114,24 +117,44 @@ bool sameName(str a, str b) {
 
 // The value of a header, "" when the request has none. Names match in any case.
 pub str Request.header(str name) {
-    for i in 0..self.count {
-        if sameName(self.names[i], name) {
-            return self.values[i]
+    rest := self.head
+    for rest.len > 0 {
+        n, v, after := nextHeader(rest)
+        if sameName(n, name) {
+            return v
         }
+        rest = after
     }
     return ""
+}
+
+// The first header line in rest, its name and value trimmed, and the lines
+// after it. A line without a colon has the name "".
+(str, str, str) nextHeader(str rest) {
+    line, after, _ := str.cut(rest, "\n")
+    name, value, found := str.cut(line, ":")
+    if !found {
+        return ("", "", after)
+    }
+    return (str.trim(name), str.trim(value), after)
+}
+
+// Adds a header line to the request's own head, for a request read into
+// Strings of its own.
+void Request.addHeader(str name, str value) {
+    self.own.append(name)
+    self.own.append(": ")
+    self.own.append(value)
+    self.own.append("\n")
+    self.head = self.own
 }
 
 void Request.free() {
     self.method.free()
     self.path.free()
     self.body.free()
-    for i in 0..self.count {
-        self.names[i].free()
-        self.values[i].free()
-    }
-    free(self.names)
-    free(self.values)
+    self.own.free()
+    self.head = ""
     self.paramNames.free()
     self.paramValues.free()
     self.kept.freeEach()
@@ -139,20 +162,25 @@ void Request.free() {
 
 // Answers with text.
 pub void Response.text(str body) {
-    self.body.free()
-    self.body = body.copy()
+    self.body.truncate(0)
+    self.body.append(body)
     self.contentType.free()
-    self.contentType = "text/plain; charset=utf-8".copy()
+    self.contentType = borrow("text/plain; charset=utf-8")
 }
 
 // Answers with HTML.
-pub void Response.html(str body) => self.send(body, "text/html; charset=utf-8")
+pub void Response.html(str body) {
+    self.body.truncate(0)
+    self.body.append(body)
+    self.contentType.free()
+    self.contentType = borrow("text/html; charset=utf-8")
+}
 
 // Answers with body as contentType, for any type text, json and html
 // don't cover: res.send(csv, "text/csv").
 pub void Response.send(str body, str contentType) {
-    self.body.free()
-    self.body = body.copy()
+    self.body.truncate(0)
+    self.body.append(body)
     self.contentType.free()
     self.contentType = contentType.copy()
 }
@@ -167,10 +195,10 @@ pub void Response.error(i32 status, str message) {
 
 // Answers with JSON text.
 pub void Response.json(str body) {
-    self.body.free()
-    self.body = body.copy()
+    self.body.truncate(0)
+    self.body.append(body)
     self.contentType.free()
-    self.contentType = "application/json".copy()
+    self.contentType = borrow("application/json")
 }
 
 str statusText(i32 code) => match code {
@@ -200,8 +228,137 @@ str statusText(i32 code) => match code {
     _ => "Status"
 }
 
-// Reads one request. False when the client has closed the connection.
+@extern("iris_string_borrow")
+void rawBorrow(String *s, u8 *p, i64 n)
+
+// A String that points at s, which outlives it: no copy, and freeing it
+// frees nothing.
+String borrow(str s) {
+    String out
+    rawBorrow(&out, s.ptr, s.len)
+    return out
+}
+
+// Gives the request copies of what points into the connection's buffer,
+// for when the connection is read while the request is still in use.
+void Request.keep() {
+    if !self.views {
+        return
+    }
+    self.views = false
+    self.method = self.method.copy()
+    self.path = self.path.copy()
+    self.body = self.body.copy()
+    self.own.free()
+    self.own = self.head.copy()
+    self.head = self.own
+}
+
+// Where the head of a request in b ends, after its blank line; 0 when it
+// hasn't all come yet. The search starts at from.
+i64 headEnd(str b, i64 from) {
+    for i in from..b.len {
+        if b[i] == '\n' {
+            if i + 1 < b.len && b[i + 1] == '\n' {
+                return i + 2
+            }
+            if i + 2 < b.len && b[i + 1] == '\r' && b[i + 2] == '\n' {
+                return i + 3
+            }
+        }
+    }
+    return 0
+}
+
+// Fills req from the head of a request, its fields pointing into head.
+// The body's length, from Content-Length.
+!i64 parseHead(str head, Request *req, Limits *limits) {
+    line, rest, _ := str.cut(head, "\n")
+    line = str.trimSuffix(line, "\r")
+    method, after, ok := str.cut(line, " ")
+    path, version, ok2 := str.cut(after, " ")
+    if !ok || !ok2 || !str.startsWith(version, "HTTP/1.") && !(method == "PRI" && version == "HTTP/2.0") {
+        return error(HttpError.badRequest, "a request line HTTP doesn't allow: '{line}'")
+    }
+    req.method = borrow(method)
+    req.path = borrow(path)
+    req.head = rest
+    req.views = true
+    i64 length = 0
+    for rest.len > 0 {
+        h, next, _ := str.cut(rest, "\n")
+        if h.len > limits.maxHeader + 1 {
+            return error(net.NetError.tooLong, "reading a line: longer than {limits.maxHeader} bytes")
+        }
+        name, value, _ := nextHeader(rest)
+        rest = next
+        if name.len == 14 && sameName(name, "Content-Length") {
+            length = str.parseInt(value) catch 0
+        }
+    }
+    return length
+}
+
+// Reads one request, which points into the connection's buffer when it
+// fits there; readHead reads one that doesn't. False when the client has
+// closed the connection.
 !bool readRequest(net.Conn *c, Request *req, Limits *limits) {
+    i64 scanned = 0
+    i64 end = 0
+    for {
+        b := c.buffered()
+        end = headEnd(b, scanned)
+        if end > 0 {
+            break
+        }
+        scanned = if b.len > 2 { b.len - 2 } else { 0 }
+        more := c.readMore() catch e {
+            if e.code == net.NetError.closed {
+                return false
+            }
+            return e
+        }
+        if !more {
+            if c.buffered().len < c.bufferSize() {
+                return false // closed
+            }
+            return try readHead(c, req, limits)
+        }
+    }
+    req.received = time.clock()
+    req.protocol = "HTTP/1.1"
+    length := try parseHead(c.buffered()[0:end], req, limits)
+    if length > limits.maxBody {
+        return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
+    }
+    if length <= 0 {
+        c.skip(end)
+        return true
+    }
+    if end + length > c.bufferSize() {
+        req.head = ""
+        req.views = false
+        req.method = borrow("")
+        req.path = borrow("")
+        return try readHead(c, req, limits)
+    }
+    if c.buffered().len < end + length {
+        for c.buffered().len < end + length {
+            if !try c.readMore() {
+                return error(net.NetError.closed, "reading: connection closed")
+            }
+        }
+        // reading may have moved the buffer's bytes
+        _ = try parseHead(c.buffered()[0:end], req, limits)
+    }
+    req.body = borrow(c.buffered()[end:end + length])
+    c.skip(end + length)
+    return true
+}
+
+// Reads one request a line at a time into Strings of its own, for a head
+// or body too big for the connection's buffer.
+!bool readHead(net.Conn *c, Request *req, Limits *limits) {
     line := c.readLine(limits.maxHeader) catch e {
         if e.code == net.NetError.closed {
             return false
@@ -218,18 +375,14 @@ str statusText(i32 code) => match code {
     req.protocol = "HTTP/1.1"
     req.method = method.copy()
     req.path = path.copy()
-    req.names = alloc(String, 64)
-    req.values = alloc(String, 64)
     for {
         scoped String h = try c.readLine(limits.maxHeader)
         if h.len == 0 {
             break
         }
         name, value, found := str.cut(h, ":")
-        if found && req.count < 64 {
-            req.names[req.count] = str.trim(name).copy()
-            req.values[req.count] = str.trim(value).copy()
-            req.count += 1
+        if found {
+            req.addHeader(str.trim(name), str.trim(value))
         }
     }
     length := str.parseInt(req.header("Content-Length")) catch 0
@@ -269,10 +422,42 @@ void maybeGzip(Router *router, Request *req, Response *res) {
     res.headers.append("Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n")
 }
 
-!void writeResponse(net.Conn *c, Response *res, bool keepAlive) {
-    scoped String head = format("HTTP/1.1 {res.status} {statusText(res.status)}\r\nContent-Type: {res.contentType}\r\nContent-Length: {res.body.len}\r\n{res.headers}Connection: {if keepAlive { "keep-alive" } else { "close" }}\r\n\r\n")
-    head.append(res.body)
-    try c.write(head)
+// Adds n in decimal.
+void appendInt(String *out, i64 n) {
+    if n < 0 {
+        out.append("-")
+        n = -n
+    }
+    u8[20] digits
+    i64 i = 20
+    for {
+        i -= 1
+        digits[i] = u8('0' + n % 10)
+        n /= 10
+        if n == 0 {
+            break
+        }
+    }
+    out.append(digits[i:20])
+}
+
+// Writes the answer, built in out, which a connection keeps for all its
+// answers.
+!void writeResponse(net.Conn *c, Response *res, bool keepAlive, String *out) {
+    out.truncate(0)
+    out.append("HTTP/1.1 ")
+    appendInt(out, i64(res.status))
+    out.append(" ")
+    out.append(statusText(res.status))
+    out.append("\r\nContent-Type: ")
+    out.append(res.contentType)
+    out.append("\r\nContent-Length: ")
+    appendInt(out, res.body.len)
+    out.append("\r\n")
+    out.append(res.headers)
+    out.append(if keepAlive { "Connection: keep-alive\r\n\r\n" } else { "Connection: close\r\n\r\n" })
+    out.append(res.body)
+    try c.write(*out)
 }
 
 // Opens a WebSocket on the connection and hands it to the route's handler.
@@ -282,6 +467,7 @@ void upgrade(net.Conn *conn, Request *req, Route *route, Watch *w, Limits *limit
     conn.write(reply) catch e {
         return
     }
+    req.keep() // the socket reads into the buffer the request points into
     unwatch(w) // a WebSocket may stay quiet for long
     WebSocket ws = WebSocket{conn: conn, maxMessage: limits.maxBody}
     route.socket(&ws, req) catch e { }
@@ -292,9 +478,9 @@ void upgrade(net.Conn *conn, Request *req, Route *route, Watch *w, Limits *limit
 void refuse(net.Conn *c, i32 status, str message) {
     Response res
     res.status = status
-    res.contentType = "text/plain; charset=utf-8".copy()
     res.body = format("{message}\n")
-    writeResponse(c, &res, false) catch e { }
+    scoped String out
+    writeResponse(c, &res, false, &out) catch e { }
     res.body.free()
     res.contentType.free()
 }
@@ -371,6 +557,15 @@ void serveConn(net.Conn conn, Target target) {
             return
         }
     }
+    // kept for all the connection's requests
+    String out
+    Response res
+    defer {
+        out.free()
+        res.body.free()
+        res.headers.free()
+        res.contentType.free()
+    }
     for {
         if target.router != null && target.router.stopping.load() != 0 {
             return
@@ -413,9 +608,7 @@ void serveConn(net.Conn conn, Target target) {
             }
             target.router.busy.add(1)
         }
-        Response res
         res.status = 200
-        res.contentType = "text/plain; charset=utf-8".copy()
         if target.router != null {
             target.router.dispatch(&req, &res)
         } else {
@@ -424,12 +617,15 @@ void serveConn(net.Conn conn, Target target) {
         maybeGzip(target.router, &req, &res)
         keepAlive := !sameName(req.header("Connection"), "close")
         bool failed = false
-        writeResponse(&conn, &res, keepAlive) catch e {
+        writeResponse(&conn, &res, keepAlive, &out) catch e {
             failed = true
         }
-        res.body.free()
+        // the next answer reuses the room, unless it is large
+        reset(&res.body)
+        reset(&res.headers)
+        reset(&out)
         res.contentType.free()
-        res.headers.free()
+        res.contentType = borrow("text/plain; charset=utf-8")
         req.free()
         if target.router != null {
             target.router.busy.sub(1)
@@ -438,6 +634,15 @@ void serveConn(net.Conn conn, Target target) {
         if !keepAlive || failed {
             return
         }
+    }
+}
+
+// Empties s for reuse, or frees it when it holds more than 64 KiB.
+void reset(String *s) {
+    if s.len > 64KiB {
+        s.free()
+    } else {
+        s.truncate(0)
     }
 }
 

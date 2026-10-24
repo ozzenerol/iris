@@ -609,6 +609,18 @@ void iris_string_free(IrisString *s) {
     s->len = s->cap = 0;
 }
 
+/* A String that borrows n bytes at p (cap 0): freeing it frees nothing and
+ * the first change copies them. For views of a buffer that outlives it. */
+void iris_string_borrow(IrisString *s, const char *p, int64_t n) {
+    s->ptr = (char *)p;
+    s->len = n;
+    s->cap = 0;
+}
+
+void iris_mem_move(void *dst, const void *src, int64_t n) {
+    if (n > 0) memmove(dst, src, (size_t)n);
+}
+
 /* sink 1: stdout; 2: the text of a panic; 3: the String at dst; 4: the
  * message of a new error */
 static void put(int sink, IrisString *dst, const char *s, size_t n) {

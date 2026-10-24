@@ -32,6 +32,8 @@ hello
 
 Each connection gets its own task and `serve` uses every CPU core, so a handler that waits for a database or another server doesn't hold up the others.
 
+The request belongs to the server. Its path, headers and body are gone when the handler returns, so a value kept longer, in a Map, on a channel or in a task the handler starts, has to be a copy: `seen.push(req.path.copy())`.
+
 The examples in this chapter run the server and a client in one program, so they can show the reply. `net.listen(0, "127.0.0.1")` opens a port the system picks. `serveOn` answers on it in a task started with `spawn`, and the client calls it with `http.get`.
 
 ```iris run
