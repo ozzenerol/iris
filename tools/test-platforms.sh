@@ -25,9 +25,15 @@ steps='set -o pipefail; make clean >/dev/null && make && make iris-debug >/dev/n
 run() {
   case "$1" in
   linux-x86_64)
-    bundle | ssh -o BatchMode=yes "$LXC" "
+    # the lock bench/remote.sh takes, so a run never overlaps a benchmark;
+    # the line saying it got the lock goes to the terminal as well as the log
+    bundle | ssh -o BatchMode=yes "$LXC" "flock -o /root/iris-bench.lock bash -c '
+      echo \"test-platforms: got the LXC\" >&2
       rm -rf /tmp/$id && mkdir -p /tmp/$id && cd /tmp/$id && tar -xzf - &&
-      { $steps; }; rc=\$?; rm -rf /tmp/$id; exit \$rc" ;;
+      { $steps; }; rc=\$?; rm -rf /tmp/$id; exit \$rc'" 2> >(while IFS= read -r l; do
+        case "$l" in *"got the LXC"*) echo "$l" >&3 ;; esac
+        printf '%s\n' "$l"
+      done >&2) ;;
   macos-arm64)
     bundle | ssh -o BatchMode=yes "$MAC" "
       export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH
@@ -46,6 +52,7 @@ run() {
   esac
 }
 
+exec 3>&1
 for p in "${platforms[@]}"; do
   run "$p" > "$logdir/$p.log" 2>&1 &
   eval "pid_${p//-/_}=$!"
