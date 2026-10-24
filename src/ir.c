@@ -2046,7 +2046,8 @@ static const char *emitAddr(IR *ir, Node *e) {
             const char *i = toI64(ir, ix);
             indexCheck(ir, i, fmt(ir, "%lld", (long long)bt->count), e);
             const char *r = tmp(ir);
-            ins(ir, "%s = getelementptr %s, ptr %s, i64 0, i64 %s", r, llType(ir, bt), base, i);
+            /* inside the array: checked, or out of range is undefined */
+            ins(ir, "%s = getelementptr inbounds %s, ptr %s, i64 0, i64 %s", r, llType(ir, bt), base, i);
             return r;
         }
         Val s = emitExpr(ir, e->a);
@@ -2055,7 +2056,7 @@ static const char *emitAddr(IR *ir, Node *e) {
         sliceParts(ir, s, &ptr, &len);
         indexCheck(ir, i, len, e);
         const char *r = tmp(ir);
-        ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", r, llType(ir, bt->elem), ptr, i);
+        ins(ir, "%s = getelementptr inbounds %s, ptr %s, i64 %s", r, llType(ir, bt->elem), ptr, i);
         return r;
     }
     case N_UNARY: {
@@ -2168,6 +2169,7 @@ typedef struct {
     Node *field;
     Type *type;
     const char *align;
+    bool lenField;          /* the len of a List, Map... of std/core: never negative */
 } Place;
 
 static bool unaligned(Node *e) {
@@ -2192,6 +2194,12 @@ static Place emitPlace(IR *ir, Node *e) {
         oddField(e->ref)) {
         p.field = e->ref;
     }
+    if (e->kind == N_FIELD_ACCESS && e->ref && e->ref->kind == N_FIELD && !p.field &&
+        strcmp(e->ref->name, "len") == 0 && e->type->kind == TY_INT && e->type->bits == 64 && !e->type->bigEndian) {
+        Type *st = e->a->type && e->a->type->kind == TY_PTR ? e->a->type->elem : e->a->type;
+        p.lenField = st && st->kind == TY_STRUCT && st->decl && st->decl->module &&
+                     strcmp(st->decl->module, "core") == 0;
+    }
     p.addr = emitAddr(ir, e);
     return p;
 }
@@ -2199,7 +2207,7 @@ static Place emitPlace(IR *ir, Node *e) {
 static Val placeLoad(IR *ir, Place p) {
     const char *r = tmp(ir);
     Type *t = p.field ? p.field->type : p.type;
-    ins(ir, "%s = load %s, ptr %s%s", r, llType(ir, t), p.addr, p.align);
+    ins(ir, "%s = load %s, ptr %s%s%s", r, llType(ir, t), p.addr, p.align, p.lenField ? ", !range !3" : "");
     return val(p.field ? fieldFromUnit(ir, p.field, r) : r, p.type);
 }
 
@@ -2594,8 +2602,10 @@ static Val emitSlice(IR *ir, Node *e) {
         ir->terminated = false;
     }
     const char *start = tmp(ir), *n = tmp(ir);
-    ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", start, llType(ir, e->type->elem), ptr, lo);
-    ins(ir, "%s = sub i64 %s, %s", n, hi, lo);
+    /* lo <= hi <= len: start is inside the items or just past them */
+    const char *inb = unchecked ? "" : "inbounds ";
+    ins(ir, "%s = getelementptr %s%s, ptr %s, i64 %s", start, inb, llType(ir, e->type->elem), ptr, lo);
+    ins(ir, "%s = sub %si64 %s, %s", n, boundsChecks(ir) && !unchecked ? "nuw " : "", hi, lo);
     return makeSlice(ir, start, n, e->type);
 }
 
@@ -2803,6 +2813,14 @@ static Val emitExpr(IR *ir, Node *e) {
             ins(ir, "%s = call ptr @iris_error_message_ptr()", p);
             ins(ir, "%s = call i64 @iris_error_message_len()", n);
             return makeSlice(ir, p, n, &tyStr);
+        }
+        if (!e->ref && e->builtin != 2 && irAddressable(e->a) && !unaligned(e->a) &&
+            !(e->a->kind == N_FIELD_ACCESS && e->a->ref && oddField(e->a->ref))) {
+            /* .len of a slice or a String in memory: never negative */
+            const char *addr = emitAddr(ir, e->a), *lp = tmp(ir), *r = tmp(ir);
+            ins(ir, "%s = getelementptr inbounds %s, ptr %s, i32 0, i32 1", lp, llType(ir, e->a->type), addr);
+            ins(ir, "%s = load i64, ptr %s, !range !3", r, lp);
+            return val(r, &tyI64);
         }
         if (!e->ref) {
             /* .len of a slice or a String (an array's is a constant), or .ptr */
@@ -3192,9 +3210,9 @@ static void emitFor(IR *ir, Node *s) {
         placeLabel(ir, body);
         const char *at = tmp(ir);
         if (ct->kind == TY_ARRAY) {
-            ins(ir, "%s = getelementptr %s, ptr %s, i64 0, i64 %s", at, llType(ir, ct), ptr, i.s);
+            ins(ir, "%s = getelementptr inbounds %s, ptr %s, i64 0, i64 %s", at, llType(ir, ct), ptr, i.s);
         } else {
-            ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", at, llType(ir, ct->elem), ptr, i.s);
+            ins(ir, "%s = getelementptr inbounds %s, ptr %s, i64 %s", at, llType(ir, ct->elem), ptr, i.s);
         }
         Val x = load(ir, at, ct->elem);
         ins(ir, "store %s %s, ptr %s", llType(ir, ct->elem), x.s, item->ir);
@@ -4270,7 +4288,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_chan_free(ptr, ptr, i32, i32, ptr)\n"
            "declare i64 @iris_select(i64, ptr, ptr, i64)\n"
            ""
-           "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
+           "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n"
+           "!3 = !{i64 0, i64 9223372036854775807}\n");
     sbPrintf(&out, "!llvm.dbg.cu = !{!10}\n!llvm.module.flags = !{!1, !2}\n"
                    "!1 = !{i32 2, !\"Debug Info Version\", i32 3}\n!2 = !{i32 7, !\"Dwarf Version\", i32 4}\n"
                    "!10 = distinct !DICompileUnit(language: DW_LANG_C, file: !%d, producer: \"iris %s\", "
