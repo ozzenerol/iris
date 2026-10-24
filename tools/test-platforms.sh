@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds Iris and runs the tests on the three platforms, in parallel:
 #   linux-x86_64   the LXC container (root@192.168.1.152)
-#   macos-arm64    the Mac (dev@192.168.1.129)
+#   macos-arm64    the Mac (dev@192.168.1.13)
 #   linux-arm64    Docker on the Mac
 # Usage: tools/test-platforms.sh [platform...]   (default: all three)
 set -uo pipefail
 LXC="${IRIS_LXC:-root@192.168.1.152}"
-MAC="${IRIS_MAC:-dev@192.168.1.129}"
+MAC="${IRIS_MAC:-dev@192.168.1.13}"
 cd "$(dirname "$0")/.."
 platforms=("${@:-linux-x86_64 macos-arm64 linux-arm64}")
 [ $# -eq 0 ] && platforms=(linux-x86_64 macos-arm64 linux-arm64)
