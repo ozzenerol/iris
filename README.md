@@ -4,13 +4,18 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-Servers, clients, databases (SQLite, PostgreSQL, Redis), JSON, regular expressions, compression, and command-line tools are in the standard library. The docs in `docs/` have a Language Tour, a Library Tour, and the library.
+The standard library covers HTTP and TCP servers and clients, SQLite, PostgreSQL and Redis, JSON, regular expressions, compression and command-line tools. The docs in `docs/` have a Language Tour, a Library Tour and the library reference.
 
 ## Speed
 
-`bench/` has 15 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers. These are the results on an AMD Ryzen 7 5700X with Linux: Iris 0.66.0 with clang 19, Rust 1.99 and Go 1.27. A time is the median of 5 runs, in seconds. A server runs for 10 seconds, twice, on 4 cores, with the load generator on the other 4. Memory is the peak, in MiB. The fastest is in bold.
+`bench/` has 15 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers.
 
-Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris safe"), which checks every index and slice as Rust does. Rust is built with `--release`, LTO and one codegen unit, and Go with `go build`.
+- Machine: AMD Ryzen 7 5700X, Linux. Iris 0.66.0 with clang 19, Rust 1.99, Go 1.27.
+- Times are the median of 5 runs, in seconds.
+- Servers run for 10 seconds, twice, on 4 cores, with the load generator on the other 4.
+- Memory is the peak, in MiB. The fastest result is in bold.
+- Iris builds with `--mode=release-fast`, and with `--mode=release-safe` ("Iris safe"), which checks every index and slice as Rust does.
+- Rust builds with `--release`, LTO and one codegen unit. Go builds with `go build`.
 
 | Benchmark | What it does | Iris | Iris safe | Rust | Go | Memory, MiB: Iris / Rust / Go |
 |---|---|--:|--:|--:|--:|--:|
@@ -32,9 +37,9 @@ Iris is built with `--mode=release-fast`, and with `--mode=release-safe` ("Iris 
 | tcp-proxy | TCP proxy, 64-byte messages, 100 connections (msg/s) | 190k | **190k** | 187k | 157k | 4 / 4 / 6 |
 | tcp-proxy-bulk | TCP proxy, 256 KiB messages, 16 connections (MiB/s each way) | 7,645 | 7,911 | 2,098 | **8,352** | 3 / 3 / 5 |
 
-In fib and spectral-norm, Iris makes the same machine code as C compiled by clang 19. Rust 1.99 compiles with LLVM 23, which does better on those two loops on this CPU; on an Intel Core i7-12650H they are level. `bench/README.md` says how to run them.
+In fib and spectral-norm, Iris produces the same machine code as C compiled by clang 19. Rust 1.99 uses LLVM 23, which is faster on those two loops on this CPU. On an Intel Core i7-12650H they are level. `bench/README.md` explains how to run the benchmarks.
 
-`bench/` also has 14 library benchmarks: the same work done with Iris's standard library, the best-known Rust crate for it, and Go's standard library (or the usual package). Times are in seconds.
+`bench/` also has 14 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
 
 | Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
 |---|---|--:|--:|--:|---|---|
@@ -59,9 +64,13 @@ In fib and spectral-norm, Iris makes the same machine code as C compiled by clan
 ./build-and-install.sh
 ```
 
-builds `iris` with every core and installs it in `/usr/local/bin` (sudo only for the copy). `--prefix DIR` installs elsewhere, `--test` runs the tests first, `--no-install` only builds `./iris`.
+This builds `iris` on every core and installs it in `/usr/local/bin`, using sudo only for the copy.
 
-It needs a C11 compiler, `clang` 15 or newer (to compile programs) and Python 3 (for the tests and the docs). During work on the compiler, `make -j` builds `./iris` and `make test` runs the tests.
+- `--prefix DIR` installs elsewhere.
+- `--test` runs the tests first.
+- `--no-install` only builds `./iris`.
+
+It needs a C11 compiler, `clang` 15 or newer to compile programs, and Python 3 for the tests and docs. While working on the compiler, `make -j` builds `./iris` and `make test` runs the tests.
 
 ## Editors
 
@@ -73,7 +82,9 @@ It needs a C11 compiler, `clang` 15 or newer (to compile programs) and Python 3 
 vim.opt.rtp:append("/usr/local/share/iris/editors/vim")
 ```
 
-With lazy.nvim, put it in `performance.rtp.paths` instead, because lazy resets the runtime path when it starts. Then start the language server for `.iris` files (Neovim 0.11 or newer):
+With lazy.nvim, add it to `performance.rtp.paths` instead, because lazy resets the runtime path at startup.
+
+Then start the language server for `.iris` files (Neovim 0.11 or newer):
 
 ```lua
 vim.lsp.config("iris", {
@@ -81,32 +92,34 @@ vim.lsp.config("iris", {
   filetypes = { "iris" },
   root_markers = { "iris.mod", ".git" },
 })
+
 vim.lsp.enable("iris")
 ```
 
 ### VS Code
 
-The extension in `editors/vscode` highlights `.iris` files and the `iris` blocks in Markdown, runs `iris lsp`, and debugs programs with gdb. Build and install it:
+The extension in `editors/vscode` highlights `.iris` files and `iris` blocks in Markdown, runs `iris lsp`, and debugs programs with gdb. Build and install it:
 
 ```
 make vscode
 code --install-extension editors/vscode/iris.vsix
 ```
 
-To debug, open a `.iris` file, set a breakpoint and press F5. The extension builds the program with `iris build` and runs it under gdb 14 or newer. A `launch.json` entry of type `iris` sets `program` (a file or a project folder), `args`, `cwd`, `env` and `mode`. See `editors/vscode/README.md`.
+To debug, open a `.iris` file, set a breakpoint and press F5. The extension builds the program with `iris build` and runs it under gdb 14 or newer. A `launch.json` entry of type `iris` takes `program` (a file or a project folder), `args`, `cwd`, `env` and `mode`. See `editors/vscode/README.md`.
 
 ## Docs
 
-The docs are in `docs-src/` as Markdown. Build and read them with:
+The docs are Markdown files in `docs-src/`. Build and serve them:
 
 ```
 python3 tools/build_docs.py --serve
 ```
 
-and open http://localhost:8000. Without `--serve` it only builds `docs/`; its pages can be opened as files too, but then some browsers can't keep the theme from page to page. They have five parts:
+Then open http://localhost:8000. Without `--serve` it only builds `docs/`. The pages also open as files, but some browsers then forget the theme between pages.
 
-- Language Tour: each part of the language, with examples.
-- Library Tour: what the standard library does, one task per chapter.
-- Library: every module of the standard library.
-- Design: how the language works underneath, for anyone working on the compiler.
-- Roadmap: what gets built, in order.
+The docs have four parts:
+
+- Language Tour: the whole language, with runnable examples.
+- Library Tour: the standard library, one task per chapter.
+- Library: every module, type and function.
+- Design: the compiler's architecture, for people working on it.
