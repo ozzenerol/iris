@@ -105,7 +105,7 @@ String reply(str q, bool tcp) {
         count = 1
     } else if qname == "big.test" && kind == 1 {
         if !tcp {
-            flags = 0x8380          // truncated: ask again over TCP
+            flags = 0x8380 // truncated: ask again over TCP
         } else {
             answer(&body, 1, "\xc0\x00\x02\x1e")
             count = 1
@@ -115,7 +115,7 @@ String reply(str q, bool tcp) {
         count = 1
     } else if kind == 1 || kind == 28 {
         if !str.endsWith(qname, ".test") || qname == "missing.test" || qname == "short" {
-            flags = 0x8183          // no such name
+            flags = 0x8183 // no such name
         }
     }
     String out
@@ -189,10 +189,23 @@ void show(net.Resolver *r, str host) {
     addrs.free()
 }
 
+// A UDP socket and a listener on one port, since the resolver asks both.
+// Another program may hold the free UDP port for TCP, so a taken one is
+// tried again with another.
+!(net.Udp, net.Listener) listenBoth() {
+    for {
+        udp := try net.listenUdp(0, "127.0.0.1")
+        ln := net.listen(udp.localAddr().port, "127.0.0.1") catch e {
+            udp.close()
+            continue
+        }
+        return (udp, ln)
+    }
+}
+
 !void main() {
-    udp := try net.listenUdp(0, "127.0.0.1")
+    udp, ln := try listenBoth()
     port := udp.localAddr().port
-    ln := try net.listen(port, "127.0.0.1")
     spawn serveUdp(&udp)
     spawn serveTcp(ln)
     scoped String server = format("127.0.0.1:{port}")
@@ -235,7 +248,9 @@ void show(net.Resolver *r, str host) {
     show(&r, "localhost")
     show(&r, "203.0.113.5")
 
-    scoped String nowhere = format("127.0.0.1:{port + 1}")
+    // a socket that is never read, so the question gets no answer
+    silent := try net.listenUdp(0, "127.0.0.1")
+    scoped String nowhere = format("127.0.0.1:{silent.localAddr().port}")
     scoped quiet := try net.resolver([nowhere], "tests/data/hosts")
     quiet.timeout = 100ms
     quiet.attempts = 1
@@ -243,6 +258,7 @@ void show(net.Resolver *r, str host) {
         print("no server: {e.code}")
         List[net.Addr]{}
     }
+    silent.close()
     udp.close()
     ln.close()
 }
