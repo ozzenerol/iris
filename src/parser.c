@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <setjmp.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,6 +220,14 @@ static Node *parseNumber(Parser *p, Token *t) {
     errno = 0;
     if (n->kind == N_FLOAT) {
         n->fval = strtod(digits, NULL);
+        /* strtod says ERANGE for a value below the normal range too; a
+         * subnormal such as 5e-324 is a float like any other */
+        if (errno == ERANGE && !isinf(n->fval)) {
+            errno = 0;
+            bool digit = false;
+            for (const char *c = digits; *c && *c != 'e' && *c != 'E'; c++) digit |= *c >= '1' && *c <= '9';
+            if (n->fval == 0 && digit) fail(p, t, "'%.*s' is too small for a float", t->len, t->s);
+        }
     } else {
         char *end;
         n->ival = strtoull(digits, &end, base);

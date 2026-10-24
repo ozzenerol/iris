@@ -1,0 +1,7 @@
+// error: 5: '1e-400' is too small for a float
+// error: 6: '1e400' is too large
+
+void main() {
+    f64 x = 1e-400
+    f64 y = 1e400
+}
