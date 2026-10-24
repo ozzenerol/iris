@@ -450,12 +450,21 @@ static bool compileIR(const char *ir, const char *out, BuildMode mode, const cha
     int lto = mode == MODE_DEBUG ? -1 : nf;
     int ltoArgs = 0;
     if (lto >= 0) {
-        flags[nf++] = "-flto";
+        bool thin = getenv("IRIS_THINLTO") != NULL;   /* wip: ThinLTO with a cache, for measuring */
+        flags[nf++] = thin ? "-flto=thin" : "-flto";
         /* loops start on a 32-byte boundary, so a small hot loop doesn't
          * straddle two of them by chance; with LTO the linker's code
          * generator is told */
         flags[nf++] = strcmp(gTarget.os, "macos") == 0 ? "-Wl,-mllvm,-align-loops=32" : "-Wl,-plugin-opt=-align-loops=32";
         ltoArgs = 2;
+        static char cacheArg[4200];
+        char cdir[4096];
+        if (thin && runtimeCacheDir(cdir, sizeof cdir)) {
+            bool mac = strcmp(gTarget.os, "macos") == 0;
+            snprintf(cacheArg, sizeof cacheArg, mac ? "-Wl,-cache_path_lto,%s/lto" : "-Wl,-plugin-opt,cache-dir=%s/lto", cdir);
+            flags[nf++] = cacheArg;
+            ltoArgs = 3;
+        }
         flags[nf++] = "-falign-loops=32";
     }
     char cpuArg[256], pgoArg[4400], pgoBuf[4300];
