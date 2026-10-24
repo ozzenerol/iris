@@ -1,0 +1,75 @@
+// expect: fast 20 of 20, before the slow ones
+// expect: slow 5 of 5, together
+// expect: burst 200 of 200
+
+import http, net, time
+
+void slow(http.Request *req, http.Response *res) {
+    sleep(300ms)
+    res.text("slow")
+}
+
+void fast(http.Request *req, http.Response *res) {
+    res.text("fast")
+}
+
+void server(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+void fetch(http.Client *c, str url, chan[bool] out) {
+    scoped http.Reply r = c.get(url) catch e {
+        out <- false
+        return
+    }
+    out <- r.status == 200 && r.protocol == "HTTP/2"
+}
+
+i64 wait(chan[bool] results, i64 n) {
+    i64 good = 0
+    for i in 0..n {
+        if <-results {
+            good += 1
+        }
+    }
+    return good
+}
+
+// Requests on one connection whose handlers wait don't hold up the others.
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/slow", slow)
+    r.get("/fast", fast)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn server(&r, ln)
+    scoped String slowUrl = format("http://127.0.0.1:{ln.port}/slow")
+    scoped String fastUrl = format("http://127.0.0.1:{ln.port}/fast")
+
+    http.Client c
+    c.priorKnowledge = true
+    defer c.close()
+    scoped http.Reply first = try c.get(fastUrl)
+    start := time.clock()
+    slows := chan[bool](5)
+    defer slows.free()
+    for i in 0..5 {
+        spawn fetch(&c, slowUrl, slows)
+    }
+    fasts := chan[bool](20)
+    defer fasts.free()
+    for i in 0..20 {
+        spawn fetch(&c, fastUrl, fasts)
+    }
+    good := wait(fasts, 20)
+    print("fast {good} of 20{if time.clock() - start < 250ms { ", before the slow ones" } else { "" }}")
+    good = wait(slows, 5)
+    print("slow {good} of 5{if time.clock() - start < 1s { ", together" } else { "" }}")
+
+    burst := chan[bool](200)
+    defer burst.free()
+    for i in 0..200 {
+        spawn fetch(&c, fastUrl, burst)
+    }
+    print("burst {wait(burst, 200)} of 200")
+}

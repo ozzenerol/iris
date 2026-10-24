@@ -464,6 +464,7 @@ struct Reader {
     Queue *jobs
     net.Addr remote
     Decoder headers
+    Work *work
     Map[i64, Incoming] open
     i64 last   // the highest stream the client opened
     i64 window // the connection's receive window
@@ -564,6 +565,52 @@ void answer(Request req, i64 stream, Target target, Queue *jobs) {
         headers: res.headers})
 }
 
+// A request waiting for a task to answer it.
+struct Pending {
+    Request req
+    i64 stream
+}
+
+// The connection's requests waiting to be answered, and the tasks that
+// answer them. A worker answers one request after another. The tasks of a
+// connection all run on one thread, so while the reader runs, every worker
+// is waiting inside a handler, and a new request gets a new worker unless
+// one is about to start. A worker that leaves requests in the queue when it
+// starts one starts a spare, which answers them if this one has to wait.
+// A burst of requests whose handlers don't wait takes two tasks.
+struct Work {
+    Deque[Pending] queue
+    i64 live   // workers started and not finished
+    bool spare // a worker started that hasn't taken a request yet
+    Target target
+    Queue *jobs
+}
+
+void Work.add(Request req, i64 stream) {
+    self.queue.push(Pending{req: req, stream: stream})
+    self.startSpare()
+}
+
+void Work.startSpare() {
+    if !self.spare {
+        self.spare = true
+        self.live += 1
+        spawn worker(self)
+    }
+}
+
+void worker(Work *w) {
+    w.spare = false
+    for w.queue.len > 0 {
+        p := w.queue.popFront()
+        if w.queue.len > 0 {
+            w.startSpare()
+        }
+        answer(p.req, p.stream, w.target, w.jobs)
+    }
+    w.live -= 1
+}
+
 void Reader.start(i64 stream, Incoming inc) {
     if inc.length >= 0 && inc.length != inc.req.body.len {
         inc.req.free()
@@ -581,7 +628,7 @@ void Reader.start(i64 stream, Incoming inc) {
     }
     *self.inFlight += 1
     self.jobs.put(Out{job: .open})
-    spawn answer(inc.req, stream, self.target, self.jobs)
+    self.work.add(inc.req, stream)
 }
 
 // A body too large for the limit: 413, and the rest of it is dropped.
@@ -867,8 +914,9 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr re
     Writer writer = Writer{conn: conn, jobs: jobs, inFlight: &inFlight, window: 65535, initial: 65535, maxFrame: 16384}
     done := chan[bool](0)
     spawn runWriter(&writer, done)
+    Work work = Work{target: target, jobs: jobs}
     Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, remote: remote, inFlight: &inFlight,
-        headers: decoder(4096)}
+        headers: decoder(4096), work: &work}
     // our settings: how many requests at once, a larger window for request
     // bodies, and no server push
     String settings
@@ -918,6 +966,11 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr re
     r.headers.free()
     jobs.put(Out{job: .close})
     _ = <-done
+    // a spare that hasn't run yet still looks at the queue
+    for work.live > 0 {
+        sleep(0s)
+    }
+    work.queue.free()
     // the writer took every job, and the requests have all answered
     done.free()
     q.ch.free()
