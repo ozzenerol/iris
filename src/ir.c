@@ -3850,6 +3850,12 @@ static const char *constValue(IR *ir, Node *v, Type *t) {
     }
 }
 
+static uint64_t nameHash(const char *s, size_t n) {
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < n; i++) h = (h ^ (unsigned char)s[i]) * 1099511628211ULL;
+    return h;
+}
+
 static bool inList(NodeList *l, Node *n) {
     for (int i = 0; i < l->len; i++) {
         if (l->items[i] == n) return true;
@@ -4020,13 +4026,62 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     if (prog->text && prog->textImplicit) {
         usedText(a, prog->text, &all, &textUsed);
     }
+    /* only the functions that main, the tests, the benches and exported
+     * functions reach are written: a function is written once the code
+     * written so far names it */
+    int cap = 64;
+    while (cap < all.len * 2) cap *= 2;
+    int *slots = arenaAlloc(a, sizeof(int) * (size_t)cap);
+    bool *queued = arenaAlloc(a, sizeof(bool) * (size_t)(all.len + 1));
+    int *queue = arenaAlloc(a, sizeof(int) * (size_t)(all.len + 1));
+    int nqueue = 0;
+    for (int i = 0; i < cap; i++) slots[i] = -1;
     for (int i = 0; i < all.len; i++) {
         Node *d = all.items[i];
-        if (d->kind == N_FUNC && !(d->flags & (F_EXTERN | F_INTRINSIC))) {
-            if (prog->text && prog->textImplicit && inModule(prog->text, d) && !inList(&textUsed, d)) {
-                continue;               /* str wasn't imported and nothing calls this */
+        queued[i] = false;
+        if (d->kind != N_FUNC || (d->flags & (F_EXTERN | F_INTRINSIC))) continue;
+        if (prog->text && prog->textImplicit && inModule(prog->text, d) && !inList(&textUsed, d)) {
+            continue;                   /* str wasn't imported and nothing calls this */
+        }
+        uint32_t h = (uint32_t)nameHash(d->ir, strlen(d->ir)) & (uint32_t)(cap - 1);
+        while (slots[h] >= 0) h = (h + 1) & (uint32_t)(cap - 1);
+        slots[h] = i;
+        bool root = !mainFn || d == mainFn || (d->flags & F_EXPORT) || inList(&prog->tests, d) ||
+                    inList(&prog->benches, d);
+        if (root) {
+            queued[i] = true;
+            queue[nqueue++] = i;
+        }
+    }
+    size_t seenFuncs = 0, seenHead = 0, seenExtra = 0;
+    for (int q = 0; q < nqueue; q++) {
+        emitFunction(&ir, all.items[queue[q]], &funcs);
+        StrBuf *bufs[3] = {&funcs, &ir.head, &ir.extra};
+        size_t *seen[3] = {&seenFuncs, &seenHead, &seenExtra};
+        for (int k = 0; k < 3; k++) {
+            const char *b = bufs[k]->buf;
+            size_t end = bufs[k]->len;
+            for (size_t at = *seen[k]; b && at + 3 < end; at++) {
+                if (b[at] != '@' || b[at + 1] != '"' || (b[at + 2] != 'f' && b[at + 2] != 'm') || b[at + 3] != '.') {
+                    continue;
+                }
+                const char *close = memchr(b + at + 2, '"', end - at - 2);
+                if (!close) break;
+                size_t len = (size_t)(close + 1 - (b + at));
+                uint32_t h = (uint32_t)nameHash(b + at, len) & (uint32_t)(cap - 1);
+                for (; slots[h] >= 0; h = (h + 1) & (uint32_t)(cap - 1)) {
+                    const char *name = all.items[slots[h]]->ir;
+                    if (strncmp(name, b + at, len) == 0 && name[len] == 0) {
+                        if (!queued[slots[h]]) {
+                            queued[slots[h]] = true;
+                            queue[nqueue++] = slots[h];
+                        }
+                        break;
+                    }
+                }
+                at = (size_t)(close - b);
             }
-            emitFunction(&ir, d, &funcs);
+            *seen[k] = end;
         }
     }
 
