@@ -5361,13 +5361,32 @@ static void writeInt(char *p, int size, int64_t v) {
     }
 }
 
+/* The first quote, backslash or control character from p on, or end. Eight
+   bytes are checked at a time while none of them is one. */
+static const char *jsonPlainEnd(const char *p, const char *end) {
+    const uint64_t ones = 0x0101010101010101ull, highs = 0x8080808080808080ull;
+    while (end - p >= 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        uint64_t q = w ^ (ones * '"'), b = w ^ (ones * '\\');
+        uint64_t hit = ((q - ones) & ~q) | ((b - ones) & ~b) | ((w - ones * 0x20) & ~w);
+        if (hit & highs) break;
+        p += 8;
+    }
+    while (p < end && *p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) p++;
+    return p;
+}
+
 static void jsonQuote(IrisString *out, const char *s, int64_t n) {
     iris_string_append(out, "\"", 1);
-    int64_t start = 0;
-    for (int64_t i = 0; i < n; i++) {
-        unsigned char ch = (unsigned char)s[i];
-        const char *esc = NULL;
+    const char *p = s, *end = s + n;
+    for (;;) {
+        const char *q = jsonPlainEnd(p, end);
+        iris_string_append(out, p, q - p);
+        if (q == end) break;
+        unsigned char ch = (unsigned char)*q;
         char buf[8];
+        const char *esc = buf;
         switch (ch) {
         case '"': esc = "\\\""; break;
         case '\\': esc = "\\\\"; break;
@@ -5376,19 +5395,11 @@ static void jsonQuote(IrisString *out, const char *s, int64_t n) {
         case '\t': esc = "\\t"; break;
         case '\b': esc = "\\b"; break;
         case '\f': esc = "\\f"; break;
-        default:
-            if (ch < 0x20) {
-                snprintf(buf, sizeof buf, "\\u%04x", ch);
-                esc = buf;
-            }
+        default: snprintf(buf, sizeof buf, "\\u%04x", ch);
         }
-        if (esc) {
-            iris_string_append(out, s + start, i - start);
-            iris_string_append(out, esc, (int64_t)strlen(esc));
-            start = i + 1;
-        }
+        iris_string_append(out, esc, (int64_t)strlen(esc));
+        p = q + 1;
     }
-    iris_string_append(out, s + start, n - start);
     iris_string_append(out, "\"", 1);
 }
 
@@ -5479,6 +5490,11 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
 }
 
 void iris_json_encode(const JsonType *t, const char *value, IrisString *out) {
+    /* room for a small object at once, instead of growing from 16 bytes */
+    if (out->cap - out->len < 128) {
+        const char *none = NULL;
+        stringGrow(out, &none, 128);
+    }
     jsonEncode(out, t, value);
 }
 
@@ -5659,22 +5675,6 @@ static int hexDigits(const char *p) {
 }
 
 /* A string, at the opening quote, into out (appended). */
-/* The first quote, backslash or control character from p on, or end. Eight
-   bytes are checked at a time while none of them is one. */
-static const char *jsonPlainEnd(const char *p, const char *end) {
-    const uint64_t ones = 0x0101010101010101ull, highs = 0x8080808080808080ull;
-    while (end - p >= 8) {
-        uint64_t w;
-        memcpy(&w, p, 8);
-        uint64_t q = w ^ (ones * '"'), b = w ^ (ones * '\\');
-        uint64_t hit = ((q - ones) & ~q) | ((b - ones) & ~b) | ((w - ones * 0x20) & ~w);
-        if (hit & highs) break;
-        p += 8;
-    }
-    while (p < end && *p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) p++;
-    return p;
-}
-
 static bool jsonString(JsonIn *in, IrisString *out) {
     in->p++;
     const char *start = in->p;

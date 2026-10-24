@@ -4,6 +4,7 @@
 // expect: big: v: 300 doesn't fit in i8
 // expect: neg: v: -1 doesn't fit in u32
 // expect: path: rows[1].v: expected a number, found a string
+// expect: {"s":"a\"b\\c\n\td\u0001e é","n":3}
 import json
 
 @json
@@ -34,6 +35,12 @@ struct Small {
 @json
 struct Unsigned {
     u32 v
+}
+
+@json
+struct Text {
+    str s
+    i64 n
 }
 
 @json
@@ -77,4 +84,6 @@ void main() {
         print("path: {e.message}")
         Table{}
     }
+    scoped String out = json.encode(Text{s: "a\"b\\c\n\td\x01e é", n: 3})
+    print(out)
 }
