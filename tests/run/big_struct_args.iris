@@ -1,0 +1,111 @@
+// expect: direct 10 caller 1
+// expect: method 11 caller 1
+// expect: value 12 caller 1
+// expect: wrapped 13 caller 1
+// expect: dyn 14 caller 1
+// expect: deep 55
+// expect: spawned 15 web
+// expect: thread 16 web
+// expect: loop 6
+// expect: returned 20 caller 1
+
+// More than 32 bytes: passed as a pointer to a copy of the caller's.
+struct Big {
+    i64 a
+    i64 b
+    i64 c
+    i64 d
+    i64 e
+    String name
+}
+
+i64 bump(Big x, i64 by) {
+    x.a += by
+    x.name.append("!")
+    return x.a
+}
+
+i64 Big.plus(Big other) {
+    other.a += self.e
+    return other.a
+}
+
+void show(Big x, str what) => print("{what} {x.a + 15} {x.name}")
+
+i64 deep(Big x, i64 n) {
+    if n == 0 {
+        return 0
+    }
+    x.a = n
+    return deep(x, n - 1) + x.a
+}
+
+Big again(Big x) {
+    x.a = 20
+    return x
+}
+
+interface Adder {
+    i64 add(Big x)
+}
+
+struct Plus {
+    i64 k
+}
+
+i64 Plus.add(Big x) {
+    x.a += self.k
+    return x.a
+}
+
+void note(Big x) => print("wrapped {x.a + 12} caller 1")
+
+!void each(!void(Big) f, Big x) {
+    try f(x)
+}
+
+chan[i64] done
+
+void worker(Big x, str what) {
+    print("{what} {x.a + 14} {x.name}")
+    done <- 1
+}
+
+void main() {
+    done = chan[i64](1)
+    Big b = Big{a: 1, name: "web".copy()}
+    defer b.name.free()
+    b.name.reserve(16)
+
+    print("direct {bump(b, 9)} caller {b.a}")
+    b.e = 10
+    print("method {b.plus(b)} caller {b.a}")
+    b.e = 0
+
+    i64(Big, i64) f = bump
+    print("value {f(b, 11)} caller {b.a}")
+    each(note, b) catch e { }
+
+    Plus p = Plus{k: 13}
+    dyn Adder d = &p
+    print("dyn {d.add(b)} caller {b.a}")
+
+    print("deep {deep(b, 10)}")
+
+    spawn worker(b, "spawned")
+    _ = <-done
+    t := thread show(b, "thread")
+    t.join()
+
+    i64 n = 0
+    for i in 0..3 {
+        Big c = b
+        c.a = i
+        n += bump(c, 1)
+    }
+    print("loop {n}")
+
+    r := again(b)
+    print("returned {r.a} caller {b.a}")
+    done.free()
+}

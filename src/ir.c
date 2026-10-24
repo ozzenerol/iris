@@ -405,8 +405,25 @@ static int dbgType(IR *ir, Type *t) {
 
 /* A named variable's stack slot, with what a debugger needs to find it.
  * arg is the parameter's position from 1, or 0 for a local. */
-static const char *varSlot(IR *ir, Type *t, Node *decl, int arg) {
-    const char *slot = allocaFor(ir, t, decl->name);
+/* Structs bigger than this go to an Iris function as a pointer to a copy
+ * that the caller makes and the function then owns: one copy, made with
+ * memory moves, in place of a value split across registers and stack. */
+static bool byRef(Type *t) { return t->kind == TY_STRUCT && t->laidOut && t->size > 32; }
+
+static const char *paramType(IR *ir, Type *t) { return byRef(t) ? "ptr" : llType(ir, t); }
+
+/* v passed for a parameter of type t: a big struct is stored in a slot of
+ * the caller's first */
+static const char *argValue(IR *ir, Type *t, Val v) {
+    if (!byRef(t)) return v.s;
+    const char *slot = allocaFor(ir, t, "arg");
+    ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, slot);
+    return slot;
+}
+
+/* The slot of a variable: a new one, or at, the copy a big struct parameter arrived in */
+static const char *varSlotAt(IR *ir, Type *t, Node *decl, int arg, const char *at) {
+    const char *slot = at ? at : allocaFor(ir, t, decl->name);
     if (ir->dbgScope && decl->name && strcmp(decl->name, "_") != 0) {
         int file = dbgFile(ir, ir->func->src->path);
         int ty = dbgType(ir, t);
@@ -420,6 +437,8 @@ static const char *varSlot(IR *ir, Type *t, Node *decl, int arg) {
     }
     return slot;
 }
+
+static const char *varSlot(IR *ir, Type *t, Node *decl, int arg) { return varSlotAt(ir, t, decl, arg, NULL); }
 
 /* A constant integer as LLVM writes it: the value sign-extended from the
  * type's width. */
@@ -667,7 +686,7 @@ static Val emitConvert(IR *ir, Node *e) {
         sbPrintf(x, "define internal i64 %s(", name);
         StrBuf args = {0};
         for (int i = 0; i < from->nelems; i++) {
-            const char *t = llType(ir, from->elems[i]);
+            const char *t = paramType(ir, from->elems[i]);
             sbPrintf(x, "%s%s %%a%d", i ? ", " : "", t, i);
             sbPrintf(&args, "%s%s %%a%d", i ? ", " : "", t, i);
         }
@@ -1664,8 +1683,8 @@ static Val emitBuiltin(IR *ir, Node *e) {
         sbPrintf(&fty, "%s (", llType(ir, ft->elem));
         for (int i = 0; i < e->list.len; i++) {
             Val v = emitExpr(ir, e->list.items[i]);
-            sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, ft->elems[i]), v.s);
-            sbPrintf(&fty, "%s%s", i ? ", " : "", llType(ir, ft->elems[i]));
+            sbPrintf(&args, "%s%s %s", i ? ", " : "", paramType(ir, ft->elems[i]), argValue(ir, ft->elems[i], v));
+            sbPrintf(&fty, "%s%s", i ? ", " : "", paramType(ir, ft->elems[i]));
         }
         sbPutc(&fty, ')');
         Val r;
@@ -1694,7 +1713,8 @@ static Val emitBuiltin(IR *ir, Node *e) {
         sbPrintf(&args, "ptr %s", data);
         for (int i = 1; i < e->list.len; i++) {
             Val v = emitExpr(ir, e->list.items[i]);
-            sbPrintf(&args, ", %s %s", llType(ir, m->list.items[i - 1]->type), v.s);
+            Type *pt = m->list.items[i - 1]->type;
+            sbPrintf(&args, ", %s %s", paramType(ir, pt), argValue(ir, pt, v));
         }
         Val r;
         if (m->type->kind == TY_VOID) {
@@ -1951,7 +1971,12 @@ static Val emitCall(IR *ir, Node *e) {
     for (int i = 0; i < e->list.len; i++) {
         Val v = emitExpr(ir, e->list.items[i]);
         if (i < d->list.len) {
-            sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, d->list.items[i]->type), v.s);
+            Type *pt = d->list.items[i]->type;
+            if (d->flags & F_EXTERN) {
+                sbPrintf(&args, "%s%s %s", i ? ", " : "", llType(ir, pt), v.s);
+            } else {
+                sbPrintf(&args, "%s%s %s", i ? ", " : "", paramType(ir, pt), argValue(ir, pt, v));
+            }
             continue;
         }
         /* an extra argument to C's ...: small integers and bool become int */
@@ -3371,6 +3396,11 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     StrBuf args = {0};
     for (int i = 0; i < n; i++) {
         sbPrintf(x, "  %%a%d.p = getelementptr %s, ptr %%env, i32 0, i32 %d\n", i, envTy, i + first);
+        bool ref = byRef(vals[i].t) && (indirect || !(d->flags & F_EXTERN));
+        if (ref) {
+            sbPrintf(&args, "%sptr %%a%d.p", i ? ", " : "", i);    /* the copy in env, freed after the call */
+            continue;
+        }
         sbPrintf(x, "  %%a%d = load %s, ptr %%a%d.p\n", i, llType(ir, vals[i].t), i);
         sbPrintf(&args, "%s%s %%a%d", i ? ", " : "", llType(ir, vals[i].t), i);
     }
@@ -3388,7 +3418,7 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     StrBuf fty = {0};
     if (indirect) {
         sbPrintf(&fty, "%s (", llType(ir, ret));
-        for (int i = 0; i < n; i++) sbPrintf(&fty, "%s%s", i ? ", " : "", llType(ir, vals[i].t));
+        for (int i = 0; i < n; i++) sbPrintf(&fty, "%s%s", i ? ", " : "", paramType(ir, vals[i].t));
         sbPutc(&fty, ')');
     } else {
         sbPuts(&fty, llType(ir, ret));
@@ -3660,6 +3690,13 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     sbPrintf(out, "define %s%s %s(", (f->flags & F_EXPORT) ? "" : "internal ", llType(ir, f->type), f->ir);
     for (int i = 0; i < f->list.len; i++) {
         Node *p = f->list.items[i];
+        if (byRef(p->type)) {
+            int64_t al = typeAlignOf(p->type);
+            sbPrintf(out, "%sptr noalias align %lld dereferenceable(%lld) %%p.%s", i ? ", " : "",
+                     (long long)(al < 8 ? al : 8), (long long)p->type->size, p->name);
+            p->ir = varSlotAt(ir, p->type, p, i + 1, fmt(ir, "%%p.%s", p->name));
+            continue;
+        }
         sbPrintf(out, "%s%s %%p.%s", i ? ", " : "", llType(ir, p->type), p->name);
         p->ir = varSlot(ir, p->type, p, i + 1);
         sbPrintf(&ir->allocas, "  store %s %%p.%s, ptr %s\n", llType(ir, p->type), p->name, p->ir);
