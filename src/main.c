@@ -11,6 +11,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 /* runtime/rt.c, turned into bytes by the Makefile */
 static const char runtimeSource[] = {
@@ -48,6 +51,8 @@ static void usage(FILE *out) {
           "  --pgo-gen       release builds: a program that records where it spends its\n"
           "                  time, in iris-pgo/ when it runs\n"
           "  --pgo=<path>    release builds: optimize with what --pgo-gen recorded\n"
+          "  --pgo           build: both steps at once; the bench blocks (or the test\n"
+          "                  blocks, when there are none) are what it records\n"
           "  -I <folder>      where C headers are, for import c\n"
           "  -l <library>     link a C library: -l sqlite3\n"
           "\n"
@@ -250,6 +255,21 @@ static int clangMajor(const char *cc, const char *dir) {
     return major;
 }
 
+/* Whether a program of this name is in PATH (or name is a path to one). */
+static bool onPath(const char *name) {
+    if (strchr(name, '/')) return access(name, X_OK) == 0;
+    const char *path = getenv("PATH");
+    char buf[4096];
+    while (path && *path) {
+        const char *end = strchr(path, ':');
+        size_t len = end ? (size_t)(end - path) : strlen(path);
+        snprintf(buf, sizeof buf, "%.*s/%s", (int)len, path, name);
+        if (len > 0 && access(buf, X_OK) == 0) return true;
+        path = end ? end + 1 : NULL;
+    }
+    return false;
+}
+
 /* Merges the profiles that --pgo names (a .profdata file is used as it
  * is; a folder or .profraw files are merged into dir) with the
  * llvm-profdata of the same version as clang. NULL when that fails. */
@@ -271,6 +291,7 @@ static const char *pgoProfile(const char *cc, const char *dir, char *buf, size_t
     }
     tries[ntries++] = "llvm-profdata";
     for (int i = 0; i < ntries; i++) {
+        if (!onPath(tries[i])) continue;
         char *argv[] = {(char *)tries[i], "merge", "-o", buf, (char *)gPgoUse, NULL};
         int rc = runCommand(argv, NULL, NULL);
         if (rc == 0) return buf;
@@ -286,6 +307,69 @@ static const char *pgoProfile(const char *cc, const char *dir, char *buf, size_t
 }
 
 static int runProgram(char **argv) { return runCommand(argv, NULL, NULL); }
+
+/* This iris, to run again for build --pgo. */
+static const char *selfPath(const char *argv0) {
+    static char buf[4096];
+#ifdef __APPLE__
+    uint32_t size = sizeof buf;
+    if (_NSGetExecutablePath(buf, &size) == 0) return buf;
+#else
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (n > 0) {
+        buf[n] = 0;
+        return buf;
+    }
+#endif
+    return argv0;
+}
+
+/* build --pgo: runs the program's bench blocks, or its test blocks when it
+ * has none, built with --pgo-gen, so their profile lands in dir. 0 when it
+ * did; a child that has nothing to run exits with 3 (see IRIS_PGO_RUN). */
+static int pgoRecord(char **argv, BuildMode mode, const char *path, const char **includes, int nincludes,
+                     const char **links, int nlinks, const char *dir) {
+    char prof[4200];
+    snprintf(prof, sizeof prof, "%s/%%p.profraw", dir);
+    setenv("LLVM_PROFILE_FILE", prof, 1);
+    setenv("IRIS_PGO_RUN", "1", 1);
+    const char *how[] = {"bench", "test"};
+    int rc = 3;
+    for (int k = 0; k < 2 && rc == 3; k++) {
+        char *args[160];
+        int n = 0;
+        args[n++] = (char *)selfPath(argv[0]);
+        args[n++] = (char *)how[k];
+        args[n++] = mode == MODE_RELEASE_SAFE ? "--mode=release-safe" : "--mode=release-fast";
+        args[n++] = "--pgo-gen";
+        if (k == 0) args[n++] = "--time=200ms";
+        char cpu[256];
+        if (gCpu) {
+            snprintf(cpu, sizeof cpu, "--cpu=%s", gCpu);
+            args[n++] = cpu;
+        }
+        for (int j = 0; j < nincludes; j++) {
+            args[n++] = "-I";
+            args[n++] = (char *)includes[j];
+        }
+        for (int j = 0; j < nlinks; j++) {
+            args[n++] = "-l";
+            args[n++] = (char *)links[j];
+        }
+        args[n++] = (char *)path;
+        args[n] = NULL;
+        rc = runCommand(args, "/dev/null", NULL);
+    }
+    unsetenv("LLVM_PROFILE_FILE");
+    unsetenv("IRIS_PGO_RUN");
+    if (rc == 3) {
+        fprintf(stderr, "iris: --pgo needs bench or test blocks to run; %s has none, so use --pgo-gen, "
+                        "run the program and build with --pgo=iris-pgo\n", path);
+    } else if (rc != 0) {
+        fputs("iris: --pgo: recording the profile failed\n", stderr);
+    }
+    return rc;
+}
 
 /* The folder that keeps compiled runtimes: $IRIS_PATH/rt or
  * ~/.cache/iris/rt, made when missing. False when it can't be. */
@@ -538,6 +622,7 @@ static long long parseBenchTime(const char *s) {
 static int cmdCompile(const char *cmd, int argc, char **argv) {
     bool bench = strcmp(cmd, "bench") == 0;
     BuildMode mode = bench ? MODE_RELEASE_FAST : MODE_DEBUG;
+    bool modeGiven = false, pgoAuto = false, targetGiven = false;
     const char *out = NULL, *path = NULL;
     const char *includes[64], *links[64];
     int nincludes = 0, nlinks = 0;
@@ -556,14 +641,18 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
                 fprintf(stderr, "iris: unknown mode %s\n", argv[i] + 7);
                 return 2;
             }
+            modeGiven = true;
         } else if (strncmp(argv[i], "--target=", 9) == 0) {
             if (!setTarget(argv[i] + 9)) {
                 fprintf(stderr, "iris: unknown target %s; the targets are x86_64-linux, aarch64-linux, "
                                 "x86_64-macos and aarch64-macos\n", argv[i] + 9);
                 return 2;
             }
+            targetGiven = true;
         } else if (strncmp(argv[i], "--cpu=", 6) == 0 && argv[i][6]) {
             gCpu = argv[i] + 6;
+        } else if (strcmp(argv[i], "--pgo") == 0 && strcmp(cmd, "build") == 0) {
+            pgoAuto = true;
         } else if (strcmp(argv[i], "--pgo-gen") == 0) {
             gPgoGen = true;
         } else if (strncmp(argv[i], "--pgo=", 6) == 0 && argv[i][6]) {
@@ -607,6 +696,27 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
         return 2;
     }
 
+    char pgoDir[4096] = "";
+    if (pgoAuto) {
+        if (!modeGiven) {
+            mode = MODE_RELEASE_FAST;
+        } else if (mode == MODE_DEBUG) {
+            fputs("iris: --pgo is for release builds: --mode=release-fast or release-safe\n", stderr);
+            return 2;
+        }
+        if (targetGiven || gPgoGen || gPgoUse) {
+            fputs("iris: --pgo runs the program here, so it takes no --target, --pgo-gen or --pgo=\n", stderr);
+            return 2;
+        }
+        if (!makeTempDir(pgoDir, sizeof pgoDir)) {
+            return 1;
+        }
+        if (pgoRecord(argv, mode, path, includes, nincludes, links, nlinks, pgoDir) != 0) {
+            removeTree(pgoDir);
+            return 1;
+        }
+        gPgoUse = pgoDir;
+    }
     gTarget.mode = mode;
     Arena a = {0};
     Program *prog = frontEnd(&a, path, includes, nincludes);
@@ -616,6 +726,10 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     }
     if (strcmp(cmd, "check") == 0) {
         rc = 0;
+        goto done;
+    }
+    if (test && getenv("IRIS_PGO_RUN") && (bench ? prog->benches.len : prog->tests.len) == 0) {
+        rc = 3;     /* build --pgo: nothing to record here */
         goto done;
     }
     char *ir = writeIR(&a, prog, mode);
@@ -681,6 +795,7 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     }
     removeTree(dir);
 done:
+    if (pgoDir[0]) removeTree(pgoDir);
     arenaFree(&a);
     return rc;
 }

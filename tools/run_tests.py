@@ -31,6 +31,8 @@
                            stay as it is when formatted again
   fmt-std                  the standard library is in the standard layout
   get                      iris get with a local git repository (needs git)
+  pgo                      iris build --pgo with bench blocks, with test blocks
+                           and with neither (needs llvm-profdata)
   lsp                      tools/lsp_check.py: an editor session with iris lsp
   std/FILE                 a standard library file with test blocks: `iris test`
                            on it alone must pass, so such a file needs nothing
@@ -373,6 +375,39 @@ def get_test(iris, only, failures):
     return 1
 
 
+PGO_PROGRAMS = {
+    "bench": 'i64 sum(i64 n) {\n    i64 t = 0\n    for i in 0..n {\n        t += i % 7\n    }\n    return t\n}\n\n'
+             'bench "sum" {\n    _ = sum(1000)\n}\n\nvoid main() {\n    print("{sum(10)}")\n}\n',
+    "test": 'i64 sum(i64 n) => n * (n - 1) / 2\n\ntest "sum" {\n    expect(sum(4) == 6)\n}\n\n'
+            'void main() {\n    print("{sum(10)}")\n}\n',
+    "none": 'void main() {\n    print("hi")\n}\n',
+}
+
+
+def pgo_test(iris, only, failures, skipped):
+    """iris build --pgo records with the bench blocks, else the test
+    blocks, and refuses a program with neither"""
+    if only and not any(o in "pgo" for o in only):
+        return 0
+    got = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, text in PGO_PROGRAMS.items():
+            src = os.path.join(tmp, name + ".iris")
+            with open(src, "w") as f:
+                f.write(text)
+            exe = os.path.join(tmp, name)
+            p = subprocess.run([iris, "build", "--pgo", "-o", exe, src], capture_output=True, text=True, timeout=120)
+            if "needs llvm-profdata" in p.stderr:
+                skipped.append("pgo (no llvm-profdata)")
+                return 0
+            out = subprocess.run([exe], capture_output=True, text=True).stdout if p.returncode == 0 else ""
+            got[name] = (p.returncode, out, "has none" in p.stderr)
+    want = {"bench": (0, "24\n", False), "test": (0, "45\n", False), "none": (1, "", True)}
+    if got != want:
+        failures.append(("pgo", "want %r\ngot  %r" % (want, got)))
+    return 1
+
+
 def doc_tests(iris, only, failures):
     files = sorted(glob.glob(os.path.join(ROOT, "docs-src/**/*.md"), recursive=True))
     # "docs" runs every page's examples; "docs-src/tour/03" only that page's
@@ -512,6 +547,7 @@ def main():
     total += project_tests(args.iris, args.only, failures)
     total += mod_init_test(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
+    total += pgo_test(args.iris, args.only, failures, skipped)
     total += doc_tests(args.iris, args.only, failures)
     total += std_tests(args.iris, args.only, failures)
     total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")

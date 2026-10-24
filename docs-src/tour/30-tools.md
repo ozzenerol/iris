@@ -33,6 +33,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `--cpu=native` or a CPU's name | release builds use what that CPU has, such as AVX2; `native` is the building machine's CPU. The program may not run on older CPUs |
 | `--pgo-gen` | release builds: the program records where it spends its time, in the folder `iris-pgo` of wherever it runs |
 | `--pgo=iris-pgo` | release builds: optimised with what `--pgo-gen` recorded (a folder, `.profraw` files or a `.profdata` file) |
+| `--pgo` | `build` only: records a profile with the program's bench blocks and optimises with it, in one step |
 
 `iris bench` also takes `--time=1s`, how long each bench's last round takes. For `run`, `test` and `bench`, options go before the file. `build`, `check` and `ir` take them before or after it.
 
@@ -51,7 +52,19 @@ iris build main.iris -o server --mode=release-fast
 
 A debug build is many times slower than a release build, so measure speed with a release one. A release build optimises the program and the runtime together, so the runtime's small functions are inlined where they are called. With a linker that can't do that, it builds without it.
 
-To optimise with a profile, build with `--pgo-gen`, run the program on work like the real one, then build again with `--pgo`:
+A profile tells the optimiser which code runs most. `iris build --pgo` makes one and uses it in a single command:
+
+```shell
+iris build --pgo -o server main.iris
+iris build --pgo --mode=release-safe -o server main.iris
+```
+
+- It builds the bench blocks with `--pgo-gen` and runs each for 200ms, which records the profile.
+- A program with no bench blocks runs its test blocks instead. One with neither is an error.
+- Then it builds the program with that profile.
+- It builds with `release-fast` unless `release-safe` is given, and it takes no `--target`, since it runs the program on the machine that builds it.
+
+Bench blocks that do the same work as the real program give the best profile. When the real work can't be put in a bench block, such as a server under load, record the profile by hand. Build with `--pgo-gen`, run the program on work like the real one, then build again with `--pgo=`:
 
 ```shell
 iris build --mode=release-fast --pgo-gen -o server main.iris
