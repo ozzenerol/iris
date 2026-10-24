@@ -20,7 +20,7 @@ bundle() {
     tar --null -T - -czf -
 }
 
-steps='make clean >/dev/null && make && make iris-debug >/dev/null && python3 tools/run_tests.py && python3 tools/run_tests.py --iris ./iris-debug | tail -1'
+steps='set -o pipefail; make clean >/dev/null && make && make iris-debug >/dev/null && python3 tools/run_tests.py && python3 tools/run_tests.py --iris ./iris-debug | tail -1'
 
 run() {
   case "$1" in

@@ -1769,6 +1769,13 @@ static void runInChild(J *msg) {
     pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
+#ifdef __APPLE__
+        /* macOS drops the signal stack in a forked child, and ASan's
+           longjmp check then fails on the parser's error recovery */
+        static char altStack[1 << 16];
+        stack_t ss = {.ss_sp = altStack, .ss_size = sizeof altStack, .ss_flags = 0};
+        sigaltstack(&ss, NULL);
+#endif
         StrBuf out = {0};
         handleInChild(msg, &out);
         size_t off = 0;

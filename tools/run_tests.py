@@ -518,10 +518,13 @@ def main():
     total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
-        p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],
-                           capture_output=True, text=True, timeout=120)
-        if p.returncode != 0:
-            failures.append(("lsp", p.stdout + p.stderr))
+        try:
+            p = subprocess.run([sys.executable, os.path.join(ROOT, "tools/lsp_check.py"), args.iris],
+                               capture_output=True, text=True, timeout=120)
+            if p.returncode != 0:
+                failures.append(("lsp", p.stdout + p.stderr))
+        except subprocess.TimeoutExpired:
+            failures.append(("lsp", "no answer from iris lsp in 120s"))
 
     for name, why in failures:
         print("FAIL %s\n  %s" % (name, why.rstrip().replace("\n", "\n  ")))
