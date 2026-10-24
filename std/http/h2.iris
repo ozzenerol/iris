@@ -352,6 +352,9 @@ void Writer.handle(Out o) {
                     // connection is shut down
                     scoped String bye = goawayFrame(0, E_FLOW)
                     self.write(bye)
+                    // sent before the connection counts as broken, which
+                    // drops whatever is still to be written
+                    self.flush()
                     self.broken = true
                     self.conn.interrupt()
                 }

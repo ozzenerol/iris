@@ -1,0 +1,57 @@
+// expect: GOAWAY with FLOW_CONTROL_ERROR
+// expect: the server stopped
+import http, net
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hi")
+}
+
+void server(http.Router *r, net.Listener ln, chan[String] out) {
+    r.serveOn(ln) catch e {
+        out <- e.message.copy()
+        return
+    }
+    out <- "the server stopped".copy()
+}
+
+// A client that takes the connection's send window past 2^31-1 gets a
+// GOAWAY with FLOW_CONTROL_ERROR (RFC 9113 6.9.1) before the server closes.
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[String](1)
+    spawn server(&r, ln, done)
+
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    // the preface, an empty SETTINGS, and a WINDOW_UPDATE of 2^31-1 on
+    // stream 0 on top of the first 65535
+    u8[] frames = [
+        'P', 'R', 'I', ' ', '*', ' ', 'H', 'T', 'T', 'P', '/', '2', '.', '0', '\r', '\n', '\r', '\n', 'S', 'M', '\r', '\n', '\r', '\n',
+        0, 0, 0, 4, 0, 0, 0, 0, 0,
+        0, 0, 4, 8, 0, 0, 0, 0, 0, 0x7f, 0xff, 0xff, 0xff,
+    ]
+    try c.write(frames)
+    for {
+        scoped String head = c.readExactly(9) catch e {
+            print("closed without a GOAWAY")
+            break
+        }
+        i64 n = i64(head[0]) << 16 | i64(head[1]) << 8 | i64(head[2])
+        scoped String body = try c.readExactly(n)
+        if head[3] == 7 {
+            i64 code = i64(body[4]) << 24 | i64(body[5]) << 16 | i64(body[6]) << 8 | i64(body[7])
+            if code == 3 {
+                print("GOAWAY with FLOW_CONTROL_ERROR")
+            } else {
+                print("GOAWAY with code {code}")
+            }
+            break
+        }
+    }
+    r.shutdown(2s)
+    scoped String end = <-done
+    print(end)
+}
