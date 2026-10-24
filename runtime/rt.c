@@ -7243,9 +7243,19 @@ int iris_tls_close_write(void *ssl, int64_t timeout) {
    pipe with splice, so they never come up to the program. Each thread keeps
    a few empty pipes for it. A splice into a socket the other side closed
    raises SIGPIPE, which splice can't be told not to; a thread that splices
-   keeps SIGPIPE blocked from then on, and one that comes is taken back. */
+   keeps SIGPIPE blocked from then on, and one that comes is taken back.
+
+   A pipe is made 256 KiB (the default is 64 KiB), so a stream moves in
+   fewer, larger splices of 256 KiB. The kernel lets a user keep only so
+   many pages in pipes (fs/pipe-user-pages-soft, 64 MiB unless set), so at
+   most 128 pipes in the process are made larger; the others keep the
+   default size, as does one the kernel won't grow. */
 
 #ifdef __linux__
+#define PIPE_BIG (1 << 18)
+#define PIPE_BIG_MAX 128
+#define SPLICE_CHUNK (1 << 18)
+static _Atomic int pipesBig;
 static _Thread_local int pipeFree[16][2];
 static _Thread_local int pipeFreeN;
 static _Thread_local bool pipeBlocked;
@@ -7257,7 +7267,12 @@ static bool pipeGet(int p[2]) {
         p[1] = pipeFree[pipeFreeN][1];
         return true;
     }
-    return pipe2(p, O_NONBLOCK | O_CLOEXEC) == 0;
+    if (pipe2(p, O_NONBLOCK | O_CLOEXEC) != 0) return false;
+    if (atomic_fetch_add(&pipesBig, 1) < PIPE_BIG_MAX && fcntl(p[1], F_SETPIPE_SZ, PIPE_BIG) >= PIPE_BIG) {
+        return true;
+    }
+    atomic_fetch_sub(&pipesBig, 1);
+    return true;
 }
 
 static void pipePut(int p[2], bool empty) {
@@ -7267,6 +7282,7 @@ static void pipePut(int p[2], bool empty) {
         pipeFreeN++;
         return;
     }
+    if (fcntl(p[1], F_GETPIPE_SZ) >= PIPE_BIG) atomic_fetch_sub(&pipesBig, 1);
     close(p[0]);
     close(p[1]);
 }
@@ -7324,7 +7340,7 @@ int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limi
                     }
                     sigpipeQuiet();
                 }
-                size_t want = limit > 0 && limit - total < (1 << 16) ? (size_t)(limit - total) : (size_t)1 << 16;
+                size_t want = limit > 0 && limit - total < SPLICE_CHUNK ? (size_t)(limit - total) : SPLICE_CHUNK;
                 ssize_t n = splice(from, NULL, p[1], NULL, want, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
                 if (n == 0) break;
                 if (n < 0) {
