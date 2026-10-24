@@ -62,12 +62,30 @@ def lib_table(res):
         print(f"| {name} | {what} | {cells} | {rust} | {go} |")
 
 
+def cpu_table(res):
+    """The servers' CPU time per request or message: it shows how much work
+    a server does even when the load generator is what limits the rate."""
+    print("| Benchmark | Iris | Iris safe | Rust | Go |")
+    print("|---|--:|--:|--:|--:|")
+    for name, what in ROWS:
+        r = res.get(name)
+        if name not in NET or not r or "iris_cpu_ns" not in r:
+            continue
+        vals = [r.get(l + "_cpu_ns") for l in ("iris", "iris_safe", "rust", "go")]
+        best = min(v for v in vals if v)
+        cells = " | ".join(f"**{v:,}**" if v == best else f"{v:,}" for v in vals)
+        print(f"| {name} | {cells} |")
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a != "--lib"]
+    args = [a for a in sys.argv[1:] if a not in ("--lib", "--cpu")]
     data = json.load(open(args[0] if args else os.path.join(HERE, "results.json")))
     res = data["results"]
     if "--lib" in sys.argv:
         lib_table(res)
+        return
+    if "--cpu" in sys.argv:
+        cpu_table(res)
         return
     print("| Benchmark | What it does | Iris | Iris safe | Rust | Go | Memory, MiB: Iris / Rust / Go |")
     print("|---|---|--:|--:|--:|--:|--:|")
