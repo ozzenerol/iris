@@ -105,6 +105,13 @@ def load(name):
         return rate / 4
 
 
+def cpu_seconds(pid):
+    """User and system time of a process and all its threads."""
+    with open(f"/proc/{pid}/stat") as f:
+        fields = f.read().rsplit(")", 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
+
 def serve(binary, name):
     backend = None
     if name in ("tcp-proxy", "tcp-proxy-bulk"):
@@ -120,8 +127,13 @@ def serve(binary, name):
                         "http://127.0.0.1:9000/order"])
             if '"total"' not in check:
                 raise RuntimeError(f"{binary}: bad reply {check}")
+        cpu0 = cpu_seconds(p.pid)
         rate = load(name)
-        return rate, peak_mib(p.pid)
+        cpu = cpu_seconds(p.pid) - cpu0
+        # the server's CPU time for one request or message: it shows a gain
+        # even when the load generator is what limits the rate
+        ops = rate * (LOAD_TIME * 1024 * 1024 * 4 / (256 << 10) if name == "tcp-proxy-bulk" else LOAD_TIME)
+        return rate, peak_mib(p.pid), cpu / ops * 1e9 if ops else 0
     finally:
         p.send_signal(signal.SIGKILL)
         p.wait()
@@ -152,8 +164,10 @@ def main():
                 runs = [serve(b, n) for _ in range(max(1, a.runs // 2))]
                 r[lang] = round(statistics.median(x[0] for x in runs))
                 mem = statistics.median(x[1] for x in runs)
+                r[lang + "_cpu_ns"] = round(statistics.median(x[2] for x in runs))
             r[lang + "_mem"] = round(mem, 1)
-            print(f"{n:15} {lang:5} {r[lang]}  {r[lang + '_mem']} MiB", flush=True)
+            cpu = f"  {r[lang + '_cpu_ns']} ns CPU each" if lang + "_cpu_ns" in r else ""
+            print(f"{n:15} {lang:5} {r[lang]}  {r[lang + '_mem']} MiB{cpu}", flush=True)
         if (n in CPU or n in LIB) and len({r["iris_out"], r["rust_out"]}) != 1:
             print(f"warning: {n}: iris and rust print different results", flush=True)
         data["results"][n] = r
