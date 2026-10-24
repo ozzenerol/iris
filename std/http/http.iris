@@ -128,6 +128,19 @@ pub str Request.header(str name) {
     return ""
 }
 
+// Whether the request has a header of this name, even an empty one.
+bool Request.hasHeader(str name) {
+    rest := self.head
+    for rest.len > 0 {
+        n, _, after := nextHeader(rest)
+        if sameName(n, name) {
+            return true
+        }
+        rest = after
+    }
+    return false
+}
+
 // The first header line in rest, its name and value trimmed, and the lines
 // after it. A line without a colon has the name "".
 (str, str, str) nextHeader(str rest) {
@@ -270,8 +283,35 @@ i64 headEnd(str b, i64 from) {
     return 0
 }
 
+// How the body of a request with these headers comes: its length from
+// Content-Length, or -1 when it comes in chunks. A request with both, with
+// a Transfer-Encoding other than chunked or with a length that isn't one
+// is refused, so a server behind a proxy can't be made to read part of a
+// body as a request of its own (RFC 9112 6.3).
+!i64 bodyLength(str length, str coding, bool hasLength) {
+    if coding.len > 0 {
+        if !sameName(str.trim(coding), "chunked") {
+            return error(HttpError.badRequest, "a Transfer-Encoding other than chunked: '{coding}'")
+        }
+        if hasLength {
+            return error(HttpError.badRequest, "both Content-Length and Transfer-Encoding")
+        }
+        return -1
+    }
+    if !hasLength {
+        return 0
+    }
+    n := str.parseInt(str.trim(length)) catch e {
+        return error(HttpError.badRequest, "a Content-Length that isn't a number: '{length}'")
+    }
+    if n < 0 {
+        return error(HttpError.badRequest, "a Content-Length that isn't a number: '{length}'")
+    }
+    return n
+}
+
 // Fills req from the head of a request, its fields pointing into head.
-// The body's length, from Content-Length.
+// The body's length as bodyLength gives it.
 !i64 parseHead(str head, Request *req, Limits *limits) {
     line, rest, _ := str.cut(head, "\n")
     line = str.trimSuffix(line, "\r")
@@ -284,7 +324,9 @@ i64 headEnd(str b, i64 from) {
     req.path = borrow(path)
     req.head = rest
     req.views = true
-    i64 length = 0
+    str length = ""
+    str coding = ""
+    bool hasLength = false
     for rest.len > 0 {
         h, next, _ := str.cut(rest, "\n")
         if h.len > limits.maxHeader + 1 {
@@ -293,10 +335,57 @@ i64 headEnd(str b, i64 from) {
         name, value, _ := nextHeader(rest)
         rest = next
         if name.len == 14 && sameName(name, "Content-Length") {
-            length = str.parseInt(value) catch 0
+            if hasLength && str.trim(value) != str.trim(length) {
+                return error(HttpError.badRequest, "two different Content-Lengths")
+            }
+            length = value
+            hasLength = true
+        } else if name.len == 17 && sameName(name, "Transfer-Encoding") {
+            coding = value
         }
     }
-    return length
+    return try bodyLength(length, coding, hasLength)
+}
+
+// Answers Expect: 100-continue, so the client sends the body.
+!void allowBody(net.Conn *c, Request *req) {
+    if sameName(req.header("Expect"), "100-continue") {
+        try c.write("HTTP/1.1 100 Continue\r\n\r\n")
+    }
+}
+
+// Reads a body sent in chunks into a String of the request's own, with
+// the trailer lines after it, which are dropped.
+!void readChunked(net.Conn *c, Request *req, Limits *limits) {
+    String body
+    errdefer body.free()
+    for {
+        scoped String sizeLine = try c.readLine(limits.maxHeader)
+        sizeText, _, _ := str.cut(sizeLine, ";")
+        size := hexNumber(str.trim(sizeText)) catch e {
+            return error(HttpError.badRequest, e.message)
+        }
+        if size == 0 {
+            break
+        }
+        if size > limits.maxBody - body.len {
+            return error(HttpError.tooBig, "a body of more than {limits.maxBody} bytes")
+        }
+        scoped String chunk = try c.readExactly(size)
+        body.append(chunk)
+        scoped String end = try c.readLine(limits.maxHeader)
+        if end.len != 0 {
+            return error(HttpError.badRequest, "a chunk longer than its size")
+        }
+    }
+    for {
+        scoped String trailer = try c.readLine(limits.maxHeader)
+        if trailer.len == 0 {
+            break
+        }
+    }
+    req.body.free()
+    req.body = body
 }
 
 // Reads one request, which points into the connection's buffer when it
@@ -331,9 +420,21 @@ i64 headEnd(str b, i64 from) {
     if length > limits.maxBody {
         return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
     }
-    if length <= 0 {
+    if length < 0 {
+        // the body comes in chunks: the request gets copies of its head,
+        // as reading the chunks moves the buffer
+        req.keep()
+        c.skip(end)
+        try allowBody(c, req)
+        try readChunked(c, req, limits)
+        return true
+    }
+    if length == 0 {
         c.skip(end)
         return true
+    }
+    if c.buffered().len < end + length {
+        try allowBody(c, req)
     }
     if end + length > c.bufferSize() {
         req.head = ""
@@ -385,11 +486,16 @@ i64 headEnd(str b, i64 from) {
             req.addHeader(str.trim(name), str.trim(value))
         }
     }
-    length := str.parseInt(req.header("Content-Length")) catch 0
+    length := try bodyLength(req.header("Content-Length"), req.header("Transfer-Encoding"),
+        req.hasHeader("Content-Length"))
     if length > limits.maxBody {
         return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
     }
-    if length > 0 {
+    if length < 0 {
+        try allowBody(c, req)
+        try readChunked(c, req, limits)
+    } else if length > 0 {
+        try allowBody(c, req)
         req.body = try c.readExactly(length)
     }
     return true
@@ -579,7 +685,7 @@ void serveConn(net.Conn conn, Target target) {
             } else if e.code == HttpError.tooBig {
                 refuse(&conn, 413, "the body is too large")
             } else if e.code == HttpError.badRequest {
-                refuse(&conn, 400, "the request line isn't HTTP/1.1")
+                refuse(&conn, 400, e.message)
             }
             return
         }
@@ -1497,6 +1603,9 @@ pub void Client.close() {
         d := if ch >= '0' && ch <= '9' { i64(ch - '0') } else if ch >= 'a' && ch <= 'f' { i64(ch - 'a') + 10 } else if ch >= 'A' && ch <= 'F' { i64(ch - 'A') + 10 } else { -1 }
         if d < 0 {
             return error(HttpError.badReply, "a chunk size that isn't hex: '{s}'")
+        }
+        if v > (1 << 55) {
+            return error(HttpError.badReply, "a chunk size too large: '{s}'")
         }
         v = v * 16 + d
     }

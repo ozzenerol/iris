@@ -1,0 +1,92 @@
+// expect: chunked: HTTP/1.1 200 OK [got 14 bytes: hello, chunks!]
+// expect: then: HTTP/1.1 200 OK [got 0 bytes:]
+// expect: both lengths: HTTP/1.1 400 Bad Request [both Content-Length and Transfer-Encoding]
+// expect: gzip: HTTP/1.1 400 Bad Request [a Transfer-Encoding other than chunked: 'gzip']
+// expect: bad length: HTTP/1.1 400 Bad Request [a Content-Length that isn't a number: '1x']
+// expect: two lengths: HTTP/1.1 400 Bad Request [two different Content-Lengths]
+// expect: bad size: HTTP/1.1 400 Bad Request [a chunk size that isn't hex: 'q']
+// expect: too big: HTTP/1.1 413 Content Too Large [the body is too large]
+// expect: expect: HTTP/1.1 100 Continue
+// expect: expect then: HTTP/1.1 200 OK [got 4 bytes: ping]
+// expect: the server stopped
+import http, net, str
+
+void echo(http.Request *req, http.Response *res) {
+    res.text("got {req.body.len} bytes: {req.body}")
+}
+
+void server(http.Router *r, net.Listener ln, chan[String] out) {
+    r.serveOn(ln) catch e {
+        out <- e.message.copy()
+        return
+    }
+    out <- "the server stopped".copy()
+}
+
+// Reads one answer: its status line and its body.
+!String answer(net.Conn *c) {
+    scoped String status = try c.readLine()
+    i64 length = 0
+    for {
+        scoped String h = try c.readLine()
+        if h.len == 0 {
+            break
+        }
+        name, value, _ := str.cut(h, ":")
+        if str.lower(name) == "content-length" {
+            length = try str.parseInt(str.trim(value))
+        }
+    }
+    scoped String body = try c.readExactly(length)
+    return format("{status} [{str.trim(body)}]")
+}
+
+!void ask(str name, u16 port, str request) {
+    c := try net.dial("127.0.0.1", port)
+    defer c.close()
+    try c.write(request)
+    scoped String a = try answer(&c)
+    print("{name}: {a}")
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.maxBody = 1000
+    r.post("/echo", echo)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[String](1)
+    spawn server(&r, ln, done)
+
+    // a body in chunks, with an extension and a trailer, and a request after it
+    c := try net.dial("127.0.0.1", ln.port)
+    try c.write("POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n7;x=1\r\nhello, \r\n7\r\nchunks!\r\n0\r\nX-Sum: 1\r\n\r\n")
+    try c.write("POST /echo HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+    scoped String one = try answer(&c)
+    print("chunked: {one}")
+    scoped String two = try answer(&c)
+    print("then: {two}")
+    c.close()
+
+    try ask("both lengths", ln.port, "POST /echo HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+    try ask("gzip", ln.port, "POST /echo HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n")
+    try ask("bad length", ln.port, "POST /echo HTTP/1.1\r\nContent-Length: 1x\r\n\r\n")
+    try ask("two lengths", ln.port, "POST /echo HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab")
+    try ask("bad size", ln.port, "POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nq\r\n")
+    try ask("too big", ln.port, "POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n800\r\n")
+
+    // Expect: 100-continue: the body is sent after the server says so
+    e := try net.dial("127.0.0.1", ln.port)
+    try e.write("POST /echo HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n")
+    scoped String go = try e.readLine()
+    scoped String blank = try e.readLine()
+    print("expect: {go}")
+    try e.write("ping")
+    scoped String after = try answer(&e)
+    print("expect then: {after}")
+    e.close()
+
+    r.shutdown(2s)
+    scoped String end = <-done
+    print(end)
+}
