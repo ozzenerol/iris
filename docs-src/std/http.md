@@ -1,6 +1,8 @@
 ## A server with a Router
 
-A `Router` sends each request to the handler for its method and path. `:name` in a path takes one part of it, and `*name` the rest; the handler reads them with `req.param`. `r.serve(8080)` answers on port 8080 until the program is stopped, with every CPU core. Here the server listens on a port the system picks, in a task, and the same program asks it with the client:
+A `Router` sends each request to the handler for its method and path. In a pattern, `:name` takes one part of the path and `*name` takes the rest. The handler reads them with `req.param`. `r.serve(8080)` answers on port 8080 with every CPU core until the program is stopped.
+
+Here the server listens in a task on a port the system picks, and the same program calls it with the client:
 
 ```iris run
 import http, net
@@ -25,15 +27,18 @@ void serve(http.Router *r, net.Listener ln) {
     defer r.free()
     r.get("/hello/:name", hello)
     r.post("/items", addItem)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
     scoped String a = format("http://127.0.0.1:{ln.port}/hello/ada")
     scoped http.Reply one = try http.get(a)
     print("{one.status} {one.body} ({one.header("Content-Type")})")
+
     scoped String b = format("http://127.0.0.1:{ln.port}/items")
     scoped http.Reply two = try http.post(b, "text/plain", "pear")
     print("{two.status} {two.body}")
+
     scoped String c = format("http://127.0.0.1:{ln.port}/nope")
     scoped http.Reply three = try http.get(c)
     print("{three.status}")
@@ -46,15 +51,22 @@ void serve(http.Router *r, net.Listener ln) {
 404
 ```
 
-Each connection gets a task of its own, so a handler can wait for a database or another server while the others go on. A path no pattern has gets 404, and a path that is there for other methods gets 405. When several patterns match, the one with the most fixed parts wins. A handler that returns an error is answered with 500 and the error's message. `res.error(404, "no such user")` answers with a status and a message, and `res.header` adds a header.
+Each connection gets a task of its own, so a handler can wait for a database or another server while the others go on.
+
+- A path that no pattern matches gets 404. A path that exists only for other methods gets 405.
+- When several patterns match, the one with the most fixed parts wins.
+- A handler that returns an error is answered with 500 and the error's message.
+- `res.error(404, "no such user")` answers with a status and a message. `res.header` adds a header.
 
 ## What a request holds
 
-`req.method`, `req.path` and `req.body` are the request's parts. `req.route()` is the path without its query, `req.query("page")` a value from the query, decoded, and `req.header("Authorization")` a header, by its name in any case. `req.remote` is the address the request came from, a `net.Addr`. Behind a proxy it is the proxy's, and the client's is in a header such as `X-Forwarded-For`.
+`req.method`, `req.path` and `req.body` are the request's parts. `req.route()` is the path without its query. `req.query("page")` gives a decoded value from the query, and `req.header("Authorization")` a header by its name, in any case.
+
+`req.remote` is the `net.Addr` the request came from. Behind a proxy it is the proxy's address, and the client's address is in a header such as `X-Forwarded-For`.
 
 ## Checks and logging
 
-`use` runs a check before the handlers, on every path or the ones that start with a prefix. A check that answers the request itself returns `false`, and the handler isn't called. `after` runs after each request, for logging:
+`use` runs a check before the handlers, on every path or on the paths that start with a prefix. A check that answers the request itself returns `false`, and the handler isn't called. `after` runs after each request, for logging:
 
 ```iris
 bool needKey(http.Request *req, http.Response *res) {
@@ -72,18 +84,20 @@ void logLine(http.Request *req, http.Response *res) {
 !void main() {
     http.Router r
     defer r.free()
+
     r.use(needKey, "/admin")
     r.after(logLine)
     r.get("/admin/stats", stats)
+
     try r.serve(8080)
 }
 ```
 
-The Router's fields set its limits: `timeout` for a slow client, `maxBody` and `maxHeader` for the size of a request, and `gzip` to compress replies for clients that take it. `shutdown` stops taking new connections and waits for the requests that are running.
+The Router's fields set its limits. `timeout` is for a slow client, `maxBody` and `maxHeader` limit the size of a request, and `gzip` compresses replies for clients that accept it. `shutdown` stops taking new connections and waits for the running requests.
 
 ## HTTPS and HTTP/2
 
-`serveTls` takes a certificate file and its key, in PEM. Clients that offer HTTP/2 get it; the others get HTTP/1.1. The client does the same for `https://` addresses:
+`serveTls` takes a certificate file and its key, in PEM. Clients that offer HTTP/2 get it, and the others get HTTP/1.1. The client does the same for `https://` addresses:
 
 ```iris
 try r.serveTls(8443, "cert.pem", "key.pem")
@@ -91,12 +105,13 @@ try r.serveTls(8443, "cert.pem", "key.pem")
 
 ## A client that keeps connections
 
-`http.get`, `post` and `send` open a connection for each request. A `Client` keeps them open between requests, so a program that makes many calls to one host is faster with one. It can be shared by tasks and threads:
+`http.get`, `post` and `send` open a connection for each request. A `Client` keeps connections open between requests, which makes many calls to one host faster. Tasks and threads can share one:
 
 ```iris
 http.Client c
 defer c.close()
 c.timeout = 10s
+
 for id in ids {
     scoped String url = format("https://api.example.com/items/{id}")
     scoped http.Reply r = try c.get(url)
@@ -106,7 +121,7 @@ for id in ids {
 
 ## WebSockets
 
-`r.websocket(path, handler)` answers WebSockets at a path; the handler gets the open socket and reads and sends messages until it returns. `http.dialWebSocket` opens one as a client:
+`r.websocket(path, handler)` answers WebSockets at a path. The handler gets the open socket and reads and sends messages until it returns. `http.dialWebSocket` opens one as a client:
 
 ```iris
 !void echo(http.WebSocket *ws, http.Request *req) {

@@ -1,10 +1,10 @@
 # Compile time
 
-Work the compiler does while it builds the program: constants, values worked out by running code before the program exists, and code that is kept or left out by the platform it is built for. There is no preprocessor and no macros; all of this is ordinary Iris.
+The compiler can do work while it builds the program: constants, values computed by running code before the program exists, and code kept or left out by the platform it is built for. There is no preprocessor and there are no macros. All of this is ordinary Iris.
 
 ## const
 
-A `const` is a value worked out when compiling, from numbers, text, other constants and operators on them:
+A `const` is a value worked out at compile time from numbers, text, other constants and operators on them:
 
 ```iris run
 const KiB = 1024
@@ -40,7 +40,7 @@ void main() {
 39.47841760435743 365.24 6.283185307179586
 ```
 
-Text with values in braces can be a constant too, when every value is a constant number, `bool` or text. The text is put together when compiling, and the constant is a `str`. The text can be written as it is, or given to `format` or `str.format`:
+Text with values in braces can be a constant too, when every value is a constant number, `bool` or text. The text is put together at compile time, and the constant is a `str`. The text can be written as it is or given to `format` or `str.format`:
 
 ```iris run
 import str
@@ -61,9 +61,9 @@ https://api.example.com/v2
 edge/2 (+https://api.example.com)
 ```
 
-A `Duration`, an enum or a struct can't go into a constant's text; a `comptime` constant can build that text (see below).
+A `Duration`, an enum or a struct can't go into a constant's text. A `comptime` constant can build that text (see below).
 
-A constant has no address and takes no memory: each use is the value itself. It can be used where a value must be known when compiling: an array's size, a parameter's default, a field's default, a global's first value, a `match` arm.
+A constant has no address and takes no memory. Each use is the value itself. It can be used where a value must be known at compile time: an array's size, a parameter's default, a field's default, a global's first value or a `match` arm.
 
 ```iris run
 const WORKERS = 4
@@ -82,11 +82,12 @@ void main() {
 
 ## comptime
 
-`comptime` runs a function while compiling and puts its result into the program, as a constant. The function is ordinary Iris, with loops, `List`s and the standard library:
+`comptime` runs a function at compile time and puts its result into the program as a constant. The function is ordinary Iris, with loops, `List`s and the standard library:
 
 ```iris run
 u32[256] makeCrcTable() {
     u32[256] table
+
     for i in 0..256 {
         u32 c = u32(i)
         for _ in 0..8 {
@@ -94,6 +95,7 @@ u32[256] makeCrcTable() {
         }
         table[i] = c
     }
+
     return table
 }
 
@@ -116,7 +118,7 @@ void main() {
 907060870
 ```
 
-The table is worked out once, when building, and is part of the program's read-only memory: running the program costs nothing for it. `comptime` goes in a `const` at the top of a file, and takes the whole expression after it.
+The table is worked out once, at build time, and is part of the program's read-only memory, so it costs nothing at run time. `comptime` goes in a `const` at the top of a file and takes the whole expression after it.
 
 What it can give:
 
@@ -125,13 +127,14 @@ What it can give:
 | a number, `bool`, `str`, `String` or a plain enum | a constant like one written out (a `String` becomes a `str`) |
 | an array, or a `@json` struct, of those | a global that can't be changed |
 
-Pointers and slices can't come out of `comptime`, since what they point to stays behind in the compiler. What the code prints shows while compiling, after `comptime:`, and a panic in it stops the build with its message.
-
-The compiler builds the code it needs into a small program, runs it on the machine that builds, and reads the values back. A comptime constant can be used by the program and by other constants, but not by the code of another comptime constant.
+- Pointers and slices can't come out of `comptime`, since what they point to stays behind in the compiler.
+- What the code prints shows at compile time, after `comptime:`. A panic in it stops the build with its message.
+- The compiler builds the code it needs into a small program, runs it on the build machine and reads the values back.
+- A comptime constant can be used by the program and by other constants. The code of another comptime constant can't use it.
 
 ## when
 
-`when` keeps code only when a condition known when compiling is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:
+`when` keeps code only when a condition known at compile time is true. The other branches are not checked or compiled, so they can use names that exist only on another platform:
 
 ```iris run
 when os == .linux {
@@ -146,6 +149,7 @@ void main() {
     } else {
         print("a release build")
     }
+
     when arch == .x86_64 || arch == .arm64 {
         print("64-bit, on {if OS_NAME.len > 0 { "a known system" } else { "?" }}")
     }
@@ -157,7 +161,7 @@ a debug build
 64-bit, on a known system
 ```
 
-`when` works around statements inside functions, and around declarations at the top of a file. It can test three names:
+`when` works around statements inside functions and around declarations at the top of a file. It can test three names:
 
 | Name | Values |
 |---|---|
@@ -169,4 +173,4 @@ Conditions join with `&&`, `||` and `!`, and compare with `==` and `!=`. The val
 
 ## Attributes
 
-Attributes, written with `@` before a declaration, are the other part of compile-time work: they make the compiler write code for the program. The next chapter covers them.
+Attributes, written with `@` before a declaration, are the other part of compile-time work. They make the compiler write code for the program. The next chapter covers them.

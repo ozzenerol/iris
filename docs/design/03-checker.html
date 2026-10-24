@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The checker - Iris</title>
+<meta name="description" content="How src/check.c resolves names, works out types, lays out structs, makes generic instances and runs comptime.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html" class="on">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.69.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html" class="on"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></aside>
+  <article class="prose">
+<h1>The checker</h1>
+<p class="lede">How <code>src/check.c</code> resolves names, works out types, lays out structs, makes generic instances and runs comptime.</p>
+<h2 id="what-it-takes-and-gives"><a href="#what-it-takes-and-gives">What it takes and gives</a></h2>
+<p><code>checkProgram(Arena *, Program *)</code> takes the parsed modules and fills in the second half of every <code>Node</code>: <code>type</code>, <code>ref</code>, <code>isConst</code> and <code>cval</code>, <code>builtin</code>, <code>scope</code> and <code>module</code>. It also lays out every struct and adds the copies of generic code to <code>Program.instances</code>. It returns false after errors. The tree it leaves is what the IR writer reads. There is no separate lowered form.</p>
+<p>Type checking is a pass of its own, after parsing. A compiler that checks while it parses often meets half a declaration when it needs all of it.</p>
+<p>Most compile errors come from here: an unknown name, a wrong type, an error that is not handled, a <code>match</code> that misses an enum case. <code>error(c, node, ...)</code> reports at a node's place through <code>errorAt</code> in <code>src/diag.c</code>, which prints the file, line and column, the source line, and a mark under the problem:</p>
+<pre class="out"><code>main.iris:3:11: error: x is not declared
+    print(&quot;{x}&quot;)
+            ^</code></pre>
+<p>The checker reports every error it finds in one run, and the compiler stops before writing any IR. The type <code>tyError</code> fits anywhere, so one mistake doesn't produce a cascade of follow-up errors.</p>
+<h2 id="the-passes"><a href="#the-passes">The passes</a></h2>
+<p><code>checkProgram</code> walks all top-level declarations several times, in this order:</p>
+<ol><li>Every module gets a <code>Scope</code> for its names, with <code>core</code>'s scope as its parent. Every file gets a scope for its imports, with the module's scope as its parent.</li><li><code>expandWhens</code> keeps only the chosen branch of each top-level <code>when</code> (<code>os</code>, <code>arch</code> and <code>mode</code>, from <code>gTarget</code>), so code for other platforms is never checked. <code>expandTests</code> turns <code>test</code> and <code>bench</code> blocks of the program's own module into functions (<code>F_TESTFN</code>, <code>F_BENCH</code>) when <code>gWithTests</code> is set, and drops them otherwise.</li><li><code>declareGlobal</code> adds each function, constant, global, struct, enum, interface and type alias to its module's scope.</li><li><code>qualify</code> rewrites <code>fs.readAll</code> into one <code>N_IDENT</code> named <code>&quot;fs.readAll&quot;</code>. It checks that the name exists in the module and is <code>pub</code>.</li><li>Methods are attached to their struct's <code>Type.methods</code>, so interfaces can see them. Methods of generic structs go to <code>genericMethods</code> and wait for instances.</li><li>Structs are resolved (<code>resolveStruct</code>, which calls <code>layoutStruct</code>), enums get their <code>Type</code> (<code>enumType</code>), and type aliases are resolved.</li><li><code>checkSignature</code> resolves every function's parameter and return types.</li><li>Field defaults and then constants and globals are checked (<code>checkFieldDefault</code>, <code>checkConstDecl</code>, <code>checkGlobalValue</code>). Constants are folded by <code>evalConst</code>.</li><li><code>checkFunctionBody</code> checks every non-generic function body.</li><li>The queue of generic instance bodies is drained. Checking one body can add more instances, so the loop runs until the queue is empty.</li><li><code>main</code> must exist (except for <code>iris test</code> and the comptime helper), take no parameters and return <code>void</code>, <code>i32</code> or <code>!void</code>.</li></ol>
+<p>Inside a body, <code>checkStmt</code> handles statements and <code>checkExpr</code> handles expressions. <code>checkExpr(c, &amp;slot, expected)</code> takes a pointer to the slot that holds the expression, because it may replace the node, for example with an <code>N_CONVERT</code>. <code>expected</code> carries the type the context wants, which literals such as <code>.red</code>, <code>[]</code> and <code>{...}</code> need.</p>
+<h2 id="scopes-and-names"><a href="#scopes-and-names">Scopes and names</a></h2>
+<p>A <code>Scope</code> is an array of <code>Sym { name, decl }</code> with a parent pointer. <code>lookup</code> walks up from the current scope. Local scopes are pushed for each block (<code>pushScope</code>). <code>declareLocal</code> refuses a name that hides another one in the same function. Each top-level declaration remembers its file's scope in <code>Node.scope</code>, and <code>enter(c, decl)</code> switches the checker to that scope, module and file before it looks at the declaration.</p>
+<p>A resolved name points at its declaration through <code>Node.ref</code>. The IR writer only follows <code>ref</code> and never looks names up again.</p>
+<h2 id="types"><a href="#types">Types</a></h2>
+<p><code>Type</code> in <code>src/iris.h</code> describes a resolved type. <code>kind</code> is a <code>TypeKind</code>:</p>
+<ul><li><code>TY_INT</code> (with <code>bits</code> and <code>isSigned</code>), <code>TY_FLOAT</code>, <code>TY_BOOL</code>, <code>TY_VOID</code>, <code>TY_NORETURN</code> (a block that always leaves) and <code>TY_NULL</code>.</li><li><code>TY_PTR</code>, <code>TY_SLICE</code> and <code>TY_ARRAY</code>, with <code>elem</code> and, for arrays, <code>count</code>. <code>str</code> is the slice of <code>u8</code>.</li><li><code>TY_STRUCT</code>, with <code>decl</code> (the <code>N_STRUCT</code>), <code>methods</code>, and after layout <code>size</code>, <code>align</code> and the LLVM <code>slots</code> with padding.</li><li><code>TY_STRING</code>, the built-in <code>String</code>.</li><li><code>TY_ENUM</code>, with <code>hasData</code>, <code>isFlags</code> and <code>payload</code>, the bytes of room for the largest value's data.</li><li><code>TY_RESULT</code> for <code>!T</code>, with <code>elem</code> set to <code>T</code>, and <code>TY_ERRVAL</code> and <code>TY_ERRCODE</code> for <code>Error</code> and <code>e.code</code>.</li><li><code>TY_TUPLE</code>, <code>TY_DYN</code>, <code>TY_FUNC</code>, <code>TY_CHAN</code>, <code>TY_ATOMIC</code>, <code>TY_MUTEX</code> and <code>TY_THREAD</code>.</li></ul>
+<p>Basic types are globals: <code>tyI64</code>, <code>tyStr</code>, <code>tyString</code>, <code>tyBool</code> and the rest. Compound types are made by <code>compound</code>, <code>funcOf</code> and <code>tupleOf</code>, which reuse an existing type when one matches. Two types are the same when <code>sameType</code> says so.</p>
+<p><code>coerce</code> is the one place where a value is fitted to a type. It narrows integer constants that fit, turns integer constants into floats, widens numbers without loss, turns a <code>String</code> into a <code>str</code> and an array into a slice, and inserts <code>N_CONVERT</code> nodes. Everything else is an error that names both types.</p>
+<p><code>layoutStruct</code> places fields in order with C's padding, honors <code>packed</code> and <code>align(n)</code>, packs runs of bitfields into one integer of their type, and records each field's <code>slot</code>, <code>offset</code>, <code>bitOff</code> and <code>bitWidth</code>. <code>typeSizeOf</code>, <code>typeAlignOf</code> and <code>fieldOffset</code> give the result to the IR writer.</p>
+<h2 id="calls"><a href="#calls">Calls</a></h2>
+<p><code>checkCall</code> works out what a call is and records it in <code>Node.builtin</code>:</p>
+<ul><li><code>BI_NONE</code> is a call to an Iris function, with <code>ref</code> pointing at it.</li><li><code>BI_PRINT</code>, <code>BI_FORMAT</code>, <code>BI_ALLOC</code>, <code>BI_ERROR</code> and the others are built-ins the IR writer writes inline.</li><li><code>BI_DYN_CALL</code> is a call through a <code>dyn</code> value, with <code>ival</code> holding the method's place in the interface.</li><li><code>BI_INDIRECT</code> is a call through a function value.</li></ul>
+<p><code>checkArgs</code> matches arguments with parameters: named arguments, defaults and a <code>T...</code> rest parameter. A method call on <code>str</code> or <code>String</code> looks the function up in the <code>str</code> module (<code>textMethod</code>).</p>
+<p>Text with values passed straight to a <code>str</code> parameter gets <code>F_TEMPTEXT</code>, and a <code>String</code> returned by a call and passed as a <code>str</code> gets <code>F_TEMPSTR</code>. The IR writer frees both when the statement ends. <code>checkTempResult</code> rejects a call that gets such a temporary and returns a <code>str</code>, slice or pointer, because the result could point into the freed memory.</p>
+<h2 id="generics"><a href="#generics">Generics</a></h2>
+<p>A generic function or struct is never checked on its own. Each use with new types makes a copy:</p>
+<ol><li><code>checkGenericCall</code> takes explicit type arguments or works them out from the arguments (<code>infer</code>, which matches a parameter's type with an argument's type).</li><li><code>instantiateFunc</code> looks for an existing <code>Instance</code> with the same generic and the same types (<code>findInstance</code>). If there is none, it checks the bounds (<code>checkBounds</code>, which calls <code>conforms</code> for each <code>T: Interface</code>), copies the declaration with <code>cloneNode</code> from <code>src/generic.c</code>, and names the copy after its types: <code>max[Version]</code>.</li><li><code>paramScope</code> makes a scope where each type parameter is an <code>N_TYPE_PARAM</code> whose <code>type</code> is the given type. The copy's signature is checked in that scope, and its body is queued with <code>queueBody</code>.</li><li>The copy goes into <code>Program.instances</code> (<code>instOut</code>) with <code>F_INSTANCE</code> and a number of its own in <code>Node.inst</code>, so <code>List[Record]</code> from two modules with different <code>Record</code>s get different IR names.</li></ol>
+<p><code>instantiateStruct</code> does the same for <code>List[i64]</code>. <code>instantiateMethods</code> then copies each method of the generic struct for the instance, checks only its signature and marks it <code>F_LAZY</code>. The body is checked when the method is first called (<code>usedMethod</code>). Methods like <code>has</code> can use <code>==</code> without ruling out element types that have no <code>==</code>, and methods nobody calls cost nothing. A method with type parameters of its own is copied per call by <code>instantiateMethod</code>.</p>
+<p>An error inside a copy is reported in the generic code and followed by a line at the use that made the copy: <code>max[Version], made here, has the errors above</code>. Instances nested more than 64 deep stop with an error, which catches generic code that calls itself with ever new types.</p>
+<h2 id="comptime"><a href="#comptime">comptime</a></h2>
+<p><code>const X = comptime expr</code> runs Iris code while compiling. <code>frontEnd</code> in <code>src/main.c</code> handles it in two rounds:</p>
+<ol><li><code>comptimeHelperSource</code> in <code>src/comptime.c</code> finds every comptime constant at the top level of the program's own files. It writes a file with the same imports and a function <code>irisComptimeMain</code> that prints each value as <code>\x01 N \x02 json.encode(expr)</code> on a line of its own.</li><li><code>runComptime</code> loads the program again with that file added (<code>gExtraPath</code>, <code>gExtraText</code>) and sets <code>gComptime = 1</code>, so comptime constants are zero-valued stand-ins and code that uses them still checks. It builds the helper in debug mode for the machine the compiler runs on, runs it, and keeps each line's JSON keyed by the expression's place (<code>comptimeKey</code>, <code>file:line:col</code>). Other output is passed through with <code>comptime:</code> in front.</li><li>With <code>gComptime = 2</code>, <code>loadProgram</code> and <code>checkProgram</code> run again. <code>checkComptime</code> calls <code>comptimeLiteral</code>, which reads the JSON into a literal of the expression's type. Numbers, <code>bool</code>, text and plain enums become constants. Arrays and structs become read-only globals (<code>F_READONLY</code>), written as an LLVM <code>constant</code>.</li></ol>
+<p>Comptime code is ordinary Iris with the whole library. Nothing has to be interpreted inside the compiler.</p>
+    <nav class="pager"><a class="prev" href="02-front-end.html"><span>Previous</span>Loading and parsing</a><a class="next" href="04-ir.html"><span>Next</span>The IR writer</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#what-it-takes-and-gives">What it takes and gives</a></li><li><a href="#the-passes">The passes</a></li><li><a href="#scopes-and-names">Scopes and names</a></li><li><a href="#types">Types</a></li><li><a href="#calls">Calls</a></li><li><a href="#generics">Generics</a></li><li><a href="#comptime">comptime</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.69.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

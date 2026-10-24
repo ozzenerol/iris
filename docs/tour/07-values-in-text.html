@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Values in text - Iris</title>
-<meta name="description" content="Putting values into text with braces, the format function that keeps the result, and how the temporary text is freed for you.">
+<meta name="description" content="Interpolating values with braces, the format function, and how temporary text is freed.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,21 +46,22 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html" class="on"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Values in text</h1>
-<p class="lede">Putting values into text with braces, the <code>format</code> function that keeps the result, and how the temporary text is freed for you.</p>
+<p class="lede">Interpolating values with braces, the <code>format</code> function, and how temporary text is freed.</p>
 <h2 id="braces"><a href="#braces">Braces</a></h2>
-<p>A name or an expression in braces inside a string literal is replaced by its value, written as text:</p>
+<p>An expression in braces inside a string literal is replaced by its value as text:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     host := <span class="s">&quot;10.0.0.5&quot;</span>
     sent := <span class="n">3</span>
     rtt := <span class="n">4.5</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>sent<span class="e">}</span><span class="s"> pings to </span><span class="e">{</span>host<span class="e">}</span><span class="s">, </span><span class="e">{</span><span class="t">f64</span>(sent) * rtt<span class="e">}</span><span class="s">ms in all&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>sent &gt; <span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>sent * <span class="n">64</span><span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 pings to 10.0.0.5, 13.5ms in all
 true 192 bytes</code></pre>
-<p>The compiler checks every value in braces, with its type, as it checks any other expression. A brace on its own is written twice, <code>{{</code> and <code>}}</code>, and a raw string (<code>r&quot;...&quot;</code>) takes braces as they are.</p>
-<h2 id="what-can-be-put-into-text"><a href="#what-can-be-put-into-text">What can be put into text</a></h2>
-<div class="table"><table><thead><tr><th>Type</th><th>Written as</th></tr></thead><tbody><tr><td>integers</td><td>in decimal: <code>42</code>, <code>-7</code></td></tr><tr><td><code>f32</code>, <code>f64</code></td><td>the fewest digits that read back as the same number: <code>0.1</code>, <code>2.5e-8</code></td></tr><tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr><tr><td><code>str</code>, <code>String</code></td><td>the text itself</td></tr><tr><td><code>Duration</code></td><td>in units: <code>1.5s</code>, <code>2m0s</code>, <code>250ms</code></td></tr><tr><td>a plain enum</td><td>the value's name: <code>warn</code></td></tr><tr><td>a flags enum</td><td>the names that are set: <code>read|write</code></td></tr><tr><td>an enum with data</td><td>the value's name: <code>Closed</code></td></tr><tr><td>an error's code</td><td>the enum and the value: <code>NetError.timeout</code></td></tr><tr><td>a struct with <code>String format()</code></td><td>what the method gives</td></tr></tbody></table></div>
+<p>The compiler type-checks each expression in braces. Write a literal brace as <code>{{</code> or <code>}}</code>. A raw string (<code>r&quot;...&quot;</code>) keeps braces as they are.</p>
+<h2 id="what-can-be-interpolated"><a href="#what-can-be-interpolated">What can be interpolated</a></h2>
+<div class="table"><table><thead><tr><th>Type</th><th>Written as</th></tr></thead><tbody><tr><td>integers</td><td>decimal: <code>42</code>, <code>-7</code></td></tr><tr><td><code>f32</code>, <code>f64</code></td><td>shortest digits that read back the same: <code>0.1</code>, <code>2.5e-8</code></td></tr><tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr><tr><td><code>str</code>, <code>String</code></td><td>the text</td></tr><tr><td><code>Duration</code></td><td>in units: <code>1.5s</code>, <code>2m0s</code>, <code>250ms</code></td></tr><tr><td>plain enum</td><td>the value's name: <code>warn</code></td></tr><tr><td>flags enum</td><td>the set names: <code>read|write</code></td></tr><tr><td>enum with data</td><td>the variant's name: <code>Closed</code></td></tr><tr><td>error code</td><td>enum and value: <code>NetError.timeout</code></td></tr><tr><td>struct with <code>String format()</code></td><td>the method's result</td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">State</span> { connecting, open, closed }
 
 <span class="k">enum</span> <span class="t">Perm</span> flags { read, write, exec }
@@ -69,17 +69,19 @@ true 192 bytes</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">State</span> s = .open
     <span class="t">Perm</span> p = .read | .write
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> </span><span class="e">{</span>p<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1500ms</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">0.25</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="k">false</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>open read|write 1.5s 0.25 false</code></pre>
-<p>A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.</p>
-<h2 id="how-a-value-is-written"><a href="#how-a-value-is-written">How a value is written</a></h2>
-<p>A <code>:</code> after the value in the braces says how it is written: <code>{port:&gt;6}</code>. What follows the <code>:</code> is, in this order, each part optional:</p>
-<div class="table"><table><thead><tr><th>Part</th><th>What it does</th></tr></thead><tbody><tr><td>a fill character and <code>&lt;</code>, <code>&gt;</code> or <code>^</code></td><td>where the value goes in the width: left, right or centred; the fill is a space unless one is given before</td></tr><tr><td><code>+</code></td><td>a <code>+</code> before positive numbers</td></tr><tr><td><code>0</code></td><td>numbers padded with zeros after the sign</td></tr><tr><td>a width</td><td>at least this many characters; the rest is filled</td></tr><tr><td><code>.</code> and a number</td><td>for a float, the digits after the point; for text, the most characters kept</td></tr><tr><td><code>x</code>, <code>X</code>, <code>o</code> or <code>b</code></td><td>an integer in hex, upper-case hex, octal or binary</td></tr><tr><td><code>e</code> or <code>f</code></td><td>a float in exponent form or with a fixed point, 6 digits after it unless a precision is given</td></tr></tbody></table></div>
-<p>Numbers go to the right of the width and everything else to the left, unless the spec says another way. The width and the precision of text count characters, not bytes, so <code>Köln</code> is four wide:</p>
+<p>Pointers, arrays and slices other than bytes can't be interpolated. Use a loop or a method.</p>
+<h2 id="format-specs"><a href="#format-specs">Format specs</a></h2>
+<p>A <code>:</code> after the expression starts a spec: <code>{port:&gt;6}</code>. Its parts come in this order, each optional:</p>
+<div class="table"><table><thead><tr><th>Part</th><th>Effect</th></tr></thead><tbody><tr><td>fill character and <code>&lt;</code>, <code>&gt;</code> or <code>^</code></td><td>align left, right or centre in the width; fill defaults to a space</td></tr><tr><td><code>+</code></td><td><code>+</code> before positive numbers</td></tr><tr><td><code>0</code></td><td>pad numbers with zeros after the sign</td></tr><tr><td>width</td><td>minimum characters</td></tr><tr><td><code>.</code> and a number</td><td>digits after the point for floats; maximum characters for text</td></tr><tr><td><code>x</code>, <code>X</code>, <code>o</code>, <code>b</code></td><td>hex, upper-case hex, octal, binary</td></tr><tr><td><code>e</code>, <code>f</code></td><td>exponent or fixed-point float, 6 digits unless a precision is given</td></tr></tbody></table></div>
+<p>Numbers align right by default, everything else left. Width and precision count characters, so <code>Köln</code> is four wide.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span><span class="n">8080</span>:&gt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;GET&quot;</span>:&lt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;ok&quot;</span>:^<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="s">&quot;Köln&quot;</span>:*&gt;<span class="n">8</span><span class="e">}</span><span class="s">]&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">7</span>:<span class="n">03</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">42</span>:<span class="n">06</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">255</span>:x<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">255</span>:#&gt;6X<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">5</span>:08b<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">12</span>:+<span class="e">}</span><span class="s">&quot;</span>)
+
     loss := <span class="n">0.256789</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>loss:.<span class="n">2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>loss:.3e<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">2.5</span>:f<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1e-9</span>:e<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span><span class="s">&quot;ingress-controller&quot;</span>:.<span class="n">7</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="k">true</span>:&gt;<span class="n">6</span><span class="e">}</span><span class="s">] [</span><span class="e">{</span><span class="n">250ms</span>:&gt;<span class="n">8</span><span class="e">}</span><span class="s">]&quot;</span>)
@@ -88,9 +90,9 @@ true 192 bytes</code></pre>
 007 -00042 ff ####FF 00000101 +12
 0.26 2.568e-01 2.500000 1.000000e-09
 [ingress] [  true] [   250ms]</code></pre>
-<p>A width works with any value that can be put into text, a struct with a <code>format</code> method included. The other parts must fit the value: <code>{1.5:x}</code> and <code>{&quot;a&quot;:+}</code> don't compile. A <code>:</code> inside parentheses, brackets or quotes is part of the value, so <code>{pad(text, width: 4)}</code> and <code>{line[0:2]}</code> work as they read. A constant's text can't have a spec; use <code>format</code> when the program runs.</p>
+<ul><li>A width works on any value, including structs with <code>format</code>.</li><li>Other parts must fit the type: <code>{1.5:x}</code> and <code>{&quot;a&quot;:+}</code> don't compile.</li><li>A <code>:</code> inside parentheses, brackets or quotes belongs to the expression, so <code>{pad(text, width: 4)}</code> and <code>{line[0:2]}</code> work.</li><li>Text in a constant can't have a spec. Use <code>format</code> at run time.</li></ul>
 <h2 id="a-struct-s-own-text"><a href="#a-struct-s-own-text">A struct's own text</a></h2>
-<p>A struct with a method <code>String format()</code> can be put into text. The method gives the text, and the <code>String</code> it returns is freed after the statement:</p>
+<p>A struct with a method <code>String format()</code> can be interpolated. The returned <code>String</code> is freed after the statement.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Ip4</span> {
     <span class="t">u8</span>[<span class="n">4</span>] b
 }
@@ -108,38 +110,40 @@ true 192 bytes</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     gw := <span class="t">Ip4</span>{b: [<span class="n">192</span>, <span class="n">168</span>, <span class="n">1</span>, <span class="n">1</span>]}
     r := <span class="t">Route</span>{dest: <span class="t">Ip4</span>{b: [<span class="n">10</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>]}, prefix: <span class="n">8</span>, via: gw}
+
     <span class="f">print</span>(<span class="s">&quot;gateway </span><span class="e">{</span>gw<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;route </span><span class="e">{</span>r<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>gateway 192.168.1.1
 route 10.0.0.0/8 via 192.168.1.1</code></pre>
 <h2 id="format"><a href="#format">format</a></h2>
-<p><code>print</code> writes text with values to standard output. <code>format</code> builds the same text and gives it as a new <code>String</code>, which the caller frees:</p>
+<p><code>format</code> builds the same text as <code>print</code> and returns it as a new <code>String</code> for the caller to free:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     host := <span class="s">&quot;localhost&quot;</span>
     port := <span class="n">8080</span>
     <span class="k">scoped</span> <span class="t">String</span> address = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;listening on </span><span class="e">{</span>address<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>address.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>listening on localhost:8080
 14 bytes</code></pre>
-<p><code>str.format</code> is the same as <code>format</code>, by the <code>str</code> module's name.</p>
-<p><code>panic</code> takes the same text, and <code>io.eprint</code> writes it to standard error with a newline. <code>io.write</code> writes to standard output without one.</p>
-<h2 id="text-passed-straight-to-a-function"><a href="#text-passed-straight-to-a-function">Text passed straight to a function</a></h2>
-<p>Text with values can be given to any function that takes a <code>str</code>. It is built in a temporary <code>String</code>, which is freed when the statement ends:</p>
+<p><code>str.format</code> is the same function. <code>panic</code> takes the same text. <code>io.eprint</code> writes it to standard error with a newline, <code>io.write</code> to standard output without one.</p>
+<h2 id="text-passed-to-a-function"><a href="#text-passed-to-a-function">Text passed to a function</a></h2>
+<p>Interpolated text can go straight to any <code>str</code> parameter. It is built in a temporary <code>String</code> freed at the end of the statement:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">logLine</span>(<span class="t">str</span> s) {
     <span class="f">print</span>(<span class="s">&quot;[edge-1] </span><span class="e">{</span>s<span class="e">}</span><span class="s">&quot;</span>)
 }
 
 <span class="t">void</span> <span class="f">main</span>() {
     open := <span class="n">3</span>
+
     <span class="f">logLine</span>(<span class="s">&quot;</span><span class="e">{</span>open<span class="e">}</span><span class="s"> connections open&quot;</span>)
     <span class="f">logLine</span>(<span class="s">&quot;plain text&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[edge-1] 3 connections open
 [edge-1] plain text</code></pre>
-<p>A function that returns a new <code>String</code>, given straight to a function that takes a <code>str</code>, is freed after the statement too:</p>
+<p>A returned <code>String</code> passed straight to a <code>str</code> parameter is freed after the statement too:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -148,35 +152,36 @@ route 10.0.0.0/8 via 192.168.1.1</code></pre>
 }</code></pre>
 <pre class="out"><code>HTTP/1.1 200 OK
 ---------------</code></pre>
-<p>Anywhere else, text with values needs <code>format</code>, and a <code>String</code> from a call needs a variable. The temporary would otherwise be gone before it is used.</p>
-<p>A call that gives back a <code>str</code>, a slice or a pointer may give back part of what it was given. When that is a temporary, the result would point into text that is freed at the end of the statement, so the compiler doesn't allow it:</p>
+<p>Everywhere else, interpolated text needs <code>format</code> and a returned <code>String</code> needs a variable.</p>
+<p>A call that returns a <code>str</code>, slice or pointer may return part of its argument. If that argument is a temporary, the result would point into freed text, so the compiler rejects it:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code>t := <span class="t">str</span>.<span class="f">trim</span>(<span class="s">&quot;  </span><span class="e">{</span>name<span class="e">}</span><span class="s">  &quot;</span>) <span class="c">// error: this text is freed when the statement ends, and the call gives back a str that may point into it</span></code></pre>
 <pre class="code"><code><span class="k">scoped</span> <span class="t">String</span> padded = <span class="f">format</span>(<span class="s">&quot;  </span><span class="e">{</span>name<span class="e">}</span><span class="s">  &quot;</span>)
 t := <span class="t">str</span>.<span class="f">trim</span>(padded)</code></pre>
-<h2 id="building-text-a-part-at-a-time"><a href="#building-text-a-part-at-a-time">Building text a part at a time</a></h2>
-<p><code>String.append</code> adds to the end of a <code>String</code>. With <code>format</code> for the parts, longer text is built without copying it again and again:</p>
+<h2 id="building-text-in-parts"><a href="#building-text-in-parts">Building text in parts</a></h2>
+<p><code>String.append</code> adds to the end of a <code>String</code>, so long text is built without repeated copies:</p>
 <pre class="code run"><code><span class="k">import</span> io
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> out = <span class="s">&quot;GET / HTTP/1.1</span><span class="e">\n</span><span class="s">&quot;</span>.<span class="f">copy</span>()
-
     headers := [<span class="s">&quot;Host&quot;</span>, <span class="s">&quot;Accept&quot;</span>, <span class="s">&quot;Connection&quot;</span>]
     values := [<span class="s">&quot;example.com&quot;</span>, <span class="s">&quot;*/*&quot;</span>, <span class="s">&quot;close&quot;</span>]
+
     <span class="k">for</span> i, h <span class="k">in</span> headers {
         <span class="k">scoped</span> <span class="t">String</span> line = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>h<span class="e">}</span><span class="s">: </span><span class="e">{</span>values[i]<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>)
         out.<span class="f">append</span>(line)
     }
+
     io.<span class="f">write</span>(out)
 }</code></pre>
 <pre class="out"><code>GET / HTTP/1.1
 Host: example.com
 Accept: */*
 Connection: close</code></pre>
-<p><code>str.join</code> puts a list of parts together with a separator between them (see <a href="06-text.html">Text</a>).</p>
+<p><code>str.join</code> joins parts with a separator (see <a href="06-text.html">Text</a>).</p>
     <nav class="pager"><a class="prev" href="06-text.html"><span>Previous</span>Text</a><a class="next" href="08-if-and-match.html"><span>Next</span>if and match</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#braces">Braces</a></li><li><a href="#what-can-be-put-into-text">What can be put into text</a></li><li><a href="#how-a-value-is-written">How a value is written</a></li><li><a href="#a-struct-s-own-text">A struct&#x27;s own text</a></li><li><a href="#format">format</a></li><li><a href="#text-passed-straight-to-a-function">Text passed straight to a function</a></li><li><a href="#building-text-a-part-at-a-time">Building text a part at a time</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#braces">Braces</a></li><li><a href="#what-can-be-interpolated">What can be interpolated</a></li><li><a href="#format-specs">Format specs</a></li><li><a href="#a-struct-s-own-text">A struct&#x27;s own text</a></li><li><a href="#format">format</a></li><li><a href="#text-passed-to-a-function">Text passed to a function</a></li><li><a href="#building-text-in-parts">Building text in parts</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -184,7 +189,6 @@ Connection: close</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

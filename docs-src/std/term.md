@@ -1,6 +1,6 @@
 ## Colors as markup
 
-`term.print` writes a line with its markup made into colors when standard output is a terminal. Sent to a pipe or a file, the same program writes the text without the markup, so its output can be read by other programs:
+`term.print` writes a line and turns its markup into colors when standard output is a terminal. Sent to a pipe or a file, the same line is written without the markup, so other programs can read the output:
 
 ```iris run
 import term
@@ -9,6 +9,7 @@ void main() {
     name := "report.pdf"
     term.print("[green]ok[/] saved [bold]{name}[/]")
     term.print("[yellow on blue] note [/] [[brackets] stay")
+
     scoped String s = term.plain("[red]3 failed[/]")
     print("{s}, {term.width("日本")} columns wide")
 }
@@ -20,11 +21,11 @@ ok saved report.pdf
 3 failed, 4 columns wide
 ```
 
-`[[` writes a `[`. Text from users can hold brackets that look like markup, so it goes through `term.escape` first: `term.print("hello [bold]{term.escape(name)}[/]")`.
+`[[` writes a `[`. Text from users can hold brackets that look like markup, so pass it through `term.escape` first: `term.print("hello [bold]{term.escape(name)}[/]")`.
 
 ## Status lines
 
-`success` and `info` write a line with a sign in front on standard output, and `warn` and `error` on standard error. `title` writes a bold line to start a part of the output:
+`success` and `info` write a line with a sign in front to standard output. `warn` and `error` write to standard error. `title` writes a bold line that starts a part of the output:
 
 ```iris
 term.title("Deploy")
@@ -36,7 +37,7 @@ term.error("cache didn't answer")
 
 ## Tables
 
-`term.table` takes the headers, `row` adds a row, and `print` writes the table with each column as wide as its widest cell. Columns of numbers line up on the right; `align` sets a column's alignment and `border` its frame (`.none`, `.box` or `.markdown`):
+`term.table` takes the headers, `row` adds a row, and `print` writes the table with each column as wide as its widest cell. Columns of numbers line up on the right. `align` sets a column's alignment, and `border` sets the frame: `.none`, `.box` or `.markdown`:
 
 ```iris run
 import term
@@ -46,6 +47,7 @@ void main() {
     t.row(["web", "[green]running[/]", "12.5"])
     t.row(["db", "[red]stopped[/]", "3"])
     t.print()
+
     t.border = .box
     t.align(1, .center)
     t.print()
@@ -66,7 +68,7 @@ db    stopped     3
 
 ## Progress
 
-`term.progress` shows a bar on standard error that `add` or `set` moves, and `done` ends. Lines written with term's functions while it runs go above it. When standard error isn't a terminal, only the last line is written:
+`term.progress` shows a bar on standard error. `add` or `set` moves it and `done` ends it. Lines written with term's functions while it runs appear above it. When standard error isn't a terminal, only the last line is written:
 
 ```iris
 bar := term.progress("downloading", files.len)
@@ -79,13 +81,19 @@ bar.done()
 
 ## Reading lines
 
-`term.readLine` shows a prompt and reads a line, with editing and a history: Left and Right move in the line, Up and Down go through the lines before, and Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K and Ctrl-W work as in a shell. `historyFile` keeps the history between runs. At the end of input, or on Ctrl-D, it fails with `IoError.eof`:
+`term.readLine` shows a prompt and reads a line, with editing and a history:
+
+- Left and Right move in the line. Up and Down go through earlier lines.
+- Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K and Ctrl-W work as in a shell.
+- `historyFile` keeps the history between runs.
+- At the end of input, or on Ctrl-D, it fails with `IoError.eof`.
 
 ```iris
 import term
 
 void main() {
     term.historyFile(".notes_history")
+
     for {
         line := term.readLine("> ") catch e {
             break

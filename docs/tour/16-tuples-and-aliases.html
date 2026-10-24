@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tuples and type aliases - Iris</title>
-<meta name="description" content="Tuples are the several values a function gives back. Type aliases give another name to a type. Both are small, and both make other code easier to read.">
+<meta name="description" content="Tuples carry a function&#x27;s several results. Type aliases give a type a second name.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,10 +46,10 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html" class="on"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Tuples and type aliases</h1>
-<p class="lede">Tuples are the several values a function gives back. Type aliases give another name to a type. Both are small, and both make other code easier to read.</p>
+<p class="lede">Tuples carry a function's several results. Type aliases give a type a second name.</p>
 <h2 id="tuples"><a href="#tuples">Tuples</a></h2>
-<p>A tuple type lists types in parentheses: <code>(i64, str)</code>. A function returns one to give back several values, and the caller unpacks it into names right where the call is:</p>
-<pre class="code run"><code><span class="c">// &quot;db.lan:5432&quot; is the host and the port.</span>
+<p>A tuple type lists types in parentheses: <code>(i64, str)</code>. A function returns a tuple to return several values, and the caller unpacks it at the call:</p>
+<pre class="code run"><code><span class="c">// Splits &quot;db.lan:5432&quot; into host and port.</span>
 (<span class="t">str</span>, <span class="t">str</span>) <span class="f">hostPort</span>(<span class="t">str</span> addr) {
     <span class="k">for</span> i, c <span class="k">in</span> addr {
         <span class="k">if</span> c == <span class="s">&#x27;:&#x27;</span> {
@@ -65,9 +64,9 @@ try {
     <span class="f">print</span>(<span class="s">&quot;host </span><span class="e">{</span>host<span class="e">}</span><span class="s">, port </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>host db.lan, port 5432</code></pre>
-<p>The values go into new variables with <code>:=</code>, or into existing ones with <code>=</code>. <code>_</code> leaves one out. A tuple can't be kept whole in one variable; values that belong together beyond one call belong in a struct, whose fields have names:</p>
+<p>Unpack into new variables with <code>:=</code> or existing ones with <code>=</code>. <code>_</code> discards a value. A tuple can't be stored whole. Values that stay together belong in a struct.</p>
 <pre class="code bad"><span class="tag">does not compile</span><code>pair := <span class="f">hostPort</span>(<span class="s">&quot;db.lan:5432&quot;</span>) <span class="c">// error: this gives 2 values; unpack them into names: a, b := ...</span></code></pre>
-<p>When only one of the values is wanted, <code>.0</code>, <code>.1</code> and on pick it out by its place, from 0:</p>
+<p><code>.0</code>, <code>.1</code> and so on pick one value by position:</p>
 <pre class="code run"><code>(<span class="t">str</span>, <span class="t">str</span>) <span class="f">hostPort</span>(<span class="t">str</span> addr) {
     <span class="k">for</span> i, c <span class="k">in</span> addr {
         <span class="k">if</span> c == <span class="s">&#x27;:&#x27;</span> {
@@ -79,16 +78,18 @@ try {
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;the port is </span><span class="e">{</span><span class="f">hostPort</span>(<span class="s">&quot;db.lan:5432&quot;</span>).<span class="n">1</span><span class="e">}</span><span class="s">&quot;</span>)
+
     kind := <span class="s">&quot;text/html; charset=utf-8&quot;</span>.<span class="f">cut</span>(<span class="s">&quot;;&quot;</span>).<span class="n">0</span>
     <span class="f">print</span>(kind)
 }</code></pre>
 <pre class="out"><code>the port is 5432
 text/html</code></pre>
-<p>A list of tuples, written as <code>[(a, b), ...]</code>, is taken apart in a <code>for</code> loop by putting names in parentheses. Each round, the tuple goes into those names, as <code>:=</code> would put it:</p>
+<p>A <code>for</code> loop unpacks a list of tuples with names in parentheses:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> (name, port) <span class="k">in</span> [(<span class="s">&quot;api&quot;</span>, <span class="n">8080</span>), (<span class="s">&quot;db&quot;</span>, <span class="n">5432</span>)] {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s"> listens on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">for</span> i, (name, port) <span class="k">in</span> [(<span class="s">&quot;cache&quot;</span>, <span class="n">6379</span>)] {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>name<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -96,17 +97,18 @@ text/html</code></pre>
 <pre class="out"><code>api listens on 8080
 db listens on 5432
 0: cache:6379</code></pre>
-<p>Writing several values on the right of <code>:=</code> or <code>=</code> makes a tuple too, so two variables change in one step:</p>
+<p>Several values on the right of <code>:=</code> or <code>=</code> form a tuple, so variables change in one step:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     seq, ack := <span class="n">1000</span>, <span class="n">5000</span>
     seq, ack = ack, seq + <span class="n">1460</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>seq<span class="e">}</span><span class="s"> </span><span class="e">{</span>ack<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>5000 2460</code></pre>
-<p>Every value on the right is worked out before any variable changes, so <code>seq + 1460</code> uses the old <code>seq</code>.</p>
-<p>Tuples also give the values of a <code>for</code> loop over a type with a <code>next</code> method: <code>(T, bool)</code> for one value a round, <code>(K, V, bool)</code> for two (see <a href="09-loops.html">Loops</a>).</p>
+<p>All values on the right are computed first, so <code>seq + 1460</code> uses the old <code>seq</code>.</p>
+<p>A <code>next</code> method returns <code>(T, bool)</code> for a one-name loop or <code>(K, V, bool)</code> for two (see <a href="09-loops.html">Loops</a>).</p>
 <h2 id="type-aliases"><a href="#type-aliases">Type aliases</a></h2>
-<p><code>type</code> gives a type another name. The two names mean the same type, so values of one can be used as the other:</p>
+<p><code>type</code> names an existing type. Both names mean the same type, so values mix freely.</p>
 <pre class="code run"><code><span class="k">type</span> <span class="t">Port</span> = <span class="t">u16</span>
 <span class="k">type</span> <span class="t">Handler</span> = <span class="t">void</span>(<span class="t">str</span>)
 
@@ -119,13 +121,14 @@ db listens on 5432
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Port</span> p = <span class="n">8080</span>
     <span class="t">u16</span> same = p
+
     <span class="f">serve</span>(p, say)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>same<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>listening on 8080
 8080</code></pre>
-<p>An alias suits a type that is long to write, like a function type, or one that says what a value is for: <code>Port</code> reads better than <code>u16</code> in a signature. It is not a new type: a <code>Port</code> is a <code>u16</code>, with every <code>u16</code> operation.</p>
-<p>A struct with one field is the way to get a type that can't be mixed up with another:</p>
+<p>Use an alias to shorten a long type, such as a function type, or to document intent: <code>Port</code> reads better than <code>u16</code> in a signature. A <code>Port</code> is still a <code>u16</code> with every <code>u16</code> operation.</p>
+<p>For a distinct type that can't be mixed up, wrap the value in a one-field struct:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">ConnId</span> {
     <span class="t">i64</span> v
 }
@@ -141,7 +144,7 @@ db listens on 5432
     <span class="f">reset</span>(s)
 }</code></pre>
 <pre class="out"><code>resetting stream 7</code></pre>
-<p>Here <code>reset(ConnId{v: 7})</code> doesn't compile, while two aliases of <code>i64</code> would mix freely.</p>
+<p><code>reset(ConnId{v: 7})</code> doesn't compile. Two aliases of <code>i64</code> would mix freely.</p>
     <nav class="pager"><a class="prev" href="15-enums.html"><span>Previous</span>Enums</a><a class="next" href="17-pointers.html"><span>Next</span>Pointers</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -153,7 +156,6 @@ db listens on 5432
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

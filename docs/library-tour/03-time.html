@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Time - Iris</title>
-<meta name="description" content="The time module has the current time, a clock for measuring, and dates: making them, taking them apart, writing them and reading them back. Lengths of time are Durations, the numbers with units like 250ms from Integers.">
+<meta name="description" content="The time module gives the current time, a clock for measuring, and dates: making them, taking them apart, writing them and reading them back. Lengths of time are Durations, the numbers with units like 250ms from Integers.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,27 +46,30 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html" class="on"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Time</h1>
-<p class="lede">The <code>time</code> module has the current time, a clock for measuring, and dates: making them, taking them apart, writing them and reading them back. Lengths of time are <code>Duration</code>s, the numbers with units like <code>250ms</code> from <a href="../tour/03-integers.html#units">Integers</a>.</p>
+<p class="lede">The <code>time</code> module gives the current time, a clock for measuring, and dates: making them, taking them apart, writing them and reading them back. Lengths of time are <code>Duration</code>s, the numbers with units like <code>250ms</code> from <a href="../tour/03-integers.html#units">Integers</a>.</p>
 <h2 id="moments"><a href="#moments">Moments</a></h2>
-<p>A <code>time.Time</code> is a moment: the nanoseconds since 1970-01-01 00:00 UTC, and the time zone it is shown in. <code>time.now()</code> gives the current moment, in UTC. <code>time.unix(seconds)</code> gives the moment that many seconds after 1970, and <code>unix()</code> and <code>unixMs()</code> give the seconds and milliseconds back:</p>
+<p>A <code>time.Time</code> is a moment: the nanoseconds since 1970-01-01 00:00 UTC, plus the time zone it is shown in.</p>
+<ul><li><code>time.now()</code> gives the current moment in UTC.</li><li><code>time.unix(seconds)</code> gives the moment that many seconds after 1970.</li><li><code>unix()</code> and <code>unixMs()</code> give the seconds and milliseconds back.</li></ul>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     t := time.<span class="f">unix</span>(<span class="n">1700000000</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t<span class="e">}</span><span class="s"> is </span><span class="e">{</span>t.<span class="f">unixMs</span>()<span class="e">}</span><span class="s"> ms after 1970&quot;</span>)
+
     now := time.<span class="f">now</span>()
     <span class="f">print</span>(<span class="s">&quot;now is later: </span><span class="e">{</span>now.<span class="f">after</span>(t)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2023-11-14T22:13:20Z is 1700000000000 ms after 1970
 now is later: true</code></pre>
-<p>A <code>Time</code> in text, <code>{t}</code>, is written in ISO 8601. <code>iso()</code> and <code>format</code> give its text as a new <code>String</code>, in that form or another (see <a href="#writing-a-time">Writing a time</a>).</p>
+<p><code>{t}</code> writes a <code>Time</code> in ISO 8601. <code>iso()</code> and <code>format</code> give its text as a new <code>String</code>, in that form or another (see <a href="#writing-a-time">Writing a time</a>).</p>
 <h2 id="dates"><a href="#dates">Dates</a></h2>
-<p><code>time.date(year, month, day)</code> makes a moment in UTC, with the month from 1 to 12; the hour, minute and second can follow and are 0 when left out. <code>year()</code>, <code>month()</code>, <code>day()</code>, <code>hour()</code>, <code>minute()</code>, <code>second()</code>, <code>nanosecond()</code> and <code>weekday()</code> give the parts back. A day past the end of its month goes on into the next one, and a month past 12 into the next year:</p>
+<p><code>time.date(year, month, day)</code> makes a moment in UTC, with the month from 1 to 12. The hour, minute and second can follow and default to 0. <code>year()</code>, <code>month()</code>, <code>day()</code>, <code>hour()</code>, <code>minute()</code>, <code>second()</code>, <code>nanosecond()</code> and <code>weekday()</code> give the parts back. A day past the end of its month carries into the next month, and a month past 12 into the next year.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">year</span>()<span class="e">}</span><span class="s">-</span><span class="e">{</span>t.<span class="f">month</span>()<span class="e">}</span><span class="s">-</span><span class="e">{</span>t.<span class="f">day</span>()<span class="e">}</span><span class="s"> </span><span class="e">{</span>t.<span class="f">hour</span>()<span class="e">}</span><span class="s">:</span><span class="e">{</span>t.<span class="f">minute</span>()<span class="e">}</span><span class="s">, a </span><span class="e">{</span>t.<span class="f">weekday</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     leap := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">2</span>, <span class="n">29</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>leap.<span class="f">month</span>()<span class="e">}</span><span class="s">/</span><span class="e">{</span>leap.<span class="f">day</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">14</span>, <span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
@@ -77,15 +79,17 @@ now is later: true</code></pre>
 2027-02-01T00:00:00Z</code></pre>
 <p><code>weekday()</code> gives a <code>time.Weekday</code>, an enum that starts with <code>monday</code>.</p>
 <h2 id="adding-and-comparing"><a href="#adding-and-comparing">Adding and comparing</a></h2>
-<p><code>add(d)</code> gives the moment a <code>Duration</code> later, or earlier when <code>d</code> is negative. <code>sub(other)</code> gives the <code>Duration</code> between two moments, and <code>before</code> and <code>after</code> compare them:</p>
+<p><code>add(d)</code> gives the moment a <code>Duration</code> later, or earlier when <code>d</code> is negative. <code>sub(other)</code> gives the <code>Duration</code> between two moments. <code>before</code> and <code>after</code> compare them.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     start := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
     end := start.<span class="f">add</span>(<span class="n">36h</span> + <span class="n">15m</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>end.<span class="f">day</span>()<span class="e">}</span><span class="s"> at </span><span class="e">{</span>end.<span class="f">hour</span>()<span class="e">}</span><span class="s">:</span><span class="e">{</span>end.<span class="f">minute</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>end.<span class="f">sub</span>(start)<span class="e">}</span><span class="s"> later, </span><span class="e">{</span>start.<span class="f">sub</span>(end)<span class="e">}</span><span class="s"> the other way&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>start.<span class="f">before</span>(end)<span class="e">}</span><span class="s"> </span><span class="e">{</span>start.<span class="f">after</span>(end)<span class="e">}</span><span class="s">&quot;</span>)
+
     yesterday := start.<span class="f">add</span>(-<span class="n">24h</span>)
     <span class="f">print</span>(<span class="s">&quot;yesterday was the </span><span class="e">{</span>yesterday.<span class="f">day</span>()<span class="e">}</span><span class="s">th&quot;</span>)
 }</code></pre>
@@ -93,7 +97,7 @@ now is later: true</code></pre>
 36h15m0s later, -36h15m0s the other way
 true false
 yesterday was the 16th</code></pre>
-<p>A day is always <code>24h</code> here: <code>add</code> counts time, not dates on a calendar. <code>addDays(n)</code>, <code>addMonths(n)</code> and <code>addYears(n)</code> move on the calendar instead, keeping the time of day. A day the new month doesn't have becomes its last, so January 31 and a month is February 28:</p>
+<p><code>add</code> counts elapsed time, so a day is always <code>24h</code>. <code>addDays(n)</code>, <code>addMonths(n)</code> and <code>addYears(n)</code> move on the calendar and keep the time of day. A day the new month doesn't have becomes its last day, so January 31 plus a month is February 28.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -101,6 +105,7 @@ yesterday was the 16th</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addDays</span>(<span class="n">30</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addMonths</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.<span class="f">addMonths</span>(-<span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
     leap := time.<span class="f">date</span>(<span class="n">2024</span>, <span class="n">2</span>, <span class="n">29</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>leap.<span class="f">addYears</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
@@ -108,17 +113,19 @@ yesterday was the 16th</code></pre>
 2026-02-28T09:30:00Z
 2025-11-30T09:30:00Z
 2025-02-28T00:00:00Z</code></pre>
-<p>They count in the offset the moment is shown with: for <code>t.local()</code>, the day changes at midnight where the program runs.</p>
+<p>They count in the offset the moment is shown with. For <code>t.local()</code>, the day changes at midnight where the program runs.</p>
 <h2 id="writing-a-time"><a href="#writing-a-time">Writing a time</a></h2>
-<p><code>iso()</code> writes a moment in ISO 8601, the form most programs read, with the fraction of a second when there is one. <code>dateText()</code> writes only the date. <code>format(layout)</code> writes it with a layout made of <code>YYYY</code>, <code>MM</code>, <code>DD</code>, <code>hh</code>, <code>mm</code>, <code>ss</code>, <code>SSS</code> (milliseconds) and <code>Z</code> (the offset, <code>Z</code> for UTC); other characters are copied. <code>format()</code> with no layout is <code>iso()</code>, and is what <code>{t}</code> uses:</p>
+<ul><li><code>iso()</code> writes a moment in ISO 8601, with the fraction of a second when there is one.</li><li><code>dateText()</code> writes only the date.</li><li><code>format(layout)</code> writes it with a layout made of <code>YYYY</code>, <code>MM</code>, <code>DD</code>, <code>hh</code>, <code>mm</code>, <code>ss</code>, <code>SSS</code> (milliseconds) and <code>Z</code> (the offset, <code>Z</code> for UTC). Other characters are copied.</li><li><code>format()</code> with no layout is <code>iso()</code>, and <code>{t}</code> uses it.</li></ul>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">5</span>).<span class="f">add</span>(<span class="n">250ms</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> iso = t.<span class="f">iso</span>()
     <span class="k">scoped</span> <span class="t">String</span> day = t.<span class="f">dateText</span>()
     <span class="k">scoped</span> <span class="t">String</span> eu = t.<span class="f">format</span>(<span class="s">&quot;DD/MM/YYYY hh:mm&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> log = t.<span class="f">format</span>(<span class="s">&quot;hh:mm:ss.SSS Z&quot;</span>)
+
     <span class="f">print</span>(iso)
     <span class="f">print</span>(day)
     <span class="f">print</span>(eu)
@@ -129,15 +136,17 @@ yesterday was the 16th</code></pre>
 17/10/2026 09:05
 09:05:00.250 Z</code></pre>
 <h2 id="time-zones"><a href="#time-zones">Time zones</a></h2>
-<p>A moment is the same moment in every time zone; the zone only changes how it is shown. <code>local()</code> shows it in the computer's time zone, <code>utc()</code> in UTC, and <code>withOffset(seconds)</code> with an offset in seconds east of UTC. The parts and the text follow the zone:</p>
+<p>A moment is the same in every time zone. The zone only changes how it is shown. <code>local()</code> shows it in the computer's time zone, <code>utc()</code> in UTC, and <code>withOffset(seconds)</code> with an offset in seconds east of UTC. The parts and the text follow the zone.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     t := time.<span class="f">date</span>(<span class="n">2026</span>, <span class="n">10</span>, <span class="n">17</span>, <span class="n">9</span>, <span class="n">30</span>)
     rome := t.<span class="f">withOffset</span>(<span class="n">2</span> * <span class="n">3600</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> a = rome.<span class="f">iso</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a<span class="e">}</span><span class="s">, hour </span><span class="e">{</span>rome.<span class="f">hour</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;same moment: </span><span class="e">{</span>rome.<span class="f">unix</span>() == t.<span class="f">unix</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> back = rome.<span class="f">utc</span>().<span class="f">iso</span>()
     <span class="f">print</span>(back)
 }</code></pre>
@@ -145,15 +154,17 @@ yesterday was the 16th</code></pre>
 same moment: true
 2026-10-17T09:30:00Z</code></pre>
 <h2 id="reading-a-time"><a href="#reading-a-time">Reading a time</a></h2>
-<p><code>time.parse(text)</code> reads ISO 8601: a date, a date and time with <code>T</code> or a space between them, seconds with a fraction, and an offset (<code>Z</code>, <code>+02:00</code> or <code>+0200</code>). Without an offset it is UTC, and the moment it gives is shown with the offset it read. Text it can't read gives a <code>time.TimeError.invalid</code>, with a message that says why:</p>
+<p><code>time.parse(text)</code> reads ISO 8601: a date, a date and time with <code>T</code> or a space between them, seconds with a fraction, and an offset (<code>Z</code>, <code>+02:00</code> or <code>+0200</code>). Without an offset the time is UTC. The moment it gives is shown with the offset it read. Text it can't read gives a <code>time.TimeError.invalid</code> with a message that says why.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 !<span class="t">void</span> <span class="f">main</span>() {
     t := <span class="k">try</span> time.<span class="f">parse</span>(<span class="s">&quot;2026-10-17 11:30:00.250+02:00&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> u = t.<span class="f">utc</span>().<span class="f">iso</span>()
     <span class="f">print</span>(u)
+
     d := <span class="k">try</span> time.<span class="f">parse</span>(<span class="s">&quot;2026-10-17&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>d.<span class="f">weekday</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> text <span class="k">in</span> [<span class="s">&quot;2026-13-01&quot;</span>, <span class="s">&quot;2026-02-30&quot;</span>, <span class="s">&quot;2026-10-1x&quot;</span>] {
         _ = time.<span class="f">parse</span>(text) <span class="k">catch</span> e {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
@@ -166,9 +177,9 @@ saturday
 TimeError.invalid: &#x27;2026-13-01&#x27; has no such month or day
 TimeError.invalid: &#x27;2026-02-30&#x27; has no such month or day
 TimeError.invalid: &#x27;2026-10-1x&#x27; has &#x27;x&#x27; where a digit should be</code></pre>
-<p><code>parse</code> checks that the month has the day: <code>2026-02-29</code> is an error, and <code>2024-02-29</code>, in a leap year, isn't.</p>
+<p><code>parse</code> checks that the month has the day. <code>2026-02-29</code> is an error and <code>2024-02-29</code>, in a leap year, isn't.</p>
 <h2 id="reading-a-duration"><a href="#reading-a-duration">Reading a duration</a></h2>
-<p><code>time.parseDuration(text)</code> reads a <code>Duration</code> as it is written in Iris and in its output: <code>1m30s</code>, <code>250ms</code>, <code>1.5h</code>. A number alone is seconds. It suits durations from a settings file or a database; flags and <code>@env</code> fields read them already (see <a href="05-flags.html#types">Command-line flags</a>):</p>
+<p><code>time.parseDuration(text)</code> reads a <code>Duration</code> written as Iris writes it: <code>1m30s</code>, <code>250ms</code>, <code>1.5h</code>. A number alone is seconds. Use it for durations from a settings file or a database. Flags and <code>@env</code> fields read durations already (see <a href="05-flags.html#types">Command-line flags</a>).</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -187,33 +198,36 @@ TimeError.invalid: &#x27;2026-10-1x&#x27; has &#x27;x&#x27; where a digit should
 &#x27;1m30&#x27; isn&#x27;t a duration like 30s or 1m30s
 &#x27;soon&#x27; isn&#x27;t a duration like 30s or 1m30s</code></pre>
 <h2 id="measuring"><a href="#measuring">Measuring</a></h2>
-<p><code>time.now()</code> follows the computer's clock, which can jump when the clock is set. To measure how long something takes, <code>time.clock()</code> reads a clock that only goes forward; the difference of two readings is a <code>Duration</code>:</p>
+<p><code>time.now()</code> follows the computer's clock, which can jump when someone sets it. <code>time.clock()</code> reads a clock that only goes forward. The difference of two readings is a <code>Duration</code>, so use it to measure how long something takes.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     start := time.<span class="f">clock</span>()
     <span class="f">sleep</span>(<span class="n">20ms</span>)
     took := time.<span class="f">clock</span>() - start
+
     <span class="f">print</span>(<span class="s">&quot;took at least 20ms: </span><span class="e">{</span>took &gt;= <span class="n">20ms</span><span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;took under a second: </span><span class="e">{</span>took &lt; <span class="n">1s</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>took at least 20ms: true
 took under a second: true</code></pre>
-<p><code>{took}</code> writes the <code>Duration</code> in its units, like <code>20.1ms</code>. As in <a href="../tour/03-integers.html#units">Integers</a>, dividing by a unit gives a plain number, so <code>took / 1ms</code> is the milliseconds, and <code>i64(took)</code> the nanoseconds.</p>
+<p><code>{took}</code> writes the <code>Duration</code> in its units, like <code>20.1ms</code>. Dividing by a unit gives a plain number, as in <a href="../tour/03-integers.html#units">Integers</a>. <code>took / 1ms</code> is the milliseconds and <code>i64(took)</code> the nanoseconds.</p>
 <p><code>time.since(start)</code> is the same as <code>time.clock() - start</code>.</p>
 <h2 id="waiting"><a href="#waiting">Waiting</a></h2>
-<p><code>sleep(d)</code> waits for a <code>Duration</code>, and while one task sleeps the others run. In a <code>select</code>, an <code>after(d)</code> arm gives up waiting on channels after that time. Both are built in, without an import; <a href="../tour/24-tasks-and-channels.html#select">Tasks and channels</a> shows them with tasks.</p>
-<p>To do something at a steady rate, like a health check every few seconds, a loop sleeps until the next tick on the clock rather than for a fixed time, so the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait:</p>
+<p><code>sleep(d)</code> waits for a <code>Duration</code>. Other tasks run while one task sleeps. In a <code>select</code>, an <code>after(d)</code> arm stops waiting on channels after that time. Both are built in and need no import. <a href="../tour/24-tasks-and-channels.html#select">Tasks and channels</a> shows them with tasks.</p>
+<p>To do something at a steady rate, such as a health check every few seconds, sleep until the next tick on the clock instead of for a fixed time. Then the time the work takes doesn't add up. A <code>Duration</code> of 0 or less doesn't wait.</p>
 <pre class="code run"><code><span class="k">import</span> time
 
 <span class="t">void</span> <span class="f">main</span>() {
     start := time.<span class="f">clock</span>()
     next := start
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
         next += <span class="n">10ms</span>
         <span class="f">sleep</span>(next - time.<span class="f">clock</span>())
         <span class="f">print</span>(<span class="s">&quot;health check </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     took := time.<span class="f">clock</span>() - start
     <span class="f">print</span>(<span class="s">&quot;three checks in at least 30ms: </span><span class="e">{</span>took &gt;= <span class="n">30ms</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
@@ -232,7 +246,6 @@ three checks in at least 30ms: true</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

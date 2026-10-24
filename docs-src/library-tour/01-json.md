@@ -1,6 +1,6 @@
 # JSON
 
-A struct marked `@json` can be turned into JSON text and read back from it, with the `json` module. The compiler writes the code for each struct, so there are no lookups by name while the program runs.
+The `json` module turns a struct marked `@json` into JSON text and reads it back. The compiler writes the code for each struct, so nothing is looked up by name at run time.
 
 ## Encoding
 
@@ -24,8 +24,10 @@ struct Service {
 void main() {
     str[2] addrs = ["10.0.0.11:8080", "10.0.0.12:8080"]
     s := Service{id: 7, name: "billing".copy(), proto: .grpc, addrs: addrs}
+
     scoped String text = json.encode(s)
     print(text)
+
     s.name.free()
 }
 ```
@@ -34,11 +36,11 @@ void main() {
 {"id":7,"name":"billing","proto":"grpc","healthy":true,"addrs":["10.0.0.11:8080","10.0.0.12:8080"]}
 ```
 
-Arrays, slices and plain values can be encoded too: `json.encode(services.items())` gives a JSON array. An enum is written as its value's name.
+Arrays, slices and plain values encode too. `json.encode(services.items())` gives a JSON array. An enum is written as the name of its value.
 
 ## Decoding
 
-`json.decode(T, text)` reads a `T` from JSON text and gives a `!T`. Keys the struct doesn't have are skipped, and fields whose keys are missing keep their defaults:
+`json.decode(T, text)` reads a `T` from JSON text and returns a `!T`. Keys the struct doesn't have are skipped. Fields whose keys are missing keep their defaults.
 
 ```iris run
 import json
@@ -67,6 +69,7 @@ struct Service {
         {"id": 7, "name": "billing", "addrs": ["10.0.0.11:8080", "10.0.0.12:8080"],
          "check": {"path": "/health", "port": 9090}, "load": 0.25, "region": "eu"}
         """
+
     scoped Service s = try json.decode(Service, text)
     print("{s.id} {s.name} {s.proto} {s.healthy} {s.addrs.len} {s.check.path} {s.check.port} {s.load}")
 }
@@ -76,9 +79,9 @@ struct Service {
 7 billing http true 2 /health 9090 0.25
 ```
 
-`null` leaves a field as it is. A decoded struct owns its `String`s and slices: the `free` method that `@json` gives the struct frees them, so `scoped` works on it, and when `decode` fails, what it had read is freed already.
+`null` leaves a field as it is. A decoded struct owns its `String`s and slices. `@json` gives the struct a `free` method that frees them, so `scoped` works on it. When `decode` fails, it has already freed what it read.
 
-A JSON array is read into a slice, written as the type: `json.decode(Service[], text)`. The slice is new memory, which the caller frees, after freeing each item that owns memory:
+A JSON array is read into a slice, written as the type: `json.decode(Service[], text)`. The slice is new memory. The caller frees each item that owns memory, then the slice:
 
 ```iris run
 import json
@@ -97,9 +100,11 @@ struct Backend {
             b.free()
         }
     }
+
     for b in backends {
         print("{b.addr} weight {b.weight}")
     }
+
     ports := try json.decode(u16[], "[80, 443, 8080]")
     print("{ports.len} ports, the last {ports[2]}")
     free(ports)
@@ -114,7 +119,7 @@ struct Backend {
 
 ## Lists
 
-A `List` field is a JSON array too. `decode` fills the list, which keeps growing with `push` after, and the struct's `free` frees the list and what is in it. `json.decode(List[T], text)` reads a whole array into a new list, which the caller frees:
+A `List` field is a JSON array too. `decode` fills the list, and `push` keeps growing it afterwards. The struct's `free` frees the list and its items. `json.decode(List[T], text)` reads a whole array into a new list, which the caller frees.
 
 ```iris run
 import json
@@ -137,9 +142,11 @@ struct Pool {
         {"name": "billing", "backends": [{"addr": "10.0.0.11:8080", "weight": 3}, {"addr": "10.0.0.12:8080"}]}
         """)
     pool.backends.push(Backend{addr: "10.0.0.13:8080".copy()})
+
     for b in pool.backends {
         print("{b.addr} weight {b.weight}")
     }
+
     scoped String text = json.encode(pool)
     print(text)
 
@@ -162,7 +169,7 @@ The second backend has no `"weight"`, so it keeps the default, 1.
 
 ## Enums
 
-An enum field is a string in JSON, the name of one of the enum's values. `decode` turns the string back into the value, and a slice of an enum is read from an array of strings. A string that names no value is a `wrongType` error:
+An enum field is a JSON string that names one of the enum's values. `decode` turns the string back into the value. A slice of an enum is read from an array of strings. A string that names no value is a `wrongType` error.
 
 ```iris run
 import json
@@ -184,6 +191,7 @@ void main() {
          {"name": "crashes", "level": "error", "protos": ["grpc"]},
          {"name": "deploys", "protos": []}]
         """
+
     rules := json.decode(Rule[], text) catch e {
         print("{e.code}: {e.message}")
         return
@@ -194,6 +202,7 @@ void main() {
             r.free()
         }
     }
+
     for r in rules {
         action := match r.level {
             .error => "page someone"
@@ -202,8 +211,10 @@ void main() {
         }
         print("{r.name}: {r.level}, {r.protos.len} protocols, {action}")
     }
+
     scoped String back = json.encode(rules[0])
     print(back)
+
     _ = json.decode(Rule, r"""{"name": "x", "level": "fatal"}""") catch e {
         print("{e.code}: {e.message}")
         Rule{}
@@ -223,7 +234,7 @@ The third rule has no `"level"`, so it keeps the default, `.info`.
 
 ## Keys and required fields
 
-A field's key is its name as written. `@json("key")` gives another key, and `@json(required)` makes `decode` fail when the key is missing. Both can go together, `@json("id", required)`:
+A field's key is its name as written. `@json("key")` gives it another key. `@json(required)` makes `decode` fail when the key is missing. The two combine as `@json("id", required)`.
 
 ```iris run
 import json
@@ -242,8 +253,10 @@ void main() {
         Access{}
     }
     print("{a.id} {a.remote} {a.status}")
+
     scoped String back = json.encode(a)
     print(back)
+
     _ = json.decode(Access, r"""{"status": 502}""") catch err {
         print("{err.code}: {err.message}")
         Access{}
@@ -259,11 +272,16 @@ JsonError.missing: the required field "request_id" is missing
 
 ## What a @json struct can hold
 
-Integers, floats, `bool`, `String`, plain enums, other `@json` structs, and slices, arrays and `List`s of those. Fields of an embedded struct appear as fields of the outer one. A `str` field can be encoded but not decoded, since a `str` can't own the text it would point to; decoded text goes in a `String`.
+- integers, floats and `bool`
+- `String` and plain enums
+- other `@json` structs
+- slices, arrays and `List`s of these
+
+The fields of an embedded struct appear as fields of the outer one. A `str` field encodes but doesn't decode, because a `str` can't own the text it points to. Decoded text goes in a `String`.
 
 ## Errors
 
-The errors are values of `json.JsonError`, and the message says where in the text it went wrong:
+The errors are values of `json.JsonError`. The message says where in the text the problem is.
 
 | Code | When |
 |---|---|
@@ -301,7 +319,7 @@ JsonError.syntax: line 1, column 2: expected a key in quotes
 
 ## Quoting text
 
-`json.quote(text)` gives text as a JSON string, in quotes, with the characters that need it escaped. It is how a bit of JSON is written by hand:
+`json.quote(text)` gives text as a JSON string in quotes, with the characters that need it escaped. Use it to write a bit of JSON by hand:
 
 ```iris run
 import json

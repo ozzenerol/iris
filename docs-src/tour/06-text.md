@@ -1,14 +1,15 @@
 # Text
 
-Iris has two types for text. A `str` looks at text that is stored somewhere else; a `String` owns its text and can grow. This chapter covers both, the ways to write text in the program, and the methods that work on it.
+Iris has two text types. A `str` views text stored elsewhere. A `String` owns its text and can grow. This chapter covers both, text literals, and the methods on text.
 
 ## str
 
-A `str` is a slice of bytes: a pointer to some text and its length. A string literal is a `str` that points into the program itself:
+A `str` is a pointer to bytes and a length. A string literal is a `str` that points into the program:
 
 ```iris run
 void main() {
     line := "GET /index.html HTTP/1.1"
+
     print("{line.len} bytes")
     print("first byte {line[0]}, last {line[line.len - 1]}")
 }
@@ -19,9 +20,9 @@ void main() {
 first byte 71, last 49
 ```
 
-Indexing gives a byte, a `u8`. Every index is checked, so `line[24]` stops a debug build with a message that says where.
+Indexing gives a `u8`. Indexes are checked: `line[24]` stops a debug build with the location.
 
-A slice of a `str`, `s[from:to]`, is another `str` that points into the same text. Nothing is copied, so slicing costs nothing whatever the length. Either end can be left out:
+`s[from:to]` is a `str` into the same bytes. Nothing is copied, so slicing is free at any length. Either end can be omitted.
 
 ```iris run
 void main() {
@@ -34,11 +35,12 @@ void main() {
 [GET] [/index.html] [HTTP/1.1] [GET] []
 ```
 
-`==` and `!=` compare the bytes of two strings. `compare` puts them in order, giving a number below zero, zero or above zero:
+`==` and `!=` compare bytes. `compare` orders two strings and returns a negative number, zero or a positive number:
 
 ```iris run
 void main() {
     method := "POST"
+
     print("{method == "POST"} {method != "GET"}")
     print("{"api.lan".compare("db.lan")} {"web2".compare("web1")} {"x".compare("x")}")
 }
@@ -51,12 +53,13 @@ true true
 
 ## UTF-8
 
-Text is stored as UTF-8. Letters outside ASCII take more than one byte, so `len` counts bytes, not letters, and an index can land inside a letter:
+Text is UTF-8. Characters outside ASCII take several bytes, so `len` counts bytes and an index can land inside a character:
 
 ```iris run
 void main() {
     city := "Köln" // from an X-City header
     print("{city.len} bytes")
+
     for i, b in city {
         print("{i}: {b}")
     }
@@ -72,9 +75,9 @@ void main() {
 4: 110
 ```
 
-`ö` is the two bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8 text: a search for `"ö"` finds it, since no letter's bytes appear inside another's. `<`, `<=`, `>` and `>=` put text in order byte by byte, with the shorter first when one starts the other, which for UTF-8 is the order of the code points: `"Zebra" < "apple"`, as upper-case letters come first.
+`ö` is the bytes 195 and 182. Searching, cutting and comparing work on bytes, which is correct for UTF-8: no character's bytes appear inside another's, so a search for `"ö"` finds it. `<`, `<=`, `>` and `>=` order byte by byte, shorter first on a shared prefix. For UTF-8 that is code point order, so `"Zebra" < "apple"`.
 
-`runes()` goes over the characters instead, each a code point, an `i32`. `runeCount` counts them, and `validUtf8` says whether text is UTF-8 at all. A character literal beyond ASCII, such as `'ö'`, is its code point too:
+`runes()` iterates over code points, each an `i32`. `runeCount` counts them. `validUtf8` checks the encoding. A non-ASCII character literal such as `'ö'` is its code point.
 
 ```iris run
 import str
@@ -82,11 +85,13 @@ import str
 void main() {
     city := "Köln 東京"
     print("{city.len} bytes, {city.runeCount()} characters")
+
     for r in city.runes() {
         if r > 127 {
             print("{r:x}")
         }
     }
+
     print("{'ö' == 0xf6} {str.validUtf8("Köln")} {str.validUtf8("K\xf6ln")}")
 }
 ```
@@ -99,21 +104,26 @@ f6
 true true false
 ```
 
-Bytes that aren't UTF-8 come out of `runes()` as `str.REPLACEMENT`, one for each byte, so a loop over any text ends. `decodeRune(at)` gives the character at a byte and how many bytes it takes, `str.appendRune(&s, r)` adds a character's bytes to a `String`, and `str.fromRune(r)` makes one. A character literal beyond ASCII can't be given to a `u8`, which is a byte: its UTF-8 bytes are the string `"ö"`.
+- Invalid bytes come out of `runes()` as `str.REPLACEMENT`, one per byte, so the loop always ends.
+- `decodeRune(at)` returns the code point at a byte offset and its length in bytes.
+- `str.appendRune(&s, r)` appends a code point to a `String`. `str.fromRune(r)` makes a new one.
+- A non-ASCII character literal can't be stored in a `u8`. Its bytes are the string `"ö"`.
 
-`str.isDigit`, `isHexDigit`, `isLetter`, `isAlnum`, `isUpper`, `isLower` and `isPunct` say what kind of ASCII character a code point is, and `isSpace` knows Unicode's spaces as well. `str.toUpper` and `str.toLower` change one ASCII letter.
+`str.isDigit`, `isHexDigit`, `isLetter`, `isAlnum`, `isUpper`, `isLower` and `isPunct` classify ASCII. `isSpace` also knows Unicode spaces. `str.toUpper` and `str.toLower` change one ASCII letter.
 
 ## String
 
-A `String` owns its bytes. It can grow, and it must be freed when it is no longer needed. `.copy()` makes a `String` from a `str`, and `append` adds to the end:
+A `String` owns its bytes, can grow, and must be freed. `.copy()` makes one from a `str`. `append` adds to the end.
 
 ```iris run
 void main() {
     String req = "GET ".copy()
     req.append("/api/users")
     req.append(" HTTP/1.1")
+
     print(req)
     print("{req.len} bytes")
+
     req.free()
 }
 ```
@@ -123,7 +133,7 @@ GET /api/users HTTP/1.1
 23 bytes
 ```
 
-`scoped` frees it when the block ends, so the `free` can't be forgotten, whatever way the block is left:
+`scoped` frees it at the end of the block, however the block is left:
 
 ```iris run
 void main() {
@@ -137,12 +147,13 @@ void main() {
 /var/log/nginx
 ```
 
-A `String` can be given wherever a `str` is wanted: to a function, to `==`, to slicing. The `str` points into the `String`'s bytes, so it is valid while the `String` is alive and doesn't grow.
+A `String` works wherever a `str` is expected: as an argument, with `==`, in slicing. The `str` points into the `String`'s bytes and is valid while the `String` is alive and doesn't grow.
 
 ```iris run
 void main() {
     scoped String url = "https://api.example.com/v1".copy()
     str scheme = url[0:5]
+
     print("{scheme} {url.contains("example")} {url == "https://api.example.com/v1"}")
 }
 ```
@@ -151,18 +162,24 @@ void main() {
 https true true
 ```
 
-A function that gives back a `String` gives the caller a new one to free. `upper`, `replace` and `format` are such functions.
+A function that returns a `String`, such as `upper`, `replace` or `format`, gives the caller a new one to free.
 
-`insert` puts text in at a byte, `truncate` keeps the first bytes, `clear` empties a `String` and keeps its memory, and `reserve` makes room for more bytes, so that appending up to that many doesn't grow it again:
+- `insert` adds text at a byte offset.
+- `truncate` keeps the first n bytes.
+- `clear` empties the `String` and keeps its memory.
+- `reserve` makes room so appends up to that size don't reallocate.
 
 ```iris run
 void main() {
     scoped String line = "200 OK".copy()
     line.reserve(64)
+
     line.insert(0, "HTTP/1.1 ")
     print(line)
+
     line.truncate(8)
     print("[{line}]")
+
     line.clear()
     print("[{line}] {line.len}")
 }
@@ -174,23 +191,23 @@ HTTP/1.1 200 OK
 [] 0
 ```
 
-A place outside the `String` stops the program with a message that says where.
+An offset outside the `String` stops the program with the location.
 
-## Writing text in the program
+## Literals
 
-A literal is written in double quotes. A backslash starts an escape:
+A literal is written in double quotes. Escapes:
 
-| Escape | Is |
+| Escape | Meaning |
 |---|---|
-| `\n` | a newline |
-| `\t` | a tab |
-| `\r` | a carriage return |
-| `\0` | a zero byte |
-| `\\` | a backslash |
-| `\"` | a double quote |
-| `\x41` | the byte written in two hex digits |
+| `\n` | newline |
+| `\t` | tab |
+| `\r` | carriage return |
+| `\0` | zero byte |
+| `\\` | backslash |
+| `\"` | double quote |
+| `\x41` | a byte in two hex digits |
 
-`{` and `}` put a value into the text (see the next chapter), so a brace on its own is written twice: `{{` and `}}`.
+`{` and `}` insert values (see the next chapter), so a literal brace is written `{{` or `}}`.
 
 ```iris run
 void main() {
@@ -202,7 +219,7 @@ void main() {
 200	OK, "quoted", C:\logs, A, {"ok": true}
 ```
 
-Three double quotes start text that spans several lines. The text starts on the line after the opening quotes and ends before the line with the closing ones. The indentation every line shares is taken off, so the text can be indented with the code around it:
+Triple quotes hold text over several lines. The text starts on the line after `"""` and ends before the line with the closing `"""`. Indentation common to all lines is removed, so the text can follow the code's indentation.
 
 ```iris run
 void main() {
@@ -221,7 +238,7 @@ services:
     port: 8080
 ```
 
-In a raw string, `r"..."`, backslashes and braces are plain characters. It suits Windows paths and regular expressions:
+In a raw string, `r"..."`, backslashes and braces are plain characters. Use it for Windows paths and regular expressions:
 
 ```iris run
 void main() {
@@ -235,7 +252,7 @@ C:\logs\{date}.log
 \d+\.\d+\.\d+\.\d+
 ```
 
-`r"""..."""` is raw text over several lines, which also takes double quotes as they are. It suits JSON and other text full of quotes and braces:
+`r"""..."""` is raw text over several lines and also keeps double quotes. Use it for JSON:
 
 ```iris run
 void main() {
@@ -250,17 +267,19 @@ void main() {
 {"host": "10.0.0.5", "ports": [22, 443]}
 ```
 
-## Methods of text
+## Methods
 
-A `str` and a `String` have methods that look at the text and make new text. Those that give a `str` give part of the text they were given, so nothing is copied:
+`str` and `String` have methods to inspect and build text. Methods that return a `str` return part of the input, without copying:
 
 ```iris run
 void main() {
     raw := "  Content-Type: text/html  "
     h := raw.trim()
     print("[{h}] [{raw.trimLeft()}] [{raw.trimRight()}]")
+
     name, value, found := h.cut(": ")
     print("{name} -> {value} ({found})")
+
     print("{h.find(":")} {"/api/v1/users".findLast("/")} {h.contains("html")}")
     print("{h.startsWith("Content-")} {h.endsWith("/html")} {"10.0.0.1".count(".")}")
 }
@@ -273,9 +292,9 @@ Content-Type -> text/html (true)
 true true 3
 ```
 
-The methods are the functions of the `str` module, with the text as the first argument: `h.trim()` is `str.trim(h)`. They need no import. The module's functions, called as `str.trim(h)`, need `import str`, and so does `str.join`, which takes a slice of parts.
+The methods are the `str` module's functions with the text as first argument: `h.trim()` is `str.trim(h)`. Methods need no import. Calling `str.trim(h)` or `str.join` directly needs `import str`.
 
-`split` cuts text at each separator and `fields` at each run of spaces, tabs and newlines. Both give a `List` of `str`s that point into the text. `str.join` puts parts together:
+`split` cuts at each separator, `fields` at each run of whitespace. Both return a `List` of `str`s into the original text. `str.join` joins parts:
 
 ```iris run
 import str
@@ -283,6 +302,7 @@ import str
 void main() {
     scoped parts := "GET,/health,,200".split(",")
     print("{parts.len} parts, the third is [{parts.at(2)}]")
+
     scoped cols := "tcp   0  0 0.0.0.0:22\tLISTEN\n".fields()
     scoped String joined = str.join(cols.items(), " | ")
     print(joined)
@@ -294,7 +314,7 @@ void main() {
 tcp | 0 | 0 | 0.0.0.0:22 | LISTEN
 ```
 
-The methods that change text give a new `String`:
+Methods that change text return a new `String`:
 
 ```iris run
 void main() {
@@ -302,6 +322,7 @@ void main() {
     scoped String b = "Content-Length".lower()
     scoped String c = "/api/v1/users/v1".replace("v1", "v2")
     scoped String d = "-".repeat(12)
+
     print("{a} {b} {c}")
     print(d)
 }
@@ -314,19 +335,23 @@ GET content-length /api/v2/users/v2
 
 `upper` and `lower` change ASCII letters only.
 
-More of the same kind:
+More methods:
 
 ```iris run
 import str
 
 void main() {
     print("{"/api/users".trimPrefix("/api")} {"main.iris".trimSuffix(".iris")}")
+
     dir, file, _ := "/var/log/nginx/access.log".cutLast("/")
     print("{dir} {file}")
+
     scoped kv := "key=a=b".splitN("=", 2)
     print("{kv.at(0)} -> {kv.at(1)}")
+
     scoped rows := "GET /\r\nHost: lan\r\n".lines()
     print("{rows.len} lines, the second is [{rows.at(1)}]")
+
     scoped String id = "42".padLeft(6, "0")
     scoped String name = "x-request-id".title()
     print("{id} {name} {"Content-Length".equalFold("content-length")}")
@@ -341,11 +366,14 @@ key -> a=b
 000042 X-Request-Id true
 ```
 
-`splitN` stops after a number of parts, and the last holds the rest. `lines` cuts at `\n` and `\r\n`, with no empty line for a line break at the very end. `padLeft` and `padRight` count characters, not bytes, and `reverse` turns the characters around.
+- `splitN` stops after n parts. The last part holds the rest.
+- `lines` cuts at `\n` and `\r\n`. A final line break adds no empty line.
+- `padLeft` and `padRight` count characters.
+- `reverse` reverses the characters.
 
-## Reading numbers from text
+## Parsing numbers
 
-`parseInt` and `parseFloat` read a number and give an error when the text isn't one (errors are covered in [Errors](18-errors.html)):
+`parseInt` and `parseFloat` read a number and fail when the text isn't one (see [Errors](18-errors.html)):
 
 ```iris run
 void main() {
@@ -366,4 +394,4 @@ void main() {
 ParseError.empty: no number in an empty text
 ```
 
-`parseInt` takes an optional sign and decimal digits; a number too large for an `i64` is `ParseError.tooBig`. `parseIntBase` reads other bases, from 2 to 36: `"ff".parseIntBase(16)` is 255. To write a number in another base, see [Values in text](07-values-in-text.html).
+`parseInt` accepts an optional sign and decimal digits. A number beyond `i64` gives `ParseError.tooBig`. `parseIntBase` reads bases 2 to 36: `"ff".parseIntBase(16)` is 255. To format a number in another base, see [Values in text](07-values-in-text.html).

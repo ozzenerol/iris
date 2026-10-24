@@ -1,13 +1,13 @@
 # if and match
 
-Choosing what runs: `if` for conditions, `match` for picking one of many values. Both can also give a value.
+`if` chooses by condition and `match` by value. Both can produce a value.
 
 ## if
 
-`if` runs its block when its condition is true. `else if` adds more conditions, tried in order, and `else` runs when none was true:
+`if` runs its block when the condition is true. `else if` adds conditions, tried in order. `else` runs when none matched.
 
 ```iris run
-// How a ping's round trip time reads, in milliseconds; 0 is no reply.
+// How a ping's round trip reads, in milliseconds. 0 is no reply.
 str health(i64 ms) {
     if ms > 500 {
         return "very slow"
@@ -34,11 +34,11 @@ void main() {
 0ms: no reply
 ```
 
-The condition is a `bool` and needs no parentheses. The block always has braces. `else` goes on the line of the closing brace before it, or on the next line.
+The condition is a `bool` without parentheses. Braces are required. `else` goes on the line of the closing brace or on the next line.
 
-## A condition after a statement
+## Trailing conditions
 
-A short statement can have its condition after it, on the same line: the statement runs only when the condition is true. This suits the checks at the top of a function and in loops:
+A short statement can end with `if cond`. It runs only when the condition is true. Use it for guards at the top of a function and in loops:
 
 ```iris run
 Duration retryDelay(i64 attempt) {
@@ -49,10 +49,12 @@ Duration retryDelay(i64 attempt) {
 
 void main() {
     verbose := true
+
     print("{retryDelay(0)} {retryDelay(3)} {retryDelay(9)}")
     print("scanning") if verbose
+
     for port in [22, 80, 3000, 8080, 0, 9090] {
-        break if port == 0      // the end of the list
+        break if port == 0      // end of the list
         continue if port < 1024 // needs root
         print("trying {port}")
     }
@@ -66,11 +68,13 @@ trying 3000
 trying 8080
 ```
 
-`stmt if cond` is the same as `if cond { stmt }`. It works after `return`, `break`, `continue`, an assignment, a call or `spawn`, and takes only a condition. With an `else` after the condition it is a value instead (see below). A declaration can't have one, since the name would only exist when the condition held, and neither can `defer`.
+- `stmt if cond` equals `if cond { stmt }`.
+- It works after `return`, `break`, `continue`, an assignment, a call and `spawn`.
+- With `else` after the condition it becomes a value (see below).
+- Declarations and `defer` can't take one.
+- `return if` followed by a block is an if-value: `return if ok { 1 } else { 2 }`.
 
-`return if` followed by a block is still an if that gives a value: `return if ok { 1 } else { 2 }`.
-
-A function that returns nothing can put the condition after an `=>` body. The call runs only when the condition holds:
+A `void` function can put the condition after its `=>` body. The body runs only when the condition holds:
 
 ```iris run
 struct Conn {
@@ -83,6 +87,7 @@ void main() {
     i64 n = 42
     Conn a = Conn{buf: &n}
     Conn b = Conn{}
+
     a.show()
     b.show()
 }
@@ -92,16 +97,17 @@ void main() {
 buf 42
 ```
 
-A function that returns a value can't, since it would have nothing to return when the condition is false. Write `a if cond else b` there.
+A function with a result can't, because it would have nothing to return. Use `a if cond else b` there.
 
 ## if as a value
 
-`if` can give a value. Each branch ends with the value it gives, without `return`, and `else` is required, since there must be a value whichever way it goes:
+Each branch ends with its value, without `return`. `else` is required.
 
 ```iris run
 void main() {
     load := 0.93
     level := if load > 0.9 { "critical" } else if load > 0.7 { "high" } else { "normal" }
+
     print("load {load}: {level}")
 }
 ```
@@ -110,18 +116,20 @@ void main() {
 load 0.93: critical
 ```
 
-A branch can hold statements before its value. The value is the last line of the branch:
+A branch can run statements first. Its last line is the value.
 
 ```iris run
 void main() {
     size := 4000
     mss := 1460
+
     segments := if size > 0 {
         full := size / mss
         full + (if size % mss > 0 { 1 } else { 0 })
     } else {
         0
     }
+
     print("{segments} segments")
 }
 ```
@@ -130,9 +138,9 @@ void main() {
 3 segments
 ```
 
-All the branches must give values of the same type.
+All branches must have the same type.
 
-A short choice of a value can be written on one line as `a if cond else b`: `a` when the condition is true, `b` when it isn't. It is the same as `if cond { a } else { b }`, and can be chained:
+`a if cond else b` is the one-line form of `if cond { a } else { b }`. It chains:
 
 ```iris run
 str sizeClass(i64 bytes) => "small" if bytes < 1KiB else "medium" if bytes < 1MiB else "large"
@@ -144,6 +152,7 @@ bool retryable(i64 status) {
 void main() {
     status := 503
     wait := 2s if retryable(status) else 0s
+
     print("{sizeClass(4096)} {wait} {"retry" if retryable(status) else "give up"}")
 }
 ```
@@ -152,11 +161,11 @@ void main() {
 medium 2s retry
 ```
 
-Without the `else`, `return x if cond` is a condition on the statement: it returns only when the condition holds.
+Without `else`, `return x if cond` is a guard.
 
 ## match
 
-`match` compares one value against a list of arms and runs the first one that fits. Only that arm runs; there is no falling through into the next one:
+`match` runs the first arm that fits the value. Only that arm runs.
 
 ```iris run
 void reply(str command) {
@@ -182,13 +191,16 @@ void main() {
 -ERR unknown command 'FLUSH'
 ```
 
-An arm is the values it takes, `=>`, and what it does: one statement, or a block in braces. `{}` is an arm that does nothing. An arm can list several values, separated by commas. `_` takes every value the arms above it didn't.
+- An arm is its values, `=>`, and a statement or a block.
+- `{}` does nothing.
+- Several values are separated by commas.
+- `_` matches everything the arms above didn't.
 
 `match` works on integers, characters, `bool`, `str` and enums.
 
 ## Ranges
 
-An arm can be a range, `low..high`, which takes every value from `low` to `high` with both ends included:
+`low..high` in an arm matches both ends and everything between:
 
 ```iris run
 str portKind(i64 port) => match port {
@@ -218,17 +230,19 @@ letter digit space other
 
 ## match as a value
 
-Like `if`, `match` can give a value. Each arm gives one, and they all have the same type. A function whose whole body is a `match` reads well with `=>`, as `portKind` above shows:
+Each arm gives a value of one shared type. A function whose body is a single `match` uses `=>`, as `portKind` above does.
 
 ```iris run
 void main() {
     status := 404
+
     text := match status {
         200..299 => "ok"
         301, 302 => "moved"
         404 => "not found"
         _ => "error"
     }
+
     print("{status}: {text}")
 }
 ```
@@ -237,9 +251,9 @@ void main() {
 404: not found
 ```
 
-## Every value has an arm
+## Exhaustiveness
 
-On an enum, a `match` must have an arm for every value, or a `_` arm. A missing value is a compile error, so adding a value to an enum shows every `match` that has to deal with it:
+A `match` on an enum needs an arm for every value or a `_` arm. When a value is added to the enum, the compiler reports each `match` that misses it:
 
 ```iris error
 enum Mode { read, write, append }
@@ -250,7 +264,7 @@ match m {
 } // error: this match has no arm for Mode.append; add it or a '_' arm
 ```
 
-On integers and text, where the values can't all be listed, a `match` that gives a value needs a `_` arm.
+A `match` value on integers or text needs a `_` arm.
 
 ```iris run
 enum Mode { read, write, append }
@@ -270,4 +284,4 @@ void main() {
 ra
 ```
 
-The enum's values are written with a dot, `.read`, since the type is known from the value being matched. The [Enums](15-enums.html) chapter shows how `match` takes apart enum values that carry data.
+Enum values are written `.read` because the type is known from the matched value. [Enums](15-enums.html) shows how `match` unpacks variants with data.

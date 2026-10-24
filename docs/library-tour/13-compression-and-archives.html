@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -49,30 +48,36 @@ try {
 <h1>Compression and archives</h1>
 <p class="lede">The <code>compress</code> module makes data smaller with gzip and zlib, the formats behind <code>.gz</code> files and HTTP compression. The <code>tar</code> and <code>zip</code> modules pack many files into one, for backups, releases and downloads. All three work on data in memory, so they combine with each other and with the <code>fs</code> module.</p>
 <h2 id="compressing-data"><a href="#compressing-data">Compressing data</a></h2>
-<p><code>compress.gzip(data)</code> gives the data compressed in the gzip format, and <code>compress.gunzip(packed)</code> gives it back. Text that repeats itself, such as logs, JSON and HTML, gets much smaller:</p>
+<p><code>compress.gzip(data)</code> gives the data compressed in the gzip format, and <code>compress.gunzip(packed)</code> gives it back. Text that repeats itself, such as logs, JSON and HTML, gets much smaller.</p>
 <pre class="code run"><code><span class="k">import</span> compress, fs, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> log = <span class="t">str</span>.<span class="f">repeat</span>(<span class="s">&quot;2026-10-24T10:00:00Z INFO GET /health 200 1ms</span><span class="e">\n</span><span class="s">&quot;</span>, <span class="n">1000</span>)
     <span class="k">scoped</span> <span class="t">String</span> packed = <span class="k">try</span> compress.<span class="f">gzip</span>(log)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>log.len<span class="e">}</span><span class="s"> bytes, under 1% of that packed: </span><span class="e">{</span>packed.len * <span class="n">100</span> &lt; log.len<span class="e">}</span><span class="s">&quot;</span>)
+
     path := <span class="s">&quot;/tmp/iris-tour-access.log.gz&quot;</span>
     <span class="k">try</span> fs.<span class="f">writeAll</span>(path, packed)
+
     <span class="k">scoped</span> <span class="t">String</span> read = <span class="k">try</span> fs.<span class="f">readAll</span>(path)
     <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> compress.<span class="f">gunzip</span>(read)
     <span class="f">print</span>(<span class="s">&quot;the same after a round trip: </span><span class="e">{</span>back == log<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">try</span> fs.<span class="f">remove</span>(path)
 }</code></pre>
 <pre class="out"><code>46000 bytes, under 1% of that packed: true
 the same after a round trip: true</code></pre>
-<p>The file it writes is a normal <code>.gz</code> file, which <code>gunzip</code> and <code>zcat</code> read. <code>level</code> sets how hard to try, from 1, the fastest, to 9, the smallest, with 6 unless given: <code>compress.gzip(log, level: 9)</code>.</p>
-<p><code>compress.compress(data, format)</code> and <code>compress.decompress</code> take the format: <code>.gzip</code>, <code>.zlib</code>, the format inside PNG files and many protocols, or <code>.raw</code> deflate with no header at all. <code>gunzip</code> takes zlib data too. Data that isn't compressed fails with <code>CompressError.broken</code>:</p>
+<p>The file it writes is a normal <code>.gz</code> file that <code>gunzip</code> and <code>zcat</code> read. <code>level</code> sets how hard to try, from 1, the fastest, to 9, the smallest. The default is 6: <code>compress.gzip(log, level: 9)</code>.</p>
+<p><code>compress.compress(data, format)</code> and <code>compress.decompress</code> take the format:</p>
+<ul><li><code>.gzip</code></li><li><code>.zlib</code>, the format inside PNG files and many protocols</li><li><code>.raw</code>, deflate with no header at all</li></ul>
+<p><code>gunzip</code> accepts zlib data too. Data that isn't compressed fails with <code>CompressError.broken</code>.</p>
 <pre class="code run"><code><span class="k">import</span> compress
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> z = <span class="k">try</span> compress.<span class="f">compress</span>(<span class="s">&quot;hello hello hello&quot;</span>, .zlib)
     <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> compress.<span class="f">decompress</span>(z, .zlib)
     <span class="f">print</span>(back)
+
     _ = compress.<span class="f">gunzip</span>(<span class="s">&quot;plain text&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
@@ -81,13 +86,14 @@ the same after a round trip: true</code></pre>
 <pre class="out"><code>hello hello hello
 CompressError.broken</code></pre>
 <h2 id="a-limit-for-data-from-outside"><a href="#a-limit-for-data-from-outside">A limit for data from outside</a></h2>
-<p>A few kilobytes of compressed data can grow into gigabytes. Data from a client or another service is decompressed with a <code>limit</code>, and anything that would grow past it fails with <code>CompressError.tooLarge</code>:</p>
+<p>A few kilobytes of compressed data can grow into gigabytes. Decompress data from a client or another service with a <code>limit</code>. Anything that would grow past it fails with <code>CompressError.tooLarge</code>.</p>
 <pre class="code run"><code><span class="k">import</span> compress, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> zeros = <span class="t">str</span>.<span class="f">repeat</span>(<span class="s">&quot;0&quot;</span>, <span class="n">10000000</span>)
     <span class="k">scoped</span> <span class="t">String</span> bomb = <span class="k">try</span> compress.<span class="f">gzip</span>(zeros, level: <span class="n">9</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>zeros.len<span class="e">}</span><span class="s"> bytes, over 1000 times smaller packed: </span><span class="e">{</span>bomb.len * <span class="n">1000</span> &lt; zeros.len<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = compress.<span class="f">gunzip</span>(bomb, limit: <span class="n">1048576</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
@@ -95,9 +101,9 @@ CompressError.broken</code></pre>
 }</code></pre>
 <pre class="out"><code>10000000 bytes, over 1000 times smaller packed: true
 CompressError.tooLarge: the data comes out larger than the limit</code></pre>
-<p>With no limit, the most is 1 GiB.</p>
+<p>Without a limit, the most is 1 GiB.</p>
 <h2 id="a-part-at-a-time"><a href="#a-part-at-a-time">A part at a time</a></h2>
-<p>Data that arrives in pieces, or is too big to hold twice, goes through a <code>compress.Writer</code>: each <code>write</code> compresses a piece and adds the result to its <code>out</code>, and <code>finish</code> ends the stream. A <code>compress.Reader</code> works the other way, and its <code>write</code> gives <code>true</code> once the stream has ended:</p>
+<p>Data that arrives in pieces, or is too big to hold twice, goes through a <code>compress.Writer</code>. Each <code>write</code> compresses a piece and adds the result to its <code>out</code>, and <code>finish</code> ends the stream. A <code>compress.Reader</code> works the other way. Its <code>write</code> returns <code>true</code> once the stream has ended.</p>
 <pre class="code run"><code><span class="k">import</span> compress
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -107,6 +113,7 @@ CompressError.tooLarge: the data comes out larger than the limit</code></pre>
     }
     <span class="k">try</span> w.<span class="f">finish</span>()
     <span class="f">print</span>(<span class="s">&quot;under 4 KiB compressed: </span><span class="e">{</span>w.out.len &lt; <span class="n">4096</span><span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> r := <span class="k">try</span> compress.<span class="f">reader</span>()
     done := <span class="k">try</span> r.<span class="f">write</span>(w.out)
     <span class="k">scoped</span> rows := r.out.<span class="f">lines</span>()
@@ -114,9 +121,10 @@ CompressError.tooLarge: the data comes out larger than the limit</code></pre>
 }</code></pre>
 <pre class="out"><code>under 4 KiB compressed: true
 ended: true, 1000 rows, the last is 999,sensor-3,21.5</code></pre>
-<p><code>out</code> keeps growing, so a program that sends the data on takes what is there after each <code>write</code> and clears it with <code>w.out.clear()</code>.</p>
+<p><code>out</code> keeps growing. A program that sends the data on takes what is there after each <code>write</code> and clears it with <code>w.out.clear()</code>.</p>
 <h2 id="tar-archives"><a href="#tar-archives">Tar archives</a></h2>
-<p>A tar archive holds files and folders with their names, modes and times, and is usually compressed with gzip into a <code>.tar.gz</code>. A <code>tar.Writer</code> builds one in memory: <code>add</code> adds a file from its bytes, <code>addDir</code> a folder, <code>addFile</code> a file from the disk, and <code>addTree</code> a whole folder from the disk. <code>finish</code> ends the archive and <code>out</code> holds it:</p>
+<p>A tar archive holds files and folders with their names, modes and times. It is usually compressed with gzip into a <code>.tar.gz</code>. A <code>tar.Writer</code> builds one in memory:</p>
+<ul><li><code>add</code> adds a file from its bytes.</li><li><code>addDir</code> adds a folder.</li><li><code>addFile</code> adds a file from the disk.</li><li><code>addTree</code> adds a whole folder from the disk.</li><li><code>finish</code> ends the archive, and <code>out</code> holds it.</li></ul>
 <pre class="code run"><code><span class="k">import</span> compress, fs, tar
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -130,14 +138,16 @@ ended: true, 1000 rows, the last is 999,sensor-3,21.5</code></pre>
     <span class="k">try</span> w.<span class="f">addTree</span>(dir, <span class="s">&quot;backup&quot;</span>)
     w.<span class="f">add</span>(<span class="s">&quot;backup/VERSION&quot;</span>, <span class="s">&quot;1.4.2</span><span class="e">\n</span><span class="s">&quot;</span>)
     w.<span class="f">finish</span>()
+
     <span class="k">scoped</span> <span class="t">String</span> packed = <span class="k">try</span> compress.<span class="f">gzip</span>(w.out)
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-backup.tar.gz&quot;</span>, packed)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>w.out.len<span class="e">}</span><span class="s"> bytes, smaller gzipped: </span><span class="e">{</span>packed.len &lt; w.out.len<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">try</span> fs.<span class="f">removeAll</span>(dir)
 }</code></pre>
 <pre class="out"><code>4608 bytes, smaller gzipped: true</code></pre>
-<p>A tar archive is made of 512-byte blocks, so even small files take some room until gzip squeezes the empty parts out.</p>
-<p><code>tar.open(path)</code> reads an archive back, and decompresses it first when it is gzipped; <code>tar.parse(data)</code> reads one from memory. Each <code>tar.Entry</code> has its <code>name</code>, <code>kind</code>, <code>size</code>, <code>mode</code>, <code>mtime</code> and, for a file, its bytes in <code>data</code>. <code>find(name)</code> gives one entry, or <code>null</code>:</p>
+<p>A tar archive is made of 512-byte blocks, so even small files take some room until gzip squeezes out the empty parts.</p>
+<p><code>tar.open(path)</code> reads an archive back and decompresses it first when it is gzipped. <code>tar.parse(data)</code> reads one from memory. Each <code>tar.Entry</code> has its <code>name</code>, <code>kind</code>, <code>size</code>, <code>mode</code>, <code>mtime</code> and, for a file, its bytes in <code>data</code>. <code>find(name)</code> gives one entry, or <code>null</code>.</p>
 <pre class="code run"><code><span class="k">import</span> tar
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -145,6 +155,7 @@ ended: true, 1000 rows, the last is 999,sensor-3,21.5</code></pre>
     <span class="k">for</span> e <span class="k">in</span> a.entries {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.kind<span class="e">}</span><span class="s"> </span><span class="e">{</span>e.name<span class="e">}</span><span class="s"> </span><span class="e">{</span>e.size<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     v := a.<span class="f">find</span>(<span class="s">&quot;backup/VERSION&quot;</span>)
     <span class="k">if</span> v != <span class="k">null</span> {
         <span class="f">print</span>(<span class="s">&quot;version </span><span class="e">{</span>v.data.<span class="f">trim</span>()<span class="e">}</span><span class="s">&quot;</span>)
@@ -155,20 +166,22 @@ file backup/conf/app.toml 12
 file backup/notes.txt 19
 file backup/VERSION 6
 version 1.4.2</code></pre>
-<p><code>addTree</code> names each entry after its place under the folder, with the prefix it was given in front.</p>
+<p><code>addTree</code> names each entry after its place under the folder, with the given prefix in front.</p>
 <p><code>extract(dir)</code> writes the files, folders and links into a folder, with their modes:</p>
 <pre class="code run"><code><span class="k">import</span> fs, tar
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> tar.<span class="t">Archive</span> a = <span class="k">try</span> tar.<span class="f">open</span>(<span class="s">&quot;/tmp/iris-tour-backup.tar.gz&quot;</span>)
     <span class="k">try</span> a.<span class="f">extract</span>(<span class="s">&quot;/tmp/iris-tour-restore&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> conf = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;/tmp/iris-tour-restore/backup/conf/app.toml&quot;</span>)
     <span class="f">print</span>(conf.<span class="f">trim</span>())
+
     <span class="k">try</span> fs.<span class="f">removeAll</span>(<span class="s">&quot;/tmp/iris-tour-restore&quot;</span>)
     <span class="k">try</span> fs.<span class="f">remove</span>(<span class="s">&quot;/tmp/iris-tour-backup.tar.gz&quot;</span>)
 }</code></pre>
 <pre class="out"><code>port = 8080</code></pre>
-<p>An archive from somewhere else might hold a name like <code>../../etc/passwd</code>, to write outside the folder. <code>extract</code> checks every name and link first, and fails with <code>TarError.unsafe</code> before it writes anything:</p>
+<p>An archive from elsewhere might contain a name like <code>../../etc/passwd</code> that writes outside the folder. <code>extract</code> checks every name and link first and fails with <code>TarError.unsafe</code> before writing anything.</p>
 <pre class="code run"><code><span class="k">import</span> tar
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -176,6 +189,7 @@ version 1.4.2</code></pre>
     <span class="k">defer</span> w.<span class="f">free</span>()
     w.<span class="f">add</span>(<span class="s">&quot;../../etc/cron.d/job&quot;</span>, <span class="s">&quot;* * * * * root sh</span><span class="e">\n</span><span class="s">&quot;</span>)
     w.<span class="f">finish</span>()
+
     <span class="k">scoped</span> tar.<span class="t">Archive</span> bad = <span class="k">try</span> tar.<span class="f">parse</span>(w.out)
     bad.<span class="f">extract</span>(<span class="s">&quot;/tmp/iris-tour-restore&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
@@ -183,22 +197,24 @@ version 1.4.2</code></pre>
 }</code></pre>
 <pre class="out"><code>TarError.unsafe: ../../etc/cron.d/job has .. in it, which would leave the folder</code></pre>
 <h2 id="zip-archives"><a href="#zip-archives">Zip archives</a></h2>
-<p>Zip compresses each file on its own, so one file can be read without the rest, and every system opens it. A <code>zip.Writer</code> is built like a <code>tar.Writer</code>. <code>add</code> deflates a file unless that wouldn't make it smaller, and <code>method: .stored</code> keeps it as it is, for data that is compressed already:</p>
+<p>Zip compresses each file separately, so one file can be read without the rest, and every system opens it. A <code>zip.Writer</code> works like a <code>tar.Writer</code>. <code>add</code> deflates a file unless that wouldn't make it smaller. <code>method: .stored</code> keeps a file as it is, for data that is already compressed.</p>
 <pre class="code run"><code><span class="k">import</span> fs, <span class="t">str</span>, zip
 
 !<span class="t">void</span> <span class="f">main</span>() {
     zip.<span class="t">Writer</span> w
     <span class="k">defer</span> w.<span class="f">free</span>()
+
     <span class="k">scoped</span> <span class="t">String</span> csv = <span class="t">str</span>.<span class="f">repeat</span>(<span class="s">&quot;2026-10-24,eu-west,200,14</span><span class="e">\n</span><span class="s">&quot;</span>, <span class="n">500</span>)
     <span class="k">try</span> w.<span class="f">add</span>(<span class="s">&quot;report/requests.csv&quot;</span>, csv)
     <span class="k">try</span> w.<span class="f">add</span>(<span class="s">&quot;report/README.txt&quot;</span>, <span class="s">&quot;Requests per region, one row a minute.</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="k">try</span> w.<span class="f">add</span>(<span class="s">&quot;report/chart.png&quot;</span>, <span class="s">&quot;</span><span class="e">\x89</span><span class="s">PNG</span><span class="e">\r</span><span class="e">\n</span><span class="s">...&quot;</span>, method: .stored)
     w.<span class="f">finish</span>()
+
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-report.zip&quot;</span>, w.out)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>csv.len<span class="e">}</span><span class="s"> bytes of CSV, the zip is under 1 KiB: </span><span class="e">{</span>w.out.len &lt; <span class="n">1024</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>13000 bytes of CSV, the zip is under 1 KiB: true</code></pre>
-<p><code>zip.open(path)</code> reads an archive, and <code>zip.parse(data)</code> one in memory. Each <code>zip.Entry</code> has its <code>name</code>, <code>size</code>, <code>compressedSize</code>, <code>method</code> and <code>isDir</code>. <code>read(entry)</code> gives one file's bytes, and checks them against the CRC-32 the archive keeps for them:</p>
+<p><code>zip.open(path)</code> reads an archive and <code>zip.parse(data)</code> reads one in memory. Each <code>zip.Entry</code> has its <code>name</code>, <code>size</code>, <code>compressedSize</code>, <code>method</code> and <code>isDir</code>. <code>read(entry)</code> gives one file's bytes and checks them against the CRC-32 the archive stores for them.</p>
 <pre class="code run"><code><span class="k">import</span> fs, zip
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -206,8 +222,10 @@ version 1.4.2</code></pre>
     <span class="k">for</span> e <span class="k">in</span> a.entries {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.method<span class="e">}</span><span class="s">, </span><span class="e">{</span>e.size<span class="e">}</span><span class="s"> bytes&quot;</span>)
     }
+
     <span class="k">scoped</span> <span class="t">String</span> readme = <span class="k">try</span> a.<span class="f">read</span>(a.<span class="f">find</span>(<span class="s">&quot;report/README.txt&quot;</span>))
     <span class="f">print</span>(readme.<span class="f">trim</span>())
+
     <span class="k">try</span> fs.<span class="f">remove</span>(<span class="s">&quot;/tmp/iris-tour-report.zip&quot;</span>)
 }</code></pre>
 <pre class="out"><code>report/requests.csv: deflated, 13000 bytes
@@ -215,7 +233,7 @@ report/README.txt: stored, 39 bytes
 report/chart.png: stored, 9 bytes
 Requests per region, one row a minute.</code></pre>
 <p>The README was stored, since deflating 39 bytes wouldn't have made them smaller.</p>
-<p><code>extract(dir)</code> writes every file into a folder, with the same check for names that would leave it as tar has (<code>ZipError.unsafe</code>). Bytes that don't match their CRC-32 fail with <code>ZipError.crc</code>, and an encrypted entry with <code>ZipError.unsupported</code>.</p>
+<p><code>extract(dir)</code> writes every file into a folder. It checks for names that would leave the folder, as tar does, and fails with <code>ZipError.unsafe</code>. Bytes that don't match their CRC-32 fail with <code>ZipError.crc</code>, and an encrypted entry fails with <code>ZipError.unsupported</code>.</p>
     <nav class="pager"><a class="prev" href="12-templates.html"><span>Previous</span>Templates</a><a class="next" href="14-http.html"><span>Next</span>HTTP</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -227,7 +245,6 @@ Requests per region, one row a minute.</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

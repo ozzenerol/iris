@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Booleans and operators - Iris</title>
-<meta name="description" content="The bool type, the operators that combine and compare values, and the order in which a longer expression is worked out.">
+<meta name="description" content="The bool type, the operators, and the order in which an expression is evaluated.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,22 +46,24 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html" class="on"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Booleans and operators</h1>
-<p class="lede">The <code>bool</code> type, the operators that combine and compare values, and the order in which a longer expression is worked out.</p>
+<p class="lede">The <code>bool</code> type, the operators, and the order in which an expression is evaluated.</p>
 <h2 id="bool"><a href="#bool">bool</a></h2>
-<p>A <code>bool</code> is <code>true</code> or <code>false</code>. Comparisons give one, and conditions take one:</p>
+<p>A <code>bool</code> is <code>true</code> or <code>false</code>. Comparisons produce one and conditions take one:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">503</span>
     failed := status &gt;= <span class="n">500</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>failed<span class="e">}</span><span class="s"> </span><span class="e">{</span>status == <span class="n">200</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>status != <span class="n">200</span><span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">if</span> failed {
         <span class="f">print</span>(<span class="s">&quot;retrying&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>true false true
 retrying</code></pre>
-<p>A condition must be a <code>bool</code>. A number, a pointer or a string isn't one, so <code>if count</code> doesn't compile; the comparison is written out: <code>if count != 0</code>, <code>if p != null</code>, <code>if name.len &gt; 0</code>.</p>
+<p>A condition must be a <code>bool</code>. <code>if count</code> doesn't compile. Write the comparison: <code>if count != 0</code>, <code>if p != null</code>, <code>if name.len &gt; 0</code>.</p>
 <h2 id="and-or-not"><a href="#and-or-not">And, or, not</a></h2>
-<p><code>&amp;&amp;</code> is true when both sides are, <code>||</code> when at least one is, and <code>!</code> turns a <code>bool</code> around. The right side of <code>&amp;&amp;</code> and <code>||</code> is only worked out when it is needed:</p>
+<p><code>&amp;&amp;</code> is true when both sides are true, <code>||</code> when at least one is, and <code>!</code> negates. The right side of <code>&amp;&amp;</code> and <code>||</code> runs only when needed:</p>
 <pre class="code run"><code><span class="t">bool</span> <span class="f">probe</span>(<span class="t">str</span> host, <span class="t">bool</span> up) {
     <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">return</span> up
@@ -72,31 +73,35 @@ retrying</code></pre>
     <span class="k">if</span> <span class="f">probe</span>(<span class="s">&quot;primary&quot;</span>, <span class="k">false</span>) &amp;&amp; <span class="f">probe</span>(<span class="s">&quot;replica&quot;</span>, <span class="k">true</span>) {
         <span class="f">print</span>(<span class="s">&quot;both databases are up&quot;</span>)
     }
+
     <span class="k">if</span> <span class="f">probe</span>(<span class="s">&quot;dns1&quot;</span>, <span class="k">true</span>) || <span class="f">probe</span>(<span class="s">&quot;dns2&quot;</span>, <span class="k">true</span>) {
         <span class="f">print</span>(<span class="s">&quot;a resolver is up&quot;</span>)
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>!<span class="k">true</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>!(<span class="n">1</span> &gt; <span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>probing primary
 probing dns1
 a resolver is up
 false true</code></pre>
-<p>This makes conditions like <code>conn != null &amp;&amp; conn.open</code> safe: the second part isn't reached when the first is false.</p>
-<p>They can also be written as words: <code>and</code>, <code>or</code> and <code>not</code>. <code>and</code> and <code>or</code> are the same as <code>&amp;&amp;</code> and <code>||</code>. <code>not</code> takes everything up to the next <code>and</code> or <code>or</code>, so <code>not a == b</code> is <code>!(a == b)</code>, where <code>!</code> takes only the value right after it:</p>
+<p>So <code>conn != null &amp;&amp; conn.open</code> is safe: the second part doesn't run when the first is false.</p>
+<p><code>and</code>, <code>or</code> and <code>not</code> are word forms. <code>and</code> and <code>or</code> equal <code>&amp;&amp;</code> and <code>||</code>. <code>not</code> applies to everything up to the next <code>and</code> or <code>or</code>, so <code>not a == b</code> means <code>!(a == b)</code>. <code>!</code> applies only to the value right after it.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     closed := <span class="k">false</span>
     pending := <span class="n">3</span>
+
     <span class="k">if</span> <span class="k">not</span> closed <span class="k">and</span> pending &gt; <span class="n">0</span> {
         <span class="f">print</span>(<span class="s">&quot;flushing </span><span class="e">{</span>pending<span class="e">}</span><span class="s"> writes&quot;</span>)
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">not</span> pending == <span class="n">4</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>closed <span class="k">or</span> pending == <span class="n">3</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>flushing 3 writes
 true true</code></pre>
-<p>Which to write is a matter of taste; a project usually picks one. <code>not</code> can't go where only one value fits, as in <code>a == not b</code>; parentheses or <code>!</code> are used there.</p>
+<p>Pick one style per project. <code>not</code> can't appear where a single value is expected, as in <code>a == not b</code>. Use <code>!</code> or parentheses there.</p>
 <h2 id="comparing"><a href="#comparing">Comparing</a></h2>
-<div class="table"><table><thead><tr><th>Operator</th><th>True when</th></tr></thead><tbody><tr><td><code>a == b</code></td><td>a and b are equal</td></tr><tr><td><code>a != b</code></td><td>they aren't</td></tr><tr><td><code>a &lt; b</code>, <code>a &lt;= b</code></td><td>a is smaller, or smaller or equal</td></tr><tr><td><code>a &gt; b</code>, <code>a &gt;= b</code></td><td>a is larger, or larger or equal</td></tr></tbody></table></div>
-<p>Numbers compare by value. <code>str</code> and <code>String</code> compare by their bytes, <code>==</code> and <code>!=</code> only. Structs compare field by field with <code>==</code> and <code>!=</code>, plain enums by value, and pointers by address:</p>
+<div class="table"><table><thead><tr><th>Operator</th><th>True when</th></tr></thead><tbody><tr><td><code>a == b</code></td><td>a equals b</td></tr><tr><td><code>a != b</code></td><td>a differs from b</td></tr><tr><td><code>a &lt; b</code>, <code>a &lt;= b</code></td><td>a is smaller, or smaller or equal</td></tr><tr><td><code>a &gt; b</code>, <code>a &gt;= b</code></td><td>a is larger, or larger or equal</td></tr></tbody></table></div>
+<ul><li>Numbers compare by value.</li><li><code>str</code> and <code>String</code> compare by bytes, with <code>==</code> and <code>!=</code> only.</li><li>Structs compare field by field with <code>==</code> and <code>!=</code>.</li><li>Plain enums compare by value, pointers by address.</li></ul>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Addr</span> {
     <span class="t">u32</span> ip
     <span class="t">u16</span> port
@@ -108,32 +113,35 @@ true true</code></pre>
     a := <span class="t">Addr</span>{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
     b := <span class="t">Addr</span>{ip: <span class="n">0x7f000001</span>, port: <span class="n">8080</span>}
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a == b<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;GET&quot;</span> == <span class="s">&quot;GET&quot;</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">Proto</span>.tcp != <span class="t">Proto</span>.udp<span class="e">}</span><span class="s">&quot;</span>)
+
     p := &amp;a
     q := &amp;b
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p == q<span class="e">}</span><span class="s"> </span><span class="e">{</span>p == &amp;a<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true true true
 false true</code></pre>
-<p><code>is</code> can be written for <code>==</code>, and <code>is not</code> for <code>!=</code>. They compare the same way, and the comparison is by value: <code>a is b</code> on two structs compares their fields, as <code>==</code> does, not whether they are the same variable.</p>
+<p><code>is</code> means <code>==</code> and <code>is not</code> means <code>!=</code>. <code>a is b</code> on two structs compares fields, the same as <code>==</code>.</p>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">Proto</span> { tcp, udp }
 
 <span class="t">void</span> <span class="f">main</span>() {
     status := <span class="n">404</span>
     p := <span class="t">Proto</span>.tcp
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>status <span class="k">is</span> <span class="n">404</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>p <span class="k">is</span> <span class="k">not</span> .udp<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="s">&quot;GET&quot;</span> <span class="k">is</span> <span class="s">&quot;GET&quot;</span><span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;not found&quot;</span>) <span class="k">if</span> status <span class="k">is</span> <span class="n">404</span>
 }</code></pre>
 <pre class="out"><code>true true true
 not found</code></pre>
 <h2 id="all-the-operators"><a href="#all-the-operators">All the operators</a></h2>
-<div class="table"><table><thead><tr><th>Operators</th><th>What they do</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~</code></td><td>bits: and, or, exclusive or, each bit flipped</td></tr><tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code>, <code>and or not</code></td><td>and, or, not, on <code>bool</code></td></tr><tr><td><code>-x</code></td><td>the negative of x</td></tr><tr><td><code>x++ x-- ++x --x</code></td><td>add or take one, giving the value from before or after (see <a href="02-variables.html">Variables</a>)</td></tr><tr><td><code>&amp;x</code>, <code>*p</code></td><td>the address of x, and the value p points to (see <a href="17-pointers.html">Pointers</a>)</td></tr><tr><td><code>a..b</code></td><td>the range from a to before b, in <code>for</code> and slicing; in <code>match</code>, from a to b with both ends</td></tr><tr><td><code>ch &lt;- v</code>, <code>&lt;-ch</code></td><td>sending to a channel and taking from it (see <a href="24-tasks-and-channels.html">Tasks and channels</a>)</td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment, which is a statement</td></tr></tbody></table></div>
-<h2 id="order"><a href="#order">Order</a></h2>
-<p>In a longer expression, some operators bind more tightly than others. From tightest to loosest:</p>
-<ol><li><code>x++</code>, <code>x--</code>, then <code>-x</code>, <code>!x</code>, <code>~x</code>, <code>&amp;x</code>, <code>*p</code>, <code>++x</code>, <code>--x</code> (the ones written before a value)</li><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></li><li><code>not</code></li><li><code>&amp;&amp;</code>, <code>and</code></li><li><code>||</code>, <code>or</code></li></ol>
-<p>Operators on the same level go from left to right. Parentheses group anything differently:</p>
+<div class="table"><table><thead><tr><th>Operators</th><th>Meaning</th></tr></thead><tbody><tr><td><code>+ - * / %</code></td><td>arithmetic</td></tr><tr><td><code>&amp; | ^ ~</code></td><td>bitwise and, or, xor, not</td></tr><tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>shifts</td></tr><tr><td><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></td><td>comparison</td></tr><tr><td><code>&amp;&amp; || !</code>, <code>and or not</code></td><td>logic on <code>bool</code></td></tr><tr><td><code>-x</code></td><td>negation</td></tr><tr><td><code>x++ x-- ++x --x</code></td><td>increment and decrement (see <a href="02-variables.html">Variables</a>)</td></tr><tr><td><code>&amp;x</code>, <code>*p</code></td><td>address of x, value at p (see <a href="17-pointers.html">Pointers</a>)</td></tr><tr><td><code>a..b</code></td><td>a up to but excluding b in <code>for</code> and slicing; a to b inclusive in <code>match</code></td></tr><tr><td><code>ch &lt;- v</code>, <code>&lt;-ch</code></td><td>channel send and receive (see <a href="24-tasks-and-channels.html">Tasks and channels</a>)</td></tr><tr><td><code>= += -= *= /= %= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</code></td><td>assignment, a statement</td></tr></tbody></table></div>
+<h2 id="precedence"><a href="#precedence">Precedence</a></h2>
+<p>From tightest to loosest:</p>
+<ol><li><code>x++</code>, <code>x--</code>, then the prefix operators <code>-x</code>, <code>!x</code>, <code>~x</code>, <code>&amp;x</code>, <code>*p</code>, <code>++x</code>, <code>--x</code></li><li><code>* / % &lt;&lt; &gt;&gt; &amp;</code></li><li><code>+ - | ^</code></li><li><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>is</code>, <code>is not</code></li><li><code>not</code></li><li><code>&amp;&amp;</code>, <code>and</code></li><li><code>||</code>, <code>or</code></li></ol>
+<p>Operators on one level group left to right. Parentheses override the order.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">2</span> + <span class="n">3</span> * <span class="n">4</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>(<span class="n">2</span> + <span class="n">3</span>) * <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">10</span> - <span class="n">4</span> - <span class="n">3</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">2</span> * <span class="n">3</span> % <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
+
     flags := <span class="n">0x12</span>
     port := <span class="n">8080</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>flags &amp; <span class="n">0x02</span> != <span class="n">0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>port &gt; <span class="n">1023</span> &amp;&amp; port &lt; <span class="n">49152</span> || port == <span class="n">80</span><span class="e">}</span><span class="s">&quot;</span>)
@@ -141,19 +149,20 @@ not found</code></pre>
 <pre class="out"><code>14 20
 3 2
 true true</code></pre>
-<p><code>flags &amp; 0x02 != 0</code> reads as <code>(flags &amp; 0x02) != 0</code>, since <code>&amp;</code> binds more tightly than <code>!=</code>: it tests whether the SYN bit is set.</p>
+<p><code>&amp;</code> binds tighter than <code>!=</code>, so <code>flags &amp; 0x02 != 0</code> means <code>(flags &amp; 0x02) != 0</code> and tests the SYN bit.</p>
 <h2 id="conditions-as-values"><a href="#conditions-as-values">Conditions as values</a></h2>
-<p><code>if</code> and <code>match</code> give values too, which takes the place of the <code>?:</code> operator some languages have (see <a href="08-if-and-match.html">if and match</a>):</p>
+<p><code>if</code> and <code>match</code> produce values, so there is no <code>?:</code> operator (see <a href="08-if-and-match.html">if and match</a>):</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     port := <span class="n">443</span>
     scheme := <span class="k">if</span> port == <span class="n">443</span> { <span class="s">&quot;https&quot;</span> } <span class="k">else</span> { <span class="s">&quot;http&quot;</span> }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>scheme<span class="e">}</span><span class="s">://example.com:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>https://example.com:443</code></pre>
     <nav class="pager"><a class="prev" href="04-floating-point.html"><span>Previous</span>Floating point</a><a class="next" href="06-text.html"><span>Next</span>Text</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#bool">bool</a></li><li><a href="#and-or-not">And, or, not</a></li><li><a href="#comparing">Comparing</a></li><li><a href="#all-the-operators">All the operators</a></li><li><a href="#order">Order</a></li><li><a href="#conditions-as-values">Conditions as values</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#bool">bool</a></li><li><a href="#and-or-not">And, or, not</a></li><li><a href="#comparing">Comparing</a></li><li><a href="#all-the-operators">All the operators</a></li><li><a href="#precedence">Precedence</a></li><li><a href="#conditions-as-values">Conditions as values</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -161,7 +170,6 @@ true true</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

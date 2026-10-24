@@ -1,10 +1,10 @@
 # HTTP
 
-The `http` module has a server, with a `Router` that sends each request to the function for its method and path, and a client. Both speak HTTP/1.1 and HTTP/2, and both do HTTPS.
+The `http` module has a server and a client. The server's `Router` sends each request to the function for its method and path. Both sides speak HTTP/1.1 and HTTP/2, and both do HTTPS.
 
 ## A server
 
-A handler takes the request and the response. It fills the response in, and the response is sent when the handler returns. A `Router` holds the handlers: `r.get(path, handler)` adds one for GET, and `post`, `put`, `delete` and `patch` do the same for the other methods. `r.serve(8080)` answers on port 8080 until the program is stopped:
+A handler takes the request and the response. It fills in the response, which is sent when the handler returns. A `Router` holds the handlers. `r.get(path, handler)` adds one for GET, and `post`, `put`, `delete` and `patch` do the same for the other methods. `r.serve(8080)` answers on port 8080 until the program is stopped.
 
 ```iris
 import http
@@ -17,6 +17,7 @@ void hello(http.Request *req, http.Response *res) {
     http.Router r
     defer r.free()
     r.get("/", hello)
+
     try r.serve(8080)
 }
 ```
@@ -29,9 +30,9 @@ curl localhost:8080/
 hello
 ```
 
-Each connection gets a task of its own, and `serve` uses every CPU core, so a handler that waits for a database or another server doesn't hold the others up.
+Each connection gets its own task and `serve` uses every CPU core, so a handler that waits for a database or another server doesn't hold up the others.
 
-The examples in this chapter run the server and a client in one program, so they can show what comes back. `net.listen(0, "127.0.0.1")` opens a port the system picks, `serveOn` answers on it, in a task started with `spawn`, and the client asks it with `http.get`:
+The examples in this chapter run the server and a client in one program, so they can show the reply. `net.listen(0, "127.0.0.1")` opens a port the system picks. `serveOn` answers on it in a task started with `spawn`, and the client calls it with `http.get`.
 
 ```iris run
 import http, net
@@ -50,6 +51,7 @@ void serve(http.Router *r, net.Listener ln) {
     http.Router r
     defer r.free()
     r.get("/", hello)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -65,7 +67,7 @@ void serve(http.Router *r, net.Listener ln) {
 
 ## Paths
 
-`:name` in a path takes one part of it, and `*name` all the rest. The handler reads them with `req.param`. `req.query` gives a value from the query, after the `?`, and `""` when it isn't there. Both give the value with its `%XX` decoded, and `req.query` turns `+` into a space too, as browsers send it:
+`:name` in a path takes one part of it and `*name` takes the rest. The handler reads them with `req.param`. `req.query` gives a value from the query after the `?`, or `""` when it isn't there. Both decode `%XX`, and `req.query` also turns `+` into a space, as browsers send it.
 
 ```iris run
 import http, net, str
@@ -95,6 +97,7 @@ void serve(http.Router *r, net.Listener ln) {
     r.get("/users/:id", user)
     r.get("/files/*path", file)
     r.get("/logs", logs)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -103,6 +106,7 @@ void serve(http.Router *r, net.Listener ln) {
         scoped http.Reply reply = try http.get(url)
         print("{reply.status} {str.trim(reply.body)}")
     }
+
     scoped String url = format("http://127.0.0.1:{ln.port}/users/42")
     scoped http.Reply reply = try http.post(url, "text/plain", "")
     print("{reply.status} allowed: {reply.header("Allow")}")
@@ -118,7 +122,9 @@ void serve(http.Router *r, net.Listener ln) {
 405 allowed: GET
 ```
 
-A path no pattern has gets 404, with the text `not found` and a newline, which `str.trim` takes off here. A path that is there for other methods gets 405, with an `Allow` header that lists them. When several patterns match, the one with the most fixed parts wins: `/users/me` goes before `/users/:id`, whatever the order they were added in.
+- A path that matches no pattern gets 404 with the text `not found` and a newline, which `str.trim` removes here.
+- A path that exists for other methods gets 405 with an `Allow` header that lists them.
+- When several patterns match, the one with the most fixed parts wins. `/users/me` goes before `/users/:id`, whatever order they were added in.
 
 ## What a request holds
 
@@ -140,11 +146,15 @@ A path no pattern has gets 404, with the text `not found` and a newline, which `
 
 ## Answers
 
-`res.text(s)` answers with text, `res.json(s)` with JSON and `res.html(s)` with HTML; each sets the `Content-Type`. `res.send(s, type)` answers with any other type, such as `text/csv`. The status is 200 unless `res.status` says another. `res.error(status, message)` sets the status and answers with `{"error": message}`, and `res.header(name, value)` adds a header. A `Content-Type` given with `header` replaces the type the answer had, so there is only ever one.
+- `res.text(s)` answers with text, `res.json(s)` with JSON and `res.html(s)` with HTML. Each sets the `Content-Type`.
+- `res.send(s, type)` answers with any other type, such as `text/csv`.
+- The status is 200 unless `res.status` sets another.
+- `res.error(status, message)` sets the status and answers with `{"error": message}`.
+- `res.header(name, value)` adds a header. A `Content-Type` set with `header` replaces the type of the answer, so there is only ever one.
 
-A handler can return `!void`. An error that leaves it is answered with 500 and the error's message, so `try` can be used in a handler like anywhere else.
+A handler can return `!void`. An error that leaves it is answered with 500 and the error's message, so `try` works in a handler as anywhere else.
 
-A JSON body is read with `json.decode`, and a struct is answered with `json.encode` (see [JSON](01-json.html)):
+Read a JSON body with `json.decode` and answer with a struct through `json.encode` (see [JSON](01-json.html)):
 
 ```iris run
 import http, json, net
@@ -161,6 +171,7 @@ void addBackend(http.Request *req, http.Response *res) {
         res.error(400, e.message)
         return
     }
+
     scoped String body = json.encode(b)
     res.status = 201
     res.header("Location", "/backends/1")
@@ -177,6 +188,7 @@ void serve(http.Router *r, net.Listener ln) {
     http.Router r
     defer r.free()
     r.post("/backends", addBackend)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -200,9 +212,9 @@ at /backends/1
 
 ## Forms and uploads
 
-`req.form(name)` gives a field of a form in the body, sent as `application/x-www-form-urlencoded` (with its `%XX` and `+` decoded) or as `multipart/form-data`. `req.file(name)` gives a file sent in a multipart form, as an `http.Part` with its `filename`, `contentType` and `data`, and whether there is one. Both give text that points into the request, valid until the handler returns.
+`req.form(name)` gives a field of a form in the body. The form can be `application/x-www-form-urlencoded`, with its `%XX` and `+` decoded, or `multipart/form-data`. `req.file(name)` gives a file sent in a multipart form as an `http.Part` with its `filename`, `contentType` and `data`, and whether there is one. Both return text that points into the request and stays valid until the handler returns.
 
-A client builds a multipart body with `http.multipart()`: `field` adds a field, `file` a file, and `finish` ends it. `contentType()` is the `Content-Type` to send it with:
+A client builds a multipart body with `http.multipart()`. `field` adds a field, `file` a file, and `finish` ends the body. `contentType()` is the `Content-Type` to send it with.
 
 ```iris run
 import http, net
@@ -226,6 +238,7 @@ void serve(http.Router *r, net.Listener ln) {
     http.Router r
     defer r.free()
     r.post("/photos", upload)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -233,10 +246,12 @@ void serve(http.Router *r, net.Listener ln) {
     form.field("title", "The harbour at dawn")
     form.file("photo", "harbour.jpg", "image/jpeg", "not really a jpeg")
     form.finish()
+
     scoped String url = format("http://127.0.0.1:{ln.port}/photos")
     scoped String contentType = form.contentType()
     scoped http.Reply reply = try http.post(url, contentType, form.body)
     print("{reply.status} {reply.body}")
+
     scoped http.Reply none = try http.post(url, "application/x-www-form-urlencoded", "title=No+photo")
     print("{none.status} {none.body}")
 }
@@ -247,11 +262,11 @@ void serve(http.Router *r, net.Listener ln) {
 400 {"error": "no photo"}
 ```
 
-The whole body is read before the handler runs, so an upload counts against the Router's `maxBody`, 16 MiB unless it is set. `http.parseMultipart(body, contentType)` gives every part of a multipart body, in order.
+The whole body is read before the handler runs, so an upload counts against the Router's `maxBody`, 16 MiB by default. `http.parseMultipart(body, contentType)` gives every part of a multipart body, in order.
 
 ## Cookies
 
-`req.cookie(name)` gives the value of a cookie the client sent, `""` when it sent none. `res.setCookie(c)` adds a `Set-Cookie` header for an `http.Cookie`, and `res.clearCookie(name)` tells the browser to remove one:
+`req.cookie(name)` gives the value of a cookie the client sent, or `""` when it sent none. `res.setCookie(c)` adds a `Set-Cookie` header for an `http.Cookie`. `res.clearCookie(name)` tells the browser to remove one.
 
 | Field | What it sets | Default |
 |---|---|---|
@@ -263,7 +278,7 @@ The whole body is read before the handler runs, so an upload counts against the 
 | `httpOnly` | not readable by JavaScript | `true` |
 | `sameSite` | `.lax`, `.strict`, `.none`, or `.unset` to leave it out | `.lax` |
 
-The value is sent as it is, so it should be plain text without spaces, quotes, commas or semicolons; `base64` or `url.encode` makes any value fit.
+The value is sent as it is, so keep it to plain text without spaces, quotes, commas or semicolons. `base64` or `url.encode` makes any value fit.
 
 ```iris run
 import http, net, str
@@ -283,9 +298,11 @@ void serve(net.Listener ln) {
 !void main() {
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(ln)
+
     c := try net.dial("127.0.0.1", ln.port)
     defer c.close()
     try c.write("GET / HTTP/1.1\r\nHost: localhost\r\nCookie: user=ada; theme=dark\r\nConnection: close\r\n\r\n")
+
     for {
         scoped String line = c.readLine() catch e {
             break
@@ -305,7 +322,9 @@ welcome back, ada
 
 ## Files
 
-`res.file(path)` answers with a file, its `Content-Type` from its extension, and with 404 when there is no such file. `res.fileFrom(dir, name)` does the same for a file inside `dir`, and answers 404 for a name with a `..` part or an absolute one, so a route like `/static/*path` can't send a file from outside `dir`. `http.mimeType(name)` gives the type it uses, `application/octet-stream` for an extension it doesn't know:
+- `res.file(path)` answers with a file and takes its `Content-Type` from its extension. It answers 404 when the file doesn't exist.
+- `res.fileFrom(dir, name)` does the same for a file inside `dir`. It answers 404 for a name with a `..` part or an absolute name, so a route like `/static/*path` can't send a file from outside `dir`.
+- `http.mimeType(name)` gives the type they use, or `application/octet-stream` for an unknown extension.
 
 ```iris run
 import http, fs, net, str
@@ -323,17 +342,21 @@ void serve(http.Router *r, net.Listener ln) {
 !void main() {
     try fs.mkdirAll("/tmp/iris-tour-site")
     try fs.writeAll("/tmp/iris-tour-site/style.css", "h1 {{ color: teal }}\n")
+
     http.Router r
     defer r.free()
     r.get("/static/*path", static)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
+
     for name in ["style.css", "missing.js", "../etc/passwd"] {
         scoped String url = format("http://127.0.0.1:{ln.port}/static/{name}")
         scoped http.Reply reply = try http.get(url)
         print("{reply.status} {reply.header("Content-Type")}: {str.trim(reply.body)}")
     }
     print(http.mimeType("logo.SVG"))
+
     try fs.removeAll("/tmp/iris-tour-site")
 }
 ```
@@ -345,11 +368,11 @@ void serve(http.Router *r, net.Listener ln) {
 image/svg+xml
 ```
 
-HTML pages are often made with the `template` module (see [the library](../std/index.html#template)).
+HTML pages are often made with the `template` module (see [Templates](12-templates.html) and [the library](../std/index.html#template)).
 
 ## Checks and logging
 
-`r.use(check)` runs a check before the handler of every request, and `r.use(check, "/admin")` only for paths that start with `/admin`. A check that answers the request itself returns `false`, and the handler isn't called: a login check, a rate limit. `r.after(done)` runs after every request, answered or not, for a log:
+`r.use(check)` runs a check before the handler of every request. `r.use(check, "/admin")` runs it only for paths that start with `/admin`. A check that answers the request itself, such as a login check or a rate limit, returns `false`, and the handler isn't called. `r.after(done)` runs after every request, answered or not, for a log.
 
 ```iris run
 import http, net
@@ -382,6 +405,7 @@ void serve(http.Router *r, net.Listener ln) {
     r.use(needKey, "/admin")
     r.after(logLine)
     r.get("/admin/stats", stats)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -402,7 +426,11 @@ log: GET /admin/stats 200
 
 ## Limits and stopping
 
-The Router's fields set its limits. `timeout` is how long a read or a write may wait for a slow client (30 seconds unless set). `maxBody` is the largest body, 16 MiB unless set; a larger one gets 413. `gzip` compresses text answers of 1 KiB or more for clients that take it:
+The Router's fields set its limits:
+
+- `timeout` is how long a read or a write may wait for a slow client, 30 seconds by default.
+- `maxBody` is the largest body, 16 MiB by default. A larger one gets 413.
+- `gzip` compresses text answers of 1 KiB or more for clients that accept it.
 
 ```iris
 http.Router r
@@ -411,7 +439,7 @@ r.maxBody = 1 << 20
 r.gzip = true
 ```
 
-`r.shutdown()` stops taking new connections, waits for the requests that are being answered, and then `serve` returns. A server that stops cleanly on Ctrl-C, or when systemd or Docker stop it, waits for the signal in a task of its own and calls `shutdown` (see [Programs and the environment](06-processes.html)):
+`r.shutdown()` stops taking new connections and waits for the requests in progress, then `serve` returns. To stop cleanly on Ctrl-C, or when systemd or Docker stop it, a server waits for the signal in its own task and calls `shutdown` (see [Programs and the environment](06-processes.html)).
 
 ```iris
 import http, signal
@@ -430,8 +458,10 @@ void stopOnSignal(http.Router *r) {
     http.Router r
     defer r.free()
     r.get("/", hello)
+
     signal.watch()
     spawn stopOnSignal(&r)
+
     try r.serve(8080)
     print("stopped")
 }
@@ -446,11 +476,11 @@ stopped
 
 ## A client
 
-`http.get(url)` and `http.post(url, contentType, body)` send a request and give a `Reply`: its `status`, its `body`, and `reply.header(name)`. `http.send(method, url, body, contentType)` sends any method. The reply owns its body and headers, so it is declared `scoped`. A gzip body is unpacked already.
+`http.get(url)` and `http.post(url, contentType, body)` send a request and give a `Reply` with its `status`, its `body` and `reply.header(name)`. `http.send(method, url, body, contentType)` sends any method. The reply owns its body and headers, so declare it `scoped`. A gzip body is already unpacked.
 
-An address that isn't `http://` or `https://`, a server that can't be reached, or a reply that isn't HTTP is an error. A reply with status 404 or 500 isn't: the program checks `status`.
+An address that isn't `http://` or `https://`, a server that can't be reached, or a reply that isn't HTTP is an error. A reply with status 404 or 500 isn't an error, so the program checks `status`.
 
-A JSON reply is read with `json.decode`:
+Read a JSON reply with `json.decode`:
 
 ```iris run
 import http, json, net
@@ -476,6 +506,7 @@ void serve(http.Router *r, net.Listener ln) {
     http.Router r
     defer r.free()
     r.get("/health", health)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
@@ -485,6 +516,7 @@ void serve(http.Router *r, net.Listener ln) {
         print("the server answered {reply.status}")
         return
     }
+
     h := try json.decode(Health, reply.body)
     print("{h.open} open, up {h.uptime}s ({reply.header("content-type")})")
 
@@ -500,7 +532,7 @@ void serve(http.Router *r, net.Listener ln) {
 HttpError.badUrl: ftp://example.com/: the address should start with http:// or https://
 ```
 
-`http.get` and the others open a connection for each request and wait at most 30 seconds for each step. A `Client` keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its `timeout` sets how long it waits, and it can be shared by tasks and threads:
+`http.get` and the other functions open a connection for each request and wait at most 30 seconds for each step. A `Client` keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its `timeout` sets how long it waits. Tasks and threads can share one `Client`.
 
 ```iris run
 import http, net
@@ -519,12 +551,14 @@ void serve(http.Router *r, net.Listener ln) {
     http.Router r
     defer r.free()
     r.get("/ping", ping)
+
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(&r, ln)
 
     http.Client c
     defer c.close()
     c.timeout = 5s
+
     scoped String url = format("http://127.0.0.1:{ln.port}/ping")
     for i in 0..3 {
         scoped http.Reply reply = try c.get(url)
@@ -541,6 +575,6 @@ void serve(http.Router *r, net.Listener ln) {
 
 ## HTTPS
 
-`r.serveTls(8443, "cert.pem", "key.pem")` serves HTTPS with a certificate and its key, in PEM files. Clients that offer HTTP/2 get it, and the others HTTP/1.1. The client does HTTPS for `https://` addresses and checks the server's certificate against the ones the system trusts; a `Client`'s `ca` field names a file of certificates to trust instead, for a server with a certificate of its own making. TLS comes from OpenSSL, loaded the first time a program uses it.
+`r.serveTls(8443, "cert.pem", "key.pem")` serves HTTPS with a certificate and its key in PEM files. Clients that offer HTTP/2 get it and the others get HTTP/1.1. The client does HTTPS for `https://` addresses and checks the server's certificate against the ones the system trusts. A `Client`'s `ca` field names a file of certificates to trust instead, for a server with a self-made certificate. TLS comes from OpenSSL, loaded the first time a program uses it.
 
-The library page for [http](../std/index.html#http) lists everything, with WebSockets.
+The library page for [http](../std/index.html#http) lists everything, including WebSockets.

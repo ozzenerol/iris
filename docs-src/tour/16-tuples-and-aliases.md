@@ -1,13 +1,13 @@
 # Tuples and type aliases
 
-Tuples are the several values a function gives back. Type aliases give another name to a type. Both are small, and both make other code easier to read.
+Tuples carry a function's several results. Type aliases give a type a second name.
 
 ## Tuples
 
-A tuple type lists types in parentheses: `(i64, str)`. A function returns one to give back several values, and the caller unpacks it into names right where the call is:
+A tuple type lists types in parentheses: `(i64, str)`. A function returns a tuple to return several values, and the caller unpacks it at the call:
 
 ```iris run
-// "db.lan:5432" is the host and the port.
+// Splits "db.lan:5432" into host and port.
 (str, str) hostPort(str addr) {
     for i, c in addr {
         if c == ':' {
@@ -27,13 +27,13 @@ void main() {
 host db.lan, port 5432
 ```
 
-The values go into new variables with `:=`, or into existing ones with `=`. `_` leaves one out. A tuple can't be kept whole in one variable; values that belong together beyond one call belong in a struct, whose fields have names:
+Unpack into new variables with `:=` or existing ones with `=`. `_` discards a value. A tuple can't be stored whole. Values that stay together belong in a struct.
 
 ```iris error
 pair := hostPort("db.lan:5432") // error: this gives 2 values; unpack them into names: a, b := ...
 ```
 
-When only one of the values is wanted, `.0`, `.1` and on pick it out by its place, from 0:
+`.0`, `.1` and so on pick one value by position:
 
 ```iris run
 (str, str) hostPort(str addr) {
@@ -47,6 +47,7 @@ When only one of the values is wanted, `.0`, `.1` and on pick it out by its plac
 
 void main() {
     print("the port is {hostPort("db.lan:5432").1}")
+
     kind := "text/html; charset=utf-8".cut(";").0
     print(kind)
 }
@@ -57,13 +58,14 @@ the port is 5432
 text/html
 ```
 
-A list of tuples, written as `[(a, b), ...]`, is taken apart in a `for` loop by putting names in parentheses. Each round, the tuple goes into those names, as `:=` would put it:
+A `for` loop unpacks a list of tuples with names in parentheses:
 
 ```iris run
 void main() {
     for (name, port) in [("api", 8080), ("db", 5432)] {
         print("{name} listens on {port}")
     }
+
     for i, (name, port) in [("cache", 6379)] {
         print("{i}: {name}:{port}")
     }
@@ -76,12 +78,13 @@ db listens on 5432
 0: cache:6379
 ```
 
-Writing several values on the right of `:=` or `=` makes a tuple too, so two variables change in one step:
+Several values on the right of `:=` or `=` form a tuple, so variables change in one step:
 
 ```iris run
 void main() {
     seq, ack := 1000, 5000
     seq, ack = ack, seq + 1460
+
     print("{seq} {ack}")
 }
 ```
@@ -90,13 +93,13 @@ void main() {
 5000 2460
 ```
 
-Every value on the right is worked out before any variable changes, so `seq + 1460` uses the old `seq`.
+All values on the right are computed first, so `seq + 1460` uses the old `seq`.
 
-Tuples also give the values of a `for` loop over a type with a `next` method: `(T, bool)` for one value a round, `(K, V, bool)` for two (see [Loops](09-loops.html)).
+A `next` method returns `(T, bool)` for a one-name loop or `(K, V, bool)` for two (see [Loops](09-loops.html)).
 
 ## Type aliases
 
-`type` gives a type another name. The two names mean the same type, so values of one can be used as the other:
+`type` names an existing type. Both names mean the same type, so values mix freely.
 
 ```iris run
 type Port = u16
@@ -111,6 +114,7 @@ void say(str s) => print(s)
 void main() {
     Port p = 8080
     u16 same = p
+
     serve(p, say)
     print("{same}")
 }
@@ -121,9 +125,9 @@ listening on 8080
 8080
 ```
 
-An alias suits a type that is long to write, like a function type, or one that says what a value is for: `Port` reads better than `u16` in a signature. It is not a new type: a `Port` is a `u16`, with every `u16` operation.
+Use an alias to shorten a long type, such as a function type, or to document intent: `Port` reads better than `u16` in a signature. A `Port` is still a `u16` with every `u16` operation.
 
-A struct with one field is the way to get a type that can't be mixed up with another:
+For a distinct type that can't be mixed up, wrap the value in a one-field struct:
 
 ```iris run
 struct ConnId {
@@ -146,4 +150,4 @@ void main() {
 resetting stream 7
 ```
 
-Here `reset(ConnId{v: 7})` doesn't compile, while two aliases of `i64` would mix freely.
+`reset(ConnId{v: 7})` doesn't compile. Two aliases of `i64` would mix freely.

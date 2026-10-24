@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terminal output and input - Iris</title>
-<meta name="description" content="A command-line program talks to a person at a terminal, and often to other programs through a pipe as well. The term module writes colors, status lines, tables and progress bars when a person is watching, and plain text when the output goes to a pipe or a file. It also reads lines with editing and a history, and passwords without showing them.">
+<meta name="description" content="A command-line program talks to a person at a terminal, and often to other programs through a pipe. The term module writes colors, status lines, tables and progress bars when a person is watching, and plain text when the output goes to a pipe or a file. It also reads lines with editing and a history, and reads passwords without showing them.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,11 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html" class="on"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Terminal output and input</h1>
-<p class="lede">A command-line program talks to a person at a terminal, and often to other programs through a pipe as well. The <code>term</code> module writes colors, status lines, tables and progress bars when a person is watching, and plain text when the output goes to a pipe or a file. It also reads lines with editing and a history, and passwords without showing them.</p>
+<p class="lede">A command-line program talks to a person at a terminal, and often to other programs through a pipe. The <code>term</code> module writes colors, status lines, tables and progress bars when a person is watching, and plain text when the output goes to a pipe or a file. It also reads lines with editing and a history, and reads passwords without showing them.</p>
 <h2 id="colors"><a href="#colors">Colors</a></h2>
-<p><code>term.print</code> writes a line with color markup in it. A tag is a list of words in brackets: a color (<code>black</code>, <code>red</code>, <code>green</code>, <code>yellow</code>, <code>blue</code>, <code>magenta</code>, <code>cyan</code>, <code>white</code>, <code>gray</code>), <code>on</code> and a color for the background, and <code>bold</code>, <code>dim</code>, <code>italic</code>, <code>underline</code>, <code>reverse</code> or <code>strike</code>. <code>[/]</code> closes the last tag:</p>
+<p><code>term.print</code> writes a line that contains color markup. A tag is a list of words in brackets:</p>
+<ul><li>a color: <code>black</code>, <code>red</code>, <code>green</code>, <code>yellow</code>, <code>blue</code>, <code>magenta</code>, <code>cyan</code>, <code>white</code>, <code>gray</code></li><li><code>on</code> and a color for the background</li><li>a style: <code>bold</code>, <code>dim</code>, <code>italic</code>, <code>underline</code>, <code>reverse</code> or <code>strike</code></li></ul>
+<p><code>[/]</code> closes the last tag.</p>
 <pre class="code run"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -60,22 +61,23 @@ try {
 <pre class="out"><code>PASS parser   (12 tests)
 FAIL runtime  (1 of 40)
  SLOW  2.4s in tests/net.iris</code></pre>
-<p>Colors are on when the output is a terminal. Sent to a pipe or a file, as in the output above, the markup is taken out and the text stays, so other programs read plain lines. <code>NO_COLOR</code> set to anything turns colors off, and <code>FORCE_COLOR</code> turns them on, as many tools agree. <code>term.colors()</code> says whether they are on, and <code>term.setColors</code> decides for the program.</p>
-<p><code>[[</code> writes a <code>[</code>, and brackets around anything that isn't a tag stay as they are. Text from outside the program, such as a file name, may hold something that looks like a tag, so it goes through <code>term.escape</code> first:</p>
+<p>Colors are on when the output is a terminal. When it goes to a pipe or a file, as in the output above, the markup is removed and the text stays, so other programs read plain lines. <code>NO_COLOR</code> set to anything turns colors off and <code>FORCE_COLOR</code> turns them on, a convention many tools follow. <code>term.colors()</code> says whether colors are on, and <code>term.setColors</code> sets it for the program.</p>
+<p><code>[[</code> writes a <code>[</code>. Brackets around anything that isn't a tag stay as they are. Text from outside the program, such as a file name, may contain something that looks like a tag, so pass it through <code>term.escape</code> first.</p>
 <pre class="code run"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
     name := <span class="s">&quot;[red]notes.txt&quot;</span>
     <span class="k">scoped</span> <span class="t">String</span> safe = term.<span class="f">escape</span>(name)
     term.<span class="f">print</span>(<span class="s">&quot;saved [bold]</span><span class="e">{</span>safe<span class="e">}</span><span class="s">[/] [[1 of 3]&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> text = term.<span class="f">plain</span>(<span class="s">&quot;[green]ok[/] done&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="s">, </span><span class="e">{</span>text.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>saved [red]notes.txt [1 of 3]
 ok done, 7 bytes</code></pre>
-<p><code>term.plain</code> gives the text without its markup, and <code>term.format</code> gives it with colors as a <code>String</code>, for text that is written later or elsewhere. <code>term.eprint</code> and <code>term.write</code> are <code>print</code> for standard error and without a line break.</p>
+<p><code>term.plain</code> gives the text without its markup. <code>term.format</code> gives it with colors as a <code>String</code>, for text written later or elsewhere. <code>term.eprint</code> is <code>print</code> for standard error and <code>term.write</code> is <code>print</code> without a line break.</p>
 <h2 id="status-lines"><a href="#status-lines">Status lines</a></h2>
-<p><code>success</code> and <code>info</code> write a line with a sign in front of it on standard output, and <code>warn</code> and <code>error</code> on standard error, where messages belong. <code>title</code> writes a bold line that starts a part of the output:</p>
+<p><code>success</code> and <code>info</code> write a line with a sign in front on standard output. <code>warn</code> and <code>error</code> write to standard error, where messages belong. <code>title</code> writes a bold line that starts a section of the output.</p>
 <pre class="code"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -92,7 +94,7 @@ ok done, 7 bytes</code></pre>
 ✗ cache didn&#x27;t start: port 6379 is taken</code></pre>
 <p>On a terminal the signs are green, blue, yellow and red.</p>
 <h2 id="tables"><a href="#tables">Tables</a></h2>
-<p><code>term.table(headers)</code> starts a table, <code>row</code> adds a row, and <code>print</code> writes it, with each column as wide as its widest cell. A column of numbers lines up on the right, and any other on the left. Cells can have markup, which doesn't count toward the width:</p>
+<p><code>term.table(headers)</code> starts a table, <code>row</code> adds a row, and <code>print</code> writes it with each column as wide as its widest cell. A column of numbers lines up on the right and any other column on the left. Cells can contain markup, which doesn't count toward the width.</p>
 <pre class="code run"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -100,6 +102,7 @@ ok done, 7 bytes</code></pre>
     t.<span class="f">row</span>([<span class="s">&quot;api&quot;</span>, <span class="s">&quot;[green]running[/]&quot;</span>, <span class="s">&quot;12.5&quot;</span>, <span class="s">&quot;180 MiB&quot;</span>])
     t.<span class="f">row</span>([<span class="s">&quot;worker&quot;</span>, <span class="s">&quot;[green]running[/]&quot;</span>, <span class="s">&quot;71&quot;</span>, <span class="s">&quot;1.2 GiB&quot;</span>])
     t.<span class="f">row</span>([<span class="s">&quot;cron&quot;</span>, <span class="s">&quot;[red]stopped[/]&quot;</span>, <span class="s">&quot;0&quot;</span>, <span class="s">&quot;-&quot;</span>])
+
     t.<span class="f">print</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.len<span class="e">}</span><span class="s"> services&quot;</span>)
 }</code></pre>
@@ -108,7 +111,7 @@ api      running   12.5  180 MiB
 worker   running     71  1.2 GiB
 cron     stopped      0  -
 3 services</code></pre>
-<p><code>align(col, a)</code> sets how a column lines up, <code>.left</code>, <code>.right</code> or <code>.center</code>, and <code>border</code> draws a frame: <code>.box</code> with lines, or <code>.markdown</code> for a table to paste into a README or an issue:</p>
+<p><code>align(col, a)</code> sets how a column lines up: <code>.left</code>, <code>.right</code> or <code>.center</code>. <code>border</code> draws a frame, <code>.box</code> with lines or <code>.markdown</code> for a table to paste into a README or an issue.</p>
 <pre class="code run"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -117,8 +120,10 @@ cron     stopped      0  -
     t.<span class="f">row</span>([<span class="s">&quot;http hello&quot;</span>, <span class="s">&quot;9 ms&quot;</span>, <span class="s">&quot;3 MiB&quot;</span>])
     t.<span class="f">align</span>(<span class="n">1</span>, .right)
     t.<span class="f">align</span>(<span class="n">2</span>, .right)
+
     t.border = .markdown
     t.<span class="f">print</span>()
+
     t.border = .box
     t.<span class="f">print</span>()
 }</code></pre>
@@ -134,31 +139,34 @@ cron     stopped      0  -
 ╰─────────────┴───────┴────────╯</code></pre>
 <p><code>t.format()</code> gives the table as a <code>String</code> instead of writing it.</p>
 <h2 id="progress"><a href="#progress">Progress</a></h2>
-<p><code>term.progress(label, total)</code> shows a bar on standard error for work done in steps. <code>add</code> moves it one step, or a number of steps, <code>set</code> moves it to a count, and <code>done</code> draws the last line with the time it took. While the bar is shown, lines written with <code>term</code> go above it:</p>
+<p><code>term.progress(label, total)</code> shows a bar on standard error for work done in steps. <code>add</code> moves it one step or a given number of steps, <code>set</code> moves it to a count, and <code>done</code> draws the last line with the time taken. While the bar is shown, lines written with <code>term</code> appear above it.</p>
 <pre class="code"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
     files := [<span class="s">&quot;a.log&quot;</span>, <span class="s">&quot;b.log&quot;</span>, <span class="s">&quot;c.log&quot;</span>]
     bar := term.<span class="f">progress</span>(<span class="s">&quot;compressing&quot;</span>, files.len)
+
     <span class="k">for</span> f <span class="k">in</span> files {
         <span class="f">compress</span>(f)
         term.<span class="f">print</span>(<span class="s">&quot;[dim]</span><span class="e">{</span>f<span class="e">}</span><span class="s">[/]&quot;</span>)
         bar.<span class="f">add</span>()
     }
+
     bar.<span class="f">done</span>()
 }</code></pre>
 <pre class="out"><code>a.log
 b.log
 c.log
 compressing  ██████████████████████████████  100%  3/3  0.4s</code></pre>
-<p>The bar is drawn again only when its percent changes, or every 100 ms, so moving it in a tight loop costs little. When standard error isn't a terminal, only the last line is written, so a log file doesn't fill with bars.</p>
+<p>The bar is redrawn only when its percent changes, or every 100 ms, so moving it in a tight loop costs little. When standard error isn't a terminal, only the last line is written, so a log file doesn't fill with bars.</p>
 <h2 id="the-terminal-s-size"><a href="#the-terminal-s-size">The terminal's size</a></h2>
-<p><code>term.size()</code> gives the terminal's width and height in characters, and 80 by 24 when the output isn't a terminal. <code>term.width(text)</code> gives how many columns text takes, which differs from its length in bytes for letters outside ASCII and for wide characters, and leaves out markup:</p>
+<p><code>term.size()</code> gives the terminal's width and height in characters, or 80 by 24 when the output isn't a terminal. <code>term.width(text)</code> gives how many columns text takes, leaving out markup. It differs from the length in bytes for letters outside ASCII and for wide characters.</p>
 <pre class="code run"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
     cols, rows := term.<span class="f">size</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>cols<span class="e">}</span><span class="s">x</span><span class="e">{</span>rows<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>term.<span class="f">width</span>(<span class="s">&quot;café&quot;</span>)<span class="e">}</span><span class="s"> columns, </span><span class="e">{</span><span class="s">&quot;café&quot;</span>.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>term.<span class="f">width</span>(<span class="s">&quot;日本語&quot;</span>)<span class="e">}</span><span class="s"> columns, </span><span class="e">{</span>term.<span class="f">width</span>(<span class="s">&quot;[bold]ok[/]&quot;</span>)<span class="e">}</span><span class="s"> for the markup&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;interactive: </span><span class="e">{</span>term.<span class="f">interactive</span>()<span class="e">}</span><span class="s">&quot;</span>)
@@ -167,21 +175,24 @@ compressing  ██████████████████████�
 4 columns, 5 bytes
 6 columns, 2 for the markup
 interactive: false</code></pre>
-<p><code>term.interactive()</code> is true when standard input and output are both a terminal, which is when it makes sense to ask the person a question.</p>
+<p><code>term.interactive()</code> is true when standard input and output are both a terminal. Only then does it make sense to ask the person a question.</p>
 <h2 id="reading-lines"><a href="#reading-lines">Reading lines</a></h2>
-<p><code>term.readLine(prompt)</code> shows a prompt and reads a line that the person can edit: Left and Right move in the line, Up and Down bring back earlier lines, and Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K and Ctrl-W work as they do in a shell. <code>historyFile(path)</code> keeps the earlier lines between runs. At the end of the input, or on Ctrl-D, it fails with <code>IoError.eof</code>:</p>
+<p><code>term.readLine(prompt)</code> shows a prompt and reads a line the person can edit. Left and Right move in the line, and Up and Down bring back earlier lines. Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K and Ctrl-W work as they do in a shell. <code>historyFile(path)</code> keeps the earlier lines between runs. At the end of the input, or on Ctrl-D, it fails with <code>IoError.eof</code>.</p>
 <pre class="code"><code><span class="k">import</span> term
 
 <span class="t">void</span> <span class="f">main</span>() {
     term.<span class="f">historyFile</span>(<span class="s">&quot;/tmp/calc_history&quot;</span>)
+
     <span class="k">for</span> {
         line := term.<span class="f">readLine</span>(<span class="s">&quot;[cyan]calc&gt;[/] &quot;</span>) <span class="k">catch</span> e {
             <span class="k">break</span>
         }
         <span class="k">defer</span> line.<span class="f">free</span>()
+
         <span class="k">if</span> line == <span class="s">&quot;quit&quot;</span> {
             <span class="k">break</span>
         }
+
         n := line.<span class="f">parseInt</span>() <span class="k">catch</span> e {
             term.<span class="f">error</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="s"> isn&#x27;t a number&quot;</span>)
             <span class="k">continue</span>
@@ -195,14 +206,16 @@ interactive: false</code></pre>
 calc&gt; twelve
 ✗ twelve isn&#x27;t a number
 calc&gt; quit</code></pre>
-<p><code>term.readPassword(prompt)</code> reads a line without showing it, and leaves it out of the history. When standard input isn't a terminal, both read plain lines, so the same program takes its input from a pipe:</p>
+<p><code>term.readPassword(prompt)</code> reads a line without showing it and leaves it out of the history. When standard input isn't a terminal, both functions read plain lines, so the same program can take its input from a pipe.</p>
 <pre class="code"><code><span class="k">import</span> term
 
 !<span class="t">void</span> <span class="f">main</span>() {
     user := <span class="k">try</span> term.<span class="f">readLine</span>(<span class="s">&quot;user: &quot;</span>)
     <span class="k">defer</span> user.<span class="f">free</span>()
+
     pass := <span class="k">try</span> term.<span class="f">readPassword</span>(<span class="s">&quot;password: &quot;</span>)
     <span class="k">defer</span> pass.<span class="f">free</span>()
+
     term.<span class="f">success</span>(<span class="s">&quot;signing in as </span><span class="e">{</span>user<span class="e">}</span><span class="s">, with a password of </span><span class="e">{</span>pass.len<span class="e">}</span><span class="s"> characters&quot;</span>)
 }</code></pre>
 <p><code>term.clear()</code> clears the screen.</p>
@@ -217,7 +230,6 @@ calc&gt; quit</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

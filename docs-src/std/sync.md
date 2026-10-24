@@ -1,6 +1,6 @@
 ## Waiting for others
 
-A `WaitGroup` counts what is still running: `add` before starting each task or thread, `done` when each ends, and `wait` until all have. A `Once` runs a function the first time, however many callers there are:
+A `WaitGroup` counts what is still running. Call `add` before starting each task or thread, `done` when each one ends, and `wait` to wait until all have ended. A `Once` runs a function the first time only, however many callers there are:
 
 ```iris run
 import sync
@@ -24,8 +24,10 @@ void main() {
     }
     t := thread probe(8080)
     group.add()
+
     group.wait()
     t.join()
+
     print("{checked.load()} ports checked")
     group.free()
 }
@@ -38,7 +40,7 @@ config loaded once
 
 ## Limiting how many at once
 
-A `Semaphore` lets a number of callers in at once. `Workers` are tasks that take jobs from a queue and hand each to one function, for work that waits, such as requests to other servers, a few at a time:
+A `Semaphore` lets a set number of callers in at once. `Workers` are tasks that take jobs from a queue and hand each one to a function. They suit work that waits, such as requests to other servers, a few at a time:
 
 ```iris run
 import sync
@@ -55,6 +57,7 @@ void main() {
     for id in 0..20 {
         w.submit(id)
     }
+
     w.finish() // waits for every job, then stops the tasks
     print("{done.load()} fetched")
 }
@@ -64,6 +67,6 @@ void main() {
 20 fetched
 ```
 
-An `RwLock` lets many readers in at once, or one writer. A writer that waits keeps new readers out, and readers that waited go in before the next writer, so neither waits for ever.
+An `RwLock` lets in many readers at once, or one writer. A waiting writer keeps new readers out, and readers that waited go in before the next writer, so neither side waits forever.
 
-A `WaitGroup`, a `Once` and an `RwLock` hold a `Mutex`, so they can't be copied; keep them in a global or a struct and pass a pointer.
+A `WaitGroup`, a `Once` and an `RwLock` each hold a `Mutex`, so they can't be copied. Keep them in a global or a struct and pass a pointer.

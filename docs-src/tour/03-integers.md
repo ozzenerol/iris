@@ -1,6 +1,6 @@
 # Integers
 
-The integer types, how integer literals are written, how arithmetic works on them, and how values move from one type to another.
+The integer types, their literals, arithmetic, and conversion between them.
 
 ## The types
 
@@ -15,9 +15,9 @@ The integer types, how integer literals are written, how arithmetic works on the
 | `u32` | 4 | 0 | 4294967295 |
 | `u64` | 8 | 0 | 18446744073709551615 |
 
-`i64` is the integer to use unless there is a reason for another: it is the type a number gets by default, and the type of lengths and indexes. `u8` is a byte; text is made of them. The others suit data with a fixed layout, like a file format or a network protocol, and C functions that take them.
+Use `i64` by default. It is the type of untyped numbers, lengths and indexes. `u8` is a byte, and text is made of bytes. The other types fit fixed layouts such as file formats, network protocols and C functions.
 
-Each type knows its limits as `min` and `max`:
+Each type has `min` and `max`:
 
 ```iris run
 void main() {
@@ -35,7 +35,7 @@ void main() {
 
 ## Literals
 
-A number can be written in decimal, hexadecimal (`0x`), binary (`0b`) or octal (`0o`). `_` can go between digits to make long numbers easier to read; it has no meaning of its own:
+Numbers can be decimal, hexadecimal (`0x`), binary (`0b`) or octal (`0o`). `_` between digits groups them and is ignored:
 
 ```iris run
 void main() {
@@ -44,6 +44,7 @@ void main() {
     mask := 0xFF_FF_FF_00 // 255.255.255.0
     flags := 0b0001_0010  // SYN and ACK
     mode := 0o644         // rw-r--r--
+
     print("{mtu} {ethertype} {mask} {flags} {mode}")
 }
 ```
@@ -52,13 +53,14 @@ void main() {
 1500 2048 4294967040 18 420
 ```
 
-A character in single quotes is the number of its byte, a `u8`:
+A character in single quotes is its byte value, a `u8`:
 
 ```iris run
 void main() {
     u8 cr = '\r'
     status := "503"
     first := status[0] - '0' // 5: a server error
+
     print("{cr} {'\n'} {first}")
 }
 ```
@@ -67,9 +69,9 @@ void main() {
 13 10 5
 ```
 
-The escapes inside quotes are `\n` (newline), `\t` (tab), `\r` (carriage return), `\0` (zero), `\\`, `\'`, `\"` and `\x41` (the byte written in two hex digits).
+Escapes: `\n` newline, `\t` tab, `\r` carriage return, `\0` zero, `\\`, `\'`, `\"`, and `\x41` for a byte in two hex digits.
 
-A literal has no type of its own until it is used. With nothing to go by, it is an `i64`. Given to a typed variable, a parameter or an operator with a typed value on the other side, it takes that type, as long as it fits:
+A literal takes its type from where it is used: a typed variable, a parameter, or the other side of an operator. Otherwise it is an `i64`. It must fit the type.
 
 ```iris run
 void setTtl(u8 ttl) {
@@ -78,8 +80,9 @@ void setTtl(u8 ttl) {
 
 void main() {
     u16 port = 8080
-    setTtl(64)
     i32 offset = -40
+
+    setTtl(64)
     print("{port + 1} {offset * 2}")
 }
 ```
@@ -89,18 +92,19 @@ ttl 64
 8081 -80
 ```
 
-A literal that doesn't fit is a compile error, so `setTtl(256)` doesn't compile.
+`setTtl(256)` is a compile error.
 
 ## Units
 
-A number can carry a unit. A duration is a number of nanoseconds, with the type `Duration`: `ns`, `us`, `ms`, `s`, `m` and `h`. A size is a plain integer: `KiB`, `MiB` and `GiB` multiply by 1024, 1024 squared and 1024 cubed:
+A number can carry a unit. `ns`, `us`, `ms`, `s`, `m` and `h` make a `Duration`, a count of nanoseconds. `KiB`, `MiB` and `GiB` multiply a plain integer by 1024, 1024² and 1024³.
 
 ```iris run
 void main() {
     timeout := 90s
     poll := 250ms
-    print("{timeout} {poll} {i64(poll)}")
     buf := 64KiB
+
+    print("{timeout} {poll} {i64(poll)}")
     print("{buf} bytes")
 }
 ```
@@ -110,11 +114,12 @@ void main() {
 65536 bytes
 ```
 
-A literal has one unit; `90s` or `1m + 30s` both make a minute and a half. A `Duration` prints in its units, and `i64(d)` gives its nanoseconds. Durations add and subtract, and multiply and divide by plain numbers. Dividing one duration by another gives a plain number, how many times the second fits in the first:
+A literal has one unit, so a minute and a half is `90s` or `1m + 30s`. A `Duration` prints in units and `i64(d)` gives nanoseconds. Durations add and subtract, and multiply or divide by plain numbers. One duration divided by another gives a plain number:
 
 ```iris run
 void main() {
     timeout := 1m + 30s
+
     print("{timeout} {timeout * 2} {timeout / 4}")
     print("{timeout / 1s} seconds, {timeout / 250ms} polls")
 }
@@ -125,15 +130,16 @@ void main() {
 90 seconds, 360 polls
 ```
 
-The [time](../std/index.html#time) module has the time of day, dates and a clock.
+The [time](../std/index.html#time) module has clocks, dates and times of day.
 
 ## Arithmetic
 
-`+`, `-`, `*`, `/` and `%` work on two values of the same integer type and give that type. Division drops the fraction, toward zero, and `%` gives what is left, with the sign of the left side:
+`+`, `-`, `*`, `/` and `%` take two values of one integer type and return that type. `/` truncates toward zero. `%` takes the sign of the left side.
 
 ```iris run
 void main() {
     print("{7 / 2} {-7 / 2} {7 % 3} {-7 % 3}")
+
     size := 4000
     mss := 1460
     print("{size / mss} full segments and {size % mss} bytes left")
@@ -145,15 +151,17 @@ void main() {
 2 full segments and 1080 bytes left
 ```
 
-The bit operators are `&` (and), `|` (or), `^` (exclusive or), `~` (each bit flipped), and the shifts `<<` and `>>`. Shifting a signed value right keeps its sign:
+Bit operators: `&`, `|`, `^` (xor), `~` (not), `<<` and `>>`. Right shift of a signed value keeps the sign.
 
 ```iris run
 void main() {
     u32 ip = 0xC0A8_0A2A   // 192.168.10.42
     u32 mask = 0xFFFF_FF00 // a /24 network
     net := ip & mask
+
     print("network {net >> 24}.{(net >> 16) & 0xff}.{(net >> 8) & 0xff}.{net & 0xff}")
     print("host {ip & ~mask}")
+
     u8 flags = 0x02      // SYN
     flags = flags | 0x10 // and ACK
     print("{flags} {flags ^ 0x02} {flags >> 4} {1 << 10} {-16 >> 2}")
@@ -168,22 +176,29 @@ host 42
 
 ## Overflow and division by zero
 
-A result that doesn't fit in its type is an overflow. In a debug build, which is what `iris run` makes, it stops the program with a message that says where:
+A result that doesn't fit its type overflows. A debug build, which `iris run` makes, stops with a message showing where:
 
 ```iris
 u8 ttl = 250
 next := ttl + 10 // panic: integer overflow
 ```
 
-The release builds don't check overflow. An unsigned value wraps around: `250 + 10` in a `u8` gives `4`. A signed value wraps around in a `release-safe` build. A `release-fast` build assumes signed math never overflows, as the debug build has checked, and uses that to make loops faster; there a signed overflow gives a result that can't be relied on. Dividing by zero stops a debug and a `release-safe` build; in `release-fast` it is not checked, and the result can't be relied on.
+Release builds don't check overflow:
 
-Arithmetic happens in the type of the values. Two `u8` values add up as a `u8`, even when the result goes into an `i64`, so the sum of two big bytes overflows. Convert first when the result needs more room:
+- Unsigned values wrap: `250 + 10` in a `u8` is `4`.
+- Signed values wrap in `release-safe`.
+- `release-fast` assumes signed math never overflows and optimizes on that. A signed overflow there gives an undefined result.
+
+Division by zero stops debug and `release-safe` builds. In `release-fast` it is unchecked and the result is undefined.
+
+Arithmetic happens in the operands' type. Two `u8` values add as a `u8` even if the result goes into an `i64`. Convert first when the result needs more room:
 
 ```iris run
 void main() {
     u8 ipHeader = 60 // the IHL field, in bytes
     u8 tcpHeader = 60
     u8 options = 200
+
     i64 total = i64(ipHeader) + i64(tcpHeader) + i64(options)
     print("{total} bytes of headers")
 }
@@ -193,7 +208,11 @@ void main() {
 320 bytes of headers
 ```
 
-The `math` module has what wraps around, or stops at the ends, on purpose in every build: `math.addWrap` and `mulWrap` wrap, as a hash needs; `math.addSat` and `mulSat` stop at the largest or smallest `i64`; and `math.addChecked` and `mulChecked` give the result and whether it fit:
+The `math` module has explicit behaviour that holds in every build:
+
+- `addWrap`, `mulWrap` wrap around, as hashes need.
+- `addSat`, `mulSat` clamp at the `i64` limits.
+- `addChecked`, `mulChecked` return the result and whether it fit.
 
 ```iris run
 import math
@@ -201,6 +220,7 @@ import math
 void main() {
     total, ok := math.addChecked(9223372036854775800, 10)
     print("{ok} {math.addSat(9223372036854775800, 10)} {math.mulWrap(4294967296, 4294967296)}")
+
     print("{math.gcd(84, 36)} {math.isqrt(99)} {math.ipow(3, 4)} {math.divFloor(-7, 2)} {math.mod(-7, 3)}")
 }
 ```
@@ -210,18 +230,20 @@ false 9223372036854775807 0
 12 9 81 -4 2
 ```
 
-`/` rounds toward zero and `%` takes the sign of the left side, so `-7 / 2` is `-3` and `-7 % 3` is `-1`; `math.divFloor` and `math.mod` round down instead, which a calendar or a ring buffer wants. Numbers too big for an `i64` are the `big` module's (see [the library](../std/index.html#big)).
+`math.divFloor` and `math.mod` round down, which calendars and ring buffers need: `-7 / 2` is `-3` but `math.divFloor(-7, 2)` is `-4`. For numbers beyond `i64`, use [big](../std/index.html#big).
 
 ## Converting
 
-A value converts to another integer type on its own when that type holds every value it could have: `u8` to `u16`, `i32` to `i64`, `u32` to `i64`. Every other conversion is written out, with the type's name used like a function:
+A value converts implicitly when the target type holds every value of the source: `u8` to `u16`, `i32` to `i64`, `u32` to `i64`. Other conversions use the type name like a function:
 
 ```iris run
 void main() {
     u16 port = 8080
-    i64 wide = port // on its own: every u16 fits in an i64
+    i64 wide = port // implicit: every u16 fits in an i64
+
     i64 ttl = 64
-    u8 byte = u8(ttl) // written out: an i64 may not fit
+    u8 byte = u8(ttl) // explicit: an i64 may not fit
+
     u64 sent = u64(wide) * 1000
     print("{wide} {byte} {sent}")
 }
@@ -231,9 +253,9 @@ void main() {
 8080 64 8080000
 ```
 
-A conversion that can lose the value is checked: in a debug build, `u8(300)` with a value known only when the program runs stops it with a message. A signed value never converts on its own to an unsigned type, since a negative number has no unsigned value.
+A narrowing conversion is checked: in a debug build, `u8(300)` at run time stops the program. Signed values never convert implicitly to unsigned types.
 
-The two sides of an operator must have the same type, or one must convert on its own to the other. `i32 + u32` doesn't compile: neither holds all the values of the other, so the program says which one it means.
+Both sides of an operator must have the same type, or one must convert implicitly to the other. `i32 + u32` is an error because neither holds all values of the other:
 
 ```iris error
 i32 offset = -5
@@ -243,12 +265,13 @@ next := seq + offset // error: '+' can't mix u32 and i32; convert one side
 
 ## Comparing
 
-`==`, `!=`, `<`, `<=`, `>` and `>=` compare two integers and give a `bool`. They follow the same rule as arithmetic: both sides of one type, or one that converts to the other.
+`==`, `!=`, `<`, `<=`, `>` and `>=` return a `bool` and follow the same type rule as arithmetic:
 
 ```iris run
 void main() {
     u8 ttl = 200
     i64 limit = 100
+
     print("{ttl > limit} {ttl == 200} {limit != 100}")
 }
 ```

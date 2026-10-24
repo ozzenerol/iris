@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Programs and the environment - Iris</title>
-<meta name="description" content="A program talks to the system around it in four ways: the arguments it was started with, the environment variables, the other programs it runs, and the signals it gets. The os, process and signal modules cover them.">
+<meta name="description" content="A program deals with the system around it through its arguments, the environment variables, the other programs it runs, and the signals it receives. The os, process and signal modules cover them.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,13 +46,14 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html" class="on"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Programs and the environment</h1>
-<p class="lede">A program talks to the system around it in four ways: the arguments it was started with, the environment variables, the other programs it runs, and the signals it gets. The <code>os</code>, <code>process</code> and <code>signal</code> modules cover them.</p>
+<p class="lede">A program deals with the system around it through its arguments, the environment variables, the other programs it runs, and the signals it receives. The <code>os</code>, <code>process</code> and <code>signal</code> modules cover them.</p>
 <h2 id="arguments"><a href="#arguments">Arguments</a></h2>
-<p><code>os.argc()</code> gives how many arguments the program got, counting its own name, and <code>os.arg(i)</code> gives one of them as a <code>str</code>. Argument 0 is the program's name, and past the end <code>os.arg</code> gives <code>&quot;&quot;</code>:</p>
+<p><code>os.argc()</code> gives how many arguments the program got, counting its own name. <code>os.arg(i)</code> gives one of them as a <code>str</code>. Argument 0 is the program's name, and past the end <code>os.arg</code> gives <code>&quot;&quot;</code>.</p>
 <pre class="code"><code><span class="k">import</span> os
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;this is </span><span class="e">{</span>os.<span class="f">arg</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">, with </span><span class="e">{</span>os.<span class="f">argc</span>() - <span class="n">1</span><span class="e">}</span><span class="s"> arguments&quot;</span>)
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..os.<span class="f">argc</span>() {
         <span class="f">print</span>(<span class="s">&quot;argument </span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>os.<span class="f">arg</span>(i)<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -64,7 +64,7 @@ argument 1: a
 argument 2: b c</code></pre>
 <p>A program with flags reads them into a struct with <code>flags.parse</code> instead (see <a href="05-flags.html">Command-line flags</a>).</p>
 <h2 id="exit-status"><a href="#exit-status">Exit status</a></h2>
-<p>A program that ends normally has status 0. When <code>main</code> gives <code>!void</code> and ends with an error, the program prints it and ends with status 1. <code>os.exit(code)</code> ends the program at once, with any status; <code>defer</code> blocks don't run:</p>
+<p>A program that ends normally has status 0. When <code>main</code> returns <code>!void</code> and ends with an error, the program prints the error and ends with status 1. <code>os.exit(code)</code> ends the program at once with any status, and <code>defer</code> blocks don't run.</p>
 <pre class="code"><code><span class="k">import</span> os
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -72,17 +72,20 @@ argument 2: b c</code></pre>
         <span class="f">print</span>(<span class="s">&quot;usage: probe &lt;host&gt;&quot;</span>)
         os.<span class="f">exit</span>(<span class="n">2</span>)
     }
+
     <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>os.<span class="f">arg</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <h2 id="environment-variables"><a href="#environment-variables">Environment variables</a></h2>
-<p><code>os.env(name)</code> gives a variable's value as a <code>!str</code>. A variable that isn't set is the error <code>OsError.notSet</code>, so <code>catch</code> gives a default:</p>
+<p><code>os.env(name)</code> gives a variable's value as a <code>!str</code>. A variable that isn't set gives the error <code>OsError.notSet</code>, so <code>catch</code> can supply a default.</p>
 <pre class="code run"><code><span class="k">import</span> os
 
 <span class="t">void</span> <span class="f">main</span>() {
     path := os.<span class="f">env</span>(<span class="s">&quot;PATH&quot;</span>) <span class="k">catch</span> <span class="s">&quot;&quot;</span>
     <span class="f">print</span>(<span class="s">&quot;PATH is set: </span><span class="e">{</span>path.len &gt; <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+
     upstream := os.<span class="f">env</span>(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;127.0.0.1:9000&quot;</span>
     <span class="f">print</span>(<span class="s">&quot;the upstream is </span><span class="e">{</span>upstream<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = os.<span class="f">env</span>(<span class="s">&quot;IRIS_TOUR_UPSTREAM&quot;</span>) <span class="k">catch</span> err {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>err.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>err.message<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>
@@ -91,24 +94,26 @@ argument 2: b c</code></pre>
 <pre class="out"><code>PATH is set: true
 the upstream is 127.0.0.1:9000
 OsError.notSet: IRIS_TOUR_UPSTREAM is not set</code></pre>
-<p><code>os.setenv(name, value)</code> sets a variable, for the program and the programs it runs from then on, and <code>os.unsetenv(name)</code> removes one. A name that can't be one, empty or with <code>=</code> in it, fails with <code>OsError.invalid</code>:</p>
+<p><code>os.setenv(name, value)</code> sets a variable for the program and for the programs it runs from then on. <code>os.unsetenv(name)</code> removes one. An invalid name, empty or containing <code>=</code>, fails with <code>OsError.invalid</code>.</p>
 <pre class="code run"><code><span class="k">import</span> os, process, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">try</span> os.<span class="f">setenv</span>(<span class="s">&quot;UPSTREAM&quot;</span>, <span class="s">&quot;10.0.0.11:9000&quot;</span>)
     <span class="f">print</span>(<span class="k">try</span> os.<span class="f">env</span>(<span class="s">&quot;UPSTREAM&quot;</span>))
+
     <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo $UPSTREAM&quot;</span>])
     <span class="f">print</span>(<span class="s">&quot;sh sees: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(out.stdout)<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">try</span> os.<span class="f">unsetenv</span>(<span class="s">&quot;UPSTREAM&quot;</span>)
     <span class="f">print</span>(os.<span class="f">env</span>(<span class="s">&quot;UPSTREAM&quot;</span>) <span class="k">catch</span> <span class="s">&quot;not set&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.11:9000
 sh sees: 10.0.0.11:9000
 not set</code></pre>
-<p>Set variables at the start, before the program starts threads: the environment isn't safe to change while another thread reads it.</p>
+<p>Set variables at the start, before the program starts threads. Changing the environment while another thread reads it isn't safe.</p>
 <p>For a program's settings, a struct marked <code>@env</code> reads every variable at once, with types and defaults (see <a href="../tour/27-attributes.html">Attributes</a>).</p>
 <h2 id="running-other-programs"><a href="#running-other-programs">Running other programs</a></h2>
-<p><code>process.run(argv)</code> runs a program and waits for it to end. <code>argv[0]</code> is the program, found on <code>PATH</code> when it has no <code>/</code>, and the rest are its arguments, given as they are: there is no shell in between, so spaces and quotes need no escaping. It gives an <code>Output</code> with what the program wrote and its exit status:</p>
+<p><code>process.run(argv)</code> runs a program and waits for it to end. <code>argv[0]</code> is the program, looked up on <code>PATH</code> when it has no <code>/</code>. The rest are its arguments, passed as they are. No shell is involved, so spaces and quotes need no escaping. It returns an <code>Output</code> with what the program wrote and its exit status.</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -118,13 +123,14 @@ not set</code></pre>
 }</code></pre>
 <pre class="out"><code>status 0, ok true
 it printed: listening on 8080</code></pre>
-<p><code>Output</code> owns <code>stdout</code> and <code>stderr</code>, and its <code>free</code> method frees them, so <code>scoped</code> works on it.</p>
-<p>A program that ends with a status other than 0 is no error: <code>status</code> says how it ended. <code>run</code> fails only when the program can't be started, with <code>ProcessError.notFound</code> when it isn't there:</p>
+<p><code>Output</code> owns <code>stdout</code> and <code>stderr</code>. Its <code>free</code> method frees them, so <code>scoped</code> works on it.</p>
+<p>A program that ends with a status other than 0 is no error, and <code>status</code> says how it ended. <code>run</code> fails only when the program can't be started, with <code>ProcessError.notFound</code> when it doesn't exist.</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;echo oops &gt;&amp;2; exit 3&quot;</span>])
     <span class="f">print</span>(<span class="s">&quot;status </span><span class="e">{</span>out.status<span class="e">}</span><span class="s">, ok </span><span class="e">{</span>out.<span class="f">ok</span>()<span class="e">}</span><span class="s">, stderr: </span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(out.stderr)<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = process.<span class="f">run</span>([<span class="s">&quot;no-such-program&quot;</span>]) <span class="k">catch</span> err {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>err.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>err.message<span class="e">}</span><span class="s">&quot;</span>)
         process.<span class="t">Output</span>{}
@@ -132,14 +138,15 @@ it printed: listening on 8080</code></pre>
 }</code></pre>
 <pre class="out"><code>status 3, ok false, stderr: oops
 ProcessError.notFound: no-such-program: no such program</code></pre>
-<p>A shell command, with pipes and <code>&gt;</code>, runs through <code>sh -c</code> as above.</p>
+<p>A shell command with pipes and <code>&gt;</code> runs through <code>sh -c</code>, as above.</p>
 <h2 id="input"><a href="#input">Input</a></h2>
-<p>The second argument to <code>run</code> is given to the program on its standard input:</p>
+<p>The second argument to <code>run</code> goes to the program's standard input:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sort&quot;</span>, <span class="s">&quot;-u&quot;</span>], <span class="s">&quot;10.0.0.9</span><span class="e">\n</span><span class="s">10.0.0.5</span><span class="e">\n</span><span class="s">10.0.0.9</span><span class="e">\n</span><span class="s">10.0.0.7</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="t">str</span>.<span class="f">trim</span>(out.stdout))
+
     <span class="k">scoped</span> count := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;wc&quot;</span>, <span class="s">&quot;-l&quot;</span>], <span class="s">&quot;GET /</span><span class="e">\n</span><span class="s">GET /login</span><span class="e">\n</span><span class="s">POST /login</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">str</span>.<span class="f">trim</span>(count.stdout)<span class="e">}</span><span class="s"> requests&quot;</span>)
 }</code></pre>
@@ -147,21 +154,23 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
 10.0.0.7
 10.0.0.9
 3 requests</code></pre>
-<p>While a program runs, the other tasks of the thread go on (see <a href="../tour/24-tasks-and-channels.html">Tasks and channels</a>), so a server that runs a program keeps answering.</p>
+<p>While a program runs, the thread's other tasks keep going (see <a href="../tour/24-tasks-and-channels.html">Tasks and channels</a>). A server that runs a program keeps answering.</p>
 <h2 id="signals"><a href="#signals">Signals</a></h2>
-<p>Ctrl-C sends a program the signal <code>interrupt</code>, and systemd and Docker send <code>terminate</code> when they stop it. By default either one ends the program at once. <code>signal.wait()</code> waits for one instead and gives it as a <code>signal.Signal</code>, so the program can finish what it was doing first:</p>
+<p>Ctrl-C sends a program the signal <code>interrupt</code>. systemd and Docker send <code>terminate</code> to stop it. By default either one ends the program at once. <code>signal.wait()</code> waits for one instead and returns it as a <code>signal.Signal</code>, so the program can finish its work first.</p>
 <pre class="code run"><code><span class="k">import</span> process, signal
 
 !<span class="t">void</span> <span class="f">main</span>() {
     signal.<span class="f">watch</span>()
+
     <span class="c">// stands in for Ctrl-C: sh sends terminate to this program, its parent</span>
     <span class="k">scoped</span> out := <span class="k">try</span> process.<span class="f">run</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;kill -TERM $PPID&quot;</span>])
+
     s := signal.<span class="f">wait</span>()
     <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, saving and stopping&quot;</span>)
 }</code></pre>
 <pre class="out"><code>got terminate, saving and stopping</code></pre>
-<p><code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> from then on, instead of ending the program; <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals: <code>hangup</code> (SIGHUP) is what many programs take as "read your settings again".</p>
-<p>A server waits for the signal in its own task, while the other tasks serve:</p>
+<p>From then on, <code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> instead of ending the program. <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals. Many programs take <code>hangup</code> (SIGHUP) as a request to read their settings again.</p>
+<p>A server waits for the signal in one task while other tasks serve:</p>
 <pre class="code"><code><span class="k">import</span> signal
 
 <span class="t">void</span> <span class="f">serve</span>() {
@@ -170,11 +179,12 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">spawn</span> <span class="f">serve</span>()
+
     s := signal.<span class="f">wait</span>()
     <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, stopping&quot;</span>)
     <span class="c">// close connections, flush files, then return</span>
 }</code></pre>
-<p>When <code>main</code> returns, the program ends, and the other tasks with it.</p>
+<p>When <code>main</code> returns, the program ends and the other tasks with it.</p>
     <nav class="pager"><a class="prev" href="05-flags.html"><span>Previous</span>Command-line flags</a><a class="next" href="07-terminal.html"><span>Next</span>Terminal output and input</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -186,7 +196,6 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

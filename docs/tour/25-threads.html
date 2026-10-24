@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threads - Iris</title>
-<meta name="description" content="Threads run at the same time, on different CPU cores. This chapter covers starting and joining them, sharing data between them with Atomic and Mutex, and threadlocal.">
+<meta name="description" content="Threads run at the same time on different CPU cores. This chapter covers starting and joining them, sharing data between them with Atomic and Mutex, and threadlocal.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html" class="on"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Threads</h1>
-<p class="lede">Threads run at the same time, on different CPU cores. This chapter covers starting and joining them, sharing data between them with <code>Atomic</code> and <code>Mutex</code>, and <code>threadlocal</code>.</p>
+<p class="lede">Threads run at the same time on different CPU cores. This chapter covers starting and joining them, sharing data between them with <code>Atomic</code> and <code>Mutex</code>, and <code>threadlocal</code>.</p>
 <h2 id="thread"><a href="#thread">thread</a></h2>
-<p>A program starts with one thread. <code>thread f(args)</code> starts a function call on a new thread and gives a <code>Thread</code>; its arguments are worked out first, as with <code>spawn</code>. <code>join</code> waits for the thread to finish:</p>
+<p>A program starts with one thread. <code>thread f(args)</code> starts a function call on a new thread and gives a <code>Thread</code>. Its arguments are worked out first, as with <code>spawn</code>. <code>join</code> waits for the thread to finish.</p>
 <p>Here two threads add up the halves of a megabyte of data, the way the IP, TCP and UDP checksums do, and <code>main</code> puts the two sums together:</p>
 <pre class="code run"><code><span class="c">// The 16-bit sum the IP, TCP and UDP checksums are made from.</span>
 <span class="t">u64</span> <span class="f">sum16</span>(<span class="t">u8</span>[] data) {
@@ -70,12 +69,14 @@ try {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..data.len {
         data[i] = <span class="t">u8</span>(i % <span class="n">251</span>)
     }
+
     half := data.len / <span class="n">2</span>
     sums := <span class="k">chan</span>[<span class="t">u64</span>](<span class="n">2</span>)
     a := <span class="k">thread</span> <span class="f">part</span>(data[<span class="n">0</span>:half], sums)
     b := <span class="k">thread</span> <span class="f">part</span>(data[half:], sums)
     a.<span class="f">join</span>()
     b.<span class="f">join</span>()
+
     s := &lt;-sums + &lt;-sums
     <span class="k">for</span> s &gt; <span class="n">0xffff</span> {
         s = (s &amp; <span class="n">0xffff</span>) + (s &gt;&gt; <span class="n">16</span>) <span class="c">// fold the carries back in</span>
@@ -84,13 +85,13 @@ try {
 }</code></pre>
 <pre class="out"><code>checksum 57619</code></pre>
 <p>Both threads read the same memory, which is safe while nothing changes it.</p>
-<p>Each thread has its own tasks. A task spawned inside a thread stays on that thread, and the thread ends when its function and all the tasks it spawned are done. <code>join</code> waits for that, and while it waits, the other tasks of the joining thread keep running. A <code>Thread</code> is joined once. A thread started without keeping its <code>Thread</code> runs on its own, and the program still ends when <code>main</code> returns.</p>
-<p>Channels work between threads as they do between tasks: any task can send and take, wherever it runs. They are the simplest way for threads to share work.</p>
+<ul><li>Each thread has its own tasks. A task spawned inside a thread stays on that thread, and the thread ends when its function and all the tasks it spawned are done.</li><li><code>join</code> waits for that. While it waits, the other tasks of the joining thread keep running.</li><li>A <code>Thread</code> is joined once.</li><li>A thread started without keeping its <code>Thread</code> runs on its own, and the program still ends when <code>main</code> returns.</li></ul>
+<p>Channels work between threads as they do between tasks. Any task can send and take, wherever it runs. They are the simplest way for threads to share work.</p>
 <h2 id="data-shared-between-threads"><a href="#data-shared-between-threads">Data shared between threads</a></h2>
-<p>Two threads that change the same variable at the same time can lose changes, since a change is several steps. A global that threads change needs an <code>Atomic</code>, a <code>Mutex</code>, or a channel that one task owns.</p>
+<p>Two threads that change the same variable at the same time can lose changes, since a change takes several steps. A global that threads change needs an <code>Atomic</code>, a <code>Mutex</code>, or a channel that one task owns.</p>
 <h2 id="atomic"><a href="#atomic">Atomic</a></h2>
-<p><code>Atomic[T]</code> holds an integer or a <code>bool</code> that every thread can change safely. It is used through its methods only:</p>
-<p>Here four threads accept connections on one listener, and count them in one <code>Atomic</code>:</p>
+<p><code>Atomic[T]</code> holds an integer or a <code>bool</code> that every thread can change safely. It is used only through its methods.</p>
+<p>Here four threads accept connections on one listener and count them in one <code>Atomic</code>:</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="t">Atomic</span>[<span class="t">i64</span>] accepted
@@ -111,22 +112,24 @@ try {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">4</span> {
         <span class="k">thread</span> <span class="f">acceptLoop</span>(ln)
     }
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">8</span> {
         c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
         <span class="k">scoped</span> <span class="t">String</span> hi = <span class="k">try</span> c.<span class="f">readLine</span>()
         c.<span class="f">close</span>()
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> connections accepted&quot;</span>)
     old := accepted.<span class="f">swap</span>(<span class="n">0</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>old<span class="e">}</span><span class="s"> </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s"> </span><span class="e">{</span>accepted.<span class="f">cas</span>(<span class="n">0</span>, <span class="n">5</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>accepted.<span class="f">load</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8 connections accepted
 8 0 true 5</code></pre>
-<p>Several threads can wait in <code>accept</code> on the same listener; each connection goes to one of them.</p>
+<p>Several threads can wait in <code>accept</code> on the same listener. Each connection goes to one of them.</p>
 <div class="table"><table><thead><tr><th>Method</th><th>What it does</th></tr></thead><tbody><tr><td><code>load()</code></td><td>the value</td></tr><tr><td><code>store(v)</code></td><td>sets it</td></tr><tr><td><code>add(n)</code>, <code>sub(n)</code></td><td>adds or subtracts, and gives the new value</td></tr><tr><td><code>swap(v)</code></td><td>sets it and gives the old value</td></tr><tr><td><code>cas(old, new)</code></td><td>sets it to new if it is old; true if it did</td></tr></tbody></table></div>
-<p>An <code>Atomic[bool]</code> has <code>load</code>, <code>store</code>, <code>swap</code> and <code>cas</code>. Every operation is sequentially consistent: all threads see the changes in the same order.</p>
+<p>An <code>Atomic[bool]</code> has <code>load</code>, <code>store</code>, <code>swap</code> and <code>cas</code>. Every operation is sequentially consistent, so all threads see the changes in the same order.</p>
 <h2 id="mutex"><a href="#mutex">Mutex</a></h2>
-<p>A <code>Mutex</code> protects data that takes more than one step to change. <code>lock</code> takes it, waiting while another task holds it, and <code>unlock</code> gives it back; <code>defer</code> puts the unlock right after the lock:</p>
+<p>A <code>Mutex</code> protects data that takes more than one step to change. <code>lock</code> takes it and waits while another task holds it. <code>unlock</code> gives it back. <code>defer</code> puts the unlock right after the lock:</p>
 <pre class="code run"><code><span class="c">// requests for each client, counted by every thread</span>
 <span class="t">Mutex</span> lock
 <span class="t">Map</span>[<span class="t">i64</span>, <span class="t">i64</span>] perClient
@@ -145,14 +148,14 @@ try {
     b := <span class="k">thread</span> <span class="f">record</span>(<span class="n">1000</span>, <span class="n">2000</span>)
     a.<span class="f">join</span>()
     b.<span class="f">join</span>()
+
     lock.<span class="f">lock</span>()
     <span class="k">defer</span> lock.<span class="f">unlock</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>perClient.len<span class="e">}</span><span class="s"> clients, </span><span class="e">{</span>perClient.<span class="f">getOr</span>(<span class="n">3</span>, <span class="n">0</span>)<span class="e">}</span><span class="s"> requests from client 3&quot;</span>)
     perClient.<span class="f">free</span>()
 }</code></pre>
 <pre class="out"><code>10 clients, 200 requests from client 3</code></pre>
-<p>While a task waits for a lock, the other tasks of its thread keep running. <code>tryLock()</code> takes the lock if it is free and says whether it did. Unlocking a <code>Mutex</code> that isn't locked is a bug and stops the program.</p>
-<p>An <code>Atomic</code> or a <code>Mutex</code> is used where it is declared, or through a pointer. Copying one, or a struct that holds one, is a compile error, since the copy would guard nothing.</p>
+<ul><li>While a task waits for a lock, the other tasks of its thread keep running.</li><li><code>tryLock()</code> takes the lock if it is free and says whether it did.</li><li>Unlocking a <code>Mutex</code> that isn't locked is a bug and stops the program.</li><li>An <code>Atomic</code> or a <code>Mutex</code> is used where it is declared, or through a pointer. Copying one, or a struct that holds one, is a compile error, since the copy would guard nothing.</li></ul>
 <h2 id="threadlocal"><a href="#threadlocal">threadlocal</a></h2>
 <p>A global marked <code>threadlocal</code> has a separate value on each thread. Each thread starts with the global's first value:</p>
 <pre class="code run"><code><span class="k">threadlocal</span> <span class="t">i64</span> handled <span class="c">// requests this thread answered</span>
@@ -170,6 +173,7 @@ try {
     b := <span class="k">thread</span> <span class="f">serve</span>(<span class="n">5</span>, out)
     a.<span class="f">join</span>()
     b.<span class="f">join</span>()
+
     x := &lt;-out
     y := &lt;-out
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>x + y<span class="e">}</span><span class="s"> handled, </span><span class="e">{</span>handled<span class="e">}</span><span class="s"> on main&#x27;s thread&quot;</span>)
@@ -177,9 +181,10 @@ try {
 <pre class="out"><code>8 handled, 0 on main&#x27;s thread</code></pre>
 <p>It suits a cache or a counter that each thread keeps for itself, with no lock. The tasks of one thread share its value.</p>
 <h2 id="waiting-for-many-and-limits"><a href="#waiting-for-many-and-limits">Waiting for many, and limits</a></h2>
-<p>The <code>sync</code> module builds on <code>Mutex</code> and channels, and works between tasks and threads alike. A <code>WaitGroup</code> waits for a number of them to finish, a <code>Semaphore</code> lets only so many in at once, a <code>Once</code> runs a function the first time, an <code>RwLock</code> lets many readers or one writer in, and <code>Workers</code> hand jobs from a queue to a few tasks.</p>
+<p>The <code>sync</code> module builds on <code>Mutex</code> and channels and works between tasks and threads alike.</p>
+<ul><li>A <code>WaitGroup</code> waits for a number of them to finish.</li><li>A <code>Semaphore</code> lets only so many in at once.</li><li>A <code>Once</code> runs a function the first time.</li><li>An <code>RwLock</code> lets many readers or one writer in.</li><li><code>Workers</code> hand jobs from a queue to a few tasks.</li></ul>
 <h3 id="waitgroup"><a href="#waitgroup">WaitGroup</a></h3>
-<p>A <code>WaitGroup</code> counts what is still running. <code>add</code> counts one more before each task or thread starts, <code>done</code> counts one less when it ends, and <code>wait</code> waits until the count is back to 0. <code>defer group.done()</code> at the top of the function makes sure it is counted however the function ends:</p>
+<p>A <code>WaitGroup</code> counts what is still running. <code>add</code> counts one more before each task or thread starts, <code>done</code> counts one less when it ends, and <code>wait</code> waits until the count is back to 0. <code>defer group.done()</code> at the top of the function counts it however the function ends:</p>
 <pre class="code run"><code><span class="k">import</span> sync
 
 sync.<span class="t">WaitGroup</span> group
@@ -196,8 +201,10 @@ sync.<span class="t">WaitGroup</span> group
         group.<span class="f">add</span>()
         <span class="k">spawn</span> <span class="f">download</span>(size)
     }
+
     group.<span class="f">add</span>()
     t := <span class="k">thread</span> <span class="f">download</span>(<span class="n">10000</span>)
+
     group.<span class="f">wait</span>()
     t.<span class="f">join</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes.<span class="f">load</span>()<span class="e">}</span><span class="s"> bytes&quot;</span>)
@@ -206,7 +213,7 @@ sync.<span class="t">WaitGroup</span> group
 <pre class="out"><code>16096 bytes</code></pre>
 <p>The count goes up before the task starts, so <code>wait</code> can't miss one that hasn't begun yet. A thread is counted the same way as a task.</p>
 <h3 id="semaphore"><a href="#semaphore">Semaphore</a></h3>
-<p>A <code>Semaphore</code> lets a number of callers in at once and makes the others wait. <code>acquire</code> takes a place, waiting while there is none, and <code>release</code> gives it back. It keeps a program from opening a thousand connections to a backend at once:</p>
+<p>A <code>Semaphore</code> lets a number of callers in at once and makes the others wait. <code>acquire</code> takes a place and waits while there is none. <code>release</code> gives it back. It keeps a program from opening a thousand connections to a backend at once:</p>
 <pre class="code run"><code><span class="k">import</span> sync
 
 sync.<span class="t">WaitGroup</span> group
@@ -218,6 +225,7 @@ sync.<span class="t">Semaphore</span> slots
     <span class="k">defer</span> group.<span class="f">done</span>()
     slots.<span class="f">acquire</span>()
     <span class="k">defer</span> slots.<span class="f">release</span>()
+
     n := inside.<span class="f">add</span>(<span class="n">1</span>)
     <span class="k">for</span> {
         m := most.<span class="f">load</span>()
@@ -225,6 +233,7 @@ sync.<span class="t">Semaphore</span> slots
             <span class="k">break</span>
         }
     }
+
     <span class="f">sleep</span>(<span class="n">2ms</span>) <span class="c">// the request</span>
     inside.<span class="f">sub</span>(<span class="n">1</span>)
 }
@@ -232,17 +241,19 @@ sync.<span class="t">Semaphore</span> slots
 <span class="t">void</span> <span class="f">main</span>() {
     slots = sync.<span class="f">semaphore</span>(<span class="n">3</span>)
     <span class="k">defer</span> slots.<span class="f">free</span>()
+
     <span class="k">for</span> id <span class="k">in</span> <span class="n">0</span>..<span class="n">20</span> {
         group.<span class="f">add</span>()
         <span class="k">spawn</span> <span class="f">call</span>(id)
     }
+
     group.<span class="f">wait</span>()
     group.<span class="f">free</span>()
     <span class="f">print</span>(<span class="s">&quot;at most </span><span class="e">{</span>most.<span class="f">load</span>()<span class="e">}</span><span class="s"> at once&quot;</span>)
 }</code></pre>
 <pre class="out"><code>at most 3 at once</code></pre>
 <h3 id="once"><a href="#once">Once</a></h3>
-<p>A <code>Once</code> runs a function the first time <code>run</code> is called, and makes every other caller wait until it has finished, so nothing uses what it sets up before it is ready. It suits setup that is costly and may never be needed:</p>
+<p>A <code>Once</code> runs a function the first time <code>run</code> is called and makes every other caller wait until it has finished, so nothing uses what it sets up before it is ready. It suits setup that is costly and may never be needed:</p>
 <pre class="code run"><code><span class="k">import</span> sync
 
 sync.<span class="t">Once</span> setup
@@ -260,6 +271,7 @@ sync.<span class="t">WaitGroup</span> group
         group.<span class="f">add</span>()
         <span class="k">spawn</span> <span class="f">handle</span>(id)
     }
+
     group.<span class="f">wait</span>()
     group.<span class="f">free</span>()
     <span class="f">print</span>(<span class="s">&quot;done: </span><span class="e">{</span>setup.<span class="f">done</span>()<span class="e">}</span><span class="s">&quot;</span>)
@@ -267,7 +279,7 @@ sync.<span class="t">WaitGroup</span> group
 <pre class="out"><code>rules loaded
 done: true</code></pre>
 <h3 id="rwlock"><a href="#rwlock">RwLock</a></h3>
-<p>A <code>Mutex</code> lets one caller in at a time. Data that is read often and changed seldom, such as a routing table or settings that are loaded again now and then, does better with an <code>RwLock</code>: <code>readLock</code> lets any number of readers in at once, and <code>writeLock</code> waits until it is alone. A writer that waits keeps new readers out, so a stream of readers can't keep it waiting for ever:</p>
+<p>A <code>Mutex</code> lets one caller in at a time. Data that is read often and changed seldom, such as a routing table or settings that are reloaded now and then, does better with an <code>RwLock</code>. <code>readLock</code> lets any number of readers in at once, and <code>writeLock</code> waits until it is alone. A waiting writer keeps new readers out, so a stream of readers can't keep it waiting forever:</p>
 <pre class="code run"><code><span class="k">import</span> sync
 
 sync.<span class="t">RwLock</span> lock
@@ -276,6 +288,7 @@ sync.<span class="t">RwLock</span> lock
 <span class="t">str</span> <span class="f">lookup</span>(<span class="t">str</span> host) {
     lock.<span class="f">readLock</span>()
     <span class="k">defer</span> lock.<span class="f">readUnlock</span>()
+
     to, found := routes.<span class="f">get</span>(host)
     <span class="k">return</span> <span class="k">if</span> found { to } <span class="k">else</span> { <span class="s">&quot;-&quot;</span> }
 }
@@ -289,6 +302,7 @@ sync.<span class="t">RwLock</span> lock
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">update</span>(<span class="s">&quot;api.example.com&quot;</span>, <span class="s">&quot;10.0.0.11:8080&quot;</span>)
     <span class="f">print</span>(<span class="f">lookup</span>(<span class="s">&quot;api.example.com&quot;</span>))
+
     <span class="f">update</span>(<span class="s">&quot;api.example.com&quot;</span>, <span class="s">&quot;10.0.0.12:8080&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">lookup</span>(<span class="s">&quot;api.example.com&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">lookup</span>(<span class="s">&quot;www.example.com&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
     routes.<span class="f">free</span>()
@@ -297,7 +311,7 @@ sync.<span class="t">RwLock</span> lock
 10.0.0.12:8080 -</code></pre>
 <p>The <code>str</code> that <code>lookup</code> gives points into the map, so it is valid only until the entry changes. A program that keeps it longer copies it while it holds the lock.</p>
 <h3 id="workers"><a href="#workers">Workers</a></h3>
-<p><code>sync.workers(n, handle)</code> starts <code>n</code> tasks that take jobs from a queue and call <code>handle</code> with each. <code>submit</code> adds a job, waiting while the queue is full, and <code>finish</code> waits for every job and then stops the tasks. It suits work that waits, such as requests to other servers, done a few at a time:</p>
+<p><code>sync.workers(n, handle)</code> starts <code>n</code> tasks that take jobs from a queue and call <code>handle</code> with each. <code>submit</code> adds a job and waits while the queue is full. <code>finish</code> waits for every job and then stops the tasks. It suits work that waits, such as requests to other servers, done a few at a time:</p>
 <pre class="code run"><code><span class="k">import</span> sync
 
 <span class="t">Atomic</span>[<span class="t">i64</span>] checked
@@ -312,13 +326,14 @@ sync.<span class="t">RwLock</span> lock
     <span class="k">for</span> port <span class="k">in</span> <span class="n">8000</span>..<span class="n">8050</span> {
         w.<span class="f">submit</span>(port)
     }
+
     w.<span class="f">finish</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>checked.<span class="f">load</span>()<span class="e">}</span><span class="s"> ports checked&quot;</span>)
 }</code></pre>
 <pre class="out"><code>50 ports checked</code></pre>
-<p>A <code>WaitGroup</code>, a <code>Once</code> and an <code>RwLock</code> hold a <code>Mutex</code>, so they can't be copied either; keep them in a global or a struct, and pass a pointer.</p>
+<p>A <code>WaitGroup</code>, a <code>Once</code> and an <code>RwLock</code> hold a <code>Mutex</code>, so they can't be copied either. Keep them in a global or a struct, and pass a pointer.</p>
 <h2 id="threads-in-the-library"><a href="#threads-in-the-library">Threads in the library</a></h2>
-<p><code>http.serve</code> and <code>Router.serve</code> start a thread for each CPU core, each with its own event loop, so a handler runs on several threads at once: a global it changes needs an <code>Atomic</code> or a <code>Mutex</code>, or <code>threadlocal</code>. <code>threads: 1</code> keeps everything on one thread.</p>
+<p><code>http.serve</code> and <code>Router.serve</code> start a thread for each CPU core, each with its own event loop, so a handler runs on several threads at once. A global it changes needs an <code>Atomic</code>, a <code>Mutex</code> or <code>threadlocal</code>. <code>threads: 1</code> keeps everything on one thread.</p>
     <nav class="pager"><a class="prev" href="24-tasks-and-channels.html"><span>Previous</span>Tasks and channels</a><a class="next" href="26-compile-time.html"><span>Next</span>Compile time</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -330,7 +345,6 @@ sync.<span class="t">RwLock</span> lock
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

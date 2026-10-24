@@ -1,6 +1,12 @@
 ## Filling in a template
 
-`template.parse(text)` reads a template once; `render(data)` fills it in from a `@json` struct, as often as needed. `{{ name }}` writes a value, escaped for HTML, and `{{ user.name }}` a field of a struct inside it. `{{ raw name }}` writes a value as it is, for HTML the program made itself. Templates are best written in raw strings, `r"..."` or `r"""..."""`, where braces are plain characters:
+`template.parse(text)` reads a template once, and `render(data)` fills it in from a `@json` struct as often as needed.
+
+- `{{ name }}` writes a value, escaped for HTML.
+- `{{ user.name }}` writes a field of a struct inside the data.
+- `{{ raw name }}` writes a value as it is, for HTML the program made itself.
+
+Write templates in raw strings, `r"..."` or `r"""..."""`, where braces are plain characters:
 
 ```iris run
 import template
@@ -33,10 +39,12 @@ struct Page {
         <p>closed</p>
         {{ end }}
         """)
+
     Page p = Page{shop: "Tea & <Cake>".copy(), open: true}
     defer p.free()
     p.items.push(Item{name: "green tea".copy(), price: 3.5})
     p.items.push(Item{name: "lemon cake".copy(), price: 4.25})
+
     scoped String html = try t.render(p)
     print(html)
 }
@@ -51,28 +59,28 @@ struct Page {
 
 ```
 
-A block tag (`{{ if }}`, `{{ else }}`, `{{ end }}`, `{{ for }}` or a `{{# comment }}`) alone on its line takes the line out with it, so the output has no blank lines where they were.
+A block tag (`{{ if }}`, `{{ else }}`, `{{ end }}`, `{{ for }}` or `{{# comment }}`) alone on its line removes the whole line, so the output has no blank lines where the tags were.
 
 ## What a template can say
 
 | Tag | What it does |
 |---|---|
-| `{{ name }}`, `{{ a.b.c }}` | the value, escaped for HTML |
-| `{{ raw name }}` | the value as it is |
-| `{{ list.len }}` | how many values a list holds, or bytes a text |
-| `{{ if name }}` … `{{ else if other }}` … `{{ else }}` … `{{ end }}` | a part kept when the value is true, not zero, not empty |
-| `{{ if not name }}` | the other way around |
-| `{{ if state == "open" }}`, `{{ if n != 0 }}` | compares with text, a number, `true`, `false` or another value |
-| `{{ for x in list }}` … `{{ else }}` … `{{ end }}` | the part once for each value, or the else part when there are none |
-| `{{ for i, x in list }}` | with the place of each, from 0; over a struct, each field's name and value |
-| `{{ include "name" }}` | another template, filled from the same data |
-| `{{# a comment }}` | nothing |
+| `{{ name }}`, `{{ a.b.c }}` | The value, escaped for HTML. |
+| `{{ raw name }}` | The value as it is. |
+| `{{ list.len }}` | The number of values in a list, or of bytes in a text. |
+| `{{ if name }}` … `{{ else if other }}` … `{{ else }}` … `{{ end }}` | A part kept when the value is true, not zero and not empty. |
+| `{{ if not name }}` | The opposite test. |
+| `{{ if state == "open" }}`, `{{ if n != 0 }}` | Compares with text, a number, `true`, `false` or another value. |
+| `{{ for x in list }}` … `{{ else }}` … `{{ end }}` | The part once for each value, or the else part when there are none. |
+| `{{ for i, x in list }}` | Also gives the place of each value, from 0. Over a struct, each field's name and value. |
+| `{{ include "name" }}` | Another template, filled from the same data. |
+| `{{# a comment }}` | Nothing. |
 
-A value that the data doesn't have fails with `TemplateError.missing`, with the line, so a misspelled name shows up; in `{{ if }}` it counts as false. A list or a struct written as text fails with `TemplateError.wrongType`.
+A value missing from the data fails with `TemplateError.missing` and the line, so a misspelled name shows up. Inside `{{ if }}` a missing value counts as false. A list or a struct written as text fails with `TemplateError.wrongType`.
 
 ## A Map and other templates
 
-`renderMap(map)` fills a template from a `Map` with `str` keys, whose values can be text, numbers, lists or `@json` structs. `add(name, text)` adds a template that `{{ include "name" }}` puts in, and `template.load(dir, main)` reads every file in a folder as a template named by its path inside it, with `main` as the one `render` fills:
+`renderMap(map)` fills a template from a `Map` with `str` keys. Its values can be text, numbers, lists or `@json` structs. `add(name, text)` adds a template for `{{ include "name" }}`. `template.load(dir, main)` reads every file in a folder as a template named by its path inside the folder, and `render` fills the one named `main`:
 
 ```iris run
 import template
@@ -80,10 +88,12 @@ import template
 !void main() {
     scoped template.Template t = try template.parse(r"""{{ include "header" }}<p>{{ count }} new messages</p>""")
     try t.add("header", r"""<header>Hello, {{ user }}</header>""")
+
     Map[str, str] data
     defer data.free()
     data.set("user", "Ada")
     data.set("count", "3")
+
     scoped String html = try t.renderMap(data)
     print(html)
     scoped String header = try t.renderMap(data, "header")

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Overview - Iris</title>
-<meta name="description" content="What Iris is for, who uses it, and the ideas behind its design.">
+<meta name="description" content="What Iris is for, the path from source to program, and where each part lives in the source tree.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html" class="on">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -44,30 +43,34 @@ try {
 </header>
 <div class="doc">
   <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html" class="on"><span class="num">1</span>Overview</a></li><li><a href="02-decisions.html"><span class="num">2</span>Decisions</a></li><li><a href="03-compiler.html"><span class="num">3</span>The compiler</a></li><li><a href="04-values.html"><span class="num">4</span>How values are stored</a></li><li><a href="05-workflow.html"><span class="num">5</span>Working on Iris</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html" class="on"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></aside>
   <article class="prose">
 <h1>Overview</h1>
-<p class="lede">What Iris is for, who uses it, and the ideas behind its design.</p>
+<p class="lede">What Iris is for, the path from source to program, and where each part lives in the source tree.</p>
 <h2 id="what-iris-is-for"><a href="#what-iris-is-for">What Iris is for</a></h2>
-<p>Iris is for programs that run close to the operating system: servers, proxies, databases, command-line tools and daemons. Programs should be short to write and run about as fast as the same program in C.</p>
-<h2 id="who-uses-it"><a href="#who-uses-it">Who uses it</a></h2>
-<ul><li>Programmers writing servers, proxies, databases and other network services.</li><li>C programmers who want slices, strings, generics and checked errors.</li><li>Go programmers who need control over memory.</li><li>People writing command-line tools and daemons.</li></ul>
-<p>Iris is not designed for GUI applications, web front ends or data science.</p>
-<h2 id="ideas-behind-the-design"><a href="#ideas-behind-the-design">Ideas behind the design</a></h2>
-<h3 id="keep-the-language-small"><a href="#keep-the-language-small">Keep the language small</a></h3>
-<p>There are few rules to learn. A feature is added only if it removes a lot of code and is easy to explain. A feature that saves a little typing but adds a new idea stays out. This is why Iris has one loop keyword and no lambdas.</p>
-<h3 id="make-costs-visible"><a href="#make-costs-visible">Make costs visible</a></h3>
-<p>Reading a function should tell you what it costs. A function that can fail says so in its return type (<code>!T</code>), and one that gives back memory to free returns a type with a <code>free</code> method. Nothing runs behind the program's back: there is no garbage collector, no hidden copies and no exceptions.</p>
-<h3 id="stay-close-to-c"><a href="#stay-close-to-c">Stay close to C</a></h3>
-<p>Iris uses the C calling convention and lays out structs the way C does. C headers can be imported directly. Any C library can be used, and C code can call Iris functions.</p>
-<h3 id="check-in-debug-builds"><a href="#check-in-debug-builds">Check in debug builds</a></h3>
-<p>Debug builds check array bounds, integer overflow, null pointers and use after free. Release builds keep the bounds checks. A function marked <code>@unchecked</code> drops them.</p>
-<h2 id="how-the-compiler-works"><a href="#how-the-compiler-works">How the compiler works</a></h2>
-<p>The compiler is a C program. It reads Iris source, checks it, and writes LLVM IR, which <code>clang</code> turns into a native program. The <a href="03-compiler.html">compiler</a> page has the details, and <a href="04-values.html">How values are stored</a> shows what each Iris type looks like in memory.</p>
-    <nav class="pager"><a class="next" href="02-decisions.html"><span>Next</span>Decisions</a></nav>
+<p>Iris is for programs that run close to the operating system: servers, proxies, databases, command-line tools and daemons. Programs should be short to write and fast to run. Iris is not designed for GUI applications, web front ends or data science.</p>
+<p>Four ideas shape the design:</p>
+<ol><li>The language stays small. A feature is added only if it removes a lot of code and is easy to explain. This is why Iris has one loop keyword and no lambdas.</li><li>Costs are visible. A function that can fail says so in its return type (<code>!T</code>). One that hands back memory returns a type with a <code>free</code> method. There is no garbage collector, no hidden copy and no exception.</li><li>Iris works directly with C. It uses the C calling convention and lays out structs as C does. C headers can be imported directly, and C code can call Iris functions.</li><li>Debug builds check array bounds, integer overflow, null pointers and use after free. Release builds keep the bounds checks. A function marked <code>@unchecked</code> drops them.</li></ol>
+<h2 id="the-pipeline"><a href="#the-pipeline">The pipeline</a></h2>
+<pre class="out"><code>iris build app.iris
+  loadProgram     src/module.c    files -&gt; Program (modules, parsed N_FILE trees)
+    lexRange      src/lexer.c     text -&gt; Token[]
+    parseSource   src/parser.c    Token[] -&gt; Node tree
+  comptime        src/comptime.c  helper program, built and run, values read back
+  checkProgram    src/check.c     Node tree -&gt; same tree with Type, ref and IR flags filled in
+  writeIR         src/ir.c        checked tree -&gt; LLVM IR text
+  compileIR       src/main.c      program.ll + runtime/rt.c -&gt; clang -&gt; executable</code></pre>
+<p>The driver is <code>src/main.c</code>. <code>cmdCompile</code> reads the options and calls <code>frontEnd</code>, which runs <code>loadProgram</code>, the comptime step when the program has one, and <code>checkProgram</code>. Then it calls <code>writeIR</code> and <code>compileIR</code>. Each step only reads the result of the step before it.</p>
+<p>The subcommands stop at different points:</p>
+<ul><li><code>iris lex</code> and <code>iris parse</code> run one file through the lexer or the parser and print the result (<code>cmdLex</code>, <code>cmdParse</code>).</li><li><code>iris check</code> stops after <code>checkProgram</code>.</li><li><code>iris ir</code> prints the IR that <code>writeIR</code> returns.</li><li><code>iris build</code> writes the executable.</li><li><code>iris run</code> builds into a temporary folder, starts the program and removes the folder as soon as it has started.</li><li><code>iris test</code> and <code>iris bench</code> set <code>gTesting</code> or <code>gBenching</code>, which turn test and bench blocks into functions and give <code>main</code> a runner.</li></ul>
+<p>Everything the compiler allocates for one build comes from one <code>Arena</code> (<code>src/arena.c</code>) and is freed at once with <code>arenaFree</code>. Nodes, types and strings are never freed one by one.</p>
+<h2 id="source-map"><a href="#source-map">Source map</a></h2>
+<div class="table"><table><thead><tr><th>Path</th><th>What it holds</th></tr></thead><tbody><tr><td><code>src/iris.h</code></td><td>Every shared declaration: <code>Token</code>, <code>Node</code>, <code>Type</code>, <code>Module</code>, <code>Program</code>, the <code>N_</code>, <code>F_</code>, <code>TY_</code> and <code>BI_</code> enums. Read this first.</td></tr><tr><td><code>src/main.c</code></td><td>The <code>iris</code> command: <code>cmdCompile</code>, <code>frontEnd</code>, <code>runComptime</code>, <code>compileIR</code>, <code>iris mod</code>, <code>iris get</code>, <code>iris fmt</code>.</td></tr><tr><td><code>src/arena.c</code></td><td><code>Arena</code> and <code>StrBuf</code>, the growing string every writer uses.</td></tr><tr><td><code>src/diag.c</code></td><td><code>errorAt</code>, the error printer, and the hooks the language server sets.</td></tr><tr><td><code>src/lexer.c</code></td><td><code>lexRange</code>: tokens and the newlines that end statements.</td></tr><tr><td><code>src/parser.c</code></td><td><code>parseSource</code>: recursive descent into <code>Node</code> trees.</td></tr><tr><td><code>src/ast.c</code></td><td><code>newNode</code>, <code>listPush</code> and <code>printTree</code>, which <code>iris parse</code> prints. It is the reference for what each node field means.</td></tr><tr><td><code>src/module.c</code></td><td><code>loadProgram</code>: projects, imports, packages and the embedded standard library.</td></tr><tr><td><code>src/cimport.c</code></td><td><code>cImport</code>: C headers to an Iris module, through clang.</td></tr><tr><td><code>src/comptime.c</code></td><td>The comptime helper's source and the JSON-to-literal reader.</td></tr><tr><td><code>src/check.c</code></td><td><code>checkProgram</code>: names, types, layout, generics, <code>when</code>, tests, constants.</td></tr><tr><td><code>src/generic.c</code></td><td><code>cloneNode</code>, the deep copy used for generic instances.</td></tr><tr><td><code>src/ir.c</code></td><td><code>writeIR</code>: LLVM IR, debug information, JSON, <code>@env</code> and <code>@flags</code> tables.</td></tr><tr><td><code>src/proc.c</code></td><td><code>runCommand</code>: runs clang, git and the built program.</td></tr><tr><td><code>src/fmt.c</code></td><td><code>iris fmt</code>, which works on tokens.</td></tr><tr><td><code>src/lsp.c</code></td><td><code>iris lsp</code>, the language server.</td></tr><tr><td><code>src/doc.c</code></td><td><code>iris doc</code>.</td></tr><tr><td><code>runtime/rt.c</code></td><td>The C runtime: memory, errors, tasks, I/O, channels, threads, JSON, TLS, SQLite and the C side of many std modules.</td></tr><tr><td><code>std/&lt;module&gt;/*.iris</code></td><td>The standard library in Iris. <code>std/core</code> (<code>List</code>, <code>Map</code>, <code>Arena</code>...) is loaded into every program.</td></tr><tr><td><code>tests/</code></td><td>Test programs, run by <code>tools/run_tests.py</code>.</td></tr></tbody></table></div>
+<p>The next pages follow the pipeline: <a href="02-front-end.html">Loading and parsing</a>, <a href="03-checker.html">The checker</a>, <a href="04-ir.html">The IR writer</a>, <a href="05-values.html">How values are stored</a> and <a href="06-runtime.html">The runtime</a>. <a href="07-decisions.html">Decisions</a> lists the language rules and why they were chosen, and <a href="08-workflow.html">Working on Iris</a> says where to start for a change and how to test it.</p>
+    <nav class="pager"><a class="next" href="02-front-end.html"><span>Next</span>Loading and parsing</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#what-iris-is-for">What Iris is for</a></li><li><a href="#who-uses-it">Who uses it</a></li><li><a href="#ideas-behind-the-design">Ideas behind the design</a></li><li><a href="#how-the-compiler-works">How the compiler works</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#what-iris-is-for">What Iris is for</a></li><li><a href="#the-pipeline">The pipeline</a></li><li><a href="#source-map">Source map</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -75,7 +78,6 @@ try {
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

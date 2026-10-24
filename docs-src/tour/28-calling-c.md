@@ -1,6 +1,6 @@
 # Calling C
 
-Iris calls C functions directly, with no wrapper code to write: `import c` reads a C header and makes its functions, types and constants available. C can also call Iris functions back. This chapter covers both, how C types look in Iris, and the rules for text and memory at the border.
+Iris calls C functions directly, with no wrapper code to write. `import c` reads a C header and makes its functions, types and constants available. C can also call Iris functions back. This chapter covers both, how C types look in Iris, and the rules for text and memory at the border.
 
 ## import c
 
@@ -11,9 +11,11 @@ import c "arpa/inet.h", c "stdio.h", c "string.h"
 
 void main() {
     c.puts("parsing an address\0".ptr)
+
     u8[4] addr
     ok := c.inet_pton(c.AF_INET, "192.168.1.10\0".ptr, &addr[0])
     print("{ok}: {addr[0]} {addr[1]} {addr[2]} {addr[3]}")
+
     n := c.strlen("192.168.1.10\0".ptr)
     c.printf("%s has %ld characters\n\0".ptr, "192.168.1.10\0".ptr, n)
 }
@@ -27,7 +29,7 @@ parsing an address
 
 `inet_pton` writes the four bytes of the address into `addr`, and `c.AF_INET` is the constant from the header.
 
-All the headers a file imports share one `c`. Headers are found where `clang` looks for them, in the project's folder, and in folders given with `-I`. The C library is always linked; another library is linked with `-l name` on the command line, or a `link` line in `iris.mod`:
+All the headers a file imports share one `c`. Headers are found where `clang` looks for them, in the project's folder, and in folders given with `-I`. The C library is always linked. Another library is linked with `-l name` on the command line or a `link` line in `iris.mod`:
 
 ```shell
 iris run -l sqlite3 main.iris
@@ -43,7 +45,7 @@ link sqlite3
 
 ## Text at the border
 
-C text ends with a zero byte, and Iris text doesn't: a `str` knows its length instead. Text given to C needs the zero added, and `.ptr` gives the pointer: `"name\0".ptr`, or a `String` with `"\0"` appended. Text that comes back from C is read with a slice of the pointer, up to its zero:
+C text ends with a zero byte. Iris text has none, since a `str` knows its length. Text given to C needs the zero added, and `.ptr` gives the pointer: `"name\0".ptr`, or a `String` with `"\0"` appended. Text that comes back from C is read with a slice of the pointer, up to its zero:
 
 ```iris run
 import c "stdlib.h", c "string.h"
@@ -61,7 +63,7 @@ void main() {
 HOME is set: true
 ```
 
-The slice points into C's memory, and is valid as long as C keeps it there.
+The slice points into C's memory and is valid as long as C keeps it there.
 
 ## Types
 
@@ -79,13 +81,15 @@ C types become Iris types of the same size and layout, so values pass between th
 | `enum` | its values, as `i32` constants |
 | `typedef` | a type alias |
 
-A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`. A struct named like a function, as `struct stat` and `stat()` are, is `c.struct_stat`. Functions with `...`, like `printf`, take extra numbers and pointers.
+- A C name that is an Iris keyword or built-in name gets a `_` after it: `c.free_`, `c.select_`.
+- A struct named like a function, as `struct stat` and `stat()` are, is `c.struct_stat`.
+- Functions with `...`, like `printf`, take extra numbers and pointers.
 
-Left out, for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros that aren't plain numbers, text, or the name of another such macro.
+Left out for now, with the reason shown by `iris c`: `long double`, unions, structs passed or returned by value, inline functions, and macros other than plain numbers, text, or the name of another such macro.
 
 ## Callbacks
 
-Where C takes a pointer to a function, an Iris function with the same types can be passed. C's `void *` arguments arrive as `u8 *`, which converts to the pointer type that is meant:
+Where C takes a pointer to a function, an Iris function with the same types can be passed. C's `void *` arguments arrive as `u8 *`, which converts to the intended pointer type:
 
 ```iris run
 import c "stdlib.h"
@@ -118,15 +122,15 @@ i32 onRow(u8 *ctx, i32 n, u8 **values, u8 **names) {
 }
 ```
 
-An exported function takes and gives numbers and pointers, never `!T`, since C has no way to take an error. The names `main` and those starting with `iris_` belong to the runtime.
+An exported function takes and gives only numbers and pointers. It can't return `!T`, since C has no way to take an error. The name `main` and names starting with `iris_` belong to the runtime.
 
 ## Memory at the border
 
-Memory from C's `malloc` is freed with C's `free` (`c.free_`), and memory from Iris's `alloc` with Iris's `free`; the two don't mix. A C function that keeps a pointer it was given expects the memory to stay: give it memory from `alloc`, or a global, not a local variable's address.
+Memory from C's `malloc` is freed with C's `free` (`c.free_`), and memory from Iris's `alloc` with Iris's `free`. The two don't mix. A C function that keeps a pointer it was given expects the memory to stay, so give it memory from `alloc` or a global. A local variable's address goes away when its function returns.
 
 ## The standard library and C
 
-Parts of the standard library are made this way: TLS calls OpenSSL, `sqlite` calls SQLite, and `compress` calls zlib, each loaded the first time a program uses it. A program that needs another C library uses `import c` the same way.
+Parts of the standard library are made this way. TLS calls OpenSSL, `sqlite` calls SQLite and `compress` calls zlib, each loaded the first time a program uses it. A program that needs another C library uses `import c` the same way.
 
 ## C files of the program
 
@@ -157,6 +161,6 @@ void main() {
 }
 ```
 
-`iris run .` in the folder prints `8`. The C files are built with the same mode as the program, so a debug build checks their memory too.
+`iris run .` in the folder prints `8`. The C files are built in the same mode as the program, so a debug build checks their memory too.
 
 `asm` is a reserved word, and Iris has no inline assembly. Code that needs a particular instruction goes in a C file, with C's `asm` there.

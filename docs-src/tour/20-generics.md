@@ -11,11 +11,13 @@ T first[T](T[] items) => items[0]
 
 T peak[T](T[] samples) {
     T best = samples[0]
+
     for s in samples {
         if s > best {
             best = s
         }
     }
+
     return best
 }
 
@@ -32,7 +34,7 @@ void main() {
 
 ## Working out the types
 
-The types are worked out from the arguments, so calls rarely name them. When there is nothing to work them out from, or another type is wanted, they are given in brackets after the name:
+The types are worked out from the arguments, so calls rarely name them. When nothing gives them, or another type is wanted, they go in brackets after the name:
 
 ```iris run
 T zero[T]() {
@@ -55,7 +57,7 @@ void main() {
 
 ## What a generic function may do
 
-A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't make sense for one of them is an error that names the call that used it:
+A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't work for one of them is an error that names the call that used it:
 
 ```iris error
 T peak[T](T[] samples) {
@@ -71,7 +73,7 @@ T peak[T](T[] samples) {
 peak([true, false])   // error: peak[bool], made here, has the errors above
 ```
 
-To say ahead which types a parameter takes, and give the function methods to call on it, a type parameter can have an interface as its bound (see [Interfaces](21-interfaces.html)).
+A type parameter can have an interface as its bound. The bound says which types it takes and gives the function methods to call on it (see [Interfaces](21-interfaces.html)).
 
 ## Generic structs
 
@@ -88,6 +90,7 @@ Pair[B, A] swap[A, B](Pair[A, B] p) => Pair[B, A]{first: p.second, second: p.fir
 void main() {
     p := Pair[str, u16]{first: "db.lan", second: 5432}
     q := swap(p)
+
     print("{p.first}:{p.second} / {q.first}:{q.second}")
 }
 ```
@@ -126,8 +129,10 @@ void main() {
     scoped Stack[str] idle
     idle.push("10.0.0.11:5432")
     idle.push("10.0.0.12:5432")
+
     conn, ok := idle.pop()
     print("{conn} {ok}, {idle.len} left")
+
     scoped Stack[i32] freeFds
     _, any := freeFds.pop()
     print("{any}")
@@ -139,11 +144,11 @@ void main() {
 false
 ```
 
-A method is checked for a set of types only when the program uses it with them. A method can need more of its types than the others do, and the struct still works with types that only the other methods suit. `List[T].contains` compares values with `==`; a list of a struct that can't be compared works until `contains` is called on it.
+A method is checked for a set of types only when the program uses it with them. So one method can ask more of its types than the others, and the struct still works with types that suit only the others. `List[T].has` compares values with `==`. A list of a struct that can't be compared works until `has` is called on it.
 
 ## Methods with types of their own
 
-A method can have type parameters of its own, written after its name, as a generic function's are. Its types are worked out from the arguments of each call:
+A method can have type parameters of its own, written after its name as a generic function's are. They are worked out from the arguments of each call:
 
 ```iris run
 struct Metrics {
@@ -164,9 +169,11 @@ void Batch[T].free() => self.items.free()
 // A new batch with f applied to each item.
 Batch[U] Batch[T].map[U](U(T) f) {
     Batch[U] out
+
     for x in self.items.items() {
         out.items.push(f(x))
     }
+
     return out
 }
 
@@ -178,9 +185,11 @@ void main() {
     m.report("open connections", 12)
     m.report("load", 0.75)
     m.report("region", "eu-west")
+
     scoped Batch[i64] sizes
     sizes.items.push(4096)
     sizes.items.push(3MiB)
+
     scoped Batch[i64] k = sizes.map(kib)
     scoped Batch[bool] b = sizes.map(big)
     print("{k.items.at(1)} KiB, {b.items.at(0)} {b.items.at(1)}, {m.reported} reported")
@@ -194,8 +203,8 @@ region = eu-west
 3072 KiB, false true, 3 reported
 ```
 
-Every type of such a method must show up in its parameters, so that a call says what it is. A method like `U Box.make[U]()` can't be called, since nothing in `b.make()` gives `U`; a generic function is the way to write that one.
+Every type of such a method must appear in its parameters, so that a call says what it is. A method like `U Box.make[U]()` can't be called, since nothing in `b.make()` gives `U`. Write that one as a generic function.
 
 ## How generics are compiled
 
-Each generic function and struct is compiled once for each set of types it is used with. The copy for `i64` works on `i64`s directly, with no boxing and no lookups when the program runs, so it is as fast as code written by hand for that type. The cost is in compiling: each set of types adds a copy of the code.
+Each generic function and struct is compiled once for each set of types it is used with. The copy for `i64` works on `i64`s directly, with no boxing and no lookups at run time, so it runs as fast as code written by hand for that type. Each set of types adds a copy of the code, which costs compile time.

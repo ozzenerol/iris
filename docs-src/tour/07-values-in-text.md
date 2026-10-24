@@ -1,16 +1,17 @@
 # Values in text
 
-Putting values into text with braces, the `format` function that keeps the result, and how the temporary text is freed for you.
+Interpolating values with braces, the `format` function, and how temporary text is freed.
 
 ## Braces
 
-A name or an expression in braces inside a string literal is replaced by its value, written as text:
+An expression in braces inside a string literal is replaced by its value as text:
 
 ```iris run
 void main() {
     host := "10.0.0.5"
     sent := 3
     rtt := 4.5
+
     print("{sent} pings to {host}, {f64(sent) * rtt}ms in all")
     print("{sent > 2} {sent * 64} bytes")
 }
@@ -21,22 +22,22 @@ void main() {
 true 192 bytes
 ```
 
-The compiler checks every value in braces, with its type, as it checks any other expression. A brace on its own is written twice, `{{` and `}}`, and a raw string (`r"..."`) takes braces as they are.
+The compiler type-checks each expression in braces. Write a literal brace as `{{` or `}}`. A raw string (`r"..."`) keeps braces as they are.
 
-## What can be put into text
+## What can be interpolated
 
 | Type | Written as |
 |---|---|
-| integers | in decimal: `42`, `-7` |
-| `f32`, `f64` | the fewest digits that read back as the same number: `0.1`, `2.5e-8` |
+| integers | decimal: `42`, `-7` |
+| `f32`, `f64` | shortest digits that read back the same: `0.1`, `2.5e-8` |
 | `bool` | `true` or `false` |
-| `str`, `String` | the text itself |
+| `str`, `String` | the text |
 | `Duration` | in units: `1.5s`, `2m0s`, `250ms` |
-| a plain enum | the value's name: `warn` |
-| a flags enum | the names that are set: `read\|write` |
-| an enum with data | the value's name: `Closed` |
-| an error's code | the enum and the value: `NetError.timeout` |
-| a struct with `String format()` | what the method gives |
+| plain enum | the value's name: `warn` |
+| flags enum | the set names: `read\|write` |
+| enum with data | the variant's name: `Closed` |
+| error code | enum and value: `NetError.timeout` |
+| struct with `String format()` | the method's result |
 
 ```iris run
 enum State { connecting, open, closed }
@@ -46,6 +47,7 @@ enum Perm flags { read, write, exec }
 void main() {
     State s = .open
     Perm p = .read | .write
+
     print("{s} {p} {1500ms} {0.25} {false}")
 }
 ```
@@ -54,28 +56,29 @@ void main() {
 open read|write 1.5s 0.25 false
 ```
 
-A pointer, an array or a slice of anything but bytes can't be put into text as it is; the program says what it means with a loop or a method.
+Pointers, arrays and slices other than bytes can't be interpolated. Use a loop or a method.
 
-## How a value is written
+## Format specs
 
-A `:` after the value in the braces says how it is written: `{port:>6}`. What follows the `:` is, in this order, each part optional:
+A `:` after the expression starts a spec: `{port:>6}`. Its parts come in this order, each optional:
 
-| Part | What it does |
+| Part | Effect |
 |---|---|
-| a fill character and `<`, `>` or `^` | where the value goes in the width: left, right or centred; the fill is a space unless one is given before |
-| `+` | a `+` before positive numbers |
-| `0` | numbers padded with zeros after the sign |
-| a width | at least this many characters; the rest is filled |
-| `.` and a number | for a float, the digits after the point; for text, the most characters kept |
-| `x`, `X`, `o` or `b` | an integer in hex, upper-case hex, octal or binary |
-| `e` or `f` | a float in exponent form or with a fixed point, 6 digits after it unless a precision is given |
+| fill character and `<`, `>` or `^` | align left, right or centre in the width; fill defaults to a space |
+| `+` | `+` before positive numbers |
+| `0` | pad numbers with zeros after the sign |
+| width | minimum characters |
+| `.` and a number | digits after the point for floats; maximum characters for text |
+| `x`, `X`, `o`, `b` | hex, upper-case hex, octal, binary |
+| `e`, `f` | exponent or fixed-point float, 6 digits unless a precision is given |
 
-Numbers go to the right of the width and everything else to the left, unless the spec says another way. The width and the precision of text count characters, not bytes, so `Köln` is four wide:
+Numbers align right by default, everything else left. Width and precision count characters, so `Köln` is four wide.
 
 ```iris run
 void main() {
     print("[{8080:>6}] [{"GET":<6}] [{"ok":^6}] [{"Köln":*>8}]")
     print("{7:03} {-42:06} {255:x} {255:#>6X} {5:08b} {12:+}")
+
     loss := 0.256789
     print("{loss:.2} {loss:.3e} {2.5:f} {1e-9:e}")
     print("[{"ingress-controller":.7}] [{true:>6}] [{250ms:>8}]")
@@ -89,11 +92,14 @@ void main() {
 [ingress] [  true] [   250ms]
 ```
 
-A width works with any value that can be put into text, a struct with a `format` method included. The other parts must fit the value: `{1.5:x}` and `{"a":+}` don't compile. A `:` inside parentheses, brackets or quotes is part of the value, so `{pad(text, width: 4)}` and `{line[0:2]}` work as they read. A constant's text can't have a spec; use `format` when the program runs.
+- A width works on any value, including structs with `format`.
+- Other parts must fit the type: `{1.5:x}` and `{"a":+}` don't compile.
+- A `:` inside parentheses, brackets or quotes belongs to the expression, so `{pad(text, width: 4)}` and `{line[0:2]}` work.
+- Text in a constant can't have a spec. Use `format` at run time.
 
 ## A struct's own text
 
-A struct with a method `String format()` can be put into text. The method gives the text, and the `String` it returns is freed after the statement:
+A struct with a method `String format()` can be interpolated. The returned `String` is freed after the statement.
 
 ```iris run
 struct Ip4 {
@@ -113,6 +119,7 @@ String Route.format() => format("{self.dest}/{self.prefix} via {self.via}")
 void main() {
     gw := Ip4{b: [192, 168, 1, 1]}
     r := Route{dest: Ip4{b: [10, 0, 0, 0]}, prefix: 8, via: gw}
+
     print("gateway {gw}")
     print("route {r}")
 }
@@ -125,13 +132,14 @@ route 10.0.0.0/8 via 192.168.1.1
 
 ## format
 
-`print` writes text with values to standard output. `format` builds the same text and gives it as a new `String`, which the caller frees:
+`format` builds the same text as `print` and returns it as a new `String` for the caller to free:
 
 ```iris run
 void main() {
     host := "localhost"
     port := 8080
     scoped String address = format("{host}:{port}")
+
     print("listening on {address}")
     print("{address.len} bytes")
 }
@@ -142,13 +150,11 @@ listening on localhost:8080
 14 bytes
 ```
 
-`str.format` is the same as `format`, by the `str` module's name.
+`str.format` is the same function. `panic` takes the same text. `io.eprint` writes it to standard error with a newline, `io.write` to standard output without one.
 
-`panic` takes the same text, and `io.eprint` writes it to standard error with a newline. `io.write` writes to standard output without one.
+## Text passed to a function
 
-## Text passed straight to a function
-
-Text with values can be given to any function that takes a `str`. It is built in a temporary `String`, which is freed when the statement ends:
+Interpolated text can go straight to any `str` parameter. It is built in a temporary `String` freed at the end of the statement:
 
 ```iris run
 void logLine(str s) {
@@ -157,6 +163,7 @@ void logLine(str s) {
 
 void main() {
     open := 3
+
     logLine("{open} connections open")
     logLine("plain text")
 }
@@ -167,7 +174,7 @@ void main() {
 [edge-1] plain text
 ```
 
-A function that returns a new `String`, given straight to a function that takes a `str`, is freed after the statement too:
+A returned `String` passed straight to a `str` parameter is freed after the statement too:
 
 ```iris run
 import str
@@ -183,9 +190,9 @@ HTTP/1.1 200 OK
 ---------------
 ```
 
-Anywhere else, text with values needs `format`, and a `String` from a call needs a variable. The temporary would otherwise be gone before it is used.
+Everywhere else, interpolated text needs `format` and a returned `String` needs a variable.
 
-A call that gives back a `str`, a slice or a pointer may give back part of what it was given. When that is a temporary, the result would point into text that is freed at the end of the statement, so the compiler doesn't allow it:
+A call that returns a `str`, slice or pointer may return part of its argument. If that argument is a temporary, the result would point into freed text, so the compiler rejects it:
 
 ```iris error
 t := str.trim("  {name}  ") // error: this text is freed when the statement ends, and the call gives back a str that may point into it
@@ -196,22 +203,23 @@ scoped String padded = format("  {name}  ")
 t := str.trim(padded)
 ```
 
-## Building text a part at a time
+## Building text in parts
 
-`String.append` adds to the end of a `String`. With `format` for the parts, longer text is built without copying it again and again:
+`String.append` adds to the end of a `String`, so long text is built without repeated copies:
 
 ```iris run
 import io
 
 void main() {
     scoped String out = "GET / HTTP/1.1\n".copy()
-
     headers := ["Host", "Accept", "Connection"]
     values := ["example.com", "*/*", "close"]
+
     for i, h in headers {
         scoped String line = format("{h}: {values[i]}\n")
         out.append(line)
     }
+
     io.write(out)
 }
 ```
@@ -223,4 +231,4 @@ Accept: */*
 Connection: close
 ```
 
-`str.join` puts a list of parts together with a separator between them (see [Text](06-text.html)).
+`str.join` joins parts with a separator (see [Text](06-text.html)).

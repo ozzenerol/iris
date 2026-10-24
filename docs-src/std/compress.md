@@ -10,6 +10,7 @@ import compress, str
     scoped String packed = try compress.gzip(text, level: 9)
     scoped String back = try compress.gunzip(packed)
     print("{text.len} bytes, packed under 100: {packed.len < 100}, back the same: {back == text}")
+
     scoped String z = try compress.compress(text, .zlib)
     print("zlib starts with {z[0]}")
 }
@@ -22,7 +23,7 @@ zlib starts with 120
 
 ## A limit for untrusted data
 
-A small input can decompress into a huge output. `gunzip` and `decompress` stop with `CompressError.tooLarge` when the output would pass a limit, 1 GiB unless one is given:
+A small input can decompress into a huge output. `gunzip` and `decompress` stop with `CompressError.tooLarge` when the output would pass a limit, which is 1 GiB unless given:
 
 ```iris run
 import compress, str
@@ -30,6 +31,7 @@ import compress, str
 !void main() {
     scoped String zeros = str.repeat("0", 1000000)
     scoped String packed = try compress.gzip(zeros)
+
     scoped String big = compress.gunzip(packed, limit: 4096) catch e {
         print("over the limit: {e.code}")
         return
@@ -44,7 +46,7 @@ over the limit: CompressError.tooLarge
 
 ## A part at a time
 
-A `Writer` compresses data as it comes and adds the result to its `out`; `finish` ends the stream. A `Reader` does the opposite, and its `write` gives `true` when the stream has ended:
+A `Writer` compresses data as it comes and adds the result to its `out`. `finish` ends the stream. A `Reader` does the opposite, and its `write` gives `true` when the stream has ended:
 
 ```iris run
 import compress
@@ -55,6 +57,7 @@ import compress
         try w.write("line {i}\n")
     }
     try w.finish()
+
     scoped r := try compress.reader()
     done := try r.write(w.out)
     print("ended {done}: {r.out}")
@@ -70,7 +73,7 @@ line 2
 
 ## Checksums
 
-`crc32` and `adler32` give the checksums that gzip and zlib use. Giving the one before goes on from it, so a big input can be checked a part at a time:
+`crc32` and `adler32` give the checksums that gzip and zlib use. Pass the previous checksum to continue from it, so a big input can be checked a part at a time:
 
 ```iris run
 import compress
@@ -86,4 +89,4 @@ void main() {
 222957957 true
 ```
 
-zlib is loaded the first time it is needed; `IRIS_ZLIB` names another copy of it.
+zlib is loaded the first time it is needed. `IRIS_ZLIB` names another copy of it.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SQLite - Iris</title>
-<meta name="description" content="The sqlite module keeps data in a SQLite database: one file, or memory, with tables read and changed with SQL. The system&#x27;s SQLite is loaded the first time a program opens a database, so a program that uses it needs SQLite installed.">
+<meta name="description" content="The sqlite module keeps data in a SQLite database, in one file or in memory, with tables read and changed with SQL. The system&#x27;s SQLite is loaded the first time a program opens a database, so a program that uses it needs SQLite installed.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,15 +46,16 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html" class="on"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>SQLite</h1>
-<p class="lede">The <code>sqlite</code> module keeps data in a SQLite database: one file, or memory, with tables read and changed with SQL. The system's SQLite is loaded the first time a program opens a database, so a program that uses it needs SQLite installed.</p>
+<p class="lede">The <code>sqlite</code> module keeps data in a SQLite database, in one file or in memory, with tables read and changed with SQL. The system's SQLite is loaded the first time a program opens a database, so a program that uses it needs SQLite installed.</p>
 <h2 id="opening-a-database"><a href="#opening-a-database">Opening a database</a></h2>
-<p><code>sqlite.open(path)</code> opens the database in a file and gives a <code>!sqlite.Db</code>. When the file isn't there, SQLite makes it. <code>close</code> closes it, and <code>defer db.close()</code> closes it when the function ends, however it ends. What was written stays in the file for the next time it is opened:</p>
+<p><code>sqlite.open(path)</code> opens the database in a file and gives a <code>!sqlite.Db</code>. When the file doesn't exist, SQLite creates it. <code>close</code> closes the database, and <code>defer db.close()</code> closes it when the function ends, however it ends. What was written stays in the file for the next time it is opened.</p>
 <pre class="code run"><code><span class="k">import</span> fs, sqlite
 
 <span class="c">// Records that the service started, and says how many times it has.</span>
 !<span class="t">void</span> <span class="f">started</span>(<span class="t">str</span> path) {
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(path)
     <span class="k">defer</span> db.<span class="f">close</span>()
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE IF NOT EXISTS starts (n INTEGER)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO starts VALUES (1)&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;starts: </span><span class="e">{</span><span class="k">try</span> <span class="f">count</span>(&amp;db)<span class="e">}</span><span class="s">&quot;</span>)
@@ -64,6 +64,7 @@ try {
 !<span class="t">i64</span> <span class="f">count</span>(sqlite.<span class="t">Db</span> *db) {
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT COUNT(*) FROM starts&quot;</span>)
     <span class="k">defer</span> rows.<span class="f">close</span>()
+
     _ = <span class="k">try</span> rows.<span class="f">next</span>()
     <span class="k">return</span> rows.<span class="f">int</span>(<span class="n">0</span>)
 }
@@ -76,8 +77,8 @@ try {
 }</code></pre>
 <pre class="out"><code>starts: 1
 starts: 2</code></pre>
-<p><code>count</code> reads the table with <code>query</code>, which <a href="#row-by-row">Row by row</a> shows.</p>
-<p>The path <code>&quot;:memory:&quot;</code> gives a database that lives only in memory, and is gone when it is closed. The other examples in this chapter use it, so each starts with empty tables:</p>
+<p><code>count</code> reads the table with <code>query</code>, which <a href="#row-by-row">Row by row</a> covers.</p>
+<p>The path <code>&quot;:memory:&quot;</code> gives a database that lives only in memory and is gone when it is closed. The other examples in this chapter use it, so each starts with empty tables.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -88,43 +89,49 @@ starts: 2</code></pre>
 }</code></pre>
 <pre class="out"><code>open</code></pre>
 <h2 id="changing-data"><a href="#changing-data">Changing data</a></h2>
-<p><code>exec</code> runs SQL that gives no rows: <code>CREATE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>. Without values, the SQL can hold several statements separated by <code>;</code>, which suits making the tables:</p>
+<p><code>exec</code> runs SQL that gives no rows: <code>CREATE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>. Without values, the SQL can hold several statements separated by <code>;</code>, which is handy for creating the tables.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">r&quot;&quot;&quot;
         CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, port INTEGER);
         CREATE TABLE checks (id INTEGER PRIMARY KEY, host INTEGER, ok INTEGER);
         INSERT INTO hosts (name, port) VALUES (&#x27;db&#x27;, 5432), (&#x27;cache&#x27;, 6379);
         &quot;&quot;&quot;</span>)
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE hosts SET port = port + 10000&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>db.<span class="f">changes</span>()<span class="e">}</span><span class="s"> changed&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2 changed</code></pre>
-<p><code>db.changes()</code> is how many rows the last <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> changed, and <code>db.lastId()</code> is the id of the last row <code>INSERT</code> added.</p>
+<p><code>db.changes()</code> is how many rows the last <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> changed. <code>db.lastId()</code> is the id of the last row an <code>INSERT</code> added.</p>
 <h2 id="values-in-sql"><a href="#values-in-sql">Values in SQL</a></h2>
-<p>Each <code>?</code> in the SQL takes the next value from the list given after it. The values are kept apart from the SQL text, so text with a quote in it, or text that came over the network, can't change what the SQL does. A value is one of <code>sqlite.Value</code>: <code>.int</code>, <code>.float</code>, <code>.text</code>, <code>.blob</code> for bytes, or <code>.none</code> for NULL:</p>
+<p>Each <code>?</code> in the SQL takes the next value from the list that follows it. The values are kept apart from the SQL text, so text with a quote in it, or text from the network, can't change what the SQL does. A value is a <code>sqlite.Value</code>:</p>
+<ul><li><code>.int</code>, <code>.float</code> or <code>.text</code></li><li><code>.blob</code> for bytes</li><li><code>.none</code> for NULL</li></ul>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, port INTEGER, note TEXT)&quot;</span>)
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts (name, port, note) VALUES (?, ?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;db&quot;</span>), .<span class="f">int</span>(<span class="n">5432</span>), .<span class="f">text</span>(<span class="s">&quot;the main database&quot;</span>)])
     <span class="f">print</span>(<span class="s">&quot;db is </span><span class="e">{</span>db.<span class="f">lastId</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts (name, port, note) VALUES (?, ?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;old&quot;</span>), .none, .<span class="f">text</span>(<span class="s">&quot;ops&#x27; test box&quot;</span>)])
     <span class="f">print</span>(<span class="s">&quot;old is </span><span class="e">{</span>db.<span class="f">lastId</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;DELETE FROM hosts WHERE port IS NULL&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>db.<span class="f">changes</span>()<span class="e">}</span><span class="s"> deleted&quot;</span>)
 }</code></pre>
 <pre class="out"><code>db is 1
 old is 2
 1 deleted</code></pre>
-<p>With values, <code>exec</code> runs one statement: SQL with another statement after it fails with <code>SqliteError.failed</code>, before anything runs. The number of values must match the number of <code>?</code>.</p>
+<p>With values, <code>exec</code> runs one statement. SQL with another statement after it fails with <code>SqliteError.failed</code> before anything runs. The number of values must match the number of <code>?</code>.</p>
 <h2 id="bytes"><a href="#bytes">Bytes</a></h2>
-<p>A BLOB column keeps bytes as they are, for certificates, hashes or packed data. <code>.blob(bytes)</code> puts a <code>u8[]</code> into one, and <code>rows.bytes(col)</code> reads it back; like <code>text</code>, what it gives is valid until the next <code>next</code>. A <code>String</code> field of a struct read with <code>all</code> or <code>one</code> gets the bytes too:</p>
+<p>A BLOB column keeps bytes as they are, for certificates, hashes or packed data. <code>.blob(bytes)</code> stores a <code>u8[]</code> in one and <code>rows.bytes(col)</code> reads it back. Like <code>text</code>, the result is valid until the next <code>next</code>. A <code>String</code> field of a struct read with <code>all</code> or <code>one</code> gets the bytes too.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -137,20 +144,24 @@ old is 2
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE certs (host TEXT, der BLOB)&quot;</span>)
+
     <span class="t">u8</span>[<span class="n">6</span>] start = [<span class="n">0x30</span>, <span class="n">0x82</span>, <span class="n">0x03</span>, <span class="n">0x0a</span>, <span class="n">0x30</span>, <span class="n">0x00</span>] <span class="c">// how a DER certificate starts</span>
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO certs VALUES (?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;api.example.com&quot;</span>), .<span class="f">blob</span>(start[:])])
+
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT der, typeof(der) FROM certs&quot;</span>)
     <span class="k">defer</span> rows.<span class="f">close</span>()
     _ = <span class="k">try</span> rows.<span class="f">next</span>()
     b := rows.<span class="f">bytes</span>(<span class="n">0</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">text</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span>b.len<span class="e">}</span><span class="s"> bytes, the first </span><span class="e">{</span>b[<span class="n">0</span>]<span class="e">}</span><span class="s">, the last </span><span class="e">{</span>b[<span class="n">5</span>]<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">Cert</span> c = <span class="k">try</span> sqlite.one[<span class="t">Cert</span>](&amp;db, <span class="s">&quot;SELECT * FROM certs&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.host<span class="e">}</span><span class="s">: </span><span class="e">{</span>c.der.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>blob: 6 bytes, the first 48, the last 0
 api.example.com: 6 bytes</code></pre>
 <h2 id="rows-into-structs"><a href="#rows-into-structs">Rows into structs</a></h2>
-<p><code>sqlite.all[T]</code> runs a query and gives a <code>List</code> of <code>T</code>, a <code>@json</code> struct (see <a href="01-json.html">JSON</a>). Each field is filled from the column of the same name, or the name given with <code>@json(&quot;name&quot;)</code>. Columns without a field are skipped, and fields without a column keep their defaults. The <code>String</code>s and the list are the caller's to free:</p>
+<p><code>sqlite.all[T]</code> runs a query and gives a <code>List</code> of <code>T</code>, a <code>@json</code> struct (see <a href="01-json.html">JSON</a>).</p>
+<ul><li>Each field is filled from the column of the same name, or the name given with <code>@json(&quot;name&quot;)</code>.</li><li>Columns without a field are skipped.</li><li>Fields without a column keep their defaults.</li><li>The caller frees the <code>String</code>s and the list.</li></ul>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -165,6 +176,7 @@ api.example.com: 6 bytes</code></pre>
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT, port INTEGER)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts (name, port) VALUES (&#x27;db&#x27;, 5432), (&#x27;cache&#x27;, 6379), (&#x27;dns&#x27;, 53)&quot;</span>)
+
     hosts := <span class="k">try</span> sqlite.all[<span class="t">Host</span>](&amp;db, <span class="s">&quot;SELECT * FROM hosts WHERE port &gt; ? ORDER BY name&quot;</span>, [.<span class="f">int</span>(<span class="n">1023</span>)])
     <span class="k">defer</span> {
         <span class="k">for</span> h <span class="k">in</span> hosts {
@@ -172,13 +184,14 @@ api.example.com: 6 bytes</code></pre>
         }
         hosts.<span class="f">free</span>()
     }
+
     <span class="k">for</span> h <span class="k">in</span> hosts {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>h.id<span class="e">}</span><span class="s"> </span><span class="e">{</span>h.name<span class="e">}</span><span class="s"> </span><span class="e">{</span>h.port<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>2 cache 6379
 1 db 5432</code></pre>
-<p><code>sqlite.one[T]</code> gives the first row. When the query finds nothing, it fails with <code>SqliteError.noRows</code>:</p>
+<p><code>sqlite.one[T]</code> gives the first row. When the query finds nothing, it fails with <code>SqliteError.noRows</code>.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -192,8 +205,10 @@ api.example.com: 6 bytes</code></pre>
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts (name) VALUES (&#x27;db&#x27;), (&#x27;dns&#x27;)&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">Host</span> dns = <span class="k">try</span> sqlite.one[<span class="t">Host</span>](&amp;db, <span class="s">&quot;SELECT * FROM hosts WHERE name = ?&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;dns&quot;</span>)])
     <span class="f">print</span>(<span class="s">&quot;found </span><span class="e">{</span>dns.name<span class="e">}</span><span class="s">, id </span><span class="e">{</span>dns.id<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = sqlite.one[<span class="t">Host</span>](&amp;db, <span class="s">&quot;SELECT * FROM hosts WHERE id = ?&quot;</span>, [.<span class="f">int</span>(<span class="n">99</span>)]) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="t">Host</span>{}
@@ -201,7 +216,7 @@ api.example.com: 6 bytes</code></pre>
 }</code></pre>
 <pre class="out"><code>found dns, id 2
 SqliteError.noRows</code></pre>
-<p>A field can be an integer, a float, a <code>bool</code> (0 is <code>false</code>), a <code>String</code>, or a plain enum, read from the text of its value's name. Text that isn't one of the names fails with <code>SqliteError.failed</code>:</p>
+<p>A field can be an integer, a float, a <code>bool</code> (0 is <code>false</code>), a <code>String</code>, or a plain enum read from the text of its value's name. Text that names no value fails with <code>SqliteError.failed</code>.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="k">enum</span> <span class="t">State</span> { up, down }
@@ -218,6 +233,7 @@ SqliteError.noRows</code></pre>
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE checks (host TEXT, state TEXT, tls INTEGER)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO checks VALUES (&#x27;api&#x27;, &#x27;up&#x27;, 1), (&#x27;cache&#x27;, &#x27;down&#x27;, 0)&quot;</span>)
+
     checks := <span class="k">try</span> sqlite.all[<span class="t">Check</span>](&amp;db, <span class="s">&quot;SELECT * FROM checks&quot;</span>)
     <span class="k">defer</span> {
         <span class="k">for</span> c <span class="k">in</span> checks {
@@ -225,9 +241,11 @@ SqliteError.noRows</code></pre>
         }
         checks.<span class="f">free</span>()
     }
+
     <span class="k">for</span> c <span class="k">in</span> checks {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.host<span class="e">}</span><span class="s">: </span><span class="e">{</span>c.state<span class="e">}</span><span class="s">, tls </span><span class="e">{</span>c.tls<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE checks SET state = &#x27;flapping&#x27; WHERE host = &#x27;cache&#x27;&quot;</span>)
     _ = sqlite.one[<span class="t">Check</span>](&amp;db, <span class="s">&quot;SELECT * FROM checks WHERE host = &#x27;cache&#x27;&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
@@ -237,7 +255,7 @@ SqliteError.noRows</code></pre>
 <pre class="out"><code>api: up, tls true
 cache: down, tls false
 SqliteError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t one of the enum&#x27;s values</code></pre>
-<p>A number that doesn't fit its field fails the same way, instead of being cut down to fit:</p>
+<p>A number that doesn't fit its field fails the same way instead of being cut down to fit:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -250,23 +268,27 @@ SqliteError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t 
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE routes (ttl INTEGER)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO routes VALUES (300)&quot;</span>)
+
     _ = sqlite.one[<span class="t">Route</span>](&amp;db, <span class="s">&quot;SELECT * FROM routes&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         <span class="t">Route</span>{}
     }
 }</code></pre>
 <pre class="out"><code>SqliteError.failed: the column ttl has 300, which doesn&#x27;t fit in u8</code></pre>
-<p>When <code>all</code> or <code>one</code> fails partway, they free what they had read, so nothing is left for the caller.</p>
+<p>When <code>all</code> or <code>one</code> fails partway, it frees what it had read, so the caller has nothing to clean up.</p>
 <h2 id="row-by-row"><a href="#row-by-row">Row by row</a></h2>
-<p><code>db.query</code> gives <code>Rows</code>, which are read one row at a time. <code>next</code> moves to the next row and gives <code>false</code> when there are no more. <code>int</code>, <code>float</code> and <code>text</code> read a column by its number, from 0, and <code>isNull</code> says whether it is NULL. <code>close</code> ends the query:</p>
+<p><code>db.query</code> gives <code>Rows</code>, read one row at a time.</p>
+<ul><li><code>next</code> moves to the next row and returns <code>false</code> when there are no more.</li><li><code>int</code>, <code>float</code> and <code>text</code> read a column by its number, from 0.</li><li><code>isNull</code> says whether a column is NULL.</li><li><code>close</code> ends the query.</li></ul>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE pings (host TEXT, rtt REAL); INSERT INTO pings VALUES (&#x27;api&#x27;, 1.5), (&#x27;cache&#x27;, NULL), (&#x27;db&#x27;, 4)&quot;</span>)
+
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT host, rtt FROM pings ORDER BY host&quot;</span>)
     <span class="k">defer</span> rows.<span class="f">close</span>()
+
     <span class="k">for</span> <span class="k">try</span> rows.<span class="f">next</span>() {
         <span class="k">if</span> rows.<span class="f">isNull</span>(<span class="n">1</span>) {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">text</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">: no reply&quot;</span>)
@@ -278,15 +300,17 @@ SqliteError.failed: the column state has &#x27;flapping&#x27;, which isn&#x27;t 
 <pre class="out"><code>api: 1.5ms
 cache: no reply
 db: 4ms</code></pre>
-<p>The <code>str</code> that <code>text</code> gives points into SQLite's memory, and is valid until the next call to <code>next</code>. To keep it, copy it with <code>.copy()</code>. <code>sqlite.scan(&amp;rows, &amp;v)</code> fills a <code>@json</code> struct from the current row, as <code>sqlite.all</code> does for each row.</p>
-<p><code>columns</code> gives the number of columns and <code>name</code> a column's name, for a query whose columns aren't known in advance:</p>
+<p>The <code>str</code> that <code>text</code> gives points into SQLite's memory and is valid until the next call to <code>next</code>. Copy it with <code>.copy()</code> to keep it. <code>sqlite.scan(&amp;rows, &amp;v)</code> fills a <code>@json</code> struct from the current row, as <code>sqlite.all</code> does for each row.</p>
+<p>For a query whose columns aren't known in advance, <code>columns</code> gives the number of columns and <code>name</code> a column's name:</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 !<span class="t">void</span> <span class="f">main</span>() {
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
+
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT 8080 AS port, &#x27;edge-1&#x27; AS host, 0.25 AS load&quot;</span>)
     <span class="k">defer</span> rows.<span class="f">close</span>()
+
     _ = <span class="k">try</span> rows.<span class="f">next</span>()
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..rows.<span class="f">columns</span>() {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">name</span>(i)<span class="e">}</span><span class="s"> = </span><span class="e">{</span>rows.<span class="f">text</span>(i)<span class="e">}</span><span class="s">&quot;</span>)
@@ -302,14 +326,16 @@ load = 0.25</code></pre>
     db := <span class="k">try</span> sqlite.<span class="f">open</span>(<span class="s">&quot;:memory:&quot;</span>)
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE requests (status INTEGER, bytes INTEGER); INSERT INTO requests VALUES (200, 5120), (502, 120), (503, 80)&quot;</span>)
+
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT COUNT(*), SUM(bytes) FROM requests WHERE status &gt;= ?&quot;</span>, [.<span class="f">int</span>(<span class="n">500</span>)])
     <span class="k">defer</span> rows.<span class="f">close</span>()
+
     _ = <span class="k">try</span> rows.<span class="f">next</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> failed requests, </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2 failed requests, 200 bytes</code></pre>
 <h2 id="null"><a href="#null">NULL</a></h2>
-<p>A NULL column reads as <code>0</code> with <code>int</code> and <code>float</code> and as <code>&quot;&quot;</code> with <code>text</code>, so <code>isNull</code> is how to tell. With <code>sqlite.all</code> and <code>sqlite.one</code>, a NULL column leaves the field as it is, at its default:</p>
+<p>A NULL column reads as <code>0</code> with <code>int</code> and <code>float</code> and as <code>&quot;&quot;</code> with <code>text</code>, so use <code>isNull</code> to tell. With <code>sqlite.all</code> and <code>sqlite.one</code>, a NULL column leaves the field at its default.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="a">@json</span>
@@ -323,8 +349,10 @@ load = 0.25</code></pre>
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE hosts (name TEXT, port INTEGER)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts VALUES (?, ?), (?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;db&quot;</span>), .<span class="f">int</span>(<span class="n">5432</span>), .<span class="f">text</span>(<span class="s">&quot;new&quot;</span>), .none])
+
     hosts := <span class="k">try</span> sqlite.all[<span class="t">Host</span>](&amp;db, <span class="s">&quot;SELECT * FROM hosts&quot;</span>)
     <span class="k">defer</span> hosts.<span class="f">free</span>()
+
     <span class="k">for</span> h <span class="k">in</span> hosts {
         <span class="k">if</span> h.port &lt; <span class="n">0</span> {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>h.name<span class="e">}</span><span class="s">: no port yet&quot;</span>)
@@ -337,21 +365,24 @@ load = 0.25</code></pre>
 <pre class="out"><code>db: 5432
 new: no port yet</code></pre>
 <h2 id="transactions"><a href="#transactions">Transactions</a></h2>
-<p><code>begin</code>, <code>commit</code> and <code>rollback</code> put several changes together, so they all happen or none does. Between <code>begin</code> and <code>commit</code>, the changes are seen only by this connection; <code>rollback</code> drops them. <code>errdefer</code> (see <a href="../tour/19-memory.html#errdefer">Memory</a>) rolls back on every way out with an error, so no step can leave the transaction open:</p>
+<p><code>begin</code>, <code>commit</code> and <code>rollback</code> group several changes so they all happen or none does. Between <code>begin</code> and <code>commit</code>, only this connection sees the changes, and <code>rollback</code> drops them. <code>errdefer</code> (see <a href="../tour/19-memory.html#errdefer">Memory</a>) rolls back on every exit with an error, so no step can leave the transaction open.</p>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
 <span class="c">// Moves bandwidth, in Mbit/s, from one link&#x27;s share to another&#x27;s.</span>
 !<span class="t">void</span> <span class="f">move</span>(sqlite.<span class="t">Db</span> *db, <span class="t">i64</span> from, <span class="t">i64</span> to, <span class="t">i64</span> mbps) {
     <span class="k">try</span> db.<span class="f">begin</span>()
     <span class="k">errdefer</span> _ = db.<span class="f">rollback</span>()
+
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE links SET mbps = mbps - ? WHERE id = ?&quot;</span>, [.<span class="f">int</span>(mbps), .<span class="f">int</span>(from)])
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE links SET mbps = mbps + ? WHERE id = ?&quot;</span>, [.<span class="f">int</span>(mbps), .<span class="f">int</span>(to)])
+
     <span class="k">try</span> db.<span class="f">commit</span>()
 }
 
 !<span class="t">void</span> <span class="f">show</span>(sqlite.<span class="t">Db</span> *db) {
     rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT id, mbps FROM links ORDER BY id&quot;</span>)
     <span class="k">defer</span> rows.<span class="f">close</span>()
+
     <span class="k">for</span> <span class="k">try</span> rows.<span class="f">next</span>() {
         <span class="f">print</span>(<span class="s">&quot;  </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">: </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -364,9 +395,11 @@ new: no port yet</code></pre>
         CREATE TABLE links (id INTEGER PRIMARY KEY, mbps INTEGER CHECK (mbps &lt;= 100));
         INSERT INTO links (mbps) VALUES (50), (90);
         &quot;&quot;&quot;</span>)
+
     <span class="k">try</span> <span class="f">move</span>(&amp;db, <span class="n">1</span>, <span class="n">2</span>, <span class="n">5</span>)
     <span class="f">print</span>(<span class="s">&quot;after 5:&quot;</span>)
     <span class="k">try</span> <span class="f">show</span>(&amp;db)
+
     <span class="f">move</span>(&amp;db, <span class="n">1</span>, <span class="n">2</span>, <span class="n">20</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;20 failed: </span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -380,9 +413,9 @@ new: no port yet</code></pre>
 after 20:
   1: 45
   2: 95</code></pre>
-<p>The second move took 20 from link 1, then failed on link 2, whose <code>CHECK</code> allows no more than 100. The rollback put link 1 back.</p>
+<p>The second move took 20 from link 1, then failed on link 2, whose <code>CHECK</code> allows at most 100. The rollback restored link 1.</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
-<p>The errors are values of <code>sqlite.SqliteError</code>, and the message says whether the SQL itself is wrong (<code>in the SQL</code>) or failed while it ran (<code>running the SQL</code>), then gives SQLite's reason:</p>
+<p>The errors are values of <code>sqlite.SqliteError</code>. The message says whether the SQL itself is wrong (<code>in the SQL</code>) or failed while it ran (<code>running the SQL</code>), then gives SQLite's reason.</p>
 <div class="table"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody><tr><td><code>failed</code></td><td>the SQL is wrong, a table is missing, or the wrong number of values was given</td></tr><tr><td><code>busy</code></td><td>another program kept the database locked for more than 5 seconds</td></tr><tr><td><code>constraint</code></td><td>a <code>UNIQUE</code>, <code>NOT NULL</code>, <code>CHECK</code> or other constraint isn't met</td></tr><tr><td><code>noRows</code></td><td><code>sqlite.one</code> found nothing</td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">import</span> sqlite
 
@@ -391,6 +424,7 @@ after 20:
     <span class="k">defer</span> db.<span class="f">close</span>()
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;CREATE TABLE hosts (name TEXT UNIQUE NOT NULL)&quot;</span>)
     <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts VALUES (&#x27;db&#x27;)&quot;</span>)
+
     db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO hosts VALUES (?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;db&quot;</span>)]) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -408,7 +442,7 @@ after 20:
 SqliteError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
 SqliteError.failed: in the SQL: near &quot;SELEKT&quot;: syntax error
 SqliteError.failed: the SQL has 1 ? but 2 values were given</code></pre>
-<p>A <code>Db</code> can be shared by threads; each call waits for the database on the thread that makes it. <code>IRIS_SQLITE</code> names another copy of SQLite to load instead of the system's.</p>
+<p>Threads can share a <code>Db</code>. Each call waits for the database on the thread that makes it. <code>IRIS_SQLITE</code> names another copy of SQLite to load instead of the system's.</p>
 <p>For a database server, <a href="18-postgres-and-redis.html">PostgreSQL and Redis</a> covers <code>pg</code> and <code>redis</code>.</p>
     <nav class="pager"><a class="prev" href="16-email.html"><span>Previous</span>Sending email</a><a class="next" href="18-postgres-and-redis.html"><span>Next</span>PostgreSQL and Redis</a></nav>
   </article>
@@ -421,7 +455,6 @@ SqliteError.failed: the SQL has 1 ? but 2 values were given</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

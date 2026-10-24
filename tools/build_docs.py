@@ -9,7 +9,6 @@
   docs/std/data.js           the library's API: `iris doc --json` on every module
                              of docs-src/std/modules.json, with docs-src/std/NAME.md
                              as a module's introduction when there is one
-  docs/roadmap.html          docs-src/roadmap.md
   docs/assets/               docs-src/assets/, and search.js (what the search box finds)
 
 A section's pages are its NN-name.md files in order; its index page lists them.
@@ -47,14 +46,14 @@ VERSION = version()
 SECTIONS = [
     # (folder, name in the top bar, what its index page says)
     ("tour", "Language Tour",
-     "Every part of the language, one topic per chapter, explained fully and with many small programs and "
-     "their output. Read it in order the first time; later, use it as the reference."),
+     "The whole language, one topic per chapter, with runnable programs and their output. Read it in order "
+     "once, then use it as the reference."),
     ("library-tour", "Library Tour",
-     "What the standard library does, one task per chapter: files, the terminal, formats, HTTP and "
-     "networking, databases, cryptography and more. Read the Language Tour first, then the chapters you need."),
+     "The standard library, one task per chapter: files, the terminal, formats, HTTP and networking, "
+     "databases, cryptography and more. Read the Language Tour first."),
     ("design", "Design",
-     "How Iris works underneath, and why it is the way it is: for people working on the compiler, and for "
-     "anyone who wants to know."),
+     "The compiler's architecture: the passes, their data structures, the runtime, and where to start "
+     "reading the source."),
 ]
 
 
@@ -98,7 +97,6 @@ try {{
       {nav("library-tour/index.html", "Library Tour", "library-tour")}
       {nav("std/index.html", "Library", "std")}
       {nav("design/index.html", "Design", "design")}
-      {nav("roadmap.html", "Roadmap", "roadmap")}
     </nav>
     <div class="search" data-root="{root}">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -116,7 +114,6 @@ try {{
     <a href="{root}tour/index.html">Language Tour</a>
     <a href="{root}library-tour/index.html">Library Tour</a>
     <a href="{root}std/index.html">Library</a>
-    <a href="{root}roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="{root}assets/search.js"></script>
@@ -273,7 +270,6 @@ def main():
         counts.append(f"{len(chs)} {section}")
     n = std_pages(index, iris)
     prose_page("index", "Iris", "", "Iris, a compiled language for servers, network tools and system programs.", index)
-    prose_page("roadmap", "Roadmap", "roadmap", "", index)
     write("assets/search.js", "window.IRIS_SEARCH = " + json.dumps(index, separators=(",", ":")) + ";\n")
     print(f"docs built: {', '.join(counts)}, {n} library declarations, {len(index)} search entries")
     broken = broken_links()

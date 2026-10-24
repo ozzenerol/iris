@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Attributes - Iris</title>
-<meta name="description" content="An attribute starts with @ and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except @json and @flags, which have their own chapters: JSON and Command-line flags.">
+<meta name="description" content="An attribute starts with @ and goes on the line before a declaration. Some make the compiler write code for a struct that reads it from environment variables, from command-line flags or from JSON. Others change how a function is compiled. This chapter covers each one except @json and @flags, which have their own chapters: JSON and Command-line flags.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,10 +46,10 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html" class="on"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Attributes</h1>
-<p class="lede">An attribute starts with <code>@</code> and goes on the line before a declaration. Some make the compiler write code for a struct: reading it from environment variables, from command-line flags, or from JSON. Others change how a function is compiled. This chapter covers each one except <code>@json</code> and <code>@flags</code>, which have their own chapters: <a href="../library-tour/01-json.html">JSON</a> and <a href="../library-tour/05-flags.html">Command-line flags</a>.</p>
+<p class="lede">An attribute starts with <code>@</code> and goes on the line before a declaration. Some make the compiler write code for a struct that reads it from environment variables, from command-line flags or from JSON. Others change how a function is compiled. This chapter covers each one except <code>@json</code> and <code>@flags</code>, which have their own chapters: <a href="../library-tour/01-json.html">JSON</a> and <a href="../library-tour/05-flags.html">Command-line flags</a>.</p>
 <div class="table"><table><thead><tr><th>Attribute</th><th>On</th><th>What it does</th></tr></thead><tbody><tr><td><code>@json</code></td><td>a struct</td><td>turns it into JSON and back, with the <code>json</code> module</td></tr><tr><td><code>@env</code></td><td>a struct</td><td>fills it from environment variables, with the <code>env</code> module</td></tr><tr><td><code>@flags</code></td><td>a struct</td><td>fills it from the program's arguments, with the <code>flags</code> module</td></tr><tr><td><code>@inline</code></td><td>a function</td><td>always puts its code where it is called</td></tr><tr><td><code>@unchecked</code></td><td>a function</td><td>leaves out the checks of debug builds in its code</td></tr><tr><td><code>@noreturn</code></td><td>a function</td><td>says a call to it never comes back, like <code>panic</code></td></tr><tr><td><code>@export</code></td><td>a function</td><td>makes it callable from C by its name</td></tr></tbody></table></div>
 <h2 id="env"><a href="#env">@env</a></h2>
-<p><code>@env</code> lets <code>env.load</code> fill a struct from environment variables. Each field reads the variable named after it in capitals, with <code>_</code> between its words: <code>dbUrl</code> reads <code>DB_URL</code>. A prefix on the struct goes in front of every name:</p>
+<p><code>@env</code> lets <code>env.load</code> fill a struct from environment variables. Each field reads the variable named after it in capitals, with <code>_</code> between its words, so <code>dbUrl</code> reads <code>DB_URL</code>. A prefix on the struct goes in front of every name:</p>
 <pre class="code run"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
@@ -67,16 +66,18 @@ try {
 }</code></pre>
 <pre class="out"><code>8080 -&gt; 127.0.0.1:9000, timeout 30s, debug false</code></pre>
 <p>Run with <code>PROXY_PORT=80 PROXY_DEBUG=yes</code>, the same program prints <code>80 -&gt; 127.0.0.1:9000, timeout 30s, debug true</code>. A variable that isn't set leaves the field's default.</p>
-<p><code>@env(&quot;NAME&quot;)</code> on a field gives the variable's whole name, without the prefix, and <code>@env(required)</code> makes a missing variable an error; both can go together:</p>
+<p><code>@env(&quot;NAME&quot;)</code> on a field gives the variable's whole name, without the prefix. <code>@env(required)</code> makes a missing variable an error. Both can go together:</p>
 <pre class="code"><code><span class="a">@env</span>
 <span class="k">struct</span> <span class="t">Secrets</span> {
     <span class="a">@env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>, required) <span class="t">String</span> db
     <span class="a">@env</span>(required) <span class="t">str</span> apiKey <span class="c">// API_KEY</span>
 }</code></pre>
-<p>Fields can be numbers, <code>bool</code> (<code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code>, <code>no</code>, <code>on</code>, <code>off</code>), <code>str</code>, <code>String</code>, plain enums by their value's name, and <code>Duration</code> (<code>30s</code>, <code>1500ms</code>, <code>1m30s</code>). The errors are <code>env.EnvError.missing</code> and <code>invalid</code>, with the variable's name in the message:</p>
+<p>Fields can be:</p>
+<ul><li>numbers</li><li><code>bool</code>: <code>true</code>, <code>false</code>, <code>1</code>, <code>0</code>, <code>yes</code>, <code>no</code>, <code>on</code>, <code>off</code></li><li><code>str</code> and <code>String</code></li><li>plain enums, by their value's name</li><li><code>Duration</code>: <code>30s</code>, <code>1500ms</code>, <code>1m30s</code></li></ul>
+<p>The errors are <code>env.EnvError.missing</code> and <code>invalid</code>, with the variable's name in the message:</p>
 <pre class="out"><code>error: EnvError.missing: DATABASE_URL is needed but isn&#x27;t set</code></pre>
-<p>An <code>@env</code> struct gets a <code>free</code> method, which frees its <code>String</code>s, so <code>scoped</code> works on it.</p>
-<p><code>env.loadWith(Settings, path)</code> first reads a file of <code>KEY=value</code> lines into the environment and then fills the struct like <code>env.load</code>. A file that isn't there is skipped, so the same program runs with only the environment:</p>
+<p>An <code>@env</code> struct gets a <code>free</code> method that frees its <code>String</code>s, so <code>scoped</code> works on it.</p>
+<p><code>env.loadWith(Settings, path)</code> first reads a file of <code>KEY=value</code> lines into the environment and then fills the struct like <code>env.load</code>. A missing file is skipped, so the same program runs with only the environment:</p>
 <pre class="code"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
@@ -93,8 +94,8 @@ try {
 <pre class="code"><code># the proxy
 PROXY_LISTEN_ADDRESS=&quot;127.0.0.1&quot;
 PROXY_PORT=9001 # the port it listens on</code></pre>
-<p>Blank lines and lines starting with <code>#</code> are skipped, and a <code>#</code> after a space starts a comment. A line may start with <code>export </code>. A value may be wrapped in double or single quotes, which are taken off, and inside them <code>#</code> is part of the value. A variable that is already set keeps its value, so the environment wins over the file. A line with no <code>=</code>, a name that isn't letters, digits and <code>_</code>, or a quote that isn't closed is <code>EnvError.invalid</code>, with the file and line in the message. A file that is there but can't be read gives the error from <a href="../std/index.html#fs">fs</a>.</p>
-<p><code>env.loadFile(path)</code> does only the first half: it puts the file's lines into the environment, and a missing file is an error. It suits several files read in order before one <code>env.load</code>:</p>
+<ul><li>Blank lines and lines starting with <code>#</code> are skipped, and a <code>#</code> after a space starts a comment.</li><li>A line may start with <code>export </code>.</li><li>A value may be wrapped in double or single quotes, which are taken off. Inside them, <code>#</code> is part of the value.</li><li>A variable that is already set keeps its value, so the environment wins over the file.</li><li>A line with no <code>=</code>, a name that isn't letters, digits and <code>_</code>, or an unclosed quote is <code>EnvError.invalid</code>, with the file and line in the message.</li><li>A file that exists but can't be read gives the error from <a href="../std/index.html#fs">fs</a>.</li></ul>
+<p><code>env.loadFile(path)</code> does only the first half. It puts the file's lines into the environment, and a missing file is an error. It suits several files read in order before one <code>env.load</code>:</p>
 <pre class="code"><code><span class="k">import</span> env
 
 <span class="a">@env</span>(<span class="s">&quot;PROXY&quot;</span>)
@@ -105,14 +106,15 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">try</span> env.<span class="f">loadFile</span>(<span class="s">&quot;.env.local&quot;</span>)
     <span class="k">try</span> env.<span class="f">loadFile</span>(<span class="s">&quot;.env&quot;</span>)
+
     <span class="k">scoped</span> s := <span class="k">try</span> env.<span class="f">load</span>(<span class="t">Settings</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <p>The first file wins for a variable set in both, since a variable that is already set keeps its value.</p>
 <h2 id="flags"><a href="#flags">@flags</a></h2>
-<p><code>@flags</code> lets <code>flags.parse</code> fill a struct from the program's arguments: each field is a flag, and the help is made from the struct. The <a href="../library-tour/05-flags.html">Command-line flags</a> chapter covers it.</p>
+<p><code>@flags</code> lets <code>flags.parse</code> fill a struct from the program's arguments. Each field is a flag, and the help is made from the struct. The <a href="../library-tour/05-flags.html">Command-line flags</a> chapter covers it.</p>
 <h2 id="inline"><a href="#inline">@inline</a></h2>
-<p><code>@inline</code> puts the function's code at every place it is called, instead of a call. It suits a tiny function on a path that runs very often:</p>
+<p><code>@inline</code> puts the function's code at every place it is called, in place of a call. It suits a tiny function on a path that runs very often:</p>
 <pre class="code run"><code><span class="a">@inline</span>
 <span class="t">u16</span> <span class="f">swap16</span>(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
@@ -120,9 +122,9 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">swap16</span>(<span class="n">8080</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>36895</code></pre>
-<p>The optimiser already inlines small functions on its own in release builds; <code>@inline</code> makes sure of it.</p>
+<p>The optimiser already inlines small functions on its own in release builds. <code>@inline</code> makes sure of it.</p>
 <h2 id="unchecked"><a href="#unchecked">@unchecked</a></h2>
-<p><code>@unchecked</code> leaves out the checks that debug builds add (indexes, overflow, <code>null</code>) from one function's code, in every build. It is for code that has been measured, whose indexes are known to be in range:</p>
+<p><code>@unchecked</code> leaves out the checks that debug builds add (indexes, overflow, <code>null</code>) from one function's code, in every build. It is for measured code whose indexes are known to be in range:</p>
 <pre class="code run"><code><span class="a">@unchecked</span>
 <span class="t">u32</span> <span class="f">checksum</span>(<span class="t">u8</span>[] data) {
     <span class="t">u32</span> sum = <span class="n">0</span>
@@ -136,9 +138,9 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">checksum</span>(<span class="s">&quot;GET / HTTP/1.1&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2574418856</code></pre>
-<p>A mistake in such a function isn't caught: it reads or writes the wrong memory.</p>
+<p>A mistake in such a function isn't caught. It reads or writes the wrong memory.</p>
 <h2 id="noreturn"><a href="#noreturn">@noreturn</a></h2>
-<p><code>@noreturn</code> says that a call to the function never comes back: it ends the program, as <code>os.exit</code> does, or panics. The compiler then knows the code after the call is never reached, so the call can end a <code>catch</code> block or a branch where a value would otherwise be needed:</p>
+<p><code>@noreturn</code> says that a call to the function never comes back. The function ends the program, as <code>os.exit</code> does, or panics. The compiler then knows the code after the call is never reached, so the call can end a <code>catch</code> block or a branch where a value would otherwise be needed:</p>
 <pre class="code"><code><span class="k">import</span> os, <span class="t">str</span>
 
 <span class="a">@noreturn</span>
@@ -161,9 +163,9 @@ PROXY_PORT=9001 # the port it listens on</code></pre>
 <pre class="out"><code>8080
 error: the port http: &#x27;http&#x27; is not a number</code></pre>
 <p>The program stops with exit status 2 at the second call.</p>
-<p>A <code>@noreturn</code> function returns <code>void</code>, has no <code>return</code>, and can't reach its end: its last line is a call that never comes back, such as <code>os.exit</code>, <code>panic</code> or another <code>@noreturn</code> function.</p>
+<p>A <code>@noreturn</code> function returns <code>void</code>, has no <code>return</code> and can't reach its end. Its last line is a call that never comes back, such as <code>os.exit</code>, <code>panic</code> or another <code>@noreturn</code> function.</p>
 <h2 id="export"><a href="#export">@export</a></h2>
-<p><code>@export</code> makes a function callable from C by its name, for a library that calls back into Iris code. <code>@export(&quot;name&quot;)</code> gives it another C name. An exported function takes and gives numbers and pointers, never <code>!T</code>, since C has no way to take an error (see <a href="28-calling-c.html">Calling C</a>):</p>
+<p><code>@export</code> makes a function callable from C by its name, for a library that calls back into Iris code. <code>@export(&quot;name&quot;)</code> gives it another C name. An exported function takes and gives only numbers and pointers. It can't return <code>!T</code>, since C has no way to take an error (see <a href="28-calling-c.html">Calling C</a>):</p>
 <pre class="code"><code><span class="a">@export</span>
 <span class="t">i32</span> <span class="f">onRow</span>(<span class="t">u8</span> *ctx, <span class="t">i32</span> n, <span class="t">u8</span> **values, <span class="t">u8</span> **names) {
     <span class="k">return</span> <span class="n">0</span>
@@ -179,7 +181,6 @@ error: the port http: &#x27;http&#x27; is not a number</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -54,11 +53,13 @@ try {
 
 T peak[T](T[] samples) {
     T best = samples[<span class="n">0</span>]
+
     <span class="k">for</span> s <span class="k">in</span> samples {
         <span class="k">if</span> s &gt; best {
             best = s
         }
     }
+
     <span class="k">return</span> best
 }
 
@@ -69,7 +70,7 @@ T peak[T](T[] samples) {
 <pre class="out"><code>1.1.1.1 8080
 48 0.93 1s</code></pre>
 <h2 id="working-out-the-types"><a href="#working-out-the-types">Working out the types</a></h2>
-<p>The types are worked out from the arguments, so calls rarely name them. When there is nothing to work them out from, or another type is wanted, they are given in brackets after the name:</p>
+<p>The types are worked out from the arguments, so calls rarely name them. When nothing gives them, or another type is wanted, they go in brackets after the name:</p>
 <pre class="code run"><code>T zero[T]() {
     T v
     <span class="k">return</span> v
@@ -84,7 +85,7 @@ T twice[T](T x) =&gt; x + x
 <pre class="out"><code>0 [] false
 2920 500ms 0.5</code></pre>
 <h2 id="what-a-generic-function-may-do"><a href="#what-a-generic-function-may-do">What a generic function may do</a></h2>
-<p>A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't make sense for one of them is an error that names the call that used it:</p>
+<p>A generic function is checked with each set of types it is used with, as if it had been written out for them. Code that doesn't work for one of them is an error that names the call that used it:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code>T peak[T](T[] samples) {
     T best = samples[<span class="n">0</span>]
     <span class="k">for</span> s <span class="k">in</span> samples {
@@ -96,7 +97,7 @@ T twice[T](T x) =&gt; x + x
 }
 
 <span class="f">peak</span>([<span class="k">true</span>, <span class="k">false</span>])   <span class="c">// error: peak[bool], made here, has the errors above</span></code></pre>
-<p>To say ahead which types a parameter takes, and give the function methods to call on it, a type parameter can have an interface as its bound (see <a href="21-interfaces.html">Interfaces</a>).</p>
+<p>A type parameter can have an interface as its bound. The bound says which types it takes and gives the function methods to call on it (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="generic-structs"><a href="#generic-structs">Generic structs</a></h2>
 <p>A struct's type parameters go after its name. A generic struct is always used with its types written out:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Pair</span>[A, B] {
@@ -109,6 +110,7 @@ T twice[T](T x) =&gt; x + x
 <span class="t">void</span> <span class="f">main</span>() {
     p := <span class="t">Pair</span>[<span class="t">str</span>, <span class="t">u16</span>]{first: <span class="s">&quot;db.lan&quot;</span>, second: <span class="n">5432</span>}
     q := <span class="f">swap</span>(p)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.first<span class="e">}</span><span class="s">:</span><span class="e">{</span>p.second<span class="e">}</span><span class="s"> / </span><span class="e">{</span>q.first<span class="e">}</span><span class="s">:</span><span class="e">{</span>q.second<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>db.lan:5432 / 5432:db.lan</code></pre>
@@ -138,17 +140,19 @@ T twice[T](T x) =&gt; x + x
     <span class="k">scoped</span> <span class="t">Stack</span>[<span class="t">str</span>] idle
     idle.<span class="f">push</span>(<span class="s">&quot;10.0.0.11:5432&quot;</span>)
     idle.<span class="f">push</span>(<span class="s">&quot;10.0.0.12:5432&quot;</span>)
+
     conn, ok := idle.<span class="f">pop</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conn<span class="e">}</span><span class="s"> </span><span class="e">{</span>ok<span class="e">}</span><span class="s">, </span><span class="e">{</span>idle.len<span class="e">}</span><span class="s"> left&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">Stack</span>[<span class="t">i32</span>] freeFds
     _, any := freeFds.<span class="f">pop</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>any<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.12:5432 true, 1 left
 false</code></pre>
-<p>A method is checked for a set of types only when the program uses it with them. A method can need more of its types than the others do, and the struct still works with types that only the other methods suit. <code>List[T].contains</code> compares values with <code>==</code>; a list of a struct that can't be compared works until <code>contains</code> is called on it.</p>
+<p>A method is checked for a set of types only when the program uses it with them. So one method can ask more of its types than the others, and the struct still works with types that suit only the others. <code>List[T].has</code> compares values with <code>==</code>. A list of a struct that can't be compared works until <code>has</code> is called on it.</p>
 <h2 id="methods-with-types-of-their-own"><a href="#methods-with-types-of-their-own">Methods with types of their own</a></h2>
-<p>A method can have type parameters of its own, written after its name, as a generic function's are. Its types are worked out from the arguments of each call:</p>
+<p>A method can have type parameters of its own, written after its name as a generic function's are. They are worked out from the arguments of each call:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Metrics</span> {
     <span class="t">i64</span> reported
 }
@@ -167,9 +171,11 @@ false</code></pre>
 <span class="c">// A new batch with f applied to each item.</span>
 <span class="t">Batch</span>[U] <span class="t">Batch</span>[T].map[U](<span class="f">U</span>(T) f) {
     <span class="t">Batch</span>[U] out
+
     <span class="k">for</span> x <span class="k">in</span> <span class="k">self</span>.items.<span class="f">items</span>() {
         out.items.<span class="f">push</span>(<span class="f">f</span>(x))
     }
+
     <span class="k">return</span> out
 }
 
@@ -181,9 +187,11 @@ false</code></pre>
     m.<span class="f">report</span>(<span class="s">&quot;open connections&quot;</span>, <span class="n">12</span>)
     m.<span class="f">report</span>(<span class="s">&quot;load&quot;</span>, <span class="n">0.75</span>)
     m.<span class="f">report</span>(<span class="s">&quot;region&quot;</span>, <span class="s">&quot;eu-west&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">i64</span>] sizes
     sizes.items.<span class="f">push</span>(<span class="n">4096</span>)
     sizes.items.<span class="f">push</span>(<span class="n">3MiB</span>)
+
     <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">i64</span>] k = sizes.<span class="f">map</span>(kib)
     <span class="k">scoped</span> <span class="t">Batch</span>[<span class="t">bool</span>] b = sizes.<span class="f">map</span>(big)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>k.items.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> KiB, </span><span class="e">{</span>b.items.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.items.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">, </span><span class="e">{</span>m.reported<span class="e">}</span><span class="s"> reported&quot;</span>)
@@ -192,9 +200,9 @@ false</code></pre>
 load = 0.75
 region = eu-west
 3072 KiB, false true, 3 reported</code></pre>
-<p>Every type of such a method must show up in its parameters, so that a call says what it is. A method like <code>U Box.make[U]()</code> can't be called, since nothing in <code>b.make()</code> gives <code>U</code>; a generic function is the way to write that one.</p>
+<p>Every type of such a method must appear in its parameters, so that a call says what it is. A method like <code>U Box.make[U]()</code> can't be called, since nothing in <code>b.make()</code> gives <code>U</code>. Write that one as a generic function.</p>
 <h2 id="how-generics-are-compiled"><a href="#how-generics-are-compiled">How generics are compiled</a></h2>
-<p>Each generic function and struct is compiled once for each set of types it is used with. The copy for <code>i64</code> works on <code>i64</code>s directly, with no boxing and no lookups when the program runs, so it is as fast as code written by hand for that type. The cost is in compiling: each set of types adds a copy of the code.</p>
+<p>Each generic function and struct is compiled once for each set of types it is used with. The copy for <code>i64</code> works on <code>i64</code>s directly, with no boxing and no lookups at run time, so it runs as fast as code written by hand for that type. Each set of types adds a copy of the code, which costs compile time.</p>
     <nav class="pager"><a class="prev" href="19-memory.html"><span>Previous</span>Memory</a><a class="next" href="21-interfaces.html"><span>Next</span>Interfaces</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -206,7 +214,6 @@ region = eu-west
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

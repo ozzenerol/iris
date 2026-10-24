@@ -1,6 +1,6 @@
 ## Making and reading UUIDs
 
-`v4` makes a random UUID and `v7` one that starts with the time, and `format` writes either as text. `parse` reads one back, in either case and with or without dashes:
+`v4` makes a random UUID and `v7` one that starts with the time. `format` writes either as text. `parse` reads one back, in either case and with or without dashes:
 
 ```iris run
 import uuid
@@ -24,4 +24,4 @@ import uuid
 false true
 ```
 
-A v7 UUID made in a later millisecond sorts after one made earlier, both as bytes with `compare` and as text, so rows with v7 ids are added at the end of a database index. Two made in the same millisecond can come in either order.
+A v7 UUID made in a later millisecond sorts after one made earlier, both as bytes with `compare` and as text. Rows with v7 ids are therefore added at the end of a database index. Two UUIDs made in the same millisecond can come in either order.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Memory - Iris</title>
-<meta name="description" content="Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, alloc and free, the statements that make freeing hard to forget (defer, errdefer and scoped), arenas, who frees what, and the checks that catch mistakes.">
+<meta name="description" content="Iris has no garbage collector. Memory that a program asks for, it gives back. This chapter covers where values live, alloc and free, the statements that make freeing hard to forget (defer, errdefer and scoped), arenas, who frees what, and the checks that catch mistakes.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,28 +46,31 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html" class="on"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Memory</h1>
-<p class="lede">Iris has no garbage collector: memory that a program asks for, it gives back. This chapter covers where values live, <code>alloc</code> and <code>free</code>, the statements that make freeing hard to forget (<code>defer</code>, <code>errdefer</code> and <code>scoped</code>), arenas, who frees what, and the checks that catch mistakes.</p>
+<p class="lede">Iris has no garbage collector. Memory that a program asks for, it gives back. This chapter covers where values live, <code>alloc</code> and <code>free</code>, the statements that make freeing hard to forget (<code>defer</code>, <code>errdefer</code> and <code>scoped</code>), arenas, who frees what, and the checks that catch mistakes.</p>
 <h2 id="where-values-live"><a href="#where-values-live">Where values live</a></h2>
-<p>Most values need no thought. Numbers, structs and arrays in variables live in their function's frame and go away when it returns; globals live as long as the program. Copying such a value copies it whole.</p>
-<p>Memory that must outlive a function, or whose size is known only when the program runs, comes from the heap: <code>alloc</code> asks for it, and <code>free</code> gives it back. <code>String</code>, <code>List</code> and <code>Map</code> keep their contents on the heap too, which is why they have a <code>free</code> method.</p>
+<p>Numbers, structs and arrays in variables live in their function's frame and go away when it returns. Globals live as long as the program. Copying such a value copies it whole.</p>
+<p>Memory that must outlive a function, or whose size is known only at run time, comes from the heap. <code>alloc</code> asks for it and <code>free</code> gives it back. <code>String</code>, <code>List</code> and <code>Map</code> keep their contents on the heap too, which is why they have a <code>free</code> method.</p>
 <h2 id="alloc-and-free"><a href="#alloc-and-free">alloc and free</a></h2>
 <p><code>alloc(T, n)</code> gives a slice of <code>n</code> items of type <code>T</code>, all at zero. <code>free</code> takes the slice and gives the memory back:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     size := <span class="n">4KiB</span> <span class="c">// could come from a setting</span>
     <span class="t">u8</span>[] buf = <span class="f">alloc</span>(<span class="t">u8</span>, size)
+
     <span class="k">for</span> i, b <span class="k">in</span> <span class="s">&quot;PING</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span> {
         buf[i] = b
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>buf[<span class="n">0</span>:<span class="n">4</span>]<span class="e">}</span><span class="s"> in a </span><span class="e">{</span>buf.len<span class="e">}</span><span class="s"> byte buffer&quot;</span>)
     <span class="f">free</span>(buf)
 }</code></pre>
 <pre class="out"><code>PING in a 4096 byte buffer</code></pre>
-<p>The slice can be passed around and stored like any other; whoever holds it last frees it, once. Memory from <code>alloc</code> is all zeros, even for a struct whose fields have defaults.</p>
+<p>The slice can be passed around and stored like any other. Whoever holds it last frees it, once. Memory from <code>alloc</code> is all zeros, even for a struct whose fields have defaults.</p>
 <h2 id="defer"><a href="#defer">defer</a></h2>
-<p><code>defer</code> runs a statement when the block it is in ends, however it ends: at the closing brace, at a <code>return</code>, at a <code>break</code> or <code>continue</code>, or when <code>try</code> passes an error up. It puts the cleanup right after the code that needs it:</p>
+<p><code>defer</code> runs a statement when the block it is in ends: at the closing brace, at a <code>return</code>, at a <code>break</code> or <code>continue</code>, or when <code>try</code> passes an error up. The cleanup goes right after the code that needs it:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">serve</span>(<span class="t">bool</span> badRequest) {
     <span class="f">print</span>(<span class="s">&quot;connection accepted&quot;</span>)
     <span class="k">defer</span> <span class="f">print</span>(<span class="s">&quot;connection closed&quot;</span>)
+
     <span class="k">if</span> badRequest {
         <span class="f">print</span>(<span class="s">&quot;bad request, leaving early&quot;</span>)
         <span class="k">return</span>
@@ -86,13 +88,14 @@ connection closed
 connection accepted
 bad request, leaving early
 connection closed</code></pre>
-<p>Several defers run in the reverse order of their lines, so what was set up last is undone first. A defer in a loop runs at the end of each round, since the round is a block. <code>defer { ... }</code> defers a whole block:</p>
+<ul><li>Several defers run in the reverse order of their lines, so what was set up last is undone first.</li><li>A defer in a loop runs at the end of each round, since the round is a block.</li><li><code>defer { ... }</code> defers a whole block.</li></ul>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">defer</span> <span class="f">print</span>(<span class="s">&quot;socket closed&quot;</span>)
     <span class="k">defer</span> {
         <span class="f">print</span>(<span class="s">&quot;log flushed&quot;</span>)
         <span class="f">print</span>(<span class="s">&quot;log closed&quot;</span>)
     }
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
         <span class="k">defer</span> <span class="f">print</span>(<span class="s">&quot;buffer </span><span class="e">{</span>i<span class="e">}</span><span class="s"> freed&quot;</span>)
         <span class="f">print</span>(<span class="s">&quot;sending buffer </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
@@ -114,6 +117,7 @@ socket closed</code></pre>
     <span class="f">print</span>(<span class="s">&quot;socket opened&quot;</span>)
     <span class="k">errdefer</span> <span class="f">print</span>(<span class="s">&quot;socket closed again&quot;</span>)
     <span class="k">defer</span> <span class="f">print</span>(<span class="s">&quot;attempt logged&quot;</span>)
+
     <span class="k">if</span> portTaken {
         <span class="k">return</span> <span class="f">error</span>(<span class="t">ListenError</span>.inUse, <span class="s">&quot;port 8080 is taken&quot;</span>)
     }
@@ -133,20 +137,22 @@ socket opened
 attempt logged
 socket closed again</code></pre>
 <h2 id="scoped"><a href="#scoped">scoped</a></h2>
-<p><code>scoped</code> on a declaration calls the value's <code>free</code> method when the block ends. It is the same as the declaration followed by <code>defer x.free()</code>, in one line:</p>
+<p><code>scoped</code> on a declaration calls the value's <code>free</code> method when the block ends. It equals the declaration followed by <code>defer x.free()</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> method = <span class="t">str</span>.<span class="f">upper</span>(<span class="s">&quot;get&quot;</span>)
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">u16</span>] ports
+
     ports.<span class="f">push</span>(<span class="n">80</span>)
     ports.<span class="f">push</span>(<span class="n">443</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>method<span class="e">}</span><span class="s"> on </span><span class="e">{</span>ports.len<span class="e">}</span><span class="s"> ports&quot;</span>)
 }</code></pre>
 <pre class="out"><code>GET on 2 ports</code></pre>
-<p>The type can come from the value, as with <code>:=</code>: <code>scoped t := term.table(...)</code>. Any type with a <code>free</code> method that takes nothing works with <code>scoped</code>: <code>String</code>, <code>List</code>, <code>Map</code>, the library's types, and the program's own structs.</p>
+<p>The type can come from the value, as with <code>:=</code>: <code>scoped t := term.table(...)</code>. <code>scoped</code> works with any type that has a <code>free</code> method taking nothing: <code>String</code>, <code>List</code>, <code>Map</code>, the library's types and the program's own structs.</p>
 <h2 id="arenas"><a href="#arenas">Arenas</a></h2>
-<p>An <code>Arena</code> gives out memory for many values that are freed together, like everything one request needs. <code>a.alloc(T, n)</code> gives <code>n</code> items of <code>T</code>, all at zero, as <code>alloc</code> does. They are never freed one by one. <code>a.reset()</code> gives back everything at once and keeps a block of memory to give out again, and <code>a.free()</code> gives back all of it. <code>a.copy(text)</code> puts a copy of some text in the arena:</p>
+<p>An <code>Arena</code> gives out memory for many values that are freed together, such as everything one request needs.</p>
+<ul><li><code>a.alloc(T, n)</code> gives <code>n</code> items of <code>T</code>, all at zero, as <code>alloc</code> does. They are never freed one by one.</li><li><code>a.copy(text)</code> puts a copy of some text in the arena.</li><li><code>a.reset()</code> gives back everything at once and keeps a block of memory to give out again.</li><li><code>a.free()</code> gives back all of it.</li></ul>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Header</span> {
     <span class="t">str</span> name
     <span class="t">str</span> value
@@ -154,16 +160,19 @@ socket closed again</code></pre>
 
 <span class="t">i64</span> <span class="f">handle</span>(<span class="t">Arena</span> *mem, <span class="t">str</span>[] lines) {
     <span class="t">Header</span>[] headers = mem.<span class="f">alloc</span>(<span class="t">Header</span>, lines.len)
+
     <span class="k">for</span> i, line <span class="k">in</span> lines {
         name, value, _ := line.<span class="f">cut</span>(<span class="s">&quot;: &quot;</span>)
         headers[i] = .{name: mem.<span class="f">copy</span>(name), value: mem.<span class="f">copy</span>(value)}
     }
+
     <span class="k">return</span> headers.len
 }
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">Arena</span> mem
     requests := [[<span class="s">&quot;Host: example.com&quot;</span>, <span class="s">&quot;Accept: */*&quot;</span>], [<span class="s">&quot;Host: api.lan&quot;</span>, <span class="s">&quot;Accept: text/html&quot;</span>]]
+
     <span class="k">for</span> r <span class="k">in</span> requests {
         n := <span class="f">handle</span>(&amp;mem, r)
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> headers in </span><span class="e">{</span>mem.<span class="f">used</span>()<span class="e">}</span><span class="s"> bytes&quot;</span>)
@@ -172,10 +181,11 @@ socket closed again</code></pre>
 }</code></pre>
 <pre class="out"><code>2 headers in 88 bytes
 2 headers in 90 bytes</code></pre>
-<p>The arena gets memory from the heap in blocks of <code>blockSize</code> bytes, 64 KiB unless the literal sets another: <code>Arena{blockSize: 1MiB}</code>. A value bigger than a quarter of a block gets a block of its own. An arena can't be copied, since the copy would give its memory back a second time; functions take a pointer to it. Memory from an arena is never passed to <code>free</code>, and is not used after <code>reset</code> or <code>free</code>. A debug build reports a use after either.</p>
+<p>The arena takes memory from the heap in blocks of <code>blockSize</code> bytes, 64 KiB unless the literal sets another: <code>Arena{blockSize: 1MiB}</code>. A value bigger than a quarter of a block gets a block of its own.</p>
+<p>An arena can't be copied, since the copy would give its memory back a second time. Functions take a pointer to it. Memory from an arena is never passed to <code>free</code> and is not used after <code>reset</code> or <code>free</code>. A debug build reports a use after either.</p>
 <h2 id="who-frees-what"><a href="#who-frees-what">Who frees what</a></h2>
-<p>A few conventions say who frees each piece of memory, and the standard library follows them throughout:</p>
-<ul><li>A function that returns a <code>String</code>, a <code>List</code>, a <code>Map</code> or a struct with a <code>free</code> method gives the caller a new value, which the caller frees: <code>str.upper</code>, <code>format</code>, <code>fs.readAll</code>, <code>json.encode</code>.</li><li>A <code>str</code> or a slice that a function gives back points into something else: into its argument (<code>str.trim</code>), or into a value that still owns it (<code>list.items()</code>). It is valid as long as that is, and is never freed.</li><li>A <code>List[String]</code>, or a list of structs with <code>free</code>, holds values that must be freed too: <code>freeEach</code> frees each one, then the list.</li><li>A struct that owns memory has a <code>free</code> method that frees it all, and one that only looks at memory owned elsewhere has none.</li></ul>
+<p>The standard library follows these conventions throughout:</p>
+<ul><li>A function that returns a <code>String</code>, a <code>List</code>, a <code>Map</code> or a struct with a <code>free</code> method gives the caller a new value, which the caller frees: <code>str.upper</code>, <code>format</code>, <code>fs.readAll</code>, <code>json.encode</code>.</li><li>A <code>str</code> or a slice that a function gives back points into something else: into its argument (<code>str.trim</code>), or into a value that still owns it (<code>list.items()</code>). It is valid as long as that is, and is never freed.</li><li>A <code>List[String]</code>, or a list of structs with <code>free</code>, holds values that must be freed too. <code>freeEach</code> frees each one, then the list.</li><li>A struct that owns memory has a <code>free</code> method that frees it all. One that only looks at memory owned elsewhere has none.</li></ul>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="c">// A peer, and the protocols it offered.</span>
@@ -198,19 +208,20 @@ socket closed again</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> p := <span class="f">makePeer</span>(<span class="s">&quot;API.Example.com&quot;</span>)
     p.protocols.<span class="f">push</span>(<span class="s">&quot;h2&quot;</span>.<span class="f">copy</span>())
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.host<span class="e">}</span><span class="s"> offers </span><span class="e">{</span>p.protocols.len<span class="e">}</span><span class="s"> protocols&quot;</span>)
 }</code></pre>
 <pre class="out"><code>api.example.com offers 2 protocols</code></pre>
-<p>Structs marked <code>@json</code>, <code>@env</code> or <code>@flags</code> get a <code>free</code> method made for them, which frees their Strings and slices (see <a href="27-attributes.html">Attributes</a>).</p>
+<p>Structs marked <code>@json</code>, <code>@env</code> or <code>@flags</code> get a generated <code>free</code> method that frees their Strings and slices (see <a href="27-attributes.html">Attributes</a>).</p>
 <h2 id="checks-in-debug-builds"><a href="#checks-in-debug-builds">Checks in debug builds</a></h2>
-<p>A debug build, which <code>iris run</code> makes, stops the program with a message and where it happened when it finds:</p>
-<ul><li>an index outside an array, slice or <code>str</code></li><li>an integer that overflows, and a division by zero</li><li>a conversion that loses a value</li><li>a <code>null</code> pointer used</li></ul>
-<p>It also finds memory used after it was freed, and memory freed twice, with AddressSanitizer from <code>clang</code>. Its report shows the Iris lines where the memory was used, freed and allocated:</p>
+<p>A debug build, which <code>iris run</code> makes, stops the program with a message and the location when it finds:</p>
+<ul><li>an index outside an array, slice or <code>str</code></li><li>an integer that overflows, or a division by zero</li><li>a conversion that loses a value</li><li>a <code>null</code> pointer used</li></ul>
+<p>It also finds memory used after it was freed and memory freed twice, with AddressSanitizer from <code>clang</code>. The report shows the Iris lines where the memory was used, freed and allocated:</p>
 <pre class="out"><code>ERROR: AddressSanitizer: heap-use-after-free
 WRITE of size 1 at 0x502000000010 thread T0
     #0 in f.main.main main.iris:4:5</code></pre>
 <div class="table"><table><thead><tr><th>Build</th><th>Checks</th></tr></thead><tbody><tr><td><code>debug</code></td><td>all of them</td></tr><tr><td><code>release-safe</code></td><td>indexes and slices, and division by zero</td></tr><tr><td><code>release-fast</code></td><td>none</td></tr></tbody></table></div>
-<p>A function marked <code>@unchecked</code> has none in any build, for code that has been measured and needs the speed:</p>
+<p>A function marked <code>@unchecked</code> has no checks in any build. It is meant for code that has been measured and needs the speed:</p>
 <pre class="code"><code><span class="a">@unchecked</span>
 <span class="t">u32</span> <span class="f">checksum</span>(<span class="t">u8</span>[] data) {
     <span class="t">u32</span> sum = <span class="n">0</span>
@@ -230,7 +241,6 @@ WRITE of size 1 at 0x502000000010 thread T0
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

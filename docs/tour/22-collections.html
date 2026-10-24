@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collections - Iris</title>
-<meta name="description" content="List keeps values in order and grows as values are added; Map keeps a value for each key, and Set keeps each value once. Deque is a queue open at both ends, Heap gives back the value that goes first, and SortedMap keeps its keys in order. All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.">
+
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,16 +46,19 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html" class="on"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Collections</h1>
-<p class="lede"><code>List</code> keeps values in order and grows as values are added; <code>Map</code> keeps a value for each key, and <code>Set</code> keeps each value once. <code>Deque</code> is a queue open at both ends, <code>Heap</code> gives back the value that goes first, and <code>SortedMap</code> keeps its keys in order. All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.</p>
+<ul><li><code>List</code> keeps values in order and grows as values are added.</li><li><code>Map</code> keeps a value for each key, and <code>Set</code> keeps each value once.</li><li><code>Deque</code> is a queue open at both ends.</li><li><code>Heap</code> gives back the value that goes first.</li><li><code>SortedMap</code> keeps its keys in order.</li></ul>
+<p>All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.</p>
 <h2 id="list"><a href="#list">List</a></h2>
-<p>A <code>List[T]</code> holds values of type <code>T</code> in order. A new list is empty and needs no setup; <code>free</code> gives its memory back:</p>
+<p>A <code>List[T]</code> holds values of type <code>T</code> in order. A new list is empty and needs no setup. <code>free</code> gives its memory back:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">str</span>] hosts
     <span class="k">defer</span> hosts.<span class="f">free</span>()
+
     hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.1&quot;</span>)
     hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.2&quot;</span>)
     hosts.<span class="f">push</span>(<span class="s">&quot;10.0.0.3&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hosts.len<span class="e">}</span><span class="s"> hosts: </span><span class="e">{</span>hosts.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> ... </span><span class="e">{</span>hosts.<span class="f">last</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
     hosts.<span class="f">set</span>(<span class="n">1</span>, <span class="s">&quot;10.0.0.9&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hosts.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
@@ -64,13 +66,15 @@ try {
 10.0.0.9</code></pre>
 <p><code>len</code> is the number of values. <code>at(i)</code> gives the value at index i, from 0, and <code>set(i, v)</code> replaces it. An index outside the list stops the program, as with slices.</p>
 <h2 id="adding-and-taking-out"><a href="#adding-and-taking-out">Adding and taking out</a></h2>
-<p><code>push</code> adds at the end and <code>pop</code> takes the last value off and gives it. <code>insert(i, v)</code> and <code>remove(i)</code> work anywhere in the list, moving the values after it:</p>
+<p><code>push</code> adds at the end and <code>pop</code> takes the last value off and gives it. <code>insert(i, v)</code> and <code>remove(i)</code> work anywhere in the list and move the values after it:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">show</span>(<span class="t">List</span>[<span class="t">u16</span>] *ports) {
     <span class="t">String</span> s = <span class="s">&quot;[&quot;</span>.<span class="f">copy</span>()
+
     <span class="k">for</span> i, p <span class="k">in</span> ports.<span class="f">items</span>() {
         <span class="k">scoped</span> <span class="t">String</span> part = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">if</span> i &gt; <span class="n">0</span> { <span class="s">&quot; &quot;</span> } <span class="k">else</span> { <span class="s">&quot;&quot;</span> }<span class="e">}</span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
         s.<span class="f">append</span>(part)
     }
+
     s.<span class="f">append</span>(<span class="s">&quot;]&quot;</span>)
     <span class="f">print</span>(s)
     s.<span class="f">free</span>()
@@ -79,17 +83,21 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">u16</span>] ports
     <span class="k">defer</span> ports.<span class="f">free</span>()
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">5</span> {
         ports.<span class="f">push</span>(<span class="t">u16</span>(<span class="n">8080</span> + i))
     }
     <span class="f">show</span>(&amp;ports)
+
     last := ports.<span class="f">pop</span>()
     ports.<span class="f">insert</span>(<span class="n">0</span>, <span class="n">22</span>)
     gone := ports.<span class="f">remove</span>(<span class="n">2</span>)
     <span class="f">print</span>(<span class="s">&quot;popped </span><span class="e">{</span>last<span class="e">}</span><span class="s">, removed </span><span class="e">{</span>gone<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">show</span>(&amp;ports)
+
     ports.<span class="f">reverse</span>()
     <span class="f">show</span>(&amp;ports)
+
     ports.<span class="f">clear</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports.len<span class="e">}</span><span class="s"> after clear&quot;</span>)
 }</code></pre>
@@ -100,8 +108,8 @@ popped 8084, removed 8081
 0 after clear</code></pre>
 <p><code>clear</code> empties the list and keeps its memory for reuse. <code>reserve(n)</code> makes room for n values at once, which saves growing step by step when the count is known ahead.</p>
 <h2 id="searching-and-sorting"><a href="#searching-and-sorting">Searching and sorting</a></h2>
-<p><code>has(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> where (-1 when it isn't). They compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
-<p><code>sort(less)</code> sorts with a function that says whether its first value goes before its second. Values that are equal keep their order:</p>
+<p><code>has(v)</code> says whether a value equal to v is there, and <code>indexOf(v)</code> gives its index, or -1 when it isn't there. Both compare with <code>==</code>, so they work with values that <code>==</code> can compare.</p>
+<p><code>sort(less)</code> sorts with a function that says whether its first value goes before its second. Equal values keep their order:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Upstream</span> {
     <span class="t">str</span> addr
     <span class="t">Duration</span> latency
@@ -112,15 +120,19 @@ popped 8084, removed 8081
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">Upstream</span>] ups
     <span class="k">defer</span> ups.<span class="f">free</span>()
+
     ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.11:8080&quot;</span>, latency: <span class="n">36ms</span>})
     ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.12:8080&quot;</span>, latency: <span class="n">4ms</span>})
     ups.<span class="f">push</span>(<span class="t">Upstream</span>{addr: <span class="s">&quot;10.0.0.13:8080&quot;</span>, latency: <span class="n">12ms</span>})
+
     ups.<span class="f">sort</span>(faster)
     <span class="k">for</span> u <span class="k">in</span> ups {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>u.addr<span class="e">}</span><span class="s"> </span><span class="e">{</span>u.latency<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="t">List</span>[<span class="t">str</span>] protocols
     <span class="k">defer</span> protocols.<span class="f">free</span>()
+
     protocols.<span class="f">push</span>(<span class="s">&quot;http/1.1&quot;</span>)
     protocols.<span class="f">push</span>(<span class="s">&quot;h2&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>protocols.<span class="f">has</span>(<span class="s">&quot;h2&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;http/1.1&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>protocols.<span class="f">indexOf</span>(<span class="s">&quot;h3&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
@@ -130,7 +142,7 @@ popped 8084, removed 8081
 10.0.0.11:8080 36ms
 true 0 -1</code></pre>
 <h2 id="the-values-as-a-slice"><a href="#the-values-as-a-slice">The values as a slice</a></h2>
-<p><code>items()</code> gives the list's values as a slice, without copying: to pass to a function that takes a slice, or for a loop with indexes. The slice points into the list, so it is valid until the list next grows or is freed:</p>
+<p><code>items()</code> gives the list's values as a slice without copying, to pass to a function that takes a slice or for a loop with indexes. The slice points into the list, so it is valid until the list next grows or is freed:</p>
 <pre class="code run"><code><span class="t">i64</span> <span class="f">total</span>(<span class="t">i64</span>[] sizes) {
     <span class="t">i64</span> sum
     <span class="k">for</span> s <span class="k">in</span> sizes {
@@ -142,6 +154,7 @@ true 0 -1</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">i64</span>] reads
     <span class="k">defer</span> reads.<span class="f">free</span>()
+
     reads.<span class="f">push</span>(<span class="n">4096</span>)
     reads.<span class="f">push</span>(<span class="n">1200</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>(reads.<span class="f">items</span>())<span class="e">}</span><span class="s"> bytes read&quot;</span>)
@@ -153,11 +166,14 @@ true 0 -1</code></pre>
     <span class="c">// open connections for each client address</span>
     <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] conns
     <span class="k">defer</span> conns.<span class="f">free</span>()
+
     conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">3</span>)
     conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.9&quot;</span>, <span class="n">1</span>)
     conns.<span class="f">set</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">4</span>)
+
     n, found := conns.<span class="f">get</span>(<span class="s">&quot;10.0.0.5&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> </span><span class="e">{</span>found<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.len<span class="e">}</span><span class="s">&quot;</span>)
+
     _, there := conns.<span class="f">get</span>(<span class="s">&quot;10.0.0.7&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>there<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">getOr</span>(<span class="s">&quot;10.0.0.7&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">has</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conns.<span class="f">remove</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.<span class="f">remove</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>conns.len<span class="e">}</span><span class="s">&quot;</span>)
@@ -165,36 +181,40 @@ true 0 -1</code></pre>
 <pre class="out"><code>4 true 2
 false 0 true
 true false 1</code></pre>
-<p><code>getOr(k, fallback)</code> gives the value or the fallback, <code>has(k)</code> whether the key is there, and <code>remove(k)</code> takes it out, giving false when it wasn't there. <code>keys()</code> gives the keys as a new <code>List</code>, which the caller frees. <code>clear</code> takes every key out and keeps the memory.</p>
-<p>Keys can be integers, <code>bool</code>, enums, pointers, <code>str</code> or <code>String</code>. A <code>str</code> or <code>String</code> key is copied into the map, so the text it came from can change or go away, and the caller still frees its own <code>String</code>. The keys from <code>keys()</code> and from a loop belong to the map: free the list, not the keys in it. A map's keys come in no particular order.</p>
+<ul><li><code>getOr(k, fallback)</code> gives the value or the fallback.</li><li><code>has(k)</code> says whether the key is there.</li><li><code>remove(k)</code> takes the key out and gives false when it wasn't there.</li><li><code>keys()</code> gives the keys as a new <code>List</code>, which the caller frees.</li><li><code>clear</code> takes every key out and keeps the memory.</li></ul>
+<p>Keys can be integers, <code>bool</code>, enums, pointers, <code>str</code> or <code>String</code>. A <code>str</code> or <code>String</code> key is copied into the map, so the text it came from can change or go away, and the caller still frees its own <code>String</code>. The keys from <code>keys()</code> and from a loop belong to the map, so free only the list. A map's keys come in no particular order.</p>
 <h2 id="going-over-a-map"><a href="#going-over-a-map">Going over a map</a></h2>
 <p>A loop over a map gives each key and its value:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] hits
     <span class="k">defer</span> hits.<span class="f">free</span>()
     hits.<span class="f">set</span>(<span class="s">&quot;/health&quot;</span>, <span class="n">4</span>)
+
     total := <span class="n">0</span>
     <span class="k">for</span> path, count <span class="k">in</span> hits {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s">&quot;</span>)
         total += count
     }
+
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] paths = hits.<span class="f">keys</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>paths.len<span class="e">}</span><span class="s"> paths, </span><span class="e">{</span>total<span class="e">}</span><span class="s"> requests&quot;</span>)
 }</code></pre>
 <pre class="out"><code>/health: 4
 1 paths, 4 requests</code></pre>
-<p>For a stable order, the keys go into a list, which is sorted.</p>
+<p>For a stable order, put the keys in a list and sort it.</p>
 <h2 id="set"><a href="#set">Set</a></h2>
 <p>A <code>Set[T]</code> keeps each value once. <code>add</code> puts a value in and gives false when it was there already, <code>has</code> says whether a value is there, and <code>remove</code> takes it out. A loop over a set gives each value, in no particular order:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Set</span>[<span class="t">str</span>] blocked
     <span class="k">defer</span> blocked.<span class="f">free</span>()
+
     <span class="k">for</span> addr <span class="k">in</span> [<span class="s">&quot;10.0.0.5&quot;</span>, <span class="s">&quot;10.0.0.9&quot;</span>, <span class="s">&quot;10.0.0.5&quot;</span>] {
         <span class="k">if</span> !blocked.<span class="f">add</span>(addr) {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>addr<span class="e">}</span><span class="s"> is blocked already&quot;</span>)
         }
     }
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>blocked.len<span class="e">}</span><span class="s"> blocked, </span><span class="e">{</span>blocked.<span class="f">has</span>(<span class="s">&quot;10.0.0.9&quot;</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>blocked.<span class="f">has</span>(<span class="s">&quot;10.0.0.7&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = blocked.<span class="f">remove</span>(<span class="s">&quot;10.0.0.9&quot;</span>)
     <span class="k">for</span> addr <span class="k">in</span> blocked {
         <span class="f">print</span>(<span class="s">&quot;still blocked: </span><span class="e">{</span>addr<span class="e">}</span><span class="s">&quot;</span>)
@@ -208,11 +228,13 @@ still blocked: 10.0.0.5</code></pre>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Set</span>[<span class="t">String</span>] users
     <span class="k">defer</span> users.<span class="f">free</span>()
+
     <span class="k">for</span> name <span class="k">in</span> [<span class="s">&quot;ana&quot;</span>, <span class="s">&quot;bo&quot;</span>, <span class="s">&quot;ana&quot;</span>] {
         <span class="t">String</span> s = name.<span class="f">copy</span>()
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> is new: </span><span class="e">{</span>users.<span class="f">add</span>(s)<span class="e">}</span><span class="s">&quot;</span>)
         s.<span class="f">free</span>()
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>users.len<span class="e">}</span><span class="s"> users&quot;</span>)
 }</code></pre>
 <pre class="out"><code>ana is new: true
@@ -233,14 +255,17 @@ ana is new: false
         10.0.0.7 GET / 200
         10.0.0.5 GET /admin 403
         &quot;&quot;&quot;</span>
+
     <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] counts
     <span class="k">defer</span> counts.<span class="f">free</span>()
+
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] lines = <span class="t">str</span>.<span class="f">split</span>(log, <span class="s">&quot;</span><span class="e">\n</span><span class="s">&quot;</span>)
     <span class="k">for</span> line <span class="k">in</span> lines {
         ip, _, found := <span class="t">str</span>.<span class="f">cut</span>(line, <span class="s">&quot; &quot;</span>)
         <span class="k">continue</span> <span class="k">if</span> !found
         counts.<span class="f">set</span>(ip, counts.<span class="f">getOr</span>(ip, <span class="n">0</span>) + <span class="n">1</span>)
     }
+
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">str</span>] ips = counts.<span class="f">keys</span>()
     ips.<span class="f">sort</span>(before)
     <span class="k">for</span> ip <span class="k">in</span> ips {
@@ -251,26 +276,31 @@ ana is new: false
 10.0.0.7 1
 10.0.0.9 1</code></pre>
 <h2 id="who-frees-the-values"><a href="#who-frees-the-values">Who frees the values</a></h2>
-<p>A list or a map holds its values themselves. When the values own memory, like <code>String</code>s or structs with a <code>free</code> method, something must free them before the list goes. <code>freeEach</code> frees each value, then the list:</p>
+<p>A list or a map holds the values themselves. When the values own memory, like <code>String</code>s or structs with a <code>free</code> method, something must free them before the list goes. <code>freeEach</code> frees each value, then the list:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">String</span>] headers
     <span class="k">defer</span> headers.<span class="f">freeEach</span>()
+
     <span class="k">for</span> h <span class="k">in</span> [<span class="s">&quot;Content-Type&quot;</span>, <span class="s">&quot;X-Request-Id&quot;</span>] {
         headers.<span class="f">push</span>(<span class="t">str</span>.<span class="f">lower</span>(h))
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>headers.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>headers.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>content-type x-request-id</code></pre>
-<p><code>at</code> and the loop give the list's own values: a <code>String</code> from <code>list.at(i)</code> belongs to the list, and is freed by <code>freeEach</code>, not by the caller. A map with values that own memory frees them in a loop before its own <code>free</code>:</p>
+<p><code>at</code> and the loop give the list's own values. A <code>String</code> from <code>list.at(i)</code> belongs to the list, and <code>freeEach</code> frees it. A map with values that own memory frees them in a loop before its own <code>free</code>:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Map</span>[<span class="t">i64</span>, <span class="t">String</span>] reasons
     <span class="k">defer</span> reasons.<span class="f">free</span>()
+
     reasons.<span class="f">set</span>(<span class="n">200</span>, <span class="s">&quot;OK&quot;</span>.<span class="f">copy</span>())
     reasons.<span class="f">set</span>(<span class="n">404</span>, <span class="s">&quot;Not Found&quot;</span>.<span class="f">copy</span>())
+
     text, _ := reasons.<span class="f">get</span>(<span class="n">404</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reasons.len<span class="e">}</span><span class="s"> reasons, 404 is </span><span class="e">{</span>text<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> _, v <span class="k">in</span> reasons {
         v.<span class="f">free</span>()
     }
@@ -283,15 +313,19 @@ ana is new: false
     <span class="t">i64</span>[] ms = [<span class="n">36</span>, <span class="n">4</span>, <span class="n">12</span>, <span class="n">90</span>, <span class="n">7</span>]
     <span class="f">sort</span>(ms)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ms[<span class="n">0</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>ms[<span class="n">4</span>]<span class="e">}</span><span class="s">, min </span><span class="e">{</span><span class="f">min</span>(ms)<span class="e">}</span><span class="s">, max </span><span class="e">{</span><span class="f">max</span>(ms)<span class="e">}</span><span class="s">&quot;</span>)
+
     at, found := <span class="f">binarySearch</span>(ms, <span class="n">12</span>)
     where, there := <span class="f">binarySearch</span>(ms, <span class="n">50</span>)
     <span class="f">print</span>(<span class="s">&quot;12 at </span><span class="e">{</span>at<span class="e">}</span><span class="s"> </span><span class="e">{</span>found<span class="e">}</span><span class="s">, 50 would go at </span><span class="e">{</span>where<span class="e">}</span><span class="s"> </span><span class="e">{</span>there<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">has</span>(ms, <span class="n">90</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">7</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">indexOf</span>(ms, <span class="n">8</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="t">List</span>[<span class="t">u16</span>] ports
     <span class="k">defer</span> ports.<span class="f">free</span>()
+
     <span class="k">for</span> p <span class="k">in</span> [<span class="n">443</span>, <span class="n">22</span>, <span class="n">8080</span>] {
         ports.<span class="f">push</span>(<span class="t">u16</span>(p))
     }
+
     <span class="f">sort</span>(ports.<span class="f">items</span>())
     <span class="f">reverse</span>(ports.<span class="f">items</span>())
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>ports.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>ports.<span class="f">at</span>(<span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
@@ -300,19 +334,22 @@ ana is new: false
 12 at 2 true, 50 would go at 4 false
 true 1 -1
 8080 443 22</code></pre>
-<p><code>sort</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> compare with <code>&lt;</code>, so they take numbers, <code>Duration</code>s and text. <code>binarySearch</code> needs a sorted slice; it gives where the value is, or where it would go to keep the slice sorted, and whether it is there. <code>has</code> and <code>indexOf</code> compare with <code>==</code>. For other values, <code>sortBy(xs, less)</code> sorts with a function that says whether its first value goes before its second, as <code>List.sort</code> does, and <code>binarySearchBy(xs, v, less)</code> searches a slice sorted that way. Both sort in place, with no memory of their own, and values that are equal may change places; <code>List.sort</code> keeps them in their order. <code>min</code> or <code>max</code> of an empty slice stops the program.</p>
+<ul><li><code>sort</code>, <code>min</code>, <code>max</code> and <code>binarySearch</code> compare with <code>&lt;</code>, so they take numbers, <code>Duration</code>s and text. <code>has</code> and <code>indexOf</code> compare with <code>==</code>.</li><li><code>binarySearch</code> needs a sorted slice. It gives where the value is, or where it would go to keep the slice sorted, and whether it is there.</li><li>For other values, <code>sortBy(xs, less)</code> sorts with a function that says whether its first value goes before its second, as <code>List.sort</code> does. <code>binarySearchBy(xs, v, less)</code> searches a slice sorted that way.</li><li><code>sort</code> and <code>sortBy</code> sort in place with no memory of their own, and equal values may change places. <code>List.sort</code> keeps them in their order.</li><li><code>min</code> or <code>max</code> of an empty slice stops the program.</li></ul>
 <h2 id="deque"><a href="#deque">Deque</a></h2>
 <p>A <code>Deque[T]</code> is a queue open at both ends. <code>push</code> and <code>pop</code> add and take at the back, <code>pushFront</code> and <code>popFront</code> at the front, and each takes the same time however many values there are. <code>first</code> and <code>last</code> give the values at the ends, and <code>at(i)</code> the one at i, counting from the front:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="c">// jobs waiting for a worker; a retry goes to the front</span>
     <span class="t">Deque</span>[<span class="t">str</span>] jobs
     <span class="k">defer</span> jobs.<span class="f">free</span>()
+
     jobs.<span class="f">push</span>(<span class="s">&quot;resize 1.png&quot;</span>)
     jobs.<span class="f">push</span>(<span class="s">&quot;resize 2.png&quot;</span>)
     jobs.<span class="f">push</span>(<span class="s">&quot;resize 3.png&quot;</span>)
+
     next := jobs.<span class="f">popFront</span>()
     <span class="f">print</span>(<span class="s">&quot;working on </span><span class="e">{</span>next<span class="e">}</span><span class="s">&quot;</span>)
     jobs.<span class="f">pushFront</span>(next)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>jobs.len<span class="e">}</span><span class="s"> waiting, first </span><span class="e">{</span>jobs.<span class="f">first</span>()<span class="e">}</span><span class="s">, last </span><span class="e">{</span>jobs.<span class="f">last</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">for</span> j <span class="k">in</span> jobs {
         <span class="f">print</span>(j)
@@ -336,10 +373,12 @@ resize 3.png</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Heap</span>[<span class="t">Timer</span>] timers = <span class="t">Heap</span>[<span class="t">Timer</span>]{less: sooner}
     <span class="k">defer</span> timers.<span class="f">free</span>()
+
     timers.<span class="f">push</span>(<span class="t">Timer</span>{name: <span class="s">&quot;health check&quot;</span>, due: <span class="n">30s</span>})
     timers.<span class="f">push</span>(<span class="t">Timer</span>{name: <span class="s">&quot;flush logs&quot;</span>, due: <span class="n">5s</span>})
     timers.<span class="f">push</span>(<span class="t">Timer</span>{name: <span class="s">&quot;rotate keys&quot;</span>, due: <span class="n">1h</span>})
     <span class="f">print</span>(<span class="s">&quot;next: </span><span class="e">{</span>timers.<span class="f">peek</span>().name<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> timers.len &gt; <span class="n">0</span> {
         t := timers.<span class="f">pop</span>()
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>t.due<span class="e">}</span><span class="s"> </span><span class="e">{</span>t.name<span class="e">}</span><span class="s">&quot;</span>)
@@ -349,7 +388,7 @@ resize 3.png</code></pre>
 5s flush logs
 30s health check
 1h0m0s rotate keys</code></pre>
-<p><code>push</code> adds a value and <code>pop</code> takes out the one that goes first; both take time that grows with the logarithm of the count. <code>peek</code> gives that value without taking it out, and <code>len</code> is the count. With a <code>less</code> that says <code>a &gt; b</code>, the largest comes first. A heap without a <code>less</code> stops the program when a value is pushed.</p>
+<ul><li><code>push</code> adds a value and <code>pop</code> takes out the one that goes first. Both take time that grows with the logarithm of the count.</li><li><code>peek</code> gives that value without taking it out, and <code>len</code> is the count.</li><li>With a <code>less</code> that says <code>a &gt; b</code>, the largest comes first.</li><li>A heap without a <code>less</code> stops the program when a value is pushed.</li></ul>
 <h2 id="sortedmap"><a href="#sortedmap">SortedMap</a></h2>
 <p>A <code>SortedMap[K, V]</code> is a map that keeps its keys in order. Like a heap, it is made with a <code>less</code> function, which says whether one key goes before another. A loop goes over the keys in order, <code>first</code> and <code>last</code> give the ends, and <code>range(from, to)</code> gives the keys from <code>from</code> up to <code>to</code>, without <code>to</code>:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
@@ -360,15 +399,19 @@ resize 3.png</code></pre>
     <span class="c">// bytes sent to each client, by name</span>
     <span class="t">SortedMap</span>[<span class="t">str</span>, <span class="t">i64</span>] sent = <span class="t">SortedMap</span>[<span class="t">str</span>, <span class="t">i64</span>]{less: before}
     <span class="k">defer</span> sent.<span class="f">free</span>()
+
     sent.<span class="f">set</span>(<span class="s">&quot;web-3&quot;</span>, <span class="n">900</span>)
     sent.<span class="f">set</span>(<span class="s">&quot;api-1&quot;</span>, <span class="n">1200</span>)
     sent.<span class="f">set</span>(<span class="s">&quot;web-1&quot;</span>, <span class="n">300</span>)
     sent.<span class="f">set</span>(<span class="s">&quot;db-1&quot;</span>, <span class="n">50</span>)
+
     <span class="k">for</span> name, n <span class="k">in</span> sent {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name<span class="e">}</span><span class="s"> </span><span class="e">{</span>n<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     k, v, _ := sent.<span class="f">first</span>()
     <span class="f">print</span>(<span class="s">&quot;first </span><span class="e">{</span>k<span class="e">}</span><span class="s"> </span><span class="e">{</span>v<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> name, _ <span class="k">in</span> sent.<span class="f">range</span>(<span class="s">&quot;web&quot;</span>, <span class="s">&quot;wf&quot;</span>) {
         <span class="f">print</span>(<span class="s">&quot;a web host: </span><span class="e">{</span>name<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -380,7 +423,7 @@ web-3 900
 first api-1 1200
 a web host: web-1
 a web host: web-3</code></pre>
-<p><code>set</code>, <code>get</code>, <code>getOr</code>, <code>has</code> and <code>remove</code> work as on a <code>Map</code>, and take time that grows with the logarithm of the count. Two keys where neither goes before the other are the same key. Keys can be what a <code>Map</code> takes, and a <code>str</code> or <code>String</code> key is copied into the map. The map must not change during a loop over it.</p>
+<ul><li><code>set</code>, <code>get</code>, <code>getOr</code>, <code>has</code> and <code>remove</code> work as on a <code>Map</code> and take time that grows with the logarithm of the count.</li><li>Two keys where neither goes before the other are the same key.</li><li>Keys can be what a <code>Map</code> takes, and a <code>str</code> or <code>String</code> key is copied into the map.</li><li>The map must not change during a loop over it.</li></ul>
     <nav class="pager"><a class="prev" href="21-interfaces.html"><span>Previous</span>Interfaces</a><a class="next" href="23-modules.html"><span>Next</span>Modules</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -392,7 +435,6 @@ a web host: web-3</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

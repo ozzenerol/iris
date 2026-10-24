@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Methods - Iris</title>
-<meta name="description" content="A method is a function that belongs to a struct. This chapter covers declaring them, what self is, the conventions for making and freeing values, and methods that make a type work with the rest of the language.">
+<meta name="description" content="A method is a function that belongs to a struct. This chapter covers self, constructor and free conventions, and the methods the language itself calls.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html" class="on"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Methods</h1>
-<p class="lede">A method is a function that belongs to a struct. This chapter covers declaring them, what <code>self</code> is, the conventions for making and freeing values, and methods that make a type work with the rest of the language.</p>
-<h2 id="declaring-a-method"><a href="#declaring-a-method">Declaring a method</a></h2>
-<p>A method is declared like a function, with the struct's name and a dot in front of its name. Inside it, <code>self</code> is a pointer to the value it was called on, and reaches its fields with a dot:</p>
+<p class="lede">A method is a function that belongs to a struct. This chapter covers <code>self</code>, constructor and <code>free</code> conventions, and the methods the language itself calls.</p>
+<h2 id="declaring"><a href="#declaring">Declaring</a></h2>
+<p>Write the struct name and a dot before the method name. <code>self</code> is a pointer to the receiver.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Server</span> {
     <span class="t">str</span> name
     <span class="t">i64</span> open
@@ -63,15 +62,17 @@ try {
 
 <span class="t">void</span> <span class="f">main</span>() {
     s := <span class="t">Server</span>{name: <span class="s">&quot;edge-1&quot;</span>}
+
     s.<span class="f">accepted</span>(<span class="n">4</span>)
     s.<span class="f">accepted</span>(<span class="n">9</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>s.open<span class="e">}</span><span class="s"> open, </span><span class="e">{</span>s.<span class="f">load</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>edge-1: 13 open, busy</code></pre>
-<p>Since <code>self</code> is a pointer, a method can change the value. Called on a variable, it changes the variable. Called on a value that isn't in a variable, like the result of a function, it works on a copy:</p>
+<p><code>self</code> is a pointer, so a method can change a variable it is called on. Called on a temporary, such as a function result, it works on a copy.</p>
 <pre class="code run"><code><span class="c">// A TCP sender&#x27;s window: the bytes it may send before an acknowledgement.</span>
 <span class="k">struct</span> <span class="t">Window</span> {
-    <span class="t">i64</span> start <span class="c">// the first byte not acknowledged yet</span>
+    <span class="t">i64</span> start <span class="c">// first unacknowledged byte</span>
     <span class="t">i64</span> size
 }
 
@@ -88,15 +89,16 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     w := <span class="t">Window</span>{start: <span class="n">1000</span>, size: <span class="n">2920</span>}
     w.<span class="f">ack</span>(<span class="n">1460</span>)
+
     <span class="f">print</span>(<span class="s">&quot;may send </span><span class="e">{</span>w.start<span class="e">}</span><span class="s"> to </span><span class="e">{</span>w.<span class="f">end</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">initial</span>().<span class="f">end</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>may send 2460 to 6840
 1460</code></pre>
-<p>Through a pointer to a struct, methods are called the same way: <code>wp.ack(1460)</code> changes the value <code>wp</code> points to.</p>
-<p>A method can be declared in any file of the module that declares the struct, and in any order. A struct can't have a method and a field with the same name, and each method name is used once.</p>
-<h2 id="making-and-freeing"><a href="#making-and-freeing">Making and freeing</a></h2>
-<p>By convention, a function named after the type, in lower case, makes a value of it, and a method <code>free</code> gives back what the value holds. <code>scoped</code> calls <code>free</code> when the block ends:</p>
+<p>Methods are called the same way through a pointer: <code>wp.ack(1460)</code> changes what <code>wp</code> points to.</p>
+<p>Methods can be declared in any file of the struct's module, in any order. A method can't share a name with a field or another method.</p>
+<h2 id="constructors-and-free"><a href="#constructors-and-free">Constructors and free</a></h2>
+<p>By convention, a function named after the type in lower case creates a value, and a <code>free</code> method releases what it holds. <code>scoped</code> calls <code>free</code> at the end of the block.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Buffer</span> {
     <span class="t">u8</span>[] data
     <span class="t">i64</span> used
@@ -119,15 +121,16 @@ try {
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">Buffer</span> b = <span class="f">buffer</span>(<span class="n">64</span>)
+
     b.<span class="f">add</span>(<span class="s">&quot;HTTP/1.1 &quot;</span>)
     b.<span class="f">add</span>(<span class="s">&quot;200 OK&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>b.<span class="f">text</span>()<span class="e">}</span><span class="s">] </span><span class="e">{</span>b.used<span class="e">}</span><span class="s"> of </span><span class="e">{</span>b.data.len<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>[HTTP/1.1 200 OK] 15 of 64</code></pre>
-<p>A method that can fail returns <code>!T</code> like any function, and a function that makes a value and can fail returns <code>!Type</code>.</p>
-<h2 id="methods-the-language-uses"><a href="#methods-the-language-uses">Methods the language uses</a></h2>
-<p>Some method names make a struct work with parts of the language:</p>
-<div class="table"><table><thead><tr><th>Method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code> calls it, and so does <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>the struct's text, when it is put into text with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td>a <code>for</code> loop's values, one round at a time</td></tr><tr><td><code>i64 len()</code></td><td><code>x.len</code>, as a <code>List</code>, a <code>String</code> and a slice have it</td></tr></tbody></table></div>
+<p>A method that can fail returns <code>!T</code>. A constructor that can fail returns <code>!Type</code>.</p>
+<h2 id="methods-the-language-calls"><a href="#methods-the-language-calls">Methods the language calls</a></h2>
+<div class="table"><table><thead><tr><th>Method</th><th>Used by</th></tr></thead><tbody><tr><td><code>void free()</code></td><td><code>scoped</code>, and <code>List.freeEach</code> on each item</td></tr><tr><td><code>String format()</code></td><td>interpolation with braces</td></tr><tr><td><code>(T, bool) next(i64 *at)</code></td><td><code>for</code> loops</td></tr><tr><td><code>i64 len()</code></td><td><code>x.len</code>, like <code>List</code>, <code>String</code> and slices</td></tr></tbody></table></div>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">PortRange</span> {
     <span class="t">u16</span> first
     <span class="t">u16</span> last
@@ -140,6 +143,7 @@ try {
     <span class="k">if</span> p &gt; <span class="t">i64</span>(<span class="k">self</span>.last) {
         <span class="k">return</span> (<span class="n">0</span>, <span class="k">false</span>)
     }
+
     *at += <span class="n">1</span>
     <span class="k">return</span> (<span class="t">u16</span>(p), <span class="k">true</span>)
 }
@@ -147,6 +151,7 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     r := <span class="t">PortRange</span>{first: <span class="n">8080</span>, last: <span class="n">8082</span>}
     <span class="f">print</span>(<span class="s">&quot;scanning </span><span class="e">{</span>r<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> port <span class="k">in</span> r {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -155,7 +160,7 @@ try {
 8080
 8081
 8082</code></pre>
-<p>A struct with a <code>len()</code> method and no <code>len</code> field can be read with <code>.len</code>, so every kind of collection gives its length the same way:</p>
+<p>With a <code>len()</code> method and no <code>len</code> field, <code>.len</code> works like it does on every collection:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Ring</span> {
     <span class="t">i64</span>[<span class="n">8</span>] items
     <span class="t">i64</span> start
@@ -167,12 +172,13 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     r := <span class="t">Ring</span>{count: <span class="n">3</span>}
     p := &amp;r
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.len<span class="e">}</span><span class="s"> </span><span class="e">{</span>r.<span class="f">len</span>()<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 3 3</code></pre>
-<p>Methods with the names an interface lists let the struct be used where that interface is wanted (see <a href="21-interfaces.html">Interfaces</a>).</p>
+<p>A struct with the methods an interface lists can be used as that interface (see <a href="21-interfaces.html">Interfaces</a>).</p>
 <h2 id="methods-through-embedding"><a href="#methods-through-embedding">Methods through embedding</a></h2>
-<p>The methods of an embedded struct can be called on the outer one, and get the embedded struct as <code>self</code>:</p>
+<p>An embedded struct's methods can be called on the outer struct. They get the embedded struct as <code>self</code>.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Logger</span> {
     <span class="t">str</span> prefix
 }
@@ -190,6 +196,7 @@ try {
 
 <span class="t">void</span> <span class="f">main</span>() {
     s := <span class="t">Service</span>{<span class="t">Logger</span>: <span class="t">Logger</span>{prefix: <span class="s">&quot;svc&quot;</span>}, name: <span class="s">&quot;api&quot;</span>}
+
     s.<span class="f">start</span>()
     s.<span class="f">log</span>(<span class="s">&quot;ready&quot;</span>)
 }</code></pre>
@@ -198,7 +205,7 @@ try {
     <nav class="pager"><a class="prev" href="13-structs.html"><span>Previous</span>Structs</a><a class="next" href="15-enums.html"><span>Next</span>Enums</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-a-method">Declaring a method</a></li><li><a href="#making-and-freeing">Making and freeing</a></li><li><a href="#methods-the-language-uses">Methods the language uses</a></li><li><a href="#methods-through-embedding">Methods through embedding</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring">Declaring</a></li><li><a href="#constructors-and-free">Constructors and free</a></li><li><a href="#methods-the-language-calls">Methods the language calls</a></li><li><a href="#methods-through-embedding">Methods through embedding</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -206,7 +213,6 @@ try {
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

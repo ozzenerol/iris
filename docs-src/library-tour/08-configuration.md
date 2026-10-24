@@ -1,10 +1,14 @@
 # Configuration files
 
-A program's settings come from a file, from environment variables, or from both. The `toml` and `ini` modules read the two most common file formats, and `env` reads the environment and `.env` files. All of them can fill a struct, so the rest of the program reads its settings as plain fields.
+A program's settings come from a file, from environment variables, or from both. The `toml` and `ini` modules read the two most common file formats. `env` reads the environment and `.env` files. Each of them can fill a struct, so the rest of the program reads its settings as plain fields.
 
 ## TOML into a struct
 
-`toml.decode[T](text)` reads TOML into a `@json` struct, the way `json.decode` reads JSON (see [JSON](01-json.html)). Tables are structs, arrays of tables are `List`s of structs, keys the struct doesn't have are skipped, and fields whose keys are missing keep their defaults:
+`toml.decode[T](text)` reads TOML into a `@json` struct, the way `json.decode` reads JSON (see [JSON](01-json.html)).
+
+- Tables are structs and arrays of tables are `List`s of structs.
+- Keys the struct doesn't have are skipped.
+- Fields whose keys are missing keep their defaults.
 
 ```iris run
 import fs, toml
@@ -47,12 +51,15 @@ struct Config {
         [[upstreams]]
         addr = "10.0.0.12:8080"
         """)
+
     scoped String text = try fs.readAll(path)
     scoped Config c = try toml.decode[Config](text)
+
     print("{c.name} on {c.port}, cert {c.tls.cert}")
     for u in c.upstreams {
         print("  {u.addr} weight {u.weight}")
     }
+
     try fs.remove(path)
 }
 ```
@@ -63,13 +70,18 @@ edge on 8443, cert /etc/edge/cert.pem
   10.0.0.12:8080 weight 1
 ```
 
-The `free` method that `@json` gives the struct frees its `String`s, slices and lists, so `scoped` works on it.
+`@json` gives the struct a `free` method that frees its `String`s, slices and lists, so `scoped` works on it.
 
-A date or a time in TOML goes into a `String` field as it was written: `started = 2026-10-24T09:00:00Z` gives `"2026-10-24T09:00:00Z"`, which [Time](03-time.html) can read.
+A TOML date or time goes into a `String` field as it was written. `started = 2026-10-24T09:00:00Z` gives `"2026-10-24T09:00:00Z"`, which [Time](03-time.html) can read.
 
 ## Errors in the file
 
-A file that isn't TOML fails with `TomlError.syntax`, and the message gives the line. A value of the wrong type is `wrongType`, a number too big for its field is `range`, and a field marked `@json(required)` that the file doesn't have is `missing`:
+| Code | When |
+|---|---|
+| `syntax` | the text isn't TOML, and the message gives the line |
+| `wrongType` | a value has the wrong type |
+| `range` | a number is too big for its field |
+| `missing` | the file lacks a field marked `@json(required)` |
 
 ```iris run
 import toml
@@ -107,7 +119,7 @@ TomlError.syntax: line 1: expected a value, found "edge"
 
 ## Writing a file
 
-`toml.encode(v)` writes a `@json` struct as TOML: its plain values first, then each struct field as a `[table]`, and a `List` of structs as `[[tables]]`. A program can write out its defaults for a user to change:
+`toml.encode(v)` writes a `@json` struct as TOML. Plain values come first, then each struct field as a `[table]`, and a `List` of structs as `[[tables]]`. A program can use it to write out its defaults for a user to change.
 
 ```iris run
 import toml
@@ -146,7 +158,11 @@ bodyBytes = 1048576
 
 ## Any TOML document
 
-When the keys aren't known in advance, `toml.parse(text)` reads any document into a `toml.Value`, which is a table. `get(key)` gives a value, or `null` when the key isn't there. A value's `kind` says what it holds, and `text`, `int`, `float` or `boolean` holds it. `len` and `at(i)` go through an array, and through a table with its `keys`:
+When the keys aren't known in advance, `toml.parse(text)` reads any document into a `toml.Value`, which is a table.
+
+- `get(key)` gives a value, or `null` when the key isn't there.
+- `kind` says what a value holds, and `text`, `int`, `float` or `boolean` holds it.
+- `len` and `at(i)` go through an array, and through a table together with its `keys`.
 
 ```iris run
 import toml
@@ -162,12 +178,14 @@ import toml
         queues = ["mail", "thumbs"]
         """
     scoped toml.Value doc = try toml.parse(text)
+
     services := doc.get("services")
     for i in 0..services.len {
         s := services.at(i)
         port := s.get("port")
         print("{services.keys.at(i)}: {s.get("replicas").int} replicas, has a port: {port != null}")
     }
+
     queues := services.get("worker").get("queues")
     for i in 0..queues.len {
         print("queue {queues.at(i).text}")
@@ -182,11 +200,11 @@ queue mail
 queue thumbs
 ```
 
-`toml.table()`, `toml.string(s)`, `toml.integer(n)` and the others make values, `set` and `push` put them in a table or an array, and `toml.write(doc)` gives the text. The [library](../std/index.html#toml) shows them.
+`toml.table()`, `toml.string(s)`, `toml.integer(n)` and the others make values. `set` and `push` put them in a table or an array, and `toml.write(doc)` gives the text. The [library](../std/index.html#toml) lists them.
 
 ## INI files
 
-Older programs and many system tools keep settings in INI files: `[sections]` of `key = value` lines, with `;` or `#` comments. `ini.parse(text)` reads one, `get(section, key)` gives a value, `""` when it isn't there, and `lookup` says whether it is. Keys before the first section are in the section `""`:
+Older programs and many system tools keep settings in INI files: `[sections]` of `key = value` lines, with `;` or `#` comments. `ini.parse(text)` reads one. `get(section, key)` gives a value, or `""` when it isn't there, and `lookup` says whether it is there. Keys before the first section are in the section `""`.
 
 ```iris run
 import ini
@@ -204,11 +222,14 @@ import ini
         size = 64MiB
         """
     scoped ini.File f = try ini.parse(text)
+
     print("owner {f.get("", "owner")}")
     port := try f.get("database", "port").parseInt()
     print("{f.get("database", "host")}:{port}")
+
     _, found := f.lookup("database", "password")
     print("password set: {found}")
+
     for s in f.sections {
         print("[{s.name}] {s.keys.len} keys")
     }
@@ -224,16 +245,18 @@ password set: false
 [cache] 1 keys
 ```
 
-Every value is text, so numbers are read with `parseInt` and the other methods of [Text](../tour/06-text.html#reading-numbers-from-text). `set(section, key, value)` changes a value or adds it, `remove` takes a key out, and `write` gives the file back as text, without its comments:
+Every value is text. Read numbers with `parseInt` and the other methods in [Text](../tour/06-text.html#reading-numbers-from-text). `set(section, key, value)` changes or adds a value, `remove` deletes a key, and `write` gives the file back as text without its comments.
 
 ```iris run
 import ini
 
 !void main() {
     scoped ini.File f = try ini.parse("[database]\nhost = db.lan\nport = 5432\n")
+
     f.set("database", "port", "6432")
     f.set("cache", "size", "128MiB")
     _ = f.remove("database", "host")
+
     scoped String text = f.write()
     print(text)
 }
@@ -250,7 +273,7 @@ size = 128MiB
 
 ## The environment and .env files
 
-Settings that change between machines, such as addresses and passwords, usually come from environment variables. `env.load(T)` fills an `@env` struct from them, as [Attributes](../tour/27-attributes.html#env) shows. `env.loadWith(T, path)` reads a `.env` file of `KEY=value` lines first. A variable that is already set wins over the file, so the file holds the defaults for development and the real environment changes them:
+Settings that change between machines, such as addresses and passwords, usually come from environment variables. `env.load(T)` fills an `@env` struct from them, as [Attributes](../tour/27-attributes.html#env) shows. `env.loadWith(T, path)` first reads a `.env` file of `KEY=value` lines. A variable that is already set wins over the file, so the file holds the development defaults and the real environment overrides them.
 
 ```iris run
 import env, fs, os
@@ -272,9 +295,11 @@ struct Settings {
         export SHOP_DEBUG=yes
         """)
     try os.setenv("SHOP_PORT", "9000")
+
     scoped s := try env.loadWith(Settings, path)
     print("{s.dbUrl}")
     print("port {s.port}, timeout {s.timeout}, debug {s.debug}")
+
     try fs.remove(path)
 }
 ```
@@ -284,11 +309,11 @@ postgres://dev:dev@localhost/shop_dev
 port 9000, timeout 10s, debug true
 ```
 
-`SHOP_PORT` was set before the file was read, so it kept `9000`. A file that isn't there is skipped, so in production the same program runs on the environment alone.
+`SHOP_PORT` was set before the file was read, so it kept `9000`. A missing file is skipped, so in production the same program runs on the environment alone.
 
 ## A file, then the environment
 
-A common setup reads a file for most settings and lets a few environment variables change them, for a container or a test. The file fills the struct, and then each variable that is set replaces its field:
+A common setup reads most settings from a file and lets a few environment variables override them, for a container or a test. The file fills the struct, then each variable that is set replaces its field.
 
 ```iris run
 import os, toml
@@ -304,14 +329,17 @@ struct Config {
 !Config load(str text) {
     c := try toml.decode[Config](text)
     errdefer c.free()
+
     port := os.env("APP_PORT") catch ""
     if port.len > 0 {
         c.port = u16(try port.parseInt())
     }
+
     workers := os.env("APP_WORKERS") catch ""
     if workers.len > 0 {
         c.workers = try workers.parseInt()
     }
+
     return c
 }
 
@@ -326,4 +354,4 @@ struct Config {
 0.0.0.0:80 with 16 workers, logging info
 ```
 
-A field the file leaves out keeps the default from the struct, the file changes it, and the environment has the last word.
+A field the file leaves out keeps the struct's default. The file overrides the default, and the environment overrides the file.

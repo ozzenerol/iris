@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tasks and channels - Iris</title>
-<meta name="description" content="A task is a function call that runs alongside the rest of the program. Tasks take turns on a thread, switching whenever one waits, so a program can do many things at once without callbacks. Channels pass values between them. This chapter covers spawn, channels, select and timers.">
+<meta name="description" content="A task is a function call that runs alongside the rest of the program. Tasks take turns on a thread and switch whenever one waits, so a program can do many things at once without callbacks. Channels pass values between them. This chapter covers spawn, channels, select and timers.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html" class="on"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Tasks and channels</h1>
-<p class="lede">A task is a function call that runs alongside the rest of the program. Tasks take turns on a thread, switching whenever one waits, so a program can do many things at once without callbacks. Channels pass values between them. This chapter covers <code>spawn</code>, channels, <code>select</code> and timers.</p>
+<p class="lede">A task is a function call that runs alongside the rest of the program. Tasks take turns on a thread and switch whenever one waits, so a program can do many things at once without callbacks. Channels pass values between them. This chapter covers <code>spawn</code>, channels, <code>select</code> and timers.</p>
 <h2 id="spawn"><a href="#spawn">spawn</a></h2>
-<p><code>spawn</code> starts a function call as a new task and goes on at once, without waiting for it. Its arguments are worked out first, in the task that spawns:</p>
+<p><code>spawn</code> starts a function call as a new task and goes on at once without waiting for it. Its arguments are worked out first, in the task that spawns:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">fetch</span>(<span class="t">str</span> host, <span class="t">Duration</span> rtt) {
     <span class="f">sleep</span>(rtt) <span class="c">// the time the reply takes to come back</span>
     <span class="f">print</span>(<span class="s">&quot;reply from </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
@@ -59,6 +58,7 @@ try {
     <span class="k">spawn</span> <span class="f">fetch</span>(<span class="s">&quot;eu.example.com&quot;</span>, <span class="n">20ms</span>)
     <span class="k">spawn</span> <span class="f">fetch</span>(<span class="s">&quot;us.example.com&quot;</span>, <span class="n">5ms</span>)
     <span class="f">print</span>(<span class="s">&quot;both requests sent&quot;</span>)
+
     <span class="f">sleep</span>(<span class="n">40ms</span>)
     <span class="f">print</span>(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
@@ -66,11 +66,10 @@ try {
 reply from us.example.com
 reply from eu.example.com
 done</code></pre>
-<p><code>sleep(d)</code> waits for a <code>Duration</code>, and while a task waits, the others run. The same is true of every wait: for the network, a file, a channel, a lock, a timer. Code in a task is written in order, as if each call simply took its time, and the waiting is where the tasks take turns.</p>
-<p>Tasks are cheap: each has its own stack, kept small until it is needed, so a server can start one for each connection. The program ends when <code>main</code> returns, whether or not other tasks are still running.</p>
-<p>A spawned function can't return an error, since nothing waits for its result. It handles its errors itself, or sends them to a task that does.</p>
+<p><code>sleep(d)</code> waits for a <code>Duration</code>, and while a task waits, the others run. The same holds for every wait: for the network, a file, a channel, a lock or a timer. Code in a task is written in order, as if each call simply took its time, and the tasks take turns where they wait.</p>
+<ul><li>Tasks are cheap. Each has its own stack, kept small until it is needed, so a server can start one for each connection.</li><li>The program ends when <code>main</code> returns, whether or not other tasks are still running.</li><li>A spawned function can't return an error, since nothing waits for its result. It handles its errors itself or sends them to a task that does.</li></ul>
 <h2 id="channels"><a href="#channels">Channels</a></h2>
-<p>A channel carries values of one type from one task to another. <code>chan[T](n)</code> makes one with room for n values. <code>ch &lt;- v</code> puts a value in, waiting while the channel is full; <code>&lt;-ch</code> takes the next value out, waiting while it is empty.</p>
+<p>A channel carries values of one type from one task to another. <code>chan[T](n)</code> makes one with room for n values. <code>ch &lt;- v</code> puts a value in and waits while the channel is full. <code>&lt;-ch</code> takes the next value out and waits while it is empty.</p>
 <p>Here a server task reads the lines of a connection and passes each one to <code>main</code> on a channel. <code>net.listen(0, &quot;127.0.0.1&quot;)</code> listens on a free port, which <code>ln.port</code> then holds, and <code>net.dial</code> connects to it (see <a href="../std/index.html#net">the net library</a>):</p>
 <pre class="code run"><code><span class="k">import</span> net
 
@@ -80,6 +79,7 @@ done</code></pre>
         <span class="k">return</span>
     }
     <span class="k">defer</span> conn.<span class="f">close</span>()
+
     <span class="k">for</span> {
         line := conn.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
             <span class="k">return</span>
@@ -92,9 +92,11 @@ done</code></pre>
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     lines := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">8</span>)
     <span class="k">spawn</span> <span class="f">serve</span>(ln, lines)
+
     c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
     <span class="k">defer</span> c.<span class="f">close</span>()
     <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;PING</span><span class="e">\n</span><span class="s">STATS</span><span class="e">\n</span><span class="s">QUIT</span><span class="e">\n</span><span class="s">&quot;</span>)
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
         <span class="k">scoped</span> <span class="t">String</span> l = &lt;-lines
         <span class="f">print</span>(<span class="s">&quot;the server read </span><span class="e">{</span>l<span class="e">}</span><span class="s">&quot;</span>)
@@ -104,9 +106,10 @@ done</code></pre>
 the server read STATS
 the server read QUIT</code></pre>
 <p>Values come out in the order they went in. A channel is a value that refers to the same queue wherever it is copied, so it can be passed to tasks as an argument, kept in a struct or held in a global. Several tasks can send to one channel, and several can take from it.</p>
-<p>A value sent on a channel is copied into it. A <code>String</code> or another value that owns memory is handed over that way: the task that takes it frees it. Above, <code>serve</code> sends each line it read, and <code>main</code> frees it.</p>
+<p>A value sent on a channel is copied into it. That hands over a <code>String</code> or another value that owns memory, and the task that takes it frees it. Above, <code>serve</code> sends each line it read, and <code>main</code> frees it.</p>
 <h2 id="freeing-a-channel"><a href="#freeing-a-channel">Freeing a channel</a></h2>
-<p><code>ch.free()</code> gives back a channel's memory. Free it once no task uses it anymore. Values still in it are not freed, so take out any that own memory first. Freeing a channel that a task is waiting on stops the program with a panic. A channel that holds no queue yet (a <code>chan[T]</code> variable never given one) frees as nothing. <code>scoped</code> works too:</p>
+<p><code>ch.free()</code> gives back a channel's memory. Free it once no task uses it anymore.</p>
+<ul><li>Values still in it are not freed, so take out any that own memory first.</li><li>Freeing a channel that a task is waiting on stops the program with a panic.</li><li>A channel that holds no queue yet (a <code>chan[T]</code> variable never given one) frees as nothing.</li><li><code>scoped</code> works too.</li></ul>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
         <span class="k">scoped</span> <span class="k">chan</span>[<span class="t">i64</span>] ch = <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">1</span>)
@@ -118,7 +121,7 @@ the server read QUIT</code></pre>
 took 10
 took 20</code></pre>
 <h2 id="no-buffer"><a href="#no-buffer">No buffer</a></h2>
-<p>A channel made with room for 0 values has no buffer: <code>ch &lt;- v</code> waits until another task takes the value, which goes straight from one to the other. Both sides know the hand-over happened, which makes it a way for tasks to wait for each other. Here <code>main</code> waits until the server is listening before it connects:</p>
+<p>A channel made with room for 0 values has no buffer. <code>ch &lt;- v</code> waits until another task takes the value, which goes straight from one to the other. Both sides know the hand-over happened, so tasks can use it to wait for each other. Here <code>main</code> waits until the server is listening before it connects:</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="c">// Listens, says it is ready by sending its port, then greets one client.</span>
@@ -128,6 +131,7 @@ took 20</code></pre>
         <span class="k">return</span>
     }
     ready &lt;- ln.port
+
     conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
         <span class="k">return</span>
     }
@@ -138,11 +142,13 @@ took 20</code></pre>
 !<span class="t">void</span> <span class="f">main</span>() {
     ready := <span class="k">chan</span>[<span class="t">u16</span>](<span class="n">0</span>)
     <span class="k">spawn</span> <span class="f">serve</span>(ready)
+
     port := &lt;-ready
     <span class="k">if</span> port == <span class="n">0</span> {
         <span class="f">print</span>(<span class="s">&quot;the server didn&#x27;t start&quot;</span>)
         <span class="k">return</span>
     }
+
     c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, port)
     <span class="k">defer</span> c.<span class="f">close</span>()
     <span class="k">scoped</span> <span class="t">String</span> hello = <span class="k">try</span> c.<span class="f">readLine</span>()
@@ -150,7 +156,7 @@ took 20</code></pre>
 }</code></pre>
 <pre class="out"><code>connected: 220 ready</code></pre>
 <h2 id="workers"><a href="#workers">Workers</a></h2>
-<p>A common shape: a channel of jobs, a few tasks taking jobs from it, and a channel for the results. Here three workers check which ports accept a connection. Ports 1 to 3 have nothing listening on them, so connecting fails at once:</p>
+<p>A common shape is a channel of jobs, a few tasks taking jobs from it, and a channel for the results. Here three workers check which ports accept a connection. Ports 1 to 3 have nothing listening on them, so connecting fails at once:</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="k">struct</span> <span class="t">Job</span> {
@@ -179,23 +185,27 @@ took 20</code></pre>
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">defer</span> ln.<span class="f">close</span>()
     <span class="t">u16</span>[<span class="n">4</span>] ports = [ln.port, <span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+
     jobs := <span class="k">chan</span>[<span class="t">Job</span>](<span class="n">16</span>)
     results := <span class="k">chan</span>[<span class="t">Result</span>](<span class="n">16</span>)
     <span class="k">for</span> w <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
         <span class="k">spawn</span> <span class="f">worker</span>(jobs, results)
     }
+
     <span class="k">for</span> i, p <span class="k">in</span> ports {
         jobs &lt;- <span class="t">Job</span>{index: i, port: p}
     }
+
     <span class="t">bool</span>[<span class="n">4</span>] open
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..ports.len {
         r := &lt;-results
         open[r.index] = r.open
     }
+
     <span class="f">print</span>(<span class="s">&quot;our listener: </span><span class="e">{</span>open[<span class="n">0</span>]<span class="e">}</span><span class="s">; ports 1 to 3: </span><span class="e">{</span>open[<span class="n">1</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>open[<span class="n">2</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>open[<span class="n">3</span>]<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>our listener: true; ports 1 to 3: false false false</code></pre>
-<p>The results come back in whatever order the checks finish, so each carries the index of its job. The workers loop forever, taking jobs as they come; when <code>main</code> has all the results it returns, and the program ends.</p>
+<p>The results come back in whatever order the checks finish, so each carries the index of its job. The workers loop forever and take jobs as they come. When <code>main</code> has all the results it returns, and the program ends.</p>
 <h2 id="select"><a href="#select">select</a></h2>
 <p><code>select</code> waits on several channels at once and runs the arm of the first one that has a value. An <code>after(d)</code> arm runs when nothing came in that time, which gives any wait a timeout. Here the server accepts the connection but never answers, so the reply never comes:</p>
 <pre class="code run"><code><span class="k">import</span> net
@@ -206,6 +216,7 @@ took 20</code></pre>
         <span class="k">return</span>
     }
     <span class="k">defer</span> c.<span class="f">close</span>()
+
     c.<span class="f">write</span>(<span class="s">&quot;PING</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
         <span class="k">return</span>
     }
@@ -218,15 +229,18 @@ took 20</code></pre>
 !<span class="t">void</span> <span class="f">main</span>() {
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>) <span class="c">// nothing here ever answers</span>
     <span class="k">defer</span> ln.<span class="f">close</span>()
+
     replies := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">1</span>)
     control := <span class="k">chan</span>[<span class="t">str</span>](<span class="n">1</span>)
     <span class="k">spawn</span> <span class="f">ask</span>(ln.port, replies)
     control &lt;- <span class="s">&quot;reload&quot;</span>
+
     <span class="k">select</span> {
         r := &lt;-replies =&gt; <span class="f">print</span>(r)
         c := &lt;-control =&gt; <span class="f">print</span>(<span class="s">&quot;control: </span><span class="e">{</span>c<span class="e">}</span><span class="s">&quot;</span>)
         <span class="f">after</span>(<span class="n">1s</span>) =&gt; <span class="f">print</span>(<span class="s">&quot;nothing came&quot;</span>)
     }
+
     <span class="k">select</span> {
         r := &lt;-replies =&gt; <span class="f">print</span>(r)
         <span class="f">after</span>(<span class="n">50ms</span>) =&gt; <span class="f">print</span>(<span class="s">&quot;no reply within 50ms&quot;</span>)
@@ -234,16 +248,16 @@ took 20</code></pre>
 }</code></pre>
 <pre class="out"><code>control: reload
 no reply within 50ms</code></pre>
-<p>When several channels have values, <code>select</code> takes the first arm in order. An arm takes from a channel, or waits with <code>after</code>; sending is done outside <code>select</code>.</p>
+<p>When several channels have values, <code>select</code> takes the first arm in order. An arm takes from a channel or waits with <code>after</code>. Sending is done outside <code>select</code>.</p>
 <h2 id="deadlocks"><a href="#deadlocks">Deadlocks</a></h2>
-<p>When every task waits for something that no other task can give, the program can never go on. It stops with a panic that says so, instead of hanging:</p>
+<p>When every task waits for something that no other task can give, the program can never go on. It stops with a panic that says so instead of hanging:</p>
 <pre class="code"><code><span class="t">void</span> <span class="f">main</span>() {
     replies := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">0</span>)
     r := &lt;-replies <span class="c">// no task will ever send</span>
 }</code></pre>
 <pre class="out"><code>panic: every task is waiting and nothing can wake them: a deadlock</code></pre>
 <h2 id="errors-from-tasks"><a href="#errors-from-tasks">Errors from tasks</a></h2>
-<p>A task that can fail sends its error, or its result, on a channel. A struct carries either. Here each probe sends what it found, with the error's code when connecting failed:</p>
+<p>A task that can fail sends its error or its result on a channel, in a struct that carries either. Here each probe sends what it found, with the error's code when connecting failed:</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="k">struct</span> <span class="t">Probe</span> {
@@ -264,15 +278,18 @@ no reply within 50ms</code></pre>
 !<span class="t">void</span> <span class="f">main</span>() {
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">defer</span> ln.<span class="f">close</span>()
+
     out := <span class="k">chan</span>[<span class="t">Probe</span>](<span class="n">4</span>)
     <span class="k">spawn</span> <span class="f">probe</span>(<span class="n">0</span>, ln.port, out)
     <span class="k">spawn</span> <span class="f">probe</span>(<span class="n">1</span>, <span class="n">1</span>, out)
+
     <span class="t">str</span>[<span class="n">2</span>] names = [<span class="s">&quot;our listener&quot;</span>, <span class="s">&quot;port 1&quot;</span>]
     <span class="t">Probe</span>[<span class="n">2</span>] found
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
         p := &lt;-out
         found[p.index] = p
     }
+
     <span class="k">for</span> p <span class="k">in</span> found {
         <span class="k">if</span> p.ok {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>names[p.index]<span class="e">}</span><span class="s">: open&quot;</span>)
@@ -284,7 +301,7 @@ no reply within 50ms</code></pre>
 }</code></pre>
 <pre class="out"><code>our listener: open
 port 1: NetError.refused</code></pre>
-<p>Tasks on one thread never run at the same moment; the next chapter covers threads, which do.</p>
+<p>Tasks on one thread never run at the same moment. The next chapter covers threads, which do.</p>
     <nav class="pager"><a class="prev" href="23-modules.html"><span>Previous</span>Modules</a><a class="next" href="25-threads.html"><span>Next</span>Threads</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -296,7 +313,6 @@ port 1: NetError.refused</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

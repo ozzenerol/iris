@@ -1,6 +1,6 @@
 ## Lists, maps and sets
 
-`List`, `Map` and `Set` need no setup: a new one is empty, and `free` gives its memory back. A `str` or `String` key is copied into a map or a set:
+`List`, `Map` and `Set` need no setup. A new one is empty, and `free` gives its memory back. A `str` or `String` key is copied into a map or a set:
 
 ```iris run
 void main() {
@@ -10,12 +10,15 @@ void main() {
         sizes.push(n)
     }
     sort(sizes.items())
+
     Map[str, i64] ports
     defer ports.free()
     ports.set("https", 443)
+
     Set[str] seen
     defer seen.free()
     _ = seen.add("10.0.0.5")
+
     print("{sizes.at(0)} {ports.getOr("https", 0)} {seen.has("10.0.0.5")}")
 }
 ```
@@ -35,13 +38,16 @@ void main() {
     scoped Deque[i64] d
     d.push(2)
     d.pushFront(1)
+
     scoped Heap[i64] h = Heap[i64]{less: lower}
     h.push(30)
     h.push(10)
+
     scoped SortedMap[i64, str] m = SortedMap[i64, str]{less: lower}
     m.set(404, "Not Found")
     m.set(200, "OK")
     k, v, _ := m.first()
+
     print("{d.popFront()} {h.pop()} {k} {v}")
 }
 ```

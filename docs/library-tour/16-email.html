@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sending email - Iris</title>
-<meta name="description" content="Services send mail for sign-ups, password resets, alerts and reports. The smtp module sends it through a mail server over SMTP, the way a mail program does, with TLS and a login.">
+<meta name="description" content="Services send mail for sign-ups, password resets, alerts and reports. The smtp module sends it through a mail server over SMTP, with TLS and a login.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html" class="on"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Sending email</h1>
-<p class="lede">Services send mail for sign-ups, password resets, alerts and reports. The <code>smtp</code> module sends it through a mail server over SMTP, the way a mail program does, with TLS and a login.</p>
+<p class="lede">Services send mail for sign-ups, password resets, alerts and reports. The <code>smtp</code> module sends it through a mail server over SMTP, with TLS and a login.</p>
 <h2 id="a-mail"><a href="#a-mail">A mail</a></h2>
-<p>A <code>smtp.Mail</code> holds what a mail has: <code>from</code>, <code>to</code>, <code>subject</code>, and the body as <code>text</code>, <code>html</code> or both. With both, the reader's mail program shows the one it can. <code>smtp.send(address, mail)</code> connects to the server, sends the mail and closes:</p>
+<p>A <code>smtp.Mail</code> holds the parts of a mail: <code>from</code>, <code>to</code>, <code>subject</code>, and the body as <code>text</code>, <code>html</code> or both. With both, the reader's mail program shows the one it can. <code>smtp.send(address, mail)</code> connects to the server, sends the mail and closes the connection.</p>
 <pre class="code"><code><span class="k">import</span> smtp
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -61,12 +60,13 @@ try {
         html: <span class="s">&quot;&lt;p&gt;/var on &lt;b&gt;db1&lt;/b&gt; is at 91%.&lt;/p&gt;&quot;</span>,
     })
 }</code></pre>
-<p><code>cc</code> names more recipients that everyone sees, <code>bcc</code> sends to recipients without naming them in the mail, and <code>replyTo</code> says where answers go. A subject with characters beyond ASCII is encoded as mail headers need it.</p>
+<ul><li><code>cc</code> names more recipients that everyone sees.</li><li><code>bcc</code> sends to recipients without naming them in the mail.</li><li><code>replyTo</code> says where answers go.</li></ul>
+<p>A subject with characters beyond ASCII is encoded as mail headers require.</p>
 <h2 id="the-server-s-address"><a href="#the-server-s-address">The server's address</a></h2>
-<p>The server is given as an address, with the login in it:</p>
+<p>The server is given as an address with the login in it:</p>
 <div class="table"><table><thead><tr><th>Address</th><th>Connection</th></tr></thead><tbody><tr><td><code>smtps://user:password@mail.example.com</code></td><td>TLS from the start, on port 465 unless one is given</td></tr><tr><td><code>smtp://user:password@mail.example.com:587</code></td><td>plain at first, then TLS with STARTTLS</td></tr><tr><td><code>smtp://localhost:25</code></td><td>a local server, with no login</td></tr></tbody></table></div>
-<p>On <code>smtp://</code>, the connection switches to TLS whenever the server offers it, and a password is never sent without TLS: when the server doesn't offer TLS, a login fails with <code>SmtpError.auth</code> before the password goes out. <code>?ca=file</code> trusts certificates other than the system's, for a server inside a company. A password with characters that mean something in a URL, such as <code>@</code> or <code>/</code>, is written with <code>url.encode</code> (see <a href="11-encodings-and-ids.html">Encodings and ids</a>).</p>
-<p>The password belongs in the environment, not in the code, so the address is read from a variable (see <a href="08-configuration.html">Configuration files</a>):</p>
+<p>On <code>smtp://</code>, the connection switches to TLS whenever the server offers it. A password is never sent without TLS. When the server doesn't offer TLS, a login fails with <code>SmtpError.auth</code> before the password goes out. <code>?ca=file</code> trusts certificates other than the system's, for a server inside a company. Write a password containing characters that mean something in a URL, such as <code>@</code> or <code>/</code>, with <code>url.encode</code> (see <a href="11-encodings-and-ids.html">Encodings and ids</a>).</p>
+<p>Keep the password out of the code and read the address from an environment variable (see <a href="08-configuration.html">Configuration files</a>):</p>
 <pre class="code"><code><span class="k">import</span> os, smtp
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -74,7 +74,7 @@ try {
     <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{from: <span class="s">&quot;noreply@example.com&quot;</span>, to: [<span class="s">&quot;ada@example.com&quot;</span>], subject: <span class="s">&quot;Welcome&quot;</span>, text: <span class="s">&quot;Thanks for signing up.&quot;</span>})
 }</code></pre>
 <h2 id="what-goes-over-the-wire"><a href="#what-goes-over-the-wire">What goes over the wire</a></h2>
-<p>To see what <code>smtp</code> sends, this program runs a small mail server of its own in a task, which answers every command with success and prints what it gets. A real server would also check the sender and the recipients and keep the mail:</p>
+<p>This program runs a small mail server of its own in a task to show what <code>smtp</code> sends. The server answers every command with success and prints what it gets. A real server would also check the sender and the recipients and keep the mail.</p>
 <pre class="code run"><code><span class="k">import</span> net, smtp
 
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
@@ -83,11 +83,13 @@ try {
     }
     <span class="k">defer</span> c.<span class="f">close</span>()
     c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+
     <span class="t">bool</span> inData = <span class="k">false</span>
     <span class="k">for</span> {
         <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
+
         <span class="k">if</span> inData {
             <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
                 inData = <span class="k">false</span>
@@ -98,6 +100,7 @@ try {
             }
             <span class="k">continue</span>
         }
+
         <span class="f">print</span>(line)
         <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;EHLO&quot;</span>) {
             c.<span class="f">write</span>(<span class="s">&quot;250 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
@@ -116,6 +119,7 @@ try {
 !<span class="t">void</span> <span class="f">main</span>() {
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> <span class="f">serve</span>(ln)
+
     <span class="k">scoped</span> <span class="t">String</span> server = <span class="f">format</span>(<span class="s">&quot;smtp://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">?helo=app.example.com&quot;</span>)
     <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{
         from: <span class="s">&quot;Shop &lt;orders@example.com&gt;&quot;</span>,
@@ -137,10 +141,10 @@ DATA
   Content-Type: text/plain
   Content-Type: text/html
 QUIT</code></pre>
-<p>The <code>bcc</code> address got the mail with <code>RCPT TO</code>, and isn't in any header. The body has a plain text part and an HTML part, each encoded so that any text gets through. Every mail also gets a <code>Date</code> and a <code>Message-ID</code>.</p>
+<p>The <code>bcc</code> address got the mail through <code>RCPT TO</code> and appears in no header. The body has a plain text part and an HTML part, each encoded so that any text gets through. Every mail also gets a <code>Date</code> and a <code>Message-ID</code>.</p>
 <h2 id="attachments"><a href="#attachments">Attachments</a></h2>
-<p><code>attachments</code> holds the files sent with a mail, each a <code>smtp.Attachment</code> with the <code>name</code> the reader sees, the bytes in <code>data</code>, and the <code>contentType</code>. Without a type, a file goes as <code>application/octet-stream</code>, and <code>http.mimeType(name)</code> gives the usual type for a name. The bytes can be anything, so a file is read with <code>fs.readAll</code> and passed as it is.</p>
-<p>An attachment with an <code>id</code> is part of the HTML instead of a file to save: <code>&lt;img src=&quot;cid:logo&quot;&gt;</code> shows the attachment whose id is <code>logo</code>, as company logos in mails are. This program sends both kinds to a small server like the one above, which prints how the mail is built:</p>
+<p><code>attachments</code> holds the files sent with a mail. Each is a <code>smtp.Attachment</code> with the <code>name</code> the reader sees, the bytes in <code>data</code>, and the <code>contentType</code>. Without a type, a file goes as <code>application/octet-stream</code>. <code>http.mimeType(name)</code> gives the usual type for a name. The bytes can be anything, so read a file with <code>fs.readAll</code> and pass it as it is.</p>
+<p>An attachment with an <code>id</code> is shown inside the HTML instead of offered as a file to save. <code>&lt;img src=&quot;cid:logo&quot;&gt;</code> shows the attachment whose id is <code>logo</code>, which is how mails show company logos. This program sends both kinds to a small server like the one above, which prints how the mail is built:</p>
 <pre class="code run"><code><span class="k">import</span> fs, net, smtp
 
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
@@ -149,11 +153,13 @@ QUIT</code></pre>
     }
     <span class="k">defer</span> c.<span class="f">close</span>()
     c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+
     <span class="t">bool</span> inData = <span class="k">false</span>
     <span class="k">for</span> {
         <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
             <span class="k">return</span>
         }
+
         <span class="k">if</span> inData {
             <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
                 inData = <span class="k">false</span>
@@ -176,8 +182,10 @@ QUIT</code></pre>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">try</span> fs.<span class="f">writeAll</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>, <span class="s">&quot;%PDF-1.7 ...&quot;</span>)
+
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> <span class="f">serve</span>(ln)
+
     <span class="k">scoped</span> <span class="t">String</span> pdf = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> server = <span class="f">format</span>(<span class="s">&quot;smtp://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">try</span> smtp.<span class="f">send</span>(server, smtp.<span class="t">Mail</span>{
@@ -190,6 +198,7 @@ QUIT</code></pre>
             smtp.<span class="t">Attachment</span>{name: <span class="s">&quot;invoice-1041.pdf&quot;</span>, data: pdf, contentType: <span class="s">&quot;application/pdf&quot;</span>},
         ],
     })
+
     <span class="k">try</span> fs.<span class="f">remove</span>(<span class="s">&quot;/tmp/iris-tour-invoice.pdf&quot;</span>)
 }</code></pre>
 <pre class="out"><code>Content-Type: multipart/mixed
@@ -199,24 +208,26 @@ Content-Type: image/png; name=&quot;logo.png&quot;
 Content-Disposition: inline; filename=&quot;logo.png&quot;
 Content-Type: application/pdf; name=&quot;invoice-1041.pdf&quot;
 Content-Disposition: attachment; filename=&quot;invoice-1041.pdf&quot;</code></pre>
-<p>The HTML and the logo go together as <code>multipart/related</code>, and the PDF after them as a file of its own. A name with characters beyond ASCII, such as <code>résumé.pdf</code>, is encoded so every mail program shows it. A line break in a name, a type or an id is an error, as it is in the headers.</p>
+<p>The HTML and the logo go together as <code>multipart/related</code>, and the PDF follows as a separate file. A name with characters beyond ASCII, such as <code>résumé.pdf</code>, is encoded so every mail program shows it. A line break in a name, a type or an id is an error, as it is in the headers.</p>
 <h2 id="several-mails"><a href="#several-mails">Several mails</a></h2>
-<p><code>smtp.connect(address)</code> gives a <code>smtp.Client</code> that sends many mails on one connection, which is much faster than connecting for each. <code>close</code> ends it:</p>
+<p><code>smtp.connect(address)</code> gives a <code>smtp.Client</code> that sends many mails on one connection, which is much faster than connecting for each. <code>close</code> ends it.</p>
 <pre class="code"><code><span class="k">import</span> smtp
 
 !<span class="t">void</span> <span class="f">main</span>() {
     c := <span class="k">try</span> smtp.<span class="f">connect</span>(<span class="s">&quot;smtp://alerts:secret@mail.example.com:587&quot;</span>)
     <span class="k">defer</span> c.<span class="f">close</span>()
+
     <span class="k">for</span> to <span class="k">in</span> [<span class="s">&quot;ada@example.com&quot;</span>, <span class="s">&quot;linus@example.com&quot;</span>, <span class="s">&quot;grace@example.com&quot;</span>] {
         c.<span class="f">send</span>(smtp.<span class="t">Mail</span>{from: <span class="s">&quot;alerts@example.com&quot;</span>, to: [to], subject: <span class="s">&quot;Maintenance tonight&quot;</span>, text: <span class="s">&quot;The API is down from 22:00 to 22:30 UTC.&quot;</span>}) <span class="k">catch</span> e {
             <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>to<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         }
     }
 }</code></pre>
-<p>One task uses a <code>Client</code> at a time. A program that sends from many tasks gives each its own, or keeps them in a pool (see <a href="18-postgres-and-redis.html#a-pool-for-other-connections">PostgreSQL and Redis</a>).</p>
+<p>Only one task at a time may use a <code>Client</code>. A program that sends from many tasks gives each its own, or keeps them in a pool (see <a href="18-postgres-and-redis.html#a-pool-for-other-connections">PostgreSQL and Redis</a>).</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
-<p><code>SmtpError.connect</code> means the server can't be reached or TLS failed, and <code>auth</code> that the login was refused. <code>rejected</code> means the server refused the sender, a recipient or the mail, and the message has the server's reply, so a full mailbox or an unknown address shows why. After a <code>rejected</code> recipient, the <code>Client</code> can send the next mail.</p>
-<p>A line break in <code>from</code>, <code>subject</code>, <code>replyTo</code> or an address fails with <code>SmtpError.rejected</code> before anything is sent, so text from a form can't add headers of its own, such as a <code>Bcc</code> to everyone.</p>
+<div class="table"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody><tr><td><code>connect</code></td><td>the server can't be reached or TLS failed</td></tr><tr><td><code>auth</code></td><td>the login was refused</td></tr><tr><td><code>rejected</code></td><td>the server refused the sender, a recipient or the mail</td></tr></tbody></table></div>
+<p>The <code>rejected</code> message has the server's reply, so a full mailbox or an unknown address shows why. After a <code>rejected</code> recipient, the <code>Client</code> can send the next mail.</p>
+<p>A line break in <code>from</code>, <code>subject</code>, <code>replyTo</code> or an address fails with <code>SmtpError.rejected</code> before anything is sent. Text from a form can't add headers of its own, such as a <code>Bcc</code> to everyone.</p>
     <nav class="pager"><a class="prev" href="15-networking.html"><span>Previous</span>Networking</a><a class="next" href="17-sqlite.html"><span>Next</span>SQLite</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -228,7 +239,6 @@ Content-Disposition: attachment; filename=&quot;invoice-1041.pdf&quot;</code></p
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

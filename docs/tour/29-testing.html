@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Testing - Iris</title>
-<meta name="description" content="Tests sit next to the code they test, in test blocks, and iris test runs them. This chapter covers writing tests, checking with expect, tests that use errors, running them, and measuring how fast code is with bench blocks.">
+<meta name="description" content="Tests sit next to the code they test, in test blocks, and iris test runs them. This chapter covers writing tests, checking with expect, tests that use errors, running them, and measuring speed with bench blocks.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html" class="on"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Testing</h1>
-<p class="lede">Tests sit next to the code they test, in <code>test</code> blocks, and <code>iris test</code> runs them. This chapter covers writing tests, checking with <code>expect</code>, tests that use errors, running them, and measuring how fast code is with <code>bench</code> blocks.</p>
+<p class="lede">Tests sit next to the code they test, in <code>test</code> blocks, and <code>iris test</code> runs them. This chapter covers writing tests, checking with <code>expect</code>, tests that use errors, running them, and measuring speed with <code>bench</code> blocks.</p>
 <h2 id="test-blocks"><a href="#test-blocks">test blocks</a></h2>
-<p>A <code>test</code> block has a name in quotes and a body, and can go in any file of a module, at the top level:</p>
+<p>A <code>test</code> block has a name in quotes and a body. It goes at the top level of any file of a module:</p>
 <pre class="code"><code><span class="c">// A 16-bit number in network byte order.</span>
 <span class="t">u16</span> <span class="f">swap16</span>(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 
@@ -57,15 +56,15 @@ try {
     <span class="f">expect</span>(<span class="f">swap16</span>(<span class="n">0x1F90</span>) == <span class="n">0x901F</span>)
     <span class="f">expect</span>(<span class="f">swap16</span>(<span class="f">swap16</span>(<span class="n">8080</span>)) == <span class="n">8080</span>, <span class="s">&quot;swapping twice gives </span><span class="e">{</span><span class="f">swap16</span>(<span class="f">swap16</span>(<span class="n">8080</span>))<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
-<p>A test is a function the compiler makes from the block. It sees everything in its module, including names that aren't <code>pub</code>, so a test can check a module's inner parts. <code>iris run</code> and <code>iris build</code> leave tests out of the program; <code>iris check</code> checks them like the rest of the code.</p>
+<p>The compiler makes a function from each test block. A test sees everything in its module, including names that aren't <code>pub</code>, so it can check a module's inner parts. <code>iris run</code> and <code>iris build</code> leave tests out of the program. <code>iris check</code> checks them like the rest of the code.</p>
 <h2 id="expect"><a href="#expect">expect</a></h2>
-<p><code>expect(cond)</code> checks a condition. When it is false, the test fails, with the file and line of the check, and goes on to its end, so one run shows every failed check. A second argument is a message to show, which can have values in braces:</p>
+<p><code>expect(cond)</code> checks a condition. When it is false, the test fails with the file and line of the check and goes on to its end, so one run shows every failed check. A second argument is a message to show, which can have values in braces:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;parse a port&quot;</span> {
     n := <span class="k">try</span> <span class="f">parsePort</span>(<span class="s">&quot;8080&quot;</span>)
     <span class="f">expect</span>(n == <span class="n">8080</span>)
     <span class="f">expect</span>(n &gt; <span class="n">0</span> &amp;&amp; n &lt; <span class="n">65536</span>, <span class="s">&quot;port </span><span class="e">{</span>n<span class="e">}</span><span class="s"> out of range&quot;</span>)
 }</code></pre>
-<p><code>expect</code> can be used only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:</p>
+<p><code>expect</code> works only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:</p>
 <pre class="code"><code><span class="t">String</span> <span class="f">checkConfig</span>(<span class="t">Config</span> c) {
     <span class="k">if</span> c.upstream.len == <span class="n">0</span> {
         <span class="k">return</span> <span class="f">format</span>(<span class="s">&quot;the config has no upstream&quot;</span>)
@@ -78,18 +77,19 @@ try {
     <span class="f">expect</span>(problem.len == <span class="n">0</span>, problem)
 }</code></pre>
 <h2 id="errors-in-tests"><a href="#errors-in-tests">Errors in tests</a></h2>
-<p>A test can use <code>try</code>: an error that leaves the test fails it, and the output shows the error and its trace. A test that checks that something fails uses <code>catch</code>:</p>
+<p>A test can use <code>try</code>. An error that leaves the test fails it, and the output shows the error and its trace. A test that checks that something fails uses <code>catch</code>:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;a bad port fails&quot;</span> {
     <span class="t">bool</span> failed = <span class="k">false</span>
     _ = <span class="f">parsePort</span>(<span class="s">&quot;x&quot;</span>) <span class="k">catch</span> e {
         failed = e.code == <span class="t">str</span>.<span class="t">ParseError</span>.notNumber
         <span class="n">0</span>
     }
+
     <span class="f">expect</span>(failed, <span class="s">&quot;parsePort(</span><span class="e">\&quot;</span><span class="s">x</span><span class="e">\&quot;</span><span class="s">) should fail with notNumber&quot;</span>)
 }</code></pre>
-<p>A panic in a test, an index out of range or an overflow, stops the whole run with its message, as it would stop the program.</p>
+<p>A panic in a test, such as an index out of range or an overflow, stops the whole run with its message, as it would stop the program.</p>
 <h2 id="iris-test"><a href="#iris-test">iris test</a></h2>
-<p><code>iris test</code> runs every test of the program's module, in the order they are written, and prints a line for each, then a count:</p>
+<p><code>iris test</code> runs every test of the program's module in the order they are written. It prints a line for each, then a count:</p>
 <pre class="code"><code>iris test main.iris</code></pre>
 <pre class="out"><code>ok   swap16
     main.iris:22:11: expect failed: n is 8080
@@ -100,19 +100,19 @@ FAIL parse a port
       at test &quot;a bad port&quot;  main.iris:26
 FAIL a bad port
 3 tests, 1 passed, 2 failed</code></pre>
-<p>The exit status is 1 when a test failed, so a build script or CI stops there. A name after the file runs only the tests whose name has it in: <code>iris test main.iris port</code>. In a project, <code>iris test</code> in its folder runs the main module's tests.</p>
-<p>Tests are built as debug builds, with every check on: an index out of range, an overflow or a <code>null</code> pointer stops the test run with its message, and so does memory used after it was freed.</p>
+<ul><li>The exit status is 1 when a test failed, so a build script or CI stops there.</li><li>A name after the file runs only the tests whose name contains it: <code>iris test main.iris port</code>.</li><li>In a project, <code>iris test</code> in its folder runs the main module's tests.</li><li>Tests are debug builds with every check on. An index out of range, an overflow, a <code>null</code> pointer or memory used after it was freed stops the run with its message.</li></ul>
 <h2 id="tests-that-need-more"><a href="#tests-that-need-more">Tests that need more</a></h2>
-<p>A test that needs files, a network server or a database makes them itself, and cleans up with <code>defer</code>. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:</p>
+<p>A test that needs files, a network server or a database makes them itself and cleans up with <code>defer</code>. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;the server answers&quot;</span> {
     ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
     <span class="k">spawn</span> <span class="f">serve</span>(ln)
+
     <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/health&quot;</span>)
     <span class="k">scoped</span> http.<span class="t">Reply</span> r = <span class="k">try</span> http.<span class="f">get</span>(url)
     <span class="f">expect</span>(r.status == <span class="n">200</span>, <span class="s">&quot;status </span><span class="e">{</span>r.status<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <h2 id="benchmarks"><a href="#benchmarks">Benchmarks</a></h2>
-<p>A <code>bench</code> block measures how long its code takes. <code>iris bench</code> runs its body again and again, more times each round, until a round takes a second, and prints how many runs that was and the time of one:</p>
+<p>A <code>bench</code> block measures how long its code takes. <code>iris bench</code> runs its body again and again, more times each round, until a round takes a second. It prints how many runs that was and the time of one:</p>
 <pre class="code"><code><span class="t">i64</span> <span class="f">checksum</span>(<span class="t">str</span> data) {
     <span class="t">u32</span> sum = <span class="n">0</span>
     <span class="k">for</span> b <span class="k">in</span> data {
@@ -128,12 +128,13 @@ FAIL a bad port
 <pre class="code"><code>iris bench main.iris</code></pre>
 <pre class="out"><code>checksum of a 1500-byte packet        1000000 runs       1.01us/run</code></pre>
 <p>The compiler leaves out work whose result isn't used. In a <code>bench</code> block, <code>_ = value</code> keeps the value, so the work that made it is measured.</p>
-<p>When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. Only the whole block is timed, so setting up should cost little next to the loop:</p>
+<p>When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. The whole block is timed, so the setup should cost little next to the loop:</p>
 <pre class="code"><code><span class="k">bench</span> <span class="s">&quot;sort 10000 ports&quot;</span> (n) {
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">i64</span>] ports
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">10000</span> {
         ports.<span class="f">push</span>((i * <span class="n">7919</span>) % <span class="n">65536</span>)
     }
+
     <span class="k">scoped</span> <span class="t">List</span>[<span class="t">i64</span>] work
     <span class="k">for</span> k <span class="k">in</span> <span class="n">0</span>..n {
         work.<span class="f">clear</span>()
@@ -146,7 +147,7 @@ FAIL a bad port
 }
 
 <span class="t">bool</span> <span class="f">less</span>(<span class="t">i64</span> a, <span class="t">i64</span> b) =&gt; a &lt; b</code></pre>
-<p><code>iris bench</code> builds with <code>--mode=release-fast</code> unless another mode is given, and runs only the bench blocks, not <code>main</code> or the tests. A name after the file runs only the benches whose name has it in. <code>--time=200ms</code> sets how long the last round of each bench takes. A <code>bench</code> block that fails with an error stops with the error and its trace, and <code>iris bench</code> then ends with status 1.</p>
+<ul><li><code>iris bench</code> builds with <code>--mode=release-fast</code> unless another mode is given.</li><li>It runs only the bench blocks. <code>main</code> and the tests don't run.</li><li>A name after the file runs only the benches whose name contains it.</li><li><code>--time=200ms</code> sets how long the last round of each bench takes.</li><li>A <code>bench</code> block that fails with an error stops with the error and its trace, and <code>iris bench</code> then ends with status 1.</li></ul>
     <nav class="pager"><a class="prev" href="28-calling-c.html"><span>Previous</span>Calling C</a><a class="next" href="30-tools.html"><span>Next</span>Tools</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -158,7 +159,6 @@ FAIL a bad port
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

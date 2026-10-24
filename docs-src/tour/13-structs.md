@@ -1,10 +1,10 @@
 # Structs
 
-A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, embedding one struct in another, and how a struct's fields are laid out in memory.
+A struct groups named values into one type. This chapter covers declaring structs, literals and defaults, copying and comparing, embedding, and memory layout.
 
-## Declaring a struct
+## Declaring
 
-A struct lists its fields, one on each line, each with its type and name:
+A struct lists its fields, one per line, each with a type and a name:
 
 ```iris run
 struct Endpoint {
@@ -15,6 +15,7 @@ struct Endpoint {
 void main() {
     e := Endpoint{host: "10.0.0.5", port: 22}
     print("{e.host}:{e.port}")
+
     e.port = 2222
     print("{e.host}:{e.port}")
 }
@@ -25,11 +26,11 @@ void main() {
 10.0.0.5:2222
 ```
 
-Fields are read and changed with a dot. A field can be of any type: a number, text, an array, another struct, a pointer, a function, a `List`.
+Fields are read and set with a dot. A field can have any type: number, text, array, struct, pointer, function, `List`.
 
-## Making a value
+## Literals and defaults
 
-A struct literal is the type's name and, in braces, the fields to set, by name. Fields left out are zero, or their default:
+A literal is the type name followed by named fields in braces. Omitted fields take their default, or zero.
 
 ```iris run
 struct Config {
@@ -42,6 +43,7 @@ struct Config {
 void main() {
     a := Config{}
     b := Config{port: 9000, verbose: true}
+
     print("{a.host}:{a.port} {a.verbose} {a.timeout}")
     print("{b.host}:{b.port} {b.verbose} {b.timeout}")
 }
@@ -52,9 +54,9 @@ localhost:8080 false 30s
 localhost:9000 true 30s
 ```
 
-A default is a value known when compiling. Defaults apply wherever a value is made without one: a field left out of a literal, a variable or a global declared with no value (`Config c`), the items of an array of structs, and a struct inside another struct. Memory from `alloc` is the exception: it is all zeros, as it comes.
+A default must be known at compile time. Defaults apply wherever a value is made without one: omitted literal fields, variables and globals declared without a value (`Config c`), array items, and nested structs. Memory from `alloc` is the exception and is all zeros.
 
-A `String` field can have text as its default. The field borrows that text, so making the value allocates nothing, and freeing the field frees nothing. The first change to the field copies the text into memory of its own, and from then on it is an ordinary `String`:
+A `String` field can default to text. The field borrows the text, so creating the value allocates nothing and freeing the field frees nothing. The first change copies the text, and after that it is an ordinary `String`.
 
 ```iris run
 struct Server {
@@ -66,7 +68,9 @@ void main() {
     s := Server{}
     t := Server{port: 8443}
     t.name.append("-2")
+
     print("{s.name}:{s.port} {t.name}:{t.port}")
+
     s.name.free()
     t.name.free()
 }
@@ -76,9 +80,9 @@ void main() {
 edge:443 edge-2:8443
 ```
 
-This suits `@json` structs read from a file, whose fields keep their defaults when the file leaves them out (see [Configuration files](../library-tour/08-configuration.html)).
+This suits `@json` structs, whose fields keep their defaults when the file omits them (see [Configuration files](../library-tour/08-configuration.html)).
 
-When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:
+When the type is known from context, the literal can start with a dot:
 
 ```iris run
 struct Endpoint {
@@ -90,6 +94,7 @@ void connect(Endpoint e) => print("connecting to {e.host}:{e.port}")
 
 void main() {
     Endpoint db = .{host: "db.lan", port: 5432}
+
     connect(.{host: "cache.lan", port: 6379})
     connect(db)
 }
@@ -102,7 +107,7 @@ connecting to db.lan:5432
 
 ## Copying and comparing
 
-A struct is a value: assigning it, or passing it to a function, copies every field. The copy and the original are separate:
+Structs are values. Assigning or passing one copies every field.
 
 ```iris run
 struct Endpoint {
@@ -114,6 +119,7 @@ void main() {
     plain := Endpoint{host: "example.com", port: 80}
     secure := plain
     secure.port = 443
+
     print("{plain.port} {secure.port}")
 }
 ```
@@ -122,7 +128,7 @@ void main() {
 80 443
 ```
 
-`==` and `!=` compare two structs field by field, when every field can be compared that way: numbers, `bool`, `str`, enums, pointers and structs of those. A `String`, a slice or a `List` holds a pointer to memory it owns, so a struct with one can't be compared with `==`; the program compares the fields it means:
+`==` and `!=` compare field by field when every field is comparable: numbers, `bool`, `str`, enums, pointers, and structs of those. A struct with a `String`, slice or `List` field can't use `==`. Compare the fields you mean instead.
 
 ```iris run
 struct Addr {
@@ -137,6 +143,7 @@ struct Route {
 
 void main() {
     print("{Addr{ip: 1, port: 80} == Addr{ip: 1, port: 80}} {Addr{port: 80} == Addr{port: 443}}")
+
     a := Route{path: "/api", weight: 1}
     b := Route{path: "/api", weight: 1}
     print("{a == b}")
@@ -148,9 +155,9 @@ true false
 true
 ```
 
-## Structs inside structs
+## Nested structs
 
-A field can be another struct. Its fields are reached with one more dot:
+A field can be a struct, reached with another dot:
 
 ```iris run
 struct Counters {
@@ -167,7 +174,12 @@ struct Iface {
 i64 traffic(Iface i) => i.rx.bytes + i.tx.bytes
 
 void main() {
-    eth := Iface{name: "eth0", rx: Counters{packets: 10, bytes: 9000}, tx: Counters{packets: 4, bytes: 600}}
+    eth := Iface{
+        name: "eth0",
+        rx: Counters{packets: 10, bytes: 9000},
+        tx: Counters{packets: 4, bytes: 600},
+    }
+
     eth.tx.bytes += 1500
     print("{eth.name}: {traffic(eth)} bytes")
 }
@@ -177,7 +189,7 @@ void main() {
 eth0: 11100 bytes
 ```
 
-A struct can't hold itself, since its size would have no end. It can hold a pointer to itself, or a `List` of itself, whose items are kept apart:
+A struct can't contain itself, but it can hold a pointer to itself or a `List` of itself:
 
 ```iris run
 // One part of a URL path, with the parts that can follow it.
@@ -204,11 +216,14 @@ i64 Node.count() {
 void main() {
     root := Node{name: "/"}
     defer root.free()
+
     users := Node{name: "users"}
     api := Node{name: "api"}
     api.children.push(users)
+
     root.children.push(api)
     root.children.push(Node{name: "static"})
+
     print("{root.count()} paths")
 }
 ```
@@ -219,7 +234,7 @@ void main() {
 
 ## Embedding
 
-A field written as just a type, without a name, embeds that struct. Its fields and methods can then be used as if they were the outer struct's own:
+A field written as a type without a name embeds that struct. Its fields and methods work directly on the outer struct.
 
 ```iris run
 struct Socket {
@@ -235,6 +250,7 @@ struct Conn {
 
 void main() {
     c := Conn{Socket: Socket{fd: 3}, peer: "10.0.0.2"}
+
     c.send("hello")
     print("{c.fd} {c.Socket.fd} {c.peer}")
 }
@@ -245,13 +261,13 @@ fd 3 sends hello
 3 3 10.0.0.2
 ```
 
-The embedded struct is a field named after its type, so it can also be reached and set as a whole: `c.Socket`. A method called through the outer struct gets a pointer to the embedded one as its `self`.
+- The embedded struct is a field named after its type, so `c.Socket` reaches it as a whole.
+- A method called through the outer struct gets a pointer to the embedded struct as `self`.
+- There is no inheritance. If the outer struct has a field or method with the same name, its own wins.
 
-Embedding is how one type reuses another; there is no inheritance. When the outer struct has a field or method of the same name, its own one is used.
+## Memory layout
 
-## Layout in memory
-
-Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. `sizeof(T)` gives the bytes a `T` takes, padding included. `T` can be an array type too, `sizeof(Entry[4])`:
+Fields are stored in declaration order. Each starts at a multiple of its size, so padding can appear between fields, and the struct can be passed to C unchanged. `sizeof(T)` gives the size including padding, and works on array types such as `sizeof(Entry[4])`.
 
 ```iris run
 struct Entry {
@@ -269,11 +285,13 @@ void main() {
 12 4
 ```
 
-A struct marked `packed` has no padding: each field starts right after the one before. That makes it match a format that is laid out byte by byte, such as a protocol header. Network protocols put the high byte of a number first. A field of type `u16be`, `u32be` or `u64be` (and `i16be`, `i32be`, `i64be`) is kept that way in memory. It reads and is set as a plain `u16`, `u32` or `u64`, and the bytes are turned around on the way.
+Three features match byte-exact formats such as protocol headers:
 
-A field with `: n` after its name is a bitfield of `n` bits. Bitfields next to each other share one integer of their type while their bits fit, and the first one takes the highest bits. That is the order in which protocol headers are drawn.
+- `packed` removes padding. Each field starts right after the previous one.
+- `u16be`, `u32be`, `u64be`, `i16be`, `i32be` and `i64be` store the high byte first, as network protocols do. They read and write as plain integers, and the bytes are swapped on access.
+- `name: n` makes a bitfield of `n` bits. Adjacent bitfields share one integer of their type while the bits fit, and the first takes the highest bits, the order protocol diagrams use.
 
-Together these read a header straight from the bytes that came in. `u8 *` converts to any pointer, so a pointer to the bytes becomes a pointer to the header:
+`u8 *` converts to any pointer, so a header can be read straight from received bytes:
 
 ```iris run
 struct Ipv4 packed {
@@ -294,8 +312,10 @@ struct Ipv4 packed {
 void main() {
     u8[20] packet = [0x45, 0, 0, 60, 0x1c, 0x46, 0x40, 0, 64, 6, 0xb1, 0xe6, 192, 168, 0, 1, 10, 0, 0, 7]
     Ipv4 *ip = packet[0:20].ptr
+
     print("IPv{ip.version}, {ip.ihl * 4} byte header, {ip.length} bytes, ttl {ip.ttl}, protocol {ip.protocol}")
     print("from {ip.src[0]}.{ip.src[1]}.{ip.src[2]}.{ip.src[3]}, flags {ip.flags}")
+
     ip.ttl--
     ip.length = 1500
     print("{sizeof(Ipv4)} bytes, now {packet[2]} {packet[3]} {packet[8]}")
@@ -308,7 +328,7 @@ from 192.168.0.1, flags 2
 20 bytes, now 5 220 63
 ```
 
-A bitfield, a field in network byte order and an unaligned field of a packed struct have no address of their own, so `&ip.length` doesn't compile; copy the value out first. A value known when compiling must fit in a bitfield's bits. A debug build checks the others when the program runs:
+Bitfields, byte-swapped fields and unaligned packed fields have no address, so `&ip.length` doesn't compile. Copy the value out first. A compile-time value must fit a bitfield. A debug build checks other values at run time.
 
 ```iris run
 struct Flags {
@@ -321,6 +341,7 @@ void main() {
     Flags f = .{syn: 1}
     f.ack = 1
     f.window += 31
+
     print("{f.syn} {f.ack} {f.window} {sizeof(Flags)}")
 }
 ```
@@ -329,7 +350,7 @@ void main() {
 1 1 63 1
 ```
 
-`align(n)` makes a struct start at a multiple of `n` bytes, and its size a multiple of `n` too. Counters that different threads change are kept on separate 64-byte cache lines this way, so one thread's writes don't slow the others down. Variables, globals and memory from `alloc` all get the alignment:
+`align(n)` starts the struct at a multiple of `n` bytes and rounds its size up to a multiple of `n`. Use it to keep per-thread counters on separate 64-byte cache lines so threads don't slow each other down. Variables, globals and `alloc` all respect it.
 
 ```iris run
 struct Counter align(64) {
@@ -339,6 +360,7 @@ struct Counter align(64) {
 void main() {
     Counter[4] perThread
     perThread[1].hits += 1
+
     print("{sizeof(Counter)} {sizeof(Counter) * 4}")
 }
 ```
@@ -347,9 +369,9 @@ void main() {
 64 256
 ```
 
-## Visible to other modules
+## Visibility
 
-A struct marked `pub` can be used by other modules, and so can those of its fields that are marked `pub`. The rest of its fields are the module's own: other modules can't read or set them, which keeps them free to change (see [Modules](23-modules.html)):
+A `pub` struct is visible to other modules, and so are its `pub` fields. Other fields are private to the module (see [Modules](23-modules.html)).
 
 ```iris
 pub struct Server {

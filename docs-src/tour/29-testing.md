@@ -1,10 +1,10 @@
 # Testing
 
-Tests sit next to the code they test, in `test` blocks, and `iris test` runs them. This chapter covers writing tests, checking with `expect`, tests that use errors, running them, and measuring how fast code is with `bench` blocks.
+Tests sit next to the code they test, in `test` blocks, and `iris test` runs them. This chapter covers writing tests, checking with `expect`, tests that use errors, running them, and measuring speed with `bench` blocks.
 
 ## test blocks
 
-A `test` block has a name in quotes and a body, and can go in any file of a module, at the top level:
+A `test` block has a name in quotes and a body. It goes at the top level of any file of a module:
 
 ```iris
 // A 16-bit number in network byte order.
@@ -16,11 +16,11 @@ test "swap16" {
 }
 ```
 
-A test is a function the compiler makes from the block. It sees everything in its module, including names that aren't `pub`, so a test can check a module's inner parts. `iris run` and `iris build` leave tests out of the program; `iris check` checks them like the rest of the code.
+The compiler makes a function from each test block. A test sees everything in its module, including names that aren't `pub`, so it can check a module's inner parts. `iris run` and `iris build` leave tests out of the program. `iris check` checks them like the rest of the code.
 
 ## expect
 
-`expect(cond)` checks a condition. When it is false, the test fails, with the file and line of the check, and goes on to its end, so one run shows every failed check. A second argument is a message to show, which can have values in braces:
+`expect(cond)` checks a condition. When it is false, the test fails with the file and line of the check and goes on to its end, so one run shows every failed check. A second argument is a message to show, which can have values in braces:
 
 ```iris
 test "parse a port" {
@@ -30,7 +30,7 @@ test "parse a port" {
 }
 ```
 
-`expect` can be used only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:
+`expect` works only inside a test block. A helper function that checks something gives back what is wrong, and the test expects it to be empty:
 
 ```iris
 String checkConfig(Config c) {
@@ -48,7 +48,7 @@ test "config" {
 
 ## Errors in tests
 
-A test can use `try`: an error that leaves the test fails it, and the output shows the error and its trace. A test that checks that something fails uses `catch`:
+A test can use `try`. An error that leaves the test fails it, and the output shows the error and its trace. A test that checks that something fails uses `catch`:
 
 ```iris
 test "a bad port fails" {
@@ -57,15 +57,16 @@ test "a bad port fails" {
         failed = e.code == str.ParseError.notNumber
         0
     }
+
     expect(failed, "parsePort(\"x\") should fail with notNumber")
 }
 ```
 
-A panic in a test, an index out of range or an overflow, stops the whole run with its message, as it would stop the program.
+A panic in a test, such as an index out of range or an overflow, stops the whole run with its message, as it would stop the program.
 
 ## iris test
 
-`iris test` runs every test of the program's module, in the order they are written, and prints a line for each, then a count:
+`iris test` runs every test of the program's module in the order they are written. It prints a line for each, then a count:
 
 ```shell
 iris test main.iris
@@ -83,18 +84,20 @@ FAIL a bad port
 3 tests, 1 passed, 2 failed
 ```
 
-The exit status is 1 when a test failed, so a build script or CI stops there. A name after the file runs only the tests whose name has it in: `iris test main.iris port`. In a project, `iris test` in its folder runs the main module's tests.
-
-Tests are built as debug builds, with every check on: an index out of range, an overflow or a `null` pointer stops the test run with its message, and so does memory used after it was freed.
+- The exit status is 1 when a test failed, so a build script or CI stops there.
+- A name after the file runs only the tests whose name contains it: `iris test main.iris port`.
+- In a project, `iris test` in its folder runs the main module's tests.
+- Tests are debug builds with every check on. An index out of range, an overflow, a `null` pointer or memory used after it was freed stops the run with its message.
 
 ## Tests that need more
 
-A test that needs files, a network server or a database makes them itself, and cleans up with `defer`. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:
+A test that needs files, a network server or a database makes them itself and cleans up with `defer`. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:
 
 ```iris
 test "the server answers" {
     ln := try net.listen(0, "127.0.0.1")
     spawn serve(ln)
+
     scoped String url = format("http://127.0.0.1:{ln.port}/health")
     scoped http.Reply r = try http.get(url)
     expect(r.status == 200, "status {r.status}")
@@ -103,7 +106,7 @@ test "the server answers" {
 
 ## Benchmarks
 
-A `bench` block measures how long its code takes. `iris bench` runs its body again and again, more times each round, until a round takes a second, and prints how many runs that was and the time of one:
+A `bench` block measures how long its code takes. `iris bench` runs its body again and again, more times each round, until a round takes a second. It prints how many runs that was and the time of one:
 
 ```iris
 i64 checksum(str data) {
@@ -130,7 +133,7 @@ checksum of a 1500-byte packet        1000000 runs       1.01us/run
 
 The compiler leaves out work whose result isn't used. In a `bench` block, `_ = value` keeps the value, so the work that made it is measured.
 
-When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. Only the whole block is timed, so setting up should cost little next to the loop:
+When the body needs something set up first, such as data to work on, the block takes a name for the number of runs and has its own loop. The whole block is timed, so the setup should cost little next to the loop:
 
 ```iris
 bench "sort 10000 ports" (n) {
@@ -138,6 +141,7 @@ bench "sort 10000 ports" (n) {
     for i in 0..10000 {
         ports.push((i * 7919) % 65536)
     }
+
     scoped List[i64] work
     for k in 0..n {
         work.clear()
@@ -152,4 +156,8 @@ bench "sort 10000 ports" (n) {
 bool less(i64 a, i64 b) => a < b
 ```
 
-`iris bench` builds with `--mode=release-fast` unless another mode is given, and runs only the bench blocks, not `main` or the tests. A name after the file runs only the benches whose name has it in. `--time=200ms` sets how long the last round of each bench takes. A `bench` block that fails with an error stops with the error and its trace, and `iris bench` then ends with status 1.
+- `iris bench` builds with `--mode=release-fast` unless another mode is given.
+- It runs only the bench blocks. `main` and the tests don't run.
+- A name after the file runs only the benches whose name contains it.
+- `--time=200ms` sets how long the last round of each bench takes.
+- A `bench` block that fails with an error stops with the error and its trace, and `iris bench` then ends with status 1.

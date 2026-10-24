@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Interfaces - Iris</title>
-<meta name="description" content="An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as dyn values, worked out when the program runs.">
+<meta name="description" content="An interface is a list of methods. A struct with those methods has the interface, with nothing more to write. Interfaces work in two ways: as bounds on type parameters, resolved at compile time, and as dyn values, resolved at run time.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,7 +46,7 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html" class="on"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Interfaces</h1>
-<p class="lede">An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as <code>dyn</code> values, worked out when the program runs.</p>
+<p class="lede">An interface is a list of methods. A struct with those methods has the interface, with nothing more to write. Interfaces work in two ways: as bounds on type parameters, resolved at compile time, and as <code>dyn</code> values, resolved at run time.</p>
 <h2 id="declaring-an-interface"><a href="#declaring-an-interface">Declaring an interface</a></h2>
 <p>An interface lists the methods a type must have, with their types:</p>
 <pre class="code"><code><span class="k">interface</span> <span class="t">Link</span> {
@@ -56,7 +55,7 @@ try {
 }</code></pre>
 <p>Any struct with an <code>mtu</code> method that takes nothing and gives an <code>i64</code>, and a <code>format</code> method that gives a <code>String</code>, has <code>Link</code>. Only structs have methods, so only structs have interfaces.</p>
 <h2 id="bounds"><a href="#bounds">Bounds</a></h2>
-<p>A type parameter written <code>T: Link</code> takes only types that have <code>Link</code>, and the generic code can then call its methods:</p>
+<p>A type parameter written <code>T: Link</code> takes only types that have <code>Link</code>. The generic code can then call its methods:</p>
 <pre class="code run"><code><span class="c">// A network link, and the largest packet it carries.</span>
 <span class="k">interface</span> <span class="t">Link</span> {
     <span class="t">i64</span> <span class="f">mtu</span>()
@@ -84,9 +83,9 @@ T roomier[T: <span class="t">Link</span>](T a, T b) =&gt; <span class="k">if</sp
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>big.jumbo<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">payload</span>(<span class="t">Tunnel</span>{overhead: <span class="n">80</span>})<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true 1380</code></pre>
-<p>A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.</p>
+<p>A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing at run time.</p>
 <h2 id="self"><a href="#self">Self</a></h2>
-<p>In an interface, <code>Self</code> stands for the type that has the interface. It lets a method take or give a value of the same type:</p>
+<p>In an interface, <code>Self</code> stands for the type that has the interface. A method can then take or give a value of the same type:</p>
 <pre class="code run"><code><span class="k">interface</span> <span class="t">Ordered</span> {
     <span class="t">i64</span> <span class="f">compare</span>(<span class="t">Self</span> other)
 }
@@ -111,7 +110,8 @@ T max[T: <span class="t">Ordered</span>](T a, T b) =&gt; <span class="k">if</spa
 }</code></pre>
 <pre class="out"><code>1.5</code></pre>
 <h2 id="dyn"><a href="#dyn">dyn</a></h2>
-<p>A <code>dyn Link</code> value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things. Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:</p>
+<p>A <code>dyn Link</code> value holds any type with the interface, chosen at run time. Its methods are looked up through a table that comes with the value. It is made from a pointer to a struct and suits cases where the types aren't known ahead, such as a list of different kinds of things.</p>
+<p>Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:</p>
 <pre class="code run"><code><span class="k">interface</span> <span class="t">Link</span> {
     <span class="t">i64</span> <span class="f">mtu</span>()
     <span class="t">str</span> <span class="f">name</span>()
@@ -137,21 +137,24 @@ T max[T: <span class="t">Ordered</span>](T a, T b) =&gt; <span class="k">if</spa
     lan := <span class="t">Ethernet</span>{jumbo: <span class="k">true</span>}
     vpn := <span class="t">Tunnel</span>{overhead: <span class="n">80</span>}
     <span class="f">describe</span>(&amp;vpn)
+
     <span class="t">List</span>[<span class="k">dyn</span> <span class="t">Link</span>] path
     <span class="k">defer</span> path.<span class="f">free</span>()
     path.<span class="f">push</span>(&amp;lan)
     path.<span class="f">push</span>(&amp;vpn)
+
     <span class="t">i64</span> pmtu = <span class="n">65535</span>
     <span class="k">for</span> l <span class="k">in</span> path {
         pmtu = l.<span class="f">mtu</span>() <span class="k">if</span> l.<span class="f">mtu</span>() &lt; pmtu
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path.len<span class="e">}</span><span class="s"> links, path MTU </span><span class="e">{</span>pmtu<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>tunnel carries 1420 bytes
 2 links, path MTU 1420</code></pre>
-<p>A <code>dyn</code> value holds a pointer, not a copy: the struct must live as long as the <code>dyn</code> value is used. Its type must have each of the interface's methods with the same types. An interface with <code>Self</code> can't be used with <code>dyn</code>, since the type behind it isn't known when compiling.</p>
+<ul><li>A <code>dyn</code> value holds a pointer to the struct, so the struct must live as long as the <code>dyn</code> value is used.</li><li>The type must have each of the interface's methods with the same types.</li><li>An interface with <code>Self</code> can't be used with <code>dyn</code>, since the type behind it isn't known at compile time.</li></ul>
 <h2 id="which-one-to-use"><a href="#which-one-to-use">Which one to use</a></h2>
-<p>Bounds are the default: they cost nothing when the program runs, and the compiler checks each use with its own type. <code>dyn</code> is for values whose types are known only when the program runs, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through <code>dyn</code> costs one lookup in the value's table.</p>
+<p>Use bounds by default. They cost nothing at run time, and the compiler checks each use with its own type. Use <code>dyn</code> for values whose types are known only at run time, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through <code>dyn</code> costs one lookup in the value's table.</p>
     <nav class="pager"><a class="prev" href="20-generics.html"><span>Previous</span>Generics</a><a class="next" href="22-collections.html"><span>Next</span>Collections</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -163,7 +166,6 @@ T max[T: <span class="t">Ordered</span>](T a, T b) =&gt; <span class="k">if</spa
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

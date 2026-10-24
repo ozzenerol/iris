@@ -1,6 +1,11 @@
 # Iris
 
-Iris is a compiled language for servers, network tools and command-line programs. It has no garbage collector: memory is freed by the program, with `defer` and `scoped` to make that hard to forget. Errors are values that must be handled, every index is checked, and tasks and channels let one thread do many things at once. The compiler is written in C and produces native code through LLVM.
+Iris is a compiled language for servers, network tools and command-line programs.
+
+- No garbage collector. The program frees memory, and `defer` and `scoped` make that hard to forget.
+- Errors are values that must be handled. Every index is checked.
+- Tasks and channels run many things at once on one thread, and threads spread work over cores.
+- The compiler is written in C and produces native code through LLVM.
 
 ```iris run
 import http
@@ -12,6 +17,7 @@ void hello(http.Request *req, http.Response *res) {
 !void main() {
     http.Router r
     defer r.free()
+
     r.get("/hello/:name", hello)
     print("routes ready")
 }
@@ -21,25 +27,35 @@ void hello(http.Request *req, http.Response *res) {
 routes ready
 ```
 
-With `try r.serve(8080)` at the end, that is a web server on every CPU core, with HTTP/1.1 and HTTP/2.
+Add `try r.serve(8080)` at the end and it is a web server on every CPU core, speaking HTTP/1.1 and HTTP/2.
 
 ## Where to start
 
-- The [Language Tour](tour/index.html) covers every part of the language, one topic per chapter, with programs you can run and their output. Start here.
-- The [Library Tour](library-tour/index.html) shows what the standard library does, one task per chapter: files, HTTP, databases, formats, cryptography and more.
-- The [Library](std/index.html) has every module of the standard library, with each type and function and what it does.
-- [Design](design/index.html) explains how Iris works underneath and why, for people working on the compiler.
-- The [Roadmap](roadmap.html) lists each release and what it brought.
+- [Language Tour](tour/index.html): the whole language, one topic per chapter, with runnable programs and their output. Start here.
+- [Library Tour](library-tour/index.html): the standard library, one task per chapter: files, HTTP, databases, formats, cryptography and more.
+- [Library](std/index.html): every module, type and function of the standard library.
+- [Design](design/index.html): the compiler's architecture, for people working on it.
 
 ## Install
 
-Iris is built from its source. It needs a C compiler and `clang` 15 or newer, which Iris uses to make programs; on Debian and Ubuntu, `sudo apt install build-essential clang`, and on macOS, the Xcode command-line tools. Then, in the source folder:
+Iris builds from source. It needs a C compiler and `clang` 15 or newer, which it uses to produce programs.
+
+- Debian and Ubuntu: `sudo apt install build-essential clang`
+- macOS: the Xcode command-line tools
+
+Then, in the source folder:
 
 ```shell
 ./build-and-install.sh
 ```
 
-That builds `iris` on every core and installs it in `/usr/local/bin`, asking for your password only for the copy. `--prefix ~/.local` installs it in your home folder instead, `--test` runs the tests first, and `--help` lists the rest. `iris version` checks it worked.
+This builds `iris` on every core and installs it in `/usr/local/bin`, asking for a password only for the copy.
+
+- `--prefix ~/.local` installs into your home folder.
+- `--test` runs the tests first.
+- `--help` lists the other options.
+
+`iris version` confirms the install.
 
 ## A first program
 
@@ -53,4 +69,4 @@ void main() {
 hello, world
 ```
 
-Save it as `hello.iris`, and run it with `iris run hello.iris`. The [first chapter](tour/01-hello.html) of the tour goes on from there.
+Save it as `hello.iris` and run `iris run hello.iris`. The [first chapter](tour/01-hello.html) of the tour continues from there.

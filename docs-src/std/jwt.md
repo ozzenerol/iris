@@ -1,6 +1,6 @@
 ## Signing and checking tokens
 
-A server signs a token with the claims of a `@json` struct, gives it to a client, and later reads the claims back from it with `verify`, which fails when the token was changed:
+A server signs a token with the claims of a `@json` struct and gives it to a client. Later, `verify` reads the claims back and fails when the token was changed:
 
 ```iris run
 import jwt, time
@@ -19,6 +19,7 @@ struct Claims {
 
     scoped Claims c = try jwt.verify[Claims](token, key)
     print("{c.sub} is {c.role}")
+
     _ = jwt.verify[Claims](token, "another key") catch e {
         print("{e.code}")
         Claims{}
@@ -31,6 +32,8 @@ ada is admin
 JwtError.signature
 ```
 
-`verify` takes only tokens signed with HS256, and `verifyEd25519` only EdDSA ones, whatever the token's header says. When the claims have `exp` or `nbf`, in seconds since 1970 as JWT has them, a token past its `exp` fails with `JwtError.expired` and one before its `nbf` with `JwtError.early`. `leeway` gives clocks that differ a little some room.
+`verify` accepts only tokens signed with HS256, and `verifyEd25519` only EdDSA ones, whatever the token's header says.
 
-With `signEd25519`, a service signs with its private seed and other services check with the public key alone, so they can't make tokens of their own.
+`exp` and `nbf` claims are seconds since 1970. A token past its `exp` fails with `JwtError.expired`, and one before its `nbf` with `JwtError.early`. `leeway` gives some room to clocks that differ a little.
+
+With `signEd25519`, a service signs with its private seed and other services check with the public key alone. Those services can't make tokens of their own.

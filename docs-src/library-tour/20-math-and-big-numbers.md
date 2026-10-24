@@ -1,10 +1,10 @@
 # Math and big numbers
 
-The `math` module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. [Integers](../tour/03-integers.html) and [Floating point](../tour/04-floating-point.html) show the basics. This chapter puts them to work, and then turns to the `big` module, for whole numbers too large for an `i64`.
+The `math` module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. [Integers](../tour/03-integers.html) and [Floating point](../tour/04-floating-point.html) show the basics. This chapter puts them to work and then turns to the `big` module, for whole numbers too large for an `i64`.
 
 ## Distances
 
-Trigonometry works in radians, so degrees are multiplied by `math.pi / 180` first. The distance between two places on Earth, from their latitude and longitude, uses `sin`, `cos`, `atan2` and `sqrt`:
+Trigonometry works in radians, so degrees are first multiplied by `math.pi / 180`. The distance between two places on Earth, from their latitude and longitude, uses `sin`, `cos`, `atan2` and `sqrt`:
 
 ```iris run
 import math
@@ -23,12 +23,14 @@ f64 radians(f64 deg) => deg * math.pi / 180
 f64 distance(Place a, Place b) {
     dlat := radians(b.lat - a.lat)
     dlon := radians(b.lon - a.lon)
+
     h := math.pow(math.sin(dlat / 2), 2) + math.cos(radians(a.lat)) * math.cos(radians(b.lat)) * math.pow(math.sin(dlon / 2), 2)
     return 2 * EARTH_KM * math.atan2(math.sqrt(h), math.sqrt(1 - h))
 }
 
 void main() {
     frankfurt := Place{name: "Frankfurt", lat: 50.11, lon: 8.68}
+
     for p in [Place{name: "Amsterdam", lat: 52.37, lon: 4.90}, Place{name: "Virginia", lat: 38.95, lon: -77.45}, Place{name: "Singapore", lat: 1.35, lon: 103.82}] {
         print("{p.name}: {math.round(distance(frankfurt, p))} km")
     }
@@ -63,16 +65,19 @@ void main() {
     for v in [12.0, 15.5, 11.2, 13.8, 250.0, 14.1, 12.9, 16.3, 13.0, 12.4] {
         ms.push(v)
     }
+
     f64 sum = 0
     for v in ms {
         sum += v
     }
     mean := sum / f64(ms.len)
+
     f64 sq = 0
     for v in ms {
         sq += (v - mean) * (v - mean)
     }
     sd := math.sqrt(sq / f64(ms.len))
+
     ms.sort(less)
     print("mean {mean:.1} ms, deviation {sd:.1} ms")
     print("p50 {percentile(&ms, 50)} ms, p90 {percentile(&ms, 90)} ms, p99 {percentile(&ms, 99)} ms")
@@ -88,7 +93,7 @@ One slow request pulled the mean far above what most requests took, which is why
 
 ## Growth and logarithms
 
-`math.pow` and `math.exp` give growth, and `math.log`, `log2` and `log10` turn it around, to say how long growth takes or how many steps a search needs:
+`math.pow` and `math.exp` give growth. `math.log`, `log2` and `log10` turn it around, to say how long growth takes or how many steps a search needs:
 
 ```iris run
 import math
@@ -98,8 +103,10 @@ void main() {
     rate := 1.08
     print("in a year: {math.pow(rate, 12):.2} times as much")
     print("twice as much after {math.ceil(math.log(2) / math.log(rate))} months")
+
     // a binary search over a million sorted keys
     print("{math.ceil(math.log2(1000000))} steps at most")
+
     // retries that wait twice as long each time, up to 30 seconds
     for attempt in 0..7 {
         wait := math.min(0.1 * math.pow(2, f64(attempt)), 30)
@@ -123,7 +130,10 @@ attempt 6: wait 6.4s
 
 ## Integers that must not overflow
 
-An `i64` holds numbers up to about 9.2 × 10¹⁸. Arithmetic past that panics in the debug build (see [Integers](../tour/03-integers.html)). Where a value comes from outside and could be that large, `math.addChecked`, `subChecked` and `mulChecked` give the result and whether it fit, and `addSat`, `subSat` and `mulSat` stop at the largest or smallest value instead:
+An `i64` holds numbers up to about 9.2 × 10¹⁸. Arithmetic past that panics in the debug build (see [Integers](../tour/03-integers.html)). Where a value comes from outside and could be that large:
+
+- `math.addChecked`, `subChecked` and `mulChecked` give the result and whether it fit.
+- `addSat`, `subSat` and `mulSat` stop at the largest or smallest value.
 
 ```iris run
 import math
@@ -132,8 +142,10 @@ void main() {
     bytes := 3000000000
     total, ok := math.mulChecked(bytes, 4000000000)
     print("fits: {ok}")
+
     quota := math.mulSat(bytes, 4000000000)
     print("saturated: {quota == 9223372036854775807}")
+
     print("{math.gcd(1920, 1080)} {math.lcm(4, 6)} {math.ipow(2, 40)} {math.isqrt(1000000)}")
 }
 ```
@@ -144,23 +156,30 @@ saturated: true
 120 12 1099511627776 1000
 ```
 
-For numbers that are larger still, there is `big`.
+For larger numbers still, there is `big`.
 
 ## Whole numbers of any size
 
-A `big.Int` holds a whole number of any size, limited only by memory. `big.from(n)` makes one from an `i64`, and `big.parse(text)` from text, in base 10 or any base from 2 to 36. Each operation gives a new `Int`, which owns memory and is freed after use, so `scoped` suits them. `{n}` writes one in decimal:
+A `big.Int` holds a whole number of any size, limited only by memory.
+
+- `big.from(n)` makes one from an `i64`.
+- `big.parse(text)` makes one from text, in base 10 or any base from 2 to 36.
+- Each operation gives a new `Int`, which owns memory and is freed after use, so `scoped` suits them.
+- `{n}` writes one in decimal.
 
 ```iris run
 import big
 
 void main() {
     scoped big.Int f = big.from(1)
+
     for i in 2..31 {
         scoped big.Int k = big.from(i)
         next := f.mul(k)
         f.free()
         f = next
     }
+
     print("30! = {f}")
     scoped String hex = f.text(16)
     print("{f.bitLen()} bits, {hex} in hex")
@@ -172,11 +191,11 @@ void main() {
 108 bits, d13f6370f96865df5dd54000000 in hex
 ```
 
-The loop replaces `f` with each new product and frees the one before. `add`, `sub`, `mul`, `div`, `rem` and `divMod` do arithmetic, `pow` raises to an `i64` power, `cmp` and `equal` compare, and `shl` and `shr` shift.
+The loop replaces `f` with each new product and frees the one before. `add`, `sub`, `mul`, `div`, `rem` and `divMod` do arithmetic, `pow` raises to an `i64` power, `compare` and `equal` compare, and `shl` and `shr` shift.
 
 ## Ids and keys as numbers
 
-Numbers too large for an `i64` turn up as ids, hashes and keys: a 128-bit id in hex, or a 256-bit balance on a blockchain. `big.parse(text, 16)` reads one, `_` may separate the digits, and `toI64` gives an `i64` back when the number fits, or fails with `BigError.tooBig`:
+Numbers too large for an `i64` turn up as ids, hashes and keys, such as a 128-bit id in hex or a 256-bit balance on a blockchain. `big.parse(text, 16)` reads one, and `_` may separate the digits. `toI64` gives an `i64` back when the number fits and fails with `BigError.tooBig` when it doesn't:
 
 ```iris run
 import big
@@ -184,10 +203,13 @@ import big
 !void main() {
     scoped id := try big.parse("0190e5d4_8a2b_7c3d_9e4f_5a6b7c8d9e0f", 16)
     print("{id}")
+
     scoped String back = id.text(16)
     print(back)
+
     scoped top := id.shr(80)
     print("the first 48 bits: {try top.toI64()} ms")
+
     _ = id.toI64() catch e {
         print("{e.code}")
         0
@@ -207,11 +229,11 @@ BigError.tooBig
 BigError.invalid
 ```
 
-`text(16)` writes the number without the zero it started with, since a number has no leading zeros. The first 48 bits of that UUID are the time it was made, in milliseconds since 1970 (see [Encodings and ids](11-encodings-and-ids.html#uuids)).
+`text(16)` writes the number without its leading zero, since a number has no leading zeros. The first 48 bits of that UUID are the time it was made, in milliseconds since 1970 (see [Encodings and ids](11-encodings-and-ids.html#uuids)).
 
 ## Modular arithmetic
 
-`modPow(e, m)` raises to a power modulo `m` without ever making the whole power, which would have more digits than there are atoms. It is the step at the heart of RSA and of many checks for primes. Here a small RSA key encrypts and decrypts a number:
+`modPow(e, m)` raises to a power modulo `m` without ever making the whole power, which would have more digits than there are atoms. It is the core step of RSA and of many prime tests. Here a small RSA key encrypts and decrypts a number:
 
 ```iris run
 import big
@@ -221,12 +243,15 @@ import big
     scoped p := try big.parse("61")
     scoped q := try big.parse("53")
     scoped n := p.mul(q)
+
     scoped e := big.from(17)   // the public exponent
     scoped d := big.from(2753) // the private one: 17 * 2753 = 1 mod 60 * 52
+
     scoped msg := big.from(65)
     scoped secret := msg.modPow(e, n)
     scoped back := secret.modPow(d, n)
     print("n = {n}, {msg} -> {secret} -> {back}")
+
     scoped g := big.from(3120).gcd(e)
     print("gcd(3120, 17) = {g}")
 }
@@ -237,4 +262,4 @@ n = 3233, 65 -> 2790 -> 65
 gcd(3120, 17) = 1
 ```
 
-Real keys use primes of hundreds of digits, and this code works the same for them. To sign and encrypt in a program, use `crypto` (see [Random numbers and cryptography](19-random-and-crypto.html)), which does it safely; `big` is for the arithmetic itself.
+Real keys use primes of hundreds of digits, and this code works the same for them. To sign and encrypt in a program, use `crypto` (see [Random numbers and cryptography](19-random-and-crypto.html)), which does it safely. `big` is for the arithmetic itself.

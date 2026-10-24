@@ -1,6 +1,6 @@
 # Enums
 
-An enum is a type with a fixed list of values. Plain enums name choices and codes; flag enums hold any set of their values at once; and the values of an enum with data each carry fields of their own.
+An enum is a type with a fixed list of values. Plain enums name choices and codes. Flags enums hold any set of their values. Enums with data carry fields per value.
 
 ## Plain enums
 
@@ -12,6 +12,7 @@ enum Level { debug, info, warn, error }
 void main() {
     Level l = Level.warn
     print("level {l}")
+
     if l == Level.warn {
         print("watch out")
     }
@@ -23,7 +24,7 @@ level warn
 watch out
 ```
 
-A value is written with its enum's name in front: `Level.warn`. Where the type is known from the place it goes (a typed variable, a parameter, a comparison with a value of the enum, a `match` arm), the name can be left out, keeping just the dot:
+A value is written `Level.warn`. Where the type is known (a typed variable, a parameter, a comparison with the enum, a `match` arm), write just `.warn`:
 
 ```iris run
 enum Level { debug, info, warn, error }
@@ -32,6 +33,7 @@ void log(Level level, str msg) => print("[{level}] {msg}")
 
 void main() {
     Level l = .info
+
     log(.error, "disk full")
     log(l, "started")
     print("{l == .info}")
@@ -44,17 +46,18 @@ void main() {
 true
 ```
 
-An enum printed in text writes its value's name. `.name` gives the name as a `str`.
+An enum interpolates as its value's name. `.name` returns the name as a `str`.
 
 ## Numbers
 
-Each value is a number, starting at 0 and going up by one. A value can be given its own number, and the ones after it go on from there. `.value` gives the number as an `i64`:
+Values are numbered from 0 up. A value can set its own number, and later values continue from it. `.value` returns the number as an `i64`.
 
 ```iris run
 enum Status { ok = 200, created, notFound = 404, error = 500 }
 
 void main() {
     s := Status.created
+
     print("{s} is {s.value}")
     print("{Status.notFound.value} {Status.error.name}")
 }
@@ -65,7 +68,7 @@ created is 201
 404 error
 ```
 
-The numbers fit in an `i32`. Numbers don't turn into enum values on their own: the program says which value a number means, with a `match`:
+Numbers fit in an `i32`. A number never converts to an enum implicitly. Map it with a `match`:
 
 ```iris run
 enum Status { ok = 200, notFound = 404, error = 500 }
@@ -85,9 +88,9 @@ void main() {
 notFound error
 ```
 
-## match on an enum
+## match
 
-A `match` on an enum must have an arm for each value, or a `_` arm, so adding a value later shows every place that has to handle it:
+A `match` on an enum needs an arm per value or a `_` arm, so a new value shows every place that must handle it:
 
 ```iris run
 enum Level { debug, info, warn, error }
@@ -109,7 +112,7 @@ gray red
 
 ## Flags
 
-An enum marked `flags` gives its values powers of two, so a value of it can hold any of them together. `|` joins them, `&` keeps what two have in common, `~` turns every one around, and `has` says whether one is there:
+A `flags` enum numbers its values as powers of two, so one value can hold several. `|` combines, `&` intersects, `~` inverts, and `has` tests one.
 
 ```iris run
 enum Perm flags { read, write, exec }
@@ -117,9 +120,11 @@ enum Perm flags { read, write, exec }
 void main() {
     Perm p = .read | .write
     print("{p} has write: {p.has(.write)}, exec: {p.has(.exec)}")
+
     p = p | .exec
     noWrite := p & ~Perm.write
     print("{p} -> {noWrite}")
+
     Perm none
     print("[{none}] {none.value} {p.value}")
 }
@@ -131,11 +136,11 @@ read|write|exec -> read|exec
 [0] 0 7
 ```
 
-A flags value prints the names of the values that are set, joined by `|`. A flags enum can have up to 31 values.
+A flags value prints its set names joined by `|`. A flags enum has at most 31 values.
 
 ## Enums with data
 
-A value of an enum can carry data, written like a function's parameters after its name:
+A value can carry data, declared like parameters:
 
 ```iris
 enum Frame {
@@ -145,10 +150,10 @@ enum Frame {
 }
 ```
 
-A value is made by calling it like a function, and taken apart with `match`. Each arm names a value and gives names to its data, which the arm then uses:
+Create a value by calling it. Unpack it with `match`: each arm names a variant and binds its data.
 
 ```iris run
-// The frames of a protocol, each with a 9-byte header.
+// Protocol frames, each with a 9-byte header.
 enum Frame {
     Data(i64 stream, i64 size)
     Ping(u64 payload)
@@ -163,6 +168,7 @@ i64 wireSize(Frame f) => match f {
 
 void main() {
     Frame[3] frames = [Frame.Data(1, 1200), .Ping(42), .Close]
+
     for f in frames {
         print("{f}: {wireSize(f)} bytes")
     }
@@ -175,7 +181,7 @@ Ping: 17 bytes
 Close: 9 bytes
 ```
 
-A name in an arm can be `_` for data that isn't needed, and a value's name on its own takes it whatever its data. A value prints as its name:
+`_` skips a field. A variant name alone matches whatever its data. A value prints as its variant's name.
 
 ```iris run
 // What a poller reports about a socket.
@@ -206,11 +212,11 @@ fd 6 can be written
 a peer went away
 ```
 
-The data is part of the value, which is copied as a whole like a struct. Values of an enum with data can't be compared with `==`, since their data may differ; `match` is the way to look at them.
+The data is part of the value, which copies like a struct. Enums with data don't support `==`. Use `match`.
 
-## Errors are enums
+## Error codes
 
-The code of an error is a value of a plain enum. A module lists what can go wrong with it as an enum, and the caller matches on it (see [Errors](18-errors.html)):
+An error's code is a plain enum value. A module lists its failures as an enum and callers match on it (see [Errors](18-errors.html)):
 
 ```iris run
 enum ConfigError { missing, invalid }

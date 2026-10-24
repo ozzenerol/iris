@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Functions - Iris</title>
-<meta name="description" content="Declaring functions, passing them arguments, giving defaults and names to those arguments, and returning one value or several.">
+<meta name="description" content="Declaring functions, default and named arguments, variadic parameters, and returning several values.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html" class="on"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Functions</h1>
-<p class="lede">Declaring functions, passing them arguments, giving defaults and names to those arguments, and returning one value or several.</p>
-<h2 id="declaring-a-function"><a href="#declaring-a-function">Declaring a function</a></h2>
-<p>A function is written as its return type, its name, its parameters in parentheses, and a block. <code>void</code> means it gives nothing back:</p>
+<p class="lede">Declaring functions, default and named arguments, variadic parameters, and returning several values.</p>
+<h2 id="declaring"><a href="#declaring">Declaring</a></h2>
+<p>A function is its return type, name, parameters and block. <code>void</code> returns nothing.</p>
 <pre class="code run"><code><span class="t">i64</span> <span class="f">frameSize</span>(<span class="t">i64</span> payload, <span class="t">i64</span> headers) {
     <span class="k">return</span> payload + headers
 }
@@ -64,10 +63,10 @@ try {
 }</code></pre>
 <pre class="out"><code>listening on 0.0.0.0:8080
 1514 bytes</code></pre>
-<p>Parameters next to each other with the same type can share it: <code>i64 frameSize(i64 payload, headers)</code> is the same as <code>i64 frameSize(i64 payload, i64 headers)</code>.</p>
-<p>A function that gives a value must give it on every way out of its block. One that can reach its closing brace without a <code>return</code> doesn't compile.</p>
+<p>Adjacent parameters of one type can share it: <code>i64 frameSize(i64 payload, headers)</code>.</p>
+<p>A function with a result must return on every path. Reaching the closing brace without <code>return</code> is a compile error.</p>
 <h2 id="one-expression"><a href="#one-expression">One expression</a></h2>
-<p>A function whose body is one expression can be written with <code>=&gt;</code>, leaving out the braces and the <code>return</code>:</p>
+<p>A body that is one expression can use <code>=&gt;</code>, without braces or <code>return</code>:</p>
 <pre class="code run"><code><span class="c">// A 16-bit number in network byte order: its two bytes swapped.</span>
 <span class="t">u16</span> <span class="f">swap16</span>(<span class="t">u16</span> x) =&gt; (x &lt;&lt; <span class="n">8</span>) | (x &gt;&gt; <span class="n">8</span>)
 <span class="t">bool</span> <span class="f">isDigit</span>(<span class="t">u8</span> c) =&gt; c &gt;= <span class="s">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="s">&#x27;9&#x27;</span>
@@ -82,12 +81,12 @@ try {
 <pre class="out"><code>503 is a server error
 200 is fine
 36895 true false</code></pre>
-<p>For a <code>void</code> function, the expression after <code>=&gt;</code> is a call.</p>
-<h2 id="order"><a href="#order">Order</a></h2>
-<p>Functions can be declared in any order: a function can call one declared further down the file, or in another file of the same module. A function can call itself:</p>
+<p>In a <code>void</code> function, the expression after <code>=&gt;</code> is a call.</p>
+<h2 id="order-and-recursion"><a href="#order-and-recursion">Order and recursion</a></h2>
+<p>Functions can appear in any order and in any file of the module. A function can call itself.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="c">// Prints the labels of a DNS name from the top down, the way a resolver walks them.</span>
+<span class="c">// Prints a DNS name&#x27;s labels from the top down, as a resolver walks them.</span>
 <span class="t">void</span> <span class="f">labels</span>(<span class="t">str</span> name) {
     head, rest, found := <span class="t">str</span>.<span class="f">cut</span>(name, <span class="s">&quot;.&quot;</span>)
     <span class="k">if</span> found {
@@ -103,9 +102,9 @@ try {
 example
 eu
 api</code></pre>
-<p>Each name means one function: two functions can't share a name, even with different parameters. A function's name can't be a built-in one (<code>print</code>, <code>format</code>, <code>free</code>...) or a type's.</p>
+<p>Each name refers to one function, so there is no overloading. A function can't take the name of a built-in (<code>print</code>, <code>format</code>, <code>free</code>...) or a type.</p>
 <h2 id="arguments-are-copies"><a href="#arguments-are-copies">Arguments are copies</a></h2>
-<p>Each argument is copied into its parameter. A function that changes a parameter changes its copy, not the caller's variable:</p>
+<p>Each argument is copied into its parameter. Changing the parameter leaves the caller's variable alone.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">record</span>(<span class="t">i64</span> sent) {
     sent += <span class="n">1500</span>
     <span class="f">print</span>(<span class="s">&quot;inside: </span><span class="e">{</span>sent<span class="e">}</span><span class="s">&quot;</span>)
@@ -113,25 +112,27 @@ api</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     sent := <span class="n">3000</span>
+
     <span class="f">record</span>(sent)
     <span class="f">print</span>(<span class="s">&quot;outside: </span><span class="e">{</span>sent<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>inside: 4500
 outside: 3000</code></pre>
-<p>To let a function change the caller's value, pass a pointer to it, with <code>&amp;</code>. The function reads and writes through it with <code>*</code> (the <a href="17-pointers.html">Pointers</a> chapter has more):</p>
+<p>To change the caller's value, pass a pointer with <code>&amp;</code> and use <code>*</code> inside (see <a href="17-pointers.html">Pointers</a>):</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">record</span>(<span class="t">i64</span> *sent) {
     *sent += <span class="n">1500</span>
 }
 
 <span class="t">void</span> <span class="f">main</span>() {
     sent := <span class="n">3000</span>
+
     <span class="f">record</span>(&amp;sent)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>sent<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4500</code></pre>
-<p>A struct is copied too, field by field. A large struct, or one the function should change, is passed as a pointer: a pointer to a struct reaches the fields with a dot, as the value does.</p>
+<p>Structs are copied too. Pass a large struct, or one the function changes, as a pointer. Fields are reached with a dot through a pointer.</p>
 <h2 id="defaults"><a href="#defaults">Defaults</a></h2>
-<p>A parameter can have a default value, which is used when the call leaves it out. Parameters with defaults come after the ones without:</p>
+<p>A parameter can have a default, used when the call omits it. Parameters with defaults come last.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">connect</span>(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = <span class="n">30s</span>) {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">, waiting at most </span><span class="e">{</span>timeout<span class="e">}</span><span class="s">&quot;</span>)
 }
@@ -144,9 +145,9 @@ outside: 3000</code></pre>
 <pre class="out"><code>example.com:80, waiting at most 30s
 example.com:8080, waiting at most 30s
 example.com:443, waiting at most 5s</code></pre>
-<p>A default is a value known when compiling: a number, text, a constant, or an empty slice <code>[]</code>.</p>
+<p>A default must be known at compile time: a number, text, a constant, or <code>[]</code>.</p>
 <h2 id="named-arguments"><a href="#named-arguments">Named arguments</a></h2>
-<p>Any argument can be given by its parameter's name. This lets a call skip some defaults and give a later one, and makes calls with several values of the same type easier to read:</p>
+<p>Any argument can be passed by name. This skips defaults and clarifies calls with several values of one type.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">connect</span>(<span class="t">str</span> host, <span class="t">u16</span> port = <span class="n">80</span>, <span class="t">Duration</span> timeout = <span class="n">30s</span>, <span class="t">bool</span> tls = <span class="k">false</span>) {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s"> timeout </span><span class="e">{</span>timeout<span class="e">}</span><span class="s"> tls </span><span class="e">{</span>tls<span class="e">}</span><span class="s">&quot;</span>)
 }
@@ -159,9 +160,9 @@ example.com:443, waiting at most 5s</code></pre>
 <pre class="out"><code>example.com:80 timeout 30s tls true
 example.com:8443 timeout 5s tls false
 localhost:80 timeout 30s tls false</code></pre>
-<p>Named arguments come after the ones given by position, in any order among themselves. A parameter is given once, by position or by name.</p>
-<h2 id="any-number-of-arguments"><a href="#any-number-of-arguments">Any number of arguments</a></h2>
-<p>A last parameter written <code>T... name</code> takes the arguments left over, any number of them, and the function sees them as a slice, <code>T[]</code>. A slice the caller already has is given by the parameter's name:</p>
+<p>Named arguments follow positional ones, in any order. Each parameter is given once.</p>
+<h2 id="variadic-parameters"><a href="#variadic-parameters">Variadic parameters</a></h2>
+<p>A last parameter <code>T... name</code> takes all remaining arguments as a slice <code>T[]</code>. Pass an existing slice by the parameter's name.</p>
 <pre class="code run"><code><span class="t">i64</span> <span class="f">total</span>(<span class="t">i64</span>... sizes) {
     sum := <span class="n">0</span>
     <span class="k">for</span> s <span class="k">in</span> sizes {
@@ -178,8 +179,10 @@ localhost:80 timeout 30s tls false</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>()<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">total</span>(<span class="n">512</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">total</span>(<span class="n">1460</span>, <span class="n">1460</span>, <span class="n">80</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
     reads := [<span class="n">4096</span>, <span class="n">1024</span>]
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">total</span>(sizes: reads[:])<span class="e">}</span><span class="s">&quot;</span>)
+
     port := <span class="n">8080</span>
     <span class="f">log</span>(<span class="s">&quot;info&quot;</span>, <span class="s">&quot;starting&quot;</span>, <span class="s">&quot;port </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
@@ -187,9 +190,9 @@ localhost:80 timeout 30s tls false</code></pre>
 5120
 info: starting
 info: port 8080</code></pre>
-<p>The values are put in an array for the call, so nothing is allocated. A <code>...</code> parameter comes last and has no default; with no arguments left over it is an empty slice. As a function value, <code>total</code> is an <code>i64(i64[])</code>: a call through it gives the slice.</p>
-<h2 id="several-values"><a href="#several-values">Several values</a></h2>
-<p>A function can give several values. Its return type lists their types in parentheses, and <code>return</code> gives them separated by commas, also in parentheses:</p>
+<ul><li>The arguments go into a stack array, so nothing is allocated.</li><li>A <code>...</code> parameter is last and has no default. With no extra arguments it is empty.</li><li>As a function value, <code>total</code> has type <code>i64(i64[])</code>.</li></ul>
+<h2 id="several-results"><a href="#several-results">Several results</a></h2>
+<p>The return type lists the types in parentheses. <code>return</code> gives the values in parentheses.</p>
 <pre class="code run"><code><span class="c">// Full segments, and the bytes left for a last one.</span>
 (<span class="t">i64</span>, <span class="t">i64</span>) <span class="f">segments</span>(<span class="t">i64</span> size, <span class="t">i64</span> mss) =&gt; (size / mss, size % mss)
 
@@ -206,33 +209,38 @@ info: port 8080</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     full, rest := <span class="f">segments</span>(<span class="n">4000</span>, <span class="n">1460</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>full<span class="e">}</span><span class="s"> full segments and </span><span class="e">{</span>rest<span class="e">}</span><span class="s"> bytes&quot;</span>)
+
     m, more := <span class="f">method</span>(<span class="s">&quot;GET /index.html HTTP/1.1&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>m<span class="e">}</span><span class="s"> </span><span class="e">{</span>more<span class="e">}</span><span class="s">&quot;</span>)
+
     _, last := <span class="f">segments</span>(<span class="n">9000</span>, <span class="n">1460</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>last<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>2 full segments and 1080 bytes
 GET true
 240</code></pre>
-<p>The caller unpacks the values into names, one for each; <code>_</code> leaves one out. A function's several values can't be kept together in one variable: they are unpacked where the call is.</p>
+<p>The caller unpacks every value at the call, one name each, with <code>_</code> for unwanted ones.</p>
 <h2 id="functions-that-can-fail"><a href="#functions-that-can-fail">Functions that can fail</a></h2>
-<p>A function whose return type starts with <code>!</code> can fail: it gives its value or an error. The caller must deal with the error, with <code>try</code> or <code>catch</code>:</p>
+<p>A return type starting with <code>!</code> means the function returns a value or an error. The caller must handle it with <code>try</code> or <code>catch</code>.</p>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">PortError</span> { empty, notNumber, tooBig }
 
 !<span class="t">u16</span> <span class="f">parsePort</span>(<span class="t">str</span> s) {
     <span class="k">if</span> s.len == <span class="n">0</span> {
         <span class="k">return</span> <span class="f">error</span>(<span class="t">PortError</span>.empty, <span class="s">&quot;no port given&quot;</span>)
     }
+
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">for</span> c <span class="k">in</span> s {
         <span class="k">if</span> c &lt; <span class="s">&#x27;0&#x27;</span> || c &gt; <span class="s">&#x27;9&#x27;</span> {
             <span class="k">return</span> <span class="f">error</span>(<span class="t">PortError</span>.notNumber, <span class="s">&quot;&#x27;</span><span class="e">{</span>s<span class="e">}</span><span class="s">&#x27; isn&#x27;t a number&quot;</span>)
         }
+
         n = n * <span class="n">10</span> + <span class="t">i64</span>(c - <span class="s">&#x27;0&#x27;</span>)
         <span class="k">if</span> n &gt; <span class="n">65535</span> {
             <span class="k">return</span> <span class="f">error</span>(<span class="t">PortError</span>.tooBig, <span class="s">&quot;</span><span class="e">{</span>s<span class="e">}</span><span class="s"> is above 65535&quot;</span>)
         }
     }
+
     <span class="k">return</span> <span class="t">u16</span>(n)
 }
 
@@ -244,8 +252,8 @@ GET true
 <pre class="out"><code>8080
 0
 0</code></pre>
-<p>The <a href="18-errors.html">Errors</a> chapter covers them in full. The result of any other function can be left unused, as with a <code>print</code> of nothing:</p>
-<pre class="code run"><code><span class="c">// Sends a line and gives how many bytes it took.</span>
+<p><a href="18-errors.html">Errors</a> covers them in full. Results of other functions can be ignored:</p>
+<pre class="code run"><code><span class="c">// Sends a line and returns its byte count.</span>
 <span class="t">i64</span> <span class="f">send</span>(<span class="t">str</span> line) {
     <span class="f">print</span>(line)
     <span class="k">return</span> line.len
@@ -258,7 +266,7 @@ GET true
     <nav class="pager"><a class="prev" href="09-loops.html"><span>Previous</span>Loops</a><a class="next" href="11-function-values.html"><span>Next</span>Functions as values</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-a-function">Declaring a function</a></li><li><a href="#one-expression">One expression</a></li><li><a href="#order">Order</a></li><li><a href="#arguments-are-copies">Arguments are copies</a></li><li><a href="#defaults">Defaults</a></li><li><a href="#named-arguments">Named arguments</a></li><li><a href="#any-number-of-arguments">Any number of arguments</a></li><li><a href="#several-values">Several values</a></li><li><a href="#functions-that-can-fail">Functions that can fail</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring">Declaring</a></li><li><a href="#one-expression">One expression</a></li><li><a href="#order-and-recursion">Order and recursion</a></li><li><a href="#arguments-are-copies">Arguments are copies</a></li><li><a href="#defaults">Defaults</a></li><li><a href="#named-arguments">Named arguments</a></li><li><a href="#variadic-parameters">Variadic parameters</a></li><li><a href="#several-results">Several results</a></li><li><a href="#functions-that-can-fail">Functions that can fail</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -266,7 +274,6 @@ GET true
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

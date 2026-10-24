@@ -1,19 +1,20 @@
 # Functions as values
 
-A function can be kept in a variable, passed to another function and stored in a struct. This chapter covers function types and what can be done with them.
+Functions can be stored in variables and struct fields and passed as arguments.
 
 ## Function types
 
-The type of a function is written as its return type followed by its parameter types in parentheses: `i64(i64, i64)` is a function that takes two `i64`s and gives one. A function's name, used without calling it, is a value of that type:
+A function type is the return type followed by the parameter types in parentheses. `i64(i64, i64)` takes two `i64`s and returns one. A function's name without a call is a value of its type.
 
 ```iris run
-// Two ways to pick which of n servers gets request number r.
+// Two ways to pick which of n servers gets request r.
 i64 roundRobin(i64 r, i64 n) => r % n
 i64 firstOnly(i64 r, i64 n) => 0
 
 void main() {
     i64(i64, i64) pick = roundRobin
     print("request 7 goes to server {pick(7, 3)}")
+
     pick = firstOnly
     print("request 7 goes to server {pick(7, 3)}")
 }
@@ -26,15 +27,13 @@ request 7 goes to server 0
 
 ## Passing a function
 
-A parameter can take a function, so a function can leave part of its work to the caller:
+A parameter can take a function, so the caller supplies part of the work:
 
 ```iris run
-// Calls attempt until it succeeds, at most times times.
+// Calls attempt until it succeeds, at most `times` times.
 bool retry(bool(i64) attempt, i64 times) {
     for i in 1..times + 1 {
-        if attempt(i) {
-            return true
-        }
+        return true if attempt(i)
     }
     return false
 }
@@ -69,16 +68,16 @@ ping 10.0.0.1
 ping 10.0.0.2
 ```
 
-`List.sort` takes a function like this: one that says whether its first value goes before its second (see [Collections](22-collections.html)).
+`List.sort` takes such a function: it returns whether its first argument goes before its second (see [Collections](22-collections.html)).
 
-There are no unnamed functions: the function passed is declared like any other, with a name. Data it needs comes through its parameters, or through a struct it is a method of.
+There are no anonymous functions. A passed function is declared with a name like any other. It gets data through its parameters or as a method of a struct.
 
-## Type aliases for functions
+## Type aliases
 
-A function type is easier to read with a name. `type` gives one:
+`type` names a function type:
 
 ```iris run
-// Takes a request body and gives the status of the reply.
+// Takes a request body and returns the reply status.
 type Handler = i64(str)
 
 i64 health(str body) => 200
@@ -88,6 +87,7 @@ i64 gone(str body) => 410
 void main() {
     Handler[3] routes = [health, create, gone]
     str[3] paths = ["GET /health", "POST /users", "GET /old"]
+
     for i, h in routes {
         print("{paths[i]}: {h("name=ada")}")
     }
@@ -102,7 +102,7 @@ GET /old: 410
 
 ## In structs
 
-A field can hold a function, which is called with the field's name like a method:
+A field can hold a function. It is called like a method, by the field's name:
 
 ```iris run
 // A command typed at a server's admin console.
@@ -115,7 +115,11 @@ void stats(str name) => print("{name}: 12 connections open")
 void reload(str name) => print("{name}: config read again")
 
 void main() {
-    Command[2] commands = [Command{name: "stats", run: stats}, Command{name: "reload", run: reload}]
+    Command[2] commands = [
+        Command{name: "stats", run: stats},
+        Command{name: "reload", run: reload},
+    ]
+
     for c in commands {
         c.run(c.name)
     }
@@ -127,9 +131,9 @@ stats: 12 connections open
 reload: config read again
 ```
 
-## null and comparing
+## null and comparison
 
-A function value is `null` until it is set, and can be compared with `==` and `!=`, against `null` or another function. Calling a `null` one stops a debug build with a message:
+An unset function value is `null`. Function values compare with `==` and `!=`. Calling `null` stops a debug build.
 
 ```iris run
 void logClose(str peer) => print("closed {peer}")
@@ -137,8 +141,10 @@ void logClose(str peer) => print("closed {peer}")
 void main() {
     void(str) onClose
     print("{onClose == null}")
+
     onClose = logClose
     print("{onClose == null} {onClose == logClose}")
+
     onClose("10.0.0.5:51234")
 }
 ```
@@ -149,11 +155,11 @@ false true
 closed 10.0.0.5:51234
 ```
 
-## What carries over
+## Calling through a value
 
-A call through a function value passes its arguments by position. Defaults and names belong to the declaration, so they don't carry over to the value: every argument is given.
-
-A function that can fail has a type that starts with `!`, as its declaration does: `!i64(str)`. A function that returns `void` can be given where one returning `!void` is wanted, since never failing is one way of not failing. This is how an HTTP route can take a plain handler or one that uses `try`:
+- Arguments are positional. Defaults and parameter names belong to the declaration and don't carry over, so every argument is given.
+- A function that can fail has a type starting with `!`: `!i64(str)`.
+- A `void` function is accepted where `!void` is expected. HTTP routes use this to take plain handlers and handlers that use `try`.
 
 ```iris run
 // A check run on each request, given its size in bytes.
@@ -178,7 +184,9 @@ void logSize(i64 size) => print("request of {size} bytes")
 
 void main() {
     Check[2] checks = [logSize, limit]
+
     runAll(checks, 4096) catch e { }
+
     runAll(checks, 5MiB) catch e {
         print("rejected: {e.message}")
     }
@@ -192,4 +200,4 @@ request of 5242880 bytes
 rejected: 5242880 bytes is over the limit
 ```
 
-A generic function, and a C function with `...`, can't be used as a value. Methods are called through their struct; a function value holds a plain function.
+Generic functions and variadic C functions can't be values. A function value holds a plain function. Methods are called through their struct.

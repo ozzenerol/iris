@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loops - Iris</title>
-<meta name="description" content="for is the only loop, and it has four forms: forever, while a condition holds, over a range of numbers, and over the items of something. break and continue change its course.">
+<meta name="description" content="for is the only loop. It has four forms: forever, while a condition holds, over a range, and over items. break and continue control it.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,29 +46,33 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html" class="on"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Loops</h1>
-<p class="lede"><code>for</code> is the only loop, and it has four forms: forever, while a condition holds, over a range of numbers, and over the items of something. <code>break</code> and <code>continue</code> change its course.</p>
+<p class="lede"><code>for</code> is the only loop. It has four forms: forever, while a condition holds, over a range, and over items. <code>break</code> and <code>continue</code> control it.</p>
 <h2 id="forever"><a href="#forever">Forever</a></h2>
-<p><code>for</code> with nothing after it runs until a <code>break</code> or a <code>return</code> leaves it:</p>
+<p><code>for</code> alone runs until <code>break</code> or <code>return</code>:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
-    remaining := <span class="n">10000</span> <span class="c">// bytes of the body still to read</span>
+    remaining := <span class="n">10000</span> <span class="c">// body bytes left to read</span>
     reads := <span class="n">0</span>
+
     <span class="k">for</span> {
         got := <span class="n">4096</span> <span class="k">if</span> remaining &gt; <span class="n">4096</span> <span class="k">else</span> remaining
         remaining -= got
         reads += <span class="n">1</span>
+
         <span class="k">if</span> remaining == <span class="n">0</span> {
             <span class="k">break</span>
         }
     }
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reads<span class="e">}</span><span class="s"> reads&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 reads</code></pre>
-<p>A server's accept loop is the usual place for it: it runs as long as the program does.</p>
-<h2 id="while-a-condition-holds"><a href="#while-a-condition-holds">While a condition holds</a></h2>
-<p><code>for</code> with a condition runs while the condition is true. It is checked before each round, so the loop may not run at all:</p>
+<p>A server's accept loop is the typical use.</p>
+<h2 id="while"><a href="#while">While</a></h2>
+<p><code>for cond</code> runs while the condition is true. The condition is checked before each round, so the body may never run.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     delay := <span class="n">100ms</span>
     attempt := <span class="n">1</span>
+
     <span class="k">for</span> delay &lt; <span class="n">5s</span> {
         <span class="f">print</span>(<span class="s">&quot;attempt </span><span class="e">{</span>attempt<span class="e">}</span><span class="s">, then wait </span><span class="e">{</span>delay<span class="e">}</span><span class="s">&quot;</span>)
         delay *= <span class="n">2</span>
@@ -82,15 +85,17 @@ attempt 3, then wait 400ms
 attempt 4, then wait 800ms
 attempt 5, then wait 1.6s
 attempt 6, then wait 3.2s</code></pre>
-<h2 id="over-a-range"><a href="#over-a-range">Over a range</a></h2>
-<p><code>for i in a..b</code> counts from <code>a</code> up to <code>b - 1</code>. The range's ends are worked out once, before the first round, so changing them in the loop doesn't change how many rounds there are. A range whose end isn't above its start runs no rounds:</p>
+<h2 id="ranges"><a href="#ranges">Ranges</a></h2>
+<p><code>for i in a..b</code> counts from <code>a</code> to <code>b - 1</code>. Both ends are evaluated once, before the first round. An empty range runs nothing.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
         <span class="f">print</span>(<span class="s">&quot;starting worker </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">3</span>..<span class="n">3</span> {
         <span class="f">print</span>(<span class="s">&quot;never&quot;</span>)
     }
+
     <span class="k">for</span> port <span class="k">in</span> <span class="n">8080</span>..<span class="n">8083</span> {
         <span class="f">print</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -101,9 +106,10 @@ starting worker 2
 listening on 8080
 listening on 8081
 listening on 8082</code></pre>
-<p><code>i</code> is a new variable for each round, and it belongs to the loop. A range counts up by one; a loop that goes another way uses a condition:</p>
+<p><code>i</code> is a new variable each round, local to the loop. A range counts up by one. For other steps, use a condition:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     left := <span class="n">10s</span>
+
     <span class="k">for</span> left &gt; <span class="n">0s</span> {
         <span class="f">print</span>(<span class="s">&quot;stopping in </span><span class="e">{</span>left<span class="e">}</span><span class="s">&quot;</span>)
         left -= <span class="n">4s</span>
@@ -112,16 +118,20 @@ listening on 8082</code></pre>
 <pre class="out"><code>stopping in 10s
 stopping in 6s
 stopping in 2s</code></pre>
-<h2 id="over-items"><a href="#over-items">Over items</a></h2>
-<p><code>for x in items</code> goes over the items of an array, a slice, a <code>str</code> (its bytes), a <code>List</code> or a <code>Map</code>. With two names, an array, a slice or a <code>str</code> gives each item's index first. Names in parentheses take a tuple apart, as <code>for (name, port) in [(&quot;api&quot;, 8080)]</code> does (see <a href="16-tuples-and-aliases.html">Tuples</a>):</p>
+<h2 id="items"><a href="#items">Items</a></h2>
+<p><code>for x in items</code> iterates over an array, a slice, a <code>str</code> (its bytes), a <code>List</code> or a <code>Map</code>.</p>
+<ul><li>With two names, arrays, slices and <code>str</code> give the index first.</li><li>Names in parentheses unpack a tuple: <code>for (name, port) in [(&quot;api&quot;, 8080)]</code> (see <a href="16-tuples-and-aliases.html">Tuples</a>).</li></ul>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u16</span>[<span class="n">4</span>] ports = [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>, <span class="n">8080</span>]
+
     <span class="k">for</span> p <span class="k">in</span> ports {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">for</span> i, p <span class="k">in</span> ports[<span class="n">1</span>:<span class="n">3</span>] {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>p<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">for</span> i, b <span class="k">in</span> <span class="s">&quot;OK&quot;</span> {
         <span class="f">print</span>(<span class="s">&quot;byte </span><span class="e">{</span>i<span class="e">}</span><span class="s"> is </span><span class="e">{</span>b<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -134,15 +144,18 @@ stopping in 2s</code></pre>
 1: 443
 byte 0 is 79
 byte 1 is 75</code></pre>
-<p>A <code>List</code> gives its values. Its <code>items()</code> is a slice of them, which takes the form with an index:</p>
+<p>A <code>List</code> gives its values. <code>items()</code> returns them as a slice, which supports the index form:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">List</span>[<span class="t">str</span>] upstreams
     <span class="k">defer</span> upstreams.<span class="f">free</span>()
+
     upstreams.<span class="f">push</span>(<span class="s">&quot;10.0.0.11:8080&quot;</span>)
     upstreams.<span class="f">push</span>(<span class="s">&quot;10.0.0.12:8080&quot;</span>)
+
     <span class="k">for</span> u <span class="k">in</span> upstreams {
         <span class="f">print</span>(u)
     }
+
     <span class="k">for</span> i, u <span class="k">in</span> upstreams.<span class="f">items</span>() {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>i<span class="e">}</span><span class="s">: </span><span class="e">{</span>u<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -151,48 +164,51 @@ byte 1 is 75</code></pre>
 10.0.0.12:8080
 0: 10.0.0.11:8080
 1: 10.0.0.12:8080</code></pre>
-<p>A <code>Map</code> gives each key and its value, in no particular order. <code>_</code> leaves out what isn't needed:</p>
+<p>A <code>Map</code> gives each key and value in no fixed order. <code>_</code> skips one:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] hits
     <span class="k">defer</span> hits.<span class="f">free</span>()
+
     hits.<span class="f">set</span>(<span class="s">&quot;/health&quot;</span>, <span class="n">3</span>)
+
     <span class="k">for</span> path, count <span class="k">in</span> hits {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>path<span class="e">}</span><span class="s">: </span><span class="e">{</span>count<span class="e">}</span><span class="s">&quot;</span>)
     }
+
     <span class="k">for</span> path, _ <span class="k">in</span> hits {
         <span class="f">print</span>(<span class="s">&quot;served </span><span class="e">{</span>path<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>/health: 3
 served /health</code></pre>
-<p>The items are copies: changing <code>x</code> in <code>for x in items</code> doesn't change the item. To change them, go over the indexes: <code>for i in 0..items.len { items[i] += 1 }</code>.</p>
+<p>Loop variables are copies. To change items, loop over indexes: <code>for i in 0..items.len { items[i] += 1 }</code>.</p>
 <h2 id="break-and-continue"><a href="#break-and-continue">break and continue</a></h2>
-<p><code>break</code> leaves the loop at once. <code>continue</code> ends this round and goes on with the next:</p>
+<p><code>break</code> leaves the loop. <code>continue</code> skips to the next round.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
-    <span class="c">// the status of each request in a log; 0 marks the end</span>
+    <span class="c">// each request&#x27;s status; 0 marks the end</span>
     <span class="k">for</span> status <span class="k">in</span> [<span class="n">200</span>, <span class="n">200</span>, <span class="n">500</span>, <span class="n">404</span>, <span class="n">200</span>, <span class="n">0</span>, <span class="n">503</span>] {
-        <span class="k">if</span> status == <span class="n">200</span> {
-            <span class="k">continue</span>
-        }
-        <span class="k">if</span> status == <span class="n">0</span> {
-            <span class="k">break</span>
-        }
+        <span class="k">continue</span> <span class="k">if</span> status == <span class="n">200</span>
+        <span class="k">break</span> <span class="k">if</span> status == <span class="n">0</span>
+
         <span class="f">print</span>(<span class="s">&quot;failed with </span><span class="e">{</span>status<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>failed with 500
 failed with 404</code></pre>
 <h2 id="labels"><a href="#labels">Labels</a></h2>
-<p>A label in front of a loop, <code>name:</code>, lets <code>break</code> and <code>continue</code> in a loop inside it act on the outer one:</p>
+<p>A label before a loop, <code>name:</code>, lets an inner loop's <code>break</code> and <code>continue</code> act on the outer one:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     down := <span class="s">&quot;10.0.0.1&quot;</span>
+
     probe: <span class="k">for</span> host <span class="k">in</span> [<span class="s">&quot;10.0.0.1&quot;</span>, <span class="s">&quot;10.0.0.2&quot;</span>, <span class="s">&quot;10.0.0.3&quot;</span>] {
         <span class="k">for</span> port <span class="k">in</span> [<span class="n">22</span>, <span class="n">80</span>, <span class="n">443</span>] {
             <span class="k">if</span> host == down {
                 <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>host<span class="e">}</span><span class="s"> is down&quot;</span>)
                 <span class="k">continue</span> probe
             }
+
             <span class="f">print</span>(<span class="s">&quot;probing </span><span class="e">{</span>host<span class="e">}</span><span class="s">:</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
+
             <span class="k">if</span> host == <span class="s">&quot;10.0.0.2&quot;</span> &amp;&amp; port == <span class="n">80</span> {
                 <span class="f">print</span>(<span class="s">&quot;web server at </span><span class="e">{</span>host<span class="e">}</span><span class="s">&quot;</span>)
                 <span class="k">break</span> probe
@@ -204,9 +220,9 @@ failed with 404</code></pre>
 probing 10.0.0.2:22
 probing 10.0.0.2:80
 web server at 10.0.0.2</code></pre>
-<h2 id="making-a-type-a-loop-can-go-over"><a href="#making-a-type-a-loop-can-go-over">Making a type a loop can go over</a></h2>
-<p>Any struct can be gone over with <code>for</code>, by giving it a method <code>next(i64 *at)</code> that gives the next value and a <code>bool</code>, which is false when there are no more. <code>at</code> starts at 0 for each loop, and the method moves it on:</p>
-<pre class="code run"><code><span class="c">// The lines of a text, without their line breaks.</span>
+<h2 id="custom-iteration"><a href="#custom-iteration">Custom iteration</a></h2>
+<p>A struct with a method <code>next(i64 *at)</code> returning a value and a <code>bool</code> works in <code>for</code>. The <code>bool</code> is false when there are no more values. <code>at</code> starts at 0 in each loop and the method advances it.</p>
+<pre class="code run"><code><span class="c">// The lines of a text, without line breaks.</span>
 <span class="k">struct</span> <span class="t">Lines</span> {
     <span class="t">str</span> text
 }
@@ -215,11 +231,13 @@ web server at 10.0.0.2</code></pre>
     <span class="k">if</span> *at &gt;= <span class="k">self</span>.text.len {
         <span class="k">return</span> (<span class="s">&quot;&quot;</span>, <span class="k">false</span>)
     }
+
     start := *at
     end := start
     <span class="k">for</span> end &lt; <span class="k">self</span>.text.len &amp;&amp; <span class="k">self</span>.text[end] != <span class="s">&#x27;\n&#x27;</span> {
         end += <span class="n">1</span>
     }
+
     *at = end + <span class="n">1</span>
     <span class="k">return</span> (<span class="k">self</span>.text[start:end], <span class="k">true</span>)
 }
@@ -229,6 +247,7 @@ web server at 10.0.0.2</code></pre>
     <span class="k">for</span> line <span class="k">in</span> req {
         <span class="f">print</span>(<span class="s">&quot;[</span><span class="e">{</span>line<span class="e">}</span><span class="s">]&quot;</span>)
     }
+
     <span class="k">for</span> cmd <span class="k">in</span> (<span class="t">Lines</span>{text: <span class="s">&quot;PING</span><span class="e">\n</span><span class="s">QUIT&quot;</span>}) {
         <span class="f">print</span>(<span class="s">&quot;command </span><span class="e">{</span>cmd<span class="e">}</span><span class="s">&quot;</span>)
     }
@@ -238,11 +257,11 @@ web server at 10.0.0.2</code></pre>
 [Accept: */*]
 command PING
 command QUIT</code></pre>
-<p>A method that gives two values and a <code>bool</code> makes a loop with two names, as a <code>Map</code> has. A struct literal in a <code>for</code> or <code>if</code> line goes in parentheses, so its braces aren't taken for the start of the block.</p>
+<p>A <code>next</code> that returns two values and a <code>bool</code> gives a two-name loop, as <code>Map</code> does. A struct literal in a <code>for</code> or <code>if</code> head needs parentheses so its braces aren't read as the block.</p>
     <nav class="pager"><a class="prev" href="08-if-and-match.html"><span>Previous</span>if and match</a><a class="next" href="10-functions.html"><span>Next</span>Functions</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#forever">Forever</a></li><li><a href="#while-a-condition-holds">While a condition holds</a></li><li><a href="#over-a-range">Over a range</a></li><li><a href="#over-items">Over items</a></li><li><a href="#break-and-continue">break and continue</a></li><li><a href="#labels">Labels</a></li><li><a href="#making-a-type-a-loop-can-go-over">Making a type a loop can go over</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#forever">Forever</a></li><li><a href="#while">While</a></li><li><a href="#ranges">Ranges</a></li><li><a href="#items">Items</a></li><li><a href="#break-and-continue">break and continue</a></li><li><a href="#labels">Labels</a></li><li><a href="#custom-iteration">Custom iteration</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -250,7 +269,6 @@ command QUIT</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

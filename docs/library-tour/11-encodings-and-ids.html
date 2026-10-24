@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Encodings and ids - Iris</title>
-<meta name="description" content="Bytes often have to travel as text: in a header, a URL, a JSON field or a log line. The base64 and hex modules write any bytes as text and read them back, url takes URLs apart and escapes their parts, and uuid makes the ids that services hand out.">
+<meta name="description" content="Bytes often travel as text: in a header, a URL, a JSON field or a log line. The base64 and hex modules write any bytes as text and read them back. url takes URLs apart and escapes their parts. uuid makes the ids that services hand out.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,17 +46,19 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html" class="on"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Encodings and ids</h1>
-<p class="lede">Bytes often have to travel as text: in a header, a URL, a JSON field or a log line. The <code>base64</code> and <code>hex</code> modules write any bytes as text and read them back, <code>url</code> takes URLs apart and escapes their parts, and <code>uuid</code> makes the ids that services hand out.</p>
+<p class="lede">Bytes often travel as text: in a header, a URL, a JSON field or a log line. The <code>base64</code> and <code>hex</code> modules write any bytes as text and read them back. <code>url</code> takes URLs apart and escapes their parts. <code>uuid</code> makes the ids that services hand out.</p>
 <h2 id="base64"><a href="#base64">Base64</a></h2>
-<p><code>base64.encode(data)</code> writes bytes as Base64 text, four characters for every three bytes, and <code>base64.decode(text)</code> reads them back. Each gives a new <code>String</code>. Text that isn't Base64 fails with <code>Base64Error.invalid</code>:</p>
+<p><code>base64.encode(data)</code> writes bytes as Base64 text, four characters for every three bytes. <code>base64.decode(text)</code> reads them back. Each gives a new <code>String</code>. Text that isn't Base64 fails with <code>Base64Error.invalid</code>.</p>
 <pre class="code run"><code><span class="k">import</span> base64
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> token = base64.<span class="f">encode</span>(<span class="s">&quot;ada:s3cret&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;Authorization: Basic </span><span class="e">{</span>token<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> base64.<span class="f">decode</span>(token)
     user, pass, _ := back.<span class="f">cut</span>(<span class="s">&quot;:&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>user<span class="e">}</span><span class="s"> / </span><span class="e">{</span>pass<span class="e">}</span><span class="s">&quot;</span>)
+
     _ = base64.<span class="f">decode</span>(<span class="s">&quot;not base64!&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
@@ -66,16 +67,18 @@ try {
 <pre class="out"><code>Authorization: Basic YWRhOnMzY3JldA==
 ada / s3cret
 Base64Error.invalid</code></pre>
-<p><code>decode</code> takes text with or without the <code>=</code> at the end, and skips line breaks, as Base64 in mail and PEM files has them.</p>
-<p>Standard Base64 uses <code>+</code> and <code>/</code>, which mean something else in a URL. <code>encodeUrl</code> uses <code>-</code> and <code>_</code> instead and leaves out the <code>=</code>, as JSON Web Tokens and many URLs do, and <code>decodeUrl</code> reads it:</p>
+<p><code>decode</code> accepts text with or without the <code>=</code> at the end, and skips line breaks as found in mail and PEM files.</p>
+<p>Standard Base64 uses <code>+</code> and <code>/</code>, which mean something else in a URL. <code>encodeUrl</code> uses <code>-</code> and <code>_</code> instead and leaves out the <code>=</code>, as JSON Web Tokens and many URLs do. <code>decodeUrl</code> reads it.</p>
 <pre class="code run"><code><span class="k">import</span> base64
 
 !<span class="t">void</span> <span class="f">main</span>() {
     data := <span class="s">&quot;subject?id=7&amp;x=~~~&quot;</span>
+
     <span class="k">scoped</span> <span class="t">String</span> std = base64.<span class="f">encode</span>(data)
     <span class="k">scoped</span> <span class="t">String</span> safe = base64.<span class="f">encodeUrl</span>(data)
     <span class="f">print</span>(std)
     <span class="f">print</span>(safe)
+
     <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> base64.<span class="f">decodeUrl</span>(safe)
     <span class="f">print</span>(back)
 }</code></pre>
@@ -83,14 +86,16 @@ Base64Error.invalid</code></pre>
 c3ViamVjdD9pZD03Jng9fn5-
 subject?id=7&amp;x=~~~</code></pre>
 <h2 id="hex"><a href="#hex">Hex</a></h2>
-<p><code>hex.encode(data)</code> writes each byte as two hex digits, and <code>hex.decode(text)</code> reads them back, in either case. Hex is twice as long as the bytes, and easy to read, so it suits hashes, keys and dumps of a few bytes:</p>
+<p><code>hex.encode(data)</code> writes each byte as two hex digits. <code>hex.decode(text)</code> reads them back in either case. Hex is twice as long as the bytes and easy to read, so use it for hashes, keys and dumps of a few bytes.</p>
 <pre class="code run"><code><span class="k">import</span> hex
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> h = hex.<span class="f">encode</span>(<span class="s">&quot;GET /&quot;</span>)
     <span class="f">print</span>(h)
+
     <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> hex.<span class="f">decode</span>(<span class="s">&quot;4F4b&quot;</span>)
     <span class="f">print</span>(back)
+
     _ = hex.<span class="f">decode</span>(<span class="s">&quot;abc&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
         <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
@@ -99,27 +104,29 @@ subject?id=7&amp;x=~~~</code></pre>
 <pre class="out"><code>474554202f
 OK
 HexError.invalid: hex text has an odd number of digits</code></pre>
-<p>To write one number in hex, <code>{n:x}</code> in text is enough (see <a href="../tour/07-values-in-text.html">Values in text</a>).</p>
+<p>To write one number in hex, use <code>{n:x}</code> in text (see <a href="../tour/07-values-in-text.html">Values in text</a>).</p>
 <h2 id="urls"><a href="#urls">URLs</a></h2>
-<p><code>url.parse(text)</code> takes a URL apart into a <code>url.Url</code>: its <code>scheme</code>, <code>user</code>, <code>host</code>, <code>port</code>, <code>path</code>, <code>query</code> and <code>fragment</code>. The parts are slices of the text, so nothing is copied. When no port is written, <code>port</code> is the usual one for <code>http</code> and <code>https</code>:</p>
+<p><code>url.parse(text)</code> takes a URL apart into a <code>url.Url</code> with its <code>scheme</code>, <code>user</code>, <code>host</code>, <code>port</code>, <code>path</code>, <code>query</code> and <code>fragment</code>. The parts are slices of the text, so nothing is copied. When the URL has no port, <code>port</code> is the usual one for <code>http</code> and <code>https</code>.</p>
 <pre class="code run"><code><span class="k">import</span> url
 
 !<span class="t">void</span> <span class="f">main</span>() {
     u := <span class="k">try</span> url.<span class="f">parse</span>(<span class="s">&quot;https://ada:pw@api.example.com/v1/users?page=2&amp;q=lo%20ve#top&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;scheme </span><span class="e">{</span>u.scheme<span class="e">}</span><span class="s">, user </span><span class="e">{</span>u.user<span class="e">}</span><span class="s">, host </span><span class="e">{</span>u.host<span class="e">}</span><span class="s">, port </span><span class="e">{</span>u.port<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;path </span><span class="e">{</span>u.path<span class="e">}</span><span class="s">, query </span><span class="e">{</span>u.query<span class="e">}</span><span class="s">, fragment </span><span class="e">{</span>u.fragment<span class="e">}</span><span class="s">&quot;</span>)
+
     local := <span class="k">try</span> url.<span class="f">parse</span>(<span class="s">&quot;http://127.0.0.1:9000/health&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>local.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>local.port<span class="e">}</span><span class="e">{</span>local.path<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>scheme https, user ada:pw, host api.example.com, port 443
 path /v1/users, query page=2&amp;q=lo%20ve, fragment top
 127.0.0.1:9000/health</code></pre>
-<p>A value put into a query or a path must not carry characters that mean something there, such as <code>&amp;</code>, <code>=</code>, <code>?</code>, <code>/</code> or a space. <code>url.encode</code> writes every character except letters, digits and <code>-_.~</code> as <code>%XX</code>, and <code>url.decode</code> reads them back, with <code>+</code> as a space, as forms send it:</p>
+<p>A value put into a query or a path must not contain characters that mean something there, such as <code>&amp;</code>, <code>=</code>, <code>?</code>, <code>/</code> or a space. <code>url.encode</code> writes every character except letters, digits and <code>-_.~</code> as <code>%XX</code>. <code>url.decode</code> reads them back and reads <code>+</code> as a space, as forms send it.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>, url
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> <span class="t">String</span> q = url.<span class="f">encode</span>(<span class="s">&quot;tea &amp; cake = 5/5&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;/search?q=</span><span class="e">{</span>q<span class="e">}</span><span class="s">&quot;</span>)
+
     u := <span class="k">try</span> url.<span class="f">parse</span>(<span class="s">&quot;/search?q=green+tea&amp;max=10%25&quot;</span>)
     <span class="k">scoped</span> pairs := u.query.<span class="f">split</span>(<span class="s">&quot;&amp;&quot;</span>)
     <span class="k">for</span> p <span class="k">in</span> pairs {
@@ -131,14 +138,15 @@ path /v1/users, query page=2&amp;q=lo%20ve, fragment top
 <pre class="out"><code>/search?q=tea%20%26%20cake%20%3D%205%2F5
 q = green tea
 max = 10%</code></pre>
-<p>A <code>%</code> not followed by two hex digits fails with <code>UrlError.invalid</code>. In a path, <code>+</code> is a plus sign, so a part of a path is read with <code>url.decodePath</code>, which leaves it as it is. An HTTP handler gets both kinds decoded already, with <code>req.query</code> and <code>req.param</code>.</p>
+<p>A <code>%</code> not followed by two hex digits fails with <code>UrlError.invalid</code>. In a path, <code>+</code> is a plus sign, so decode a part of a path with <code>url.decodePath</code>, which leaves <code>+</code> as it is. An HTTP handler gets both kinds already decoded through <code>req.query</code> and <code>req.param</code>.</p>
 <h2 id="uuids"><a href="#uuids">UUIDs</a></h2>
-<p>A UUID is a 16-byte id, written as 36 characters, that a program can make without asking a database for the next number. <code>uuid.v4()</code> is fully random. <code>uuid.v7()</code> starts with the time in milliseconds, so ids made later sort after ones made earlier, which keeps a database index in order. <code>format</code> writes either as text:</p>
+<p>A UUID is a 16-byte id, written as 36 characters, that a program can make without asking a database for the next number. <code>uuid.v4()</code> is fully random. <code>uuid.v7()</code> starts with the time in milliseconds, so later ids sort after earlier ones, which keeps a database index in order. <code>format</code> writes either kind as text.</p>
 <pre class="code run"><code><span class="k">import</span> uuid
 
 <span class="t">void</span> <span class="f">main</span>() {
     a := uuid.<span class="f">v4</span>()
     b := uuid.<span class="f">v7</span>()
+
     <span class="k">scoped</span> <span class="t">String</span> at = a.<span class="f">format</span>()
     <span class="k">scoped</span> <span class="t">String</span> bt = b.<span class="f">format</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>at.len<span class="e">}</span><span class="s"> characters, versions </span><span class="e">{</span>a.<span class="f">version</span>()<span class="e">}</span><span class="s"> and </span><span class="e">{</span>b.<span class="f">version</span>()<span class="e">}</span><span class="s">&quot;</span>)
@@ -146,7 +154,7 @@ max = 10%</code></pre>
 }</code></pre>
 <pre class="out"><code>36 characters, versions 4 and 7
 false false true</code></pre>
-<p><code>uuid.parse</code> reads a UUID back, in upper or lower case, with or without the dashes, and fails with <code>UuidError.invalid</code> for anything else. The time a v7 UUID was made comes back with <code>time</code>:</p>
+<p><code>uuid.parse</code> reads a UUID back in upper or lower case, with or without the dashes, and fails with <code>UuidError.invalid</code> for anything else. <code>time</code> gives the time a v7 UUID was made.</p>
 <pre class="code run"><code><span class="k">import</span> uuid
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -154,8 +162,10 @@ false false true</code></pre>
     <span class="k">scoped</span> <span class="t">String</span> text = id.<span class="f">format</span>()
     <span class="k">scoped</span> <span class="t">String</span> day = id.<span class="f">time</span>().<span class="f">dateText</span>()
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="s">, made on </span><span class="e">{</span>day<span class="e">}</span><span class="s">&quot;</span>)
+
     later := uuid.<span class="f">v7</span>()
     <span class="f">print</span>(<span class="s">&quot;sorts before a new one: </span><span class="e">{</span>id.<span class="f">compare</span>(later) &lt; <span class="n">0</span><span class="e">}</span><span class="s">&quot;</span>)
+
     _ = uuid.<span class="f">parse</span>(<span class="s">&quot;0190e5d4-xxxx&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         uuid.<span class="f">nil</span>()
@@ -164,7 +174,7 @@ false false true</code></pre>
 <pre class="out"><code>0190e5d4-8a2b-7c3d-9e4f-5a6b7c8d9e0f, made on 2024-07-24
 sorts before a new one: true
 UuidError.invalid</code></pre>
-<p>A <code>Uuid</code> is a plain value of 16 bytes, so it can be copied, kept in a struct and compared with <code>equal</code> without freeing anything. Only <code>format</code> gives a <code>String</code> to free.</p>
+<p>A <code>Uuid</code> is a plain 16-byte value. It can be copied, kept in a struct and compared with <code>equal</code> without freeing anything. Only <code>format</code> gives a <code>String</code> to free.</p>
     <nav class="pager"><a class="prev" href="10-csv-and-xml.html"><span>Previous</span>CSV and XML</a><a class="next" href="12-templates.html"><span>Next</span>Templates</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -176,7 +186,6 @@ UuidError.invalid</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

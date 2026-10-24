@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Math and big numbers - Iris</title>
-<meta name="description" content="The math module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. Integers and Floating point show the basics. This chapter puts them to work, and then turns to the big module, for whole numbers too large for an i64.">
+<meta name="description" content="The math module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. Integers and Floating point show the basics. This chapter puts them to work and then turns to the big module, for whole numbers too large for an i64.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html" class="on"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Math and big numbers</h1>
-<p class="lede">The <code>math</code> module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. <a href="../tour/03-integers.html">Integers</a> and <a href="../tour/04-floating-point.html">Floating point</a> show the basics. This chapter puts them to work, and then turns to the <code>big</code> module, for whole numbers too large for an <code>i64</code>.</p>
+<p class="lede">The <code>math</code> module has the functions of floating point math, such as roots, powers, logarithms and trigonometry, and careful integer helpers. <a href="../tour/03-integers.html">Integers</a> and <a href="../tour/04-floating-point.html">Floating point</a> show the basics. This chapter puts them to work and then turns to the <code>big</code> module, for whole numbers too large for an <code>i64</code>.</p>
 <h2 id="distances"><a href="#distances">Distances</a></h2>
-<p>Trigonometry works in radians, so degrees are multiplied by <code>math.pi / 180</code> first. The distance between two places on Earth, from their latitude and longitude, uses <code>sin</code>, <code>cos</code>, <code>atan2</code> and <code>sqrt</code>:</p>
+<p>Trigonometry works in radians, so degrees are first multiplied by <code>math.pi / 180</code>. The distance between two places on Earth, from their latitude and longitude, uses <code>sin</code>, <code>cos</code>, <code>atan2</code> and <code>sqrt</code>:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="k">struct</span> <span class="t">Place</span> {
@@ -66,12 +65,14 @@ try {
 <span class="t">f64</span> <span class="f">distance</span>(<span class="t">Place</span> a, <span class="t">Place</span> b) {
     dlat := <span class="f">radians</span>(b.lat - a.lat)
     dlon := <span class="f">radians</span>(b.lon - a.lon)
+
     h := math.<span class="f">pow</span>(math.<span class="f">sin</span>(dlat / <span class="n">2</span>), <span class="n">2</span>) + math.<span class="f">cos</span>(<span class="f">radians</span>(a.lat)) * math.<span class="f">cos</span>(<span class="f">radians</span>(b.lat)) * math.<span class="f">pow</span>(math.<span class="f">sin</span>(dlon / <span class="n">2</span>), <span class="n">2</span>)
     <span class="k">return</span> <span class="n">2</span> * EARTH_KM * math.<span class="f">atan2</span>(math.<span class="f">sqrt</span>(h), math.<span class="f">sqrt</span>(<span class="n">1</span> - h))
 }
 
 <span class="t">void</span> <span class="f">main</span>() {
     frankfurt := <span class="t">Place</span>{name: <span class="s">&quot;Frankfurt&quot;</span>, lat: <span class="n">50.11</span>, lon: <span class="n">8.68</span>}
+
     <span class="k">for</span> p <span class="k">in</span> [<span class="t">Place</span>{name: <span class="s">&quot;Amsterdam&quot;</span>, lat: <span class="n">52.37</span>, lon: <span class="n">4.90</span>}, <span class="t">Place</span>{name: <span class="s">&quot;Virginia&quot;</span>, lat: <span class="n">38.95</span>, lon: -<span class="n">77.45</span>}, <span class="t">Place</span>{name: <span class="s">&quot;Singapore&quot;</span>, lat: <span class="n">1.35</span>, lon: <span class="n">103.82</span>}] {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>math.<span class="f">round</span>(<span class="f">distance</span>(frankfurt, p))<span class="e">}</span><span class="s"> km&quot;</span>)
     }
@@ -97,16 +98,19 @@ Singapore: 10258 km</code></pre>
     <span class="k">for</span> v <span class="k">in</span> [<span class="n">12.0</span>, <span class="n">15.5</span>, <span class="n">11.2</span>, <span class="n">13.8</span>, <span class="n">250.0</span>, <span class="n">14.1</span>, <span class="n">12.9</span>, <span class="n">16.3</span>, <span class="n">13.0</span>, <span class="n">12.4</span>] {
         ms.<span class="f">push</span>(v)
     }
+
     <span class="t">f64</span> sum = <span class="n">0</span>
     <span class="k">for</span> v <span class="k">in</span> ms {
         sum += v
     }
     mean := sum / <span class="t">f64</span>(ms.len)
+
     <span class="t">f64</span> sq = <span class="n">0</span>
     <span class="k">for</span> v <span class="k">in</span> ms {
         sq += (v - mean) * (v - mean)
     }
     sd := math.<span class="f">sqrt</span>(sq / <span class="t">f64</span>(ms.len))
+
     ms.<span class="f">sort</span>(less)
     <span class="f">print</span>(<span class="s">&quot;mean </span><span class="e">{</span>mean:.<span class="n">1</span><span class="e">}</span><span class="s"> ms, deviation </span><span class="e">{</span>sd:.<span class="n">1</span><span class="e">}</span><span class="s"> ms&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;p50 </span><span class="e">{</span><span class="f">percentile</span>(&amp;ms, <span class="n">50</span>)<span class="e">}</span><span class="s"> ms, p90 </span><span class="e">{</span><span class="f">percentile</span>(&amp;ms, <span class="n">90</span>)<span class="e">}</span><span class="s"> ms, p99 </span><span class="e">{</span><span class="f">percentile</span>(&amp;ms, <span class="n">99</span>)<span class="e">}</span><span class="s"> ms&quot;</span>)
@@ -115,7 +119,7 @@ Singapore: 10258 km</code></pre>
 p50 13 ms, p90 16.3 ms, p99 250 ms</code></pre>
 <p>One slow request pulled the mean far above what most requests took, which is why services watch percentiles. <code>math.clamp(x, lo, hi)</code> keeps a value between two ends, for any type that compares.</p>
 <h2 id="growth-and-logarithms"><a href="#growth-and-logarithms">Growth and logarithms</a></h2>
-<p><code>math.pow</code> and <code>math.exp</code> give growth, and <code>math.log</code>, <code>log2</code> and <code>log10</code> turn it around, to say how long growth takes or how many steps a search needs:</p>
+<p><code>math.pow</code> and <code>math.exp</code> give growth. <code>math.log</code>, <code>log2</code> and <code>log10</code> turn it around, to say how long growth takes or how many steps a search needs:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -123,8 +127,10 @@ p50 13 ms, p90 16.3 ms, p99 250 ms</code></pre>
     rate := <span class="n">1.08</span>
     <span class="f">print</span>(<span class="s">&quot;in a year: </span><span class="e">{</span>math.<span class="f">pow</span>(rate, <span class="n">12</span>):.<span class="n">2</span><span class="e">}</span><span class="s"> times as much&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;twice as much after </span><span class="e">{</span>math.<span class="f">ceil</span>(math.<span class="f">log</span>(<span class="n">2</span>) / math.<span class="f">log</span>(rate))<span class="e">}</span><span class="s"> months&quot;</span>)
+
     <span class="c">// a binary search over a million sorted keys</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">ceil</span>(math.<span class="f">log2</span>(<span class="n">1000000</span>))<span class="e">}</span><span class="s"> steps at most&quot;</span>)
+
     <span class="c">// retries that wait twice as long each time, up to 30 seconds</span>
     <span class="k">for</span> attempt <span class="k">in</span> <span class="n">0</span>..<span class="n">7</span> {
         wait := math.<span class="f">min</span>(<span class="n">0.1</span> * math.<span class="f">pow</span>(<span class="n">2</span>, <span class="t">f64</span>(attempt)), <span class="n">30</span>)
@@ -142,51 +148,60 @@ attempt 4: wait 1.6s
 attempt 5: wait 3.2s
 attempt 6: wait 6.4s</code></pre>
 <h2 id="integers-that-must-not-overflow"><a href="#integers-that-must-not-overflow">Integers that must not overflow</a></h2>
-<p>An <code>i64</code> holds numbers up to about 9.2 × 10¹⁸. Arithmetic past that panics in the debug build (see <a href="../tour/03-integers.html">Integers</a>). Where a value comes from outside and could be that large, <code>math.addChecked</code>, <code>subChecked</code> and <code>mulChecked</code> give the result and whether it fit, and <code>addSat</code>, <code>subSat</code> and <code>mulSat</code> stop at the largest or smallest value instead:</p>
+<p>An <code>i64</code> holds numbers up to about 9.2 × 10¹⁸. Arithmetic past that panics in the debug build (see <a href="../tour/03-integers.html">Integers</a>). Where a value comes from outside and could be that large:</p>
+<ul><li><code>math.addChecked</code>, <code>subChecked</code> and <code>mulChecked</code> give the result and whether it fit.</li><li><code>addSat</code>, <code>subSat</code> and <code>mulSat</code> stop at the largest or smallest value.</li></ul>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> <span class="f">main</span>() {
     bytes := <span class="n">3000000000</span>
     total, ok := math.<span class="f">mulChecked</span>(bytes, <span class="n">4000000000</span>)
     <span class="f">print</span>(<span class="s">&quot;fits: </span><span class="e">{</span>ok<span class="e">}</span><span class="s">&quot;</span>)
+
     quota := math.<span class="f">mulSat</span>(bytes, <span class="n">4000000000</span>)
     <span class="f">print</span>(<span class="s">&quot;saturated: </span><span class="e">{</span>quota == <span class="n">9223372036854775807</span><span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">gcd</span>(<span class="n">1920</span>, <span class="n">1080</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">lcm</span>(<span class="n">4</span>, <span class="n">6</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">ipow</span>(<span class="n">2</span>, <span class="n">40</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">isqrt</span>(<span class="n">1000000</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>fits: false
 saturated: true
 120 12 1099511627776 1000</code></pre>
-<p>For numbers that are larger still, there is <code>big</code>.</p>
+<p>For larger numbers still, there is <code>big</code>.</p>
 <h2 id="whole-numbers-of-any-size"><a href="#whole-numbers-of-any-size">Whole numbers of any size</a></h2>
-<p>A <code>big.Int</code> holds a whole number of any size, limited only by memory. <code>big.from(n)</code> makes one from an <code>i64</code>, and <code>big.parse(text)</code> from text, in base 10 or any base from 2 to 36. Each operation gives a new <code>Int</code>, which owns memory and is freed after use, so <code>scoped</code> suits them. <code>{n}</code> writes one in decimal:</p>
+<p>A <code>big.Int</code> holds a whole number of any size, limited only by memory.</p>
+<ul><li><code>big.from(n)</code> makes one from an <code>i64</code>.</li><li><code>big.parse(text)</code> makes one from text, in base 10 or any base from 2 to 36.</li><li>Each operation gives a new <code>Int</code>, which owns memory and is freed after use, so <code>scoped</code> suits them.</li><li><code>{n}</code> writes one in decimal.</li></ul>
 <pre class="code run"><code><span class="k">import</span> big
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> big.<span class="t">Int</span> f = big.<span class="f">from</span>(<span class="n">1</span>)
+
     <span class="k">for</span> i <span class="k">in</span> <span class="n">2</span>..<span class="n">31</span> {
         <span class="k">scoped</span> big.<span class="t">Int</span> k = big.<span class="f">from</span>(i)
         next := f.<span class="f">mul</span>(k)
         f.<span class="f">free</span>()
         f = next
     }
+
     <span class="f">print</span>(<span class="s">&quot;30! = </span><span class="e">{</span>f<span class="e">}</span><span class="s">&quot;</span>)
     <span class="k">scoped</span> <span class="t">String</span> hex = f.<span class="f">text</span>(<span class="n">16</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f.<span class="f">bitLen</span>()<span class="e">}</span><span class="s"> bits, </span><span class="e">{</span>hex<span class="e">}</span><span class="s"> in hex&quot;</span>)
 }</code></pre>
 <pre class="out"><code>30! = 265252859812191058636308480000000
 108 bits, d13f6370f96865df5dd54000000 in hex</code></pre>
-<p>The loop replaces <code>f</code> with each new product and frees the one before. <code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>rem</code> and <code>divMod</code> do arithmetic, <code>pow</code> raises to an <code>i64</code> power, <code>cmp</code> and <code>equal</code> compare, and <code>shl</code> and <code>shr</code> shift.</p>
+<p>The loop replaces <code>f</code> with each new product and frees the one before. <code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>rem</code> and <code>divMod</code> do arithmetic, <code>pow</code> raises to an <code>i64</code> power, <code>compare</code> and <code>equal</code> compare, and <code>shl</code> and <code>shr</code> shift.</p>
 <h2 id="ids-and-keys-as-numbers"><a href="#ids-and-keys-as-numbers">Ids and keys as numbers</a></h2>
-<p>Numbers too large for an <code>i64</code> turn up as ids, hashes and keys: a 128-bit id in hex, or a 256-bit balance on a blockchain. <code>big.parse(text, 16)</code> reads one, <code>_</code> may separate the digits, and <code>toI64</code> gives an <code>i64</code> back when the number fits, or fails with <code>BigError.tooBig</code>:</p>
+<p>Numbers too large for an <code>i64</code> turn up as ids, hashes and keys, such as a 128-bit id in hex or a 256-bit balance on a blockchain. <code>big.parse(text, 16)</code> reads one, and <code>_</code> may separate the digits. <code>toI64</code> gives an <code>i64</code> back when the number fits and fails with <code>BigError.tooBig</code> when it doesn't:</p>
 <pre class="code run"><code><span class="k">import</span> big
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="k">scoped</span> id := <span class="k">try</span> big.<span class="f">parse</span>(<span class="s">&quot;0190e5d4_8a2b_7c3d_9e4f_5a6b7c8d9e0f&quot;</span>, <span class="n">16</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>id<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> <span class="t">String</span> back = id.<span class="f">text</span>(<span class="n">16</span>)
     <span class="f">print</span>(back)
+
     <span class="k">scoped</span> top := id.<span class="f">shr</span>(<span class="n">80</span>)
     <span class="f">print</span>(<span class="s">&quot;the first 48 bits: </span><span class="e">{</span><span class="k">try</span> top.<span class="f">toI64</span>()<span class="e">}</span><span class="s"> ms&quot;</span>)
+
     _ = id.<span class="f">toI64</span>() <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="n">0</span>
@@ -201,9 +216,9 @@ saturated: true
 the first 48 bits: 1721842829867 ms
 BigError.tooBig
 BigError.invalid</code></pre>
-<p><code>text(16)</code> writes the number without the zero it started with, since a number has no leading zeros. The first 48 bits of that UUID are the time it was made, in milliseconds since 1970 (see <a href="11-encodings-and-ids.html#uuids">Encodings and ids</a>).</p>
+<p><code>text(16)</code> writes the number without its leading zero, since a number has no leading zeros. The first 48 bits of that UUID are the time it was made, in milliseconds since 1970 (see <a href="11-encodings-and-ids.html#uuids">Encodings and ids</a>).</p>
 <h2 id="modular-arithmetic"><a href="#modular-arithmetic">Modular arithmetic</a></h2>
-<p><code>modPow(e, m)</code> raises to a power modulo <code>m</code> without ever making the whole power, which would have more digits than there are atoms. It is the step at the heart of RSA and of many checks for primes. Here a small RSA key encrypts and decrypts a number:</p>
+<p><code>modPow(e, m)</code> raises to a power modulo <code>m</code> without ever making the whole power, which would have more digits than there are atoms. It is the core step of RSA and of many prime tests. Here a small RSA key encrypts and decrypts a number:</p>
 <pre class="code run"><code><span class="k">import</span> big
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -211,18 +226,21 @@ BigError.invalid</code></pre>
     <span class="k">scoped</span> p := <span class="k">try</span> big.<span class="f">parse</span>(<span class="s">&quot;61&quot;</span>)
     <span class="k">scoped</span> q := <span class="k">try</span> big.<span class="f">parse</span>(<span class="s">&quot;53&quot;</span>)
     <span class="k">scoped</span> n := p.<span class="f">mul</span>(q)
+
     <span class="k">scoped</span> e := big.<span class="f">from</span>(<span class="n">17</span>)   <span class="c">// the public exponent</span>
     <span class="k">scoped</span> d := big.<span class="f">from</span>(<span class="n">2753</span>) <span class="c">// the private one: 17 * 2753 = 1 mod 60 * 52</span>
+
     <span class="k">scoped</span> msg := big.<span class="f">from</span>(<span class="n">65</span>)
     <span class="k">scoped</span> secret := msg.<span class="f">modPow</span>(e, n)
     <span class="k">scoped</span> back := secret.<span class="f">modPow</span>(d, n)
     <span class="f">print</span>(<span class="s">&quot;n = </span><span class="e">{</span>n<span class="e">}</span><span class="s">, </span><span class="e">{</span>msg<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>secret<span class="e">}</span><span class="s"> -&gt; </span><span class="e">{</span>back<span class="e">}</span><span class="s">&quot;</span>)
+
     <span class="k">scoped</span> g := big.<span class="f">from</span>(<span class="n">3120</span>).<span class="f">gcd</span>(e)
     <span class="f">print</span>(<span class="s">&quot;gcd(3120, 17) = </span><span class="e">{</span>g<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>n = 3233, 65 -&gt; 2790 -&gt; 65
 gcd(3120, 17) = 1</code></pre>
-<p>Real keys use primes of hundreds of digits, and this code works the same for them. To sign and encrypt in a program, use <code>crypto</code> (see <a href="19-random-and-crypto.html">Random numbers and cryptography</a>), which does it safely; <code>big</code> is for the arithmetic itself.</p>
+<p>Real keys use primes of hundreds of digits, and this code works the same for them. To sign and encrypt in a program, use <code>crypto</code> (see <a href="19-random-and-crypto.html">Random numbers and cryptography</a>), which does it safely. <code>big</code> is for the arithmetic itself.</p>
     <nav class="pager"><a class="prev" href="19-random-and-crypto.html"><span>Previous</span>Random numbers and cryptography</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -234,7 +252,6 @@ gcd(3120, 17) = 1</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

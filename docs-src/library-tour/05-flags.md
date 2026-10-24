@@ -1,10 +1,10 @@
 # Command-line flags
 
-A struct marked `@flags` describes the flags a program takes, and the `flags` module fills it from the program's arguments. The compiler writes the table of flags for each struct, and the help is made from it.
+A struct marked `@flags` describes the flags a program takes. The `flags` module fills it from the program's arguments. The compiler writes the table of flags for each struct and builds the help from it.
 
 ## A first program
 
-Each field is a flag named after it: `port` is `--port`. A field with a value, like `port = 8080`, keeps it when the flag isn't given. `flags.parse(Options)` reads the program's own arguments:
+Each field is a flag named after it: `port` is `--port`. A field with a value, like `port = 8080`, keeps that value when the flag isn't given. `flags.parse(Options)` reads the program's own arguments.
 
 ```iris
 import flags
@@ -31,11 +31,11 @@ $ ./serve --port 9000 --verbose --root /srv/www
 serving /srv/www on port 9000, verbose true
 ```
 
-`flags.parse` gives the struct itself. When something is wrong, it says what and ends the program, so `main` never sees a half-read struct.
+`flags.parse` returns the struct itself. When something is wrong, it says what and ends the program, so `main` never sees a half-read struct.
 
 ## Reading given arguments
 
-`flags.parseArgs(T, args, name)` reads the arguments given instead of the program's own, and gives a `!T` instead of ending the program. `name` is the program's name in the help and the messages; `""` uses the program's real name. The examples in this chapter use it, so they always run with the same arguments:
+`flags.parseArgs(T, args, name)` reads the given arguments instead of the program's own and returns a `!T` instead of ending the program. `name` is the program's name in the help and the messages, and `""` uses the real name. The examples in this chapter use it so they always run with the same arguments.
 
 ```iris run
 import flags
@@ -57,11 +57,11 @@ struct Options {
 . 9000 true
 ```
 
-It suits tests, and programs with subcommands (see below). A `str` field points into the arguments given, so they must live as long as the struct.
+Use it in tests and for subcommands (see below). A `str` field points into the given arguments, so they must live as long as the struct.
 
 ## Names and short forms
 
-A field named with more than one word gets `-` between the words: `dryRun` is `--dry-run`. `@flag` on a field gives a letter for the short form and the help text, in any order:
+A field name with several words gets `-` between them: `dryRun` is `--dry-run`. `@flag` on a field gives a letter for the short form and the help text, in either order.
 
 ```iris run
 import flags
@@ -76,6 +76,7 @@ struct Options {
 !void main() {
     scoped a := try flags.parseArgs(Options, ["--dry-run", "--jobs", "8", "--out=/tmp/b"], "copy")
     print("{a.dryRun} {a.jobs} {a.out}")
+
     scoped b := try flags.parseArgs(Options, ["-n", "-j", "2", "-o", "x"], "copy")
     print("{b.dryRun} {b.jobs} {b.out}")
 }
@@ -90,7 +91,7 @@ A value can be written `--jobs 8`, `--jobs=8` or `-j 8`.
 
 ## Bool flags
 
-A `bool` flag needs no value: `--verbose` turns it on. `--verbose=false` turns it off, which is how a flag whose default is `true` is turned off. One-letter `bool` flags can be joined, `-vq` is `-v -q`:
+A `bool` flag needs no value. `--verbose` turns it on and `--verbose=false` turns it off, which is how to turn off a flag whose default is `true`. One-letter `bool` flags can be joined: `-vq` is `-v -q`.
 
 ```iris run
 import flags
@@ -112,11 +113,11 @@ struct Options {
 true true false
 ```
 
-A letter that needs a value can't be joined with others: `-vj 8` is an error.
+A letter that needs a value can't be joined with others. `-vj 8` is an error.
 
 ## Arguments that aren't flags
 
-A `str[]` field with `@flag(args)` gets the arguments that aren't flags, in order, wherever they are among the flags. After `--`, every argument is taken as it is, even one that starts with `-`:
+A `str[]` field with `@flag(args)` gets the arguments that aren't flags, in order, wherever they appear among the flags. Every argument after `--` is taken as it is, even one that starts with `-`.
 
 ```iris run
 import flags
@@ -129,6 +130,7 @@ struct Options {
 
 !void main() {
     scoped o := try flags.parseArgs(Options, ["a.txt", "-f", "b.txt", "--", "-c.txt"], "rm")
+
     print("{o.force}, {o.files.len} files:")
     for f in o.files {
         print("  {f}")
@@ -147,7 +149,7 @@ The slice belongs to the struct, so `scoped` frees it. Without an `@flag(args)` 
 
 ## Required flags
 
-`@flag(required)` makes a flag that must be given. On the `@flag(args)` field it means at least one argument is needed. `required` goes with the letter and the help in any order:
+`@flag(required)` makes a flag that must be given. On the `@flag(args)` field it means at least one argument is needed. `required` combines with the letter and the help in any order.
 
 ```iris run
 import flags
@@ -175,7 +177,7 @@ run copy --help to see the flags
 
 ## Types
 
-A field can be any integer or float type, `bool`, `str`, `String`, a plain enum, or `Duration`. An enum flag takes the name of one of its values, and a `Duration` flag takes `30s`, `1500ms` or `1m30s`:
+A field can be any integer or float type, `bool`, `str`, `String`, a plain enum, or `Duration`. An enum flag takes the name of one of its values. A `Duration` flag takes `30s`, `1500ms` or `1m30s`.
 
 ```iris run
 import flags
@@ -201,11 +203,11 @@ struct Options {
 csv 1m30s 0.25 3 night
 ```
 
-A `String` field holds its own copy of the text, which the struct's `free` method frees. That method is what `scoped` calls.
+A `String` field holds its own copy of the text. The struct's `free` method frees it, and `scoped` calls that method.
 
 ## Help
 
-`-h` and `--help` show the help, made from the struct: the text given to `@flags`, a usage line, and one line per flag with its short form, the kind of value it takes, its help and its default. `flags.parse` prints it and ends the program with status 0. `flags.parseArgs` fails with `flags.FlagError.help`, and the help is the message. Since every `@flags` struct has them, `'h'` can't be another flag's letter, and no field can be named `help`:
+`-h` and `--help` show the help built from the struct: the text given to `@flags`, a usage line, and one line per flag with its short form, the kind of value, its help and its default. `flags.parse` prints it and ends the program with status 0. `flags.parseArgs` fails with `flags.FlagError.help` and the help as the message. Every `@flags` struct has these two flags, so `'h'` can't be another flag's letter and no field can be named `help`.
 
 ```iris run
 import flags
@@ -249,7 +251,7 @@ flags:
 
 ## Wrong flags
 
-A flag that isn't there, a missing value, or a value of the wrong kind is an error. `flags.parseArgs` fails with `flags.FlagError.invalid`; the message says what is wrong, then gives the usage line and how to get the help:
+An unknown flag, a missing value, or a value of the wrong kind is an error. `flags.parseArgs` fails with `flags.FlagError.invalid`. The message says what is wrong, then gives the usage line and how to get the help.
 
 ```iris run
 import flags
@@ -289,7 +291,7 @@ run copy --help to see the flags
 
 ```
 
-`flags.parse` prints the same message after `error: ` on standard error, and the program ends with status 2, the usual status for a wrong command line:
+`flags.parse` prints the same message after `error: ` on standard error and ends the program with status 2, the usual status for a wrong command line:
 
 ```output
 $ ./copy --jobz 2
@@ -302,7 +304,7 @@ $ echo $?
 
 ## Subcommands
 
-A program with subcommands, like `net ping` and `net scan`, has one `@flags` struct for each. The first argument picks the subcommand, and `flags.parseArgs` reads the rest with that subcommand's struct:
+A program with subcommands, like `net ping` and `net scan`, has one `@flags` struct for each. The first argument picks the subcommand, and `flags.parseArgs` reads the rest with that subcommand's struct.
 
 ```iris run
 import flags
@@ -324,6 +326,7 @@ struct ScanOptions {
         print("usage: net ping|scan ...")
         return
     }
+
     rest := args[1:]
     match args[0] {
         "ping" => {
@@ -349,11 +352,11 @@ ping: 2 hosts, 2 each
 scan: 10.0.0.5, 200ms a port
 ```
 
-A real program builds `args` from its own arguments, with `os.argc()` and `os.arg(i)`.
+A real program builds `args` from its own arguments with `os.argc()` and `os.arg(i)`.
 
 ## The raw arguments
 
-The `os` module gives the arguments as they are, without flags: `os.argc()` is how many there are, and `os.arg(i)` gives one, `os.arg(0)` being the program's own name:
+The `os` module gives the arguments as they are. `os.argc()` is how many there are and `os.arg(i)` gives one. `os.arg(0)` is the program's own name.
 
 ```iris
 import os

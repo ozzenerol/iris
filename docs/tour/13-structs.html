@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Structs - Iris</title>
-<meta name="description" content="A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, embedding one struct in another, and how a struct&#x27;s fields are laid out in memory.">
+<meta name="description" content="A struct groups named values into one type. This chapter covers declaring structs, literals and defaults, copying and comparing, embedding, and memory layout.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html" class="on"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Structs</h1>
-<p class="lede">A struct puts several values together into one type, each with a name. This chapter covers declaring structs, making values of them, defaults, copying and comparing, embedding one struct in another, and how a struct's fields are laid out in memory.</p>
-<h2 id="declaring-a-struct"><a href="#declaring-a-struct">Declaring a struct</a></h2>
-<p>A struct lists its fields, one on each line, each with its type and name:</p>
+<p class="lede">A struct groups named values into one type. This chapter covers declaring structs, literals and defaults, copying and comparing, embedding, and memory layout.</p>
+<h2 id="declaring"><a href="#declaring">Declaring</a></h2>
+<p>A struct lists its fields, one per line, each with a type and a name:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Endpoint</span> {
     <span class="t">str</span> host
     <span class="t">u16</span> port
@@ -58,14 +57,15 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     e := <span class="t">Endpoint</span>{host: <span class="s">&quot;10.0.0.5&quot;</span>, port: <span class="n">22</span>}
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>e.port<span class="e">}</span><span class="s">&quot;</span>)
+
     e.port = <span class="n">2222</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>e.port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>10.0.0.5:22
 10.0.0.5:2222</code></pre>
-<p>Fields are read and changed with a dot. A field can be of any type: a number, text, an array, another struct, a pointer, a function, a <code>List</code>.</p>
-<h2 id="making-a-value"><a href="#making-a-value">Making a value</a></h2>
-<p>A struct literal is the type's name and, in braces, the fields to set, by name. Fields left out are zero, or their default:</p>
+<p>Fields are read and set with a dot. A field can have any type: number, text, array, struct, pointer, function, <code>List</code>.</p>
+<h2 id="literals-and-defaults"><a href="#literals-and-defaults">Literals and defaults</a></h2>
+<p>A literal is the type name followed by named fields in braces. Omitted fields take their default, or zero.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Config</span> {
     <span class="t">str</span> host = <span class="s">&quot;localhost&quot;</span>
     <span class="t">u16</span> port = <span class="n">8080</span>
@@ -76,13 +76,14 @@ try {
 <span class="t">void</span> <span class="f">main</span>() {
     a := <span class="t">Config</span>{}
     b := <span class="t">Config</span>{port: <span class="n">9000</span>, verbose: <span class="k">true</span>}
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>a.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>a.verbose<span class="e">}</span><span class="s"> </span><span class="e">{</span>a.timeout<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>b.host<span class="e">}</span><span class="s">:</span><span class="e">{</span>b.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.verbose<span class="e">}</span><span class="s"> </span><span class="e">{</span>b.timeout<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>localhost:8080 false 30s
 localhost:9000 true 30s</code></pre>
-<p>A default is a value known when compiling. Defaults apply wherever a value is made without one: a field left out of a literal, a variable or a global declared with no value (<code>Config c</code>), the items of an array of structs, and a struct inside another struct. Memory from <code>alloc</code> is the exception: it is all zeros, as it comes.</p>
-<p>A <code>String</code> field can have text as its default. The field borrows that text, so making the value allocates nothing, and freeing the field frees nothing. The first change to the field copies the text into memory of its own, and from then on it is an ordinary <code>String</code>:</p>
+<p>A default must be known at compile time. Defaults apply wherever a value is made without one: omitted literal fields, variables and globals declared without a value (<code>Config c</code>), array items, and nested structs. Memory from <code>alloc</code> is the exception and is all zeros.</p>
+<p>A <code>String</code> field can default to text. The field borrows the text, so creating the value allocates nothing and freeing the field frees nothing. The first change copies the text, and after that it is an ordinary <code>String</code>.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Server</span> {
     <span class="t">String</span> name = <span class="s">&quot;edge&quot;</span>
     <span class="t">u16</span> port = <span class="n">443</span>
@@ -92,13 +93,15 @@ localhost:9000 true 30s</code></pre>
     s := <span class="t">Server</span>{}
     t := <span class="t">Server</span>{port: <span class="n">8443</span>}
     t.name.<span class="f">append</span>(<span class="s">&quot;-2&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.name<span class="e">}</span><span class="s">:</span><span class="e">{</span>s.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>t.name<span class="e">}</span><span class="s">:</span><span class="e">{</span>t.port<span class="e">}</span><span class="s">&quot;</span>)
+
     s.name.<span class="f">free</span>()
     t.name.<span class="f">free</span>()
 }</code></pre>
 <pre class="out"><code>edge:443 edge-2:8443</code></pre>
-<p>This suits <code>@json</code> structs read from a file, whose fields keep their defaults when the file leaves them out (see <a href="../library-tour/08-configuration.html">Configuration files</a>).</p>
-<p>When the type is already known from where the value goes, the literal can start with a dot instead of the type's name:</p>
+<p>This suits <code>@json</code> structs, whose fields keep their defaults when the file omits them (see <a href="../library-tour/08-configuration.html">Configuration files</a>).</p>
+<p>When the type is known from context, the literal can start with a dot:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Endpoint</span> {
     <span class="t">str</span> host
     <span class="t">u16</span> port
@@ -108,13 +111,14 @@ localhost:9000 true 30s</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Endpoint</span> db = .{host: <span class="s">&quot;db.lan&quot;</span>, port: <span class="n">5432</span>}
+
     <span class="f">connect</span>(.{host: <span class="s">&quot;cache.lan&quot;</span>, port: <span class="n">6379</span>})
     <span class="f">connect</span>(db)
 }</code></pre>
 <pre class="out"><code>connecting to cache.lan:6379
 connecting to db.lan:5432</code></pre>
 <h2 id="copying-and-comparing"><a href="#copying-and-comparing">Copying and comparing</a></h2>
-<p>A struct is a value: assigning it, or passing it to a function, copies every field. The copy and the original are separate:</p>
+<p>Structs are values. Assigning or passing one copies every field.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Endpoint</span> {
     <span class="t">str</span> host
     <span class="t">u16</span> port
@@ -124,10 +128,11 @@ connecting to db.lan:5432</code></pre>
     plain := <span class="t">Endpoint</span>{host: <span class="s">&quot;example.com&quot;</span>, port: <span class="n">80</span>}
     secure := plain
     secure.port = <span class="n">443</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>plain.port<span class="e">}</span><span class="s"> </span><span class="e">{</span>secure.port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>80 443</code></pre>
-<p><code>==</code> and <code>!=</code> compare two structs field by field, when every field can be compared that way: numbers, <code>bool</code>, <code>str</code>, enums, pointers and structs of those. A <code>String</code>, a slice or a <code>List</code> holds a pointer to memory it owns, so a struct with one can't be compared with <code>==</code>; the program compares the fields it means:</p>
+<p><code>==</code> and <code>!=</code> compare field by field when every field is comparable: numbers, <code>bool</code>, <code>str</code>, enums, pointers, and structs of those. A struct with a <code>String</code>, slice or <code>List</code> field can't use <code>==</code>. Compare the fields you mean instead.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Addr</span> {
     <span class="t">u32</span> ip
     <span class="t">u16</span> port
@@ -140,14 +145,15 @@ connecting to db.lan:5432</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">Addr</span>{ip: <span class="n">1</span>, port: <span class="n">80</span>} == <span class="t">Addr</span>{ip: <span class="n">1</span>, port: <span class="n">80</span>}<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">Addr</span>{port: <span class="n">80</span>} == <span class="t">Addr</span>{port: <span class="n">443</span>}<span class="e">}</span><span class="s">&quot;</span>)
+
     a := <span class="t">Route</span>{path: <span class="s">&quot;/api&quot;</span>, weight: <span class="n">1</span>}
     b := <span class="t">Route</span>{path: <span class="s">&quot;/api&quot;</span>, weight: <span class="n">1</span>}
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>a == b<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>true false
 true</code></pre>
-<h2 id="structs-inside-structs"><a href="#structs-inside-structs">Structs inside structs</a></h2>
-<p>A field can be another struct. Its fields are reached with one more dot:</p>
+<h2 id="nested-structs"><a href="#nested-structs">Nested structs</a></h2>
+<p>A field can be a struct, reached with another dot:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Counters</span> {
     <span class="t">i64</span> packets
     <span class="t">i64</span> bytes
@@ -162,12 +168,17 @@ true</code></pre>
 <span class="t">i64</span> <span class="f">traffic</span>(<span class="t">Iface</span> i) =&gt; i.rx.bytes + i.tx.bytes
 
 <span class="t">void</span> <span class="f">main</span>() {
-    eth := <span class="t">Iface</span>{name: <span class="s">&quot;eth0&quot;</span>, rx: <span class="t">Counters</span>{packets: <span class="n">10</span>, bytes: <span class="n">9000</span>}, tx: <span class="t">Counters</span>{packets: <span class="n">4</span>, bytes: <span class="n">600</span>}}
+    eth := <span class="t">Iface</span>{
+        name: <span class="s">&quot;eth0&quot;</span>,
+        rx: <span class="t">Counters</span>{packets: <span class="n">10</span>, bytes: <span class="n">9000</span>},
+        tx: <span class="t">Counters</span>{packets: <span class="n">4</span>, bytes: <span class="n">600</span>},
+    }
+
     eth.tx.bytes += <span class="n">1500</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>eth.name<span class="e">}</span><span class="s">: </span><span class="e">{</span><span class="f">traffic</span>(eth)<span class="e">}</span><span class="s"> bytes&quot;</span>)
 }</code></pre>
 <pre class="out"><code>eth0: 11100 bytes</code></pre>
-<p>A struct can't hold itself, since its size would have no end. It can hold a pointer to itself, or a <code>List</code> of itself, whose items are kept apart:</p>
+<p>A struct can't contain itself, but it can hold a pointer to itself or a <code>List</code> of itself:</p>
 <pre class="code run"><code><span class="c">// One part of a URL path, with the parts that can follow it.</span>
 <span class="k">struct</span> <span class="t">Node</span> {
     <span class="t">str</span> name
@@ -192,16 +203,19 @@ true</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     root := <span class="t">Node</span>{name: <span class="s">&quot;/&quot;</span>}
     <span class="k">defer</span> root.<span class="f">free</span>()
+
     users := <span class="t">Node</span>{name: <span class="s">&quot;users&quot;</span>}
     api := <span class="t">Node</span>{name: <span class="s">&quot;api&quot;</span>}
     api.children.<span class="f">push</span>(users)
+
     root.children.<span class="f">push</span>(api)
     root.children.<span class="f">push</span>(<span class="t">Node</span>{name: <span class="s">&quot;static&quot;</span>})
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>root.<span class="f">count</span>()<span class="e">}</span><span class="s"> paths&quot;</span>)
 }</code></pre>
 <pre class="out"><code>4 paths</code></pre>
 <h2 id="embedding"><a href="#embedding">Embedding</a></h2>
-<p>A field written as just a type, without a name, embeds that struct. Its fields and methods can then be used as if they were the outer struct's own:</p>
+<p>A field written as a type without a name embeds that struct. Its fields and methods work directly on the outer struct.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Socket</span> {
     <span class="t">i32</span> fd
 }
@@ -215,15 +229,15 @@ true</code></pre>
 
 <span class="t">void</span> <span class="f">main</span>() {
     c := <span class="t">Conn</span>{<span class="t">Socket</span>: <span class="t">Socket</span>{fd: <span class="n">3</span>}, peer: <span class="s">&quot;10.0.0.2&quot;</span>}
+
     c.<span class="f">send</span>(<span class="s">&quot;hello&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.fd<span class="e">}</span><span class="s"> </span><span class="e">{</span>c.<span class="t">Socket</span>.fd<span class="e">}</span><span class="s"> </span><span class="e">{</span>c.peer<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>fd 3 sends hello
 3 3 10.0.0.2</code></pre>
-<p>The embedded struct is a field named after its type, so it can also be reached and set as a whole: <code>c.Socket</code>. A method called through the outer struct gets a pointer to the embedded one as its <code>self</code>.</p>
-<p>Embedding is how one type reuses another; there is no inheritance. When the outer struct has a field or method of the same name, its own one is used.</p>
-<h2 id="layout-in-memory"><a href="#layout-in-memory">Layout in memory</a></h2>
-<p>Fields are kept in the order they are written. Each starts at a multiple of its own size, so there can be unused bytes between them, and the struct can be passed to C as it is. <code>sizeof(T)</code> gives the bytes a <code>T</code> takes, padding included. <code>T</code> can be an array type too, <code>sizeof(Entry[4])</code>:</p>
+<ul><li>The embedded struct is a field named after its type, so <code>c.Socket</code> reaches it as a whole.</li><li>A method called through the outer struct gets a pointer to the embedded struct as <code>self</code>.</li><li>There is no inheritance. If the outer struct has a field or method with the same name, its own wins.</li></ul>
+<h2 id="memory-layout"><a href="#memory-layout">Memory layout</a></h2>
+<p>Fields are stored in declaration order. Each starts at a multiple of its size, so padding can appear between fields, and the struct can be passed to C unchanged. <code>sizeof(T)</code> gives the size including padding, and works on array types such as <code>sizeof(Entry[4])</code>.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Entry</span> {
     <span class="t">u8</span> kind
     <span class="t">u32</span> addr
@@ -234,9 +248,9 @@ true</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Entry</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">u32</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>12 4</code></pre>
-<p>A struct marked <code>packed</code> has no padding: each field starts right after the one before. That makes it match a format that is laid out byte by byte, such as a protocol header. Network protocols put the high byte of a number first. A field of type <code>u16be</code>, <code>u32be</code> or <code>u64be</code> (and <code>i16be</code>, <code>i32be</code>, <code>i64be</code>) is kept that way in memory. It reads and is set as a plain <code>u16</code>, <code>u32</code> or <code>u64</code>, and the bytes are turned around on the way.</p>
-<p>A field with <code>: n</code> after its name is a bitfield of <code>n</code> bits. Bitfields next to each other share one integer of their type while their bits fit, and the first one takes the highest bits. That is the order in which protocol headers are drawn.</p>
-<p>Together these read a header straight from the bytes that came in. <code>u8 *</code> converts to any pointer, so a pointer to the bytes becomes a pointer to the header:</p>
+<p>Three features match byte-exact formats such as protocol headers:</p>
+<ul><li><code>packed</code> removes padding. Each field starts right after the previous one.</li><li><code>u16be</code>, <code>u32be</code>, <code>u64be</code>, <code>i16be</code>, <code>i32be</code> and <code>i64be</code> store the high byte first, as network protocols do. They read and write as plain integers, and the bytes are swapped on access.</li><li><code>name: n</code> makes a bitfield of <code>n</code> bits. Adjacent bitfields share one integer of their type while the bits fit, and the first takes the highest bits, the order protocol diagrams use.</li></ul>
+<p><code>u8 *</code> converts to any pointer, so a header can be read straight from received bytes:</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Ipv4</span> packed {
     <span class="t">u8</span> version: <span class="n">4</span>
     <span class="t">u8</span> ihl: <span class="n">4</span>
@@ -255,8 +269,10 @@ true</code></pre>
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">u8</span>[<span class="n">20</span>] packet = [<span class="n">0x45</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">60</span>, <span class="n">0x1c</span>, <span class="n">0x46</span>, <span class="n">0x40</span>, <span class="n">0</span>, <span class="n">64</span>, <span class="n">6</span>, <span class="n">0xb1</span>, <span class="n">0xe6</span>, <span class="n">192</span>, <span class="n">168</span>, <span class="n">0</span>, <span class="n">1</span>, <span class="n">10</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">7</span>]
     <span class="t">Ipv4</span> *ip = packet[<span class="n">0</span>:<span class="n">20</span>].ptr
+
     <span class="f">print</span>(<span class="s">&quot;IPv</span><span class="e">{</span>ip.version<span class="e">}</span><span class="s">, </span><span class="e">{</span>ip.ihl * <span class="n">4</span><span class="e">}</span><span class="s"> byte header, </span><span class="e">{</span>ip.length<span class="e">}</span><span class="s"> bytes, ttl </span><span class="e">{</span>ip.ttl<span class="e">}</span><span class="s">, protocol </span><span class="e">{</span>ip.protocol<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;from </span><span class="e">{</span>ip.src[<span class="n">0</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span>ip.src[<span class="n">1</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span>ip.src[<span class="n">2</span>]<span class="e">}</span><span class="s">.</span><span class="e">{</span>ip.src[<span class="n">3</span>]<span class="e">}</span><span class="s">, flags </span><span class="e">{</span>ip.flags<span class="e">}</span><span class="s">&quot;</span>)
+
     ip.ttl--
     ip.length = <span class="n">1500</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Ipv4</span>)<span class="e">}</span><span class="s"> bytes, now </span><span class="e">{</span>packet[<span class="n">2</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>packet[<span class="n">3</span>]<span class="e">}</span><span class="s"> </span><span class="e">{</span>packet[<span class="n">8</span>]<span class="e">}</span><span class="s">&quot;</span>)
@@ -264,7 +280,7 @@ true</code></pre>
 <pre class="out"><code>IPv4, 20 byte header, 60 bytes, ttl 64, protocol 6
 from 192.168.0.1, flags 2
 20 bytes, now 5 220 63</code></pre>
-<p>A bitfield, a field in network byte order and an unaligned field of a packed struct have no address of their own, so <code>&amp;ip.length</code> doesn't compile; copy the value out first. A value known when compiling must fit in a bitfield's bits. A debug build checks the others when the program runs:</p>
+<p>Bitfields, byte-swapped fields and unaligned packed fields have no address, so <code>&amp;ip.length</code> doesn't compile. Copy the value out first. A compile-time value must fit a bitfield. A debug build checks other values at run time.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Flags</span> {
     <span class="t">u8</span> syn: <span class="n">1</span>
     <span class="t">u8</span> ack: <span class="n">1</span>
@@ -275,10 +291,11 @@ from 192.168.0.1, flags 2
     <span class="t">Flags</span> f = .{syn: <span class="n">1</span>}
     f.ack = <span class="n">1</span>
     f.window += <span class="n">31</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f.syn<span class="e">}</span><span class="s"> </span><span class="e">{</span>f.ack<span class="e">}</span><span class="s"> </span><span class="e">{</span>f.window<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Flags</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1 1 63 1</code></pre>
-<p><code>align(n)</code> makes a struct start at a multiple of <code>n</code> bytes, and its size a multiple of <code>n</code> too. Counters that different threads change are kept on separate 64-byte cache lines this way, so one thread's writes don't slow the others down. Variables, globals and memory from <code>alloc</code> all get the alignment:</p>
+<p><code>align(n)</code> starts the struct at a multiple of <code>n</code> bytes and rounds its size up to a multiple of <code>n</code>. Use it to keep per-thread counters on separate 64-byte cache lines so threads don't slow each other down. Variables, globals and <code>alloc</code> all respect it.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Counter</span> <span class="f">align</span>(<span class="n">64</span>) {
     <span class="t">i64</span> hits
 }
@@ -286,11 +303,12 @@ from 192.168.0.1, flags 2
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="t">Counter</span>[<span class="n">4</span>] perThread
     perThread[<span class="n">1</span>].hits += <span class="n">1</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Counter</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Counter</span>) * <span class="n">4</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>64 256</code></pre>
-<h2 id="visible-to-other-modules"><a href="#visible-to-other-modules">Visible to other modules</a></h2>
-<p>A struct marked <code>pub</code> can be used by other modules, and so can those of its fields that are marked <code>pub</code>. The rest of its fields are the module's own: other modules can't read or set them, which keeps them free to change (see <a href="23-modules.html">Modules</a>):</p>
+<h2 id="visibility"><a href="#visibility">Visibility</a></h2>
+<p>A <code>pub</code> struct is visible to other modules, and so are its <code>pub</code> fields. Other fields are private to the module (see <a href="23-modules.html">Modules</a>).</p>
 <pre class="code"><code><span class="k">pub</span> <span class="k">struct</span> <span class="t">Server</span> {
     <span class="k">pub</span> <span class="t">u16</span> port <span class="c">// other modules can use it</span>
     <span class="t">i32</span> fd       <span class="c">// only this module can</span>
@@ -298,7 +316,7 @@ from 192.168.0.1, flags 2
     <nav class="pager"><a class="prev" href="12-arrays-and-slices.html"><span>Previous</span>Arrays and slices</a><a class="next" href="14-methods.html"><span>Next</span>Methods</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring-a-struct">Declaring a struct</a></li><li><a href="#making-a-value">Making a value</a></li><li><a href="#copying-and-comparing">Copying and comparing</a></li><li><a href="#structs-inside-structs">Structs inside structs</a></li><li><a href="#embedding">Embedding</a></li><li><a href="#layout-in-memory">Layout in memory</a></li><li><a href="#visible-to-other-modules">Visible to other modules</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#declaring">Declaring</a></li><li><a href="#literals-and-defaults">Literals and defaults</a></li><li><a href="#copying-and-comparing">Copying and comparing</a></li><li><a href="#nested-structs">Nested structs</a></li><li><a href="#embedding">Embedding</a></li><li><a href="#memory-layout">Memory layout</a></li><li><a href="#visibility">Visibility</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -306,7 +324,6 @@ from 192.168.0.1, flags 2
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

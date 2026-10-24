@@ -1,6 +1,6 @@
 ## Encoding and decoding
 
-A struct marked `@json` can be turned into JSON with `json.encode` and read back with `json.decode`. Field names are used as they are, `String` and `str` fields become JSON strings, numbers and `bool` stay what they are, and enums go by their value's name. The [JSON chapter](../library-tour/01-json.html) of the Tour has every rule; this is the short version:
+`json.encode` turns a struct marked `@json` into JSON, and `json.decode` reads it back. Field names are used as written. `String` and `str` fields become JSON strings, numbers and `bool` stay as they are, and enums go by their value's name. The [JSON chapter](../library-tour/01-json.html) of the Library Tour has every rule. This is the short version:
 
 ```iris run
 import json
@@ -18,6 +18,7 @@ struct User {
 !void main() {
     scoped User u = try json.decode(User, r"""{"id": 7, "name": "Ada", "role": "admin", "tags": ["math"]}""")
     print("{u.id} {u.name} {u.role} {u.tags.len}")
+
     scoped String text = json.encode(u)
     print(text)
 }
@@ -28,11 +29,11 @@ struct User {
 {"id":7,"name":"Ada","role":"admin","tags":["math"]}
 ```
 
-The decoded value owns its text and slices, and `scoped` frees them with the `free` method that `@json` adds.
+The decoded value owns its text and slices. `scoped` frees them with the `free` method that `@json` adds.
 
 ## Arrays
 
-`json.decode(User[], text)` reads a JSON array into a slice of structs:
+`json.decode(Point[], text)` reads a JSON array into a slice of structs:
 
 ```iris run
 import json
@@ -57,7 +58,7 @@ struct Point {
 3,4
 ```
 
-`json.decode(List[Point], text)` reads it into a `List` instead, and a `List` field of a `@json` struct is read and written as an array the same way.
+`json.decode(List[Point], text)` reads it into a `List` instead. A `List` field of a `@json` struct is read and written as an array the same way.
 
 ## Errors
 
@@ -84,4 +85,4 @@ void main() {
 JsonError.wrongType: x: expected a number, found a string
 ```
 
-`json.quote` writes one string as JSON, for building text by hand.
+`json.quote` writes one string as JSON, for building JSON text by hand.

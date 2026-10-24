@@ -31,7 +31,6 @@ try {
       <a href="library-tour/index.html">Library Tour</a>
       <a href="std/index.html">Library</a>
       <a href="design/index.html">Design</a>
-      <a href="roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -44,7 +43,8 @@ try {
 </header>
 <main class="narrow prose">
 <h1>Iris</h1>
-<p class="lede">Iris is a compiled language for servers, network tools and command-line programs. It has no garbage collector: memory is freed by the program, with <code>defer</code> and <code>scoped</code> to make that hard to forget. Errors are values that must be handled, every index is checked, and tasks and channels let one thread do many things at once. The compiler is written in C and produces native code through LLVM.</p>
+<p class="lede">Iris is a compiled language for servers, network tools and command-line programs.</p>
+<ul><li>No garbage collector. The program frees memory, and <code>defer</code> and <code>scoped</code> make that hard to forget.</li><li>Errors are values that must be handled. Every index is checked.</li><li>Tasks and channels run many things at once on one thread, and threads spread work over cores.</li><li>The compiler is written in C and produces native code through LLVM.</li></ul>
 <pre class="code run"><code><span class="k">import</span> http
 
 <span class="t">void</span> <span class="f">hello</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
@@ -54,23 +54,28 @@ try {
 !<span class="t">void</span> <span class="f">main</span>() {
     http.<span class="t">Router</span> r
     <span class="k">defer</span> r.<span class="f">free</span>()
+
     r.<span class="f">get</span>(<span class="s">&quot;/hello/:name&quot;</span>, hello)
     <span class="f">print</span>(<span class="s">&quot;routes ready&quot;</span>)
 }</code></pre>
 <pre class="out"><code>routes ready</code></pre>
-<p>With <code>try r.serve(8080)</code> at the end, that is a web server on every CPU core, with HTTP/1.1 and HTTP/2.</p>
+<p>Add <code>try r.serve(8080)</code> at the end and it is a web server on every CPU core, speaking HTTP/1.1 and HTTP/2.</p>
 <h2 id="where-to-start"><a href="#where-to-start">Where to start</a></h2>
-<ul><li>The <a href="tour/index.html">Language Tour</a> covers every part of the language, one topic per chapter, with programs you can run and their output. Start here.</li><li>The <a href="library-tour/index.html">Library Tour</a> shows what the standard library does, one task per chapter: files, HTTP, databases, formats, cryptography and more.</li><li>The <a href="std/index.html">Library</a> has every module of the standard library, with each type and function and what it does.</li><li><a href="design/index.html">Design</a> explains how Iris works underneath and why, for people working on the compiler.</li><li>The <a href="roadmap.html">Roadmap</a> lists each release and what it brought.</li></ul>
+<ul><li><a href="tour/index.html">Language Tour</a>: the whole language, one topic per chapter, with runnable programs and their output. Start here.</li><li><a href="library-tour/index.html">Library Tour</a>: the standard library, one task per chapter: files, HTTP, databases, formats, cryptography and more.</li><li><a href="std/index.html">Library</a>: every module, type and function of the standard library.</li><li><a href="design/index.html">Design</a>: the compiler's architecture, for people working on it.</li></ul>
 <h2 id="install"><a href="#install">Install</a></h2>
-<p>Iris is built from its source. It needs a C compiler and <code>clang</code> 15 or newer, which Iris uses to make programs; on Debian and Ubuntu, <code>sudo apt install build-essential clang</code>, and on macOS, the Xcode command-line tools. Then, in the source folder:</p>
+<p>Iris builds from source. It needs a C compiler and <code>clang</code> 15 or newer, which it uses to produce programs.</p>
+<ul><li>Debian and Ubuntu: <code>sudo apt install build-essential clang</code></li><li>macOS: the Xcode command-line tools</li></ul>
+<p>Then, in the source folder:</p>
 <pre class="code"><code>./build-and-install.sh</code></pre>
-<p>That builds <code>iris</code> on every core and installs it in <code>/usr/local/bin</code>, asking for your password only for the copy. <code>--prefix ~/.local</code> installs it in your home folder instead, <code>--test</code> runs the tests first, and <code>--help</code> lists the rest. <code>iris version</code> checks it worked.</p>
+<p>This builds <code>iris</code> on every core and installs it in <code>/usr/local/bin</code>, asking for a password only for the copy.</p>
+<ul><li><code>--prefix ~/.local</code> installs into your home folder.</li><li><code>--test</code> runs the tests first.</li><li><code>--help</code> lists the other options.</li></ul>
+<p><code>iris version</code> confirms the install.</p>
 <h2 id="a-first-program"><a href="#a-first-program">A first program</a></h2>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;hello, world&quot;</span>)
 }</code></pre>
 <pre class="out"><code>hello, world</code></pre>
-<p>Save it as <code>hello.iris</code>, and run it with <code>iris run hello.iris</code>. The <a href="tour/01-hello.html">first chapter</a> of the tour goes on from there.</p>
+<p>Save it as <code>hello.iris</code> and run <code>iris run hello.iris</code>. The <a href="tour/01-hello.html">first chapter</a> of the tour continues from there.</p>
 </main>
 <footer>
   <div class="bar">
@@ -78,7 +83,6 @@ try {
     <a href="tour/index.html">Language Tour</a>
     <a href="library-tour/index.html">Library Tour</a>
     <a href="std/index.html">Library</a>
-    <a href="roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="assets/search.js"></script>

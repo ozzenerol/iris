@@ -1,6 +1,6 @@
 # Interfaces
 
-An interface is a list of methods. A struct with those methods has the interface; nothing more needs to be written. Interfaces are used in two ways: as bounds on type parameters, worked out when compiling, and as `dyn` values, worked out when the program runs.
+An interface is a list of methods. A struct with those methods has the interface, with nothing more to write. Interfaces work in two ways: as bounds on type parameters, resolved at compile time, and as `dyn` values, resolved at run time.
 
 ## Declaring an interface
 
@@ -17,7 +17,7 @@ Any struct with an `mtu` method that takes nothing and gives an `i64`, and a `fo
 
 ## Bounds
 
-A type parameter written `T: Link` takes only types that have `Link`, and the generic code can then call its methods:
+A type parameter written `T: Link` takes only types that have `Link`. The generic code can then call its methods:
 
 ```iris run
 // A network link, and the largest packet it carries.
@@ -52,11 +52,11 @@ void main() {
 true 1380
 ```
 
-A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing when the program runs.
+A call with a type that lacks a method is an error that names the missing method. Each use is compiled for its own type, so a bound costs nothing at run time.
 
 ## Self
 
-In an interface, `Self` stands for the type that has the interface. It lets a method take or give a value of the same type:
+In an interface, `Self` stands for the type that has the interface. A method can then take or give a value of the same type:
 
 ```iris run
 interface Ordered {
@@ -89,7 +89,9 @@ void main() {
 
 ## dyn
 
-A `dyn Link` value holds any type with the interface, chosen when the program runs: the methods are looked up through a table that comes with the value. It is made from a pointer to a struct, and works where the types aren't known ahead, like a list of different kinds of things. Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:
+A `dyn Link` value holds any type with the interface, chosen at run time. Its methods are looked up through a table that comes with the value. It is made from a pointer to a struct and suits cases where the types aren't known ahead, such as a list of different kinds of things.
+
+Here the links on a network path are of different kinds, and the largest packet that crosses all of them is the smallest MTU:
 
 ```iris run
 interface Link {
@@ -117,14 +119,17 @@ void main() {
     lan := Ethernet{jumbo: true}
     vpn := Tunnel{overhead: 80}
     describe(&vpn)
+
     List[dyn Link] path
     defer path.free()
     path.push(&lan)
     path.push(&vpn)
+
     i64 pmtu = 65535
     for l in path {
         pmtu = l.mtu() if l.mtu() < pmtu
     }
+
     print("{path.len} links, path MTU {pmtu}")
 }
 ```
@@ -134,8 +139,10 @@ tunnel carries 1420 bytes
 2 links, path MTU 1420
 ```
 
-A `dyn` value holds a pointer, not a copy: the struct must live as long as the `dyn` value is used. Its type must have each of the interface's methods with the same types. An interface with `Self` can't be used with `dyn`, since the type behind it isn't known when compiling.
+- A `dyn` value holds a pointer to the struct, so the struct must live as long as the `dyn` value is used.
+- The type must have each of the interface's methods with the same types.
+- An interface with `Self` can't be used with `dyn`, since the type behind it isn't known at compile time.
 
 ## Which one to use
 
-Bounds are the default: they cost nothing when the program runs, and the compiler checks each use with its own type. `dyn` is for values whose types are known only when the program runs, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through `dyn` costs one lookup in the value's table.
+Use bounds by default. They cost nothing at run time, and the compiler checks each use with its own type. Use `dyn` for values whose types are known only at run time, such as handlers of different kinds kept in one list, or plug-ins chosen by a setting. A call through `dyn` costs one lookup in the value's table.

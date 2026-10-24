@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Floating point - Iris</title>
-<meta name="description" content="Numbers with a fraction: the two types, how they are written and printed, and how they mix with integers.">
+<meta name="description" content="The two float types, their literals and printing, and how they mix with integers.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,21 +46,22 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html" class="on"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Floating point</h1>
-<p class="lede">Numbers with a fraction: the two types, how they are written and printed, and how they mix with integers.</p>
+<p class="lede">The two float types, their literals and printing, and how they mix with integers.</p>
 <h2 id="f64-and-f32"><a href="#f64-and-f32">f64 and f32</a></h2>
-<p><code>f64</code> is a 64-bit floating point number, with about 15 significant digits. <code>f32</code> takes half the room and has about 7. <code>f64</code> is the one to use; <code>f32</code> is for large arrays where the room matters, and for C functions and file formats that use it.</p>
+<p><code>f64</code> is a 64-bit float with about 15 significant digits. <code>f32</code> is half the size with about 7. Use <code>f64</code> by default. Use <code>f32</code> for large arrays and for C functions and file formats that need it.</p>
 <p>A literal with a point or an exponent is an <code>f64</code>:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     rtt := <span class="n">1.5</span>       <span class="c">// milliseconds</span>
     link := <span class="n">2e10</span>     <span class="c">// bits per second</span>
     jitter := <span class="n">2.5e-3</span> <span class="c">// seconds</span>
     <span class="t">f32</span> loss = <span class="n">0.1</span>   <span class="c">// 10% of packets</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rtt<span class="e">}</span><span class="s"> </span><span class="e">{</span>link<span class="e">}</span><span class="s"> </span><span class="e">{</span>jitter<span class="e">}</span><span class="s"> </span><span class="e">{</span>loss<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1.5 20000000000 0.0025 0.1</code></pre>
-<p>There must be a digit on each side of the point: <code>0.5</code>, not <code>.5</code>, and <code>2.0</code>, not <code>2.</code>.</p>
+<p>The point needs a digit on both sides: <code>0.5</code> and <code>2.0</code>.</p>
 <h2 id="printing"><a href="#printing">Printing</a></h2>
-<p>A float prints in the fewest digits that read back as the same number, so <code>0.1</code> prints as <code>0.1</code> even though the number stored is a little off from a tenth. Very large and very small numbers use an exponent:</p>
+<p>A float prints in the fewest digits that read back as the same number. <code>0.1</code> prints as <code>0.1</code>, though the stored value is slightly off. Very large and very small numbers use an exponent.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">0.1</span> + <span class="n">0.2</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1.0</span> / <span class="n">3</span><span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">1e21</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">1e-7</span><span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="n">100.0</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">2.5</span><span class="e">}</span><span class="s">&quot;</span>)
@@ -69,50 +69,54 @@ try {
 <pre class="out"><code>0.30000000000000004 0.3333333333333333
 1e+21 1e-7 100 -2.5</code></pre>
 <h2 id="arithmetic"><a href="#arithmetic">Arithmetic</a></h2>
-<p><code>+</code>, <code>-</code>, <code>*</code> and <code>/</code> work as on integers. <code>%</code> gives what is left after dividing, with a fraction:</p>
+<p><code>+</code>, <code>-</code>, <code>*</code> and <code>/</code> work as on integers. <code>%</code> returns the remainder with its fraction.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
-    elapsed := <span class="n">7.5</span> <span class="c">// seconds since the server started</span>
-    window := <span class="n">2.0</span>  <span class="c">// its rate is counted per 2-second window</span>
+    elapsed := <span class="n">7.5</span> <span class="c">// seconds since start</span>
+    window := <span class="n">2.0</span>  <span class="c">// seconds per rate window</span>
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>elapsed / window<span class="e">}</span><span class="s"> windows, </span><span class="e">{</span>elapsed % window<span class="e">}</span><span class="s">s into the last one&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>elapsed + <span class="n">1</span><span class="e">}</span><span class="s"> </span><span class="e">{</span>elapsed * <span class="n">2</span><span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3.75 windows, 1.5s into the last one
 8.5 15</code></pre>
-<p>An integer literal used with a float becomes a float, so <code>elapsed + 1</code> needs no <code>1.0</code>. A variable of an integer type doesn't: the two types must be made the same.</p>
+<p>An integer literal next to a float becomes a float, so <code>elapsed + 1</code> works. An integer variable must be converted:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span> bytes = <span class="n">3000</span>
 <span class="t">f64</span> seconds = <span class="n">1.5</span>
 <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes / seconds<span class="e">}</span><span class="s">&quot;</span>) <span class="c">// error: &#x27;/&#x27; can&#x27;t mix i64 and f64; convert one side, for example f64(...)</span></code></pre>
-<p>Division by zero doesn't stop the program for floats. It gives infinity, or NaN ("not a number") for <code>0.0 / 0.0</code>, as the hardware does. NaN is not equal to anything, even itself:</p>
+<p>Float division by zero doesn't stop the program. It gives infinity, or NaN for <code>0.0 / 0.0</code>. NaN equals nothing, not even itself.</p>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> <span class="f">main</span>() {
-    seconds := <span class="n">0.0</span> <span class="c">// nothing measured yet</span>
+    seconds := <span class="n">0.0</span>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="n">1500.0</span> / seconds<span class="e">}</span><span class="s"> </span><span class="e">{</span>-<span class="n">1500.0</span> / seconds<span class="e">}</span><span class="s"> </span><span class="e">{</span>seconds / seconds<span class="e">}</span><span class="s">&quot;</span>)
+
     rate := <span class="n">0.0</span> / seconds
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rate == rate<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">isNaN</span>(rate)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>inf -inf nan
 false true</code></pre>
 <h2 id="converting"><a href="#converting">Converting</a></h2>
-<p><code>f32</code> converts to <code>f64</code> on its own. Integers and floats convert only when it is written out, with the type's name:</p>
+<p><code>f32</code> converts to <code>f64</code> implicitly. Conversions between integers and floats are explicit:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     totalMs := <span class="n">17</span>
     pings := <span class="n">4</span>
+
     average := <span class="t">f64</span>(totalMs) / <span class="t">f64</span>(pings)
     <span class="f">print</span>(<span class="s">&quot;average rtt </span><span class="e">{</span>average<span class="e">}</span><span class="s">ms&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="t">i64</span>(<span class="n">2.9</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">i64</span>(-<span class="n">2.9</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="t">u8</span>(<span class="n">65.7</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>average rtt 4.25ms
 2 -2 65</code></pre>
-<p>Converting a float to an integer drops the fraction, toward zero. A value that doesn't fit, infinity and NaN stop a debug build with a message, since there is no integer for them.</p>
+<p>Float to integer truncates toward zero. Out-of-range values, infinity and NaN stop a debug build.</p>
 <h2 id="the-math-module"><a href="#the-math-module">The math module</a></h2>
-<p><code>math</code> has the usual functions and constants. All of them take and give <code>f64</code>:</p>
+<p><code>math</code> has the common functions and constants, all on <code>f64</code>:</p>
 <pre class="code run"><code><span class="k">import</span> math
 
 <span class="t">void</span> <span class="f">main</span>() {
-    <span class="c">// the smoothed round trip time TCP keeps: 7/8 of the old value, 1/8 of the new sample</span>
+    <span class="c">// TCP&#x27;s smoothed round trip: 7/8 old value, 1/8 new sample</span>
     srtt := <span class="n">0.875</span> * <span class="n">100.0</span> + <span class="n">0.125</span> * <span class="n">140.0</span>
     <span class="f">print</span>(<span class="s">&quot;srtt </span><span class="e">{</span>srtt<span class="e">}</span><span class="s">ms&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">ceil</span>(<span class="n">4000.0</span> / <span class="n">1460</span>)<span class="e">}</span><span class="s"> segments for 4000 bytes&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">log2</span>(<span class="n">65536</span>)<span class="e">}</span><span class="s"> bits for a port, </span><span class="e">{</span>math.<span class="f">pow</span>(<span class="n">2</span>, <span class="n">10</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">sqrt</span>(<span class="n">2</span>)<span class="e">}</span><span class="s">&quot;</span>)
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>math.<span class="f">floor</span>(<span class="n">2.7</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">round</span>(<span class="n">2.5</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>math.<span class="f">trunc</span>(-<span class="n">2.7</span>)<span class="e">}</span><span class="s">&quot;</span>)
@@ -123,7 +127,7 @@ false true</code></pre>
 16 bits for a port, 1024 1.4142135623730951
 2 3 -2
 3 4 9</code></pre>
-<p>The <a href="../std/index.html#math">math</a> page of the library lists them all. <code>str.parseFloat</code> reads a float from text (see <a href="06-text.html">Text</a>).</p>
+<p>The <a href="../std/index.html#math">math</a> page lists everything. <code>str.parseFloat</code> reads a float from text (see <a href="06-text.html">Text</a>).</p>
     <nav class="pager"><a class="prev" href="03-integers.html"><span>Previous</span>Integers</a><a class="next" href="05-booleans-and-operators.html"><span>Next</span>Booleans and operators</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
@@ -135,7 +139,6 @@ false true</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

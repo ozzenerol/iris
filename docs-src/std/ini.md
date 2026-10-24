@@ -1,6 +1,10 @@
 ## Reading
 
-`ini.parse(text)` reads INI text into an `ini.File`: its sections in order, each with its keys and values. `get(section, key)` gives a value, `""` when it isn't there, and `lookup` says whether it is. Keys before the first `[section]` are in the section `""`. Lines that start with `;` or `#` are comments, and so is the rest of a line after a ` ;` or ` #`. A value may be in quotes, which keep its spaces and comment characters:
+`ini.parse(text)` reads INI text into an `ini.File`, which holds its sections in order, each with its keys and values. `get(section, key)` gives a value, or `""` when it isn't there. `lookup` also says whether it is there.
+
+- Keys before the first `[section]` are in the section `""`.
+- Lines that start with `;` or `#` are comments, and so is the rest of a line after ` ;` or ` #`.
+- A value may be in quotes, which keep its spaces and comment characters.
 
 ```iris run
 import ini
@@ -16,9 +20,11 @@ import ini
         user = "ada lovelace"   ; who logs in
         """
     scoped ini.File f = try ini.parse(text)
+
     print("{f.get("", "name")}: {f.get("database", "host")}:{f.get("database", "port")} as [{f.get("database", "user")}]")
     _, found := f.lookup("database", "password")
     print("password set: {found}")
+
     for s in f.sections {
         print("[{s.name}] {s.keys.len} keys")
     }
@@ -36,7 +42,7 @@ A key given twice keeps the last value. A line that is not a section, a `key = v
 
 ## Writing
 
-`set(section, key, value)` sets a value, adding the section or the key when they aren't there, and `remove` takes a key out. `write` gives the file as text, a blank line before each section, with the comments left out:
+`set(section, key, value)` sets a value and adds the section or the key when missing. `remove` takes a key out. `write` gives the file as text, with a blank line before each section and without the comments:
 
 ```iris run
 import ini
@@ -45,6 +51,7 @@ import ini
     scoped ini.File f = try ini.parse("[database]\nhost = db.lan\nport = 5432\n")
     f.set("database", "port", "6543")
     f.set("cache", "size", "64MiB")
+
     scoped String text = f.write()
     print(text)
 }

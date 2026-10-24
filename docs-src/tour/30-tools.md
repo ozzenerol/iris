@@ -1,6 +1,6 @@
 # Tools
 
-The `iris` command builds, runs, tests, formats and documents programs, gets packages, and serves editors. This chapter covers each command, the build modes, building for other platforms, editors and debuggers.
+The `iris` command builds, runs, tests, formats and documents programs, gets packages and serves editors. This chapter covers each command, the build modes, building for other platforms, editors and debuggers.
 
 ## Commands
 
@@ -9,7 +9,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris run main.iris [args]` | compiles and runs a program; what follows the file goes to the program |
 | `iris build main.iris` | compiles a program, or a project when given its folder; `-o name` names the output |
 | `iris check main.iris` | checks a program and its tests without compiling it |
-| `iris test [file] [name]` | runs the test blocks, or those whose name has `name` in it |
+| `iris test [file] [name]` | runs the test blocks, or those whose name contains `name` |
 | `iris bench [file] [name]` | runs the bench blocks, built with `release-fast` |
 | `iris fmt file-or-folder` | puts code in the standard layout |
 | `iris doc http` | shows the documentation of a module, a name, a file or a project |
@@ -26,11 +26,11 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 
 | Option | What it does |
 |---|---|
-| `--mode=debug`, `release-safe`, `release-fast` | the build mode; `debug` is the one used without it |
+| `--mode=debug`, `release-safe`, `release-fast` | the build mode; `debug` when none is given |
 | `--target=x86_64-linux` and the others | builds for another platform |
 | `-l name` | links a C library |
 | `-I folder` | a folder where `import c` looks for headers |
-| `--cpu=native` or a CPU's name | release builds use what that CPU has, such as AVX2; `native` is the one building. The program may not run on older CPUs |
+| `--cpu=native` or a CPU's name | release builds use what that CPU has, such as AVX2; `native` is the building machine's CPU. The program may not run on older CPUs |
 | `--pgo-gen` | release builds: the program records where it spends its time, in the folder `iris-pgo` of wherever it runs |
 | `--pgo=iris-pgo` | release builds: optimised with what `--pgo-gen` recorded (a folder, `.profraw` files or a `.profdata` file) |
 
@@ -42,14 +42,14 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 |---|---|---|---|
 | `debug` | every one, and AddressSanitizer for memory | no | writing and testing the program |
 | `release-safe` | indexes and slices, and division by zero | yes | most programs that run for real |
-| `release-fast` | only indexes into arrays of a fixed size | yes | code that has been measured and needs every bit of speed |
+| `release-fast` | only indexes into arrays of a fixed size | yes | measured code that needs every bit of speed |
 
 ```shell
 iris build --mode=release-safe main.iris
 iris build main.iris -o server --mode=release-fast
 ```
 
-A debug build is many times slower than a release build, so speed is measured with a release one. A release build optimises the program and the runtime together, so the runtime's small functions are put where they are called; with a linker that can't do that, it builds without it.
+A debug build is many times slower than a release build, so measure speed with a release one. A release build optimises the program and the runtime together, so the runtime's small functions are inlined where they are called. With a linker that can't do that, it builds without it.
 
 To optimise with a profile, build with `--pgo-gen`, run the program on work like the real one, then build again with `--pgo`:
 
@@ -59,15 +59,22 @@ iris build --mode=release-fast --pgo-gen -o server main.iris
 iris build --mode=release-fast --pgo=iris-pgo -o server main.iris
 ```
 
-`--pgo` needs `llvm-profdata` of the same version as `clang`; `IRIS_PROFDATA` names another.
+`--pgo` needs `llvm-profdata` of the same version as `clang`. `IRIS_PROFDATA` names another.
 
-`iris` uses `clang`, version 15 or newer, to turn the IR into a program. `IRIS_CC` names another `clang` to use.
+`iris` uses `clang`, version 15 or newer, to turn the IR into a program. `IRIS_CC` names another `clang`.
 
-The runtime, the part of every program written in C, is compiled once for each build mode and target and kept in `~/.cache/iris/rt` (or `rt` in `IRIS_PATH`). Later builds compile only the program's own code, so a small program builds in a tenth of a second. Builds with `--pgo-gen` or `--pgo` compile the runtime each time, and so does every build when `IRIS_NO_RT_CACHE` is set.
+The runtime is the part of every program written in C. It is compiled once for each build mode and target and kept in `~/.cache/iris/rt` (or `rt` in `IRIS_PATH`). Later builds compile only the program's own code, so a small program builds in a tenth of a second. Builds with `--pgo-gen` or `--pgo` compile the runtime each time, and so does every build when `IRIS_NO_RT_CACHE` is set.
 
 ## Formatting
 
-`iris fmt` puts code in the standard layout: four spaces for each level, a space around operators and after commas, none inside brackets, at most one blank line in a row, and comments at the ends of lines that are next to each other lined up in one column. It changes only spaces and line breaks: comments and text in strings stay as they are, and a file whose tokens would change is left alone.
+`iris fmt` puts code in the standard layout:
+
+- four spaces for each level
+- a space around operators and after commas, none inside brackets
+- at most one blank line in a row
+- end-of-line comments on neighbouring lines lined up in one column
+
+It changes only spaces and line breaks. Comments and text in strings stay as they are, and a file whose tokens would change is left alone.
 
 ```shell
 iris fmt main.iris       # rewrites the file
@@ -89,13 +96,22 @@ iris doc main.iris         # a file, or a project's folder
 iris doc main.iris User    # one name in it
 ```
 
-A comment at the top of a module's file, with a blank line after it, describes the module. For the standard library and packages, only `pub` names are shown; for a program's own files, everything. The [Library](../std/index.html) pages are made from the same comments.
+A comment at the top of a module's file, with a blank line after it, describes the module. For the standard library and packages, only `pub` names are shown. For a program's own files, everything is. The [Library](../std/index.html) pages are made from the same comments.
 
 ## Editors
 
-`iris lsp` is a language server. An editor that speaks LSP gets the errors as the code is typed, the type and comment of a name when the pointer rests on it, going to a name's declaration (also into the standard library), a file's outline, completion, and formatting with `iris fmt`. Completion offers the variables in scope where the cursor is, the file's functions and types, the imported modules and the built-ins; after a dot, a module's names or a value's fields and methods; and in an `import` line, the standard library's modules. It reads the editor's unsaved text, and keeps answering while the line being typed doesn't parse yet.
+`iris lsp` is a language server. An editor that speaks LSP gets:
 
-In Neovim 0.11 or newer, with the syntax files from the repository's `editors/vim` folder, which `build-and-install.sh` also copies to `/usr/local/share/iris/editors/vim`:
+- the errors as the code is typed
+- the type and comment of a name under the pointer
+- going to a name's declaration, also into the standard library
+- a file's outline
+- completion
+- formatting with `iris fmt`
+
+Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
+
+Neovim 0.11 or newer needs the syntax files from the repository's `editors/vim` folder, which `build-and-install.sh` also copies to `/usr/local/share/iris/editors/vim`:
 
 ```output
 vim.opt.rtp:append("/path/to/iris/editors/vim")
@@ -127,9 +143,9 @@ iris build --target=aarch64-linux main.iris
 iris build --target=x86_64-macos main.iris
 ```
 
-The targets are `x86_64-linux`, `aarch64-linux`, `x86_64-macos` and `aarch64-macos`. `when` sees the target's `os` and `arch`, and `comptime` code still runs on the machine that builds.
+The targets are `x86_64-linux`, `aarch64-linux`, `x86_64-macos` and `aarch64-macos`. `when` sees the target's `os` and `arch`, and `comptime` code still runs on the building machine.
 
-On a Mac, both macOS targets work as they are. For another Linux, `clang` needs that platform's C library and a linker for it: `IRIS_SYSROOT` names a folder with the target's files, or they are installed where `clang` looks, such as Debian's `gcc-aarch64-linux-gnu` for `aarch64-linux`.
+On a Mac, both macOS targets work as they are. For another Linux, `clang` needs that platform's C library and a linker for it. `IRIS_SYSROOT` names a folder with the target's files, or they are installed where `clang` looks, such as Debian's `gcc-aarch64-linux-gnu` for `aarch64-linux`.
 
 ## Debugging
 
@@ -148,8 +164,6 @@ A function's name in the debugger is its module and name, `f.main.handle`, or `m
 
 In VS Code, the Iris extension debugs with gdb. Set a breakpoint in a `.iris` file and press F5. The extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
 
-In VS Code, the Iris extension debugs with gdb. Set a breakpoint in a `.iris` file and press F5: the extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
-
 ## The libraries Iris loads
 
 Some modules use a C library that is loaded the first time a program uses it, so a program that doesn't use it needs nothing installed:
@@ -160,4 +174,4 @@ Some modules use a C library that is loaded the first time a program uses it, so
 | `sqlite` | SQLite 3 | `IRIS_SQLITE` |
 | `compress`, and gzip in `http` | zlib | `IRIS_ZLIB` |
 
-On macOS, OpenSSL comes from Homebrew (`brew install openssl@3`); SQLite and zlib come with the system.
+On macOS, OpenSSL comes from Homebrew (`brew install openssl@3`). SQLite and zlib come with the system.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Errors - Iris</title>
-<meta name="description" content="A function that can fail says so in its type, and gives either its result or an error. The caller must do something with the error: pass it up with try, or handle it with catch. Nothing can be ignored by accident. This chapter covers making errors, passing them on, handling them, the trace a program prints when one reaches the end of main, and panic for bugs.">
+<meta name="description" content="A function that can fail says so in its type and returns either its result or an error. The caller must pass the error up with try or handle it with catch. This chapter covers creating, propagating and handling errors, the trace printed when an error leaves main, and panic for bugs.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,25 +46,28 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Language Tour</h4><ol><li><a href="01-hello.html"><span class="num">1</span>A first program</a></li><li><a href="02-variables.html"><span class="num">2</span>Variables</a></li><li><a href="03-integers.html"><span class="num">3</span>Integers</a></li><li><a href="04-floating-point.html"><span class="num">4</span>Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="num">5</span>Booleans and operators</a></li><li><a href="06-text.html"><span class="num">6</span>Text</a></li><li><a href="07-values-in-text.html"><span class="num">7</span>Values in text</a></li><li><a href="08-if-and-match.html"><span class="num">8</span>if and match</a></li><li><a href="09-loops.html"><span class="num">9</span>Loops</a></li><li><a href="10-functions.html"><span class="num">10</span>Functions</a></li><li><a href="11-function-values.html"><span class="num">11</span>Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="num">12</span>Arrays and slices</a></li><li><a href="13-structs.html"><span class="num">13</span>Structs</a></li><li><a href="14-methods.html"><span class="num">14</span>Methods</a></li><li><a href="15-enums.html"><span class="num">15</span>Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="num">16</span>Tuples and type aliases</a></li><li><a href="17-pointers.html"><span class="num">17</span>Pointers</a></li><li><a href="18-errors.html" class="on"><span class="num">18</span>Errors</a></li><li><a href="19-memory.html"><span class="num">19</span>Memory</a></li><li><a href="20-generics.html"><span class="num">20</span>Generics</a></li><li><a href="21-interfaces.html"><span class="num">21</span>Interfaces</a></li><li><a href="22-collections.html"><span class="num">22</span>Collections</a></li><li><a href="23-modules.html"><span class="num">23</span>Modules</a></li><li><a href="24-tasks-and-channels.html"><span class="num">24</span>Tasks and channels</a></li><li><a href="25-threads.html"><span class="num">25</span>Threads</a></li><li><a href="26-compile-time.html"><span class="num">26</span>Compile time</a></li><li><a href="27-attributes.html"><span class="num">27</span>Attributes</a></li><li><a href="28-calling-c.html"><span class="num">28</span>Calling C</a></li><li><a href="29-testing.html"><span class="num">29</span>Testing</a></li><li><a href="30-tools.html"><span class="num">30</span>Tools</a></li></ol></aside>
   <article class="prose">
 <h1>Errors</h1>
-<p class="lede">A function that can fail says so in its type, and gives either its result or an error. The caller must do something with the error: pass it up with <code>try</code>, or handle it with <code>catch</code>. Nothing can be ignored by accident. This chapter covers making errors, passing them on, handling them, the trace a program prints when one reaches the end of <code>main</code>, and <code>panic</code> for bugs.</p>
-<h2 id="a-function-that-can-fail"><a href="#a-function-that-can-fail">A function that can fail</a></h2>
-<p>A return type written <code>!T</code> means the function gives a <code>T</code> or an error. <code>return error(code, message)</code> gives an error; any other <code>return</code> gives the value:</p>
+<p class="lede">A function that can fail says so in its type and returns either its result or an error. The caller must pass the error up with <code>try</code> or handle it with <code>catch</code>. This chapter covers creating, propagating and handling errors, the trace printed when an error leaves <code>main</code>, and <code>panic</code> for bugs.</p>
+<h2 id="failing-functions"><a href="#failing-functions">Failing functions</a></h2>
+<p>A return type <code>!T</code> means the function returns a <code>T</code> or an error. <code>return error(code, message)</code> returns an error. Any other <code>return</code> returns the value.</p>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">ParseError</span> { empty, notNumber, tooBig }
 
 !<span class="t">u16</span> <span class="f">parsePort</span>(<span class="t">str</span> text) {
     <span class="k">if</span> text.len == <span class="n">0</span> {
         <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.empty, <span class="s">&quot;no port given&quot;</span>)
     }
+
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">for</span> c <span class="k">in</span> text {
         <span class="k">if</span> c &lt; <span class="s">&#x27;0&#x27;</span> || c &gt; <span class="s">&#x27;9&#x27;</span> {
             <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.notNumber, <span class="s">&quot;&#x27;</span><span class="e">{</span>text<span class="e">}</span><span class="s">&#x27; isn&#x27;t a number&quot;</span>)
         }
+
         n = n * <span class="n">10</span> + <span class="t">i64</span>(c - <span class="s">&#x27;0&#x27;</span>)
         <span class="k">if</span> n &gt; <span class="n">65535</span> {
             <span class="k">return</span> <span class="f">error</span>(<span class="t">ParseError</span>.tooBig, <span class="s">&quot;</span><span class="e">{</span>text<span class="e">}</span><span class="s"> is above 65535&quot;</span>)
         }
     }
+
     <span class="k">return</span> <span class="t">u16</span>(n)
 }
 
@@ -82,15 +84,16 @@ try {
 ParseError.empty: no port given
 ParseError.notNumber: &#x27;80a&#x27; isn&#x27;t a number
 ParseError.tooBig: 99999 is above 65535</code></pre>
-<p><code>!void</code> is a function that gives no value but can fail. Its successful end is a plain <code>return</code>, or the end of its block.</p>
+<p><code>!void</code> returns no value but can fail. It succeeds with a plain <code>return</code> or by reaching the end.</p>
 <h2 id="codes-and-messages"><a href="#codes-and-messages">Codes and messages</a></h2>
-<p>An error has a code and a message. The code is a value of a plain enum: it tells the program what went wrong, so code can decide what to do. The message is for people: it says what happened, with the values that matter. The message can be left out, <code>error(ParseError.empty)</code>, which gives an empty one.</p>
-<p>Each module lists what can go wrong with it in an enum of its own: <code>fs.FsError</code>, <code>net.NetError</code>, <code>json.JsonError</code>. An error's code can be printed (<code>ParseError.empty</code>), compared, and matched on.</p>
+<p>An error has a code and a message.</p>
+<ul><li>The code is a plain enum value. Programs branch on it.</li><li>The message is for people and says what happened, with the relevant values. <code>error(ParseError.empty)</code> leaves it empty.</li></ul>
+<p>Each module has its own error enum: <code>fs.FsError</code>, <code>net.NetError</code>, <code>json.JsonError</code>. Codes can be printed (<code>ParseError.empty</code>), compared and matched.</p>
 <h2 id="try"><a href="#try">try</a></h2>
-<p><code>try</code> calls a function that can fail and, when it does, returns the same error from the function <code>try</code> is in. That function must be able to fail too:</p>
+<p><code>try</code> calls a failing function. On error, it returns the same error from the enclosing function, which must also be able to fail.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
-<span class="c">// The number of bytes in a Range header&#x27;s &quot;from-to&quot;.</span>
+<span class="c">// The byte count of a Range header&#x27;s &quot;from-to&quot;.</span>
 !<span class="t">i64</span> <span class="f">rangeSize</span>(<span class="t">str</span> from, <span class="t">str</span> to) {
     a := <span class="k">try</span> <span class="t">str</span>.<span class="f">parseInt</span>(from)
     b := <span class="k">try</span> <span class="t">str</span>.<span class="f">parseInt</span>(to)
@@ -103,9 +106,9 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 }</code></pre>
 <pre class="out"><code>500
 -1</code></pre>
-<p><code>try</code> is part of an expression, so it can sit where the value is needed: <code>return try f(x) + 1</code>, <code>print(&quot;{try load()}&quot;)</code>. Everything that was set up with <code>defer</code> and <code>scoped</code> still runs on the way out, so passing an error up never leaks (see <a href="19-memory.html">Memory</a>). The error keeps its message and trace while that code runs, even when the code makes and catches errors of its own, as a rollback can.</p>
+<p><code>try</code> is an expression: <code>return try f(x) + 1</code>, <code>print(&quot;{try load()}&quot;)</code>. <code>defer</code> and <code>scoped</code> cleanup still runs on the way out, so propagating never leaks (see <a href="19-memory.html">Memory</a>). The error keeps its message and trace while cleanup runs, even if cleanup creates and catches errors of its own, as a rollback can.</p>
 <h2 id="catch-with-a-value"><a href="#catch-with-a-value">catch with a value</a></h2>
-<p><code>catch</code> handles the error where the call is. A value after it is used when the call fails:</p>
+<p>A value after <code>catch</code> replaces the result when the call fails:</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -113,9 +116,9 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>8080</code></pre>
-<p>The value after <code>catch</code> is one value: a name, a literal, a call, or an expression in parentheses. The rest of the line applies to the result: <code>parse(s) catch 0 + 1</code> adds one to whichever value it gets.</p>
+<p>The fallback is one operand: a name, literal, call, or parenthesized expression. The rest of the line applies to the result, so <code>parse(s) catch 0 + 1</code> adds one to either value.</p>
 <h2 id="catch-with-a-block"><a href="#catch-with-a-block">catch with a block</a></h2>
-<p><code>catch e { ... }</code> runs the block when the call fails, with the error in <code>e</code>. When the call gives a value, the block's last line is the value to use instead; the block can also leave with <code>return</code>, <code>break</code> or <code>continue</code>:</p>
+<p><code>catch e { ... }</code> runs the block on failure with the error in <code>e</code>. For a call with a value, the block's last line is the replacement. The block can also leave with <code>return</code>, <code>break</code> or <code>continue</code>.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="t">i64</span> <span class="f">portOr</span>(<span class="t">str</span> s, <span class="t">i64</span> fallback) {
@@ -133,7 +136,7 @@ ParseError.tooBig: 99999 is above 65535</code></pre>
 <pre class="out"><code>8443
 can&#x27;t read the port &#x27;https&#x27;: &#x27;https&#x27; is not a number
 443</code></pre>
-<p>For a function that gives no value, the block is just what to do; it can also be empty, to drop the error on purpose:</p>
+<p>For a <code>!void</code> call the block is just the handler. An empty block drops the error deliberately.</p>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">LogError</span> { full }
 
 !<span class="t">void</span> <span class="f">flush</span>(<span class="t">bool</span> roomLeft) {
@@ -145,15 +148,16 @@ can&#x27;t read the port &#x27;https&#x27;: &#x27;https&#x27; is not a number
 
 <span class="t">void</span> <span class="f">main</span>() {
     <span class="f">flush</span>(<span class="k">true</span>) <span class="k">catch</span> e { }
+
     <span class="f">flush</span>(<span class="k">false</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;log not flushed: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
     }
 }</code></pre>
 <pre class="out"><code>log flushed
 log not flushed: the disk is full</code></pre>
-<p>The error's message stays the same for the whole block, even when code in the block makes and handles errors of its own.</p>
-<h2 id="deciding-by-the-code"><a href="#deciding-by-the-code">Deciding by the code</a></h2>
-<p><code>catch e match e.code</code> picks what to do by the error's code. Each arm gives a value or leaves:</p>
+<p><code>e.message</code> stays the same throughout the block, even if the block handles other errors.</p>
+<h2 id="branching-on-the-code"><a href="#branching-on-the-code">Branching on the code</a></h2>
+<p><code>catch e match e.code</code> chooses by code. Each arm gives a value or leaves.</p>
 <pre class="code run"><code><span class="k">enum</span> <span class="t">FetchError</span> { notFound, timeout, refused }
 
 !<span class="t">str</span> <span class="f">fetch</span>(<span class="t">str</span> what) {
@@ -181,8 +185,8 @@ log not flushed: the disk is full</code></pre>
 }</code></pre>
 <pre class="out"><code>(nothing)
 (try later)</code></pre>
-<h2 id="passing-an-error-on-with-more-to-say"><a href="#passing-an-error-on-with-more-to-say">Passing an error on with more to say</a></h2>
-<p>A caught error can be returned as it is with <code>return e</code>, or turned into a new one with the same code and a longer message, which tells the reader what was being done:</p>
+<h2 id="adding-context"><a href="#adding-context">Adding context</a></h2>
+<p><code>return e</code> passes a caught error on unchanged. <code>error(e.code, &quot;...&quot;)</code> creates a new error with the same code and a message that says what was being done.</p>
 <pre class="code run"><code><span class="k">import</span> <span class="t">str</span>
 
 <span class="k">enum</span> <span class="t">ConfigError</span> { invalid }
@@ -206,6 +210,7 @@ log not flushed: the disk is full</code></pre>
         <span class="f">print</span>(e.message)
         <span class="n">0</span>
     }
+
     _ = <span class="f">readRetries</span>(<span class="s">&quot;&quot;</span>) <span class="k">catch</span> e {
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
         <span class="n">0</span>
@@ -213,13 +218,12 @@ log not flushed: the disk is full</code></pre>
 }</code></pre>
 <pre class="out"><code>reading the timeout: &#x27;ten&#x27; is not a number
 ParseError.empty</code></pre>
-<p><code>error(e.code)</code> makes a new error with another error's code.</p>
 <h2 id="errors-can-t-be-ignored"><a href="#errors-can-t-be-ignored">Errors can't be ignored</a></h2>
-<p>Calling a function that can fail without <code>try</code> or <code>catch</code> is a compile error. To drop an error on purpose, the call is assigned to <code>_</code>:</p>
+<p>Calling a failing function without <code>try</code> or <code>catch</code> is a compile error. Assign to <code>_</code> to drop the error deliberately:</p>
 <pre class="code bad"><span class="tag">does not compile</span><code><span class="f">save</span>(data)     <span class="c">// error: the error from save is not handled; use try, catch or _ =</span>
-_ = <span class="f">save</span>(data) <span class="c">// the error is dropped, and so is the value</span></code></pre>
+_ = <span class="f">save</span>(data) <span class="c">// the error and the value are dropped</span></code></pre>
 <h2 id="errors-in-main"><a href="#errors-in-main">Errors in main</a></h2>
-<p>When <code>main</code> is <code>!void</code>, an error that reaches its end is printed with its code, its message, and the trace: where it was made, and each <code>try</code> or <code>return e</code> that passed it on. The program exits with status 1:</p>
+<p>When <code>main</code> is <code>!void</code>, an error that leaves it is printed with its code, message and trace: where it was created and each <code>try</code> or <code>return e</code> that passed it on. The exit status is 1.</p>
 <pre class="code"><code><span class="k">import</span> fs
 
 !<span class="t">i64</span> <span class="f">configSize</span>(<span class="t">str</span> path) {
@@ -236,9 +240,9 @@ _ = <span class="f">save</span>(data) <span class="c">// the error is dropped, a
   at readAll     std/fs/fs.iris:30
   at configSize  main.iris:4
   at main        main.iris:9</code></pre>
-<p>A message holds up to 1024 bytes, and a trace up to 64 steps.</p>
-<h2 id="bugs-panic"><a href="#bugs-panic">Bugs: panic</a></h2>
-<p><code>!T</code> is for things that can go wrong in a correct program: a missing file, a closed connection, bad input. A bug is different: an index past the end, an integer that overflows, a <code>null</code> pointer used. The program stops at once, with a message and where it happened, and exits with status 2. <code>panic</code> does the same for a state the program should never be in:</p>
+<p>A message holds up to 1024 bytes and a trace up to 64 steps.</p>
+<h2 id="panic"><a href="#panic">panic</a></h2>
+<p><code>!T</code> covers failures in a correct program: a missing file, a closed connection, bad input. Bugs are different: an index past the end, an overflow, a <code>null</code> dereference. Those stop the program immediately with a message and location, exit status 2. <code>panic</code> does the same for states that should never happen:</p>
 <pre class="code"><code><span class="t">void</span> <span class="f">setLevel</span>(<span class="t">i64</span> level) {
     <span class="k">if</span> level &lt; <span class="n">0</span> || level &gt; <span class="n">3</span> {
         <span class="f">panic</span>(<span class="s">&quot;level </span><span class="e">{</span>level<span class="e">}</span><span class="s"> is outside 0..3&quot;</span>)
@@ -246,13 +250,13 @@ _ = <span class="f">save</span>(data) <span class="c">// the error is dropped, a
 }</code></pre>
 <pre class="out"><code>panic: level 7 is outside 0..3
   at main.iris:3:9 in setLevel</code></pre>
-<p>A panic can't be caught. It is meant to be fixed in the code, not handled while the program runs.</p>
-<h2 id="tasks-don-t-return-errors"><a href="#tasks-don-t-return-errors">Tasks don't return errors</a></h2>
-<p>A function started with <code>spawn</code> or <code>thread</code> can't return <code>!T</code>, since nothing waits for its result: it handles its errors itself, or sends them on a channel to a task that does (see <a href="24-tasks-and-channels.html">Tasks and channels</a>).</p>
+<p>A panic can't be caught. Fix the code.</p>
+<h2 id="tasks"><a href="#tasks">Tasks</a></h2>
+<p>A function started with <code>spawn</code> or <code>thread</code> can't return <code>!T</code>, since nothing waits for its result. It handles its own errors or sends them over a channel (see <a href="24-tasks-and-channels.html">Tasks and channels</a>).</p>
     <nav class="pager"><a class="prev" href="17-pointers.html"><span>Previous</span>Pointers</a><a class="next" href="19-memory.html"><span>Next</span>Memory</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-function-that-can-fail">A function that can fail</a></li><li><a href="#codes-and-messages">Codes and messages</a></li><li><a href="#try">try</a></li><li><a href="#catch-with-a-value">catch with a value</a></li><li><a href="#catch-with-a-block">catch with a block</a></li><li><a href="#deciding-by-the-code">Deciding by the code</a></li><li><a href="#passing-an-error-on-with-more-to-say">Passing an error on with more to say</a></li><li><a href="#errors-can-t-be-ignored">Errors can&#x27;t be ignored</a></li><li><a href="#errors-in-main">Errors in main</a></li><li><a href="#bugs-panic">Bugs: panic</a></li><li><a href="#tasks-don-t-return-errors">Tasks don&#x27;t return errors</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#failing-functions">Failing functions</a></li><li><a href="#codes-and-messages">Codes and messages</a></li><li><a href="#try">try</a></li><li><a href="#catch-with-a-value">catch with a value</a></li><li><a href="#catch-with-a-block">catch with a block</a></li><li><a href="#branching-on-the-code">Branching on the code</a></li><li><a href="#adding-context">Adding context</a></li><li><a href="#errors-can-t-be-ignored">Errors can&#x27;t be ignored</a></li><li><a href="#errors-in-main">Errors in main</a></li><li><a href="#panic">panic</a></li><li><a href="#tasks">Tasks</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
@@ -260,7 +264,6 @@ _ = <span class="f">save</span>(data) <span class="c">// the error is dropped, a
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

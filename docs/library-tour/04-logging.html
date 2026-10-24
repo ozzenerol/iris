@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Input, output and logging - Iris</title>
-<meta name="description" content="A program reads its input from standard input, and has two places to write text: standard output, for what it gives as its result, and standard error, for what it says about itself while it runs. print writes to standard output. The io module reads standard input and writes to either output, and the log module writes lines with the time and a level to standard error.">
+<meta name="description" content="A program reads input from standard input. It writes its results to standard output and messages about itself to standard error. print writes to standard output. The io module reads standard input and writes to either output. The log module writes lines with the time and a level to standard error.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -31,7 +31,6 @@ try {
       <a href="../library-tour/index.html" class="on">Library Tour</a>
       <a href="../std/index.html">Library</a>
       <a href="../design/index.html">Design</a>
-      <a href="../roadmap.html">Roadmap</a>
     </nav>
     <div class="search" data-root="../">
       <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
@@ -47,9 +46,9 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html" class="on"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Input, output and logging</h1>
-<p class="lede">A program reads its input from standard input, and has two places to write text: standard output, for what it gives as its result, and standard error, for what it says about itself while it runs. <code>print</code> writes to standard output. The <code>io</code> module reads standard input and writes to either output, and the <code>log</code> module writes lines with the time and a level to standard error.</p>
+<p class="lede">A program reads input from standard input. It writes its results to standard output and messages about itself to standard error. <code>print</code> writes to standard output. The <code>io</code> module reads standard input and writes to either output. The <code>log</code> module writes lines with the time and a level to standard error.</p>
 <h2 id="output-and-error"><a href="#output-and-error">Output and error</a></h2>
-<p><code>io.write(text)</code> writes to standard output without a line break; <code>io.ewrite(text)</code> writes to standard error, and <code>io.eprint(text)</code> does the same with a line break:</p>
+<p><code>io.write(text)</code> writes to standard output without a line break. <code>io.ewrite(text)</code> writes to standard error, and <code>io.eprint(text)</code> does the same with a line break.</p>
 <pre class="code run"><code><span class="k">import</span> io
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -60,13 +59,15 @@ try {
 }</code></pre>
 <pre class="out"><code>HTTP/1.1 200 OK
 Content-Length: 0</code></pre>
-<p>The line on standard error isn't part of the output above: it shows in the terminal, but <code>./program &gt; out.txt</code> puts only the other lines in the file, and <code>./program 2&gt; errors.txt</code> puts it in its own file. Results go to standard output, so another program can read them; messages for the person running it go to standard error.</p>
+<p>The line on standard error isn't in the output above. It shows in the terminal, but <code>./program &gt; out.txt</code> puts only the other lines in the file, and <code>./program 2&gt; errors.txt</code> puts it in a file of its own. Write results to standard output so another program can read them. Write messages for the person running the program to standard error.</p>
 <h2 id="reading-standard-input"><a href="#reading-standard-input">Reading standard input</a></h2>
-<p><code>io.readLine()</code> gives the next line of standard input as a new <code>String</code>, without its line break, and fails with <code>io.IoError.eof</code> when there is no more. <code>io.readAll()</code> gives all of it at once. A program that reads lines until the input ends, like a filter in a pipe, looks like this. It prints the client address at the start of each access log line:</p>
+<p><code>io.readLine()</code> gives the next line of standard input as a new <code>String</code> without its line break. It fails with <code>io.IoError.eof</code> when the input ends. <code>io.readAll()</code> gives all of it at once.</p>
+<p>This filter reads lines until the input ends and prints the client address at the start of each access log line:</p>
 <pre class="code"><code><span class="k">import</span> io, <span class="t">str</span>
 
 !<span class="t">void</span> <span class="f">main</span>() {
     <span class="t">i64</span> n = <span class="n">0</span>
+
     <span class="k">for</span> {
         line := io.<span class="f">readLine</span>() <span class="k">catch</span> e {
             <span class="k">if</span> e.code == io.<span class="t">IoError</span>.eof {
@@ -79,62 +80,69 @@ Content-Length: 0</code></pre>
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s">: </span><span class="e">{</span>ip<span class="e">}</span><span class="s">&quot;</span>)
         line.<span class="f">free</span>()
     }
+
     io.<span class="f">eprint</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> lines&quot;</span>)
 }</code></pre>
-<p>Given three lines in a pipe, it prints the addresses numbered, and the count on standard error:</p>
+<p>Given three lines in a pipe, it prints the numbered addresses, and the count on standard error:</p>
 <pre class="out"><code>$ printf &#x27;10.0.0.5 GET /\n10.0.0.9 GET /login\n10.0.0.5 POST /login\n&#x27; | ./clients
 1: 10.0.0.5
 2: 10.0.0.9
 3: 10.0.0.5
 3 lines</code></pre>
-<p>When nothing is piped in, <code>io.readLine</code> waits for the person at the terminal to type a line; Ctrl-D ends the input. <code>term.readLine(prompt)</code> shows a prompt and lets the line be edited, with the lines typed before under Up and Down (see <a href="07-terminal.html#reading-lines">Terminal output and input</a>).</p>
+<p>When nothing is piped in, <code>io.readLine</code> waits for the person at the terminal to type a line. Ctrl-D ends the input. <code>term.readLine(prompt)</code> shows a prompt, lets the line be edited, and keeps earlier lines under Up and Down (see <a href="07-terminal.html#reading-lines">Terminal output and input</a>).</p>
 <h2 id="log-lines"><a href="#log-lines">Log lines</a></h2>
-<p><code>log.info(message)</code> writes a line to standard error, with the time in UTC and the level. <code>log.debug</code>, <code>log.warn</code> and <code>log.error</code> write at the other levels:</p>
+<p><code>log.info(message)</code> writes a line to standard error with the time in UTC and the level. <code>log.debug</code>, <code>log.warn</code> and <code>log.error</code> write at the other levels.</p>
 <pre class="code run"><code><span class="k">import</span> log
 
 <span class="t">void</span> <span class="f">main</span>() {
     log.<span class="f">info</span>(<span class="s">&quot;starting&quot;</span>)
+
     port := <span class="n">8080</span>
     log.<span class="f">info</span>(<span class="s">&quot;listening on </span><span class="e">{</span>port<span class="e">}</span><span class="s">&quot;</span>)
     log.<span class="f">warn</span>(<span class="s">&quot;no config file, using the defaults&quot;</span>)
     log.<span class="f">error</span>(<span class="s">&quot;can&#x27;t open the database&quot;</span>)
+
     <span class="f">print</span>(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
 <pre class="out"><code>done</code></pre>
-<p>Only <code>done</code> is on standard output. The terminal shows the log lines as well:</p>
+<p>Only <code>done</code> is on standard output. The terminal also shows the log lines:</p>
 <pre class="out"><code>2026-10-17T09:30:00.250Z INFO starting
 2026-10-17T09:30:00.250Z INFO listening on 8080
 2026-10-17T09:30:00.250Z WARN no config file, using the defaults
 2026-10-17T09:30:00.250Z ERROR can&#x27;t open the database</code></pre>
-<p>The message is ordinary text, so values go in it with <code>{}</code> (see <a href="../tour/07-values-in-text.html">Values in text</a>). Each line is written at once, so lines from several threads or tasks never mix.</p>
+<p>The message is ordinary text, so values go in it with <code>{}</code> (see <a href="../tour/07-values-in-text.html">Values in text</a>). Each line is written in one piece, so lines from several threads or tasks never mix.</p>
 <h2 id="fields"><a href="#fields">Fields</a></h2>
-<p>A line can carry values as fields after the message: a list of names, each with a <code>log.Value</code>, which is <code>.int</code>, <code>.float</code>, <code>.text</code> or <code>.bool</code>. They go after the message as <code>name=value</code>, and text with spaces is put in quotes. Fields are easier for a program to search than values written into the message:</p>
+<p>A line can carry fields after the message: a list of names, each with a <code>log.Value</code>, which is <code>.int</code>, <code>.float</code>, <code>.text</code> or <code>.bool</code>. They are written as <code>name=value</code>, and text with spaces goes in quotes. A program can search fields more easily than values written into the message.</p>
 <pre class="code run"><code><span class="k">import</span> log
 
 <span class="t">void</span> <span class="f">main</span>() {
     log.<span class="f">showTime</span>(<span class="k">false</span>)
     peer := <span class="s">&quot;10.0.0.5:51234&quot;</span>
+
     log.<span class="f">info</span>(<span class="s">&quot;client connected&quot;</span>, [(<span class="s">&quot;peer&quot;</span>, .<span class="f">text</span>(peer)), (<span class="s">&quot;fd&quot;</span>, .<span class="f">int</span>(<span class="n">7</span>)), (<span class="s">&quot;tls&quot;</span>, .<span class="t">bool</span>(<span class="k">true</span>))])
     log.<span class="f">warn</span>(<span class="s">&quot;slow request&quot;</span>, [(<span class="s">&quot;path&quot;</span>, .<span class="f">text</span>(<span class="s">&quot;/search&quot;</span>)), (<span class="s">&quot;ms&quot;</span>, .<span class="f">int</span>(<span class="n">950</span>)), (<span class="s">&quot;query&quot;</span>, .<span class="f">text</span>(<span class="s">&quot;status 502&quot;</span>))])
+
     <span class="f">print</span>(<span class="s">&quot;done&quot;</span>)
 }</code></pre>
 <pre class="out"><code>done</code></pre>
 <p>Standard error gets:</p>
 <pre class="out"><code>INFO client connected peer=10.0.0.5:51234 fd=7 tls=true
 WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
-<p><code>log.showTime(false)</code> leaves the time out, as here. It suits a program that systemd or Docker runs, since they put the time on each line themselves.</p>
+<p><code>log.showTime(false)</code> leaves the time out, as here. Use it when systemd or Docker runs the program, since they add the time to each line.</p>
 <h2 id="levels"><a href="#levels">Levels</a></h2>
 <p>The levels are the values of <code>log.Level</code>, from least to most important:</p>
-<div class="table"><table><thead><tr><th>Level</th><th>For</th></tr></thead><tbody><tr><td><code>debug</code></td><td>details for finding a problem</td></tr><tr><td><code>info</code></td><td>what the program is doing</td></tr><tr><td><code>warn</code></td><td>something went wrong, and the program goes on</td></tr><tr><td><code>error</code></td><td>something failed</td></tr></tbody></table></div>
-<p>Lines below the level set with <code>log.setLevel</code> are left out. It starts at <code>info</code>, so <code>log.debug</code> writes nothing until the level is lowered. <code>log.write(level, message)</code> writes at a level held in a variable:</p>
+<div class="table"><table><thead><tr><th>Level</th><th>For</th></tr></thead><tbody><tr><td><code>debug</code></td><td>details for finding a problem</td></tr><tr><td><code>info</code></td><td>what the program is doing</td></tr><tr><td><code>warn</code></td><td>something went wrong and the program goes on</td></tr><tr><td><code>error</code></td><td>something failed</td></tr></tbody></table></div>
+<p><code>log.setLevel</code> sets the lowest level that is written. It starts at <code>info</code>, so <code>log.debug</code> writes nothing until the level is lowered. <code>log.write(level, message)</code> writes at a level held in a variable.</p>
 <pre class="code run"><code><span class="k">import</span> log
 
 <span class="t">void</span> <span class="f">main</span>() {
     log.<span class="f">debug</span>(<span class="s">&quot;not shown: the level starts at info&quot;</span>)
     log.<span class="f">setLevel</span>(.debug)
     log.<span class="f">debug</span>(<span class="s">&quot;shown now&quot;</span>)
+
     log.<span class="f">setLevel</span>(.error)
     log.<span class="f">warn</span>(<span class="s">&quot;not shown&quot;</span>)
+
     level := log.<span class="t">Level</span>.error
     log.<span class="f">write</span>(level, <span class="s">&quot;shown: error is not below error&quot;</span>)
 }</code></pre>
@@ -143,30 +151,33 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 2026-10-17T09:30:00.250Z ERROR shown: error is not below error</code></pre>
 <p>A program usually sets the level once at the start, from a flag or an environment variable (see <a href="05-flags.html">Command-line flags</a> and <a href="../tour/27-attributes.html">Attributes</a>).</p>
 <h2 id="json-lines"><a href="#json-lines">JSON lines</a></h2>
-<p><code>log.useJson()</code> writes each line as a JSON object, for programs that collect logs and search them. <code>log.useJson(false)</code> goes back to plain lines:</p>
+<p><code>log.useJson()</code> writes each line as a JSON object, for programs that collect and search logs. <code>log.useJson(false)</code> goes back to plain lines.</p>
 <pre class="code run"><code><span class="k">import</span> log
 
 <span class="t">void</span> <span class="f">main</span>() {
     log.<span class="f">useJson</span>()
     log.<span class="f">info</span>(<span class="s">&quot;client </span><span class="e">\&quot;</span><span class="s">edge-1</span><span class="e">\&quot;</span><span class="s"> connected&quot;</span>)
+
     log.<span class="f">useJson</span>(<span class="k">false</span>)
     log.<span class="f">info</span>(<span class="s">&quot;plain again&quot;</span>)
 }</code></pre>
 <p>Standard error gets:</p>
 <pre class="out"><code>{&quot;time&quot;: &quot;2026-10-17T09:30:00.250Z&quot;, &quot;level&quot;: &quot;info&quot;, &quot;message&quot;: &quot;client \&quot;edge-1\&quot; connected&quot;}
 2026-10-17T09:30:00.250Z INFO plain again</code></pre>
-<p>The message is quoted with <code>json.quote</code>, so quotes and line breaks in it keep the line valid JSON. Fields become keys of the object, with numbers and <code>true</code> or <code>false</code> as JSON values: <code>&quot;ms&quot;: 950</code>.</p>
+<p>The message is quoted with <code>json.quote</code>, so quotes and line breaks in it keep the line valid JSON. Fields become keys of the object, with numbers, <code>true</code> and <code>false</code> as JSON values: <code>&quot;ms&quot;: 950</code>.</p>
 <h2 id="writing-to-a-file"><a href="#writing-to-a-file">Writing to a file</a></h2>
-<p><code>log.toFile(path)</code> writes the lines at the end of a file instead, making it when it isn't there. It fails like <code>fs.openAppend</code> when the file can't be opened (see <a href="02-files.html">Files</a>). <code>log.toStderr()</code> goes back to standard error and closes the file:</p>
+<p><code>log.toFile(path)</code> appends the lines to a file instead and creates the file if it doesn't exist. It fails like <code>fs.openAppend</code> when the file can't be opened (see <a href="02-files.html">Files</a>). <code>log.toStderr()</code> goes back to standard error and closes the file.</p>
 <pre class="code run"><code><span class="k">import</span> fs, log
 
 !<span class="t">void</span> <span class="f">main</span>() {
     path := <span class="s">&quot;/tmp/iris-tour-app.log&quot;</span>
     <span class="k">try</span> fs.<span class="f">removeAll</span>(path)
+
     log.<span class="f">showTime</span>(<span class="k">false</span>)
     <span class="k">try</span> log.<span class="f">toFile</span>(path)
     log.<span class="f">info</span>(<span class="s">&quot;written to the file&quot;</span>, [(<span class="s">&quot;n&quot;</span>, .<span class="f">int</span>(<span class="n">1</span>))])
     log.<span class="f">toStderr</span>()
+
     <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> fs.<span class="f">readAll</span>(path)
     <span class="f">print</span>(text)
     <span class="k">try</span> fs.<span class="f">remove</span>(path)
@@ -184,7 +195,6 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
-    <a href="../roadmap.html">Roadmap</a>
   </div>
 </footer>
 <script src="../assets/search.js"></script>

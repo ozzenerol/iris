@@ -1,16 +1,18 @@
 # Booleans and operators
 
-The `bool` type, the operators that combine and compare values, and the order in which a longer expression is worked out.
+The `bool` type, the operators, and the order in which an expression is evaluated.
 
 ## bool
 
-A `bool` is `true` or `false`. Comparisons give one, and conditions take one:
+A `bool` is `true` or `false`. Comparisons produce one and conditions take one:
 
 ```iris run
 void main() {
     status := 503
     failed := status >= 500
+
     print("{failed} {status == 200} {status != 200}")
+
     if failed {
         print("retrying")
     }
@@ -22,11 +24,11 @@ true false true
 retrying
 ```
 
-A condition must be a `bool`. A number, a pointer or a string isn't one, so `if count` doesn't compile; the comparison is written out: `if count != 0`, `if p != null`, `if name.len > 0`.
+A condition must be a `bool`. `if count` doesn't compile. Write the comparison: `if count != 0`, `if p != null`, `if name.len > 0`.
 
 ## And, or, not
 
-`&&` is true when both sides are, `||` when at least one is, and `!` turns a `bool` around. The right side of `&&` and `||` is only worked out when it is needed:
+`&&` is true when both sides are true, `||` when at least one is, and `!` negates. The right side of `&&` and `||` runs only when needed:
 
 ```iris run
 bool probe(str host, bool up) {
@@ -38,9 +40,11 @@ void main() {
     if probe("primary", false) && probe("replica", true) {
         print("both databases are up")
     }
+
     if probe("dns1", true) || probe("dns2", true) {
         print("a resolver is up")
     }
+
     print("{!true} {!(1 > 2)}")
 }
 ```
@@ -52,17 +56,19 @@ a resolver is up
 false true
 ```
 
-This makes conditions like `conn != null && conn.open` safe: the second part isn't reached when the first is false.
+So `conn != null && conn.open` is safe: the second part doesn't run when the first is false.
 
-They can also be written as words: `and`, `or` and `not`. `and` and `or` are the same as `&&` and `||`. `not` takes everything up to the next `and` or `or`, so `not a == b` is `!(a == b)`, where `!` takes only the value right after it:
+`and`, `or` and `not` are word forms. `and` and `or` equal `&&` and `||`. `not` applies to everything up to the next `and` or `or`, so `not a == b` means `!(a == b)`. `!` applies only to the value right after it.
 
 ```iris run
 void main() {
     closed := false
     pending := 3
+
     if not closed and pending > 0 {
         print("flushing {pending} writes")
     }
+
     print("{not pending == 4} {closed or pending == 3}")
 }
 ```
@@ -72,18 +78,21 @@ flushing 3 writes
 true true
 ```
 
-Which to write is a matter of taste; a project usually picks one. `not` can't go where only one value fits, as in `a == not b`; parentheses or `!` are used there.
+Pick one style per project. `not` can't appear where a single value is expected, as in `a == not b`. Use `!` or parentheses there.
 
 ## Comparing
 
 | Operator | True when |
 |---|---|
-| `a == b` | a and b are equal |
-| `a != b` | they aren't |
+| `a == b` | a equals b |
+| `a != b` | a differs from b |
 | `a < b`, `a <= b` | a is smaller, or smaller or equal |
 | `a > b`, `a >= b` | a is larger, or larger or equal |
 
-Numbers compare by value. `str` and `String` compare by their bytes, `==` and `!=` only. Structs compare field by field with `==` and `!=`, plain enums by value, and pointers by address:
+- Numbers compare by value.
+- `str` and `String` compare by bytes, with `==` and `!=` only.
+- Structs compare field by field with `==` and `!=`.
+- Plain enums compare by value, pointers by address.
 
 ```iris run
 struct Addr {
@@ -97,6 +106,7 @@ void main() {
     a := Addr{ip: 0x7f000001, port: 8080}
     b := Addr{ip: 0x7f000001, port: 8080}
     print("{a == b} {"GET" == "GET"} {Proto.tcp != Proto.udp}")
+
     p := &a
     q := &b
     print("{p == q} {p == &a}")
@@ -108,7 +118,7 @@ true true true
 false true
 ```
 
-`is` can be written for `==`, and `is not` for `!=`. They compare the same way, and the comparison is by value: `a is b` on two structs compares their fields, as `==` does, not whether they are the same variable.
+`is` means `==` and `is not` means `!=`. `a is b` on two structs compares fields, the same as `==`.
 
 ```iris run
 enum Proto { tcp, udp }
@@ -116,6 +126,7 @@ enum Proto { tcp, udp }
 void main() {
     status := 404
     p := Proto.tcp
+
     print("{status is 404} {p is not .udp} {"GET" is "GET"}")
     print("not found") if status is 404
 }
@@ -128,25 +139,25 @@ not found
 
 ## All the operators
 
-| Operators | What they do |
+| Operators | Meaning |
 |---|---|
 | `+ - * / %` | arithmetic |
-| `& \| ^ ~` | bits: and, or, exclusive or, each bit flipped |
+| `& \| ^ ~` | bitwise and, or, xor, not |
 | `<< >>` | shifts |
 | `== != < <= > >=`, `is`, `is not` | comparison |
-| `&& \|\| !`, `and or not` | and, or, not, on `bool` |
-| `-x` | the negative of x |
-| `x++ x-- ++x --x` | add or take one, giving the value from before or after (see [Variables](02-variables.html)) |
-| `&x`, `*p` | the address of x, and the value p points to (see [Pointers](17-pointers.html)) |
-| `a..b` | the range from a to before b, in `for` and slicing; in `match`, from a to b with both ends |
-| `ch <- v`, `<-ch` | sending to a channel and taking from it (see [Tasks and channels](24-tasks-and-channels.html)) |
-| `= += -= *= /= %= &= \|= ^= <<= >>=` | assignment, which is a statement |
+| `&& \|\| !`, `and or not` | logic on `bool` |
+| `-x` | negation |
+| `x++ x-- ++x --x` | increment and decrement (see [Variables](02-variables.html)) |
+| `&x`, `*p` | address of x, value at p (see [Pointers](17-pointers.html)) |
+| `a..b` | a up to but excluding b in `for` and slicing; a to b inclusive in `match` |
+| `ch <- v`, `<-ch` | channel send and receive (see [Tasks and channels](24-tasks-and-channels.html)) |
+| `= += -= *= /= %= &= \|= ^= <<= >>=` | assignment, a statement |
 
-## Order
+## Precedence
 
-In a longer expression, some operators bind more tightly than others. From tightest to loosest:
+From tightest to loosest:
 
-1. `x++`, `x--`, then `-x`, `!x`, `~x`, `&x`, `*p`, `++x`, `--x` (the ones written before a value)
+1. `x++`, `x--`, then the prefix operators `-x`, `!x`, `~x`, `&x`, `*p`, `++x`, `--x`
 2. `* / % << >> &`
 3. `+ - | ^`
 4. `== != < <= > >=`, `is`, `is not`
@@ -154,12 +165,13 @@ In a longer expression, some operators bind more tightly than others. From tight
 6. `&&`, `and`
 7. `||`, `or`
 
-Operators on the same level go from left to right. Parentheses group anything differently:
+Operators on one level group left to right. Parentheses override the order.
 
 ```iris run
 void main() {
     print("{2 + 3 * 4} {(2 + 3) * 4}")
     print("{10 - 4 - 3} {2 * 3 % 4}")
+
     flags := 0x12
     port := 8080
     print("{flags & 0x02 != 0} {port > 1023 && port < 49152 || port == 80}")
@@ -172,16 +184,17 @@ void main() {
 true true
 ```
 
-`flags & 0x02 != 0` reads as `(flags & 0x02) != 0`, since `&` binds more tightly than `!=`: it tests whether the SYN bit is set.
+`&` binds tighter than `!=`, so `flags & 0x02 != 0` means `(flags & 0x02) != 0` and tests the SYN bit.
 
 ## Conditions as values
 
-`if` and `match` give values too, which takes the place of the `?:` operator some languages have (see [if and match](08-if-and-match.html)):
+`if` and `match` produce values, so there is no `?:` operator (see [if and match](08-if-and-match.html)):
 
 ```iris run
 void main() {
     port := 443
     scheme := if port == 443 { "https" } else { "http" }
+
     print("{scheme}://example.com:{port}")
 }
 ```
