@@ -1,0 +1,44 @@
+// expect: 0.1 0.3 0.3333333333333333 12.5 100 -2.75
+// expect: 1e+21 100000000000000000000 1.5e-7 0.000001
+// expect: 1.7976931348623157e+308 2.2250738585072014e-308 9007199254740992
+// expect: 7.120236347223045e-307
+// expect: 0.1 3.4028235e+38 0.33333334 1e-45
+// expect: 12.5
+// expect: 199.99
+// expect: -0.25
+// expect: 1000
+// expect: 0.000015
+// expect: 123456789012345680000
+// expect: 1.5
+// expect: 0.1 2.5
+import json, str
+
+@json
+struct Price {
+    f64 amount
+    f32 rate
+}
+
+void main() {
+    print("{0.1} {0.3} {1.0 / 3.0} {12.5} {100.0} {-2.75}")
+    print("{1e21} {1e20} {1.5e-7} {0.000001}")
+    print("{1.7976931348623157e308} {2.2250738585072014e-308} {9007199254740992.0}")
+    // 16 digits read back as this value; the correctly rounded 16 don't
+    print("{7.120236347223045e-307}")
+    f32 a = 0.1
+    f32 b = 3.4028235e38
+    f32 tiny = 1e-45
+    print("{a} {b} {f32(1.0) / f32(3.0)} {tiny}")
+
+    // reading numbers: the short path and strtod's
+    texts := ["12.5", "199.99", "-0.25", "1e3", "1.5e-5", "123456789012345678901", "1.5"]
+    for t in texts {
+        f64 v = str.parseFloat(t) catch e { 0.0 }
+        print("{v}")
+    }
+    scoped Price p = json.decode(Price, "{{\"amount\": 0.1, \"rate\": 2.5}}") catch e {
+        print(e.message)
+        return
+    }
+    print("{p.amount} {p.rate}")
+}

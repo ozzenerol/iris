@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -O2 -g -Wall -Wextra -Wpedantic -Wshadow -Wno-unused-parameter
 SRC = $(wildcard src/*.c)
-HDR = $(wildcard src/*.h)
+HDR = $(wildcard src/*.h) runtime/ryu.h
 STD = $(sort $(wildcard std/*/*.iris))
 
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
@@ -33,9 +33,9 @@ build/std.inc: $(STD)
 	  echo "};"; } > $@
 
 # the runtime's source, as bytes the compiler carries with it
-build/runtime.inc: runtime/rt.c
+build/runtime.inc: runtime/rt.c runtime/ryu.h
 	mkdir -p build
-	od -An -v -tx1 runtime/rt.c | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g' > $@
+	sed -e '/^#include "ryu.h"$$/{r runtime/ryu.h' -e 'd' -e '}' runtime/rt.c | od -An -v -tx1 | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g' > $@
 
 test: iris
 	python3 tools/run_tests.py

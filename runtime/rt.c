@@ -1477,6 +1477,8 @@ static void padBytes(int sink, IrisString *dst, const char *p, int64_t len, int6
 /* A float in the fewest digits that read back as the same value, written
  * as a plain decimal unless it is very large or very small: 100, 0.25,
  * 1e+21, 1e-07. */
+#include "ryu.h"
+
 void iris_write_float(int sink, IrisString *dst, double v, int bits) {
     char buf[64];
     int n = 0;
@@ -1492,30 +1494,37 @@ void iris_write_float(int sink, IrisString *dst, double v, int bits) {
         put(sink, dst, signbit(v) ? "-0" : "0", signbit(v) ? 2 : 1);
         return;
     }
-    /* the shortest digits: d.ddde+XX */
-    int prec = 0;
-    for (prec = 0; prec < 17; prec++) {
-        snprintf(buf, sizeof buf, "%.*e", prec, v);
-        double back = strtod(buf, NULL);
-        if (bits == 32 ? (float)back == (float)v : back == v) {
-            break;
-        }
+    /* the shortest digits, and the power of ten of the first one */
+    bool neg = signbit(v);
+    uint64_t d;
+    int32_t last;
+    if (bits == 32) {
+        float f = (float)v;
+        uint32_t u;
+        memcpy(&u, &f, 4);
+        d = ryuDigits(u & 0x7fffff, (u >> 23) & 0xff, 23, 127, &last);
+    } else {
+        uint64_t u;
+        memcpy(&u, &v, 8);
+        d = ryuDigits(u & ((1ull << 52) - 1), (u >> 52) & 0x7ff, 52, 1023, &last);
     }
-    char *ep = strchr(buf, 'e');
-    int exp10 = atoi(ep + 1);
-    if (exp10 < -6 || exp10 >= 21) {
-        /* the exponent form, without padding zeros: 1e+21, 1.5e-7 */
-        n = snprintf(buf + (ep - buf), sizeof buf - (size_t)(ep - buf), "e%c%d", exp10 < 0 ? '-' : '+',
-                     exp10 < 0 ? -exp10 : exp10);
-        put(sink, dst, buf, strlen(buf));
-        return;
-    }
-    /* the digits without the point and the exponent */
     char digits[32];
     int nd = 0;
-    bool neg = buf[0] == '-';
-    for (char *q = buf + (neg ? 1 : 0); q < ep; q++) {
-        if (*q != '.') digits[nd++] = *q;
+    for (uint64_t x = d; x; x /= 10) nd++;
+    for (int i = nd - 1; i >= 0; i--, d /= 10) digits[i] = (char)('0' + d % 10);
+    int exp10 = last + nd - 1;
+    if (exp10 < -6 || exp10 >= 21) {
+        /* the exponent form, without padding zeros: 1e+21, 1.5e-7 */
+        if (neg) buf[n++] = '-';
+        buf[n++] = digits[0];
+        if (nd > 1) {
+            buf[n++] = '.';
+            memcpy(buf + n, digits + 1, (size_t)nd - 1);
+            n += nd - 1;
+        }
+        n += snprintf(buf + n, sizeof buf - (size_t)n, "e%c%d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+        put(sink, dst, buf, (size_t)n);
+        return;
     }
     char out[64];
     int o = 0;
@@ -2573,6 +2582,56 @@ int64_t iris_str_find(const char *s, int64_t n, const char *sub, int64_t m) {
     return -1;
 }
 
+/* strtod, with a fast path for a plain decimal number: when its digits fit
+   in 53 bits and its power of ten is at most 22, both are exact doubles and
+   one multiply or divide gives the correctly rounded value (Clinger 1990).
+   Anything else, such as more digits, hex floats or inf, goes to strtod. */
+static double irisStrtod(const char *s, char **end) {
+    static const double pow10[23] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                                     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+    const char *p = s;
+    bool neg = *p == '-';
+    if (neg) p++;
+    uint64_t w = 0;
+    int nd = 0, exp = 0;
+    bool any = false;
+    for (; *p >= '0' && *p <= '9'; p++) {
+        any = true;
+        if (w || *p != '0') {
+            if (nd++ == 19) return strtod(s, end);
+            w = w * 10 + (uint64_t)(*p - '0');
+        }
+    }
+    if (*p == '.') {
+        for (p++; *p >= '0' && *p <= '9'; p++) {
+            any = true;
+            if (w || *p != '0') {
+                if (nd++ == 19) return strtod(s, end);
+                w = w * 10 + (uint64_t)(*p - '0');
+            }
+            exp--;
+        }
+    }
+    if (!any || *p == 'x' || *p == 'X') return strtod(s, end);
+    if (*p == 'e' || *p == 'E') {
+        const char *q = p + 1;
+        bool eneg = *q == '-';
+        if (*q == '-' || *q == '+') q++;
+        if (*q < '0' || *q > '9') return strtod(s, end);
+        int e = 0;
+        for (; *q >= '0' && *q <= '9'; q++) {
+            if (e < 100000) e = e * 10 + (*q - '0');
+        }
+        exp += eneg ? -e : e;
+        p = q;
+    }
+    if (w > (1ull << 53) || exp < -22 || exp > 22) return strtod(s, end);
+    double v = (double)w;
+    v = exp < 0 ? v / pow10[-exp] : v * pow10[exp];
+    if (end) *end = (char *)p;
+    return neg ? -v : v;
+}
+
 /* str.parseFloat: 0 ok, 1 empty, 2 not a number */
 int iris_str_parse_float(const char *p, int64_t n, double *out) {
     if (n == 0) {
@@ -2585,7 +2644,7 @@ int iris_str_parse_float(const char *p, int64_t n, double *out) {
     memcpy(buf, p, (size_t)n);
     buf[n] = 0;
     char *end;
-    double v = strtod(buf, &end);
+    double v = irisStrtod(buf, &end);
     if (*end || end == buf) {
         return 2;
     }
@@ -5912,7 +5971,7 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
         memcpy(num, s, n);
         num[n] = 0;
         if (t->kind == J_FLOAT) {
-            double v = strtod(num, NULL);
+            double v = irisStrtod(num, NULL);
             if (t->size == 4) *(float *)p = (float)v;
             else *(double *)p = v;
             return true;
@@ -8842,7 +8901,7 @@ static bool parseDuration(const char *s, int64_t *out) {
     bool any = false;
     while (*s) {
         char *end;
-        double v = strtod(s, &end);
+        double v = irisStrtod(s, &end);
         if (end == s) return false;
         s = end;
         double unit = 1e9;
@@ -8905,7 +8964,7 @@ static const char *setFromText(const JsonType *ft, bool duration, char *p, const
     }
     case J_FLOAT: {
         char *end;
-        double d = strtod(v, &end);
+        double d = irisStrtod(v, &end);
         if (*end || end == v) return "isn't a number";
         if (ft->size == 4) *(float *)p = (float)d;
         else *(double *)p = d;

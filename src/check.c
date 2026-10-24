@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../runtime/ryu.h"
 
 Type tyError = {.kind = TY_ERROR, .name = "error"};
 Type tyVoid = {.kind = TY_VOID, .name = "void"};
@@ -2432,26 +2433,33 @@ static void constFloatText(StrBuf *out, double v, int bits) {
         sbPuts(out, signbit(v) ? "-0" : "0");
         return;
     }
-    char buf[64];
-    for (int prec = 0; prec < 17; prec++) {
-        snprintf(buf, sizeof buf, "%.*e", prec, v);
-        double back = strtod(buf, NULL);
-        if (bits == 32 ? (float)back == (float)v : back == v) {
-            break;
-        }
-    }
-    char *ep = strchr(buf, 'e');
-    int exp10 = atoi(ep + 1);
-    if (exp10 < -6 || exp10 >= 21) {
-        sbPutn(out, buf, (size_t)(ep - buf));
-        sbPrintf(out, "e%c%d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
-        return;
+    bool neg = signbit(v);
+    uint64_t d;
+    int32_t last;
+    if (bits == 32) {
+        float f = (float)v;
+        uint32_t u;
+        memcpy(&u, &f, 4);
+        d = ryuDigits(u & 0x7fffff, (u >> 23) & 0xff, 23, 127, &last);
+    } else {
+        uint64_t u;
+        memcpy(&u, &v, 8);
+        d = ryuDigits(u & ((1ull << 52) - 1), (u >> 52) & 0x7ff, 52, 1023, &last);
     }
     char digits[32];
     int nd = 0;
-    bool neg = buf[0] == '-';
-    for (char *q = buf + (neg ? 1 : 0); q < ep; q++) {
-        if (*q != '.') digits[nd++] = *q;
+    for (uint64_t x = d; x; x /= 10) nd++;
+    for (int i = nd - 1; i >= 0; i--, d /= 10) digits[i] = (char)('0' + d % 10);
+    int exp10 = last + nd - 1;
+    if (exp10 < -6 || exp10 >= 21) {
+        if (neg) sbPutc(out, '-');
+        sbPutc(out, digits[0]);
+        if (nd > 1) {
+            sbPutc(out, '.');
+            sbPutn(out, digits + 1, (size_t)nd - 1);
+        }
+        sbPrintf(out, "e%c%d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+        return;
     }
     if (neg) sbPutc(out, '-');
     if (exp10 < 0) {
