@@ -5659,10 +5659,28 @@ static int hexDigits(const char *p) {
 }
 
 /* A string, at the opening quote, into out (appended). */
+/* The first quote, backslash or control character from p on, or end. Eight
+   bytes are checked at a time while none of them is one. */
+static const char *jsonPlainEnd(const char *p, const char *end) {
+    const uint64_t ones = 0x0101010101010101ull, highs = 0x8080808080808080ull;
+    while (end - p >= 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        uint64_t q = w ^ (ones * '"'), b = w ^ (ones * '\\');
+        uint64_t hit = ((q - ones) & ~q) | ((b - ones) & ~b) | ((w - ones * 0x20) & ~w);
+        if (hit & highs) break;
+        p += 8;
+    }
+    while (p < end && *p != '"' && *p != '\\' && (unsigned char)*p >= 0x20) p++;
+    return p;
+}
+
 static bool jsonString(JsonIn *in, IrisString *out) {
     in->p++;
     const char *start = in->p;
     while (in->p < in->end) {
+        in->p = jsonPlainEnd(in->p, in->end);
+        if (in->p >= in->end) break;
         unsigned char c = (unsigned char)*in->p;
         if (c == '"') {
             if (out) iris_string_append(out, start, in->p - start);
@@ -5810,10 +5828,29 @@ static bool jsonSkip(JsonIn *in) {
     return jsonFail(in, 1, "expected a value");
 }
 
-static void pathPush(JsonIn *in, const char *fmtStr, const char *s, int64_t n) {
-    size_t room = sizeof in->path - in->pathLen;
-    int w = snprintf(in->path + in->pathLen, room, fmtStr, (int)n, s);
-    if (w > 0) in->pathLen += (size_t)w < room ? (size_t)w : room - 1;
+/* The path to the value being read, for error messages: items[2].price.
+   It is kept for every value, so it is written byte by byte, without
+   printf, and cut short when it doesn't fit. */
+static void pathPut(JsonIn *in, const char *s, size_t n) {
+    size_t room = sizeof in->path - 1 - in->pathLen;
+    if (n > room) n = room;
+    memcpy(in->path + in->pathLen, s, n);
+    in->pathLen += n;
+    in->path[in->pathLen] = 0;
+}
+
+static void pathField(JsonIn *in, const char *name, int64_t n) {
+    if (in->pathLen) pathPut(in, ".", 1);
+    pathPut(in, name, (size_t)n);
+}
+
+static void pathIndex(JsonIn *in, int64_t i) {
+    char buf[24];
+    char *end = buf + sizeof buf;
+    char *d = u64Digits((uint64_t)i, end - 1);
+    *(end - 1) = ']';
+    *--d = '[';
+    pathPut(in, d, (size_t)(end - d));
 }
 
 static bool jsonValue(JsonIn *in, const JsonType *t, char *p);
@@ -5825,6 +5862,7 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
     if (!seen) outOfMemory();
     memset(seen, 0, t->count <= 64 ? sizeof seenSmall : 0);
     IrisString key = {0};
+    int64_t next = 0;
     bool ok = jsonDeeper(in);
     if (ok) {
         in->p++;
@@ -5838,10 +5876,22 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
                     ok = jsonFail(in, 1, "expected a key in quotes");
                     break;
                 }
-                key.len = 0;
-                if (!jsonString(in, &key)) {
-                    ok = false;
-                    break;
+                /* a key without escapes is compared where it is */
+                const char *kp;
+                int64_t kn;
+                const char *q = jsonPlainEnd(in->p + 1, in->end);
+                if (q < in->end && *q == '"') {
+                    kp = in->p + 1;
+                    kn = q - kp;
+                    in->p = q + 1;
+                } else {
+                    key.len = 0;
+                    if (!jsonString(in, &key)) {
+                        ok = false;
+                        break;
+                    }
+                    kp = key.ptr;
+                    kn = key.len;
                 }
                 jsonWs(in);
                 if (in->p >= in->end || *in->p != ':') {
@@ -5849,10 +5899,14 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
                     break;
                 }
                 in->p++;
+                /* keys mostly come in the struct's order: look from the
+                   field after the last one first */
                 int64_t f = -1;
-                for (int64_t i = 0; i < t->count; i++) {
-                    if (fs[i].nameLen == key.len && !memcmp(fs[i].name, key.ptr, (size_t)key.len)) {
+                for (int64_t k = 0; k < t->count; k++) {
+                    int64_t i = next + k < t->count ? next + k : next + k - t->count;
+                    if (fs[i].nameLen == kn && !memcmp(fs[i].name, kp, (size_t)kn)) {
                         f = i;
+                        next = i + 1;
                         break;
                     }
                 }
@@ -5860,7 +5914,7 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
                     ok = jsonSkip(in);  /* a key the struct doesn't have */
                 } else {
                     size_t saved = in->pathLen;
-                    pathPush(in, in->pathLen ? ".%.*s" : "%.*s", fs[f].name, fs[f].nameLen);
+                    pathField(in, fs[f].name, fs[f].nameLen);
                     ok = jsonValue(in, fs[f].type, p + fs[f].offset);
                     in->pathLen = saved;
                     in->path[saved] = 0;
@@ -5925,7 +5979,7 @@ static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
                 cap = ncap;
             }
             size_t saved = in->pathLen;
-            pathPush(in, "[%d]%s", "", n);
+            pathIndex(in, n);
             if (slice && et->init) memcpy(buf + n * et->size, et->init, (size_t)et->size);
             ok = jsonValue(in, et, buf + n * et->size);
             in->pathLen = saved;
@@ -5991,8 +6045,13 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
         if (!integer) return jsonFail(in, 2, "expected a whole number");
         errno = 0;
         char msg[128];
+        /* up to 18 digits can't overflow: read them here, without strtoll */
+        bool neg = num[0] == '-';
+        bool shortInt = n - neg <= 18;
+        uint64_t u = 0;
+        for (size_t i = neg; shortInt && i < n; i++) u = u * 10 + (uint64_t)(num[i] - '0');
         if (t->kind == J_INT) {
-            long long v = strtoll(num, NULL, 10);
+            long long v = shortInt ? (neg ? -(long long)u : (long long)u) : strtoll(num, NULL, 10);
             int bits = t->size * 8;
             bool fits = errno == 0 && (bits == 64 || (v >= -(1LL << (bits - 1)) && v < (1LL << (bits - 1))));
             if (!fits) {
@@ -6001,7 +6060,7 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
             }
             writeInt(p, t->size, v);
         } else {
-            unsigned long long v = num[0] == '-' ? 0 : strtoull(num, NULL, 10);
+            unsigned long long v = neg ? 0 : shortInt ? u : strtoull(num, NULL, 10);
             int bits = t->size * 8;
             bool fits = num[0] != '-' && errno == 0 && (bits == 64 || v < (1ULL << bits));
             if (!fits) {

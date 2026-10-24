@@ -1,0 +1,80 @@
+// expect: -9223372036854775808 18446744073709551615 999999999999999999 -999999999999999999 1234567890123456789
+// expect: escaped key: 7
+// expect: out of order: 3 x
+// expect: big: v: 300 doesn't fit in i8
+// expect: neg: v: -1 doesn't fit in u32
+// expect: path: rows[1].v: expected a number, found a string
+import json
+
+@json
+struct Ints {
+    i64 a
+    u64 b
+    i64 c
+    i64 d
+    i64 e
+}
+
+@json
+struct Named {
+    i64 name
+}
+
+@json
+struct Pair {
+    i64 n
+    String s
+}
+
+@json
+struct Small {
+    i8 v
+}
+
+@json
+struct Unsigned {
+    u32 v
+}
+
+@json
+struct Row {
+    i64 v
+}
+
+@json
+struct Table {
+    List[Row] rows
+}
+
+void main() {
+    Ints i = json.decode(Ints, "{{\"a\": -9223372036854775808, \"b\": 18446744073709551615, \"c\": 999999999999999999, \"d\": -999999999999999999, \"e\": 1234567890123456789}}") catch e {
+        print(e.message)
+        return
+    }
+    print("{i.a} {i.b} {i.c} {i.d} {i.e}")
+
+    Named k = json.decode(Named, "{{\"na\\u006de\": 7}}") catch e {
+        print(e.message)
+        return
+    }
+    print("escaped key: {k.name}")
+
+    scoped Pair p = json.decode(Pair, "{{\"s\": \"x\", \"n\": 3}}") catch e {
+        print(e.message)
+        return
+    }
+    print("out of order: {p.n} {p.s}")
+
+    Small s = json.decode(Small, "{{\"v\": 300}}") catch e {
+        print("big: {e.message}")
+        Small{}
+    }
+    Unsigned u = json.decode(Unsigned, "{{\"v\": -1}}") catch e {
+        print("neg: {e.message}")
+        Unsigned{}
+    }
+    scoped Table t = json.decode(Table, "{{\"rows\": [{{\"v\": 1}}, {{\"v\": \"x\"}}]}}") catch e {
+        print("path: {e.message}")
+        Table{}
+    }
+}
