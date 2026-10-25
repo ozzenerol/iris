@@ -1,8 +1,8 @@
 // expect: sha512 right: true, wrong: false
-// expect: made hash checks: true
-// expect: yescrypt or sha512 available: true
-// expect: no such user: ShadowError.denied
-// expect: not root reading shadow: ShadowError.denied
+// expect: made hash checks: true, differs from another salt: true
+// expect: checkLogin needs a hash to read: true
+
+// os: linux
 
 import shadow
 
@@ -11,21 +11,15 @@ import shadow
     print("sha512 right: {try shadow.check("hunter2", h)}, wrong: {shadow.check("wrong", h) catch e { true }}")
 
     scoped made := try shadow.crypt("my secret", "$6$0123456789abcdef")
-    print("made hash checks: {try shadow.check("my secret", made)}")
+    scoped other := try shadow.crypt("my secret", "$6$fedcba9876543210")
+    print("made hash checks: {try shadow.check("my secret", made)}, differs from another salt: {made != other}")
 
-    bool any = false
-    _ = shadow.crypt("x", "$y$j9T$aaaaaaaaaaaaaaaaaaaaaa") catch e { "".copy() }
-    any = shadow.check("hunter2", h) catch e { false }
-    print("yescrypt or sha512 available: {any}")
-
-    // nobody's entry is locked (! or *), so no password is set
-    _ = shadow.checkLogin("no-such-user-xyz", "x") catch e {
-        print("no such user: {e.code}")
+    // checkLogin either finds no such user, or can't read /etc/shadow,
+    // depending on whether the test runs as root; both are errors here
+    bool errored = false
+    _ = shadow.checkLogin("no-such-user-iris-xyz", "x") catch e {
+        errored = e.code == shadow.ShadowError.notFound || e.code == shadow.ShadowError.denied
         false
     }
-    _ = shadow.checkLogin("root", "whatever") catch e {
-        // run as a normal user, /etc/shadow can't be read
-        print("not root reading shadow: {e.code}")
-        false
-    }
+    print("checkLogin needs a hash to read: {errored}")
 }

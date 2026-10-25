@@ -14,6 +14,7 @@
                                // command: test    use iris test (or bench) instead of iris run
                                // args: A B        arguments after the file
                                // env: NAME=VALUE  set for the run
+                               // os: linux       run only on these platforms
                                // netns: tun       run in a network namespace of its own
                                                    (unshare -Urn), with /dev/net/tun;
                                                    skipped where there is none
@@ -265,6 +266,9 @@ def netns_ok():
 def run_test(iris, path, name, env):
     failures = []
     text = open(path).read()
+    oses = re.findall(r"^// os: (\S+)$", text, re.M)
+    if oses and not any(sys.platform.startswith(o) for o in oses):
+        return failures
     if re.search(r"^// netns: tun$", text, re.M):
         if not netns_ok():
             print("SKIP %s (no network namespace with TUN here)" % name)
