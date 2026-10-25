@@ -975,3 +975,74 @@ pub bool matches(str pattern, str name) {
     }
     return (false, 0)
 }
+
+@extern("iris_watch_open")
+u8 *rawWatchOpen(u8 *path, i64 len, i32 recursive, i32 *err)
+
+@extern("iris_watch_next")
+i32 rawWatchNext(u8 *w, i32 *kind, String *path, i32 *isDir, i64 timeout)
+
+@extern("iris_watch_close")
+void rawWatchClose(u8 *w)
+
+// What changed: something made (or moved in), removed (or moved out), or
+// a file written or its permissions changed.
+pub enum Change { created, removed, changed }
+
+// A change in a watched folder.
+pub struct Event {
+    pub Change change
+    pub String path
+    pub bool isDir
+}
+
+// Gives the event's path back.
+pub void Event.free() => self.path.free()
+
+// Watches a folder for changes; next gives them.
+pub struct Watcher {
+    u8 *w
+    String root
+}
+
+// Watches the folder at path, and with recursive, the folders in it, and
+// those made in it later. On Linux the system tells of each change at once
+// (inotify); elsewhere the folder is looked at every 200 ms.
+pub !Watcher watch(str path, bool recursive = false) {
+    i32 err
+    w := rawWatchOpen(path.ptr, path.len, if recursive { 1 } else { 0 }, &err)
+    if w == null {
+        return fsError(err, path)
+    }
+    return Watcher{w: w, root: path.copy()}
+}
+
+// Waits for the next change, for at most timeout when it isn't 0
+// (FsError.end when it runs out). The other tasks run meanwhile.
+pub !Event Watcher.next(Duration timeout = 0s) {
+    i32 kind
+    i32 isDir
+    String path
+    code := rawWatchNext(self.w, &kind, &path, &isDir, timeout)
+    if code == 3 {
+        path.free()
+        return error(FsError.end, "{self.root}: nothing changed in {timeout}")
+    }
+    if code != 0 {
+        path.free()
+        return fsError(code, self.root)
+    }
+    change := match kind {
+        1 => Change.created
+        2 => Change.removed
+        _ => Change.changed
+    }
+    return Event{change: change, path: path, isDir: isDir != 0}
+}
+
+// Stops watching.
+pub void Watcher.close() {
+    rawWatchClose(self.w)
+    self.w = null
+    self.root.free()
+}

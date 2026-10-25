@@ -7774,6 +7774,251 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
     return code;
 }
 
+/* ---------------------------------------------------------------- watching folders
+
+   fs.watch: inotify on Linux, waiting in the event loop; elsewhere scans of
+   the tree compared every 200 ms. Each change is (kind, path): 1 created,
+   2 removed, 3 changed. */
+
+typedef struct {
+    char *path;
+    int64_t size, mtime;
+    int isDir;
+} WatchSeen;
+
+typedef struct {
+    char *root;
+    int recursive;
+#ifdef __linux__
+    int fd;
+    char buf[65536];
+    int len, at;
+    char **paths;               /* by watch descriptor */
+    int npaths;
+#else
+    WatchSeen *seen;
+    int64_t nseen;
+#endif
+    /* changes found and not given yet */
+    int *kinds;
+    char **queue;
+    int *queueDir;
+    int64_t qn, qcap, qat;
+} Watcher;
+
+static void watchPush(Watcher *w, int kind, const char *path, int isDir) {
+    if (w->qn == w->qcap) {
+        w->qcap = w->qcap ? w->qcap * 2 : 16;
+        w->kinds = realloc(w->kinds, (size_t)w->qcap * sizeof(int));
+        w->queue = realloc(w->queue, (size_t)w->qcap * sizeof(char *));
+        w->queueDir = realloc(w->queueDir, (size_t)w->qcap * sizeof(int));
+        if (!w->kinds || !w->queue || !w->queueDir) outOfMemory();
+    }
+    w->kinds[w->qn] = kind;
+    w->queue[w->qn] = strdup(path);
+    w->queueDir[w->qn] = isDir;
+    w->qn++;
+}
+
+#ifdef __linux__
+#include <sys/inotify.h>
+
+static void watchAdd(Watcher *w, const char *path) {
+    int wd = inotify_add_watch(w->fd, path, IN_CREATE | IN_DELETE | IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_FROM |
+                                                IN_MOVED_TO | IN_ATTRIB | IN_DELETE_SELF | IN_ONLYDIR);
+    if (wd < 0) return;
+    if (wd >= w->npaths) {
+        int n = wd + 16;
+        w->paths = realloc(w->paths, (size_t)n * sizeof(char *));
+        if (!w->paths) outOfMemory();
+        for (int i = w->npaths; i < n; i++) w->paths[i] = NULL;
+        w->npaths = n;
+    }
+    free(w->paths[wd]);
+    w->paths[wd] = strdup(path);
+    if (!w->recursive) return;
+    DIR *d = opendir(path);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.' && (!e->d_name[1] || (e->d_name[1] == '.' && !e->d_name[2]))) continue;
+        char sub[PATH_MAX];
+        snprintf(sub, sizeof sub, "%s/%s", path, e->d_name);
+        struct stat st;
+        if (lstat(sub, &st) == 0 && S_ISDIR(st.st_mode)) watchAdd(w, sub);
+    }
+    closedir(d);
+}
+#else
+static int seenCmp(const void *a, const void *b) {
+    return strcmp(((const WatchSeen *)a)->path, ((const WatchSeen *)b)->path);
+}
+
+static void scanTree(const char *path, int recursive, WatchSeen **out, int64_t *n, int64_t *cap) {
+    DIR *d = opendir(path);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.' && (!e->d_name[1] || (e->d_name[1] == '.' && !e->d_name[2]))) continue;
+        char sub[PATH_MAX];
+        snprintf(sub, sizeof sub, "%s/%s", path, e->d_name);
+        struct stat st;
+        if (lstat(sub, &st) != 0) continue;
+        if (*n == *cap) {
+            *cap = *cap ? *cap * 2 : 64;
+            *out = realloc(*out, (size_t)*cap * sizeof(WatchSeen));
+            if (!*out) outOfMemory();
+        }
+        WatchSeen *s = &(*out)[(*n)++];
+        s->path = strdup(sub);
+        s->size = st.st_size;
+        s->mtime = (int64_t)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+        s->isDir = S_ISDIR(st.st_mode);
+        if (s->isDir && recursive) scanTree(sub, recursive, out, n, cap);
+    }
+    closedir(d);
+}
+
+static void scanSorted(Watcher *w, WatchSeen **out, int64_t *n) {
+    int64_t cap = 0;
+    *out = NULL;
+    *n = 0;
+    scanTree(w->root, w->recursive, out, n, &cap);
+    if (*n) qsort(*out, (size_t)*n, sizeof(WatchSeen), seenCmp);
+}
+
+static void seenFree(WatchSeen *s, int64_t n) {
+    for (int64_t i = 0; i < n; i++) free(s[i].path);
+    free(s);
+}
+#endif
+
+void *iris_watch_open(const char *path, int64_t len, int recursive, int *err) {
+    char *root = cpath(path, len);
+    struct stat st;
+    if (!root || stat(root, &st) != 0) {
+        *err = fsCode(errno);
+        free(root);
+        return NULL;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        *err = 1;
+        free(root);
+        return NULL;
+    }
+    Watcher *w = calloc(1, sizeof *w);
+    if (!w) outOfMemory();
+    w->root = root;
+    w->recursive = recursive;
+#ifdef __linux__
+    w->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (w->fd < 0) {
+        *err = fsCode(errno);
+        free(root);
+        free(w);
+        return NULL;
+    }
+    fdForget(w->fd);
+    watchAdd(w, root);
+#else
+    scanSorted(w, &w->seen, &w->nseen);
+#endif
+    *err = 0;
+    return w;
+}
+
+/* The next change: 0 with its kind, path and whether it is a folder; 3
+   when the time ran out (timeout 0: no limit). */
+int iris_watch_next(void *wp, int *kind, IrisString *path, int *isDir, int64_t timeout) {
+    Watcher *w = wp;
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        if (w->qat < w->qn) {
+            *kind = w->kinds[w->qat];
+            *isDir = w->queueDir[w->qat];
+            iris_string_append(path, w->queue[w->qat], (int64_t)strlen(w->queue[w->qat]));
+            free(w->queue[w->qat]);
+            w->qat++;
+            if (w->qat == w->qn) w->qat = w->qn = 0;
+            return 0;
+        }
+#ifdef __linux__
+        if (w->at >= w->len) {
+            ssize_t n = read(w->fd, w->buf, sizeof w->buf);
+            if (n <= 0) {
+                if (n < 0 && errno != EAGAIN && errno != EINTR) return 5;
+                if (!waitFdUntil(w->fd, 0, deadline)) return 3;
+                continue;
+            }
+            w->len = (int)n;
+            w->at = 0;
+        }
+        while (w->at < w->len) {
+            struct inotify_event *e = (struct inotify_event *)(w->buf + w->at);
+            w->at += (int)(sizeof *e + e->len);
+            if (e->wd < 0 || e->wd >= w->npaths || !w->paths[e->wd]) continue;
+            if (e->mask & (IN_IGNORED | IN_DELETE_SELF)) {
+                continue;
+            }
+            char full[PATH_MAX];
+            if (e->len) snprintf(full, sizeof full, "%s/%s", w->paths[e->wd], e->name);
+            else snprintf(full, sizeof full, "%s", w->paths[e->wd]);
+            int dir = (e->mask & IN_ISDIR) != 0;
+            int k = (e->mask & (IN_CREATE | IN_MOVED_TO)) ? 1 : (e->mask & (IN_DELETE | IN_MOVED_FROM)) ? 2 : 3;
+            if (k == 1 && dir && w->recursive) watchAdd(w, full);
+            if (k == 3 && dir) continue;    /* a folder's own times: its entries tell more */
+            watchPush(w, k, full, dir);
+        }
+#else
+        WatchSeen *now;
+        int64_t n;
+        scanSorted(w, &now, &n);
+        int64_t i = 0, j = 0;
+        while (i < w->nseen || j < n) {
+            int c = i >= w->nseen ? 1 : j >= n ? -1 : strcmp(w->seen[i].path, now[j].path);
+            if (c < 0) {
+                watchPush(w, 2, w->seen[i].path, w->seen[i].isDir);
+                i++;
+            } else if (c > 0) {
+                watchPush(w, 1, now[j].path, now[j].isDir);
+                j++;
+            } else {
+                if (!now[j].isDir && (now[j].size != w->seen[i].size || now[j].mtime != w->seen[i].mtime)) {
+                    watchPush(w, 3, now[j].path, 0);
+                }
+                i++;
+                j++;
+            }
+        }
+        seenFree(w->seen, w->nseen);
+        w->seen = now;
+        w->nseen = n;
+        if (w->qn > 0) continue;
+        if (deadline > 0 && nowNs() >= deadline) return 3;
+        iris_sleep(200000000);
+#endif
+    }
+}
+
+void iris_watch_close(void *wp) {
+    Watcher *w = wp;
+    if (!w) return;
+#ifdef __linux__
+    fdForget(w->fd);
+    close(w->fd);
+    for (int i = 0; i < w->npaths; i++) free(w->paths[i]);
+    free(w->paths);
+#else
+    seenFree(w->seen, w->nseen);
+#endif
+    for (int64_t i = w->qat; i < w->qn; i++) free(w->queue[i]);
+    free(w->queue);
+    free(w->kinds);
+    free(w->queueDir);
+    free(w->root);
+    free(w);
+}
+
 /* ---------------------------------------------------------------- pseudo-terminals
 
    A pty is a pair: the program side, which a shell runs on as its

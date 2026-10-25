@@ -414,6 +414,30 @@ true false
 
 `fs.matches(pattern, name)` says whether one name matches one part of a pattern. A pattern that starts with a wildcard is searched from the working folder and gives paths without `./` in front.
 
+## Watching a folder
+
+`fs.watch(dir)` gives a `Watcher`, and `next()` waits for the next change in the folder: an `Event` with its `change`, `created`, `removed` or `changed`, its `path`, and whether it `isDir`. With `recursive: true` it watches the folders inside too, and those made later. `next(timeout)` gives up with `FsError.end` when nothing changes for that long. On Linux the system tells of each change at once; elsewhere the folder is looked at every 200 ms. One write can be told of more than once, so a program that reloads a file on a change doesn't count them.
+
+```iris run
+import fs, path
+
+!void main() {
+    scoped String dir = try fs.tempDir("iris-tour-watch")
+    w := try fs.watch(dir)
+    defer w.close()
+
+    scoped String file = format("{dir}/config.toml")
+    try fs.writeAll(file, "port = 8080")
+    scoped e := try w.next(2s)
+    print("{e.change} {path.base(e.path)}")
+    try fs.removeAll(dir)
+}
+```
+
+```output
+created config.toml
+```
+
 ## Temporary files and copies
 
 `fs.tempDir(prefix)` makes a new folder with a unique name, the prefix and six random characters, and gives its path. `fs.tempFile(prefix)` does the same for an empty file. Both go in `$TMPDIR`, or `/tmp`, or the folder given as `dir`. `fs.copy(from, to)` copies a file with its permissions and replaces whatever is at `to`.

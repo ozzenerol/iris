@@ -1,0 +1,54 @@
+// expect: created a.txt
+// expect: changed a.txt
+// expect: created sub (a folder)
+// expect: created sub/b.txt
+// expect: removed a.txt
+// expect: nothing more: FsError.end
+
+import fs, str
+
+!void waitFor(fs.Watcher *w, fs.Change want, str name, str dir) {
+    // a write may be told of more than once: take what matches
+    for {
+        scoped e := try w.next(2s)
+        rel := str.trimPrefix(e.path, dir)
+        if e.change == want && rel == name {
+            print("{e.change} {name}{if e.isDir { " (a folder)" } else { "" }}")
+            return
+        }
+    }
+}
+
+!void main() {
+    scoped String dir = try fs.tempDir("iris-watch")
+    scoped String root = try fs.realPath(dir)
+    w := try fs.watch(root, recursive: true)
+    defer w.close()
+    scoped String prefix = format("{root}/")
+
+    scoped String a = format("{root}/a.txt")
+    try fs.writeAll(a, "one")
+    try waitFor(&w, .created, "a.txt", prefix)
+    sleep(250ms)
+    try fs.append(a, " two")
+    try waitFor(&w, .changed, "a.txt", prefix)
+    scoped String sub = format("{root}/sub")
+    try fs.mkdir(sub)
+    try waitFor(&w, .created, "sub", prefix)
+    sleep(250ms)
+    scoped String b = format("{root}/sub/b.txt")
+    try fs.writeAll(b, "inside")
+    try waitFor(&w, .created, "sub/b.txt", prefix)
+    try fs.remove(a)
+    try waitFor(&w, .removed, "a.txt", prefix)
+
+    // what is left of the writes above, then a quiet folder
+    for {
+        e := w.next(500ms) catch err {
+            print("nothing more: {err.code}")
+            break
+        }
+        e.free()
+    }
+    try fs.removeAll(dir)
+}
