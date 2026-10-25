@@ -1,0 +1,14 @@
+// expect: logged to syslog and back
+
+import log
+
+void main() {
+    log.toSyslog("iris-test", .user)
+    log.debug("left out below info")
+    log.info("from the iris tests", [("n", .int(1))])
+    log.useJson()
+    log.warn("as json", [("ok", .bool(true))])
+    log.useJson(false)
+    log.toStderr()
+    print("logged to syslog and back")
+}

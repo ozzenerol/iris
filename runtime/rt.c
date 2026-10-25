@@ -5752,6 +5752,29 @@ int iris_pin_thread(int64_t n) {
 #endif
 }
 
+/* syslog(3): the system log, at a priority from LOG_EMERG (0) to
+   LOG_DEBUG (7), as facility, with ident and the process id on each line. */
+#include <syslog.h>
+
+static char *syslogIdent;
+
+void iris_syslog_open(const char *ident, int64_t identLen, int facility) {
+    static const int facilities[] = {LOG_USER, LOG_DAEMON, LOG_AUTH, LOG_AUTHPRIV, LOG_LOCAL0, LOG_LOCAL1,
+                                     LOG_LOCAL2, LOG_LOCAL3, LOG_LOCAL4, LOG_LOCAL5, LOG_LOCAL6, LOG_LOCAL7};
+    int f = facility >= 0 && facility < (int)(sizeof facilities / sizeof facilities[0]) ? facilities[facility]
+                                                                                       : LOG_DAEMON;
+    char *old = syslogIdent;
+    syslogIdent = identLen > 0 ? cpath(ident, identLen) : NULL;   /* openlog keeps the pointer */
+    openlog(syslogIdent, LOG_PID | LOG_NDELAY, f);
+    free(old);
+}
+
+void iris_syslog_write(int priority, const char *msg, int64_t len) {
+    syslog(priority, "%.*s", (int)len, msg);
+}
+
+void iris_syslog_close(void) { closelog(); }
+
 /* The users and groups of the system (getpwnam_r and friends). A user
    found: 0, with its fields added to the Strings; 1 when there is none. */
 int iris_user_lookup(const char *name, int64_t nameLen, int64_t uid, IrisString *outName, int64_t *outUid,

@@ -1,6 +1,7 @@
 // Log lines on standard error, with the time and a level:
 // 2026-10-17T09:30:00.250Z INFO listening on 8080
 // Each line is written at once, so lines from several threads don't mix.
+// They can go to a file instead, or to the system log (syslog).
 
 import fs, io, json, time
 
@@ -14,7 +15,37 @@ Level minimum = .info
 bool asJson
 bool noTime
 bool toFileOn
+bool toSyslogOn
 fs.File out
+
+// Where syslog files a program's lines: user, daemon (servers), auth and
+// authPriv (logins, as SSH servers use), and local0 to local7 for a site's
+// own uses.
+pub enum Facility { user, daemon, auth, authPriv, local0, local1, local2, local3, local4, local5, local6, local7 }
+
+@extern("iris_syslog_open")
+void rawSyslogOpen(u8 *ident, i64 identLen, i32 facility)
+
+@extern("iris_syslog_write")
+void rawSyslogWrite(i32 priority, u8 *msg, i64 len)
+
+@extern("iris_syslog_close")
+void rawSyslogClose()
+
+i32 facilityCode(Facility f) => match f {
+    .user => 0
+    .daemon => 1
+    .auth => 2
+    .authPriv => 3
+    .local0 => 4
+    .local1 => 5
+    .local2 => 6
+    .local3 => 7
+    .local4 => 8
+    .local5 => 9
+    .local6 => 10
+    .local7 => 11
+}
 
 // Lines below level are left out. The start is info.
 pub void setLevel(Level level) {
@@ -44,12 +75,38 @@ pub !void toFile(str path) {
     toFileOn = true
 }
 
-// Writes the lines on standard error again, closing the file of toFile.
+// Writes the lines on standard error again, closing the file of toFile or
+// leaving syslog.
 pub void toStderr() {
     if toFileOn {
         out.close()
         toFileOn = false
     }
+    if toSyslogOn {
+        rawSyslogClose()
+        toSyslogOn = false
+    }
+}
+
+// Sends the lines to the system log (syslog) as facility, each with ident
+// (the program's name when "") and the process id: journald, rsyslog or
+// macOS's log keep them, and tools like fail2ban read them. The level
+// becomes syslog's priority; syslog adds the time itself.
+pub void toSyslog(str ident = "", Facility facility = .daemon) {
+    if toFileOn {
+        out.close()
+        toFileOn = false
+    }
+    rawSyslogOpen(ident.ptr, ident.len, facilityCode(facility))
+    toSyslogOn = true
+}
+
+// syslog's priority for a level
+i32 priority(Level l) => match l {
+    .debug => 7
+    .info => 6
+    .warn => 4
+    .error => 3
 }
 
 i64 rank(Level l) => match l {
@@ -106,6 +163,29 @@ void addValue(String *line, Value v, bool quoted) {
 // the message as key=value, text in quotes when it has spaces.
 pub void write(Level level, str message, (str, Value)[] fields = []) {
     if rank(level) < rank(minimum) {
+        return
+    }
+    if toSyslogOn {
+        scoped String sl
+        if asJson {
+            scoped String m = json.quote(message)
+            sl.append("{{\"level\": \"{lower(level)}\", \"message\": {m}")
+            for f in fields {
+                k, v := f
+                scoped String key = json.quote(k)
+                sl.append(", {key}: ")
+                addValue(&sl, v, true)
+            }
+            sl.append("}}")
+        } else {
+            sl.append(message)
+            for f in fields {
+                k, v := f
+                sl.append(" {k}=")
+                addValue(&sl, v, false)
+            }
+        }
+        rawSyslogWrite(priority(level), sl.ptr, sl.len)
         return
     }
     scoped String stamp = time.now().format("YYYY-MM-DDThh:mm:ss.SSSZ")

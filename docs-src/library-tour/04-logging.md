@@ -219,3 +219,18 @@ import fs, log
 INFO written to the file n=1
 
 ```
+
+## The system log
+
+`log.toSyslog(ident, facility)` sends the lines to the system log instead: journald or rsyslog on Linux, the unified log on macOS. Each line carries `ident`, the program's name when it is empty, and the process id, and its level becomes syslog's priority. syslog adds the time itself. `facility` says where the system files the lines: `.daemon` for a server, the start, `.auth` or `.authPriv` for logins, as SSH servers use, so tools like fail2ban find them, and `.local0` to `.local7` for a site's own uses.
+
+```iris
+import log
+
+void main() {
+    log.toSyslog("myserver", .daemon)
+    log.info("listening", [("port", .int(8080))])
+}
+```
+
+`journalctl -t myserver` then shows `myserver[4242]: listening port=8080`. `log.toStderr()` goes back to standard error.
