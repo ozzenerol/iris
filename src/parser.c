@@ -1365,11 +1365,16 @@ static Node *parseSelect(Parser *p) {
             longjmp(*p->recover, 1);
         }
         Node *arm = node(p, N_SELECT_ARM, peek(p));
-        if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_DEFINE) {
-            arm->name = tokText(p, next(p));
-            next(p);
+        if (accept(p, K_ELSE)) {
+            /* else => ...: runs when no other arm can go at once */
+            arm->op = K_ELSE;
+        } else {
+            if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_DEFINE) {
+                arm->name = tokText(p, next(p));
+                next(p);
+            }
+            arm->a = parseExpr(p);
         }
-        arm->a = parseExpr(p);
         expect(p, P_ARROW);
         arm->c = parseArmBody(p);
         push(p, &s->list, arm);

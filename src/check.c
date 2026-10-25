@@ -6013,12 +6013,26 @@ static void checkStmt(Checker *c, Node *s) {
         checkStarted(c, &s->a, "spawn", "a task");
         return;
     case N_SELECT: {
-        bool hasAfter = false;
+        bool hasAfter = false, hasElse = false;
         for (int i = 0; i < s->list.len; i++) {
             Node *arm = s->list.items[i];
             Node *x = arm->a;
             pushScope(c, false);
-            if (x->kind == N_UNARY && x->op == P_LARROW) {
+            if (arm->op == K_ELSE) {
+                if (hasElse) {
+                    error(c, arm, "a select can have one else arm");
+                }
+                if (hasAfter) {
+                    error(c, arm, "a select has else or after, not both");
+                }
+                hasElse = true;
+            } else if (x->kind == N_BINARY && x->op == P_LARROW) {
+                /* ch <- value: sends when the channel can take it */
+                if (arm->name) {
+                    error(c, arm, "a send gives no value to name");
+                }
+                checkExpr(c, &arm->a, NULL);
+            } else if (x->kind == N_UNARY && x->op == P_LARROW) {
                 Type *t = checkExpr(c, &arm->a, NULL);
                 if (arm->name && !isErr(t)) {
                     Node *var = like(c, N_IDENT, arm);
@@ -6037,6 +6051,9 @@ static void checkStmt(Checker *c, Node *s) {
                 if (hasAfter) {
                     error(c, x, "a select can have one after arm");
                 }
+                if (hasElse) {
+                    error(c, x, "a select has else or after, not both");
+                }
                 hasAfter = true;
                 x->builtin = BI_AFTER;
                 if (x->list.len != 1 || x->list.items[0]->kind == N_NAMED_ARG) {
@@ -6050,7 +6067,7 @@ static void checkStmt(Checker *c, Node *s) {
                     }
                 }
             } else {
-                error(c, x, "a select arm takes from a channel (<-ch) or waits with after(...)");
+                error(c, x, "a select arm takes from a channel (<-ch), sends to one (ch <- v), waits with after(...) or is else");
             }
             if (arm->c->kind == N_BLOCK) {
                 checkBlock(c, arm->c, true);

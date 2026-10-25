@@ -2323,9 +2323,9 @@ static bool touchesErrors(Node *n, int depth) {
     switch (n->kind) {
     case N_TRY: case N_CATCH: case N_SELECT: case N_SELECT_ARM: case N_ASM: case N_SPAWN: case N_THREAD:
         return true;
-    case N_UNARY:
+    case N_UNARY: case N_BINARY:
         if (n->op == P_LARROW) {
-            return true; /* taking from a channel waits */
+            return true; /* taking from a channel or sending to one waits */
         }
         break;
     case N_ASSIGN:
@@ -3437,46 +3437,59 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
     return handle;
 }
 
-/* select: the channels and where each value goes, then a jump to the arm
- * whose channel had a value (or the after arm). */
+/* select: the channels, where each value taken goes or where each value
+ * sent comes from, and which arms send; then a jump to the arm that went
+ * (or the after or else arm). else is an after that doesn't wait. */
 static void emitSelect(IR *ir, Node *s) {
     int n = 0;
     Node *afterArm = NULL;
     for (int i = 0; i < s->list.len; i++) {
-        if (s->list.items[i]->a->builtin == BI_AFTER) {
-            afterArm = s->list.items[i];
+        Node *arm = s->list.items[i];
+        if (arm->op == K_ELSE || arm->a->builtin == BI_AFTER) {
+            afterArm = arm;
         } else {
             n++;
         }
     }
     const char *chans = fmt(ir, "%%v.selchans.%d", ++ir->vars);
     const char *outs = fmt(ir, "%%v.selouts.%d", ++ir->vars);
-    sbPrintf(&ir->allocas, "  %s = alloca [%d x ptr]\n  %s = alloca [%d x ptr]\n", chans, n ? n : 1, outs, n ? n : 1);
-    Node **recvArms = arenaAlloc(ir->arena, sizeof(Node *) * (size_t)(n ? n : 1));
+    const char *sends = fmt(ir, "%%v.selsends.%d", ++ir->vars);
+    sbPrintf(&ir->allocas, "  %s = alloca [%d x ptr]\n  %s = alloca [%d x ptr]\n  %s = alloca [%d x i8]\n", chans,
+             n ? n : 1, outs, n ? n : 1, sends, n ? n : 1);
+    Node **armsFor = arenaAlloc(ir->arena, sizeof(Node *) * (size_t)(n ? n : 1));
     const char **slots = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(n ? n : 1));
     int k = 0;
     for (int i = 0; i < s->list.len; i++) {
         Node *arm = s->list.items[i];
         if (arm == afterArm) continue;
-        Node *recv = arm->a;
-        Val ch = emitExpr(ir, recv->a);
-        slots[k] = allocaFor(ir, recv->type, "sel");
-        const char *pc = tmp(ir), *po = tmp(ir);
+        Node *x = arm->a;
+        bool send = x->kind == N_BINARY;
+        Val ch = emitExpr(ir, x->a);
+        if (send) {
+            /* the value is made before select picks an arm */
+            slots[k] = spill(ir, emitExpr(ir, x->b));
+        } else {
+            slots[k] = allocaFor(ir, x->type, "sel");
+        }
+        const char *pc = tmp(ir), *po = tmp(ir), *ps = tmp(ir);
         ins(ir, "%s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", pc, n, chans, k);
         ins(ir, "store ptr %s, ptr %s", ch.s, pc);
         ins(ir, "%s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", po, n, outs, k);
         ins(ir, "store ptr %s, ptr %s", slots[k], po);
-        recvArms[k++] = arm;
+        ins(ir, "%s = getelementptr [%d x i8], ptr %s, i64 0, i64 %d", ps, n, sends, k);
+        ins(ir, "store i8 %d, ptr %s", send ? 1 : 0, ps);
+        armsFor[k++] = arm;
     }
     const char *timeout = "-1";
     if (afterArm) {
-        timeout = emitExpr(ir, afterArm->a->list.items[0]).s;
+        timeout = afterArm->op == K_ELSE ? "0" : emitExpr(ir, afterArm->a->list.items[0]).s;
     }
     const char *which = tmp(ir);
-    ins(ir, "%s = call i64 @iris_select(i64 %d, ptr %s, ptr %s, i64 %s)", which, n, chans, outs, timeout);
+    ins(ir, "%s = call i64 @iris_select(i64 %d, ptr %s, ptr %s, ptr %s, i64 %s)", which, n, chans, outs, sends,
+        timeout);
     int end = newLabel(ir);
     for (int i = 0; i <= n; i++) {
-        Node *arm = i < n ? recvArms[i] : afterArm;
+        Node *arm = i < n ? armsFor[i] : afterArm;
         if (!arm) continue;
         int body = newLabel(ir), next = newLabel(ir);
         const char *is = tmp(ir);
@@ -4328,7 +4341,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i64 @iris_chan_len(ptr)\n"
            "declare void @iris_chan_recv(ptr, ptr)\n"
            "declare void @iris_chan_free(ptr, ptr, i32, i32, ptr)\n"
-           "declare i64 @iris_select(i64, ptr, ptr, i64)\n"
+           "declare i64 @iris_select(i64, ptr, ptr, ptr, i64)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
     sbPrintf(&out, "!llvm.dbg.cu = !{!10}\n!llvm.module.flags = !{!1, !2}\n"

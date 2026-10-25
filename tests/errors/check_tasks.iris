@@ -5,7 +5,7 @@
 // error: 18: <- takes from a channel, not from i64
 // error: 19: after is an arm of a select: select { after(5s) => ... }
 // error: 20: a channel's room can't be below 0; 0 is a channel with no buffer
-// error: 22: a select arm takes from a channel (<-ch) or waits with after(...)
+// error: 22: a select arm takes from a channel (<-ch), sends to one (ch <- v), waits with after(...) or is else
 !void fails() { }
 void ok(i64 n) { }
 

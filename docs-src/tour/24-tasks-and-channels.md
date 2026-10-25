@@ -263,7 +263,37 @@ control: reload
 no reply within 50ms
 ```
 
-When several channels have values, `select` takes the first arm in order. An arm takes from a channel or waits with `after`. Sending is done outside `select`.
+When several channels have values, `select` takes the first arm in order. An arm takes from a channel, sends to one, waits with `after`, or is `else`.
+
+A send arm, `ch <- v => ...`, goes when the channel has room or, for a channel without room, when a task waits to take the value. The value is made before `select` picks an arm, so when another arm goes, it still belongs to the code that made it: send a named value, and free a `String` that didn't go out. An `else` arm runs at once when no other arm can go, so the `select` never waits. A `select` has `else` or `after`, not both.
+
+```iris run
+void main() {
+    jobs := chan[i64](2)
+    defer jobs.free()
+    stop := chan[bool](1)
+    defer stop.free()
+    for i in 0..3 {
+        select {
+            jobs <- i => print("queued {i}")
+            else => print("full, {i} dropped")
+        }
+    }
+    stop <- true
+    i64 next = 9
+    select {
+        _ := <-stop => print("stopped before sending {next}")
+        jobs <- next => print("sent {next}")
+    }
+}
+```
+
+```output
+queued 0
+queued 1
+full, 2 dropped
+stopped before sending 9
+```
 
 `ch.trySend(v)` sends without waiting. It gives `true` when the value went in, and `false` when the channel is full, or, for a channel without room, when no task waits to take it. After a `false` the value still belongs to the sender, which frees a `String` it drops. `ch.len()` says how many values wait in the channel. A request handler that logs through a channel uses them so a slow log writer drops lines instead of holding up requests:
 

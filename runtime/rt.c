@@ -4416,7 +4416,7 @@ static bool handTake(Chan *c, void *out) {
     Waiter *s = takeWaiter(&c->sendWaiters);
     if (!s) return false;
     memcpy(out, s->data, (size_t)c->elemSize);
-    *s->got = 1;
+    *s->got = s->arm + 1;
     wakeTask(s->task);
     return true;
 }
@@ -4542,9 +4542,44 @@ void iris_chan_free(Chan *c, const char *file, int line, int col, const char *fn
     free(c);
 }
 
-/* select: takes a value from the first of chans that has one, or returns
- * n when timeout (ns, -1 for none) runs out first. */
-int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
+/* Whether q holds a waiter of another task than the one whose claim flag
+   is mine: a select that sends and takes on one channel can't meet itself. */
+static bool othersWait(WaitQueue *q, int *mine) {
+    for (Waiter *w = q->head; w; w = w->next) {
+        if (w->claimed != mine) return true;
+    }
+    return false;
+}
+
+/* One select arm, tried without waiting; the channel's lock is held. A
+   send arm's value is at bufs[i], a taking arm's goes there. */
+static bool selectTry(Chan *c, void *buf, bool send) {
+    if (!send) {
+        if (c->cap == 0) return handTake(c, buf);
+        if (c->len == 0) return false;
+        chanTake(c, buf);
+        return true;
+    }
+    if (c->cap == 0) {
+        Waiter *r = takeWaiter(&c->recvWaiters);
+        if (!r) return false;
+        memcpy(r->data, buf, (size_t)c->elemSize);
+        *r->got = r->arm + 1;
+        wakeTask(r->task);
+        return true;
+    }
+    if (c->len == c->cap) return false;
+    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->elemSize, buf, (size_t)c->elemSize);
+    c->len++;
+    wakeOne(&c->recvWaiters);
+    return true;
+}
+
+/* select: the first arm in order that can go at once goes: it takes a
+ * value from chans[i] into bufs[i], or, when sends[i] is set, sends the
+ * value at bufs[i]. Returns its index, or n when timeout (ns, -1 for none,
+ * 0 for an else arm) runs out first. */
+int64_t iris_select(int64_t n, Chan **chans, void **bufs, const int8_t *sends, int64_t timeout) {
     int64_t deadline = timeout >= 0 ? nowNs() + timeout : -1;
     Waiter ws[64];
     if (n > 64) {
@@ -4553,27 +4588,29 @@ int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
     for (;;) {
         for (int64_t i = 0; i < n; i++) {
             spinLock(&chans[i]->lock);
-            if (chans[i]->cap == 0 ? handTake(chans[i], outs[i]) : chans[i]->len > 0) {
-                if (chans[i]->cap != 0) chanTake(chans[i], outs[i]);
-                spinUnlock(&chans[i]->lock);
-                return i;
-            }
+            bool went = selectTry(chans[i], bufs[i], sends[i]);
             spinUnlock(&chans[i]->lock);
+            if (went) return i;
         }
         if (deadline >= 0 && nowNs() >= deadline) {
             return n;
         }
-        /* wait on every channel; one that got a value meanwhile means
-           trying again, unless a waker already claimed this task */
+        /* wait on every channel; one that can go meanwhile means trying
+           again, unless a waker already claimed this task */
         int claimed = 0;
         int64_t added = 0, got = 0;
         bool arrived = false;
         for (; added < n && !arrived; added++) {
             Chan *c = chans[added];
             spinLock(&c->lock);
-            ws[added] = (Waiter){.task = current, .claimed = &claimed, .data = outs[added], .got = &got, .arm = added};
-            queuePush(&c->recvWaiters, &ws[added]);
-            arrived = c->cap == 0 ? c->sendWaiters.head != NULL : c->len > 0;
+            ws[added] = (Waiter){.task = current, .claimed = &claimed, .data = bufs[added], .got = &got, .arm = added};
+            if (sends[added]) {
+                queuePush(&c->sendWaiters, &ws[added]);
+                arrived = c->cap == 0 ? othersWait(&c->recvWaiters, &claimed) : c->len < c->cap;
+            } else {
+                queuePush(&c->recvWaiters, &ws[added]);
+                arrived = c->cap == 0 ? othersWait(&c->sendWaiters, &claimed) : c->len > 0;
+            }
             spinUnlock(&c->lock);
         }
         bool mine = arrived && !__atomic_exchange_n(&claimed, 1, __ATOMIC_ACQ_REL);
@@ -4590,11 +4627,12 @@ int64_t iris_select(int64_t n, Chan **chans, void **outs, int64_t timeout) {
         }
         for (int64_t i = 0; i < added; i++) {
             spinLock(&chans[i]->lock);
-            queueRemove(&chans[i]->recvWaiters, &ws[i]);
+            queueRemove(sends[i] ? &chans[i]->sendWaiters : &chans[i]->recvWaiters, &ws[i]);
             spinUnlock(&chans[i]->lock);
         }
         if (got) {
-            return got - 1;         /* a sender handed its value straight over */
+            /* a task on the other side took or handed the value itself */
+            return got - 1;
         }
     }
 }

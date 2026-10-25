@@ -1,0 +1,24 @@
+// error: 9: a send gives no value to name
+// error: 13: a select can have one else arm
+// error: 18: a select has else or after, not both
+// error: 21: the value sent is str, but i64 is needed
+
+void main() {
+    ch := chan[i64](1)
+    select {
+        x := ch <- 1 => print("x")
+    }
+    select {
+        else => print("a")
+        else => print("b")
+    }
+    select {
+        <-ch => print("c")
+        else => print("d")
+        after(1s) => print("e")
+    }
+    select {
+        ch <- "text" => print("f")
+    }
+    ch.free()
+}

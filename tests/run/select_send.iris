@@ -1,0 +1,86 @@
+// expect: room: sent
+// expect: full: else
+// expect: taken 1
+// expect: unbuffered with nobody waiting: else
+// expect: waited for a taker: sent 7
+// expect: after: no taker within 20ms
+// expect: took first: 5
+// expect: 40 sent, 40 taken, sum 780
+// expect: else with nothing to take
+
+void taker(chan[i64] ch, chan[i64] done) {
+    v := <-ch
+    done <- v
+}
+
+void counter(chan[i64] work, chan[i64] done, i64 count) {
+    i64 sum = 0
+    for _ in 0..count {
+        sum += <-work
+    }
+    done <- sum
+}
+
+void main() {
+    ch := chan[i64](1)
+    defer ch.free()
+    select {
+        ch <- 1 => print("room: sent")
+        else => print("room: else")
+    }
+    select {
+        ch <- 2 => print("full: sent")
+        else => print("full: else")
+    }
+    print("taken {<-ch}")
+
+    plain := chan[i64](0)
+    defer plain.free()
+    select {
+        plain <- 3 => print("unbuffered with nobody waiting: sent")
+        else => print("unbuffered with nobody waiting: else")
+    }
+
+    done := chan[i64](0)
+    defer done.free()
+    spawn taker(plain, done)
+    select {
+        plain <- 7 => print("waited for a taker: sent {<-done}")
+    }
+
+    select {
+        plain <- 8 => print("after: sent")
+        after(20ms) => print("after: no taker within 20ms")
+    }
+
+    // a value to take comes before the send in order
+    inbox := chan[i64](1)
+    defer inbox.free()
+    inbox <- 5
+    out := chan[i64](1)
+    defer out.free()
+    select {
+        v := <-inbox => print("took first: {v}")
+        out <- 6 => print("sent first")
+    }
+
+    // a producer that sends while it also listens for a stop
+    work := chan[i64](0)
+    defer work.free()
+    sum := chan[i64](0)
+    defer sum.free()
+    spawn counter(work, sum, 40)
+    i64 sent = 0
+    for sent < 40 {
+        select {
+            work <- sent => sent += 1
+            after(1s) => print("stuck")
+        }
+    }
+    print("{sent} sent, 40 taken, sum {<-sum}")
+
+    select {
+        v := <-inbox => print("took {v}")
+        else => print("else with nothing to take")
+    }
+}

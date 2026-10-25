@@ -362,8 +362,11 @@ static void printNode(Node *n, int depth, const char *label) {
         if (n->name) {
             sbPrintf(&b, " %s :=", n->name);
         }
+        if (n->op == K_ELSE) {
+            sbPuts(&b, " else");
+        }
         line(depth, label, b.buf);
-        child(n->a, d, "recv");
+        child(n->a, d, n->a && n->a->kind == N_BINARY ? "send" : "recv");
         child(n->c, d, "body");
         break;
     case N_ASM:

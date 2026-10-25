@@ -1,0 +1,51 @@
+// expect: 20000 values, sum 199990000, stop seen: true
+
+// Both sides wait in select on channels without room, on two threads:
+// each value goes from a send arm straight to a taking arm.
+void produce(chan[i64] work, chan[i64] stop, i64 count) {
+    i64 i = 0
+    for i < count {
+        select {
+            work <- i => i += 1
+            _ := <-stop => return
+        }
+    }
+}
+
+void consume(chan[i64] work, chan[bool] idle, i64 count, chan[i64] result) {
+    i64 sum = 0
+    i64 got = 0
+    for got < count {
+        select {
+            v := <-work => {
+                sum += v
+                got += 1
+            }
+            idle <- true => {}
+        }
+    }
+    result <- sum
+}
+
+void main() {
+    work := chan[i64](0)
+    defer work.free()
+    stop := chan[i64](0)
+    defer stop.free()
+    idle := chan[bool](0)
+    defer idle.free()
+    p := thread produce(work, stop, 20000)
+    result := chan[i64](1)
+    defer result.free()
+    c := thread consume(work, idle, 20000, result)
+    c.join()
+    sum := <-result
+    // the producer is done: a stop now finds nobody, so else runs
+    p.join()
+    bool seen = true
+    select {
+        stop <- 1 => seen = false
+        else => {}
+    }
+    print("20000 values, sum {sum}, stop seen: {seen}")
+}
