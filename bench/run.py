@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Builds every benchmark in Iris, Rust and Go, runs them and writes results.json.
-#   python3 bench/run.py [--iris PATH] [--runs N] [name...]
+#   python3 bench/run.py [--iris PATH] [--runs N] [--langs iris,rust] [name...]
 # CPU benchmarks: median wall time and peak memory of N runs. Servers run on
 # half the cores and the load generator (wrk, h2load, echo-load) on the rest; their
 # memory is the server's peak. Iris is built twice: release-fast, and
@@ -148,6 +148,7 @@ def main():
     ap.add_argument("--iris", default=shutil.which("iris") or "iris")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--out", default=os.path.join(HERE, "results.json"))
+    ap.add_argument("--langs", default="iris,iris_safe,rust,go", help="the languages to run, for an A/B")
     ap.add_argument("names", nargs="*")
     a = ap.parse_args()
     names = [n for n in CPU + NET + LIB if not a.names or n in a.names]
@@ -155,7 +156,7 @@ def main():
     data = json.load(open(a.out)) if os.path.exists(a.out) else {"results": {}}
     for n in names:
         r = {}
-        for lang in ("iris", "iris_safe", "rust", "go"):
+        for lang in a.langs.split(","):
             b = f"{OUT}/{lang}-{SAME_AS.get(n, n)}"
             if n in CPU or n in LIB:
                 t, mem, outs = timed(b, a.runs, SERVER_CORES if n in THREADED else None)
