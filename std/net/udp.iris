@@ -188,6 +188,58 @@ pub !Udp dialUdp(Addr addr) {
     return error(netCode(code), "{doing}: {reason(code)}")
 }
 
+@extern("iris_udp_multicast")
+i32 rawMulticast(i32 fd, i32 family, i32 op, u8 *ip, u8 *iface, i64 ifaceLen, i32 value)
+
+!void multicastFail(i32 e, str what, str iface) {
+    if e == -1 {
+        return error(NetError.notFound, "{what}: no interface {iface} (with an IPv4 address, for IPv4)")
+    }
+    try optionFail(e, what)
+}
+
+// Joins the multicast group, an address such as 239.255.255.250 or
+// ff02::fb: datagrams sent to it come to this socket too. iface names the
+// interface to listen on ("" lets the system choose). An IPv4 group needs
+// a socket of IPv4, such as listenUdp(port, "0.0.0.0"), on every system.
+pub !void Udp.joinGroup(Addr group, str iface = "") {
+    scoped String g = group.ipText()
+    try multicastFail(rawMulticast(self.sock, self.family, 1, &group.ip[0], iface.ptr, iface.len, 0),
+        "joining {g}", iface)
+}
+
+// Leaves a group joinGroup joined.
+pub !void Udp.leaveGroup(Addr group, str iface = "") {
+    scoped String g = group.ipText()
+    try multicastFail(rawMulticast(self.sock, self.family, 2, &group.ip[0], iface.ptr, iface.len, 0),
+        "leaving {g}", iface)
+}
+
+// How many routers a multicast datagram this socket sends may pass (1 is
+// the start: this network only).
+pub !void Udp.setMulticastHops(i64 hops) {
+    try multicastFail(rawMulticast(self.sock, self.family, 3, null, "".ptr, 0, i32(hops)), "setting the hops", "")
+}
+
+// Whether multicast this socket sends also comes back to sockets on this
+// machine that joined the group (true is the start).
+pub !void Udp.setMulticastLoop(bool on) {
+    try multicastFail(rawMulticast(self.sock, self.family, 4, null, "".ptr, 0, if on { 1 } else { 0 }),
+        "setting the loop", "")
+}
+
+// The interface multicast this socket sends goes out of.
+pub !void Udp.setMulticastInterface(str iface) {
+    try multicastFail(rawMulticast(self.sock, self.family, 5, null, iface.ptr, iface.len, 0),
+        "setting the interface", iface)
+}
+
+// Lets the socket send to a broadcast address such as 255.255.255.255.
+pub !void Udp.setBroadcast(bool on) {
+    try multicastFail(rawMulticast(self.sock, self.family, 6, null, "".ptr, 0, if on { 1 } else { 0 }),
+        "setting SO_BROADCAST", "")
+}
+
 // Sends data as one datagram to addr.
 pub !void Udp.sendTo(str data, Addr addr) {
     code := rawUdpSend(self.sock, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port), self.timeout)

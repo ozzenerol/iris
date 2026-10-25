@@ -315,6 +315,33 @@ ping from 127.0.0.1: true
 
 Several sockets can listen on the same UDP port, such as one per thread. The kernel gives each datagram to one of them.
 
+## Multicast
+
+`joinGroup(group)` makes a socket receive what is sent to a multicast group, such as SSDP's 239.255.255.250 or mDNS's ff02::fb, and `leaveGroup` stops it. An optional interface name chooses where to listen. An IPv4 group needs an IPv4 socket, `listenUdp(port, "0.0.0.0")`. For sending, `setMulticastHops` says how many routers a datagram may pass (1, this network only, is the start), `setMulticastLoop` whether it also comes back to this machine, and `setMulticastInterface` which interface it goes out of. `setBroadcast(true)` lets a socket send to a broadcast address.
+
+```iris run
+import net
+
+!void main() {
+    group := try net.ip("239.1.2.3")
+    rx := try net.listenUdp(0, "0.0.0.0")
+    defer rx.close()
+    try rx.joinGroup(group)
+
+    tx := try net.listenUdp(0, "0.0.0.0")
+    defer tx.close()
+    try tx.sendTo("anyone there?", net.Addr{ip: group.ip, port: rx.localAddr().port})
+
+    u8[64] buf
+    n, _ := try rx.readFrom(buf)
+    print(buf[0:n])
+}
+```
+
+```output
+anyone there?
+```
+
 ## Many datagrams at once
 
 A busy UDP server spends much of its time in system calls, one per datagram. `readMany` waits for a datagram and then takes all waiting ones, up to the number of `Datagram`s it is given, with one system call on Linux. Each `Datagram` has room for one datagram in `buf`, and `readMany` sets its `len` and the `addr` it came from. `sendMany` sends a batch the same way, so a batch that was read can be sent back as it is:

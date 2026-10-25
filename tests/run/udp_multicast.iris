@@ -1,0 +1,43 @@
+// expect: got from the group: hello group
+// expect: after leaving, nothing: true
+// expect: NetError.notFound: joining 239.1.2.3: no interface no-such-iface0 (with an IPv4 address, for IPv4)
+// expect: broadcast on: true
+
+import net
+
+!void main() {
+    group := try net.ip("239.1.2.3", 0)
+    rx := try net.listenUdp(0, "0.0.0.0")
+    defer rx.close()
+    try rx.joinGroup(group)
+    rx.setTimeout(2s)
+    tx := try net.listenUdp(0, "0.0.0.0")
+    defer tx.close()
+    try tx.setMulticastHops(1)
+    try tx.setMulticastLoop(true)
+    to := net.Addr{ip: group.ip, port: rx.localAddr().port}
+    try tx.sendTo("hello group", to)
+    u8[] buf = alloc(u8, 64)
+    defer free(buf)
+    n, _ := try rx.readFrom(buf)
+    print("got from the group: {buf[0:n]}")
+
+    try rx.leaveGroup(group)
+    rx.setTimeout(200ms)
+    try tx.sendTo("again", to)
+    bool nothing = false
+    _, _ = rx.readFrom(buf) catch e {
+        nothing = e.code == net.NetError.timeout
+        (i64(0), net.Addr{})
+    }
+    print("after leaving, nothing: {nothing}")
+
+    rx.joinGroup(group, "no-such-iface0") catch e {
+        print("{e.code}: {e.message}")
+    }
+    bool ok = true
+    tx.setBroadcast(true) catch e {
+        ok = false
+    }
+    print("broadcast on: {ok}")
+}

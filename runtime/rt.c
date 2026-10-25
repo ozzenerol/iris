@@ -2916,6 +2916,8 @@ int iris_str_parse_float(const char *p, int64_t n, double *out) {
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <net/if.h>
+#include <ifaddrs.h>
 #include <sys/un.h>
 #include <stddef.h>
 #include <arpa/inet.h>
@@ -4788,6 +4790,94 @@ int iris_udp_open(const uint8_t *ip, int64_t port, int connectTo, int *family, i
     *family = fam;
     *err = 0;
     return fd;
+}
+
+/* The IPv4 address of the interface named, for IPv4 multicast; false when
+   it has none. */
+static bool ifaceV4(const char *name, struct in_addr *out) {
+    struct ifaddrs *list, *i;
+    if (getifaddrs(&list) != 0) return false;
+    bool found = false;
+    for (i = list; i; i = i->ifa_next) {
+        if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET && strcmp(i->ifa_name, name) == 0) {
+            *out = ((struct sockaddr_in *)i->ifa_addr)->sin_addr;
+            found = true;
+            break;
+        }
+    }
+    freeifaddrs(list);
+    return found;
+}
+
+/* Multicast and broadcast on a UDP socket: op 1 joins group (ip), 2 leaves
+   it, on the interface named (iface, "" for the system's choice); 3 sets
+   the hops multicast goes (value), 4 whether it comes back to this machine
+   (value), 5 the interface it goes out of (iface), 6 broadcast (value). 0,
+   errno, or -1 for an interface that doesn't exist or has no IPv4. */
+int iris_udp_multicast(int fd, int family, int op, const uint8_t *ip, const char *iface, int64_t ifaceLen,
+                       int value) {
+    char name[IF_NAMESIZE + 1] = "";
+    if (ifaceLen > IF_NAMESIZE) return -1;
+    memcpy(name, iface, (size_t)ifaceLen);
+    name[ifaceLen] = 0;
+    unsigned index = 0;
+    if (ifaceLen > 0 && (index = if_nametoindex(name)) == 0) return -1;
+    bool v4 = ip ? isMapped(ip) : family == AF_INET;
+    int r = 0;
+    switch (op) {
+    case 1:
+    case 2:
+        if (v4) {
+            struct ip_mreq m;
+            memset(&m, 0, sizeof m);
+            memcpy(&m.imr_multiaddr, ip + 12, 4);
+            m.imr_interface.s_addr = htonl(INADDR_ANY);
+            if (ifaceLen > 0 && !ifaceV4(name, &m.imr_interface)) return -1;
+            r = setsockopt(fd, IPPROTO_IP, op == 1 ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &m, sizeof m);
+        } else {
+            struct ipv6_mreq m;
+            memset(&m, 0, sizeof m);
+            memcpy(&m.ipv6mr_multiaddr, ip, 16);
+            m.ipv6mr_interface = index;
+            r = setsockopt(fd, IPPROTO_IPV6, op == 1 ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP, &m, sizeof m);
+        }
+        break;
+    case 3:
+        if (v4) {
+            unsigned char t = (unsigned char)(value > 255 ? 255 : value);
+            r = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &t, sizeof t);
+        } else {
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &value, sizeof value);
+        }
+        break;
+    case 4:
+        if (v4) {
+            unsigned char on = value != 0;
+            r = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &on, sizeof on);
+        } else {
+            unsigned on = value != 0;
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &on, sizeof on);
+        }
+        break;
+    case 5:
+        if (v4) {
+            struct in_addr a;
+            a.s_addr = htonl(INADDR_ANY);
+            if (ifaceLen > 0 && !ifaceV4(name, &a)) return -1;
+            r = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &a, sizeof a);
+        } else {
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_IF, &index, sizeof index);
+        }
+        break;
+    case 6: {
+        int on = value != 0;
+        r = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
+        break;
+    }
+    default:
+        return EINVAL;
+    }
+    return r == 0 ? 0 : errno;
 }
 
 /* Sends one datagram, to ip and port, or where the socket is connected
