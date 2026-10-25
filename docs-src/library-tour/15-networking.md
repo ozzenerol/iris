@@ -431,3 +431,9 @@ the listener: 1 descriptor, same port: true
 For a descriptor used through `import c`, `net.waitRead` and `net.waitWrite` wait in the event loop until it is ready, so other tasks run in the meantime.
 
 The [net library page](../std/index.html#net) has the rest: UDP with `listenUdp` and batches of datagrams, names with `lookup` and `query`, and every function of the module.
+
+`listenUnixDatagram(path)` is a Unix socket for messages, each sent and read whole, as syslog's `/dev/log` and systemd take them. `sendTo(data, path)` sends one, and `readFrom(buf)` reads one with the path of the socket it came from. `listenUnixDatagram()` without a path makes one that only sends, and `dialUnixDatagram(path)` one that sends to a single path with `send`. A path that starts with `@` is in Linux's abstract namespace and has no file.
+
+`net.socketPair()` gives two connected sockets: what one writes, the other reads. A program hands one to a program it starts, as a kept descriptor, and keeps the other.
+
+A service that systemd runs with `Type=notify` says it is ready with `net.notifySystemd("READY=1")`, and `"RELOADING=1"`, `"STOPPING=1"` or `"STATUS=..."` as it goes on. A server that hands its sockets to a new version sends `"MAINPID=..."` with the new process's id. It returns false when the program doesn't run under systemd.

@@ -591,6 +591,147 @@ pub !Conn dialUnix(str path, Duration timeout = 0s) {
     return Conn{sock: fd, buf: alloc(u8, 16KiB)}
 }
 
+@extern("iris_unixgram_open")
+i32 rawGramOpen(u8 *path, i64 len, i32 *err)
+
+@extern("iris_unixgram_connect")
+i32 rawGramConnect(i32 fd, u8 *path, i64 len)
+
+@extern("iris_unixgram_send")
+i32 rawGramSend(i32 fd, u8 *data, i64 n, u8 *path, i64 len, i64 timeout)
+
+@extern("iris_unixgram_recv")
+i64 rawGramRecv(i32 fd, u8 *buf, i64 len, String *from, i64 timeout)
+
+@extern("iris_socket_pair")
+i32 rawSocketPair(i32 *a, i32 *b)
+
+// A Unix datagram socket: each send and read is one message, kept whole,
+// to and from paths on this machine, as syslog's /dev/log and systemd's
+// notify socket take them. A path starting with @ is in Linux's abstract
+// namespace, which has no file.
+pub struct UnixDatagram {
+    i32 sock
+    Duration timeout
+}
+
+// A Unix datagram socket at path, a file it makes, that others send to;
+// "" for one that only sends. The file stays when the socket closes.
+pub !UnixDatagram listenUnixDatagram(str path = "") {
+    i32 err
+    fd := rawGramOpen(path.ptr, path.len, &err)
+    if fd < 0 {
+        return error(netCode(err), "opening a datagram socket at {path}: {reason(err)}")
+    }
+    return UnixDatagram{sock: fd}
+}
+
+// A Unix datagram socket that sends to path alone, with send.
+pub !UnixDatagram dialUnixDatagram(str path) {
+    i32 err
+    fd := rawGramOpen("".ptr, 0, &err)
+    if fd < 0 {
+        return error(netCode(err), "opening a datagram socket: {reason(err)}")
+    }
+    code := rawGramConnect(fd, path.ptr, path.len)
+    if code != 0 {
+        rawClose(fd)
+        return error(netCode(code), "connecting to {path}: {reason(code)}")
+    }
+    return UnixDatagram{sock: fd}
+}
+
+// Each read and send after this fails with NetError.timeout when it waits
+// longer than d; 0 is the start, no limit.
+pub void UnixDatagram.setTimeout(Duration d) {
+    self.timeout = d
+}
+
+!void gramFail(i32 code, str doing) {
+    if code == 9 {
+        return error(NetError.tooLong, "{doing}: the message is too large")
+    }
+    return error(netCode(code), "{doing}: {reason(code)}")
+}
+
+// Sends data as one message to the socket at path.
+pub !void UnixDatagram.sendTo(str data, str path) {
+    code := rawGramSend(self.sock, data.ptr, data.len, path.ptr, path.len, self.timeout)
+    if code != 0 {
+        try gramFail(code, "sending to {path}")
+    }
+}
+
+// Sends data as one message to where dialUnixDatagram connected.
+pub !void UnixDatagram.send(str data) {
+    code := rawGramSend(self.sock, data.ptr, data.len, "".ptr, 0, self.timeout)
+    if code != 0 {
+        try gramFail(code, "sending")
+    }
+}
+
+// Waits for a message and reads it into buf: its length, cut to buf's,
+// and the path of the socket it came from, "" when that one has no path.
+pub !(i64, String) UnixDatagram.readFrom(u8[] buf) {
+    String from
+    n := rawGramRecv(self.sock, buf.ptr, buf.len, &from, self.timeout)
+    if n < 0 {
+        from.free()
+        return error(netCode(i32(-n)), "reading a message: {reason(i32(-n))}")
+    }
+    return (n, from)
+}
+
+// Waits for a message and reads it into buf: its length, cut to buf's.
+pub !i64 UnixDatagram.read(u8[] buf) {
+    n, from := try self.readFrom(buf)
+    from.free()
+    return n
+}
+
+// The socket's file descriptor.
+pub i32 UnixDatagram.fd() => self.sock
+
+// Closes the socket.
+pub void UnixDatagram.close() => rawClose(self.sock)
+
+// Two connected Unix sockets: what one writes, the other reads. For
+// talking to a program started with one of them as a kept descriptor,
+// or between threads.
+pub !(Conn, Conn) socketPair() {
+    i32 a
+    i32 b
+    code := rawSocketPair(&a, &b)
+    if code != 0 {
+        return error(netCode(code), "making a socket pair: {reason(code)}")
+    }
+    return (Conn{sock: a, buf: alloc(u8, 16KiB)}, Conn{sock: b, buf: alloc(u8, 16KiB)})
+}
+
+// Tells systemd how the program is doing, for a service of Type=notify:
+// "READY=1" once it serves, "RELOADING=1" and "STOPPING=1", "STATUS=..."
+// for systemctl status, "MAINPID=4242" after an upgrade hands over to a
+// new process, several separated by newlines. False when the program
+// doesn't run under systemd (NOTIFY_SOCKET isn't set).
+pub !bool notifySystemd(str state) {
+    path := rawNotifySocket()
+    if path.len == 0 {
+        return false
+    }
+    s := try listenUnixDatagram()
+    defer s.close()
+    try s.sendTo(state, path)
+    return true
+}
+
+@extern("iris_notify_socket_ptr")
+u8 *rawNotifyPtr()
+
+@extern("iris_notify_socket_len")
+i64 rawNotifyLen()
+
+str rawNotifySocket() => rawNotifyPtr()[0:rawNotifyLen()]
+
 // Sends data, and file descriptors with it, over a Unix socket: the other
 // side gets copies of them with readFds. data can't be empty. At most 250
 // descriptors.

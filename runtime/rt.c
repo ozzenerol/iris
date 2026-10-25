@@ -5718,6 +5718,113 @@ static int unixAddr(const char *path, int64_t len, struct sockaddr_un *a, sockle
     return 0;
 }
 
+/* Unix datagram sockets: bound to path when it isn't empty. -1 with *err
+   on an error. */
+int iris_unixgram_open(const char *path, int64_t len, int *err) {
+    int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        *err = netCode(errno);
+        return -1;
+    }
+    if (len > 0) {
+        struct sockaddr_un a;
+        socklen_t sl;
+        if (unixAddr(path, len, &a, &sl) != 0) {
+            close(fd);
+            *err = 4;
+            return -1;
+        }
+        if (bind(fd, (struct sockaddr *)&a, sl) != 0) {
+            *err = errno == EADDRINUSE ? 5 : errno == ENOENT ? 4 : errno == EACCES ? 8 : netCode(errno);
+            close(fd);
+            return -1;
+        }
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    *err = 0;
+    return fd;
+}
+
+int iris_unixgram_connect(int fd, const char *path, int64_t len) {
+    struct sockaddr_un a;
+    socklen_t sl;
+    if (unixAddr(path, len, &a, &sl) != 0) return 4;
+    return connect(fd, (struct sockaddr *)&a, sl) == 0 ? 0 : errno == ENOENT ? 4 : netCode(errno);
+}
+
+/* One datagram to path, or where the socket is connected (len 0): 0, or a
+   code (9 too large). */
+int iris_unixgram_send(int fd, const char *data, int64_t n, const char *path, int64_t len, int64_t timeout) {
+    struct sockaddr_un a;
+    socklen_t sl = 0;
+    if (len > 0 && unixAddr(path, len, &a, &sl) != 0) return 4;
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        ssize_t k = len > 0 ? sendto(fd, data, (size_t)n, 0, (struct sockaddr *)&a, sl) : send(fd, data, (size_t)n, 0);
+        if (k >= 0) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ENOBUFS) {
+            if (!waitFdUntil(fd, 1, deadline)) return 3;
+            continue;
+        }
+        if (errno == EMSGSIZE) return 9;
+        if (errno == ENOENT) return 4;
+        if (errno == ECONNREFUSED) return 1;
+        return netCode(errno);
+    }
+}
+
+/* One datagram into buf: its length (cut to len), and the path it came
+   from in from ("" for an unbound sender, @name for an abstract one); or
+   -code. */
+int64_t iris_unixgram_recv(int fd, char *buf, int64_t len, IrisString *from, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        struct sockaddr_un a;
+        socklen_t sl = sizeof a;
+        memset(&a, 0, sizeof a);
+        ssize_t k = recvfrom(fd, buf, (size_t)len, 0, (struct sockaddr *)&a, &sl);
+        if (k >= 0) {
+            size_t pl = sl > offsetof(struct sockaddr_un, sun_path) ? sl - offsetof(struct sockaddr_un, sun_path) : 0;
+            if (pl > 0 && a.sun_path[0] == 0) {
+                iris_string_append(from, "@", 1);
+                iris_string_append(from, a.sun_path + 1, (int64_t)pl - 1);
+            } else if (pl > 0) {
+                iris_string_append(from, a.sun_path, (int64_t)strnlen(a.sun_path, pl));
+            }
+            return k;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 0, deadline)) return -3;
+            continue;
+        }
+        return -netCode(errno);
+    }
+}
+
+/* $NOTIFY_SOCKET, where systemd takes a service's notifications. */
+const char *iris_notify_socket_ptr(void) {
+    const char *p = getenv("NOTIFY_SOCKET");
+    return p ? p : "";
+}
+
+int64_t iris_notify_socket_len(void) { return (int64_t)strlen(iris_notify_socket_ptr()); }
+
+/* Two connected Unix stream sockets, for talking to a program started
+   with one of them, or between threads: 0, or a code. */
+int iris_socket_pair(int *a, int *b) {
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return netCode(errno);
+    for (int i = 0; i < 2; i++) {
+        fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+        nonBlocking(fds[i]);
+        fdForget(fds[i]);
+    }
+    *a = fds[0];
+    *b = fds[1];
+    return 0;
+}
+
 int iris_unix_listen(const char *path, int64_t len, int *err) {
     struct sockaddr_un a;
     socklen_t sl;

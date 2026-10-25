@@ -1,0 +1,64 @@
+// expect: got "first" from the client's path: true
+// expect: got "second" from a socket without a path: true
+// expect: dialed: third
+// expect: NetError.notFound
+// expect: pair: ping, pong
+// expect: not under systemd: false
+// expect: systemd got: READY=1
+
+import fs, net, os
+
+!void main() {
+    scoped String dir = try fs.tempDir("iris-gram")
+    scoped String srvPath = format("{dir}/srv")
+    scoped String cliPath = format("{dir}/cli")
+    srv := try net.listenUnixDatagram(srvPath)
+    defer srv.close()
+    srv.setTimeout(2s)
+    cli := try net.listenUnixDatagram(cliPath)
+    defer cli.close()
+    try cli.sendTo("first", srvPath)
+    u8[] buf = alloc(u8, 64)
+    defer free(buf)
+    n, from := try srv.readFrom(buf)
+    print("got \"{buf[0:n]}\" from the client's path: {from == cliPath}")
+    from.free()
+
+    anon := try net.listenUnixDatagram()
+    defer anon.close()
+    try anon.sendTo("second", srvPath)
+    n2, from2 := try srv.readFrom(buf)
+    print("got \"{buf[0:n2]}\" from a socket without a path: {from2.len == 0}")
+    from2.free()
+
+    d := try net.dialUnixDatagram(srvPath)
+    defer d.close()
+    try d.send("third")
+    n3 := try srv.read(buf)
+    print("dialed: {buf[0:n3]}")
+
+    scoped String nowhere = format("{dir}/nobody")
+    anon.sendTo("lost", nowhere) catch e {
+        print("{e.code}")
+    }
+
+    a, b := try net.socketPair()
+    defer a.close()
+    defer b.close()
+    try a.write("ping\n")
+    scoped String p1 = try b.readLine()
+    try b.write("pong\n")
+    scoped String p2 = try a.readLine()
+    print("pair: {p1}, {p2}")
+
+    try os.unsetenv("NOTIFY_SOCKET")
+    print("not under systemd: {try net.notifySystemd("READY=1")}")
+    scoped String notifyPath = format("{dir}/notify")
+    fake := try net.listenUnixDatagram(notifyPath)
+    defer fake.close()
+    try os.setenv("NOTIFY_SOCKET", notifyPath)
+    _ = try net.notifySystemd("READY=1")
+    n4 := try fake.read(buf)
+    print("systemd got: {buf[0:n4]}")
+    try fs.removeAll(dir)
+}
