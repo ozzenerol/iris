@@ -5729,6 +5729,93 @@ int64_t iris_cpu_count(void) {
     return n > 0 ? n : 1;
 }
 
+/* Pins the calling thread to the nth core this process may run on (n
+   from 0 to iris_cpu_count() - 1): 0, -2 for an n out of range, -1 off
+   Linux, or errno. */
+int iris_pin_thread(int64_t n) {
+#ifdef __linux__
+    cpu_set_t set, one;
+    if (sched_getaffinity(0, sizeof set, &set) != 0) return errno;
+    int64_t k = 0;
+    for (int c = 0; c < CPU_SETSIZE; c++) {
+        if (!CPU_ISSET(c, &set)) continue;
+        if (k++ == n) {
+            CPU_ZERO(&one);
+            CPU_SET(c, &one);
+            return pthread_setaffinity_np(pthread_self(), sizeof one, &one);
+        }
+    }
+    return -2;
+#else
+    (void)n;
+    return -1;
+#endif
+}
+
+/* The users and groups of the system (getpwnam_r and friends). A user
+   found: 0, with its fields added to the Strings; 1 when there is none. */
+int iris_user_lookup(const char *name, int64_t nameLen, int64_t uid, IrisString *outName, int64_t *outUid,
+                     int64_t *outGid, IrisString *home, IrisString *shell, IrisString *gecos) {
+    char buf[16384];
+    struct passwd pw, *pwp = NULL;
+    if (nameLen >= 0) {
+        char *n = cpath(name, nameLen);
+        if (!n) return 1;
+        getpwnam_r(n, &pw, buf, sizeof buf, &pwp);
+        free(n);
+    } else {
+        getpwuid_r((uid_t)uid, &pw, buf, sizeof buf, &pwp);
+    }
+    if (!pwp) return 1;
+    iris_string_append(outName, pw.pw_name, (int64_t)strlen(pw.pw_name));
+    *outUid = pw.pw_uid;
+    *outGid = pw.pw_gid;
+    if (pw.pw_dir) iris_string_append(home, pw.pw_dir, (int64_t)strlen(pw.pw_dir));
+    if (pw.pw_shell) iris_string_append(shell, pw.pw_shell, (int64_t)strlen(pw.pw_shell));
+    if (pw.pw_gecos) iris_string_append(gecos, pw.pw_gecos, (int64_t)strlen(pw.pw_gecos));
+    return 0;
+}
+
+/* The groups user is in, its own group gid among them, into gids (room
+   for cap): how many there are, which may be more than cap. */
+int64_t iris_user_groups(const char *name, int64_t nameLen, int64_t gid, int64_t *gids, int64_t cap) {
+    char *n = cpath(name, nameLen);
+    if (!n) return 0;
+    int count = 512;
+#ifdef __APPLE__
+    int list[512];
+    getgrouplist(n, (int)gid, list, &count);
+#else
+    gid_t list[512];
+    getgrouplist(n, (gid_t)gid, list, &count);
+#endif
+    free(n);
+    if (count > 512) count = 512;
+    for (int i = 0; i < count && i < cap; i++) gids[i] = (int64_t)list[i];
+    return count;
+}
+
+/* A group, by name (nameLen >= 0) or id: 0 with its name, id and members
+   (each followed by a 0 byte), or 1 when there is none. */
+int iris_group_lookup(const char *name, int64_t nameLen, int64_t gid, IrisString *outName, int64_t *outGid,
+                      IrisString *members) {
+    char buf[65536];
+    struct group gr, *grp = NULL;
+    if (nameLen >= 0) {
+        char *n = cpath(name, nameLen);
+        if (!n) return 1;
+        getgrnam_r(n, &gr, buf, sizeof buf, &grp);
+        free(n);
+    } else {
+        getgrgid_r((gid_t)gid, &gr, buf, sizeof buf, &grp);
+    }
+    if (!grp) return 1;
+    iris_string_append(outName, gr.gr_name, (int64_t)strlen(gr.gr_name));
+    *outGid = gr.gr_gid;
+    for (char **m = gr.gr_mem; m && *m; m++) iris_string_append(members, *m, (int64_t)strlen(*m) + 1);
+    return 0;
+}
+
 /* ---------------------------------------------------------------- json
 
    json.encode, json.decode and the free of @json structs work from a table
@@ -10371,7 +10458,8 @@ static void onSignal(int sig) {
 }
 
 /* signal.Signal's cases, in order, as the system numbers them */
-static const int sigNumbers[] = {SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2};
+static const int sigNumbers[] = {SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2, SIGCHLD, SIGWINCH, SIGQUIT,
+                                  SIGKILL, SIGSTOP, SIGCONT};
 
 void iris_signal_watch(int which) {
     if (which < 0 || which >= (int)(sizeof sigNumbers / sizeof sigNumbers[0])) return;
@@ -10394,6 +10482,13 @@ void iris_signal_watch(int which) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     sigaction(sig, &sa, NULL);
+}
+
+/* Sends signal.Signal which to process pid, or to every process of the
+   group pid when group: 0, or errno. */
+int iris_signal_send(int64_t pid, int which, int group) {
+    if (which < 0 || which >= (int)(sizeof sigNumbers / sizeof sigNumbers[0]) || pid <= 0) return EINVAL;
+    return kill(group ? -(pid_t)pid : (pid_t)pid, sigNumbers[which]) == 0 ? 0 : errno;
 }
 
 /* The next signal that came, as its case of signal.Signal. */

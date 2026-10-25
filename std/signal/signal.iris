@@ -5,8 +5,18 @@
 // what systemd and Docker send), hangup is SIGHUP, which servers take as
 // "read the configuration again", and user1 and user2 are SIGUSR1 and
 // SIGUSR2, for whatever a program wants them to mean, such as starting
-// its next version.
-pub enum Signal { interrupt, terminate, hangup, user1, user2 }
+// its next version. child (SIGCHLD) comes when a program this one started
+// ends, windowChange (SIGWINCH) when the terminal changes size, and quit
+// is Ctrl-\ (SIGQUIT). kill (SIGKILL), pause (SIGSTOP) and resume
+// (SIGCONT) can be sent but not watched.
+pub enum Signal { interrupt, terminate, hangup, user1, user2, child, windowChange, quit, kill, pause, resume }
+
+// What send fails with: notFound for a process that isn't there, permission
+// for one this program may not signal.
+pub enum SignalError { notFound, permission, other }
+
+@extern("iris_signal_send")
+i32 rawSend(i64 pid, i32 which, i32 group)
 
 @extern("iris_signal_watch")
 void rawWatch(i32 sig)
@@ -21,6 +31,12 @@ i32 number(Signal s) => match s {
     .hangup => 2
     .user1 => 3
     .user2 => 4
+    .child => 5
+    .windowChange => 6
+    .quit => 7
+    .kill => 8
+    .pause => 9
+    .resume => 10
 }
 
 // From now on these signals no longer stop the program: wait gives them.
@@ -45,6 +61,29 @@ pub Signal wait() {
         1 => .terminate
         2 => .hangup
         3 => .user1
-        _ => .user2
+        4 => .user2
+        5 => .child
+        6 => .windowChange
+        _ => .quit
     }
 }
+
+!void sendFail(i32 e, str what) {
+    if e == 0 {
+        return
+    }
+    if e == 3 {     // ESRCH
+        return error(SignalError.notFound, "{what}: no such process")
+    }
+    if e == 1 {     // EPERM
+        return error(SignalError.permission, "{what}: not allowed")
+    }
+    return error(SignalError.other, "{what}: the system refused")
+}
+
+// Sends s to the process pid, such as a Child's.
+pub !void send(i64 pid, Signal s) => try sendFail(rawSend(pid, number(s), 0), "signaling {pid}")
+
+// Sends s to every process of the process group group: a shell's job, or
+// a program started in a session of its own and what it started.
+pub !void sendGroup(i64 group, Signal s) => try sendFail(rawSend(group, number(s), 1), "signaling group {group}")

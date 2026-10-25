@@ -1,0 +1,39 @@
+// expect: root: uid 0, gid 0, has a home: true
+// expect: by id: root
+// expect: groups start with its own: true
+// expect: OsError.notFound: no-such-user-iris: no such user
+// expect: group 0 is named: true
+// expect: OsError.notFound: no-such-group-iris: no such group
+// expect: cores: true
+// expect: pinned or told why: true
+
+import os
+
+!void main() {
+    scoped root := try os.lookupUser("root")
+    print("root: uid {root.uid}, gid {root.gid}, has a home: {root.home.len > 0}")
+    scoped byId := try os.lookupUserId(0)
+    print("by id: {byId.name}")
+    scoped me := try os.lookupUserId(os.uid())
+    scoped gs := me.groups()
+    print("groups start with its own: {gs.len >= 1 && gs.at(0) == me.gid}")
+    _ = os.lookupUser("no-such-user-iris") catch e {
+        print("{e.code}: {e.message}")
+        os.User{}
+    }
+    scoped g0 := try os.lookupGroupId(0)
+    print("group 0 is named: {g0.name.len > 0}")
+    _ = os.lookupGroup("no-such-group-iris") catch e {
+        print("{e.code}: {e.message}")
+        os.Group{}
+    }
+    print("cores: {os.cpuCount() >= 1}")
+    bool told = true
+    os.pinThread(0) catch e {
+        told = e.message == "pinning a thread: only on Linux"
+    }
+    os.pinThread(os.cpuCount()) catch e {
+        told = told && (e.code == os.OsError.invalid || e.message == "pinning a thread: only on Linux")
+    }
+    print("pinned or told why: {told}")
+}

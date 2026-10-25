@@ -1,0 +1,34 @@
+// expect: terminated: 143
+// expect: paused, then resumed and ended: 0
+// expect: got child
+// expect: got windowChange
+// expect: SignalError.notFound: signaling 1073741823: no such process
+
+import os, process, signal
+
+!void main() {
+    a := try process.start(["sleep", "10"])
+    try signal.send(a.pid, .terminate)
+    print("terminated: {a.wait()}")
+
+    b := try process.start(["sh", "-c", "sleep 0.2; exit 0"])
+    try signal.send(b.pid, .pause)
+    sleep(300ms)
+    running := b.running()
+    try signal.send(b.pid, .resume)
+    status := b.wait()
+    print("paused, then resumed and ended: {if running { status } else { -1 }}")
+
+    signal.watch([.child, .windowChange])
+    c := try process.start(["true"])
+    got := signal.wait()
+    _ = c.wait()
+    print("got {got}")
+    try signal.send(os.pid(), .windowChange)
+    got2 := signal.wait()
+    print("got {got2}")
+
+    signal.send(1073741823, .terminate) catch e {
+        print("{e.code}: {e.message}")
+    }
+}

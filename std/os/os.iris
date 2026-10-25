@@ -177,3 +177,142 @@ pub !String home() {
     }
     return out
 }
+
+@extern("iris_cpu_count")
+i64 rawCpuCount()
+
+@extern("iris_pin_thread")
+i32 rawPin(i64 n)
+
+@extern("iris_user_lookup")
+i32 rawUserLookup(u8 *name, i64 nameLen, i64 uid, String *outName, i64 *outUid, i64 *outGid, String *home,
+    String *shell, String *gecos)
+
+@extern("iris_user_groups")
+i64 rawUserGroups(u8 *name, i64 nameLen, i64 gid, i64 *gids, i64 cap)
+
+@extern("iris_group_lookup")
+i32 rawGroupLookup(u8 *name, i64 nameLen, i64 gid, String *outName, i64 *outGid, String *members)
+
+// How many cores the program may run on: all of the machine's, or fewer
+// when taskset or a container limits it.
+pub i64 cpuCount() => rawCpuCount()
+
+// Keeps the thread that calls it on one core from now on: core is from 0
+// to cpuCount() - 1, counting the cores the program may run on, so a
+// thread per core each keeps its caches warm. Linux only.
+pub !void pinThread(i64 core) {
+    e := rawPin(core)
+    if e == -1 {
+        return error(OsError.other, "pinning a thread: only on Linux")
+    }
+    if e == -2 {
+        return error(OsError.invalid, "pinning a thread: core {core} isn't one of the {cpuCount()} it may use")
+    }
+    if e != 0 {
+        return error(OsError.other, "pinning a thread to core {core}: the system refused")
+    }
+}
+
+// A user of the system, as the user database has it.
+pub struct User {
+    pub String name
+    pub i64 uid
+    pub i64 gid
+    pub String home
+    pub String shell
+    // the full name and other notes
+    pub String gecos
+}
+
+// Gives the user's text back.
+pub void User.free() {
+    self.name.free()
+    self.home.free()
+    self.shell.free()
+    self.gecos.free()
+}
+
+// The ids of the groups the user is in, its own group first.
+pub List[i64] User.groups() {
+    i64[512] gids
+    n := rawUserGroups(self.name.ptr, self.name.len, self.gid, &gids[0], 512)
+    List[i64] out
+    out.push(self.gid)
+    for i in 0..(if n < 512 { n } else { 512 }) {
+        if gids[i] != self.gid {
+            out.push(gids[i])
+        }
+    }
+    return out
+}
+
+// The user named name: notFound when there is none.
+pub !User lookupUser(str name) {
+    User u
+    if rawUserLookup(name.ptr, name.len, 0, &u.name, &u.uid, &u.gid, &u.home, &u.shell, &u.gecos) != 0 {
+        u.free()
+        return error(OsError.notFound, "{name}: no such user")
+    }
+    return u
+}
+
+// The user with the id uid: notFound when there is none.
+pub !User lookupUserId(i64 uid) {
+    User u
+    if rawUserLookup("".ptr, -1, uid, &u.name, &u.uid, &u.gid, &u.home, &u.shell, &u.gecos) != 0 {
+        u.free()
+        return error(OsError.notFound, "user {uid}: no such user")
+    }
+    return u
+}
+
+// A group of the system, and the users the group database names as its
+// members (not those whose own group it is).
+pub struct Group {
+    pub String name
+    pub i64 gid
+    pub List[String] members
+}
+
+// Gives the group's text back.
+pub void Group.free() {
+    self.name.free()
+    self.members.freeEach()
+}
+
+Group groupFrom(String name, i64 gid, String members) {
+    Group g = Group{name: name, gid: gid}
+    i64 start = 0
+    for i in 0..members.len {
+        if members[i] == 0 {
+            g.members.push(members[start:i].copy())
+            start = i + 1
+        }
+    }
+    return g
+}
+
+// The group named name: notFound when there is none.
+pub !Group lookupGroup(str name) {
+    String n
+    i64 gid
+    scoped String members
+    if rawGroupLookup(name.ptr, name.len, 0, &n, &gid, &members) != 0 {
+        n.free()
+        return error(OsError.notFound, "{name}: no such group")
+    }
+    return groupFrom(n, gid, members)
+}
+
+// The group with the id gid: notFound when there is none.
+pub !Group lookupGroupId(i64 gid) {
+    String n
+    i64 id
+    scoped String members
+    if rawGroupLookup("".ptr, -1, gid, &n, &id, &members) != 0 {
+        n.free()
+        return error(OsError.notFound, "group {gid}: no such group")
+    }
+    return groupFrom(n, id, members)
+}

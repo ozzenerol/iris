@@ -217,6 +217,23 @@ import net, os
 
 Only root may change to another user: anyone else gets `OsError.permission`, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives `OsError.notFound`. `os.uid()` and `os.gid()` give the ids the program runs as, and `os.user()` the user's name.
 
+`os.lookupUser(name)` and `os.lookupUserId(uid)` give a `User` from the system's user database: its `name`, `uid`, `gid`, `home`, `shell` and `gecos`, and `groups()`, the ids of every group it is in. `os.lookupGroup(name)` and `os.lookupGroupId(gid)` give a `Group` with its `name`, `gid` and `members`.
+
+```iris run
+import os
+
+!void main() {
+    scoped root := try os.lookupUser("root")
+    print("{root.name} is {root.uid}, in group {root.gid}")
+}
+```
+
+```output
+root is 0, in group 0
+```
+
+`os.cpuCount()` is how many cores the program may run on, and `os.pinThread(core)`, on Linux, keeps the calling thread on one of them, so a thread per core keeps its caches warm.
+
 ## Input
 
 The second argument to `run` goes to the program's standard input:
@@ -264,7 +281,9 @@ import process, signal
 got terminate, saving and stopping
 ```
 
-From then on, `signal.watch()` makes `interrupt` and `terminate` wait for `wait` instead of ending the program. `wait` calls it when nothing is watched yet. `signal.watch([.hangup])` watches other signals. Many programs take `hangup` (SIGHUP) as a request to read their settings again. `user1` and `user2` (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version.
+From then on, `signal.watch()` makes `interrupt` and `terminate` wait for `wait` instead of ending the program. `wait` calls it when nothing is watched yet. `signal.watch([.hangup])` watches other signals. Many programs take `hangup` (SIGHUP) as a request to read their settings again. `user1` and `user2` (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version. `child` comes when a program this one started ends, `windowChange` when the terminal changes size, and `quit` is Ctrl-\\.
+
+`signal.send(pid, s)` sends a signal to another process, and `signal.sendGroup(group, s)` to every process of a process group. Besides the ones above, `kill` ends a process at once, `pause` stops it and `resume` lets it go on; those three can be sent but not watched. A process that isn't there gives `SignalError.notFound`, and one this program may not signal `SignalError.permission`.
 
 A server waits for the signal in one task while other tasks serve:
 
