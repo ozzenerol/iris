@@ -1,0 +1,106 @@
+// expect: HTTP/1.1 send: body 'whole' grpc-status=0 grpc-message=ok
+// expect: HTTP/2 send: body 'whole' grpc-status=0 grpc-message=ok
+// expect: HTTP/1.1 send: body '' grpc-status=5 grpc-message=
+// expect: HTTP/2 send: body '' grpc-status=5 grpc-message=
+// expect: HTTP/1.1 send: body 'one two ' grpc-status=0 grpc-message=streamed
+// expect: HTTP/2 send: body 'one two ' grpc-status=0 grpc-message=streamed
+// expect: stream: body 'one two ' grpc-status=0, 2 trailers
+// expect: upload: x-sum=abc123 x-count=3, body 12 bytes
+// expect: upload without chunks: HttpError.badRequest
+// expect: no trailers: '' and 0
+
+import http, net, str
+
+void whole(http.Request *req, http.Response *res) {
+    res.text("whole")
+    res.trailer("grpc-status", "0")
+    res.trailer("grpc-message", "ok")
+}
+
+void empty(http.Request *req, http.Response *res) {
+    res.status = 200
+    res.trailer("grpc-status", "5")
+}
+
+!void streamed(http.Request *req, http.Response *res) {
+    try res.write("one ")
+    try res.write("two ")
+    res.trailer("grpc-status", "0")
+    res.trailer("grpc-message", "streamed")
+}
+
+// what came: the body's length and the request's trailers
+void upload(http.Request *req, http.Response *res) {
+    scoped List[http.Header] all = req.trailers()
+    scoped String out = format("x-sum={req.trailer("x-sum")} x-count={all.len}, body {req.body.len} bytes")
+    res.text(out)
+}
+
+void plain(http.Request *req, http.Response *res) {
+    res.text("plain")
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/whole", whole)
+    r.get("/empty", empty)
+    r.get("/streamed", streamed)
+    r.post("/upload", upload)
+    r.get("/plain", plain)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    for path in ["whole", "empty", "streamed"] {
+        scoped String url = format("http://127.0.0.1:{ln.port}/{path}")
+        for h2 in [false, true] {
+            http.Client c
+            c.priorKnowledge = h2
+            defer c.close()
+            scoped http.Reply a = try c.get(url)
+            print("{a.protocol} send: body '{a.body}' grpc-status={a.trailer("grpc-status")} grpc-message={a.trailer("Grpc-Message")}")
+        }
+    }
+
+    http.Client c
+    defer c.close()
+    scoped String streamUrl = format("http://127.0.0.1:{ln.port}/streamed")
+    rs := try c.stream("GET", streamUrl)
+    defer rs.close()
+    scoped String body = try rs.readAll()
+    scoped List[http.Header] ts = rs.trailers()
+    print("stream: body '{body}' grpc-status={rs.trailer("grpc-status")}, {ts.len} trailers")
+
+    scoped String uploadUrl = format("http://127.0.0.1:{ln.port}/upload")
+    u := try c.begin("POST", uploadUrl, "application/octet-stream")
+    try u.write("hello ")
+    try u.write("world!")
+    u.trailer("X-Sum", "abc123")
+    u.trailer("X-Count", "3")
+    u.trailer("X-Last", "yes")
+    ur := try u.finish()
+    defer ur.close()
+    scoped String got = try ur.readAll()
+    print("upload: {got}")
+
+    u2 := try c.begin("POST", uploadUrl, "text/plain", length: 2)
+    try u2.write("hi")
+    u2.trailer("X-Sum", "1")
+    _ = u2.finish() catch e {
+        print("upload without chunks: {e.code}")
+        http.ReplyStream none
+        none
+    }
+
+    scoped String plainUrl = format("http://127.0.0.1:{ln.port}/plain")
+    scoped http.Reply p = try c.get(plainUrl)
+    scoped List[http.Header] none = p.trailers()
+    print("no trailers: '{p.trailer("grpc-status")}' and {none.len}")
+    r.shutdown(0s)
+}

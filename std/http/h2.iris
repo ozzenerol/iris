@@ -145,6 +145,7 @@ struct Out {
     i32 status
     String contentType
     String headers  // "Name: value\r\n" lines, as Response keeps them
+    String trailers // reply and end: sent after the body, as headers are
     StreamOut *sink // head, chunk and end: the streamed answer
 }
 
@@ -174,6 +175,7 @@ struct Sending {
     i64 window
     bool open // a streamed answer whose end hasn't come yet
     StreamOut *sink
+    String trailers // sent in a HEADERS frame that ends the stream
 }
 
 struct Writer {
@@ -230,8 +232,16 @@ void encodeReply(String *block, Out *o) {
         encodeHeader(block, "content-type", o.contentType)
     }
     scoped String length = format("{o.data.len}")
-    encodeHeader(block, "content-length", length)
-    str rest = o.headers
+    if o.job != .head {
+        // a streamed answer's length isn't known
+        encodeHeader(block, "content-length", length)
+    }
+    encodeLines(block, o.headers)
+}
+
+// Header lines "Name: value\r\n" in HTTP/2's form, as encodeReply does.
+void encodeLines(String *block, str lines) {
+    str rest = lines
     for rest.len > 0 {
         line, after, _ := str.cut(rest, "\r\n")
         rest = after
@@ -240,12 +250,52 @@ void encodeReply(String *block, Out *o) {
             continue
         }
         scoped String lower = str.lower(str.trim(name))
-        if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" ||
-            lower == "upgrade" || lower == "proxy-connection" || lower == "content-length" {
+        if lower.len == 0 || lower[0] == ':' || lower == "connection" || lower == "keep-alive" ||
+            lower == "transfer-encoding" || lower == "upgrade" || lower == "proxy-connection" ||
+            lower == "content-length" {
                 continue
             }
         encodeHeader(block, lower, str.trim(value))
     }
+}
+
+// A header block as HEADERS and the CONTINUATION frames it needs, ending
+// the stream when end is set.
+void Writer.headerFrames(i64 stream, str block, bool end) {
+    String frames
+    defer frames.free()
+    i64 at = 0
+    for {
+        n := if block.len - at > self.maxFrame { self.maxFrame } else { block.len - at }
+        last := at + n == block.len
+        kind := if at == 0 { F_HEADERS } else { F_CONTINUATION }
+        i64 flags = 0
+        if last {
+            flags |= END_HEADERS
+        }
+        if at == 0 && end {
+            flags |= END_STREAM
+        }
+        putFrame(&frames, kind, flags, stream, block[at:at + n])
+        at += n
+        if last {
+            break
+        }
+    }
+    self.write(frames)
+}
+
+// Ends a stream whose body has all gone: with the trailers when there are
+// some, else with an empty DATA frame.
+void Writer.endStream(i64 stream, str trailers) {
+    if trailers.len == 0 {
+        scoped String f = frameOf(F_DATA, END_STREAM, stream, "")
+        self.write(f)
+        return
+    }
+    scoped String block
+    encodeLines(&block, trailers)
+    self.headerFrames(stream, block, true)
 }
 
 void Writer.reply(Out *o) {
@@ -260,6 +310,7 @@ void Writer.reply(Out *o) {
             _ = self.reset.remove(i)
             _ = self.early.remove(o.stream)
             o.data.free()
+            o.trailers.free()
             if streamed {
                 o.sink.gone.store(1)
             }
@@ -271,37 +322,20 @@ void Writer.reply(Out *o) {
     defer block.free()
     encodeReply(&block, o)
     bodyless := o.data.len == 0 && !streamed
-    String frames
-    defer frames.free()
-    // the block in frames of at most maxFrame: HEADERS, then CONTINUATION
-    i64 at = 0
-    for {
-        n := if block.len - at > self.maxFrame { self.maxFrame } else { block.len - at }
-        last := at + n == block.len
-        kind := if at == 0 { F_HEADERS } else { F_CONTINUATION }
-        i64 flags = 0
-        if last {
-            flags |= END_HEADERS
-        }
-        if at == 0 && bodyless {
-            flags |= END_STREAM
-        }
-        putFrame(&frames, kind, flags, o.stream, block[at:at + n])
-        at += n
-        if last {
-            break
-        }
-    }
-    self.write(frames)
+    self.headerFrames(o.stream, block, bodyless && o.trailers.len == 0)
     extra, _ := self.early.get(o.stream)
     _ = self.early.remove(o.stream)
     if bodyless {
+        if o.trailers.len > 0 {
+            self.endStream(o.stream, o.trailers)
+        }
         o.data.free()
+        o.trailers.free()
         self.finished()
         return
     }
     self.sending.push(Sending{stream: o.stream, body: o.data, window: self.initial + extra, open: streamed,
-        sink: if streamed { o.sink } else { null }})
+        sink: if streamed { o.sink } else { null }, trailers: o.trailers})
 }
 
 // A piece of a streamed answer, sent as the windows allow.
@@ -332,8 +366,8 @@ void Writer.end(Out *o) {
         if s.stream == o.stream {
             s.open = false
             if s.at == s.body.len {
-                scoped String f = frameOf(F_DATA, END_STREAM, s.stream, "")
-                self.write(f)
+                self.endStream(s.stream, o.trailers)
+                o.trailers.free()
                 s.body.free()
                 _ = self.sending.remove(i)
                 self.finished()
@@ -341,11 +375,13 @@ void Writer.end(Out *o) {
                 return
             }
             s.sink = null
+            s.trailers = o.trailers
             self.sending.set(i, s)
             free(o.sink[0:1])
             return
         }
     }
+    o.trailers.free()
     free(o.sink[0:1])
 }
 
@@ -374,8 +410,12 @@ bool Writer.pump() {
             continue
         }
         last := n == left && !s.open
-        scoped String f = frameOf(F_DATA, if last { END_STREAM } else { 0 }, s.stream, s.body[s.at:s.at + n])
+        scoped String f = frameOf(F_DATA, if last && s.trailers.len == 0 { END_STREAM } else { 0 }, s.stream,
+            s.body[s.at:s.at + n])
         self.write(f)
+        if last && s.trailers.len > 0 {
+            self.endStream(s.stream, s.trailers)
+        }
         sent = true
         s.at += n
         s.window -= n
@@ -385,6 +425,7 @@ bool Writer.pump() {
         }
         if last {
             s.body.free()
+            s.trailers.free()
             _ = self.sending.remove(i)
             self.finished()
             continue
@@ -437,6 +478,7 @@ void Writer.handle(Out o) {
                         scoped String rst = rstFrame(o.stream, E_FLOW)
                         self.write(rst)
                         s.body.free()
+                        s.trailers.free()
                         _ = self.sending.remove(i)
                         self.finished()
                         return
@@ -478,6 +520,7 @@ void Writer.handle(Out o) {
                         s.sink.queued.store(0)
                     }
                     s.body.free()
+                    s.trailers.free()
                     _ = self.sending.remove(i)
                     self.finished()
                     return
@@ -513,6 +556,7 @@ void runWriter(Writer *w, chan[bool] done) {
     // whatever is left now has no one to read it
     for s in w.sending {
         s.body.free()
+        s.trailers.free()
     }
     w.sending.free()
     w.early.free()
@@ -645,12 +689,12 @@ void answer(Request req, i64 stream, Target target, Queue *jobs) {
     if res.streaming {
         // the head and the pieces went already; the writer frees the sink
         res.body.free()
-        jobs.put(Out{job: .end, stream: stream, sink: sink})
+        jobs.put(Out{job: .end, stream: stream, sink: sink, trailers: res.trailers})
         return
     }
     free(sink[0:1])
     jobs.put(Out{job: .reply, stream: stream, status: res.status, data: res.body, contentType: res.contentType,
-        headers: res.headers})
+        headers: res.headers, trailers: res.trailers})
 }
 
 // A request waiting for a task to answer it.
@@ -793,6 +837,19 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
         if f.flags & END_STREAM == 0 {
             self.fail(E_PROTOCOL)
             return
+        }
+        for i in 0..names.len {
+            n := names.at(i)
+            if n.len == 0 || n[0] == ':' {
+                self.resetStream(stream, E_PROTOCOL)
+                _ = self.open.remove(stream)
+                inc.req.free()
+                return
+            }
+            inc.req.trailerText.append(n)
+            inc.req.trailerText.append(": ")
+            inc.req.trailerText.append(values.at(i))
+            inc.req.trailerText.append("\n")
         }
         _ = self.open.remove(stream)
         if !inc.tooBig {

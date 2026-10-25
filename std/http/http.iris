@@ -36,8 +36,10 @@ pub struct Request {
     String own
     List[str] paramNames
     List[str] paramValues
-    List[String] kept // form values decoded by form, freed with the request
-    bool views        // method, path, head and body point into the connection's buffer
+    List[String] kept  // form values decoded by form, freed with the request
+    bool views         // method, path, head and body point into the connection's buffer
+    String trailerText // the trailer lines after the body, "Name: value\n"
+
     // when the request came in, by time.clock(): time.clock() - req.received
     // is how long it has taken
     pub Duration received
@@ -49,6 +51,7 @@ pub struct Response {
     String contentType = "text/plain; charset=utf-8"
     String body
     String headers
+    String trailers // "Name: value\r\n" lines sent after the body
     // a body streamed with write: where it goes, and whether the head went
     net.Conn *conn
     StreamOut *h2
@@ -176,6 +179,15 @@ pub void Response.header(str name, str value) {
     self.headers.append("\r\n")
 }
 
+// Adds a trailer: a header sent after the body, such as gRPC's
+// grpc-status. On HTTP/1.1 an answer with trailers goes in chunks.
+pub void Response.trailer(str name, str value) {
+    self.trailers.append(name)
+    self.trailers.append(": ")
+    self.trailers.append(value)
+    self.trailers.append("\r\n")
+}
+
 // The value of :name or *name in the Router's pattern that matched, with
 // %XX decoded, "" when there is none.
 pub str Request.param(str name) {
@@ -250,9 +262,33 @@ pub struct Header {
 // Every header of the request, in the order they came: for a proxy that
 // passes them on. They point into the request, so they are gone when the
 // handler returns. Free only the list.
-pub List[Header] Request.headers() {
+pub List[Header] Request.headers() => lineHeaders(self.head)
+
+// The value of a trailer, a header sent after the body, "" when the
+// request has none. Trailers come after a chunked HTTP/1.1 body or an
+// HTTP/2 one; on a Router.stream route, once read has given 0.
+pub str Request.trailer(str name) => lineValue(self.trailerText, name)
+
+// Every trailer of the request, in the order they came. Free only the list.
+pub List[Header] Request.trailers() => lineHeaders(self.trailerText)
+
+// The value of name in header lines, "" when they don't have it.
+str lineValue(str lines, str name) {
+    rest := lines
+    for rest.len > 0 {
+        n, v, after := nextHeader(rest)
+        if sameName(n, name) {
+            return v
+        }
+        rest = after
+    }
+    return ""
+}
+
+// Header lines as a list, pointing into them.
+List[Header] lineHeaders(str lines) {
     List[Header] out
-    rest := self.head
+    rest := lines
     for rest.len > 0 {
         n, v, after := nextHeader(rest)
         if n.len > 0 {
@@ -306,6 +342,7 @@ void Request.free() {
     self.paramNames.free()
     self.paramValues.free()
     self.kept.freeEach()
+    self.trailerText.free()
 }
 
 // Answers with text.
@@ -514,8 +551,8 @@ i64 headEnd(str b, i64 from) {
     }
 }
 
-// Reads a body sent in chunks into a String of the request's own, with
-// the trailer lines after it, which are dropped.
+// Reads a body sent in chunks into a String of the request's own, and
+// the trailer lines after it.
 !void readChunked(net.Conn *c, Request *req, Limits *limits) {
     String body
     errdefer body.free()
@@ -538,14 +575,25 @@ i64 headEnd(str b, i64 from) {
             return error(HttpError.badRequest, "a chunk longer than its size")
         }
     }
-    for {
-        scoped String trailer = try c.readLine(limits.maxHeader)
-        if trailer.len == 0 {
-            break
-        }
-    }
+    try readTrailers(c, &req.trailerText, limits.maxHeader)
     req.body.free()
     req.body = body
+}
+
+// Reads the trailer lines after a chunked body, up to the empty line,
+// into out.
+!void readTrailers(net.Conn *c, String *out, i64 maxLine) {
+    for {
+        scoped String line = try c.readLine(maxLine)
+        if line.len == 0 {
+            return
+        }
+        if out.len + line.len > maxLine * 8 {
+            return error(net.NetError.tooLong, "reading the trailers: more than {maxLine * 8} bytes")
+        }
+        out.append(line)
+        out.append("\n")
+    }
 }
 
 // Reads one request, which points into the connection's buffer when it
@@ -717,13 +765,35 @@ void appendInt(String *out, i64 n) {
     out.append(statusText(res.status))
     out.append("\r\nContent-Type: ")
     out.append(res.contentType)
-    out.append("\r\nContent-Length: ")
-    appendInt(out, res.body.len)
-    out.append("\r\n")
+    if res.trailers.len > 0 {
+        // trailers come after the last chunk
+        out.append("\r\nTransfer-Encoding: chunked\r\n")
+    } else {
+        out.append("\r\nContent-Length: ")
+        appendInt(out, res.body.len)
+        out.append("\r\n")
+    }
     out.append(res.headers)
     out.append(if keepAlive { "Connection: keep-alive\r\n\r\n" } else { "Connection: close\r\n\r\n" })
-    out.append(res.body)
+    if res.trailers.len == 0 {
+        out.append(res.body)
+    } else {
+        if res.body.len > 0 {
+            scoped String size = format("{res.body.len:x}\r\n")
+            out.append(size)
+            out.append(res.body)
+            out.append("\r\n")
+        }
+        lastChunk(out, res.trailers)
+    }
     try c.write(*out)
+}
+
+// The chunk that ends a chunked body, with the trailers.
+void lastChunk(String *out, str trailers) {
+    out.append("0\r\n")
+    out.append(trailers)
+    out.append("\r\n")
 }
 
 // Opens a WebSocket on the connection and hands it to the route's handler.
@@ -844,6 +914,7 @@ void serveConn(net.Conn conn, Target target) {
         out.free()
         res.body.free()
         res.headers.free()
+        res.trailers.free()
         res.contentType.free()
     }
     bool served = false
@@ -921,7 +992,9 @@ void serveConn(net.Conn conn, Target target) {
         bool failed = false
         if res.streaming {
             // the last chunk ends the body
-            conn.write("0\r\n\r\n") catch e {
+            reset(&out)
+            lastChunk(&out, res.trailers)
+            conn.write(out) catch e {
                 failed = true
             }
         } else {
@@ -933,6 +1006,7 @@ void serveConn(net.Conn conn, Target target) {
         // the next answer reuses the room, unless it is large
         reset(&res.body)
         reset(&res.headers)
+        reset(&res.trailers)
         reset(&out)
         res.contentType.free()
         res.contentType = borrow("text/plain; charset=utf-8")
@@ -966,6 +1040,7 @@ i32 listenPerThread()
 void run(Handler handler, Request *req, Response *res) {
     handler(req, res) catch e {
         res.headers.free()
+        res.trailers.free()
         res.error(500, e.message)
     }
 }
@@ -1423,6 +1498,7 @@ pub struct Reply {
     pub str protocol
     List[String] names
     List[String] values
+    String trailerText // the trailer lines after the body, "Name: value\n"
 }
 
 // A gzip body is decompressed, and its Content-Encoding header taken out,
@@ -1478,7 +1554,15 @@ pub void Reply.free() {
     }
     self.names.free()
     self.values.free()
+    self.trailerText.free()
 }
+
+// The value of a trailer of the reply, a header sent after the body, ""
+// when it has none: grpc-status, for one.
+pub str Reply.trailer(str name) => lineValue(self.trailerText, name)
+
+// Every trailer of the reply, in the order they came. Free only the list.
+pub List[Header] Reply.trailers() => lineHeaders(self.trailerText)
 
 // Asks for url with GET.
 pub !Reply get(str url, str[] headers = []) => try send("GET", url, headers: headers)
@@ -1855,12 +1939,7 @@ pub void Client.close() {
             size := try hexNumber(str.trim(sizeText))
             if size == 0 {
                 // trailers, up to the empty line that ends the reply
-                for {
-                    scoped String t = try c.readLine()
-                    if t.len == 0 {
-                        break
-                    }
-                }
+                try readTrailers(c, &r.trailerText, 8KiB)
                 break
             }
             scoped String chunk = try c.readExactly(size)

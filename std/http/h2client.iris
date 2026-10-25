@@ -153,6 +153,16 @@ void h2Reader(H2Conn *h) {
                         pend.reply.names.push(names.at(i).copy())
                         pend.reply.values.push(values.at(i).copy())
                     }
+                } else {
+                    // a block after the body's: the trailers
+                    for i in 0..names.len {
+                        if names.at(i).len > 0 && names.at(i)[0] != ':' {
+                            pend.reply.trailerText.append(names.at(i))
+                            pend.reply.trailerText.append(": ")
+                            pend.reply.trailerText.append(values.at(i))
+                            pend.reply.trailerText.append("\n")
+                        }
+                    }
                 }
                 names.freeEach()
                 values.freeEach()

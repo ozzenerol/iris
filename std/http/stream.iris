@@ -13,6 +13,7 @@ pub struct Upload {
     bool chunked
     i64 left
     bool reused
+    String trailers // "Name: value\r\n" lines sent after the body
 }
 
 // A reply whose body is read as it comes: status and the headers are
@@ -29,7 +30,8 @@ pub struct ReplyStream {
     i64 left // length: bytes to come; chunked: of this chunk
     bool done
     bool reusable
-    bool given // the connection went back to the Client
+    bool given         // the connection went back to the Client
+    String trailerText // the trailer lines after the body, "Name: value\n"
 }
 
 // The value of a header of the reply, "" when it has none.
@@ -41,6 +43,13 @@ pub str ReplyStream.header(str name) {
     }
     return ""
 }
+
+// The value of a trailer, a header sent after the body, "" when the reply
+// has none. Trailers are there once read has given 0.
+pub str ReplyStream.trailer(str name) => lineValue(self.trailerText, name)
+
+// Every trailer of the reply, in the order they came. Free only the list.
+pub List[Header] ReplyStream.trailers() => lineHeaders(self.trailerText)
 
 // Starts a request to url and gives an Upload to write its body to.
 // length is the body's size when it is known, and -1 sends it in chunks
@@ -118,15 +127,30 @@ pub !void Upload.write(str data) {
     try self.conn.write(data)
 }
 
+// Adds a trailer, a header sent after the body. It takes a body sent in
+// chunks (begin with length -1).
+pub void Upload.trailer(str name, str value) {
+    self.trailers.append(name)
+    self.trailers.append(": ")
+    self.trailers.append(value)
+    self.trailers.append("\r\n")
+}
+
 // Ends the body and waits for the reply's status and headers; the body
 // is read from the ReplyStream.
 pub !ReplyStream Upload.finish() {
+    defer self.trailers.free()
     errdefer {
         self.conn.close()
         self.url.free()
     }
+    if self.trailers.len > 0 && !self.chunked {
+        return error(HttpError.badRequest, "trailers go after a body sent in chunks: begin with length -1")
+    }
     if self.chunked {
-        try self.conn.write("0\r\n\r\n")
+        scoped String last
+        lastChunk(&last, self.trailers)
+        try self.conn.write(last)
     } else if self.left > 0 {
         return error(HttpError.badRequest, "{self.left} bytes of the body are missing")
     }
@@ -217,12 +241,7 @@ pub !i64 ReplyStream.read(u8[] buf) {
         size := try hexNumber(str.trim(sizeText))
         if size == 0 {
             // trailers, up to the empty line
-            for {
-                scoped String t = try self.conn.readLine()
-                if t.len == 0 {
-                    break
-                }
-            }
+            try readTrailers(&self.conn, &self.trailerText, 8KiB)
             self.finished()
             return 0
         }
@@ -292,4 +311,5 @@ pub void ReplyStream.close() {
     self.names.freeEach()
     self.values.freeEach()
     self.url.free()
+    self.trailerText.free()
 }
