@@ -7774,6 +7774,459 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
     return code;
 }
 
+/* ---------------------------------------------------------------- TUN and TAP devices
+
+   A TUN device carries IP packets between the kernel and this program, a
+   TAP device Ethernet frames (Linux, /dev/net/tun; CAP_NET_ADMIN to make
+   one). Reads and writes are one packet each, and wait in the event loop. */
+
+#ifdef __linux__
+#include <linux/if_tun.h>
+#endif
+
+/* The device's descriptor, its name in name; -1 with *err (errno, or -2
+   off Linux). */
+int iris_tun_open(const char *want, int64_t len, int tap, int multi, IrisString *name, int *err) {
+#ifdef __linux__
+    int fd = open("/dev/net/tun", O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        *err = errno;
+        return -1;
+    }
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof ifr);
+    ifr.ifr_flags = (short)((tap ? IFF_TAP : IFF_TUN) | IFF_NO_PI | (multi ? IFF_MULTI_QUEUE : 0));
+    if (len >= IFNAMSIZ) {
+        close(fd);
+        *err = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(ifr.ifr_name, want, (size_t)len);
+    if (ioctl(fd, TUNSETIFF, &ifr) != 0) {
+        *err = errno;
+        close(fd);
+        return -1;
+    }
+    nonBlocking(fd);
+    fdForget(fd);
+    iris_string_append(name, ifr.ifr_name, (int64_t)strnlen(ifr.ifr_name, IFNAMSIZ));
+    *err = 0;
+    return fd;
+#else
+    (void)want;
+    (void)len;
+    (void)tap;
+    (void)multi;
+    (void)name;
+    *err = -2;
+    return -1;
+#endif
+}
+
+/* One packet: its length, or -errno. */
+int64_t iris_tun_read(int fd, char *buf, int64_t len, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        ssize_t n = read(fd, buf, (size_t)len);
+        if (n >= 0) return n;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 0, deadline)) return -ETIMEDOUT;
+            continue;
+        }
+        return -errno;
+    }
+}
+
+int iris_tun_write(int fd, const char *buf, int64_t len) {
+    for (;;) {
+        ssize_t n = write(fd, buf, (size_t)len);
+        if (n >= 0) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            waitFd(fd, 1);
+            continue;
+        }
+        return errno;
+    }
+}
+
+/* ---------------------------------------------------------------- netlink (Linux)
+
+   rtnetlink: the kernel's interfaces, addresses and routes, set with
+   requests the kernel acknowledges, and read with dumps; events come to a
+   socket bound to their groups. Each record the dumps and events give is
+   a line of tab-separated fields:
+
+     link   index name mtu up(0/1) running(0/1) mac
+     addr   index family address/prefix
+     route  table protocol dest/prefix gateway dev-index metric
+
+   with "new" or "del" in front for an event. */
+
+#ifdef __linux__
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <net/if_arp.h>
+
+static _Atomic uint32_t nlSeq = 1;
+
+int iris_nl_open(uint32_t groups, int *err) {
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+    if (fd < 0) {
+        *err = errno;
+        return -1;
+    }
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof sa);
+    sa.nl_family = AF_NETLINK;
+    sa.nl_groups = groups;
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        *err = errno;
+        close(fd);
+        return -1;
+    }
+    int big = 1 << 20;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &big, sizeof big);
+    nonBlocking(fd);
+    fdForget(fd);
+    *err = 0;
+    return fd;
+}
+
+static void nlAttr(char *buf, size_t *len, unsigned short type, const void *data, size_t n) {
+    struct rtattr *a = (struct rtattr *)(buf + NLMSG_ALIGN(*len));
+    a->rta_type = type;
+    a->rta_len = (unsigned short)RTA_LENGTH(n);
+    memcpy(RTA_DATA(a), data, n);
+    *len = NLMSG_ALIGN(*len) + RTA_ALIGN(a->rta_len);
+}
+
+/* Reads until the answer to seq: 0, or the kernel's errno. */
+static int nlWaitAck(int fd, uint32_t seq) {
+    char buf[16384];
+    for (;;) {
+        ssize_t n = recv(fd, buf, sizeof buf, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                waitFd(fd, 0);
+                continue;
+            }
+            return errno;
+        }
+        for (struct nlmsghdr *h = (struct nlmsghdr *)buf; NLMSG_OK(h, (size_t)n); h = NLMSG_NEXT(h, n)) {
+            if (h->nlmsg_seq != seq) continue;
+            if (h->nlmsg_type == NLMSG_ERROR) {
+                struct nlmsgerr *e = NLMSG_DATA(h);
+                return -e->error;
+            }
+            if (h->nlmsg_type == NLMSG_DONE) return 0;
+        }
+    }
+}
+
+static int nlRequest(char *msg, size_t len) {
+    int err;
+    int fd = iris_nl_open(0, &err);
+    if (fd < 0) return err;
+    struct nlmsghdr *h = (struct nlmsghdr *)msg;
+    h->nlmsg_len = (uint32_t)len;
+    h->nlmsg_seq = nlSeq++;
+    struct sockaddr_nl k;
+    memset(&k, 0, sizeof k);
+    k.nl_family = AF_NETLINK;
+    int r = sendto(fd, msg, len, 0, (struct sockaddr *)&k, sizeof k) < 0 ? errno : nlWaitAck(fd, h->nlmsg_seq);
+    fdForget(fd);
+    close(fd);
+    return r;
+}
+
+static int ifIndex(const char *name, int64_t len) {
+    char n[IF_NAMESIZE + 1];
+    if (len <= 0 || len > IF_NAMESIZE) return 0;
+    memcpy(n, name, (size_t)len);
+    n[len] = 0;
+    return (int)if_nametoindex(n);
+}
+
+/* An interface up (1) or down (0) or as it is (-1), and its MTU when not
+   -1: 0, errno, or -1 when there is no such interface. */
+int iris_nl_link_set(const char *name, int64_t len, int up, int64_t mtu) {
+    int index = ifIndex(name, len);
+    if (!index) return -1;
+    char msg[512];
+    memset(msg, 0, sizeof msg);
+    struct nlmsghdr *h = (struct nlmsghdr *)msg;
+    h->nlmsg_type = RTM_NEWLINK;
+    h->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+    struct ifinfomsg *i = NLMSG_DATA(h);
+    i->ifi_family = AF_UNSPEC;
+    i->ifi_index = index;
+    if (up >= 0) {
+        i->ifi_change = IFF_UP;
+        i->ifi_flags = up ? IFF_UP : 0;
+    }
+    size_t l = NLMSG_LENGTH(sizeof *i);
+    if (mtu >= 0) {
+        uint32_t m = (uint32_t)mtu;
+        nlAttr(msg, &l, IFLA_MTU, &m, sizeof m);
+    }
+    return nlRequest(msg, l);
+}
+
+/* Adds (1) or removes (0) an address, ip with prefix bits, on an
+   interface. */
+int iris_nl_addr(int add, const char *name, int64_t len, const uint8_t *ip, int prefix) {
+    int index = ifIndex(name, len);
+    if (!index) return -1;
+    bool v4 = isMapped(ip);
+    char msg[512];
+    memset(msg, 0, sizeof msg);
+    struct nlmsghdr *h = (struct nlmsghdr *)msg;
+    h->nlmsg_type = add ? RTM_NEWADDR : RTM_DELADDR;
+    h->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | (add ? NLM_F_CREATE | NLM_F_EXCL : 0);
+    struct ifaddrmsg *a = NLMSG_DATA(h);
+    a->ifa_family = v4 ? AF_INET : AF_INET6;
+    a->ifa_prefixlen = (unsigned char)prefix;
+    a->ifa_index = (unsigned)index;
+    size_t l = NLMSG_LENGTH(sizeof *a);
+    nlAttr(msg, &l, IFA_LOCAL, v4 ? ip + 12 : ip, v4 ? 4 : 16);
+    nlAttr(msg, &l, IFA_ADDRESS, v4 ? ip + 12 : ip, v4 ? 4 : 16);
+    return nlRequest(msg, l);
+}
+
+/* Adds (1, replace when replace), or removes (0), a route to dest/prefix
+   via gateway (NULL: none) out of the interface named (len 0: none). */
+int iris_nl_route(int add, int replace, const uint8_t *dest, int prefix, const uint8_t *gateway, const char *name,
+                  int64_t len, int table, int protocol, int64_t metric) {
+    int index = len > 0 ? ifIndex(name, len) : 0;
+    if (len > 0 && !index) return -1;
+    bool v4 = isMapped(dest);
+    char msg[512];
+    memset(msg, 0, sizeof msg);
+    struct nlmsghdr *h = (struct nlmsghdr *)msg;
+    h->nlmsg_type = add ? RTM_NEWROUTE : RTM_DELROUTE;
+    h->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | (add ? NLM_F_CREATE | (replace ? NLM_F_REPLACE : NLM_F_EXCL) : 0);
+    struct rtmsg *r = NLMSG_DATA(h);
+    r->rtm_family = v4 ? AF_INET : AF_INET6;
+    r->rtm_dst_len = (unsigned char)prefix;
+    r->rtm_table = table < 256 ? (unsigned char)table : RT_TABLE_UNSPEC;
+    r->rtm_protocol = (unsigned char)(protocol ? protocol : RTPROT_STATIC);
+    r->rtm_scope = gateway ? RT_SCOPE_UNIVERSE : RT_SCOPE_LINK;
+    r->rtm_type = RTN_UNICAST;
+    size_t l = NLMSG_LENGTH(sizeof *r);
+    nlAttr(msg, &l, RTA_DST, v4 ? dest + 12 : dest, v4 ? 4 : 16);
+    if (gateway) nlAttr(msg, &l, RTA_GATEWAY, v4 ? gateway + 12 : gateway, v4 ? 4 : 16);
+    if (index) nlAttr(msg, &l, RTA_OIF, &index, sizeof index);
+    if (table >= 256) {
+        uint32_t t = (uint32_t)table;
+        nlAttr(msg, &l, RTA_TABLE, &t, sizeof t);
+    }
+    if (metric >= 0) {
+        uint32_t m = (uint32_t)metric;
+        nlAttr(msg, &l, RTA_PRIORITY, &m, sizeof m);
+    }
+    return nlRequest(msg, l);
+}
+
+static void nlIp(IrisString *out, int family, const void *p) {
+    char t[64];
+    inet_ntop(family, p, t, sizeof t);
+    iris_string_append(out, t, (int64_t)strlen(t));
+}
+
+static void nlNum(IrisString *out, int64_t v) {
+    char t[32];
+    int n = snprintf(t, sizeof t, "%lld", (long long)v);
+    iris_string_append(out, t, n);
+}
+
+/* One message as a line, as the comment above has them; false for one
+   that isn't a link, an address or a route. */
+static bool nlLine(struct nlmsghdr *h, IrisString *out, bool event) {
+    if (h->nlmsg_type == RTM_NEWLINK || h->nlmsg_type == RTM_DELLINK) {
+        struct ifinfomsg *i = NLMSG_DATA(h);
+        if (event) iris_string_append(out, h->nlmsg_type == RTM_NEWLINK ? "new\t" : "del\t", 4);
+        iris_string_append(out, "link\t", 5);
+        nlNum(out, i->ifi_index);
+        const char *name = "";
+        int64_t mtu = 0;
+        char mac[32] = "";
+        int len = (int)IFLA_PAYLOAD(h);
+        for (struct rtattr *a = IFLA_RTA(i); RTA_OK(a, len); a = RTA_NEXT(a, len)) {
+            if (a->rta_type == IFLA_IFNAME) name = RTA_DATA(a);
+            else if (a->rta_type == IFLA_MTU) mtu = *(uint32_t *)RTA_DATA(a);
+            else if (a->rta_type == IFLA_ADDRESS && RTA_PAYLOAD(a) == 6) {
+                const unsigned char *m = RTA_DATA(a);
+                snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+            }
+        }
+        iris_string_append(out, "\t", 1);
+        iris_string_append(out, name, (int64_t)strlen(name));
+        iris_string_append(out, "\t", 1);
+        nlNum(out, mtu);
+        iris_string_append(out, (i->ifi_flags & IFF_UP) ? "\t1" : "\t0", 2);
+        iris_string_append(out, (i->ifi_flags & IFF_RUNNING) ? "\t1\t" : "\t0\t", 3);
+        iris_string_append(out, mac, (int64_t)strlen(mac));
+        iris_string_append(out, "\n", 1);
+        return true;
+    }
+    if (h->nlmsg_type == RTM_NEWADDR || h->nlmsg_type == RTM_DELADDR) {
+        struct ifaddrmsg *a = NLMSG_DATA(h);
+        if (event) iris_string_append(out, h->nlmsg_type == RTM_NEWADDR ? "new\t" : "del\t", 4);
+        iris_string_append(out, "addr\t", 5);
+        nlNum(out, a->ifa_index);
+        iris_string_append(out, a->ifa_family == AF_INET ? "\t4\t" : "\t6\t", 3);
+        int len = (int)IFA_PAYLOAD(h);
+        const void *ip = NULL;
+        for (struct rtattr *r = IFA_RTA(a); RTA_OK(r, len); r = RTA_NEXT(r, len)) {
+            if (r->rta_type == IFA_LOCAL) ip = RTA_DATA(r);
+            else if (r->rta_type == IFA_ADDRESS && !ip) ip = RTA_DATA(r);
+        }
+        if (ip) nlIp(out, a->ifa_family, ip);
+        iris_string_append(out, "/", 1);
+        nlNum(out, a->ifa_prefixlen);
+        iris_string_append(out, "\n", 1);
+        return true;
+    }
+    if (h->nlmsg_type == RTM_NEWROUTE || h->nlmsg_type == RTM_DELROUTE) {
+        struct rtmsg *r = NLMSG_DATA(h);
+        if (r->rtm_family != AF_INET && r->rtm_family != AF_INET6) return false;
+        if (event) iris_string_append(out, h->nlmsg_type == RTM_NEWROUTE ? "new\t" : "del\t", 4);
+        iris_string_append(out, "route\t", 6);
+        int64_t table = r->rtm_table, oif = 0, metric = 0;
+        const void *dst = NULL, *gw = NULL;
+        int len = (int)RTM_PAYLOAD(h);
+        for (struct rtattr *a = RTM_RTA(r); RTA_OK(a, len); a = RTA_NEXT(a, len)) {
+            if (a->rta_type == RTA_TABLE) table = *(uint32_t *)RTA_DATA(a);
+            else if (a->rta_type == RTA_DST) dst = RTA_DATA(a);
+            else if (a->rta_type == RTA_GATEWAY) gw = RTA_DATA(a);
+            else if (a->rta_type == RTA_OIF) oif = *(int *)RTA_DATA(a);
+            else if (a->rta_type == RTA_PRIORITY) metric = *(uint32_t *)RTA_DATA(a);
+        }
+        nlNum(out, table);
+        iris_string_append(out, "\t", 1);
+        nlNum(out, r->rtm_protocol);
+        iris_string_append(out, "\t", 1);
+        if (dst) {
+            nlIp(out, r->rtm_family, dst);
+        } else {
+            iris_string_append(out, r->rtm_family == AF_INET ? "0.0.0.0" : "::", r->rtm_family == AF_INET ? 7 : 2);
+        }
+        iris_string_append(out, "/", 1);
+        nlNum(out, r->rtm_dst_len);
+        iris_string_append(out, "\t", 1);
+        if (gw) nlIp(out, r->rtm_family, gw);
+        iris_string_append(out, "\t", 1);
+        nlNum(out, oif);
+        iris_string_append(out, "\t", 1);
+        nlNum(out, metric);
+        iris_string_append(out, "\n", 1);
+        return true;
+    }
+    return false;
+}
+
+/* A dump: 0 links, 1 addresses, 2 routes; a line each, added to out. */
+int iris_nl_dump(int what, IrisString *out) {
+    int err;
+    int fd = iris_nl_open(0, &err);
+    if (fd < 0) return err;
+    struct {
+        struct nlmsghdr h;
+        union {
+            struct ifinfomsg link;
+            struct ifaddrmsg addr;
+            struct rtmsg route;
+        } body;
+    } req;
+    memset(&req, 0, sizeof req);
+    req.h.nlmsg_type = what == 0 ? RTM_GETLINK : what == 1 ? RTM_GETADDR : RTM_GETROUTE;
+    req.h.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    req.h.nlmsg_len = NLMSG_LENGTH(what == 0 ? sizeof req.body.link : what == 1 ? sizeof req.body.addr : sizeof req.body.route);
+    req.h.nlmsg_seq = nlSeq++;
+    struct sockaddr_nl k;
+    memset(&k, 0, sizeof k);
+    k.nl_family = AF_NETLINK;
+    if (sendto(fd, &req, req.h.nlmsg_len, 0, (struct sockaddr *)&k, sizeof k) < 0) {
+        err = errno;
+        fdForget(fd);
+        close(fd);
+        return err;
+    }
+    char *buf = malloc(65536);
+    if (!buf) outOfMemory();
+    int code = 0;
+    for (bool done = false; !done;) {
+        ssize_t n = recv(fd, buf, 65536, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                waitFd(fd, 0);
+                continue;
+            }
+            code = errno;
+            break;
+        }
+        for (struct nlmsghdr *h = (struct nlmsghdr *)buf; NLMSG_OK(h, (size_t)n); h = NLMSG_NEXT(h, n)) {
+            if (h->nlmsg_type == NLMSG_DONE) {
+                done = true;
+                break;
+            }
+            if (h->nlmsg_type == NLMSG_ERROR) {
+                code = -((struct nlmsgerr *)NLMSG_DATA(h))->error;
+                done = true;
+                break;
+            }
+            nlLine(h, out, false);
+        }
+    }
+    free(buf);
+    fdForget(fd);
+    close(fd);
+    return code;
+}
+
+/* The next event on a socket bound to groups: its line in out. 0, 3 when
+   the time ran out, or errno. */
+int iris_nl_next(int fd, IrisString *out, IrisString *pending, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        if (pending->len > 0) {
+            const char *nl = memchr(pending->ptr, '\n', (size_t)pending->len);
+            int64_t k = nl ? (int64_t)(nl - pending->ptr) + 1 : pending->len;
+            iris_string_append(out, pending->ptr, k - 1);
+            memmove(pending->ptr, pending->ptr + k, (size_t)(pending->len - k));
+            pending->len -= k;
+            return 0;
+        }
+        char buf[65536];
+        ssize_t n = recv(fd, buf, sizeof buf, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                if (!waitFdUntil(fd, 0, deadline)) return 3;
+                continue;
+            }
+            return errno;
+        }
+        for (struct nlmsghdr *h = (struct nlmsghdr *)buf; NLMSG_OK(h, (size_t)n); h = NLMSG_NEXT(h, n)) {
+            nlLine(h, pending, true);
+        }
+    }
+}
+#else
+int iris_nl_open(uint32_t groups, int *err) {
+    (void)groups;
+    *err = -2;
+    return -1;
+}
+int iris_nl_link_set(const char *name, int64_t len, int up, int64_t mtu) { return -2; }
+int iris_nl_addr(int add, const char *name, int64_t len, const uint8_t *ip, int prefix) { return -2; }
+int iris_nl_route(int add, int replace, const uint8_t *dest, int prefix, const uint8_t *gateway, const char *name,
+                  int64_t len, int table, int protocol, int64_t metric) {
+    return -2;
+}
+int iris_nl_dump(int what, IrisString *out) { return -2; }
+int iris_nl_next(int fd, IrisString *out, IrisString *pending, int64_t timeout) { return -2; }
+#endif
+
 /* ---------------------------------------------------------------- watching folders
 
    fs.watch: inotify on Linux, waiting in the event loop; elsewhere scans of

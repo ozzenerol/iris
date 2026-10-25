@@ -46,6 +46,7 @@
     ]},
     {"title": "Network", "modules": [
       {"name": "net", "title": "Networking", "summary": "TCP, UDP, TLS, addresses and looking up names."},
+      {"name": "netlink", "title": "Interfaces and routes", "summary": "The kernel's interfaces, addresses and routes on Linux, read, changed and watched, as ip link, ip addr and ip route do."},
       {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."},
       {"name": "template", "title": "HTML templates", "summary": "Templates with values, if, for and include, escaped for HTML, filled from a struct or a Map."},
       {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."},

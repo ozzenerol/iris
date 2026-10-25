@@ -14,6 +14,9 @@
                                // command: test    use iris test (or bench) instead of iris run
                                // args: A B        arguments after the file
                                // env: NAME=VALUE  set for the run
+                               // netns: tun       run in a network namespace of its own
+                                                   (unshare -Urn), with /dev/net/tun;
+                                                   skipped where there is none
                                // stdin: LINE      one per line of input
                                // tty: KEYS        run in a terminal and type KEYS
                                                    (Python escapes: \r, \x1b[D), one
@@ -243,9 +246,41 @@ def run_tests(iris, only, failures, folder="run", env=None):
     return gather(jobs, failures)
 
 
+_netns = None
+
+
+def netns_ok():
+    """Whether a test can run in a user and network namespace of its own,
+    with a TUN device to make."""
+    global _netns
+    if _netns is None:
+        try:
+            _netns = (sys.platform.startswith("linux") and os.path.exists("/dev/net/tun") and
+                      subprocess.run(["unshare", "-Urn", "true"], capture_output=True, timeout=10).returncode == 0)
+        except (OSError, subprocess.TimeoutExpired):
+            _netns = False
+    return _netns
+
+
 def run_test(iris, path, name, env):
     failures = []
     text = open(path).read()
+    if re.search(r"^// netns: tun$", text, re.M):
+        if not netns_ok():
+            print("SKIP %s (no network namespace with TUN here)" % name)
+            return failures
+        # the test's own build, run in its namespace
+        exe = os.path.join(tempfile.mkdtemp(prefix="iris-netns-"), "test")
+        built = subprocess.run([iris, "build", "-o", exe, path], capture_output=True, text=True, timeout=120)
+        if built.returncode != 0:
+            return [(name, "build failed:\n" + built.stderr)]
+        p = subprocess.run(["unshare", "-Urn", exe], capture_output=True, text=True, timeout=60)
+        shutil.rmtree(os.path.dirname(exe), ignore_errors=True)
+        want = "".join(line + "\n" for line in re.findall(r"^// expect:(?: (.*))?$", text, re.M))
+        if p.stdout != want or p.returncode != 0:
+            return [(name, diff(want, p.stdout).replace("tree", "output") +
+                     ("\nexit status %d" % p.returncode) + ("\nstderr:\n" + p.stderr if p.stderr else ""))]
+        return failures
     expect = re.findall(r"^// expect:(?: (.*))?$", text, re.M)
     exits = re.findall(r"^// exit: (\d+)$", text, re.M)
     panics = re.findall(r"^// panic: (.*)$", text, re.M)

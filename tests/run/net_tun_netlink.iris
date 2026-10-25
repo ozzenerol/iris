@@ -1,0 +1,62 @@
+// netns: tun
+// expect: iris0 is up: true, mtu 1500
+// expect: read a UDP packet of 46 bytes to 10.99.0.2: through the tunnel
+// expect: event: added true, route 10.98.0.0/16 via 10.99.0.2
+// expect: route: 10.98.0.0/16 via 10.99.0.2 dev iris0 metric 50 proto 4
+// expect: event: added false, route 10.98.0.0/16
+// expect: again: NetlinkError.exists
+// expect: NetlinkError.notFound: bringing nope0 up: no such interface
+
+import net, netlink
+
+!void main() {
+    t := try net.openTun("iris0")
+    defer t.close()
+    try netlink.addAddress("iris0", "10.99.0.1/24")
+    try netlink.linkUp("iris0")
+    try netlink.linkUp("lo")
+    scoped ls := try netlink.links()
+    for l in ls {
+        if l.name == "iris0" {
+            print("iris0 is up: {l.up}, mtu {l.mtu}")
+        }
+    }
+
+    u := try net.listenUdp(0, "10.99.0.1")
+    defer u.close()
+    try u.sendTo("through the tunnel", try net.ip("10.99.0.2", 9999))
+    u8[] buf = alloc(u8, 2048)
+    defer free(buf)
+    t.setTimeout(2s)
+    for {
+        n := try t.read(buf)
+        // an IPv4 packet: version 4, protocol 17 (UDP), to 10.99.0.2
+        if n > 28 && buf[0] >> 4 == 4 && buf[9] == 17 {
+            print("read a UDP packet of {n} bytes to {buf[16]}.{buf[17]}.{buf[18]}.{buf[19]}: {buf[28:n]}")
+            break
+        }
+    }
+
+    w := try netlink.watch(links: false, addresses: false)
+    defer w.close()
+    try netlink.addRoute(netlink.Route{dest: "10.98.0.0/16".copy(), gateway: "10.99.0.2".copy(), dev: "iris0".copy(), metric: 50})
+    ev := try w.next(2s)
+    print("event: added {ev.added}, route {ev.route.dest} via {ev.route.gateway}")
+    ev.free()
+    scoped rs := try netlink.routes()
+    for r in rs {
+        if r.dest == "10.98.0.0/16" {
+            print("route: {r.dest} via {r.gateway} dev {r.dev} metric {r.metric} proto {r.protocol}")
+        }
+    }
+    try netlink.removeRoute(netlink.Route{dest: "10.98.0.0/16".copy(), gateway: "10.99.0.2".copy(), dev: "iris0".copy()})
+    ev2 := try w.next(2s)
+    print("event: added {ev2.added}, route {ev2.route.dest}")
+    ev2.free()
+    netlink.addAddress("iris0", "10.99.0.1/24") catch e {
+        print("again: {e.code}")
+    }
+    netlink.linkUp("nope0") catch e {
+        print("{e.code}: {e.message}")
+    }
+}

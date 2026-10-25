@@ -1,0 +1,84 @@
+// TUN and TAP devices: a network interface whose other side is this
+// program, as VPNs and userspace network stacks use. A TUN device
+// carries IP packets, a TAP device Ethernet frames. Linux only.
+
+@extern("iris_tun_open")
+i32 rawTunOpen(u8 *want, i64 len, i32 tap, i32 multi, String *name, i32 *err)
+
+@extern("iris_tun_read")
+i64 rawTunRead(i32 fd, u8 *buf, i64 len, i64 timeout)
+
+@extern("iris_tun_write")
+i32 rawTunWrite(i32 fd, u8 *buf, i64 len)
+
+// A TUN or TAP device. name is the interface's, such as tun0.
+pub struct Tun {
+    i32 sock
+    pub String name
+    Duration timeout
+}
+
+// Makes a TUN device, or with tap a TAP device, named name ("" lets the
+// system choose, tun0 or tap0 and on). It needs CAP_NET_ADMIN, and the
+// interface still has to be given an address and brought up, as
+// netlink.addAddress and netlink.linkUp do. With multiQueue, several
+// openTun calls with the same name each get a queue of its own, for a
+// thread each.
+pub !Tun openTun(str name = "", bool tap = false, bool multiQueue = false) {
+    Tun t
+    i32 err
+    fd := rawTunOpen(name.ptr, name.len, if tap { 1 } else { 0 }, if multiQueue { 1 } else { 0 }, &t.name, &err)
+    if fd < 0 {
+        t.name.free()
+        if err == -2 {
+            return error(NetError.other, "TUN and TAP devices: only on Linux")
+        }
+        scoped String text
+        rawErrnoText(err, &text)
+        return error(if err == 1 { NetError.other } else { NetError.notFound }, "opening a {if tap { "TAP" } else { "TUN" }} device: {text}")
+    }
+    t.sock = fd
+    return t
+}
+
+// Each read after this fails with NetError.timeout when it waits longer
+// than d; 0 is the start, no limit.
+pub void Tun.setTimeout(Duration d) {
+    self.timeout = d
+}
+
+// Reads one packet, or frame, into buf: its length. buf should hold the
+// interface's MTU, and for TAP the Ethernet header too.
+pub !i64 Tun.read(u8[] buf) {
+    n := rawTunRead(self.sock, buf.ptr, buf.len, self.timeout)
+    if n < 0 {
+        if n == -110 {
+            return error(NetError.timeout, "reading {self.name}: timed out")
+        }
+        scoped String text
+        rawErrnoText(i32(-n), &text)
+        return error(NetError.other, "reading {self.name}: {text}")
+    }
+    return n
+}
+
+// Writes one packet, or frame: the kernel takes it as if it came in on
+// the interface.
+pub !void Tun.write(str packet) {
+    e := rawTunWrite(self.sock, packet.ptr, packet.len)
+    if e != 0 {
+        scoped String text
+        rawErrnoText(e, &text)
+        return error(NetError.other, "writing to {self.name}: {text}")
+    }
+}
+
+// The device's file descriptor.
+pub i32 Tun.fd() => self.sock
+
+// Closes the device; the interface goes away unless it was made
+// persistent.
+pub void Tun.close() {
+    rawClose(self.sock)
+    self.name.free()
+}

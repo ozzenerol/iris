@@ -1,0 +1,369 @@
+// The kernel's network setup, through rtnetlink (Linux): interfaces
+// (links), their addresses, and routes, read, changed, and watched as
+// they change, as ip link, ip addr and ip route do, without running them.
+// Changing anything needs CAP_NET_ADMIN.
+
+import net, str
+
+// What the calls fail with: notFound for an interface that isn't there,
+// exists for an address or route that is already there, permission, and
+// other for the rest, such as a system other than Linux.
+pub enum NetlinkError { notFound, exists, permission, other }
+
+@extern("iris_nl_open")
+i32 rawOpen(u32 groups, i32 *err)
+
+@extern("iris_nl_link_set")
+i32 rawLinkSet(u8 *name, i64 len, i32 up, i64 mtu)
+
+@extern("iris_nl_addr")
+i32 rawAddr(i32 add, u8 *name, i64 len, u8 *ip, i32 prefix)
+
+@extern("iris_nl_route")
+i32 rawRoute(i32 add, i32 replace, u8 *dest, i32 prefix, u8 *gateway, u8 *name, i64 len, i32 table, i32 protocol,
+    i64 metric)
+
+@extern("iris_nl_dump")
+i32 rawDump(i32 what, String *out)
+
+@extern("iris_nl_next")
+i32 rawNext(i32 fd, String *out, String *pending, i64 timeout)
+
+@extern("iris_net_close")
+void rawClose(i32 fd)
+
+// e: -1 no such interface, -2 not Linux, or the kernel's errno
+Error fail(i32 e, str what) => if e == -1 {
+    error(NetlinkError.notFound, "{what}: no such interface")
+} else if e == -2 {
+    error(NetlinkError.other, "{what}: netlink is only on Linux")
+} else if e == 17 {
+    error(NetlinkError.exists, "{what}: already there")
+} else if e == 1 || e == 13 {
+    error(NetlinkError.permission, "{what}: needs CAP_NET_ADMIN")
+} else if e == 19 || e == 3 || e == 99 {
+    error(NetlinkError.notFound, "{what}: not there")
+} else if e == 22 {
+    error(NetlinkError.other, "{what}: the kernel took it as invalid")
+} else if e == 101 || e == 113 {
+    error(NetlinkError.other, "{what}: the gateway can't be reached")
+} else {
+    error(NetlinkError.other, "{what}: the kernel refused it (errno {e})")
+}
+
+// An address with its prefix length, from "10.0.0.2/24" or "fd00::1/64";
+// an address alone has all its bits.
+pub !(net.Addr, i64) parsePrefix(str text) {
+    ipText, bitsText, hasBits := str.cut(text, "/")
+    a := net.ip(ipText) catch e {
+        return error(NetlinkError.other, "'{text}' isn't an address with a prefix")
+    }
+    max := if a.isV4() { 32 } else { 128 }
+    i64 bits = max
+    if hasBits {
+        bits = str.parseInt(bitsText) catch e {
+            return error(NetlinkError.other, "'{text}': the prefix isn't a number")
+        }
+        if bits < 0 || bits > max {
+            return error(NetlinkError.other, "'{text}': a prefix of 0 to {max}")
+        }
+    }
+    return (a, bits)
+}
+
+// ------------------------------------------------------------ interfaces
+
+// An interface.
+pub struct Link {
+    pub i64 index
+    pub String name
+    pub i64 mtu
+    // up: brought up; running: up and connected
+    pub bool up
+    pub bool running
+    // the hardware address, "" for none
+    pub String mac
+}
+
+// Gives the link's text back.
+pub void Link.free() {
+    self.name.free()
+    self.mac.free()
+}
+
+Link linkOf(List[str] *f, i64 at) {
+    return Link{index: str.parseInt(f.at(at + 1)) catch e { 0 }, name: f.at(at + 2).copy(),
+        mtu: str.parseInt(f.at(at + 3)) catch e { 0 }, up: f.at(at + 4) == "1", running: f.at(at + 5) == "1",
+        mac: (if f.len > at + 6 { f.at(at + 6) } else { "" }).copy()}
+}
+
+// The interfaces.
+pub !List[Link] links() {
+    scoped String text
+    e := rawDump(0, &text)
+    if e != 0 {
+        return fail(e, "listing the interfaces")
+    }
+    List[Link] out
+    scoped List[str] lines = str.lines(text)
+    for line in lines {
+        scoped List[str] f = str.split(line, "\t")
+        if f.len >= 6 && f.at(0) == "link" {
+            out.push(linkOf(&f, 0))
+        }
+    }
+    return out
+}
+
+// Brings the interface up.
+pub !void linkUp(str name) {
+    e := rawLinkSet(name.ptr, name.len, 1, -1)
+    if e != 0 {
+        return fail(e, "bringing {name} up")
+    }
+}
+
+// Takes the interface down.
+pub !void linkDown(str name) {
+    e := rawLinkSet(name.ptr, name.len, 0, -1)
+    if e != 0 {
+        return fail(e, "taking {name} down")
+    }
+}
+
+// Sets the interface's MTU.
+pub !void setMtu(str name, i64 mtu) {
+    e := rawLinkSet(name.ptr, name.len, -1, mtu)
+    if e != 0 {
+        return fail(e, "setting the MTU of {name}")
+    }
+}
+
+// ------------------------------------------------------------ addresses
+
+// An address of an interface, with its prefix: "10.0.0.2/24".
+pub struct Address {
+    pub i64 index
+    pub bool v4
+    pub String prefix
+}
+
+// Gives the address's text back.
+pub void Address.free() => self.prefix.free()
+
+// Every interface's addresses.
+pub !List[Address] addresses() {
+    scoped String text
+    e := rawDump(1, &text)
+    if e != 0 {
+        return fail(e, "listing the addresses")
+    }
+    List[Address] out
+    scoped List[str] lines = str.lines(text)
+    for line in lines {
+        scoped List[str] f = str.split(line, "\t")
+        if f.len >= 4 && f.at(0) == "addr" {
+            out.push(Address{index: str.parseInt(f.at(1)) catch err { 0 }, v4: f.at(2) == "4", prefix: f.at(3).copy()})
+        }
+    }
+    return out
+}
+
+// Gives the interface name an address with its prefix, "10.0.0.2/24".
+pub !void addAddress(str name, str prefix) {
+    a, bits := try parsePrefix(prefix)
+    e := rawAddr(1, name.ptr, name.len, &a.ip[0], i32(bits))
+    if e != 0 {
+        return fail(e, "adding {prefix} to {name}")
+    }
+}
+
+// Takes an address away from an interface.
+pub !void removeAddress(str name, str prefix) {
+    a, bits := try parsePrefix(prefix)
+    e := rawAddr(0, name.ptr, name.len, &a.ip[0], i32(bits))
+    if e != 0 {
+        return fail(e, "removing {prefix} from {name}")
+    }
+}
+
+// ------------------------------------------------------------ routes
+
+// The tables, and who made a route (its protocol): the kernel, an admin
+// (static), or a routing daemon such as BGP.
+pub const i64 TABLE_MAIN = 254
+pub const i64 TABLE_LOCAL = 255
+pub const i64 PROTO_KERNEL = 2
+pub const i64 PROTO_BOOT = 3
+pub const i64 PROTO_STATIC = 4
+pub const i64 PROTO_BGP = 186
+pub const i64 PROTO_OSPF = 188
+
+// A route: traffic for dest ("10.0.0.0/8", "0.0.0.0/0" for the default)
+// goes via gateway ("" for none: on the link itself) out of dev.
+pub struct Route {
+    pub String dest
+    pub String gateway
+    pub String dev
+    pub i64 table = 254
+    pub i64 protocol = 4
+    // its cost, lower first; -1 lets the kernel choose
+    pub i64 metric = -1
+}
+
+// Gives the route's text back.
+pub void Route.free() {
+    self.dest.free()
+    self.gateway.free()
+    self.dev.free()
+}
+
+Route routeOf(List[str] *f, i64 at, List[Link] *names) {
+    oif := str.parseInt(f.at(at + 5)) catch e { 0 }
+    String dev
+    for l in *names {
+        if l.index == oif {
+            dev.append(l.name)
+        }
+    }
+    return Route{table: str.parseInt(f.at(at + 1)) catch e { 0 }, protocol: str.parseInt(f.at(at + 2)) catch e { 0 },
+        dest: f.at(at + 3).copy(), gateway: f.at(at + 4).copy(), dev: dev, metric: str.parseInt(f.at(at + 6)) catch e { 0 }}
+}
+
+// The routes of table (TABLE_MAIN, or another; 0 for every table).
+pub !List[Route] routes(i64 table = 254) {
+    scoped String text
+    e := rawDump(2, &text)
+    if e != 0 {
+        return fail(e, "listing the routes")
+    }
+    scoped names := try links()
+    List[Route] out
+    scoped List[str] lines = str.lines(text)
+    for line in lines {
+        scoped List[str] f = str.split(line, "\t")
+        if f.len >= 7 && f.at(0) == "route" {
+            r := routeOf(&f, 0, &names)
+            if table != 0 && r.table != table {
+                r.free()
+                continue
+            }
+            out.push(r)
+        }
+    }
+    return out
+}
+
+!void routeCall(Route r, i32 add, i32 replace, str what) {
+    d, bits := try parsePrefix(r.dest)
+    net.Addr g
+    bool hasGateway = r.gateway.len > 0
+    if hasGateway {
+        g = net.ip(r.gateway) catch e {
+            return error(NetlinkError.other, "{what}: '{r.gateway}' isn't an address")
+        }
+    }
+    e := rawRoute(add, replace, &d.ip[0], i32(bits), if hasGateway { &g.ip[0] } else { null }, r.dev.ptr, r.dev.len,
+        i32(r.table), i32(r.protocol), r.metric)
+    if e != 0 {
+        return fail(e, what)
+    }
+}
+
+// Adds a route; replace sets it in place of one to the same destination.
+pub !void addRoute(Route r, bool replace = false) => try routeCall(r, 1, if replace { 1 } else { 0 }, "adding a route to {r.dest}")
+
+// Removes a route, found by its destination, table, and the gateway and
+// device when they are given.
+pub !void removeRoute(Route r) => try routeCall(r, 0, 0, "removing the route to {r.dest}")
+
+// ------------------------------------------------------------ changes
+
+// What changed: a link, an address or a route that came (added true) or
+// went. The one that is set holds the change.
+pub struct Event {
+    pub bool added
+    pub bool isLink
+    pub bool isAddress
+    pub bool isRoute
+    pub Link link
+    pub Address address
+    pub Route route
+}
+
+// Gives the event's text back.
+pub void Event.free() {
+    self.link.free()
+    self.address.free()
+    self.route.free()
+}
+
+// A socket that gets changes as the kernel makes them.
+pub struct Watcher {
+    i32 fd
+    String pending
+}
+
+// Watches for changes of interfaces, of addresses and of routes, IPv4
+// and IPv6, as the ones chosen say.
+pub !Watcher watch(bool links = true, bool addresses = true, bool routes = true) {
+    u32 groups = 0
+    if links {
+        groups |= 1     // RTMGRP_LINK
+    }
+    if addresses {
+        groups |= 0x10 | 0x100  // RTMGRP_IPV4_IFADDR, RTMGRP_IPV6_IFADDR
+    }
+    if routes {
+        groups |= 0x40 | 0x400  // RTMGRP_IPV4_ROUTE, RTMGRP_IPV6_ROUTE
+    }
+    i32 err
+    fd := rawOpen(groups, &err)
+    if fd < 0 {
+        return fail(err, "watching the network")
+    }
+    return Watcher{fd: fd}
+}
+
+// Waits for the next change, for at most timeout when it isn't 0 (then
+// fails with NetlinkError.other).
+pub !Event Watcher.next(Duration timeout = 0s) {
+    for {
+        scoped String line
+        e := rawNext(self.fd, &line, &self.pending, timeout)
+        if e == 3 {
+            return error(NetlinkError.other, "no change in {timeout}")
+        }
+        if e != 0 {
+            return fail(e, "reading the changes")
+        }
+        scoped List[str] f = str.split(line, "\t")
+        if f.len < 2 {
+            continue
+        }
+        Event ev = Event{added: f.at(0) == "new"}
+        if f.at(1) == "link" && f.len >= 7 {
+            ev.isLink = true
+            ev.link = linkOf(&f, 1)
+            return ev
+        }
+        if f.at(1) == "addr" && f.len >= 5 {
+            ev.isAddress = true
+            ev.address = Address{index: str.parseInt(f.at(2)) catch e2 { 0 }, v4: f.at(3) == "4", prefix: f.at(4).copy()}
+            return ev
+        }
+        if f.at(1) == "route" && f.len >= 8 {
+            ev.isRoute = true
+            scoped List[Link] none
+            ev.route = routeOf(&f, 1, &none)
+            return ev
+        }
+    }
+    return error(NetlinkError.other, "no change")
+}
+
+// Stops watching.
+pub void Watcher.close() {
+    rawClose(self.fd)
+    self.pending.free()
+}

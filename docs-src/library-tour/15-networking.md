@@ -437,3 +437,24 @@ The [net library page](../std/index.html#net) has the rest: UDP with `listenUdp`
 `net.socketPair()` gives two connected sockets: what one writes, the other reads. A program hands one to a program it starts, as a kept descriptor, and keeps the other.
 
 A service that systemd runs with `Type=notify` says it is ready with `net.notifySystemd("READY=1")`, and `"RELOADING=1"`, `"STOPPING=1"` or `"STATUS=..."` as it goes on. A server that hands its sockets to a new version sends `"MAINPID=..."` with the new process's id. It returns false when the program doesn't run under systemd.
+
+## TUN devices and the kernel's routes
+
+A VPN or a network stack of its own gets packets from the kernel through a TUN device, a network interface whose other side is the program. `net.openTun(name)` makes one, Linux only and with CAP_NET_ADMIN. `read` gives one IP packet, and `write` hands one to the kernel as if it came in on the interface. `openTun(name, tap: true)` makes a TAP device, which carries Ethernet frames.
+
+The `netlink` module sets up interfaces the way `ip` does, without running it. `netlink.addAddress("tun0", "10.99.0.1/24")` gives an interface an address, `linkUp` and `linkDown` bring it up and down, and `setMtu` sets its MTU. `links()`, `addresses()` and `routes()` list what the kernel has. `addRoute(netlink.Route{dest: "10.0.0.0/8", gateway: "10.99.0.2", dev: "tun0"})` and `removeRoute` change the routing table, in another table or with another protocol, such as `netlink.PROTO_BGP`, when the fields say so. `netlink.watch()` gives the changes as they happen: an `Event` for each link, address or route that comes or goes.
+
+```iris
+import net, netlink
+
+!void main() {
+    t := try net.openTun("tun0")
+    defer t.close()
+    try netlink.addAddress("tun0", "10.99.0.1/24")
+    try netlink.linkUp("tun0")
+
+    u8[2048] packet
+    n := try t.read(packet[:])
+    print("an IPv{packet[0] >> 4} packet of {n} bytes")
+}
+```
