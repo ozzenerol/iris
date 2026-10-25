@@ -54,7 +54,10 @@ i32 rawWait(i32 fd, i32 write, i64 timeout)
 
 @extern("iris_net_relay")
 i64 rawRelay(i32 to, i32 from, u8 *buf, i64 bufLen, i64 limit, i64 readTimeout, i64 writeTimeout, i32 *err,
-    i32 *side)
+    i32 *side, i64 *active, i64 idle)
+
+@extern("iris_time_clock")
+i64 rawClock()
 
 @extern("iris_unix_listen")
 i32 rawUnixListen(u8 *path, i64 len, i32 *err)
@@ -367,7 +370,11 @@ pub !void Conn.closeWrite() {
 // for from to have data, or for to to take it, is limited by that
 // connection's timeout. It doesn't end to's writes; closeWrite does.
 // received and sent keep counting through an error.
-pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) {
+pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) => try copyIdle(to, from, limit, null, 0s)
+
+// copy, and with active, relay's idle limit for both directions: active is
+// when bytes last moved either way.
+!i64 copyIdle(Conn *to, Conn *from, i64 limit, i64 *active, Duration idle) {
     i64 total = 0
     if from.start < from.end {
         n := from.end - from.start
@@ -379,6 +386,9 @@ pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) {
         }
         from.start += n
         total += n
+        if active != null {
+            *active = rawClock()
+        }
     }
     if limit > 0 && total >= limit {
         return total
@@ -387,7 +397,8 @@ pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) {
     if to.tls == null && from.tls == null {
         i32 err
         i32 side
-        n := rawRelay(to.sock, from.sock, from.buf.ptr, from.buf.len, left, from.timeout, to.timeout, &err, &side)
+        n := rawRelay(to.sock, from.sock, from.buf.ptr, from.buf.len, left, from.timeout, to.timeout, &err, &side,
+            active, idle)
         from.received += n
         to.sent += n
         total += n
@@ -402,19 +413,88 @@ pub !i64 copy(Conn *to, Conn *from, i64 limit = 0) {
         if limit > 0 && limit - total < want {
             want = limit - total
         }
-        n := from.rawRead(from.buf[0:want])
+        i64 n = 0
+        for {
+            if active != null {
+                // the wait ends when nothing moved either way for idle
+                from.timeout = *active + idle - rawClock()
+                if from.timeout <= 0 {
+                    return error(NetError.timeout, "copying: idle for {idle}")
+                }
+            }
+            n = from.rawRead(from.buf[0:want])
+            if n != -3 || active == null || *active + idle <= rawClock() {
+                break
+            }
+        }
         if n < 0 {
             return error(netCode(i32(-n)), "copying: reading: {reason(i32(-n))}")
         }
         if n == 0 {
             break
         }
+        if active != null {
+            *active = rawClock()
+            to.timeout = idle
+        }
         to.write(from.buf[0:n]) catch e {
             return error(e.code, "copying: {e.message}")
         }
         total += n
+        if active != null {
+            *active = rawClock()
+        }
     }
     return total
+}
+
+// One direction of a relay: what it copied, and how it ended.
+struct RelayHalf {
+    i64 bytes
+    bool failed
+    Error err
+}
+
+void relayHalf(Conn *to, Conn *from, i64 *active, Duration idle, RelayHalf *out, chan[i64] done) {
+    out.bytes = copyIdle(to, from, 0, active, idle) catch e {
+        out.failed = true
+        out.err = e
+        // the other direction ends too
+        to.interrupt()
+        from.interrupt()
+        done <- 0
+        return
+    }
+    to.closeWrite() catch e { }
+    done <- 1
+}
+
+// Copies both ways between a and b, as a TCP proxy does, until both sides
+// have ended their writes: what went from a to b, and from b to a. The
+// end of one direction is passed on with closeWrite while the other keeps
+// going. With idle above 0s it ends with NetError.timeout once no byte
+// moved either way for that long; a download that goes one way only isn't
+// idle. On Linux, without TLS, the bytes go from socket to socket in the
+// kernel (splice). An error in one direction ends both. It doesn't close
+// a or b.
+pub !(i64, i64) relay(Conn *a, Conn *b, Duration idle = 0s) {
+    i64 active = rawClock()
+    i64 *shared = if idle > 0s { &active } else { null }
+    done := chan[i64](2)  // room for both halves: this task sends before it takes
+    defer done.free()
+    RelayHalf back
+    spawn relayHalf(a, b, shared, idle, &back, done)
+    RelayHalf ahead
+    relayHalf(b, a, shared, idle, &ahead, done)
+    _ = <-done
+    _ = <-done
+    if ahead.failed {
+        return error(ahead.err.code, "relaying: {ahead.err.message}")
+    }
+    if back.failed {
+        return error(back.err.code, "relaying: {back.err.message}")
+    }
+    return (ahead.bytes, back.bytes)
 }
 
 // Listens on a Unix socket at path, a file the socket makes; it must not

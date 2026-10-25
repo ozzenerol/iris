@@ -230,7 +230,7 @@ Over TLS, `closeWrite` first sends TLS's own end of data.
 
 `net.copy(to, from)` copies what one connection reads to another until the first one's data ends, and returns the number of bytes. Small messages go through a buffer. On Linux, when neither connection uses TLS, a steady stream moves from socket to socket inside the kernel with `splice` and never reaches the program.
 
-A TCP proxy is two copies, one each way. When one direction ends, the proxy passes the end on with `closeWrite` and the other direction continues.
+A TCP proxy copies both ways at once. `net.relay(a, b)` does that: it runs one copy in each direction until both sides have ended their writes, passes the end of each direction on with `closeWrite` while the other keeps flowing, and returns the bytes that went each way.
 
 ```iris run
 import net
@@ -247,16 +247,7 @@ void backend(net.Listener ln) {
     c.write("{line}, from the backend\n") catch e { }
 }
 
-void oneWay(net.Conn *to, net.Conn *from, chan[i64] done) {
-    n := net.copy(to, from) catch e {
-        done <- -1
-        return
-    }
-    to.closeWrite() catch e { }
-    done <- n
-}
-
-void proxy(net.Listener ln, u16 backendPort, chan[i64] counts) {
+void proxy(net.Listener ln, u16 backendPort, chan[String] log) {
     client := ln.accept() catch e {
         return
     }
@@ -267,14 +258,11 @@ void proxy(net.Listener ln, u16 backendPort, chan[i64] counts) {
     }
     defer server.close()
 
-    done := chan[i64](2)
-    defer done.free()
-    spawn oneWay(&server, &client, done)
-    oneWay(&client, &server, done)
-    _ = <-done
-
-    counts <- client.received
-    counts <- server.received
+    up, down := net.relay(&client, &server, idle: 30s) catch e {
+        log <- format("relay ended: {e.message}")
+        return
+    }
+    log <- format("the proxy moved {up} bytes up and {down} bytes down")
 }
 
 !void main() {
@@ -282,9 +270,9 @@ void proxy(net.Listener ln, u16 backendPort, chan[i64] counts) {
     spawn backend(back)
 
     front := try net.listen(0, "127.0.0.1")
-    counts := chan[i64](2)
-    defer counts.free()
-    spawn proxy(front, back.port, counts)
+    log := chan[String](1)
+    defer log.free()
+    spawn proxy(front, back.port, log)
 
     c := try net.dial("127.0.0.1", front.port)
     defer c.close()
@@ -293,10 +281,8 @@ void proxy(net.Listener ln, u16 backendPort, chan[i64] counts) {
 
     scoped String reply = try c.readLine()
     print(reply)
-
-    up := <-counts
-    down := <-counts
-    print("the proxy moved {up} bytes up and {down} bytes down")
+    scoped String line = <-log
+    print(line)
 }
 ```
 
@@ -305,7 +291,9 @@ hello, from the backend
 the proxy moved 6 bytes up and 24 bytes down
 ```
 
-`received` and `sent` count the bytes each connection moved, even through an error, which is what a proxy logs. Each copy waits for data as long as its connection's `setTimeout` allows, so that timeout acts as an idle timeout. `limit` stops a copy after that many bytes.
+`idle` ends the relay with `NetError.timeout` once no byte has moved either way for that long. A download that only goes one way keeps it going. An error in one direction ends both, and the relay doesn't close either connection.
+
+`net.copy(to, from)` is one direction alone. Each of its waits is as long as its connection's `setTimeout` allows, and `limit` stops it after that many bytes. `received` and `sent` count the bytes each connection moved, even through an error, which is what a proxy logs.
 
 ## The first bytes
 

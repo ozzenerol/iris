@@ -7614,9 +7614,23 @@ static void sigpipeTake(void) {
    event loop for data. A read that fills buf means a stream is flowing,
    and on Linux the copy then moves the bytes with splice through a pipe,
    in the kernel, waiting between splices, until several splices in a row
-   move little; then it reads again. */
+   move little; then it reads again.
+
+   With active (net.relay), the two directions of a connection share an
+   idle limit: active is when bytes last moved either way, set on each
+   move, and a wait gives up only once nothing moved for idle. */
+static int64_t relayLeft(const int64_t *active, int64_t idle, int64_t timeout) {
+    if (!active) return timeout;
+    int64_t left = *active + idle - nowNs();
+    return left > 0 ? left : -1;
+}
+
+/* After a wait that ran out: whether the other direction moved meanwhile,
+   so the wait goes on. */
+static bool relayMoved(const int64_t *active, int64_t idle) { return active && *active + idle > nowNs(); }
+
 int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limit, int64_t readTimeout,
-                       int64_t writeTimeout, int *err, int *side) {
+                       int64_t writeTimeout, int *err, int *side, int64_t *active, int64_t idle) {
     *err = 0;
     *side = 0;
     int64_t total = 0;
@@ -7654,7 +7668,12 @@ int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limi
                             continue;
                         }
                         /* a stream that paused: wait for it here */
-                        if (!waitFdUntil(from, 0, deadlineOf(readTimeout))) {
+                        bool ready;
+                        do {
+                            int64_t t = relayLeft(active, idle, readTimeout);
+                            ready = t >= 0 && waitFdUntil(from, 0, deadlineOf(t));
+                        } while (!ready && relayMoved(active, idle));
+                        if (!ready) {
                             *err = 3;
                             break;
                         }
@@ -7669,7 +7688,12 @@ int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limi
             ssize_t m = splice(p[0], NULL, to, NULL, (size_t)inPipe, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
             if (m < 0) {
                 if (errno == EAGAIN || errno == EINTR) {
-                    if (!waitFdUntil(to, 1, deadlineOf(writeTimeout))) {
+                    bool ready;
+                    do {
+                        int64_t t = relayLeft(active, idle, writeTimeout);
+                        ready = t >= 0 && waitFdUntil(to, 1, deadlineOf(t));
+                    } while (!ready && relayMoved(active, idle));
+                    if (!ready) {
                         *err = 3;
                         *side = 1;
                         break;
@@ -7683,24 +7707,32 @@ int64_t iris_net_relay(int to, int from, char *buf, int64_t bufLen, int64_t limi
             }
             inPipe -= m;
             total += m;
+            if (active) *active = nowNs();
             continue;
         }
 #endif
         if (limit > 0 && total >= limit) break;
         int64_t want = limit > 0 && limit - total < bufLen ? limit - total : bufLen;
-        int64_t n = iris_net_read(from, buf, want, readTimeout);
+        int64_t n;
+        do {
+            int64_t t = relayLeft(active, idle, readTimeout);
+            n = t >= 0 ? iris_net_read(from, buf, want, t) : -3;
+        } while (n == -3 && relayMoved(active, idle));
         if (n == 0) break;
         if (n < 0) {
             *err = (int)-n;
             break;
         }
-        int code = iris_net_write(to, buf, n, writeTimeout);
+        if (active) *active = nowNs();
+        int64_t wt = relayLeft(active, idle, writeTimeout);
+        int code = wt >= 0 ? iris_net_write(to, buf, n, wt) : 3;
         if (code != 0) {
             *err = code;
             *side = 1;
             break;
         }
         total += n;
+        if (active) *active = nowNs();
 #ifdef __linux__
         stream = n == bufLen;
 #endif

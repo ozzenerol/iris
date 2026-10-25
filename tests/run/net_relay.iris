@@ -1,0 +1,222 @@
+// expect: backend got 1048576 bytes, sum ok: true
+// expect: relay: 1048576 up, 1048582 down
+// expect: client got 1048582 bytes
+// expect: slow download: 12 chunks, relay 0 up, 12 down
+// expect: idle: NetError.timeout after the limit: true
+// expect: tls: hello hello over TLS | relay 5 up, 11 down
+
+import net, time
+
+i64 expectedSum() {
+    i64 sum = 0
+    for i in 0..1MiB {
+        sum += i % 251
+    }
+    return sum
+}
+
+// Reads until the client ends its writes, then sends it all back and
+// "done\r\n", and ends its own.
+void echoAll(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    scoped String all = c.readAll() catch e {
+        return
+    }
+    i64 sum = 0
+    for i in 0..all.len {
+        sum += i64(all[i])
+    }
+    print("backend got {all.len} bytes, sum ok: {sum == expectedSum()}")
+    c.write(all) catch e { }
+    c.write("done\r\n") catch e { }
+    c.closeWrite() catch e { }
+}
+
+// Sends a chunk every 40 ms for longer than the proxy's idle limit, and
+// reads nothing.
+void slowSender(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    for i in 0..12 {
+        sleep(40ms)
+        c.write("x") catch e {
+            return
+        }
+    }
+    c.closeWrite() catch e { }
+}
+
+// Accepts nothing but the connection: no bytes either way.
+void quiet(net.Listener ln, chan[i64] stop, chan[i64] stopped) {
+    c := ln.accept() catch e {
+        stopped <- 1
+        return
+    }
+    _ = <-stop
+    c.close()
+    stopped <- 1
+}
+
+void proxy(net.Listener front, u16 backend, Duration idle, chan[String] report) {
+    client := front.accept() catch e {
+        return
+    }
+    defer client.close()
+    back := net.dial("127.0.0.1", backend) catch e {
+        report <- format("dial: {e.message}")
+        return
+    }
+    defer back.close()
+    up, down := net.relay(&client, &back, idle) catch e {
+        report <- format("{e.code}")
+        return
+    }
+    report <- format("{up} up, {down} down")
+}
+
+!void bulk() {
+    backend := try net.listen(0, "127.0.0.1")
+    defer backend.close()
+    front := try net.listen(0, "127.0.0.1")
+    defer front.close()
+    report := chan[String](1)
+    defer report.free()
+    spawn echoAll(backend)
+    spawn proxy(front, backend.port, 2s, report)
+    c := try net.dial("127.0.0.1", front.port)
+    defer c.close()
+    String data
+    defer data.free()
+    for i in 0..1MiB {
+        u8[1] one = [u8(i % 251)]
+        data.append(one[0:1])
+    }
+    try c.write(data)
+    try c.closeWrite()
+    scoped String back = try c.readAll()
+    scoped String r = <-report
+    print("relay: {r}")
+    print("client got {back.len} bytes")
+}
+
+!void slowDownload() {
+    backend := try net.listen(0, "127.0.0.1")
+    defer backend.close()
+    front := try net.listen(0, "127.0.0.1")
+    defer front.close()
+    report := chan[String](1)
+    defer report.free()
+    spawn slowSender(backend)
+    spawn proxy(front, backend.port, 150ms, report)
+    c := try net.dial("127.0.0.1", front.port)
+    defer c.close()
+    // the client sends nothing: only the download keeps the relay going
+    i64 chunks = 0
+    u8[] buf = alloc(u8, 64)
+    defer free(buf)
+    for {
+        n := try c.read(buf)
+        if n == 0 {
+            break
+        }
+        chunks += n
+    }
+    try c.closeWrite()
+    scoped String r = <-report
+    print("slow download: {chunks} chunks, relay {r}")
+}
+
+!void idle() {
+    backend := try net.listen(0, "127.0.0.1")
+    defer backend.close()
+    front := try net.listen(0, "127.0.0.1")
+    defer front.close()
+    report := chan[String](1)
+    defer report.free()
+    stop := chan[i64](1)
+    defer stop.free()
+    stopped := chan[i64](1)
+    defer stopped.free()
+    spawn quiet(backend, stop, stopped)
+    start := time.now()
+    spawn proxy(front, backend.port, 100ms, report)
+    c := try net.dial("127.0.0.1", front.port)
+    defer c.close()
+    scoped String r = <-report
+    took := time.now().sub(start)
+    print("idle: {r} after the limit: {took >= 100ms && took < 2s}")
+    stop <- 1
+    _ = <-stopped
+}
+
+// The proxy ends TLS from the client and relays plain bytes to the backend.
+void tlsProxy(net.Listener front, u16 backend, chan[String] report) {
+    client := front.accept() catch e {
+        return
+    }
+    defer client.close()
+    scoped config := net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key") catch e {
+        report <- format("config: {e.message}")
+        return
+    }
+    client.acceptTls(&config) catch e {
+        report <- format("tls: {e.message}")
+        return
+    }
+    back := net.dial("127.0.0.1", backend) catch e {
+        report <- format("dial: {e.message}")
+        return
+    }
+    defer back.close()
+    up, down := net.relay(&client, &back, 150ms) catch e {
+        report <- format("{e.code}: {e.message}")
+        return
+    }
+    report <- format("{up} up, {down} down")
+}
+
+// Answers "hello" with "hello " plus what came, slowly.
+void slowEcho(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    scoped String got = c.readAll() catch e {
+        return
+    }
+    sleep(100ms)
+    c.write("hello ") catch e { }
+    sleep(100ms)
+    c.write(got) catch e { }
+    c.closeWrite() catch e { }
+}
+
+!void overTls() {
+    backend := try net.listen(0, "127.0.0.1")
+    defer backend.close()
+    front := try net.listen(0, "127.0.0.1")
+    defer front.close()
+    report := chan[String](1)
+    defer report.free()
+    spawn slowEcho(backend)
+    spawn tlsProxy(front, backend.port, report)
+    c := try net.dialTls("localhost", front.port, ca: "tests/data/tls/ca.pem")
+    defer c.close()
+    try c.write("hello")
+    try c.closeWrite()
+    scoped String got = try c.readAll()
+    scoped String r = <-report
+    print("tls: {got} over TLS | relay {r}")
+}
+
+!void main() {
+    try bulk()
+    try slowDownload()
+    try idle()
+    try overTls()
+}
