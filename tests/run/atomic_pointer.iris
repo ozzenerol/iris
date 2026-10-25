@@ -1,0 +1,34 @@
+// expect: 1 false true 3
+// expect: true true
+// An Atomic pointer publishes a new value for readers on other threads.
+
+struct Config {
+    i64 version
+}
+
+Atomic[Config *] current
+
+void reader(Atomic[i64] *seen) {
+    for i in 0..100000 {
+        c := current.load()
+        if c != null {
+            seen.add(c.version)
+        }
+    }
+}
+
+void main() {
+    Config[] cs = alloc(Config, 3)
+    for i in 0..3 {
+        cs[i].version = i64(i + 1)
+    }
+    current.store(&cs[0])
+    Atomic[i64] seen
+    t := thread reader(&seen)
+    old := current.swap(&cs[1])
+    print("{old.version} {current.cas(&cs[0], &cs[2])} {current.cas(&cs[1], &cs[2])} {current.load().version}")
+    t.join()
+    current.store(null)
+    print("{current.load() == null} {seen.load() > 0}")
+    free(cs)
+}

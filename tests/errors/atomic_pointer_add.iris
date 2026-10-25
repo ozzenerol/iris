@@ -1,0 +1,9 @@
+// error: 7: add is for numbers; an Atomic[i64 *] has load, store, swap and cas
+// error: 9: Atomic holds an integer, a bool or a pointer, not f64
+
+Atomic[i64 *] p
+
+void main() {
+    p.add(1)
+}
+Atomic[f64] f

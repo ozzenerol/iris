@@ -1584,7 +1584,7 @@ static Val emitSync(IR *ir, Node *e) {
     Type *et = base->elem;
     bool isBool = et->kind == TY_BOOL;
     const char *lt = llType(ir, base);
-    int64_t align = isBool ? 1 : et->bits / 8;
+    int64_t align = isBool ? 1 : et->kind == TY_PTR ? 8 : et->bits / 8;
     const char *args[2];
     for (int i = 0; i < e->list.len && i < 2; i++) {
         Val v = emitExpr(ir, e->list.items[i]);

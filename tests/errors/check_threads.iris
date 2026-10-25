@@ -1,4 +1,4 @@
-// error: 12: Atomic holds an integer or a bool, not str
+// error: 12: Atomic holds an integer, a bool or a pointer, not str
 // error: 25: threadlocal is for global variables; a local variable belongs to its task already
 // error: 26: an Atomic's value is read with .load()
 // error: 27: add is for numbers; an Atomic[bool] has load, store, swap and cas

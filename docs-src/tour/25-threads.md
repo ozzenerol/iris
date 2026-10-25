@@ -63,7 +63,7 @@ Two threads that change the same variable at the same time can lose changes, sin
 
 ## Atomic
 
-`Atomic[T]` holds an integer or a `bool` that every thread can change safely. It is used only through its methods.
+`Atomic[T]` holds an integer, a `bool` or a pointer that every thread can change safely. It is used only through its methods.
 
 Here four threads accept connections on one listener and count them in one `Atomic`:
 
@@ -116,7 +116,7 @@ Several threads can wait in `accept` on the same listener. Each connection goes 
 | `swap(v)` | sets it and gives the old value |
 | `cas(old, new)` | sets it to new if it is old; true if it did |
 
-An `Atomic[bool]` has `load`, `store`, `swap` and `cas`. Every operation is sequentially consistent, so all threads see the changes in the same order.
+An `Atomic[bool]` or an `Atomic` pointer has `load`, `store`, `swap` and `cas`. Every operation is sequentially consistent, so all threads see the changes in the same order. An `Atomic` pointer publishes a new version of something many threads read, such as a routing table: the writer builds the new one, then `store`s or `swap`s its pointer in. Readers `load` it with no lock. The old version can only be freed once no reader still holds it, for example a second later.
 
 ## Mutex
 

@@ -948,8 +948,8 @@ static Type *resolveType(Checker *c, Node *t) {
             }
             Type *e = resolveType(c, t->list.items[0]);
             if (isErr(e)) return e;
-            if (e->kind != TY_INT && e->kind != TY_BOOL) {
-                error(c, t->list.items[0], "Atomic holds an integer or a bool, not %s", e->name);
+            if (e->kind != TY_INT && e->kind != TY_BOOL && e->kind != TY_PTR) {
+                error(c, t->list.items[0], "Atomic holds an integer, a bool or a pointer, not %s", e->name);
                 return &tyError;
             }
             return compound(TY_ATOMIC, e, 0);
@@ -4052,8 +4052,8 @@ static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
     for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
         if ((int)base->kind != methods[i].kind || strcmp(methods[i].name, name) != 0) continue;
         int bi = methods[i].bi;
-        if (base->kind == TY_ATOMIC && base->elem->kind == TY_BOOL && (bi == BI_ATOMIC_ADD || bi == BI_ATOMIC_SUB)) {
-            error(c, e, "%s is for numbers; an Atomic[bool] has load, store, swap and cas", name);
+        if (base->kind == TY_ATOMIC && base->elem->kind != TY_INT && (bi == BI_ATOMIC_ADD || bi == BI_ATOMIC_SUB)) {
+            error(c, e, "%s is for numbers; an Atomic[%s] has load, store, swap and cas", name, base->elem->name);
             return setType(e, &tyError);
         }
         if (e->list.len != methods[i].args) {
