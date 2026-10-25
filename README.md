@@ -4,7 +4,7 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-The standard library covers HTTP and TCP servers and clients, SQLite, PostgreSQL and Redis, JSON, regular expressions, compression and command-line tools. The docs in `docs/` have a Language Tour, a Library Tour and the library reference.
+The standard library covers HTTP/1.1 and HTTP/2 servers and clients, TLS with certificate checking, TCP and UDP, Unix sockets, TUN devices and the kernel's routes, SQLite, PostgreSQL and Redis, JSON, YAML, TOML and XML, regular expressions, compression, cryptography with ECDSA and RSA, and the system side of a server: signals, pseudo-terminals, dropping privileges and a seccomp sandbox. The docs in `docs/` have a Language Tour, a Library Tour and the library reference.
 
 ## Speed
 
