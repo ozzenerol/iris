@@ -173,6 +173,16 @@ from 127.0.0.1, the client's port: true
 
 `net.Addr{port: 8080}` is every address on port 8080. A `Socket` is IPv6 and accepts IPv4 too. `Family.v4` and `Family.v6` give only one of them.
 
+These options have methods of their own, so a program doesn't need the system's numbers for them:
+
+- `setReusePort(true)` lets several sockets listen on one port, one per thread or process, and the kernel spreads the connections between them.
+- `setTransparent(true)` is for a transparent proxy with TPROXY. A listener takes connections for addresses that aren't the machine's, and their `localAddr()` is where the client was going. A client socket can bind to the client's own address before it connects, so the backend sees that address.
+- `setFreeBind(true)` binds to an address the machine doesn't have yet.
+- `setFastOpen(queue)` lets clients that have connected before send data with their SYN; `setFastOpenConnect(true)` does it from a client.
+- `setMark(mark)`, on a `Socket` or a `Conn`, sets the mark the packets carry, for policy routing.
+
+On a connection, `setLinger(0s)` makes `close` reset it, as a proxy does to pass a reset on. `originalDst()` gives where a connection that iptables or nftables redirected was going: the address a transparent proxy forwards it to. `setTransparent`, `setFreeBind`, `setMark` and `originalDst` are Linux only, and transparent and mark need `CAP_NET_ADMIN`; elsewhere they return an error that says so.
+
 ## Half-closing
 
 `closeWrite` ends this side's writes. The other side reads the end of the data, and this side can still read what comes back. A client that sends a whole request and then waits for the answer uses it to say it is done.

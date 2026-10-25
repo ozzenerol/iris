@@ -1,0 +1,71 @@
+// expect: two listeners on one port: true
+// expect: fast open, transparent, free bind, mark, original destination: asked
+// expect: linger 0s resets: true
+
+import net
+
+!void reusePort() {
+    a := try net.socket(net.Family.v4)
+    try a.setReusePort(true)
+    try a.bind(try net.ip("127.0.0.1"))
+    la := try a.listen()
+    defer la.close()
+    b := try net.socket(net.Family.v4)
+    try b.setReusePort(true)
+    try b.bind(try net.ip("127.0.0.1", la.port))
+    lb := try b.listen()
+    defer lb.close()
+    print("two listeners on one port: {la.port == lb.port}")
+}
+
+// Each of these needs Linux, and some CAP_NET_ADMIN: whether they work
+// depends on the machine, so only that they answer is checked.
+void asked() {
+    s := net.socket() catch e {
+        return
+    }
+    defer s.close()
+    s.setFastOpen(16) catch e { }
+    s.setFastOpenConnect(true) catch e { }
+    s.setTransparent(true) catch e { }
+    s.setFreeBind(true) catch e { }
+    s.setMark(7) catch e { }
+    ln := net.listen(0, "127.0.0.1") catch e {
+        return
+    }
+    defer ln.close()
+    c := net.dial("127.0.0.1", ln.port) catch e {
+        return
+    }
+    defer c.close()
+    c.setMark(7) catch e { }
+    _ = c.originalDst() catch e { net.Addr{} }
+    print("fast open, transparent, free bind, mark, original destination: asked")
+}
+
+!void linger() {
+    ln := try net.listen(0, "127.0.0.1")
+    defer ln.close()
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    srv := try ln.accept()
+    try c.write("unread")
+    sleep(20ms)
+    try srv.setLinger(0s)
+    srv.close()
+    sleep(20ms)
+    u8[] buf = alloc(u8, 16)
+    defer free(buf)
+    bool reset = false
+    _ = c.read(buf) catch e {
+        reset = true
+        0
+    }
+    print("linger 0s resets: {reset}")
+}
+
+!void main() {
+    try reusePort()
+    asked()
+    try linger()
+}

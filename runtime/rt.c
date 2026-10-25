@@ -5194,6 +5194,87 @@ int iris_sock_buffers(int fd, int64_t rd, int64_t wr) {
     return e;
 }
 
+/* Options by name, so a program needn't know each system's numbers: 0,
+   errno, or -1 where the system has no such option (Linux only ones on
+   macOS). which: 1 SO_REUSEPORT, 2 IP_TRANSPARENT (IPV6_TRANSPARENT too on
+   an IPv6 socket), 3 IP_FREEBIND, 4 TCP_FASTOPEN (value: the queue of a
+   listener), 5 TCP_FASTOPEN_CONNECT, 6 SO_MARK, 7 SO_LINGER (value:
+   seconds, -1 off). */
+int iris_sock_named(int fd, int which, int64_t value) {
+    int v = value > 0x7fffffff ? 0x7fffffff : (int)value;
+    switch (which) {
+    case 1:
+        return iris_sock_set(fd, SOL_SOCKET, SO_REUSEPORT, v);
+    case 2: {
+#ifdef __linux__
+        struct sockaddr_storage ss;
+        socklen_t n = sizeof ss;
+        bool v6 = getsockname(fd, (struct sockaddr *)&ss, &n) == 0 && ss.ss_family == AF_INET6;
+        int e = iris_sock_set(fd, SOL_IP, IP_TRANSPARENT, v);
+        if (v6 && (!e || e == ENOPROTOOPT)) e = iris_sock_set(fd, SOL_IPV6, IPV6_TRANSPARENT, v);
+        return e;
+#else
+        return -1;
+#endif
+    }
+    case 3:
+#ifdef __linux__
+        return iris_sock_set(fd, SOL_IP, IP_FREEBIND, v);
+#else
+        return -1;
+#endif
+    case 4:
+#ifdef TCP_FASTOPEN
+        return iris_sock_set(fd, IPPROTO_TCP, TCP_FASTOPEN, v);
+#else
+        return -1;
+#endif
+    case 5:
+#ifdef __linux__
+        return iris_sock_set(fd, IPPROTO_TCP, 30 /* TCP_FASTOPEN_CONNECT */, v);
+#else
+        return -1;
+#endif
+    case 6:
+#ifdef __linux__
+        return iris_sock_set(fd, SOL_SOCKET, SO_MARK, v);
+#else
+        return -1;
+#endif
+    case 7: {
+        struct linger l = {v >= 0, v >= 0 ? v : 0};
+        return setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof l) == 0 ? 0 : errno;
+    }
+    }
+    return EINVAL;
+}
+
+/* Where a connection that iptables redirected (REDIRECT, DNAT) was going:
+   0 and the address, errno, or -1 off Linux. */
+int iris_sock_original_dst(int fd, uint8_t *ip, int64_t *port) {
+#ifdef __linux__
+    struct sockaddr_storage ss;
+    socklen_t n = sizeof ss;
+    if (getsockname(fd, (struct sockaddr *)&ss, &n) != 0) return errno;
+    int level = ss.ss_family == AF_INET6 ? SOL_IPV6 : SOL_IP;
+    n = sizeof ss;
+    memset(&ss, 0, sizeof ss);
+    if (getsockopt(fd, level, 80 /* SO_ORIGINAL_DST, IP6T_SO_ORIGINAL_DST */, &ss, &n) != 0) {
+        /* an IPv6 socket that took an IPv4 connection keeps it at IPv4's level */
+        if (level == SOL_IP) return errno;
+        n = sizeof ss;
+        if (getsockopt(fd, SOL_IP, 80, &ss, &n) != 0) return errno;
+    }
+    fromSockaddr(&ss, ip, port);
+    return 0;
+#else
+    (void)fd;
+    (void)ip;
+    (void)port;
+    return -1;
+#endif
+}
+
 /* A descriptor made elsewhere (inherited, received, from C) handed to the
    event loop: 0, or errno. */
 int iris_net_adopt(int fd) {

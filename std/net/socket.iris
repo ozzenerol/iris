@@ -40,6 +40,12 @@ i32 rawSockKeepAlive(i32 fd, i64 idle, i64 interval, i64 count)
 @extern("iris_sock_buffers")
 i32 rawSockBuffers(i32 fd, i64 rd, i64 wr)
 
+@extern("iris_sock_named")
+i32 rawSockNamed(i32 fd, i32 which, i64 value)
+
+@extern("iris_sock_original_dst")
+i32 rawOriginalDst(i32 fd, u8 *ip, i64 *port)
+
 @extern("iris_net_adopt")
 i32 rawAdopt(i32 fd)
 
@@ -156,6 +162,46 @@ pub !void Socket.setNoDelay(bool on) {
     try optionFail(rawSockNoDelay(self.sock, if on { 1 } else { 0 }), "setting TCP_NODELAY")
 }
 
+// Sets an option by name: 0, or an error that says which, also when the
+// system has no such option.
+!void named(i32 fd, i32 which, i64 value, str what) {
+    e := rawSockNamed(fd, which, value)
+    if e == -1 {
+        return error(NetError.other, "{what}: only on Linux")
+    }
+    try optionFail(e, what)
+}
+
+i64 flag(bool on) => if on { 1 } else { 0 }
+
+// SO_REUSEPORT: several sockets, in this program or others, listen on the
+// same port, and the kernel spreads the connections between them.
+pub !void Socket.setReusePort(bool on) => try named(self.sock, 1, flag(on), "setting SO_REUSEPORT")
+
+// IP_TRANSPARENT (Linux, with CAP_NET_ADMIN), for transparent proxies with
+// TPROXY: a listener takes connections for addresses that aren't this
+// machine's, and their localAddr is where the client was going; a client
+// socket can bind to an address that isn't this machine's, such as the
+// client's, before it connects, so the backend sees that address.
+pub !void Socket.setTransparent(bool on) => try named(self.sock, 2, flag(on), "setting IP_TRANSPARENT")
+
+// IP_FREEBIND (Linux): binds to an address this machine doesn't have yet,
+// such as one a failover will bring up.
+pub !void Socket.setFreeBind(bool on) => try named(self.sock, 3, flag(on), "setting IP_FREEBIND")
+
+// TCP_FASTOPEN on a socket that will listen: clients that have connected
+// before send data with their SYN, and up to queue such connections wait
+// for accept. 0 turns it off.
+pub !void Socket.setFastOpen(i64 queue) => try named(self.sock, 4, queue, "setting TCP_FASTOPEN")
+
+// TCP_FASTOPEN_CONNECT (Linux) on a socket that will connect: the first
+// write goes out with the SYN to a server that has seen this client before.
+pub !void Socket.setFastOpenConnect(bool on) => try named(self.sock, 5, flag(on), "setting TCP_FASTOPEN_CONNECT")
+
+// SO_MARK (Linux, with CAP_NET_ADMIN): the mark the socket's packets
+// carry, for policy routing, as TPROXY setups use.
+pub !void Socket.setMark(u32 mark) => try named(self.sock, 6, i64(mark), "setting SO_MARK")
+
 // The kernel's buffers for reading and writing, in bytes; 0 leaves one as
 // it is. Set before listening, they also set the TCP window scale.
 pub !void Socket.setBuffers(i64 read = 0, i64 write = 0) {
@@ -221,6 +267,32 @@ pub !void Conn.setNoDelay(bool on) {
 pub !void Conn.setKeepAlive(Duration idle, Duration interval = 0s, i64 count = 0) {
     code := rawSockKeepAlive(self.sock, idle / 1s, interval / 1s, count)
     try optionFail(code, "setting keepalive")
+}
+
+// SO_MARK (Linux, with CAP_NET_ADMIN) on a connection's packets from now
+// on.
+pub !void Conn.setMark(u32 mark) => try named(self.sock, 6, i64(mark), "setting SO_MARK")
+
+// SO_LINGER: with 0s, close drops what wasn't sent and resets the
+// connection, as a proxy does to pass a reset on; with more, close waits
+// that long for the data to go. Below 0s, the start: close returns at
+// once and the data still goes. Whole seconds.
+pub !void Conn.setLinger(Duration d) {
+    try named(self.sock, 7, if d < 0s { -1 } else { d / 1s }, "setting SO_LINGER")
+}
+
+// Where the client was going before iptables redirected it here (REDIRECT
+// or DNAT, Linux): the address to proxy it to.
+pub !Addr Conn.originalDst() {
+    Addr a
+    i64 port
+    e := rawOriginalDst(self.sock, &a.ip[0], &port)
+    if e == -1 {
+        return error(NetError.other, "the original destination: only on Linux")
+    }
+    try optionFail(e, "the original destination")
+    a.port = u16(port)
+    return a
 }
 
 // The kernel's buffers for reading and writing, in bytes; 0 leaves one as
