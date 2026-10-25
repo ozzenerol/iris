@@ -2158,6 +2158,12 @@ static int fsCode(int e) {
     case EACCES: case EPERM: return 2;
     case EEXIST: return 3;
     case EISDIR: return 4;
+    case ENOSPC:
+#ifdef EDQUOT
+    case EDQUOT:
+#endif
+        return 8;
+    case EXDEV: return 9;
     default: return 5;
     }
 }
@@ -2404,6 +2410,228 @@ int iris_fs_dir_stat(void *dir, const char *name, int64_t n, int64_t *size, int 
     return 0;
 }
 
+/* What stat knows, as 10 numbers: size, is a folder, modified and
+   accessed (ns), permission bits, uid, gid, is a link, link count, inode.
+   dir NULL: path alone, following a link at its end when follow; else
+   name in dir, not following. 0, or a code. */
+static void infoOf(const struct stat *st, int64_t *v) {
+    v[0] = (int64_t)st->st_size;
+    v[1] = S_ISDIR(st->st_mode) ? 1 : 0;
+#ifdef __APPLE__
+    v[2] = (int64_t)st->st_mtimespec.tv_sec * 1000000000LL + st->st_mtimespec.tv_nsec;
+    v[3] = (int64_t)st->st_atimespec.tv_sec * 1000000000LL + st->st_atimespec.tv_nsec;
+#else
+    v[2] = (int64_t)st->st_mtim.tv_sec * 1000000000LL + st->st_mtim.tv_nsec;
+    v[3] = (int64_t)st->st_atim.tv_sec * 1000000000LL + st->st_atim.tv_nsec;
+#endif
+    v[4] = (int64_t)(st->st_mode & 07777);
+    v[5] = (int64_t)st->st_uid;
+    v[6] = (int64_t)st->st_gid;
+    v[7] = S_ISLNK(st->st_mode) ? 1 : 0;
+    v[8] = (int64_t)st->st_nlink;
+    v[9] = (int64_t)st->st_ino;
+}
+
+int iris_fs_info(void *dir, const char *path, int64_t n, int follow, int64_t *v) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    struct stat st;
+    int r = dir ? fstatat(dirfd((DIR *)dir), p, &st, AT_SYMLINK_NOFOLLOW) : follow ? stat(p, &st) : lstat(p, &st);
+    int err = errno;
+    free(p);
+    if (r != 0) return fsCode(err);
+    infoOf(&st, v);
+    return 0;
+}
+
+int iris_fs_file_info(int fd, int64_t *v) {
+    struct stat st;
+    if (fstat(fd, &st) != 0) return fsCode(errno);
+    infoOf(&st, v);
+    return 0;
+}
+
+/* chmod, chown (-1 leaves an id), times (ns; -1 leaves one), symlink,
+   link, readlink, realpath: 0, or a code. */
+int iris_fs_chmod(const char *path, int64_t n, int64_t mode) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int r = chmod(p, (mode_t)mode);
+    int err = errno;
+    free(p);
+    return r == 0 ? 0 : fsCode(err);
+}
+
+int iris_fs_chown(const char *path, int64_t n, int64_t uid, int64_t gid, int follow) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int r = follow ? chown(p, (uid_t)uid, (gid_t)gid) : lchown(p, (uid_t)uid, (gid_t)gid);
+    int err = errno;
+    free(p);
+    return r == 0 ? 0 : fsCode(err);
+}
+
+int iris_fs_times(const char *path, int64_t n, int64_t accessed, int64_t modified) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    struct timespec ts[2];
+    for (int i = 0; i < 2; i++) {
+        int64_t t = i == 0 ? accessed : modified;
+        if (t < 0) {
+            ts[i].tv_sec = 0;
+            ts[i].tv_nsec = UTIME_OMIT;
+        } else {
+            ts[i].tv_sec = (time_t)(t / 1000000000LL);
+            ts[i].tv_nsec = (long)(t % 1000000000LL);
+        }
+    }
+    int r = utimensat(AT_FDCWD, p, ts, 0);
+    int err = errno;
+    free(p);
+    return r == 0 ? 0 : fsCode(err);
+}
+
+int iris_fs_link(const char *a, int64_t an, const char *b, int64_t bn, int symbolic) {
+    char *pa = cpath(a, an), *pb = cpath(b, bn);
+    int r = pa && pb ? (symbolic ? symlink(pa, pb) : link(pa, pb)) : -1;
+    int err = pa && pb ? errno : ENOENT;
+    free(pa);
+    free(pb);
+    return r == 0 ? 0 : fsCode(err);
+}
+
+int iris_fs_readlink(const char *path, int64_t n, int real, IrisString *out) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    char buf[PATH_MAX + 1];
+    int code = 0;
+    if (real) {
+        if (realpath(p, buf)) iris_string_append(out, buf, (int64_t)strlen(buf));
+        else code = fsCode(errno);
+    } else {
+        ssize_t k = readlink(p, buf, PATH_MAX);
+        if (k >= 0) iris_string_append(out, buf, (int64_t)k);
+        else code = errno == EINVAL ? 7 : fsCode(errno);
+    }
+    free(p);
+    return code;
+}
+
+/* The space of the file system path is on: total, free, free for anyone
+   (not only root), in bytes, and the files it has room for and has left. */
+#include <sys/statvfs.h>
+int iris_fs_space(const char *path, int64_t n, int64_t *v) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    struct statvfs sv;
+    int r = statvfs(p, &sv);
+    int err = errno;
+    free(p);
+    if (r != 0) return fsCode(err);
+    uint64_t unit = sv.f_frsize ? sv.f_frsize : sv.f_bsize;
+    v[0] = (int64_t)(sv.f_blocks * unit);
+    v[1] = (int64_t)(sv.f_bfree * unit);
+    v[2] = (int64_t)(sv.f_bavail * unit);
+    v[3] = (int64_t)sv.f_files;
+    v[4] = (int64_t)sv.f_ffree;
+    v[5] = (int64_t)sv.f_bsize;
+    return 0;
+}
+
+/* Reads and writes at an offset, without moving the file's position:
+   bytes read (0 at the end) or -code; 0 or a code. */
+int64_t iris_fs_pread(int fd, char *buf, int64_t len, int64_t off) {
+    for (;;) {
+        ssize_t k = pread(fd, buf, (size_t)len, (off_t)off);
+        if (k >= 0) return k;
+        if (errno != EINTR) return -fsCode(errno);
+    }
+}
+
+int iris_fs_pwrite(int fd, const char *buf, int64_t len, int64_t off) {
+    while (len > 0) {
+        ssize_t k = pwrite(fd, buf, (size_t)len, (off_t)off);
+        if (k < 0) {
+            if (errno == EINTR) continue;
+            return fsCode(errno);
+        }
+        buf += k;
+        len -= k;
+        off += k;
+    }
+    return 0;
+}
+
+/* op 1 fsync, 2 fdatasync, 3 truncate to a, 4 allocate a..a+b, 5 seek to a
+   (gives the position), 6 the position. 0 (or the position), or -code. */
+int64_t iris_fs_ctl(int fd, int op, int64_t a, int64_t b) {
+    int r = 0;
+    switch (op) {
+    case 1:
+#ifdef __APPLE__
+        r = fcntl(fd, F_FULLFSYNC) == 0 ? 0 : fsync(fd);     /* fsync alone doesn't reach the disk on macOS */
+#else
+        r = fsync(fd);
+#endif
+        break;
+    case 2:
+#ifdef __APPLE__
+        r = fcntl(fd, F_FULLFSYNC) == 0 ? 0 : fsync(fd);
+#else
+        r = fdatasync(fd);
+#endif
+        break;
+    case 3:
+        r = ftruncate(fd, (off_t)a);
+        break;
+    case 4: {
+#ifdef __linux__
+        r = fallocate(fd, 0, (off_t)a, (off_t)b);
+        if (r != 0 && (errno == EOPNOTSUPP || errno == ENOSYS)) r = posix_fallocate(fd, (off_t)a, (off_t)b) == 0 ? 0 : -1;
+#elif defined(__APPLE__)
+        fstore_t st = {F_ALLOCATECONTIG | F_ALLOCATEALL, F_PEOFPOSMODE, 0, (off_t)(a + b), 0};
+        struct stat cur;
+        if (fstat(fd, &cur) == 0 && cur.st_size >= a + b) break;
+        st.fst_length = (off_t)(a + b - (fstat(fd, &cur) == 0 ? cur.st_size : 0));
+        if (fcntl(fd, F_PREALLOCATE, &st) != 0) {
+            st.fst_flags = F_ALLOCATEALL;
+            fcntl(fd, F_PREALLOCATE, &st);
+        }
+        r = ftruncate(fd, (off_t)(a + b));
+#else
+        r = posix_fallocate(fd, (off_t)a, (off_t)b) == 0 ? 0 : -1;
+#endif
+        break;
+    }
+    case 5: {
+        off_t at = lseek(fd, (off_t)a, SEEK_SET);
+        return at < 0 ? -fsCode(errno) : (int64_t)at;
+    }
+    case 6: {
+        off_t at = lseek(fd, 0, SEEK_CUR);
+        return at < 0 ? -fsCode(errno) : (int64_t)at;
+    }
+    default:
+        return -5;
+    }
+    return r == 0 ? 0 : -fsCode(errno);
+}
+
+/* fsync of a folder, so a file made, renamed or removed in it stays so
+   after a crash. */
+int iris_fs_sync_dir(const char *path, int64_t n) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int fd = open(p, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    int err = errno;
+    free(p);
+    if (fd < 0) return fsCode(err);
+    int r = fsync(fd);
+    err = errno;
+    close(fd);
+    return r == 0 ? 0 : fsCode(err);
+}
+
 void iris_fs_dir_close(void *dir) {
     if (dir) closedir((DIR *)dir);
 }
@@ -2416,7 +2644,11 @@ int iris_fs_open(const char *path, int64_t n, int mode, int *err) {
         *err = 1;
         return -1;
     }
-    int flags = mode == 0 ? O_RDONLY : mode == 1 ? (O_WRONLY | O_CREAT | O_TRUNC) : (O_WRONLY | O_CREAT | O_APPEND);
+    int flags = mode == 0   ? O_RDONLY
+                : mode == 1 ? (O_WRONLY | O_CREAT | O_TRUNC)
+                : mode == 2 ? (O_WRONLY | O_CREAT | O_APPEND)
+                : mode == 3 ? (O_RDWR | O_CREAT)
+                            : O_RDWR;           /* 4: read and write, not made */
     int fd = open(p, flags | O_CLOEXEC, 0666);
     *err = fd < 0 ? fsCode(errno) : 0;
     if (fd >= 0 && mode == 0) {
@@ -2516,6 +2748,7 @@ void iris_fs_close(int fd) {
 
 /* ---------------------------------------------------------------- fs (0.66) */
 #include <pwd.h>
+#include <limits.h>
 #include <grp.h>
 
 /* Copies a file's bytes to another path, replaced if it is there, with the

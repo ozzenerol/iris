@@ -4,8 +4,9 @@
 import str, time
 
 // What file calls fail with: notFound, permission, exists (for a path that is
-// there already), isDir (for a folder where a file is wanted), end, and other.
-pub enum FsError { notFound, permission, exists, isDir, other, end }
+// there already), isDir (for a folder where a file is wanted), end, full
+// (no space left, or over a quota), and other.
+pub enum FsError { notFound, permission, exists, isDir, other, end, full }
 
 @extern("iris_fs_read_all")
 i32 rawReadAll(u8 *path, i64 pathLen, String *out)
@@ -25,6 +26,9 @@ Error fsError(i32 code, str path) => match code {
     3 => error(FsError.exists, "{path}: already exists")
     4 => error(FsError.isDir, "{path}: is a folder")
     6 => error(FsError.end, "{path}: no more to read")
+    7 => error(FsError.other, "{path}: isn't a symbolic link")
+    8 => error(FsError.full, "{path}: no space left")
+    9 => error(FsError.other, "{path}: on another file system")
     _ => error(FsError.other, "{path}: can't be used")
 }
 
@@ -101,23 +105,171 @@ i32 rawWriteFd(i32 fd, u8 *data, i64 len)
 @extern("iris_fs_close")
 void rawClose(i32 fd)
 
-// What stat tells about a file or folder.
+// What stat tells about a file or folder. mode holds the permission bits
+// (0o644: the owner reads and writes, the others read), uid and gid the
+// owner and the group, links how many names the file has, and inode its
+// number on its file system.
 pub struct Info {
     pub i64 size
     pub bool isDir
     pub time.Time modified
+    pub time.Time accessed
+    pub i64 mode
+    pub i64 uid
+    pub i64 gid
+    pub bool isLink
+    pub i64 links
+    pub i64 inode
 }
 
-// The size, kind and time of change of what is at path.
+@extern("iris_fs_info")
+i32 rawInfo(u8 *dir, u8 *path, i64 n, i32 follow, i64 *v)
+
+@extern("iris_fs_file_info")
+i32 rawFileInfo(i32 fd, i64 *v)
+
+Info infoFrom(i64[10] v) => Info{size: v[0], isDir: v[1] != 0, modified: time.Time{ns: v[2]},
+    accessed: time.Time{ns: v[3]}, mode: v[4], uid: v[5], gid: v[6], isLink: v[7] != 0, links: v[8], inode: v[9]}
+
+// What is at path: its size, kind, times, permissions and owner. A
+// symbolic link is followed to what it points to.
 pub !Info stat(str path) {
-    i64 size
-    i32 isDir
-    i64 modified
-    code := rawStat(path.ptr, path.len, &size, &isDir, &modified)
+    i64[10] v
+    code := rawInfo(null, path.ptr, path.len, 1, &v[0])
     if code != 0 {
         return fsError(code, path)
     }
-    return Info{size: size, isDir: isDir != 0, modified: time.Time{ns: modified}}
+    return infoFrom(v)
+}
+
+// What stat gives, about a symbolic link itself rather than what it
+// points to: isLink says it is one.
+pub !Info lstat(str path) {
+    i64[10] v
+    code := rawInfo(null, path.ptr, path.len, 0, &v[0])
+    if code != 0 {
+        return fsError(code, path)
+    }
+    return infoFrom(v)
+}
+
+@extern("iris_fs_chmod")
+i32 rawChmod(u8 *path, i64 n, i64 mode)
+
+@extern("iris_fs_chown")
+i32 rawChown(u8 *path, i64 n, i64 uid, i64 gid, i32 follow)
+
+@extern("iris_fs_times")
+i32 rawTimes(u8 *path, i64 n, i64 accessed, i64 modified)
+
+@extern("iris_fs_link")
+i32 rawLink(u8 *a, i64 an, u8 *b, i64 bn, i32 symbolic)
+
+@extern("iris_fs_readlink")
+i32 rawReadLink(u8 *path, i64 n, i32 real, String *out)
+
+@extern("iris_fs_space")
+i32 rawSpace(u8 *path, i64 n, i64 *v)
+
+@extern("iris_fs_sync_dir")
+i32 rawSyncDir(u8 *path, i64 n)
+
+// Sets the permission bits of path: fs.chmod(path, 0o600) lets only the
+// owner read and write it.
+pub !void chmod(str path, i64 mode) {
+    code := rawChmod(path.ptr, path.len, mode)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Gives path to the user uid and the group gid; -1 leaves one as it is.
+// Only root may give a file away. A symbolic link is followed, unless
+// follow is false.
+pub !void chown(str path, i64 uid, i64 gid = -1, bool follow = true) {
+    code := rawChown(path.ptr, path.len, uid, gid, if follow { 1 } else { 0 })
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Sets when path was last read and changed, as SFTP and tar keep them.
+pub !void setTimes(str path, time.Time accessed, time.Time modified) {
+    code := rawTimes(path.ptr, path.len, accessed.ns, modified.ns)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Makes path a symbolic link to target, which needn't exist.
+pub !void symlink(str target, str path) {
+    code := rawLink(target.ptr, target.len, path.ptr, path.len, 1)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Gives the file at existing a second name, path: a hard link, on the
+// same file system.
+pub !void link(str existing, str path) {
+    code := rawLink(existing.ptr, existing.len, path.ptr, path.len, 0)
+    if code != 0 {
+        return fsError(code, path)
+    }
+}
+
+// Where the symbolic link at path points, as it was written.
+pub !String readLink(str path) {
+    String out
+    code := rawReadLink(path.ptr, path.len, 0, &out)
+    if code != 0 {
+        out.free()
+        return fsError(code, path)
+    }
+    return out
+}
+
+// The absolute path of path with every symbolic link, . and .. resolved;
+// what is there must exist.
+pub !String realPath(str path) {
+    String out
+    code := rawReadLink(path.ptr, path.len, 1, &out)
+    if code != 0 {
+        out.free()
+        return fsError(code, path)
+    }
+    return out
+}
+
+// The room on a file system, in bytes, and the files it can hold.
+// available is what users other than root may use.
+pub struct Space {
+    pub i64 total
+    pub i64 free
+    pub i64 available
+    pub i64 files
+    pub i64 freeFiles
+    pub i64 blockSize
+}
+
+// The room on the file system path is on.
+pub !Space space(str path) {
+    i64[6] v
+    code := rawSpace(path.ptr, path.len, &v[0])
+    if code != 0 {
+        return fsError(code, path)
+    }
+    return Space{total: v[0], free: v[1], available: v[2], files: v[3], freeFiles: v[4], blockSize: v[5]}
+}
+
+// Makes what was done to the files of the folder at path, made, renamed
+// or removed, stay done after a crash: after a rename that replaces a
+// file, sync the folder as well as the file.
+pub !void syncDir(str path) {
+    code := rawSyncDir(path.ptr, path.len)
+    if code != 0 {
+        return fsError(code, path)
+    }
 }
 
 // Makes a folder.
@@ -222,6 +374,11 @@ pub !File create(str path) => try openMode(path, 1)
 // Opens a file for writing at its end, making it if needed.
 pub !File openAppend(str path) => try openMode(path, 2)
 
+// Opens a file for reading and writing, as it is, making it when create
+// is set and it isn't there: for files read and written in place, at any
+// offset.
+pub !File openReadWrite(str path, bool create = true) => try openMode(path, if create { 3 } else { 4 })
+
 // Reads into buf: how many bytes, 0 at the end of the file.
 pub !i64 File.read(u8[] buf) {
     if self.start < self.end {
@@ -307,6 +464,91 @@ pub !void File.write(str data) {
     if code != 0 {
         return fsError(code, "file")
     }
+}
+
+@extern("iris_fs_pread")
+i64 rawPread(i32 fd, u8 *buf, i64 len, i64 off)
+
+@extern("iris_fs_pwrite")
+i32 rawPwrite(i32 fd, u8 *data, i64 len, i64 off)
+
+@extern("iris_fs_ctl")
+i64 rawCtl(i32 fd, i32 op, i64 a, i64 b)
+
+!i64 File.ctl(i32 op, i64 a, i64 b, str what) {
+    r := rawCtl(self.fd, op, a, b)
+    if r < 0 {
+        return fsError(i32(-r), what)
+    }
+    return r
+}
+
+// Reads into buf from offset in the file, without moving its position:
+// how many bytes, fewer than buf only at the end of the file.
+pub !i64 File.readAt(u8[] buf, i64 offset) {
+    i64 got = 0
+    for got < buf.len {
+        n := rawPread(self.fd, &buf[got], buf.len - got, offset + got)
+        if n < 0 {
+            return fsError(i32(-n), "file")
+        }
+        if n == 0 {
+            break
+        }
+        got += n
+    }
+    return got
+}
+
+// Writes data at offset in the file, without moving its position, past
+// the end too: the gap reads as zeros.
+pub !void File.writeAt(str data, i64 offset) {
+    code := rawPwrite(self.fd, data.ptr, data.len, offset)
+    if code != 0 {
+        return fsError(code, "file")
+    }
+}
+
+// Moves the file's position, where read and write go on, to offset.
+pub !void File.seek(i64 offset) {
+    self.start = 0
+    self.end = 0
+    _ = try self.ctl(5, offset, 0, "file")
+}
+
+// What stat tells about the open file.
+pub !Info File.info() {
+    i64[10] v
+    code := rawFileInfo(self.fd, &v[0])
+    if code != 0 {
+        return fsError(code, "file")
+    }
+    return infoFrom(v)
+}
+
+// Makes what was written stay after a crash or a power cut: returns once
+// the data and the file's size and times are on the disk (fsync; on macOS
+// F_FULLFSYNC).
+pub !void File.sync() {
+    _ = try self.ctl(1, 0, 0, "file")
+}
+
+// sync for the data alone, and what is needed to read it back, such as a
+// new size (fdatasync): enough for a log written in place.
+pub !void File.syncData() {
+    _ = try self.ctl(2, 0, 0, "file")
+}
+
+// Makes the file size bytes long: cut, or grown with zeros that take no
+// room on the disk until written.
+pub !void File.truncate(i64 size) {
+    _ = try self.ctl(3, size, 0, "file")
+}
+
+// Sets aside room on the disk for size bytes from offset, so writing them
+// later can't fail for lack of space; the file grows to cover them.
+pub !void File.allocate(i64 offset, i64 size) {
+    _ = try self.ctl(4, offset, size, "file")
 }
 
 // Closes the file.
@@ -494,14 +736,12 @@ pub !List[Found] find(str root) {
             try findInto(sub, out)
             continue
         }
-        i64 size
-        i32 isDir
-        i64 modified
-        code := rawDirStat(d, e.name.ptr, e.name.len, &size, &isDir, &modified)
+        i64[10] v
+        code := rawInfo(d, e.name.ptr, e.name.len, 0, &v[0])
         if code != 0 {
             return fsError(code, e.name)
         }
-        out.push(Found{path: joinPath(dir, e.name), info: Info{size: size, isDir: isDir != 0, modified: time.Time{ns: modified}}})
+        out.push(Found{path: joinPath(dir, e.name), info: infoFrom(v)})
     }
 }
 

@@ -181,6 +181,35 @@ import fs
 17 bytes in all
 ```
 
+## Reading and writing in place
+
+`fs.openReadWrite(path)` opens a file for both, as it is, making it when it isn't there. `readAt(buf, offset)` and `writeAt(data, offset)` work at any offset without moving the file's position, so tasks can share one open file, as a database or a download with many pieces does. Writing past the end grows the file, and the gap reads as zeros. `seek(offset)` moves the position that `read` and `write` use.
+
+```iris run
+import fs
+
+!void main() {
+    path := "/tmp/iris-tour-pieces.bin"
+    f := try fs.openReadWrite(path)
+    defer f.close()
+
+    try f.writeAt("second", 6)
+    try f.writeAt("first ", 0)
+    u8[12] buf
+    n := try f.readAt(buf[:], 0)
+    print(buf[0:n])
+    try fs.remove(path)
+}
+```
+
+```output
+first second
+```
+
+`truncate(size)` cuts the file or grows it with zeros, and `allocate(offset, size)` sets aside room on the disk, so writing there later can't fail for lack of space. A disk that is full fails with `FsError.full`.
+
+A write is first kept in memory and reaches the disk later. `sync()` returns once the data and the file's size and times are on the disk, so they survive a crash or a power cut. `syncData()` is enough when only the data matters, as for a log written in place. A file made or renamed in a folder survives a crash only once the folder is synced too, with `fs.syncDir(dir)`: a program that replaces a file safely writes a new one, syncs it, renames it over the old one and syncs the folder.
+
 ## Information about a file
 
 `fs.stat(path)` gives an `fs.Info` with the size in bytes, whether the path is a folder, and the time it last changed as a `time.Time`:
@@ -206,6 +235,12 @@ import fs
 5 bytes, a folder: false
 /tmp is a folder: true
 ```
+
+`Info` also has `accessed`, the time the file was last read, `mode` with the permission bits, `uid` and `gid` for the owner and the group, `links`, how many names the file has, and `inode`. `fs.stat` follows a symbolic link to what it points to, and `fs.lstat` tells about the link itself, with `isLink` set. `File.info()` gives the same for an open file.
+
+`fs.chmod(path, 0o600)` sets the permission bits, here read and write for the owner alone, as a file holding keys needs. `fs.chown(path, uid, gid)` gives a file to another user and group; only root may do it. `fs.setTimes(path, accessed, modified)` sets its times.
+
+`fs.symlink(target, path)` makes a symbolic link, `fs.readLink(path)` says where one points, and `fs.link(existing, path)` gives a file a second name on the same file system. `fs.realPath(path)` is the absolute path with every link, `.` and `..` resolved. `fs.space(path)` gives the `total`, `free` and `available` bytes of the file system the path is on.
 
 ## Moving and removing
 

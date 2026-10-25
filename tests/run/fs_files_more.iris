@@ -1,0 +1,87 @@
+// expect: read at 6: world
+// expect: written at 0 and 20: Hello world, zeros: true, size 25
+// expect: seek then read: lo w
+// expect: truncated to 5: Hello
+// expect: allocated: 4096 or more: true
+// expect: synced
+// expect: mode 600, mine: true
+// expect: link: true, points to: data.txt, reads: Hello
+// expect: hard link: 2 names
+// expect: real path ends with data.txt: true
+// expect: times kept: true
+// expect: space: true
+// expect: FsError.other: isn't a symbolic link
+
+import fs, os, str, time
+
+!void main() {
+    scoped String dir = try fs.tempDir("iris-fs-more")
+    scoped String path = format("{dir}/data.txt")
+    try fs.writeAll(path, "hello world")
+
+    f := try fs.openReadWrite(path)
+    u8[] buf = alloc(u8, 5)
+    defer free(buf)
+    n := try f.readAt(buf, 6)
+    print("read at 6: {buf[0:n]}")
+    try f.writeAt("H", 0)
+    try f.writeAt("ZZZZZ", 20)
+    scoped String all = try fs.readAll(path)
+    bool zeros = true
+    for i in 11..20 {
+        if all[i] != 0 {
+            zeros = false
+        }
+    }
+    print("written at 0 and 20: {all[0:11]}, zeros: {zeros}, size {all.len}")
+    try f.seek(3)
+    u8[] four = alloc(u8, 4)
+    defer free(four)
+    k := try f.read(four)
+    print("seek then read: {four[0:k]}")
+    try f.truncate(5)
+    scoped String cut = try fs.readAll(path)
+    print("truncated to 5: {cut}")
+    try f.allocate(0, 4096)
+    info := try f.info()
+    print("allocated: 4096 or more: {info.size >= 4096}")
+    try f.truncate(5)
+    try f.sync()
+    try f.syncData()
+    try fs.syncDir(dir)
+    print("synced")
+    f.close()
+
+    try fs.chmod(path, 0o600)
+    st := try fs.stat(path)
+    print("mode {st.mode:o}, mine: {st.uid == os.uid()}")
+
+    scoped String lpath = format("{dir}/link")
+    try fs.symlink("data.txt", lpath)
+    ls := try fs.lstat(lpath)
+    scoped String target = try fs.readLink(lpath)
+    scoped String through = try fs.readAll(lpath)
+    print("link: {ls.isLink}, points to: {target}, reads: {through}")
+
+    scoped String hpath = format("{dir}/hard")
+    try fs.link(path, hpath)
+    hs := try fs.stat(hpath)
+    print("hard link: {hs.links} names")
+
+    scoped String real = try fs.realPath(lpath)
+    print("real path ends with data.txt: {str.endsWith(real, "/data.txt")}")
+
+    t := time.unix(1700000000)
+    try fs.setTimes(path, t, t)
+    ts := try fs.stat(path)
+    print("times kept: {ts.modified.unix() == 1700000000 && ts.accessed.unix() == 1700000000}")
+
+    sp := try fs.space(dir)
+    print("space: {sp.total > 0 && sp.available <= sp.total}")
+
+    _ = fs.readLink(path) catch e {
+        print("{e.code}: {str.cut(e.message, ": ").1}")
+        "".copy()
+    }
+    try fs.removeAll(dir)
+}
