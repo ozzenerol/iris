@@ -8,7 +8,11 @@
 // expect: aesBlock 256: d8c95758e3353e530fa52bd10e73b986
 // expect: aesCtr: 63e4b601b11b4edaf2e4f3d595c1294bf988f60e58b266cd4b9e0b60419249f1d2b122950e6cb9f781dab041f10359afc06c449d7e8ca9d29ecfa10a74ff08024efdf79df169c5fa40e1e37e5461dfd6821204007cd43678d8c7e9d899a203092e3e84df
 // expect: aesCtr back: true
+// expect: aesCtr 1000: b15778c4c05206d2a535aa7543f0bc18bf234cff82a0d674efc53ee4a96a9b24
+// expect: aesSeal 1000: da5b76df83323c57ff807fbfc64f7a6aa68f809f427f38c05489ea8b6d8ef0cc
 // expect: chacha20: 6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b
+// expect: chacha20 5000: d5c31fa5e9bfda367146116e715c2211ad1a9e8c7c4abf520b9484b1d5459479
+// expect: seal 5000: e0d74d38fe8dd5f9bd3f1ee98119340817d1b95619209a7275f949521dcfa55d
 // expect: wiped: 0000000000
 
 import crypto, hex, str
@@ -16,7 +20,7 @@ import crypto, hex, str
 String bytesUpTo(i64 n) {
     String s
     for i in 0..n {
-        u8[1] b = [u8(i)]
+        u8[1] b = [u8(i % 256)]
         s.append(b[0:1])
     }
     return s
@@ -61,12 +65,33 @@ void main() {
     print("aesCtr: {ctt}")
     scoped String back = crypto.aesCtr(k32, iv[0:], ct)
     print("aesCtr back: {back == data}")
+    // long enough for 8 blocks at a time, and the counter wraps
+    scoped String long = bytesUpTo(1000)
+    scoped String lct = crypto.aesCtr(k32, iv[0:], long)
+    lh := crypto.sha256(lct)
+    scoped String lht = hex.encode(lh[0:])
+    print("aesCtr 1000: {lht}")
+    scoped String n12 = bytesUpTo(12)
+    scoped String sealed = crypto.aesSeal(k32, n12, long)
+    sh := crypto.sha256(sealed)
+    scoped String sht = hex.encode(sh[0:])
+    print("aesSeal 1000: {sht}")
 
     scoped String nonce = hex.decode("000000000000004a00000000") catch e { "".copy() }
     pt := "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
     scoped String cc = crypto.chacha20(k32, nonce, pt, counter: 1)
     scoped String cct = hex.encode(cc[0:32])
     print("chacha20: {cct}")
+    // long enough for 8 blocks at a time, from counter 7
+    scoped String five = bytesUpTo(5000)
+    scoped String c5 = crypto.chacha20(k32, n12, five, counter: 7)
+    ch := crypto.sha256(c5)
+    scoped String cht = hex.encode(ch[0:])
+    print("chacha20 5000: {cht}")
+    scoped String s5 = crypto.seal(k32, n12, five)
+    sh5 := crypto.sha256(s5)
+    scoped String sh5t = hex.encode(sh5[0:])
+    print("seal 5000: {sh5t}")
 
     u8[5] secret = [1, 2, 3, 4, 5]
     crypto.wipe(secret[0:])

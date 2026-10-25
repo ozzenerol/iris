@@ -11786,32 +11786,94 @@ static const uint64_t sha512K[80] = {
 
 #define ROR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
 
-static void sha512Block(Sha512 *s, const unsigned char *p) {
-    uint64_t w[80];
+/* One round, with the eight working variables renamed instead of moved:
+   Ch as g ^ (e & (f ^ g)), Maj as (a & b) | (c & (a | b)). */
+#define SHA512_ROUND(a, b, c, d, e, f, g, h, k)                                                         \
+    do {                                                                                                 \
+        uint64_t t1 = h + (k);                                                                           \
+        t1 += g ^ (e & (f ^ g));                                                                         \
+        t1 += ROR64(e, 14) ^ ROR64(e, 18) ^ ROR64(e, 41);                                                \
+        uint64_t t2 = (ROR64(a, 28) ^ ROR64(a, 34) ^ ROR64(a, 39)) + ((a & b) | (c & (a | b)));        \
+        d += t1;                                                                                         \
+        h = t1 + t2;                                                                                     \
+    } while (0)
+
+#define SHA512_W(w, i)                                                                                    \
+    (w[(i) & 15] += w[((i) - 7) & 15] +                                                                  \
+                    (ROR64(w[((i) - 15) & 15], 1) ^ ROR64(w[((i) - 15) & 15], 8) ^ (w[((i) - 15) & 15] >> 7)) + \
+                    (ROR64(w[((i) - 2) & 15], 19) ^ ROR64(w[((i) - 2) & 15], 61) ^ (w[((i) - 2) & 15] >> 6)))
+
+/* Each word of the message schedule is made in the round that takes it,
+   so the CPU works on it while the round waits for the one before. */
+static inline __attribute__((always_inline)) void sha512BlockBody(Sha512 *s, const unsigned char *p) {
+    uint64_t w[16];
     for (int i = 0; i < 16; i++) {
-        w[i] = 0;
-        for (int k = 0; k < 8; k++) w[i] = (w[i] << 8) | p[i * 8 + k];
-    }
-    for (int i = 16; i < 80; i++) {
-        uint64_t s0 = ROR64(w[i - 15], 1) ^ ROR64(w[i - 15], 8) ^ (w[i - 15] >> 7);
-        uint64_t s1 = ROR64(w[i - 2], 19) ^ ROR64(w[i - 2], 61) ^ (w[i - 2] >> 6);
-        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        uint64_t v;
+        memcpy(&v, p + 8 * i, 8);
+        w[i] = __builtin_bswap64(v);
     }
     uint64_t a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4], f = s->h[5], g = s->h[6], h = s->h[7];
-    for (int i = 0; i < 80; i++) {
-        uint64_t t1 = h + (ROR64(e, 14) ^ ROR64(e, 18) ^ ROR64(e, 41)) + ((e & f) ^ (~e & g)) + sha512K[i] + w[i];
-        uint64_t t2 = (ROR64(a, 28) ^ ROR64(a, 34) ^ ROR64(a, 39)) + ((a & b) ^ (a & c) ^ (b & c));
-        h = g;
-        g = f;
-        f = e;
-        e = d + t1;
-        d = c;
-        c = b;
-        b = a;
-        a = t1 + t2;
+    SHA512_ROUND(a, b, c, d, e, f, g, h, sha512K[0] + w[0]);
+    SHA512_ROUND(h, a, b, c, d, e, f, g, sha512K[1] + w[1]);
+    SHA512_ROUND(g, h, a, b, c, d, e, f, sha512K[2] + w[2]);
+    SHA512_ROUND(f, g, h, a, b, c, d, e, sha512K[3] + w[3]);
+    SHA512_ROUND(e, f, g, h, a, b, c, d, sha512K[4] + w[4]);
+    SHA512_ROUND(d, e, f, g, h, a, b, c, sha512K[5] + w[5]);
+    SHA512_ROUND(c, d, e, f, g, h, a, b, sha512K[6] + w[6]);
+    SHA512_ROUND(b, c, d, e, f, g, h, a, sha512K[7] + w[7]);
+    SHA512_ROUND(a, b, c, d, e, f, g, h, sha512K[8] + w[8]);
+    SHA512_ROUND(h, a, b, c, d, e, f, g, sha512K[9] + w[9]);
+    SHA512_ROUND(g, h, a, b, c, d, e, f, sha512K[10] + w[10]);
+    SHA512_ROUND(f, g, h, a, b, c, d, e, sha512K[11] + w[11]);
+    SHA512_ROUND(e, f, g, h, a, b, c, d, sha512K[12] + w[12]);
+    SHA512_ROUND(d, e, f, g, h, a, b, c, sha512K[13] + w[13]);
+    SHA512_ROUND(c, d, e, f, g, h, a, b, sha512K[14] + w[14]);
+    SHA512_ROUND(b, c, d, e, f, g, h, a, sha512K[15] + w[15]);
+#pragma clang loop unroll(disable)
+    for (int i = 16; i < 80; i += 16) {
+        SHA512_ROUND(a, b, c, d, e, f, g, h, sha512K[i + 0] + SHA512_W(w, 0));
+        SHA512_ROUND(h, a, b, c, d, e, f, g, sha512K[i + 1] + SHA512_W(w, 1));
+        SHA512_ROUND(g, h, a, b, c, d, e, f, sha512K[i + 2] + SHA512_W(w, 2));
+        SHA512_ROUND(f, g, h, a, b, c, d, e, sha512K[i + 3] + SHA512_W(w, 3));
+        SHA512_ROUND(e, f, g, h, a, b, c, d, sha512K[i + 4] + SHA512_W(w, 4));
+        SHA512_ROUND(d, e, f, g, h, a, b, c, sha512K[i + 5] + SHA512_W(w, 5));
+        SHA512_ROUND(c, d, e, f, g, h, a, b, sha512K[i + 6] + SHA512_W(w, 6));
+        SHA512_ROUND(b, c, d, e, f, g, h, a, sha512K[i + 7] + SHA512_W(w, 7));
+        SHA512_ROUND(a, b, c, d, e, f, g, h, sha512K[i + 8] + SHA512_W(w, 8));
+        SHA512_ROUND(h, a, b, c, d, e, f, g, sha512K[i + 9] + SHA512_W(w, 9));
+        SHA512_ROUND(g, h, a, b, c, d, e, f, sha512K[i + 10] + SHA512_W(w, 10));
+        SHA512_ROUND(f, g, h, a, b, c, d, e, sha512K[i + 11] + SHA512_W(w, 11));
+        SHA512_ROUND(e, f, g, h, a, b, c, d, sha512K[i + 12] + SHA512_W(w, 12));
+        SHA512_ROUND(d, e, f, g, h, a, b, c, sha512K[i + 13] + SHA512_W(w, 13));
+        SHA512_ROUND(c, d, e, f, g, h, a, b, sha512K[i + 14] + SHA512_W(w, 14));
+        SHA512_ROUND(b, c, d, e, f, g, h, a, sha512K[i + 15] + SHA512_W(w, 15));
     }
     s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
     s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
+}
+
+/* With BMI2, rorx rotates into another register, which saves a mov for
+   most of the rotates. */
+#if defined(__x86_64__)
+__attribute__((target("bmi2"))) static void sha512BlockBmi2(Sha512 *s, const unsigned char *p) {
+    sha512BlockBody(s, p);
+}
+
+static int sha512Bmi2 = -1;
+#endif
+
+static void sha512Block(Sha512 *s, const unsigned char *p) {
+#if defined(__x86_64__)
+    if (sha512Bmi2 < 0) {
+        __builtin_cpu_init();
+        sha512Bmi2 = __builtin_cpu_supports("bmi2");
+    }
+    if (sha512Bmi2) {
+        sha512BlockBmi2(s, p);
+        return;
+    }
+#endif
+    sha512BlockBody(s, p);
 }
 
 static void sha512Init(Sha512 *s) {
@@ -11825,28 +11887,33 @@ static void sha512Init(Sha512 *s) {
 
 static void sha512Add(Sha512 *s, const unsigned char *p, size_t n) {
     s->len += n;
-    while (n > 0) {
+    if (s->used > 0) {
         size_t take = 128 - s->used < n ? 128 - s->used : n;
         memcpy(s->block + s->used, p, take);
         s->used += take;
         p += take;
         n -= take;
-        if (s->used == 128) {
-            sha512Block(s, s->block);
-            s->used = 0;
-        }
+        if (s->used < 128) return;
+        sha512Block(s, s->block);
+        s->used = 0;
     }
+    /* whole blocks straight from p */
+    for (; n >= 128; p += 128, n -= 128) sha512Block(s, p);
+    memcpy(s->block, p, n);
+    s->used = n;
 }
 
 static void sha512End(Sha512 *s, unsigned char out[64]) {
     uint64_t bits = s->len * 8;
-    unsigned char pad = 0x80;
-    sha512Add(s, &pad, 1);
-    unsigned char zero = 0;
-    while (s->used != 112) sha512Add(s, &zero, 1);
-    unsigned char lenBytes[16] = {0};
-    for (int i = 0; i < 8; i++) lenBytes[8 + i] = (unsigned char)(bits >> (56 - 8 * i));
-    sha512Add(s, lenBytes, 16);
+    s->block[s->used++] = 0x80;
+    if (s->used > 112) {
+        memset(s->block + s->used, 0, 128 - s->used);
+        sha512Block(s, s->block);
+        s->used = 0;
+    }
+    memset(s->block + s->used, 0, 120 - s->used);
+    for (int i = 0; i < 8; i++) s->block[120 + i] = (unsigned char)(bits >> (56 - 8 * i));
+    sha512Block(s, s->block);
     for (int i = 0; i < 8; i++) {
         for (int k = 0; k < 8; k++) out[i * 8 + k] = (unsigned char)(s->h[i] >> (56 - 8 * k));
     }
@@ -12292,9 +12359,79 @@ static void chachaBlock(const unsigned char key[32], uint32_t counter, const uns
     }
 }
 
+/* 8 blocks of key stream side by side, one in each lane of the vectors,
+   xored into 512 bytes of in: AVX2 on x86_64, NEON (two halves) on arm64. */
+#if defined(__x86_64__) || defined(__aarch64__)
+#define CHACHA_WIDE 1
+typedef uint32_t ChachaVec __attribute__((vector_size(32)));
+#if defined(__x86_64__)
+#define CHACHA_TARGET __attribute__((target("avx2")))
+#else
+#define CHACHA_TARGET
+#endif
+
+static int chachaWide(void) {
+#if defined(__x86_64__)
+    static int wide = -1;
+    if (wide < 0) {
+        __builtin_cpu_init();
+        wide = __builtin_cpu_supports("avx2") && !getenv("IRIS_CHACHA_SOFT");
+    }
+    return wide;
+#else
+    return 1;
+#endif
+}
+
+CHACHA_TARGET static void chacha8(const uint32_t s[16], const unsigned char *in, unsigned char *out) {
+    ChachaVec x[16], start[16];
+    for (int i = 0; i < 16; i++) {
+        uint32_t v = s[i];
+        start[i] = (ChachaVec){v, v, v, v, v, v, v, v};
+    }
+    start[12] += (ChachaVec){0, 1, 2, 3, 4, 5, 6, 7};
+    memcpy(x, start, sizeof x);
+    for (int i = 0; i < 10; i++) {
+        QROUND(x[0], x[4], x[8], x[12]);
+        QROUND(x[1], x[5], x[9], x[13]);
+        QROUND(x[2], x[6], x[10], x[14]);
+        QROUND(x[3], x[7], x[11], x[15]);
+        QROUND(x[0], x[5], x[10], x[15]);
+        QROUND(x[1], x[6], x[11], x[12]);
+        QROUND(x[2], x[7], x[8], x[13]);
+        QROUND(x[3], x[4], x[9], x[14]);
+    }
+    uint32_t words[16][8];
+    for (int i = 0; i < 16; i++) {
+        ChachaVec v = x[i] + start[i];
+        memcpy(words[i], &v, sizeof v);
+    }
+    for (int b = 0; b < 8; b++) {
+        for (int i = 0; i < 16; i++) {
+            uint32_t d;
+            memcpy(&d, in + 64 * b + 4 * i, 4);
+            d ^= words[i][b];
+            memcpy(out + 64 * b + 4 * i, &d, 4);
+        }
+    }
+}
+#endif
+
 /* data XOR the key stream from block counter on */
 static void chachaXor(const unsigned char key[32], uint32_t counter, const unsigned char nonce[12],
                       const unsigned char *in, unsigned char *out, size_t n) {
+#ifdef CHACHA_WIDE
+    if (n >= 512 && chachaWide()) {
+        uint32_t s[16] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574};
+        for (int i = 0; i < 8; i++) s[4 + i] = le32(key + 4 * i);
+        for (int i = 0; i < 3; i++) s[13 + i] = le32(nonce + 4 * i);
+        for (; n >= 512; in += 512, out += 512, n -= 512, counter += 8) {
+            s[12] = counter;
+            chacha8(s, in, out);
+        }
+        iris_wipe(s, sizeof s);
+    }
+#endif
     unsigned char block[64];
     for (size_t at = 0; at < n; at += 64) {
         chachaBlock(key, counter++, nonce, block);
@@ -12607,6 +12744,15 @@ static void aesBlockSoft(const AesGcm *a, const uint8_t in[16], uint8_t out[16])
     memcpy(out, s, 16);
 }
 
+/* The counter block hi:lo plus one: the low 32 bits only for GCM. */
+static inline void aesCtrStep(uint64_t *hi, uint64_t *lo, int gcm) {
+    if (gcm) {
+        *lo = (*lo & 0xffffffff00000000ULL) | (uint32_t)(*lo + 1);
+    } else if (++*lo == 0) {
+        ++*hi;
+    }
+}
+
 #ifdef AES_HW_TARGET
 #if defined(__x86_64__)
 AES_HW_TARGET static void aesBlockHw(const AesGcm *a, const uint8_t in[16], uint8_t out[16]) {
@@ -12614,6 +12760,29 @@ AES_HW_TARGET static void aesBlockHw(const AesGcm *a, const uint8_t in[16], uint
     for (int r = 1; r < a->rounds; r++) s = _mm_aesenc_si128(s, _mm_loadu_si128((const __m128i *)a->rk[r]));
     s = _mm_aesenclast_si128(s, _mm_loadu_si128((const __m128i *)a->rk[a->rounds]));
     _mm_storeu_si128((__m128i *)out, s);
+}
+
+/* 8 counter blocks from hi:lo encrypted side by side and xored into 128
+   bytes of in. The blocks are made in registers: bytes stored one by one
+   and read back as 16 would stall the loads. */
+AES_HW_TARGET static void aesCtr8Hw(const AesGcm *a, uint64_t *hi, uint64_t *lo, int gcm, const uint8_t *in,
+                                    uint8_t *out) {
+    __m128i s[8];
+    __m128i k = _mm_loadu_si128((const __m128i *)a->rk[0]);
+    for (int i = 0; i < 8; i++) {
+        s[i] = _mm_xor_si128(_mm_set_epi64x((long long)__builtin_bswap64(*lo), (long long)__builtin_bswap64(*hi)), k);
+        aesCtrStep(hi, lo, gcm);
+    }
+    for (int r = 1; r < a->rounds; r++) {
+        k = _mm_loadu_si128((const __m128i *)a->rk[r]);
+        for (int i = 0; i < 8; i++) s[i] = _mm_aesenc_si128(s[i], k);
+    }
+    k = _mm_loadu_si128((const __m128i *)a->rk[a->rounds]);
+    for (int i = 0; i < 8; i++) {
+        s[i] = _mm_aesenclast_si128(s[i], k);
+        __m128i d = _mm_loadu_si128((const __m128i *)(in + 16 * i));
+        _mm_storeu_si128((__m128i *)(out + 16 * i), _mm_xor_si128(s[i], d));
+    }
 }
 
 AES_HW_TARGET static void clmulHw(uint64_t x, uint64_t y, uint64_t *hi, uint64_t *lo) {
@@ -12628,6 +12797,24 @@ AES_HW_TARGET static void aesBlockHw(const AesGcm *a, const uint8_t in[16], uint
     s = vaeseq_u8(s, vld1q_u8(a->rk[a->rounds - 1]));
     s = veorq_u8(s, vld1q_u8(a->rk[a->rounds]));
     vst1q_u8(out, s);
+}
+
+AES_HW_TARGET static void aesCtr8Hw(const AesGcm *a, uint64_t *hi, uint64_t *lo, int gcm, const uint8_t *in,
+                                    uint8_t *out) {
+    uint8x16_t s[8];
+    for (int i = 0; i < 8; i++) {
+        s[i] = vreinterpretq_u8_u64(vcombine_u64(vcreate_u64(__builtin_bswap64(*hi)), vcreate_u64(__builtin_bswap64(*lo))));
+        aesCtrStep(hi, lo, gcm);
+    }
+    for (int r = 0; r < a->rounds - 1; r++) {
+        uint8x16_t k = vld1q_u8(a->rk[r]);
+        for (int i = 0; i < 8; i++) s[i] = vaesmcq_u8(vaeseq_u8(s[i], k));
+    }
+    uint8x16_t k = vld1q_u8(a->rk[a->rounds - 1]), last = vld1q_u8(a->rk[a->rounds]);
+    for (int i = 0; i < 8; i++) {
+        s[i] = veorq_u8(vaeseq_u8(s[i], k), last);
+        vst1q_u8(out + 16 * i, veorq_u8(s[i], vld1q_u8(in + 16 * i)));
+    }
 }
 
 AES_HW_TARGET static void clmulHw(uint64_t x, uint64_t y, uint64_t *hi, uint64_t *lo) {
@@ -12742,24 +12929,37 @@ static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
     a->h0 = load64be(h + 8);
 }
 
-/* CTR from counter block 2 on, as GCM does */
-static void aesGcmCtr(const AesGcm *a, const uint8_t nonce[12], const uint8_t *in, uint8_t *out, size_t n) {
-    uint8_t ctr[16], ks[16];
-    memcpy(ctr, nonce, 12);
-    uint32_t c = 2;
+/* in xored with AES of the counter block ctr, ctr + 1, ...: counted over
+   the last 4 bytes for GCM, over all 16 for plain CTR. With the CPU's AES
+   instructions 8 blocks go at a time, so their rounds overlap. */
+static void aesCtrXor(const AesGcm *a, const uint8_t ctr[16], int gcm, const uint8_t *in, uint8_t *out, size_t n) {
+    uint64_t hi = load64be(ctr), lo = load64be(ctr + 8);
+#ifdef AES_HW_TARGET
+    if (a->hw) {
+        for (; n >= 128; in += 128, out += 128, n -= 128) aesCtr8Hw(a, &hi, &lo, gcm, in, out);
+    }
+#endif
+    uint8_t block[16], ks[16];
     while (n > 0) {
-        ctr[12] = (uint8_t)(c >> 24);
-        ctr[13] = (uint8_t)(c >> 16);
-        ctr[14] = (uint8_t)(c >> 8);
-        ctr[15] = (uint8_t)c;
-        aesBlock(a, ctr, ks);
+        store64be(block, hi);
+        store64be(block + 8, lo);
+        aesBlock(a, block, ks);
         size_t k = n < 16 ? n : 16;
         for (size_t i = 0; i < k; i++) out[i] = in[i] ^ ks[i];
         in += k;
         out += k;
         n -= k;
-        c++;
+        aesCtrStep(&hi, &lo, gcm);
     }
+    iris_wipe(ks, sizeof ks);
+}
+
+/* CTR from counter block 2 on, as GCM does */
+static void aesGcmCtr(const AesGcm *a, const uint8_t nonce[12], const uint8_t *in, uint8_t *out, size_t n) {
+    uint8_t ctr[16] = {0};
+    memcpy(ctr, nonce, 12);
+    ctr[15] = 2;
+    aesCtrXor(a, ctr, 1, in, out, n);
 }
 
 static void aesGcmTag(const AesGcm *a, const uint8_t nonce[12], const uint8_t *aad, size_t aadLen, const uint8_t *ct,
@@ -12910,21 +13110,14 @@ void iris_aes_ctr(const uint8_t *key, int64_t keyLen, const uint8_t *iv, const u
     AesGcm a;
     aesExpand(&a, key, (int)keyLen);
     a.hw = aesHasHw();
-    uint8_t ctr[16], ks[16];
+    uint8_t ctr[16];
     memcpy(ctr, iv, 16);
-    uint8_t *buf = malloc(len ? (size_t)len : 1);
-    if (!buf) outOfMemory();
-    for (int64_t at = 0; at < len; at += 16) {
-        aesBlock(&a, ctr, ks);
-        int64_t take = len - at < 16 ? len - at : 16;
-        for (int64_t i = 0; i < take; i++) buf[at + i] = data[at + i] ^ ks[i];
-        for (int i = 15; i >= 0 && ++ctr[i] == 0; i--) {
-        }
+    if (len > 0) {
+        iris_string_reserve(out, len);
+        aesCtrXor(&a, ctr, 0, data, (uint8_t *)out->ptr + out->len, (size_t)len);
+        out->len += len;
     }
-    iris_string_append(out, (const char *)buf, len);
-    free(buf);
     iris_wipe(&a, sizeof a);
-    iris_wipe(ks, sizeof ks);
 }
 
 /* The ChaCha20 stream (RFC 8439) from block counter on, xored with data:
@@ -13009,6 +13202,119 @@ uint32_t iris_crc32c(uint32_t before, const uint8_t *p, int64_t len) {
     }
     for (; n > 0; p++, n--) c = (c >> 8) ^ crc32cTable[0][(c ^ *p) & 0xff];
     return ~c;
+}
+
+static uint8_t base32Tables[2][256];    /* 0-31, 0xfe to skip, 0xff wrong */
+/* two characters for each 10 bits, so 4 lookups and one store make 8 */
+static uint16_t base32Pairs[2][1024];
+static pthread_once_t base32Once = PTHREAD_ONCE_INIT;
+
+static void base32Init(void) {
+    for (int h = 0; h < 2; h++) {
+        memset(base32Tables[h], 0xff, 256);
+        const char *al = h ? "0123456789ABCDEFGHIJKLMNOPQRSTUV" : "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        for (int k = 0; k < 32; k++) {
+            base32Tables[h][(uint8_t)al[k]] = (uint8_t)k;
+            if (al[k] >= 'A' && al[k] <= 'Z') base32Tables[h][(uint8_t)(al[k] + 32)] = (uint8_t)k;
+        }
+        base32Tables[h]['\n'] = base32Tables[h]['\r'] = base32Tables[h][' '] = 0xfe;
+        for (int k = 0; k < 1024; k++) {
+            base32Pairs[h][k] = (uint16_t)((uint8_t)al[k >> 5] | (uint8_t)al[k & 31] << 8);
+        }
+    }
+}
+
+/* Base32 (RFC 4648): 5 bytes to 8 characters, of base32hex's alphabet
+   when hex is set, with = to a multiple of 8 when pad is. Added to out. */
+void iris_base32_encode(const uint8_t *p, int64_t len, int hex, int pad, IrisString *out) {
+    int64_t size = (len + 4) / 5 * 8;
+    if (size == 0) return;
+    pthread_once(&base32Once, base32Init);
+    const uint16_t *pairs = base32Pairs[hex ? 1 : 0];
+    const char *alphabet = hex ? "0123456789ABCDEFGHIJKLMNOPQRSTUV" : "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    iris_string_reserve(out, size);
+    char *o = out->ptr + out->len;
+    int64_t i = 0;
+    for (; i + 5 <= len; i += 5, o += 8) {
+        uint64_t v = (uint64_t)p[i] << 32 | (uint64_t)p[i + 1] << 24 | (uint64_t)p[i + 2] << 16 |
+                     (uint64_t)p[i + 3] << 8 | p[i + 4];
+        uint64_t chars = (uint64_t)pairs[v >> 30] | (uint64_t)pairs[(v >> 20) & 1023] << 16 |
+                         (uint64_t)pairs[(v >> 10) & 1023] << 32 | (uint64_t)pairs[v & 1023] << 48;
+        memcpy(o, &chars, 8);
+    }
+    int64_t rest = len - i;
+    if (rest > 0) {
+        uint64_t v = 0;
+        for (int64_t k = 0; k < rest; k++) v |= (uint64_t)p[i + k] << (32 - 8 * k);
+        int chars = (int)((rest * 8 + 4) / 5);
+        for (int k = 0; k < chars; k++) o[k] = alphabet[(v >> (35 - 5 * k)) & 31];
+        if (pad) {
+            for (int k = chars; k < 8; k++) o[k] = '=';
+            o += 8;
+        } else {
+            o += chars;
+        }
+    }
+    out->len = o - out->ptr;
+}
+
+/* Base32 text to bytes, added to out, in either case; line breaks and
+   spaces are skipped. 0, or what is wrong: -1 for a = followed by more
+   text, -2 for text that ends inside a byte, i + 1 for a bad character
+   at i. */
+int64_t iris_base32_decode(const uint8_t *t, int64_t len, int hex, IrisString *out) {
+    pthread_once(&base32Once, base32Init);
+    const uint8_t *table = base32Tables[hex ? 1 : 0];
+    int64_t end = len;
+    const uint8_t *eq = len > 0 ? memchr(t, '=', (size_t)len) : NULL;
+    if (eq) {
+        end = eq - t;
+        for (int64_t k = end; k < len; k++) {
+            if (t[k] != '=') return -1;
+        }
+    }
+    /* room for every byte: 5 for each 8 characters, and the rest */
+    iris_string_reserve(out, end / 8 * 5 + 5);
+    uint8_t *o = (uint8_t *)out->ptr + out->len;
+    uint64_t acc = 0;
+    int bits = 0;
+    int64_t n = 0, i = 0;
+    /* 8 characters at a time while none is skipped or wrong */
+    for (; i + 8 <= end; i += 8) {
+        uint64_t v = 0;
+        uint8_t bad = 0;
+        for (int k = 0; k < 8; k++) {
+            uint8_t d = table[t[i + k]];
+            bad |= d;
+            v = v << 5 | (d & 31);
+        }
+        if (bad & 0xe0) break;
+        o[0] = (uint8_t)(v >> 32);
+        o[1] = (uint8_t)(v >> 24);
+        o[2] = (uint8_t)(v >> 16);
+        o[3] = (uint8_t)(v >> 8);
+        o[4] = (uint8_t)v;
+        o += 5;
+        n += 8;
+    }
+    for (; i < end; i++) {
+        uint8_t d = table[t[i]];
+        if (d == 0xfe) continue;
+        if (d == 0xff) {
+            out->len = o - (uint8_t *)out->ptr;
+            return i + 1;
+        }
+        acc = (acc << 5 | d) & 0xffff;
+        bits += 5;
+        n++;
+        if (bits >= 8) {
+            bits -= 8;
+            *o++ = (uint8_t)(acc >> bits);
+        }
+    }
+    out->len = o - (uint8_t *)out->ptr;
+    int r = (int)(n % 8);
+    return r == 1 || r == 3 || r == 6 ? -2 : 0;
 }
 
 /* xoshiro256** (Blackman and Vigna): fast, not for secrets. The thread's

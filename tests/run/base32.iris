@@ -10,6 +10,9 @@
 // expect: lower case: foobar
 // expect: Base32Error.invalid: '1' isn't base32
 // expect: Base32Error.invalid: base32 text that ends in the middle of a byte
+// expect: Base32Error.invalid: '=' in the middle of base32 text
+// expect: Base32Error.invalid: '!' isn't base32
+// expect: with line breaks: true
 
 import base32
 
@@ -47,4 +50,25 @@ void main() {
         print("{e.code}: {e.message}")
         "".copy()
     }
+    _ = base32.decode("MZXW6===MZXW6===") catch e {
+        print("{e.code}: {e.message}")
+        "".copy()
+    }
+    _ = base32.decode("MZXW6YTBMZXW6YTBMZ!W6YTB") catch e {
+        print("{e.code}: {e.message}")
+        "".copy()
+    }
+    // a line break after 16 characters, in long text
+    scoped String long = base32.encode(all, pad: false)
+    String wrapped
+    defer wrapped.free()
+    i64 at = 0
+    for at < long.len {
+        end := if at + 16 < long.len { at + 16 } else { long.len }
+        wrapped.append(long[at:end])
+        wrapped.append("\r\n")
+        at = end
+    }
+    scoped String unwrapped = base32.decode(wrapped) catch e { "".copy() }
+    print("with line breaks: {unwrapped == all}")
 }
