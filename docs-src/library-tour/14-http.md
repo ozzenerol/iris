@@ -575,6 +575,69 @@ void serve(http.Router *r, net.Listener ln) {
 2: 200 pong
 ```
 
+Each of them takes `headers`, the request's own as `"Name: value"`, such as an `Authorization`, a `Range` for part of a file, or a `User-Agent` in place of iris's: `c.get(url, ["Range: bytes=0-1023"])`. A header with a line break in it is an error, so a value from outside can't add headers of its own.
+
+## Bodies a part at a time
+
+`c.stream(method, url)` gives a `ReplyStream` as soon as the status and headers have come. `read(buf)` gives the body a part at a time, so a large download goes to a file without being held whole, and `readAll()` the rest of it. `close()` gives the connection back to the `Client` once the whole body was read. `c.begin(method, url, contentType)` is the other way round: an `Upload` to write the body to, a part at a time, sent in chunks unless `length` gives its size, and `finish()` gives the reply as a `ReplyStream`. Both go over HTTP/1.1.
+
+A handler streams its answer with `res.write(data)`: the status and headers go with the first part, each part goes out at once, chunked on HTTP/1.1 and as DATA frames on HTTP/2, and the body ends when the handler returns. A client that reads slowly makes `write` wait, and once it has gone `write` fails, which is when the handler stops. `res.event(data, event, id)` sends a server-sent event, which a browser's `EventSource` gets as one message.
+
+```iris run
+import http, net, str
+
+void ticks(http.Request *req, http.Response *res) {
+    for i in 1..4 {
+        res.event("tick {i}") catch e {
+            return
+        }
+        sleep(10ms)
+    }
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/ticks", ticks)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    http.Client c
+    defer c.close()
+    scoped String url = format("http://127.0.0.1:{ln.port}/ticks")
+    s := try c.stream("GET", url)
+    defer s.close()
+    print("{s.status} {s.header("Content-Type")}")
+    // each event as it comes; a real client handles them in the loop
+    String all
+    defer all.free()
+    u8[256] buf
+    for {
+        n := try s.read(buf[:])
+        if n == 0 {
+            break
+        }
+        all.append(buf[0:n])
+    }
+    for line in str.lines(all) {
+        if line.len > 0 {
+            print(line)
+        }
+    }
+}
+```
+
+```output
+200 text/event-stream
+data: tick 1
+data: tick 2
+data: tick 3
+```
+
 ## HTTPS
 
 `r.serveTls(8443, "cert.pem", "key.pem")` serves HTTPS with a certificate and its key in PEM files. Clients that offer HTTP/2 get it and the others get HTTP/1.1. The client does HTTPS for `https://` addresses and checks the server's certificate against the ones the system trusts. A `Client`'s `ca` field names a file of certificates to trust instead, for a server with a self-made certificate. TLS comes from OpenSSL, loaded the first time a program uses it.

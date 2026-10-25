@@ -1,0 +1,136 @@
+// expect: h1 streamed: part1 part2 part3 (chunked: true)
+// expect: h2 streamed: part1 part2 part3
+// expect: h2 big: 300000
+// expect: events: event: greet|id: 1|data: hello||data: line1|data: line2||
+// expect: events type: text/event-stream
+// expect: headers: custom=yes range=bytes=0-9 agent=tests
+// expect: bad header: HttpError.badRequest
+// expect: upload: got 30 bytes: aaaaaaaaaabbbbbbbbbbcccccccccc
+// expect: stream: 200, parts read: true, text: part1 part2 part3
+// expect: big: 300000 bytes, all x: true
+// expect: reused connection: true
+
+import http, net, str
+
+void stream(http.Request *req, http.Response *res) {
+    res.write("part1 ") catch e {
+        return
+    }
+    sleep(10ms)
+    res.write("part2 ") catch e {
+        return
+    }
+    res.write("part3") catch e { }
+}
+
+void events(http.Request *req, http.Response *res) {
+    res.event("hello", event: "greet", id: "1") catch e {
+        return
+    }
+    res.event("line1\nline2") catch e { }
+}
+
+void headers(http.Request *req, http.Response *res) {
+    res.text("custom={req.header("X-Custom")} range={req.header("Range")} agent={req.header("User-Agent")}")
+}
+
+void upload(http.Request *req, http.Response *res) {
+    res.text("got {req.body.len} bytes: {req.body}")
+}
+
+void big(http.Request *req, http.Response *res) {
+    scoped String piece = str.repeat("x", 1000)
+    for i in 0..300 {
+        res.write(piece) catch e {
+            return
+        }
+    }
+}
+
+void server(http.Router *r, net.Listener ln, chan[i64] done) {
+    r.serveOn(ln) catch e { }
+    done <- 1
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/stream", stream)
+    r.get("/events", events)
+    r.get("/headers", headers)
+    r.post("/upload", upload)
+    r.get("/big", big)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[i64](1)
+    defer done.free()
+    spawn server(&r, ln, done)
+    scoped String base = format("http://127.0.0.1:{ln.port}")
+    scoped String uStream = format("{base}/stream")
+    scoped String uEvents = format("{base}/events")
+    scoped String uHeaders = format("{base}/headers")
+    scoped String uUpload = format("{base}/upload")
+    scoped String uBig = format("{base}/big")
+
+    http.Client c
+    defer c.close()
+    scoped http.Reply a = try c.get(uStream)
+    print("h1 streamed: {a.body} (chunked: {a.header("Transfer-Encoding") == "chunked"})")
+
+    http.Client h2 = http.Client{priorKnowledge: true}
+    defer h2.close()
+    scoped http.Reply b = try h2.get(uStream)
+    print("h2 streamed: {b.body}")
+    scoped http.Reply hb = try h2.get(uBig)
+    print("h2 big: {hb.body.len}")
+
+    scoped http.Reply ev = try c.get(uEvents)
+    scoped String flat = str.replace(ev.body, "\n", "|")
+    print("events: {flat}")
+    print("events type: {ev.header("Content-Type")}")
+
+    scoped http.Reply hd = try c.get(uHeaders, ["X-Custom: yes", "Range: bytes=0-9", "User-Agent: tests"])
+    print("headers: {hd.body}")
+    _ = c.get(uHeaders, ["X-Bad: a\r\nX-Injected: b"]) catch e {
+        print("bad header: {e.code}")
+        http.Reply{}
+    }
+
+    up := try c.begin("POST", uUpload, "text/plain")
+    try up.write(str.repeat("a", 10))
+    try up.write(str.repeat("b", 10))
+    try up.write(str.repeat("c", 10))
+    upr := try up.finish()
+    scoped String upBody = try upr.readAll()
+    upr.close()
+    print("upload: {upBody}")
+
+    s := try c.stream("GET", uStream)
+    String got
+    defer got.free()
+    i64 reads = 0
+    u8[] buf = alloc(u8, 4)
+    defer free(buf)
+    for {
+        n := try s.read(buf)
+        if n == 0 {
+            break
+        }
+        reads += 1
+        got.append(buf[0:n])
+    }
+    s.close()
+    print("stream: {s.status}, parts read: {reads > 3}, text: {got}")
+
+    bs := try c.stream("GET", uBig)
+    scoped String all = try bs.readAll()
+    bs.close()
+    print("big: {all.len} bytes, all x: {str.count(all, "x") == all.len}")
+
+    // the stream gave its connection back, so this one takes it
+    s2 := try c.stream("GET", uHeaders)
+    scoped String again = try s2.readAll()
+    s2.close()
+    print("reused connection: {str.startsWith(again, "custom=")}")
+    r.shutdown()
+    _ = <-done
+}

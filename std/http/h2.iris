@@ -124,7 +124,17 @@ void Frame.free() {
 // ------------------------------------------------------------ the writer
 
 // What the writer is asked to do.
-enum Job { frame, reply, body, window, settings, reset, open, close }
+enum Job { frame, reply, body, window, settings, reset, open, close, head, chunk, end }
+
+// A streamed answer's state, which its handler and the writer share: the
+// bytes queued and not yet sent, and whether the client reset the stream.
+// The writer frees it once the end has been handled.
+struct StreamOut {
+    Queue *jobs
+    i64 stream
+    Atomic[i64] queued
+    Atomic[i64] gone
+}
 
 struct Out {
     Job job
@@ -135,6 +145,7 @@ struct Out {
     i32 status
     String contentType
     String headers // "Name: value\r\n" lines, as Response keeps them
+    StreamOut *sink // head, chunk and end: the streamed answer
 }
 
 // The writer's jobs, and how many are waiting: the writer sends what it
@@ -161,6 +172,8 @@ struct Sending {
     String body
     i64 at
     i64 window
+    bool open       // a streamed answer whose end hasn't come yet
+    StreamOut *sink
 }
 
 struct Writer {
@@ -236,6 +249,7 @@ void encodeReply(String *block, Out *o) {
 }
 
 void Writer.reply(Out *o) {
+    streamed := o.job == .head
     defer {
         o.contentType.free()
         o.headers.free()
@@ -246,6 +260,9 @@ void Writer.reply(Out *o) {
             _ = self.reset.remove(i)
             _ = self.early.remove(o.stream)
             o.data.free()
+            if streamed {
+                o.sink.gone.store(1)
+            }
             self.finished()
             return
         }
@@ -253,7 +270,7 @@ void Writer.reply(Out *o) {
     String block
     defer block.free()
     encodeReply(&block, o)
-    bodyless := o.data.len == 0
+    bodyless := o.data.len == 0 && !streamed
     String frames
     defer frames.free()
     // the block in frames of at most maxFrame: HEADERS, then CONTINUATION
@@ -283,7 +300,53 @@ void Writer.reply(Out *o) {
         self.finished()
         return
     }
-    self.sending.push(Sending{stream: o.stream, body: o.data, window: self.initial + extra})
+    self.sending.push(Sending{stream: o.stream, body: o.data, window: self.initial + extra, open: streamed,
+        sink: if streamed { o.sink } else { null }})
+}
+
+// A piece of a streamed answer, sent as the windows allow.
+void Writer.chunk(Out *o) {
+    for i in 0..self.sending.len {
+        s := self.sending.at(i)
+        if s.stream == o.stream {
+            if s.at == s.body.len {
+                s.body.truncate(0)
+                s.at = 0
+            }
+            s.body.append(o.data)
+            self.sending.set(i, s)
+            o.data.free()
+            return
+        }
+    }
+    // the client reset it
+    o.sink.gone.store(1)
+    o.sink.queued.sub(o.data.len)
+    o.data.free()
+}
+
+// The end of a streamed answer: END_STREAM once the rest has gone.
+void Writer.end(Out *o) {
+    for i in 0..self.sending.len {
+        s := self.sending.at(i)
+        if s.stream == o.stream {
+            s.open = false
+            if s.at == s.body.len {
+                scoped String f = frameOf(F_DATA, END_STREAM, s.stream, "")
+                self.write(f)
+                s.body.free()
+                _ = self.sending.remove(i)
+                self.finished()
+                free(o.sink[0:1])
+                return
+            }
+            s.sink = null
+            self.sending.set(i, s)
+            free(o.sink[0:1])
+            return
+        }
+    }
+    free(o.sink[0:1])
 }
 
 // Sends what the windows allow. True when it sent something.
@@ -310,13 +373,16 @@ bool Writer.pump() {
             i += 1
             continue
         }
-        last := n == left
+        last := n == left && !s.open
         scoped String f = frameOf(F_DATA, if last { END_STREAM } else { 0 }, s.stream, s.body[s.at:s.at + n])
         self.write(f)
         sent = true
         s.at += n
         s.window -= n
         self.window -= n
+        if s.sink != null {
+            s.sink.queued.sub(n)
+        }
         if last {
             s.body.free()
             _ = self.sending.remove(i)
@@ -336,6 +402,9 @@ void Writer.handle(Out o) {
             o.data.free()
         },
         .reply => self.reply(&o),
+        .head => self.reply(&o),
+        .chunk => self.chunk(&o),
+        .end => self.end(&o),
         .body => {
             // a client's request body, sent as the windows allow
             extra, _ := self.early.get(o.stream)
@@ -404,6 +473,10 @@ void Writer.handle(Out o) {
             for i in 0..self.sending.len {
                 s := self.sending.at(i)
                 if s.stream == o.stream {
+                    if s.sink != null {
+                        s.sink.gone.store(1)
+                        s.sink.queued.store(0)
+                    }
                     s.body.free()
                     _ = self.sending.remove(i)
                     self.finished()
@@ -551,16 +624,30 @@ void answer(Request req, i64 stream, Target target, Queue *jobs) {
     Response res
     res.status = 200
     res.contentType = "text/plain; charset=utf-8".copy()
+    StreamOut[] mem = alloc(StreamOut, 1)
+    StreamOut *sink = &mem[0]
+    sink.jobs = jobs
+    sink.stream = stream
+    res.h2 = sink
     if target.router != null {
         target.router.dispatch(&req, &res)
     } else {
         run(target.handler, &req, &res)
     }
-    maybeGzip(target.router, &req, &res)
+    if !res.streaming {
+        maybeGzip(target.router, &req, &res)
+    }
     req.free()
     if target.router != null {
         target.router.busy.sub(1)
     }
+    if res.streaming {
+        // the head and the pieces went already; the writer frees the sink
+        res.body.free()
+        jobs.put(Out{job: .end, stream: stream, sink: sink})
+        return
+    }
+    free(sink[0:1])
     jobs.put(Out{job: .reply, stream: stream, status: res.status, data: res.body, contentType: res.contentType,
         headers: res.headers})
 }

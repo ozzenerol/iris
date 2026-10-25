@@ -47,6 +47,109 @@ pub struct Response {
     String contentType = "text/plain; charset=utf-8"
     String body
     String headers
+    // a body streamed with write: where it goes, and whether the head went
+    net.Conn *conn
+    StreamOut *h2
+    bool streaming
+    bool keepAlive
+}
+
+// Sends data as the next piece of the answer's body, the status and
+// headers first: for a body made as it goes, a large one, or one that goes
+// on, such as server-sent events. Each piece goes out at once, chunked on
+// HTTP/1.1 and as DATA frames on HTTP/2; a client that reads slowly makes
+// write wait. The body ends when the handler returns. It fails once the
+// client has gone, which is when the handler should stop. send, text and
+// the others can't be used after it.
+pub !void Response.write(str data) {
+    if self.h2 != null {
+        try self.writeH2(data)
+        return
+    }
+    if self.conn == null {
+        // not served: kept as the body
+        self.body.append(data)
+        return
+    }
+    if !self.streaming {
+        scoped String head
+        head.append("HTTP/1.1 ")
+        appendInt(&head, i64(self.status))
+        head.append(" ")
+        head.append(statusText(self.status))
+        head.append("\r\nContent-Type: ")
+        head.append(self.contentType)
+        head.append("\r\nTransfer-Encoding: chunked\r\n")
+        head.append(self.headers)
+        head.append(if self.keepAlive { "Connection: keep-alive\r\n\r\n" } else { "Connection: close\r\n\r\n" })
+        try self.conn.write(head)
+        self.streaming = true
+    }
+    if data.len == 0 {
+        return
+    }
+    scoped String chunk = format("{data.len:x}\r\n")
+    chunk.append(data)
+    chunk.append("\r\n")
+    try self.conn.write(chunk)
+}
+
+!void Response.writeH2(str data) {
+    sink := self.h2
+    if !self.streaming {
+        sink.jobs.put(Out{job: .head, stream: sink.stream, status: self.status, contentType: self.contentType,
+            headers: self.headers, sink: sink})
+        // the writer has them now
+        String none
+        self.contentType = none
+        String noHeaders
+        self.headers = noHeaders
+        self.streaming = true
+    }
+    // at most 1 MiB waits for a slow client
+    for sink.queued.load() > 1MiB && sink.gone.load() == 0 {
+        sleep(1ms)
+    }
+    if sink.gone.load() != 0 {
+        return error(net.NetError.closed, "the client reset the stream")
+    }
+    if data.len == 0 {
+        return
+    }
+    sink.queued.add(data.len)
+    sink.jobs.put(Out{job: .chunk, stream: sink.stream, data: data.copy(), sink: sink})
+}
+
+// Sends a server-sent event (text/event-stream): data, a line per line of
+// it, with an event name and an id when they aren't "". A browser's
+// EventSource gets each as one message.
+pub !void Response.event(str data, str event = "", str id = "") {
+    if !self.streaming {
+        self.header("Content-Type", "text/event-stream")
+        self.header("Cache-Control", "no-cache")
+    }
+    scoped String msg
+    if event.len > 0 {
+        msg.append("event: ")
+        msg.append(event)
+        msg.append("\n")
+    }
+    if id.len > 0 {
+        msg.append("id: ")
+        msg.append(id)
+        msg.append("\n")
+    }
+    scoped List[str] lines = str.lines(data)
+    for line in lines {
+        msg.append("data: ")
+        msg.append(line)
+        msg.append("\n")
+    }
+    if data.len == 0 {
+        msg.append("data: \n")
+    }
+    msg.append("\n")
+    try self.write(msg)
 }
 
 // Adds a header to the answer: res.header("Cache-Control", "no-store").
@@ -715,16 +818,26 @@ void serveConn(net.Conn conn, Target target) {
             target.router.busy.add(1)
         }
         res.status = 200
+        keepAlive := !sameName(req.header("Connection"), "close")
+        res.conn = &conn
+        res.keepAlive = keepAlive
+        res.streaming = false
         if target.router != null {
             target.router.dispatch(&req, &res)
         } else {
             run(target.handler, &req, &res)
         }
-        maybeGzip(target.router, &req, &res)
-        keepAlive := !sameName(req.header("Connection"), "close")
         bool failed = false
-        writeResponse(&conn, &res, keepAlive, &out) catch e {
-            failed = true
+        if res.streaming {
+            // the last chunk ends the body
+            conn.write("0\r\n\r\n") catch e {
+                failed = true
+            }
+        } else {
+            maybeGzip(target.router, &req, &res)
+            writeResponse(&conn, &res, keepAlive, &out) catch e {
+                failed = true
+            }
         }
         // the next answer reuses the room, unless it is large
         reset(&res.body)
@@ -1244,10 +1357,10 @@ pub void Reply.free() {
 }
 
 // Asks for url with GET.
-pub !Reply get(str url) => try send("GET", url)
+pub !Reply get(str url, str[] headers = []) => try send("GET", url, headers: headers)
 
 // Sends body to url with POST.
-pub !Reply post(str url, str contentType, str body) => try send("POST", url, body, contentType)
+pub !Reply post(str url, str contentType, str body, str[] headers = []) => try send("POST", url, body, contentType, headers)
 
 // Where a request goes, from its URL.
 struct Dest {
@@ -1282,8 +1395,40 @@ struct Dest {
     return Dest{secure: secure, host: host, hostPort: hostPort, path: path, port: u16(port)}
 }
 
-String requestText(str method, Dest *d, str body, str contentType, bool keepAlive) {
-    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\nUser-Agent: iris\r\nAccept-Encoding: gzip\r\n")
+// Checks the request's own headers: "Name: value", without a line break
+// in either, so none can start a header or a request of its own.
+!void checkHeaders(str[] headers) {
+    for h in headers {
+        name, _, ok := str.cut(h, ":")
+        if !ok || str.trim(name).len == 0 || str.contains(h, "\r") || str.contains(h, "\n") {
+            return error(HttpError.badRequest, "'{h}' isn't a header line Name: value")
+        }
+    }
+}
+
+bool hasHeader(str[] headers, str name) {
+    for h in headers {
+        n, _, _ := str.cut(h, ":")
+        if sameName(str.trim(n), name) {
+            return true
+        }
+    }
+    return false
+}
+
+String requestText(str method, Dest *d, str body, str contentType, bool keepAlive, str[] headers = [],
+    bool gzip = true) {
+    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\n")
+    if !hasHeader(headers, "User-Agent") {
+        req.append("User-Agent: iris\r\n")
+    }
+    if gzip && !hasHeader(headers, "Accept-Encoding") {
+        req.append("Accept-Encoding: gzip\r\n")
+    }
+    for h in headers {
+        req.append(h)
+        req.append("\r\n")
+    }
     if !keepAlive {
         req.append("Connection: close\r\n")
     }
@@ -1316,11 +1461,14 @@ String requestText(str method, Dest *d, str body, str contentType, bool keepAliv
 // at most 30 seconds for each step. https:// addresses check the server's
 // certificate against the ones the system trusts. A Client keeps
 // connections open between requests.
-pub !Reply send(str method, str url, str body = "", str contentType = "") {
+// headers are the request's own, as "Name: value": a Range, an
+// Authorization, a User-Agent in place of iris's.
+pub !Reply send(str method, str url, str body = "", str contentType = "", str[] headers = []) {
+    try checkHeaders(headers)
     d := try destOf(url)
     c := try dialDest(&d, 30s)
     defer c.close()
-    scoped String req = requestText(method, &d, body, contentType, false)
+    scoped String req = requestText(method, &d, body, contentType, false, headers)
     try c.write(req)
     bool reusable
     return try readReply(&c, &reusable)
@@ -1418,7 +1566,8 @@ H2Conn *Client.h2For(Dest *d) {
 }
 
 // Sends a request on a connection the client keeps, or a new one.
-pub !Reply Client.send(str method, str url, str body = "", str contentType = "") {
+pub !Reply Client.send(str method, str url, str body = "", str contentType = "", str[] headers = []) {
+    try checkHeaders(headers)
     d := try destOf(url)
     for attempt in 0..2 {
         H2Conn *h = self.h2For(&d)
@@ -1430,7 +1579,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "")
         }
         if h != null {
             bool retry
-            r := h.request(method, &d, body, contentType, self.wait(), &retry) catch e {
+            r := h.request(method, &d, body, contentType, self.wait(), &retry, headers) catch e {
                 if retry && attempt == 0 {
                     continue
                 }
@@ -1438,7 +1587,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "")
             }
             return r
         }
-        return try self.sendH1(method, &d, body, contentType, fresh, dialed)
+        return try self.sendH1(method, &d, body, contentType, fresh, dialed, headers)
     }
     return error(net.NetError.closed, "{url}: the connection closed")
 }
@@ -1453,8 +1602,9 @@ bool Client.hasIdle(Dest *d) {
 
 // A request over HTTP/1.1, on fresh when it was just dialed, or on an idle
 // connection, and on a new one when the idle one turns out to be closed.
-!Reply Client.sendH1(str method, Dest *d, str body, str contentType, net.Conn fresh, bool dialed) {
-    scoped String req = requestText(method, d, body, contentType, true)
+!Reply Client.sendH1(str method, Dest *d, str body, str contentType, net.Conn fresh, bool dialed,
+    str[] headers = []) {
+    scoped String req = requestText(method, d, body, contentType, true, headers)
     for attempt in 0..2 {
         net.Conn c = fresh
         reused := !dialed
@@ -1489,10 +1639,11 @@ bool Client.hasIdle(Dest *d) {
 }
 
 // Sends a GET request to url.
-pub !Reply Client.get(str url) => try self.send("GET", url)
+pub !Reply Client.get(str url, str[] headers = []) => try self.send("GET", url, headers: headers)
 
 // Sends body to url with POST, as contentType.
-pub !Reply Client.post(str url, str contentType, str body) => try self.send("POST", url, body, contentType)
+pub !Reply Client.post(str url, str contentType, str body, str[] headers = []) => try self.send("POST", url, body,
+    contentType, headers)
 
 // Closes the connections the client keeps.
 pub void Client.close() {
@@ -1560,6 +1711,13 @@ pub void Client.close() {
             sizeText, _, _ := str.cut(sizeLine, ";")
             size := try hexNumber(str.trim(sizeText))
             if size == 0 {
+                // trailers, up to the empty line that ends the reply
+                for {
+                    scoped String t = try c.readLine()
+                    if t.len == 0 {
+                        break
+                    }
+                }
                 break
             }
             scoped String chunk = try c.readExactly(size)

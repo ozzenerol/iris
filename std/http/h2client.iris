@@ -247,7 +247,8 @@ H2Conn *startH2(net.Conn c, Dest *d) {
 }
 
 // Sends a request on the connection and waits for its reply.
-!Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry) {
+!Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry,
+    str[] headers = []) {
     *retry = false
     start := time.clock()
     String block
@@ -256,8 +257,22 @@ H2Conn *startH2(net.Conn c, Dest *d) {
     encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
     encodeHeader(&block, ":authority", self.authority)
     encodeHeader(&block, ":path", d.path)
-    encodeHeader(&block, "user-agent", "iris")
-    encodeHeader(&block, "accept-encoding", "gzip")
+    if !hasHeader(headers, "user-agent") {
+        encodeHeader(&block, "user-agent", "iris")
+    }
+    if !hasHeader(headers, "accept-encoding") {
+        encodeHeader(&block, "accept-encoding", "gzip")
+    }
+    for line in headers {
+        name, value, _ := str.cut(line, ":")
+        scoped String lower = str.lower(str.trim(name))
+        // HTTP/2 has no connection headers, and :authority stands for Host
+        if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" || lower == "upgrade" ||
+            lower == "host" {
+                continue
+            }
+        encodeHeader(&block, lower, str.trim(value))
+    }
     if contentType.len > 0 {
         encodeHeader(&block, "content-type", contentType)
     }

@@ -479,13 +479,66 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
 <pre class="out"><code>0: 200 pong
 1: 200 pong
 2: 200 pong</code></pre>
+<p>Each of them takes <code>headers</code>, the request's own as <code>&quot;Name: value&quot;</code>, such as an <code>Authorization</code>, a <code>Range</code> for part of a file, or a <code>User-Agent</code> in place of iris's: <code>c.get(url, [&quot;Range: bytes=0-1023&quot;])</code>. A header with a line break in it is an error, so a value from outside can't add headers of its own.</p>
+<h2 id="bodies-a-part-at-a-time"><a href="#bodies-a-part-at-a-time">Bodies a part at a time</a></h2>
+<p><code>c.stream(method, url)</code> gives a <code>ReplyStream</code> as soon as the status and headers have come. <code>read(buf)</code> gives the body a part at a time, so a large download goes to a file without being held whole, and <code>readAll()</code> the rest of it. <code>close()</code> gives the connection back to the <code>Client</code> once the whole body was read. <code>c.begin(method, url, contentType)</code> is the other way round: an <code>Upload</code> to write the body to, a part at a time, sent in chunks unless <code>length</code> gives its size, and <code>finish()</code> gives the reply as a <code>ReplyStream</code>. Both go over HTTP/1.1.</p>
+<p>A handler streams its answer with <code>res.write(data)</code>: the status and headers go with the first part, each part goes out at once, chunked on HTTP/1.1 and as DATA frames on HTTP/2, and the body ends when the handler returns. A client that reads slowly makes <code>write</code> wait, and once it has gone <code>write</code> fails, which is when the handler stops. <code>res.event(data, event, id)</code> sends a server-sent event, which a browser's <code>EventSource</code> gets as one message.</p>
+<pre class="code run"><code><span class="k">import</span> http, net, <span class="t">str</span>
+
+<span class="t">void</span> <span class="f">ticks</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
+        res.<span class="f">event</span>(<span class="s">&quot;tick </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="f">sleep</span>(<span class="n">10ms</span>)
+    }
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, net.<span class="t">Listener</span> ln) {
+    r.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">get</span>(<span class="s">&quot;/ticks&quot;</span>, ticks)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;r, ln)
+
+    http.<span class="t">Client</span> c
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/ticks&quot;</span>)
+    s := <span class="k">try</span> c.<span class="f">stream</span>(<span class="s">&quot;GET&quot;</span>, url)
+    <span class="k">defer</span> s.<span class="f">close</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>s.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="c">// each event as it comes; a real client handles them in the loop</span>
+    <span class="t">String</span> all
+    <span class="k">defer</span> all.<span class="f">free</span>()
+    <span class="t">u8</span>[<span class="n">256</span>] buf
+    <span class="k">for</span> {
+        n := <span class="k">try</span> s.<span class="f">read</span>(buf[:])
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        all.<span class="f">append</span>(buf[<span class="n">0</span>:n])
+    }
+    <span class="k">for</span> line <span class="k">in</span> <span class="t">str</span>.<span class="f">lines</span>(all) {
+        <span class="k">if</span> line.len &gt; <span class="n">0</span> {
+            <span class="f">print</span>(line)
+        }
+    }
+}</code></pre>
+<pre class="out"><code>200 text/event-stream
+data: tick 1
+data: tick 2
+data: tick 3</code></pre>
 <h2 id="https"><a href="#https">HTTPS</a></h2>
 <p><code>r.serveTls(8443, &quot;cert.pem&quot;, &quot;key.pem&quot;)</code> serves HTTPS with a certificate and its key in PEM files. Clients that offer HTTP/2 get it and the others get HTTP/1.1. The client does HTTPS for <code>https://</code> addresses and checks the server's certificate against the ones the system trusts. A <code>Client</code>'s <code>ca</code> field names a file of certificates to trust instead, for a server with a self-made certificate. TLS comes from OpenSSL, loaded the first time a program uses it.</p>
 <p>The library page for <a href="../std/index.html#http">http</a> lists everything, including WebSockets.</p>
     <nav class="pager"><a class="prev" href="13-compression-and-archives.html"><span>Previous</span>Compression and archives</a><a class="next" href="15-networking.html"><span>Next</span>Networking</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server">A server</a></li><li><a href="#paths">Paths</a></li><li><a href="#what-a-request-holds">What a request holds</a></li><li><a href="#answers">Answers</a></li><li><a href="#forms-and-uploads">Forms and uploads</a></li><li><a href="#cookies">Cookies</a></li><li><a href="#files">Files</a></li><li><a href="#checks-and-logging">Checks and logging</a></li><li><a href="#limits-and-stopping">Limits and stopping</a></li><li><a href="#a-client">A client</a></li><li><a href="#https">HTTPS</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server">A server</a></li><li><a href="#paths">Paths</a></li><li><a href="#what-a-request-holds">What a request holds</a></li><li><a href="#answers">Answers</a></li><li><a href="#forms-and-uploads">Forms and uploads</a></li><li><a href="#cookies">Cookies</a></li><li><a href="#files">Files</a></li><li><a href="#checks-and-logging">Checks and logging</a></li><li><a href="#limits-and-stopping">Limits and stopping</a></li><li><a href="#a-client">A client</a></li><li><a href="#bodies-a-part-at-a-time">Bodies a part at a time</a></li><li><a href="#https">HTTPS</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

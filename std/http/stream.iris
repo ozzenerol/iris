@@ -1,0 +1,295 @@
+// Requests whose bodies go a part at a time: an upload written as it is
+// made, and a reply read as it comes, such as a large download or
+// server-sent events. They go over HTTP/1.1.
+
+import net, str
+
+// A request whose body is being written: write sends each part, and
+// finish ends the body and gives the reply.
+pub struct Upload {
+    net.Conn conn
+    Client *client
+    String url
+    bool chunked
+    i64 left
+    bool reused
+}
+
+// A reply whose body is read as it comes: status and the headers are
+// there at once, read gives the body a part at a time. close gives the
+// connection back to the Client when all of it was read.
+pub struct ReplyStream {
+    pub i32 status
+    List[String] names
+    List[String] values
+    net.Conn conn
+    Client *client
+    String url
+    i64 mode        // 0 a length, 1 chunked, 2 up to the end of the connection
+    i64 left        // length: bytes to come; chunked: of this chunk
+    bool done
+    bool reusable
+    bool given      // the connection went back to the Client
+}
+
+// The value of a header of the reply, "" when it has none.
+pub str ReplyStream.header(str name) {
+    for i in 0..self.names.len {
+        if sameName(self.names.at(i), name) {
+            return self.values.at(i)
+        }
+    }
+    return ""
+}
+
+// Starts a request to url and gives an Upload to write its body to.
+// length is the body's size when it is known, and -1 sends it in chunks
+// (Transfer-Encoding: chunked). headers are the request's own, as send
+// takes them.
+pub !Upload Client.begin(str method, str url, str contentType = "", str[] headers = [], i64 length = -1) {
+    try checkHeaders(headers)
+    d := try destOf(url)
+    Upload u
+    u.client = self
+    u.url = url.copy()
+    errdefer u.url.free()
+    u.reused = self.take(&d, &u.conn)
+    if !u.reused {
+        u.conn = try dialDest(&d, self.wait(), ca: self.ca)
+    }
+    String all
+    defer all.free()
+    for h in headers {
+        all.append(h)
+        all.append("\r\n")
+    }
+    if contentType.len > 0 {
+        all.append("Content-Type: ")
+        all.append(contentType)
+        all.append("\r\n")
+    }
+    if length >= 0 {
+        all.append("Content-Length: ")
+        appendInt(&all, length)
+        all.append("\r\n")
+        u.left = length
+    } else if method != "GET" && method != "HEAD" {
+        all.append("Transfer-Encoding: chunked\r\n")
+        u.chunked = true
+    }
+    scoped String head = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\n")
+    if !hasHeader(headers, "User-Agent") {
+        head.append("User-Agent: iris\r\n")
+    }
+    head.append(all)
+    head.append("\r\n")
+    u.conn.write(head) catch e {
+        u.conn.close()
+        if !u.reused {
+            return e
+        }
+        // the server closed the idle connection: once more on a new one
+        u.reused = false
+        u.conn = try dialDest(&d, self.wait(), ca: self.ca)
+        u.conn.write(head) catch e2 {
+            u.conn.close()
+            return e2
+        }
+    }
+    return u
+}
+
+// Sends data as the next part of the body.
+pub !void Upload.write(str data) {
+    if data.len == 0 {
+        return
+    }
+    if self.chunked {
+        scoped String size = format("{data.len:x}\r\n")
+        try self.conn.write(size)
+        try self.conn.write(data)
+        try self.conn.write("\r\n")
+        return
+    }
+    if data.len > self.left {
+        return error(HttpError.badRequest, "the body is longer than its Content-Length")
+    }
+    self.left -= data.len
+    try self.conn.write(data)
+}
+
+// Ends the body and waits for the reply's status and headers; the body
+// is read from the ReplyStream.
+pub !ReplyStream Upload.finish() {
+    errdefer {
+        self.conn.close()
+        self.url.free()
+    }
+    if self.chunked {
+        try self.conn.write("0\r\n\r\n")
+    } else if self.left > 0 {
+        return error(HttpError.badRequest, "{self.left} bytes of the body are missing")
+    }
+    ReplyStream r
+    errdefer {
+        r.names.freeEach()
+        r.values.freeEach()
+    }
+    try readReplyHead(&self.conn, &r)
+    r.conn = self.conn
+    r.client = self.client
+    r.url = self.url
+    return r
+}
+
+!void readReplyHead(net.Conn *c, ReplyStream *r) {
+    for {
+        scoped String status = try c.readLine()
+        _, after, ok := str.cut(status, " ")
+        code, _, _ := str.cut(after, " ")
+        if !ok || !str.startsWith(status, "HTTP/") {
+            return error(HttpError.badReply, "the server didn't answer in HTTP: '{status}'")
+        }
+        r.status = i32(str.parseInt(code) catch e {
+            return error(HttpError.badReply, "the server's status isn't a number: '{status}'")
+        })
+        r.names.freeEach()
+        r.values.freeEach()
+        for {
+            scoped String h = try c.readLine()
+            if h.len == 0 {
+                break
+            }
+            name, value, found := str.cut(h, ":")
+            if found {
+                r.names.push(str.trim(name).copy())
+                r.values.push(str.trim(value).copy())
+            }
+        }
+        // 100 Continue and other 1xx answers come before the real one
+        if r.status >= 200 || r.status < 100 {
+            break
+        }
+    }
+    keep := !sameName(r.header("Connection"), "close")
+    if sameName(r.header("Transfer-Encoding"), "chunked") {
+        r.mode = 1
+        r.left = 0
+        r.reusable = keep
+    } else if r.header("Content-Length").len > 0 {
+        r.mode = 0
+        r.left = str.parseInt(r.header("Content-Length")) catch e {
+            return error(HttpError.badReply, "the server's Content-Length isn't a number")
+        }
+        r.reusable = keep
+        r.done = r.left == 0
+    } else if r.status == 204 || r.status == 304 {
+        r.mode = 0
+        r.done = true
+        r.reusable = keep
+    } else {
+        r.mode = 2
+    }
+}
+
+// Sends a request and gives its reply to read as it comes: the status and
+// headers at once, the body with read. body, contentType and headers are
+// as send takes them; no gzip is asked for.
+pub !ReplyStream Client.stream(str method, str url, str body = "", str contentType = "", str[] headers = []) {
+    u := try self.begin(method, url, contentType, headers,
+        if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" { body.len } else { -1 })
+    u.write(body) catch e {
+        u.conn.close()
+        u.url.free()
+        return e
+    }
+    return try u.finish()
+}
+
+// Reads the next part of the body into buf: how many bytes, 0 at its end.
+pub !i64 ReplyStream.read(u8[] buf) {
+    if self.done || buf.len == 0 {
+        return 0
+    }
+    if self.mode == 1 && self.left == 0 {
+        scoped String sizeLine = try self.conn.readLine()
+        sizeText, _, _ := str.cut(sizeLine, ";")
+        size := try hexNumber(str.trim(sizeText))
+        if size == 0 {
+            // trailers, up to the empty line
+            for {
+                scoped String t = try self.conn.readLine()
+                if t.len == 0 {
+                    break
+                }
+            }
+            self.finished()
+            return 0
+        }
+        self.left = size
+    }
+    want := buf.len
+    if self.mode != 2 && self.left < want {
+        want = self.left
+    }
+    n := try self.conn.read(buf[0:want])
+    if n == 0 {
+        if self.mode == 2 {
+            self.done = true
+            return 0
+        }
+        return error(net.NetError.closed, "the server closed the connection in the middle of the body")
+    }
+    if self.mode != 2 {
+        self.left -= n
+    }
+    if self.mode == 1 && self.left == 0 {
+        scoped String end = try self.conn.readLine()
+    }
+    if self.mode == 0 && self.left == 0 {
+        self.finished()
+    }
+    return n
+}
+
+// All of the body that is left, up to limit bytes when it isn't 0.
+pub !String ReplyStream.readAll(i64 limit = 0) {
+    String out
+    errdefer out.free()
+    u8[16384] buf
+    for {
+        n := try self.read(buf[:])
+        if n == 0 {
+            return out
+        }
+        if limit > 0 && out.len + n > limit {
+            return error(HttpError.tooBig, "the body is larger than {limit} bytes")
+        }
+        out.append(buf[0:n])
+    }
+    return out
+}
+
+void ReplyStream.finished() {
+    self.done = true
+    if self.reusable && self.client != null {
+        d := destOf(self.url) catch e {
+            return
+        }
+        self.client.keep(&d, self.conn)
+        self.client = null
+        self.reusable = false
+        self.given = true
+    }
+}
+
+// Ends the reply: the connection goes back to the Client when the whole
+// body was read, and closes otherwise.
+pub void ReplyStream.close() {
+    if !self.given {
+        self.conn.close()
+    }
+    self.names.freeEach()
+    self.values.freeEach()
+    self.url.free()
+}
