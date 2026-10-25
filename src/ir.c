@@ -1277,7 +1277,10 @@ static const char *jsonType(IR *ir, Type *t) {
     int64_t size = typeSizeOf(t), count = 0;
     const char *items = "null";
     switch (t->kind) {
-    case TY_INT: kind = t->isSigned ? J_INT : J_UINT; break;
+    case TY_INT:
+        kind = t->isSigned ? J_INT : J_UINT;
+        count = t == &tyDuration; /* a Duration also reads text like 30s */
+        break;
     case TY_FLOAT: kind = J_FLOAT; break;
     case TY_BOOL: kind = J_BOOL; break;
     case TY_STRING: kind = J_STRING; break;

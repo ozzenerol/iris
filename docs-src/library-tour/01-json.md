@@ -119,6 +119,8 @@ struct Backend {
 
 ## Lists
 
+A `Duration` field reads a number of nanoseconds or text like `"30s"`, `"250ms"` or `"1m30s"`, so a configuration file can say `timeout: 5s`. `encode` writes it as nanoseconds.
+
 A `List` field is a JSON array too. `decode` fills the list, and `push` keeps growing it afterwards. The struct's `free` frees the list and its items. `json.decode(List[T], text)` reads a whole array into a new list, which the caller frees.
 
 ```iris run

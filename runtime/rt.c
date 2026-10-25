@@ -6689,6 +6689,8 @@ void iris_json_free(const JsonType *t, char *value) {
     jsonFree(t, value);
 }
 
+int iris_time_parse_duration(const char *p, int64_t n, int64_t *out);
+
 /* The reader: one pass over the text, filling the value in place. */
 typedef struct {
     const char *s, *p, *end;
@@ -7155,7 +7157,19 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
     }
     switch (t->kind) {
     case J_INT: case J_UINT: case J_FLOAT: {
-        if (*in->p != '-' && (*in->p < '0' || *in->p > '9')) return jsonExpected(in, "a number");
+        if (t->kind == J_INT && t->count == 1 && *in->p == '"') {
+            /* a Duration as text: "30s", "1m30s", "250ms" */
+            IrisString text = {0};
+            bool ok = jsonString(in, &text);
+            int64_t d = 0;
+            if (ok && !(text.len > 0 && iris_time_parse_duration(text.ptr, text.len, &d))) {
+                ok = jsonFail(in, 2, "expected a duration like 30s or 1m30s");
+            }
+            iris_string_free(&text);
+            if (ok) *(int64_t *)p = d;
+            return ok;
+        }
+        if (*in->p != '-' && (*in->p < '0' || *in->p > '9')) return jsonExpected(in, t->count == 1 ? "a number or a duration like 30s" : "a number");
         const char *s;
         size_t n;
         bool integer;

@@ -1,0 +1,39 @@
+// expect: 5s 250ms 1m30s 2s
+// expect: 1.5s
+// expect: JsonError.wrongType retry.timeout: expected a duration like 30s or 1m30s
+// expect: YamlError.wrongType timeout: expected a duration like 30s or 1m30s
+// expect: 1m0s 2s
+
+import json, yaml
+
+@json
+struct Retry {
+    Duration timeout
+}
+
+@json
+struct Route {
+    Duration timeout
+    Duration idle
+    Duration total
+    Duration plain
+    Retry retry
+}
+
+!void main() {
+    scoped r := try json.decode(Route, r"""{"timeout": "5s", "idle": "250ms", "total": "1m30s", "plain": 2000000000, "retry": {"timeout": "1.5s"}}""")
+    print("{r.timeout} {r.idle} {r.total} {r.plain}")
+    print("{r.retry.timeout}")
+
+    _ = json.decode(Route, r"""{"retry": {"timeout": "soon"}}""") catch e {
+        print("{e.code} {e.message}")
+        Route{}
+    }
+    _ = yaml.decode[Route]("timeout: forever\n") catch e {
+        print("{e.code} {e.message}")
+        Route{}
+    }
+
+    scoped y := try yaml.decode[Route]("timeout: 1m\nidle: 2s\n")
+    print("{y.timeout} {y.idle}")
+}
