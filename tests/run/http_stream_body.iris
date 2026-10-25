@@ -1,0 +1,145 @@
+// expect: HTTP/1.1 chunked: 3000000 bytes in pieces, sum 382493856, x-sum=ok
+// expect: HTTP/1.1 length: 3000000 bytes in pieces, sum 382493856, x-sum=
+// expect: HTTP/2: 3000000 bytes in pieces, sum 382493856, x-sum=
+// expect: HTTP/2 whole route: 413
+// expect: HTTP/1.1 ignored body, then: pong
+// expect: HTTP/2 ignored body, then: pong
+// expect: read on a whole body: 'hello there'
+// expect: readAll with a limit: HttpError.tooBig
+
+import http, net, str
+
+// reads the body as it comes, without keeping it
+!void count(http.Request *req, http.Response *res) {
+    u8[7000] buf
+    i64 total = 0
+    i64 sum = 0
+    i64 reads = 0
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        reads += 1
+        for i in 0..n {
+            sum += i64(buf[i])
+        }
+        total += n
+    }
+    scoped String out = format("{total} bytes in {if reads > 1 { "pieces" } else { "one" }}, sum {sum}, x-sum={req.trailer("x-sum")}")
+    res.text(out)
+}
+
+void ignore(http.Request *req, http.Response *res) {
+    res.text("ignored")
+}
+
+void ping(http.Request *req, http.Response *res) {
+    res.text("pong")
+}
+
+void whole(http.Request *req, http.Response *res) {
+    res.text("whole")
+}
+
+!void readWhole(http.Request *req, http.Response *res) {
+    u8[5] buf
+    String out
+    defer out.free()
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        out.append(buf[0:n])
+    }
+    res.text(out)
+}
+
+void limited(http.Request *req, http.Response *res) {
+    scoped String all = req.readAll(limit: 10) catch e {
+        scoped String code = format("{e.code}")
+        res.text(code)
+        return
+    }
+    res.text(all)
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.maxBody = 1MiB
+    r.stream("POST /count", count)
+    r.stream("POST /ignore", ignore)
+    r.stream("POST /limited", limited)
+    r.post("/whole", whole)
+    r.post("/read", readWhole)
+    r.get("/ping", ping)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+    base := format("http://127.0.0.1:{ln.port}")
+    defer base.free()
+
+    String big
+    defer big.free()
+    for i in 0..3000000 {
+        u8[1] b = [u8(i % 256)]
+        big.append(b[:])
+    }
+
+    http.Client c
+    defer c.close()
+    scoped String countUrl = format("{base}/count")
+    u := try c.begin("POST", countUrl, "application/octet-stream")
+    i64 at = 0
+    for at < big.len {
+        try u.write(big[at:at + 100000])
+        at += 100000
+    }
+    u.trailer("X-Sum", "ok")
+    rs := try u.finish()
+    scoped String got = try rs.readAll()
+    rs.close()
+    print("HTTP/1.1 chunked: {got}")
+
+    scoped http.Reply a = try c.post(countUrl, "application/octet-stream", big)
+    print("{a.protocol} length: {a.body}")
+
+    http.Client c2
+    c2.priorKnowledge = true
+    defer c2.close()
+    scoped http.Reply b = try c2.post(countUrl, "application/octet-stream", big)
+    print("{b.protocol}: {b.body}")
+
+    scoped String wholeUrl = format("{base}/whole")
+    scoped String ignoreUrl = format("{base}/ignore")
+    scoped String pingUrl = format("{base}/ping")
+    // a route that takes the body whole still has the limit
+    http.Client k2
+    k2.priorKnowledge = true
+    defer k2.close()
+    scoped http.Reply w = try k2.post(wholeUrl, "application/octet-stream", big)
+    print("{w.protocol} whole route: {w.status}")
+    for h2 in [false, true] {
+        http.Client k
+        k.priorKnowledge = h2
+        defer k.close()
+        scoped http.Reply i = try k.post(ignoreUrl, "application/octet-stream", big[0:200000])
+        scoped http.Reply p = try k.get(pingUrl)
+        print("{p.protocol} ignored body, then: {p.body}")
+    }
+
+    scoped String readUrl = format("{base}/read")
+    scoped http.Reply rw = try c.post(readUrl, "text/plain", "hello there")
+    print("read on a whole body: '{rw.body}'")
+    scoped String limitedUrl = format("{base}/limited")
+    scoped http.Reply lr = try c.post(limitedUrl, "text/plain", "more than ten bytes")
+    print("readAll with a limit: {str.trim(lr.body)}")
+    r.shutdown(0s)
+}

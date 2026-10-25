@@ -39,6 +39,17 @@ pub struct Request {
     List[String] kept  // form values decoded by form, freed with the request
     bool views         // method, path, head and body point into the connection's buffer
     String trailerText // the trailer lines after the body, "Name: value\n"
+    // a body read as it comes, on a Router.stream route: from the
+    // connection on HTTP/1.1, from the connection's reader on HTTP/2
+    net.Conn *bodyConn
+    i64 bodyLeft // bytes still to come, or still in this chunk
+    bool chunked
+    bool bodyDone
+    bool expectContinue
+    i64 maxLine
+    BodyIn *piped
+    i64 bodyAt // where read is in body, when the body came whole
+    Watch *watch
 
     // when the request came in, by time.clock(): time.clock() - req.received
     // is how long it has taken
@@ -272,6 +283,132 @@ pub str Request.trailer(str name) => lineValue(self.trailerText, name)
 // Every trailer of the request, in the order they came. Free only the list.
 pub List[Header] Request.trailers() => lineHeaders(self.trailerText)
 
+// Reads the next part of the body into buf: how many bytes, 0 at its end.
+// On a Router.stream route the body comes from the client as it is read,
+// so a proxy can pass it on as it comes; elsewhere read gives req.body.
+pub !i64 Request.read(u8[] buf) {
+    if buf.len == 0 {
+        return 0
+    }
+    if self.piped != null {
+        n := try self.piped.read(buf, &self.trailerText)
+        self.touch()
+        return n
+    }
+    if self.bodyConn == null {
+        n := copyInto(buf, self.body[self.bodyAt:])
+        self.bodyAt += n
+        return n
+    }
+    if self.bodyDone {
+        return 0
+    }
+    c := self.bodyConn
+    if self.expectContinue {
+        self.expectContinue = false
+        try c.write("HTTP/1.1 100 Continue\r\n\r\n")
+    }
+    if self.chunked && self.bodyLeft == 0 {
+        scoped String sizeLine = try c.readLine(self.maxLine)
+        sizeText, _, _ := str.cut(sizeLine, ";")
+        size := hexNumber(str.trim(sizeText)) catch e {
+            return error(HttpError.badRequest, e.message)
+        }
+        if size == 0 {
+            try readTrailers(c, &self.trailerText, self.maxLine)
+            self.bodyDone = true
+            return 0
+        }
+        self.bodyLeft = size
+    }
+    want := if buf.len < self.bodyLeft { buf.len } else { self.bodyLeft }
+    n := try c.read(buf[0:want])
+    if n == 0 {
+        return error(net.NetError.closed, "the client closed the connection in the middle of the body")
+    }
+    self.bodyLeft -= n
+    if self.bodyLeft == 0 {
+        if self.chunked {
+            scoped String end = try c.readLine(self.maxLine)
+            if end.len != 0 {
+                return error(HttpError.badRequest, "a chunk longer than its size")
+            }
+        } else {
+            self.bodyDone = true
+        }
+    }
+    self.touch()
+    return n
+}
+
+// All of the body that is left, up to limit bytes when it isn't 0
+// (HttpError.tooBig past it).
+pub !String Request.readAll(i64 limit = 0) {
+    String out
+    errdefer out.free()
+    u8[16384] buf
+    for {
+        n := try self.read(buf[:])
+        if n == 0 {
+            return out
+        }
+        if limit > 0 && out.len + n > limit {
+            return error(HttpError.tooBig, "the body is larger than {limit} bytes")
+        }
+        out.append(buf[0:n])
+    }
+    return out
+}
+
+// The connection did something: the sweeper leaves it open.
+void Request.touch() {
+    if self.watch != null {
+        self.watch.last = time.clock()
+    }
+}
+
+// Reads and drops what the handler left of a streamed HTTP/1.1 body, up
+// to limit bytes, so the connection can take the next request. False when
+// it can't.
+bool Request.drain(i64 limit) {
+    if self.bodyConn == null || self.bodyDone {
+        return true
+    }
+    u8[16384] buf
+    i64 total = 0
+    for {
+        n := self.read(buf[:]) catch e {
+            return false
+        }
+        if n == 0 {
+            return true
+        }
+        total += n
+        if total > limit {
+            return false
+        }
+    }
+    return true
+}
+
+// Starts a body that the handler reads as it comes.
+void Request.streamFrom(net.Conn *c, i64 length, Limits *limits) {
+    self.bodyConn = c
+    self.chunked = length < 0
+    self.bodyLeft = if length < 0 { 0 } else { length }
+    self.expectContinue = sameName(self.header("Expect"), "100-continue")
+    self.maxLine = limits.maxHeader
+}
+
+// Copies as much of from as fits into buf: how many bytes.
+i64 copyInto(u8[] buf, str from) {
+    n := if from.len < buf.len { from.len } else { buf.len }
+    for i in 0..n {
+        buf[i] = from[i]
+    }
+    return n
+}
+
 // The value of name in header lines, "" when they don't have it.
 str lineValue(str lines, str name) {
     rest := lines
@@ -343,6 +480,10 @@ void Request.free() {
     self.paramValues.free()
     self.kept.freeEach()
     self.trailerText.free()
+    if self.piped != null {
+        self.piped.release()
+        self.piped = null
+    }
 }
 
 // Answers with text.
@@ -599,7 +740,7 @@ i64 headEnd(str b, i64 from) {
 // Reads one request, which points into the connection's buffer when it
 // fits there; readHead reads one that doesn't. False when the client has
 // closed the connection.
-!bool readRequest(net.Conn *c, Request *req, Limits *limits) {
+!bool readRequest(net.Conn *c, Request *req, Limits *limits, Router *router = null) {
     i64 scanned = 0
     i64 end = 0
     for {
@@ -619,12 +760,20 @@ i64 headEnd(str b, i64 from) {
             if c.buffered().len < c.bufferSize() {
                 return false // closed
             }
-            return try readHead(c, req, limits)
+            return try readHead(c, req, limits, router)
         }
     }
     req.received = time.clock()
     req.protocol = "HTTP/1.1"
     length := try parseHead(c.buffered()[0:end], req, limits)
+    if length != 0 && router != null && router.streams(req) {
+        // the handler reads the body: the request gets copies of its
+        // head, as reading moves the buffer
+        req.keep()
+        c.skip(end)
+        req.streamFrom(c, length, limits)
+        return true
+    }
     if length > limits.maxBody {
         return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
     }
@@ -649,7 +798,7 @@ i64 headEnd(str b, i64 from) {
         req.views = false
         req.method = borrow("")
         req.path = borrow("")
-        return try readHead(c, req, limits)
+        return try readHead(c, req, limits, router)
     }
     if c.buffered().len < end + length {
         for c.buffered().len < end + length {
@@ -667,7 +816,7 @@ i64 headEnd(str b, i64 from) {
 
 // Reads one request a line at a time into Strings of its own, for a head
 // or body too big for the connection's buffer.
-!bool readHead(net.Conn *c, Request *req, Limits *limits) {
+!bool readHead(net.Conn *c, Request *req, Limits *limits, Router *router = null) {
     line := c.readLine(limits.maxHeader) catch e {
         if e.code == net.NetError.closed {
             return false
@@ -696,6 +845,10 @@ i64 headEnd(str b, i64 from) {
     }
     length := try bodyLength(req.header("Content-Length"), req.header("Transfer-Encoding"),
         req.hasHeader("Content-Length"))
+    if length != 0 && router != null && router.streams(req) {
+        req.streamFrom(c, length, limits)
+        return true
+    }
     if length > limits.maxBody {
         return error(HttpError.tooBig, "a body of {length} bytes, more than {limits.maxBody}")
     }
@@ -928,7 +1081,8 @@ void serveConn(net.Conn conn, Target target) {
         Request req
         req.remote = remote
         req.local = local
-        more := readRequest(&conn, &req, &limits) catch e {
+        req.watch = &w
+        more := readRequest(&conn, &req, &limits, target.router) catch e {
             req.free()
             if e.code == net.NetError.tooLong {
                 refuse(&conn, 431, "a header line is too long")
@@ -989,6 +1143,11 @@ void serveConn(net.Conn conn, Target target) {
         // a handler can end the connection, and a server that is stopping
         // ends each one after its answer
         keepAlive = res.keepAlive && (target.router == null || target.router.stopping.load() == 0)
+        // what the handler left of a streamed body goes before the next
+        // request can be read
+        if keepAlive && !req.drain(limits.maxBody) {
+            keepAlive = false
+        }
         bool failed = false
         if res.streaming {
             // the last chunk ends the body
@@ -1167,6 +1326,7 @@ struct Route {
     String pattern
     Handler handler
     SocketHandler socket // a WebSocket route
+    bool streams         // the handler reads the body as it comes
 }
 
 // Sends each request to the handler for its method and path. Patterns are
@@ -1192,6 +1352,7 @@ pub struct Router {
     Mutex lock
     List[net.Listener] listeners
     Atomic[i64] drainEnd
+    bool streaming // some route reads its body as it comes
 }
 
 // Stops the server: no new connections, and serve returns once the
@@ -1279,6 +1440,47 @@ pub void Router.handle(str pattern, Handler handler) {
     }
     r.parts = splitPath(r.pattern[r.pattern.len - path.len:])
     self.routes.push(r)
+}
+
+// Adds a handler that reads the request's body as it comes, with
+// req.read, in place of finding it whole in req.body: for uploads larger
+// than maxBody, and for a proxy that passes a body on as it comes. The
+// handler runs once the headers are in. Patterns are as handle takes them.
+pub void Router.stream(str pattern, Handler handler) {
+    self.handle(pattern, handler)
+    r := self.routes.last()
+    r.streams = true
+    self.routes.set(self.routes.len - 1, r)
+    self.streaming = true
+}
+
+// Whether the route for a request reads its body as it comes.
+bool Router.streams(Request *req) {
+    if !self.streaming {
+        return false
+    }
+    scoped List[str] parts = splitPath(req.route())
+    best := self.best(req, &parts)
+    return best != null && best.streams
+}
+
+// The route with the most fixed parts for the request's method and path,
+// or null.
+Route *Router.best(Request *req, List[str] *parts) {
+    Route *best = null
+    i64 bestScore = -1
+    for i in 0..self.routes.len {
+        r := &self.routes.items()[i]
+        if r.socket != null || r.method.len > 0 && r.method != req.method {
+            continue
+        }
+        sc := score(r, parts)
+        if sc > bestScore {
+            best = r
+            bestScore = sc
+        }
+    }
+    return best
 }
 
 // Adds a handler for GET requests to path.

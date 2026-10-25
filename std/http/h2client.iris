@@ -215,7 +215,8 @@ void h2Reader(H2Conn *h) {
         }
     }
     h.failAll("the connection closed")
-    h.jobs.put(Out{job: .close})
+    // request bodies still being sent have nowhere to go
+    h.jobs.put(Out{job: .close, n: 1})
     _ = <-h.writerDone
     h.readerDone <- true
 }

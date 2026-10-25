@@ -121,6 +121,117 @@ void Frame.free() {
     return f
 }
 
+// ------------------------------------------------------- a body as it comes
+
+// A body read as it comes on HTTP/2: the connection's reader task adds
+// each DATA frame's bytes, and read takes them, maybe on another thread.
+// The stream's window grows by what read takes, so a body that isn't
+// read stops the sender instead of filling the memory. The reader and the
+// one that reads each hold a reference; the last to let go frees it.
+struct BodyIn {
+    Mutex lock
+    Deque[String] pieces
+    i64 at // how much of the first piece was read
+    bool ended
+    bool gone // the stream was reset or the connection ended
+    String trailerText
+    chan[bool] signal // something came
+    Queue *jobs
+    i64 stream
+    Atomic[i64] refs
+}
+
+BodyIn *newBodyIn(Queue *jobs, i64 stream) {
+    BodyIn[] mem = alloc(BodyIn, 1)
+    b := &mem[0]
+    b.jobs = jobs
+    b.stream = stream
+    b.signal = chan[bool](1)
+    b.refs.store(2)
+    return b
+}
+
+void BodyIn.wake() {
+    _ = self.signal.trySend(true)
+}
+
+// Bytes from a DATA frame.
+void BodyIn.add(str data) {
+    if data.len == 0 {
+        return
+    }
+    self.lock.lock()
+    self.pieces.push(data.copy())
+    self.lock.unlock()
+    self.wake()
+}
+
+// The body is done, with these trailer lines.
+void BodyIn.end(str trailers) {
+    self.lock.lock()
+    self.ended = true
+    self.trailerText.append(trailers)
+    self.lock.unlock()
+    self.wake()
+}
+
+void BodyIn.fail() {
+    self.lock.lock()
+    self.gone = true
+    self.lock.unlock()
+    self.wake()
+}
+
+void BodyIn.release() {
+    if self.refs.sub(1) != 0 {
+        return
+    }
+    self.pieces.freeEach()
+    self.trailerText.free()
+    self.signal.free()
+    free(self[0:1])
+}
+
+// The next bytes into buf: how many, 0 at the end, when the trailers go
+// to trailers.
+!i64 BodyIn.read(u8[] buf, String *trailers) {
+    for {
+        self.lock.lock()
+        if self.pieces.len > 0 {
+            p := self.pieces.first()
+            n := copyInto(buf, p[self.at:])
+            self.at += n
+            if self.at == p.len {
+                p.free()
+                _ = self.pieces.popFront()
+                self.at = 0
+            }
+            more := !self.ended && !self.gone
+            self.lock.unlock()
+            if more {
+                // the sender may send this much more
+                self.jobs.put(Out{job: .frame, data: windowFrame(self.stream, n)})
+            }
+            return n
+        }
+        if self.ended {
+            if self.trailerText.len > 0 {
+                trailers.append(self.trailerText)
+                self.trailerText.truncate(0)
+            }
+            self.lock.unlock()
+            return 0
+        }
+        if self.gone {
+            self.lock.unlock()
+            return error(net.NetError.closed, "the other side reset the stream")
+        }
+        self.lock.unlock()
+        _ = <-self.signal
+    }
+    return 0
+}
+
 // ------------------------------------------------------------ the writer
 
 // What the writer is asked to do.
@@ -191,7 +302,8 @@ struct Writer {
     List[i64] reset     // streams the client reset before their reply
     i64 active          // requests being answered
     bool closing
-    bool broken // writing failed: the rest is dropped
+    bool abandon // the connection is gone: stop without waiting for what is still to send
+    bool broken  // writing failed: the rest is dropped
 }
 
 // A request is answered, or dropped.
@@ -529,14 +641,17 @@ void Writer.handle(Out o) {
             self.reset.push(o.stream)
         },
         .open => self.active += 1,
-        .close => self.closing = true,
+        .close => {
+            self.closing = true
+            self.abandon = o.n == 1
+        },
     }
 }
 
 void runWriter(Writer *w, chan[bool] done) {
     for {
         sent := w.pump()
-        if w.closing && w.active <= 0 {
+        if w.closing && (w.active <= 0 || w.abandon) {
             break
         }
         if w.jobs.waiting.load() > 0 {
@@ -571,6 +686,7 @@ struct Incoming {
     Request req
     i64 length // content-length, or -1
     bool tooBig
+    BodyIn *piped // a body its handler reads as it comes; req went to the handler
 }
 
 struct Reader {
@@ -749,18 +865,46 @@ void Reader.start(i64 stream, Incoming inc) {
         self.resetStream(stream, E_PROTOCOL)
         return
     }
+    _ = self.launch(stream, inc.req)
+}
+
+// Hands a request to a worker. False when it was refused.
+bool Reader.launch(i64 stream, Request req) {
     if self.target.router != null {
-        if self.target.router.socketRoute(&inc.req) != null {
+        if self.target.router.socketRoute(&req) != null {
             // WebSockets over HTTP/2 need extended CONNECT, which isn't here
-            inc.req.free()
+            req.free()
             self.resetStream(stream, E_REFUSED)
-            return
+            return false
         }
         self.target.router.busy.add(1)
     }
     *self.inFlight += 1
     self.jobs.put(Out{job: .open})
-    self.work.add(inc.req, stream)
+    self.work.add(req, stream)
+    return true
+}
+
+// A request whose route reads its body as it comes: it starts now, and
+// the DATA frames go to it as they come.
+void Reader.startStreamed(i64 stream, Incoming *inc) {
+    piped := newBodyIn(self.jobs, stream)
+    inc.req.piped = piped
+    Request req = inc.req
+    Request none
+    inc.req = none
+    inc.piped = piped
+    if !self.launch(stream, req) {
+        // launch freed the request and its reference; the reader lets go too
+        piped.release()
+        inc.piped = null
+    }
+}
+
+// The reader is done with a streamed body.
+void Reader.closeIn(i64 stream, Incoming *inc) {
+    _ = self.open.remove(stream)
+    inc.piped.release()
 }
 
 // A body too large for the limit: 413, and the rest of it is dropped.
@@ -838,19 +982,31 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
             self.fail(E_PROTOCOL)
             return
         }
+        scoped String trailers
         for i in 0..names.len {
             n := names.at(i)
             if n.len == 0 || n[0] == ':' {
                 self.resetStream(stream, E_PROTOCOL)
+                if inc.piped != null {
+                    inc.piped.fail()
+                    self.closeIn(stream, &inc)
+                    return
+                }
                 _ = self.open.remove(stream)
                 inc.req.free()
                 return
             }
-            inc.req.trailerText.append(n)
-            inc.req.trailerText.append(": ")
-            inc.req.trailerText.append(values.at(i))
-            inc.req.trailerText.append("\n")
+            trailers.append(n)
+            trailers.append(": ")
+            trailers.append(values.at(i))
+            trailers.append("\n")
         }
+        if inc.piped != null {
+            inc.piped.end(trailers)
+            self.closeIn(stream, &inc)
+            return
+        }
+        inc.req.trailerText.append(trailers)
         _ = self.open.remove(stream)
         if !inc.tooBig {
             self.start(stream, inc)
@@ -876,6 +1032,13 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
     if code != E_NONE {
         fresh.req.free()
         self.resetStream(stream, code)
+        return
+    }
+    if f.flags & END_STREAM == 0 && self.target.router != null && self.target.router.streams(&fresh.req) {
+        self.startStreamed(stream, &fresh)
+        if fresh.piped != null {
+            self.open.set(stream, fresh)
+        }
         return
     }
     if fresh.length > self.limits.maxBody {
@@ -918,6 +1081,15 @@ void Reader.dataFrame(Frame *f) {
         }
         pad = i64(p[0])
         at = 1
+    }
+    if inc.piped != null {
+        // the handler reads it, and gives the stream's window back as it does
+        inc.piped.add(p[at:p.len - pad])
+        if f.flags & END_STREAM != 0 {
+            inc.piped.end("")
+            self.closeIn(stream, &inc)
+        }
+        return
     }
     if !inc.tooBig {
         inc.req.body.append(p[at:p.len - pad])
@@ -998,7 +1170,11 @@ void Reader.dataFrame(Frame *f) {
                 self.fail(E_PROTOCOL)
             } else {
                 inc, known := self.open.get(f.stream)
-                if known {
+                if known && inc.piped != null {
+                    inc.piped.fail()
+                    self.closeIn(f.stream, &inc)
+                    self.jobs.put(Out{job: .reset, stream: f.stream})
+                } else if known {
                     _ = self.open.remove(f.stream)
                     inc.req.free()
                 } else {
@@ -1106,7 +1282,12 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr re
     }
     // the requests still running finish, then the writer stops
     for _, inc in r.open {
-        inc.req.free()
+        if inc.piped != null {
+            inc.piped.fail()
+            inc.piped.release()
+        } else {
+            inc.req.free()
+        }
     }
     r.open.free()
     r.headers.free()
