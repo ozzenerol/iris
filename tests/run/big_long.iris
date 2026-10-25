@@ -1,0 +1,116 @@
+// expect: 10^19-1: 19 999999999999999 999999999999999 sum 171
+// expect: 10^19: 20 100000000000000 000000000000000 sum 1
+// expect: 10^19+1: 20 100000000000000 000000000000001 sum 2
+// expect: 10^38-1: 38 999999999999999 999999999999999 sum 342
+// expect: 10^38: 39 100000000000000 000000000000000 sum 1
+// expect: 10^38+1: 39 100000000000000 000000000000001 sum 2
+// expect: 10^304-1: 304 999999999999999 999999999999999 sum 2736
+// expect: 10^304: 305 100000000000000 000000000000000 sum 1
+// expect: 10^304+1: 305 100000000000000 000000000000001 sum 2
+// expect: 10^305-1: 305 999999999999999 999999999999999 sum 2745
+// expect: 10^305: 306 100000000000000 000000000000000 sum 1
+// expect: 10^305+1: 306 100000000000000 000000000000001 sum 2
+// expect: 10^608-1: 608 999999999999999 999999999999999 sum 5472
+// expect: 10^608: 609 100000000000000 000000000000000 sum 1
+// expect: 10^608+1: 609 100000000000000 000000000000001 sum 2
+// expect: 10^4864-1: 4864 999999999999999 999999999999999 sum 43776
+// expect: 10^4864: 4865 100000000000000 000000000000000 sum 1
+// expect: 10^4864+1: 4865 100000000000000 000000000000001 sum 2
+// expect: 10^9729-1: 9729 999999999999999 999999999999999 sum 87561
+// expect: 10^9729: 9730 100000000000000 000000000000000 sum 1
+// expect: 10^9729+1: 9730 100000000000000 000000000000001 sum 2
+// expect: 5000!: 16326 422857792660554 000000000000000 sum 67698
+// expect: -5000!: 16327 -42285779266055 000000000000000 sum 67698
+// expect: 2^65536: 19729 200352993040684 895905719156736 sum 88261
+// expect: rsa: 2047 471 2046 2048 2040 140139420
+// expect: long exponent: 129498549
+// expect: odd modulus: 899270295
+// expect: small odd: 652541198
+// expect: even: 499636557
+// expect: negative base: 98829022064819521896897230526271835598
+
+// big: decimal text of long numbers, split around each power of 10^19
+// the conversion uses, and modPow with odd moduli of many sizes (Montgomery),
+// long exponents (a window of bits) and an even modulus.
+
+import big
+
+void show(str name, big.Int x) {
+    scoped t := x.text()
+    i64 sum = 0
+    for i in 0..t.len {
+        if t[i] >= '0' && t[i] <= '9' {
+            sum += i64(t[i] - '0')
+        }
+    }
+    print("{name}: {t.len} {t[0:15]} {t[t.len - 15:t.len]} sum {sum}")
+}
+
+i64 low(big.Int x) {
+    scoped p := big.from(1000000007)
+    scoped r := x.rem(p)
+    return r.toI64() catch e { -1 }
+}
+
+!void main() {
+    scoped ten := big.from(10)
+    scoped one := big.from(1)
+    for e in [19, 38, 304, 305, 608, 4864, 9729] {
+        scoped p := ten.pow(e)
+        scoped a := p.sub(one)
+        scoped b := p.add(one)
+        show("10^{e}-1", a)
+        show("10^{e}", p)
+        show("10^{e}+1", b)
+    }
+    big.Int f = big.from(1)
+    for i in 2..5001 {
+        scoped k := big.from(i)
+        next := f.mul(k)
+        f.free()
+        f = next
+    }
+    show("5000!", f)
+    scoped nf := f.negate()
+    show("-5000!", nf)
+    f.free()
+    scoped two := big.from(2)
+    scoped p16 := two.pow(65536)
+    show("2^65536", p16)
+    scoped p := two.pow(2048)
+    scoped m := p.sub(big.from(159))
+    scoped e := big.from(65537)
+    String bits
+    defer bits.free()
+    i64 first = 0
+    for i in 0..5 {
+        scoped b := big.from(i + 3)
+        scoped r := b.modPow(e, m)
+        if i == 0 {
+            first = low(r)
+        }
+        bits.append(format("{r.bitLen()} "))
+    }
+    print("rsa: {bits}{first}")
+    scoped big1000 := two.pow(1000)
+    scoped le := big1000.add(big.from(12345))
+    scoped seven := big.from(7)
+    scoped r1 := seven.modPow(le, m)
+    print("long exponent: {low(r1)}")
+    scoped three := big.from(3)
+    scoped m3 := three.pow(700)
+    scoped million := big.from(1000000)
+    scoped r2 := two.modPow(million, m3)
+    print("odd modulus: {low(r2)}")
+    scoped r3 := big.from(123456789).modPow(big.from(987654321), big.from(1000000007))
+    print("small odd: {low(r3)}")
+    scoped e50 := three.pow(50)
+    scoped m200 := two.pow(200)
+    scoped r4 := big.from(5).modPow(e50, m200)
+    print("even: {low(r4)}")
+    scoped m127 := two.pow(127)
+    scoped mp := m127.sub(one)
+    scoped r5 := big.from(-3).modPow(big.from(101), mp)
+    scoped t5 := r5.text()
+    print("negative base: {t5}")
+}

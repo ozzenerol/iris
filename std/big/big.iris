@@ -44,6 +44,9 @@ i64 rawShr(u64 *a, i64 an, i64 bits, u64 *out)
 @extern("iris_bn_mul_add_small")
 i64 rawMulAddSmall(u64 *a, i64 an, u64 m, u64 add)
 
+@extern("iris_bn_modpow_odd")
+i64 rawModPowOdd(u64 *b, i64 bn, u64 *e, i64 en, u64 *m, i64 mn, u64 *out)
+
 @extern("iris_bn_text10")
 i64 rawText10(u64 *limbs, i64 n, u8 *out)
 
@@ -317,6 +320,15 @@ pub Int Int.modPow(Int e, Int m) {
         fixed := base.add(m)
         base.free()
         base = fixed
+    }
+    if m.mag.at(0) & 1 == 1 && !(m.mag.len == 1 && m.mag.at(0) == 1) {
+        // an odd modulus, as in RSA: Montgomery multiplication, in C
+        out := room(m.mag.len)
+        out.resize(rawModPowOdd(ptrOf(&base.mag), base.mag.len, ptrOf(&e.mag), e.mag.len, ptrOf(&m.mag),
+            m.mag.len, ptrOf(&out)))
+        base.free()
+        result.free()
+        return make(false, out)
     }
     bits := e.bitLen()
     for i in 0..bits {

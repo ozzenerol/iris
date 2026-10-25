@@ -1201,45 +1201,224 @@ static inline uint64_t divPreinv(uint64_t hi, uint64_t lo, uint64_t d, uint64_t 
     return q1;
 }
 
-/* the magnitude in decimal into out (room for an * 20 + 1); gives the
-   length. 19 digits a pass. */
-int64_t iris_bn_text10(const uint64_t *limbs, int64_t n, char *out) {
-    int64_t words = bnTrim(limbs, n);
-    uint64_t *w = malloc((size_t)(words ? words : 1) * sizeof(uint64_t));
-    int64_t cap = n * 64 / 63 + 4, count = 0;
-    uint64_t *chunks = malloc((size_t)cap * sizeof(uint64_t));
-    if (!w || !chunks) outOfMemory();
-    memcpy(w, limbs, (size_t)words * sizeof(uint64_t));
+/* Montgomery multiplication (CIOS) for an odd modulus m of n words:
+   out = a * b / 2^(64n) mod m, for a and b below m; t has room for n + 2
+   words, and out may be a or b. minv is -1/m[0] mod 2^64. */
+static void bnMontMul(const uint64_t *a, const uint64_t *b, const uint64_t *m, int64_t n, uint64_t minv,
+                      uint64_t *t, uint64_t *out) {
+    memset(t, 0, (size_t)(n + 2) * sizeof(uint64_t));
+    for (int64_t i = 0; i < n; i++) {
+        /* t = (t + a[i] * b + f * m) / 2^64 in one pass, f chosen so the
+           low word is 0: the two carry chains run side by side */
+        uint64_t ai = a[i];
+        unsigned __int128 p = (unsigned __int128)ai * b[0] + t[0];
+        uint64_t c1 = (uint64_t)(p >> 64);
+        uint64_t f = (uint64_t)p * minv;
+        unsigned __int128 q = (unsigned __int128)f * m[0] + (uint64_t)p;
+        uint64_t c2 = (uint64_t)(q >> 64);
+        for (int64_t j = 1; j < n; j++) {
+            p = (unsigned __int128)ai * b[j] + t[j] + c1;
+            c1 = (uint64_t)(p >> 64);
+            q = (unsigned __int128)f * m[j] + (uint64_t)p + c2;
+            c2 = (uint64_t)(q >> 64);
+            t[j - 1] = (uint64_t)q;
+        }
+        unsigned __int128 s = (unsigned __int128)t[n] + c1 + c2;
+        t[n - 1] = (uint64_t)s;
+        t[n] = t[n + 1] + (uint64_t)(s >> 64);
+        t[n + 1] = 0;
+    }
+    /* t is below 2m: once more m off when it is at least m */
+    bool ge = t[n] != 0;
+    if (!ge) {
+        ge = true;
+        for (int64_t i = n - 1; i >= 0; i--) {
+            if (t[i] != m[i]) {
+                ge = t[i] > m[i];
+                break;
+            }
+        }
+    }
+    if (ge) {
+        unsigned char borrow = 0;
+        for (int64_t i = 0; i < n; i++) {
+            uint64_t d;
+            unsigned char b1 = __builtin_sub_overflow(t[i], m[i], &d);
+            unsigned char b2 = __builtin_sub_overflow(d, (uint64_t)borrow, &out[i]);
+            borrow = b1 | b2;
+        }
+    } else {
+        memcpy(out, t, (size_t)n * sizeof(uint64_t));
+    }
+}
+
+/* x * 2^(64n) mod m into out (n words), for x below m */
+static void bnToMont(const uint64_t *x, int64_t xn, const uint64_t *m, int64_t n, uint64_t *out) {
+    int64_t un = xn + n;
+    uint64_t *u = calloc((size_t)un + 1, sizeof(uint64_t));
+    uint64_t *q = malloc((size_t)un * sizeof(uint64_t));
+    if (!u || !q) outOfMemory();
+    memcpy(u + n, x, (size_t)xn * sizeof(uint64_t));
+    un = bnTrim(u, un);
+    memset(out, 0, (size_t)n * sizeof(uint64_t));
+    int64_t qn, rn;
+    if (un == 0) {
+        rn = 0;
+    } else if (n == 1) {
+        out[0] = iris_bn_div_small(u, un, m[0], q, &qn);
+    } else if (iris_bn_cmp(u, un, m, n) < 0) {
+        memcpy(out, u, (size_t)un * sizeof(uint64_t));
+    } else {
+        iris_bn_divmod(u, un, m, n, q, &qn, out, &rn);
+    }
+    free(u);
+    free(q);
+}
+
+/* b^e mod m for an odd m (n words, the top one not zero) and b below m,
+   into out (room for n words): Montgomery multiplication, so no step
+   divides, and a window of 4 bits for long exponents. Gives the length. */
+int64_t iris_bn_modpow_odd(const uint64_t *b, int64_t bn, const uint64_t *e, int64_t en, const uint64_t *m, int64_t n,
+                           uint64_t *out) {
+    uint64_t inv = m[0];                /* 1/m[0] mod 2^64 by Newton's method */
+    for (int i = 0; i < 6; i++) inv *= 2 - m[0] * inv;
+    uint64_t minv = (uint64_t)0 - inv;
+    uint64_t *t = malloc((size_t)(n + 2) * sizeof(uint64_t));
+    uint64_t *acc = malloc((size_t)n * sizeof(uint64_t));
+    uint64_t *one = calloc((size_t)n, sizeof(uint64_t));
+    int64_t bits = en ? (en - 1) * 64 + (64 - __builtin_clzll(e[en - 1])) : 0;
+    int w = bits > 64 ? 4 : 1;
+    uint64_t *tab = malloc((size_t)((1 << w) * n) * sizeof(uint64_t));
+    if (!t || !acc || !one || !tab) outOfMemory();
+    uint64_t unit = 1;
+    bnToMont(&unit, 1, m, n, acc);              /* 1, in Montgomery form */
+    bnToMont(b, bn, m, n, tab + n);             /* b */
+    memcpy(tab, acc, (size_t)n * sizeof(uint64_t));
+    for (int i = 2; i < 1 << w; i++) bnMontMul(tab + (i - 1) * n, tab + n, m, n, minv, t, tab + i * n);
+    for (int64_t i = bits - 1; i >= 0;) {
+        if (w == 1 || i < w - 1) {
+            bnMontMul(acc, acc, m, n, minv, t, acc);
+            if ((e[i / 64] >> (i % 64)) & 1) bnMontMul(acc, tab + n, m, n, minv, t, acc);
+            i--;
+            continue;
+        }
+        /* the next w bits, from bit i down */
+        unsigned d = 0;
+        for (int k = 0; k < w; k++) {
+            int64_t bit = i - k;
+            d = d << 1 | (unsigned)((e[bit / 64] >> (bit % 64)) & 1);
+            bnMontMul(acc, acc, m, n, minv, t, acc);
+        }
+        if (d) bnMontMul(acc, tab + d * n, m, n, minv, t, acc);
+        i -= w;
+    }
+    one[0] = 1;
+    bnMontMul(acc, one, m, n, minv, t, out);    /* out of Montgomery form */
+    free(t);
+    free(acc);
+    free(one);
+    free(tab);
+    return bnTrim(out, n);
+}
+
+/* x (xn words, overwritten) as exactly chunks groups of 19 decimal digits,
+   zero-padded, ending at end: 19 digits a pass, each a division by 10^19. */
+static void bnTextChunks(uint64_t *x, int64_t xn, int64_t chunks, char *end) {
     const uint64_t ten19 = 10000000000000000000ULL;     /* above 2^63: normalized as divPreinv needs */
     const uint64_t inv = (uint64_t)((((unsigned __int128)~ten19) << 64 | ~(uint64_t)0) / ten19);
-    while (words > 0) {
-        uint64_t rem = 0;
-        for (int64_t i = words - 1; i >= 0; i--) {
-            w[i] = divPreinv(rem, w[i], ten19, inv, &rem);
-        }
-        chunks[count++] = rem;
-        while (words > 0 && w[words - 1] == 0) words--;
-    }
-    int64_t len = 0;
+    xn = bnTrim(x, xn);
     char tmp[24];
-    char *end = tmp + sizeof tmp;
-    if (count == 0) {
-        out[len++] = '0';
-    } else {
-        char *d = u64Digits(chunks[count - 1], end);
-        memcpy(out, d, (size_t)(end - d));
-        len = end - d;
-        for (int64_t c = count - 2; c >= 0; c--) {
-            char *p = u64Digits(chunks[c], end);
-            int64_t k = end - p;
-            memset(out + len, '0', (size_t)(19 - k));
-            memcpy(out + len + 19 - k, p, (size_t)k);
-            len += 19;
+    char *tend = tmp + sizeof tmp;
+    for (int64_t c = 0; c < chunks; c++) {
+        uint64_t rem = 0;
+        for (int64_t i = xn - 1; i >= 0; i--) {
+            x[i] = divPreinv(rem, x[i], ten19, inv, &rem);
+        }
+        while (xn > 0 && x[xn - 1] == 0) xn--;
+        char *p = u64Digits(rem, tend);
+        int64_t k = tend - p;
+        end -= 19;
+        memset(end, '0', (size_t)(19 - k));
+        memcpy(end + 19 - k, p, (size_t)k);
+    }
+}
+
+/* x below pw[k]^2 as exactly 19 * 2^(k+1) digits, zero-padded, ending at
+   end: split by pw[k] = 10^(19 * 2^k) into halves written the same way,
+   so a long number takes a few long divisions in place of a pass of
+   divisions per 19 digits. */
+static void bnTextSplit(const uint64_t *x, int64_t xn, int k, uint64_t **pw, int64_t *pwn, char *end) {
+    xn = bnTrim(x, xn);
+    if (k < 4 || xn <= pwn[k]) {
+        if (xn <= pwn[k] && k >= 4 && iris_bn_cmp(x, xn, pw[k], pwn[k]) < 0) {
+            /* the top half is zero */
+            int64_t half = (int64_t)19 << k;
+            memset(end - 2 * half, '0', (size_t)half);
+            bnTextSplit(x, xn, k - 1, pw, pwn, end);
+            return;
+        }
+        if (k < 4) {
+            uint64_t *w = malloc((size_t)(xn ? xn : 1) * sizeof(uint64_t));
+            if (!w) outOfMemory();
+            memcpy(w, x, (size_t)xn * sizeof(uint64_t));
+            bnTextChunks(w, xn, (int64_t)2 << k, end);
+            free(w);
+            return;
         }
     }
-    free(w);
-    free(chunks);
-    return len;
+    uint64_t *q = malloc((size_t)(xn - pwn[k] + 1) * sizeof(uint64_t));
+    uint64_t *r = malloc((size_t)pwn[k] * sizeof(uint64_t));
+    if (!q || !r) outOfMemory();
+    int64_t qn, rn;
+    iris_bn_divmod(x, xn, pw[k], pwn[k], q, &qn, r, &rn);
+    int64_t half = (int64_t)19 << k;
+    bnTextSplit(r, rn, k - 1, pw, pwn, end);
+    bnTextSplit(q, qn, k - 1, pw, pwn, end - half);
+    free(q);
+    free(r);
+}
+
+/* the magnitude in decimal into out (room for an * 20 + 1); gives the
+   length. */
+int64_t iris_bn_text10(const uint64_t *limbs, int64_t n, char *out) {
+    int64_t words = bnTrim(limbs, n);
+    if (words == 0) {
+        out[0] = '0';
+        return 1;
+    }
+    /* pw[k] = 10^(19 * 2^k), up to the first above the number's square root */
+    uint64_t *pw[40];
+    int64_t pwn[40];
+    int k = 0;
+    pw[0] = malloc(sizeof(uint64_t));
+    if (!pw[0]) outOfMemory();
+    pw[0][0] = 10000000000000000000ULL;
+    pwn[0] = 1;
+    while (2 * pwn[k] - 1 <= words && k < 38) {
+        pw[k + 1] = malloc((size_t)(2 * pwn[k]) * sizeof(uint64_t));
+        if (!pw[k + 1]) outOfMemory();
+        pwn[k + 1] = iris_bn_mul(pw[k], pwn[k], pw[k], pwn[k], pw[k + 1]);
+        k++;
+    }
+    /* now the number is below pw[k]^2 */
+    int64_t digits = (int64_t)19 << (k + 1);
+    char *buf = malloc((size_t)digits);
+    if (!buf) outOfMemory();
+    if (k < 4) {
+        uint64_t *w = malloc((size_t)words * sizeof(uint64_t));
+        if (!w) outOfMemory();
+        memcpy(w, limbs, (size_t)words * sizeof(uint64_t));
+        bnTextChunks(w, words, (int64_t)2 << k, buf + digits);
+        free(w);
+    } else {
+        bnTextSplit(limbs, words, k, pw, pwn, buf + digits);
+    }
+    int64_t skip = 0;
+    while (skip < digits - 1 && buf[skip] == '0') skip++;
+    memcpy(out, buf + skip, (size_t)(digits - skip));
+    free(buf);
+    for (int i = 0; i <= k; i++) free(pw[i]);
+    return digits - skip;
 }
 
 /* {n:x}, {n:+}: an integer in a base, with its sign; into s. */
