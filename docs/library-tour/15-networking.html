@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.76.0</span>
+    <span class="ver">v0.77.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -366,7 +366,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
 <p><code>net.socketPair()</code> gives two connected sockets: what one writes, the other reads. A program hands one to a program it starts, as a kept descriptor, and keeps the other.</p>
 <p>A service that systemd runs with <code>Type=notify</code> says it is ready with <code>net.notifySystemd(&quot;READY=1&quot;)</code>, and <code>&quot;RELOADING=1&quot;</code>, <code>&quot;STOPPING=1&quot;</code> or <code>&quot;STATUS=...&quot;</code> as it goes on. A server that hands its sockets to a new version sends <code>&quot;MAINPID=...&quot;</code> with the new process's id. It returns false when the program doesn't run under systemd.</p>
 <h2 id="udp-and-multicast"><a href="#udp-and-multicast">UDP and multicast</a></h2>
-<p><code>net.listenUdp(port)</code> makes a socket for datagrams. <code>readFrom(buf)</code> reads one with the address it came from, and <code>sendTo(data, addr)</code> sends one. <code>dialUdp(addr)</code> ties a socket to one peer, so <code>send</code> and <code>read</code> need no address. <code>readMany</code> and <code>sendMany</code> move a batch of <code>Datagram</code> in one call.</p>
+<p><code>net.listenUdp(port)</code> makes a socket for datagrams. <code>readFrom(buf)</code> reads one with the address it came from, and <code>sendTo(data, addr)</code> sends one. <code>dialUdp(addr)</code> ties a socket to one peer, so <code>send</code> and <code>read</code> need no address. <code>readMany</code> and <code>sendMany</code> move a batch of <code>Datagram</code> in one call. <code>sendTo</code> waits while the send buffer is full; <code>trySendTo(data, addr)</code> never waits and gives false instead, so a server answering a flood from addresses that don't reply drops answers rather than stalling.</p>
 <p>A socket joins a multicast group with <code>joinGroup(addr, iface)</code>, where <code>addr</code> is a group such as <code>239.255.255.250</code> for SSDP or <code>224.0.0.251</code> for mDNS, and <code>iface</code> is the interface to join on (empty for the default). <code>leaveGroup</code> leaves it. <code>setMulticastHops(n)</code> sets how many routers a datagram may cross, <code>1</code> keeping it on the local network. <code>setMulticastLoop(on)</code> says whether what the socket sends also comes back to groups it joined on this machine, and <code>setMulticastInterface(iface)</code> picks the interface its multicast goes out of. <code>setBroadcast(true)</code> allows sending to the broadcast address.</p>
 <p><code>readMsg</code> and <code>sendMsg</code> carry more than the bytes. <code>readMsg(buf)</code> gives a <code>Message</code> with the sender in <code>from</code>, and with <code>setReceiveInfo(true)</code> the local address it came to in <code>to</code> and its TOS byte in <code>tos</code>, so a server on several addresses knows which one a datagram reached and can read ECN. <code>sendMsg(data, addr, from: ..., tos: ...)</code> sends from a chosen local address with a chosen TOS. On Linux <code>setGro(true)</code> lets one <code>readMsg</code> take several datagrams of one size at once, their size in <code>Message.segment</code>, and passing <code>segment</code> to <code>sendMsg</code> splits a large buffer into datagrams of that size on the way out.</p>
 <pre class="code"><code><span class="k">import</span> net
@@ -406,7 +406,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.76.0</span>
+    <span>Iris v0.77.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>

@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.76.0</span>
+    <span class="ver">v0.77.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -192,11 +192,9 @@ wrong: false</code></pre>
 <span class="t">String</span> <span class="f">encrypt</span>(<span class="t">str</span> key, <span class="t">str</span> plain) {
     <span class="t">u8</span>[<span class="n">12</span>] nonce
     random.<span class="f">bytes</span>(nonce)
-    <span class="k">scoped</span> <span class="t">String</span> sealed = crypto.<span class="f">seal</span>(key, nonce, plain)
-
     <span class="t">String</span> out
     out.<span class="f">append</span>(nonce[:])
-    out.<span class="f">append</span>(sealed)
+    crypto.<span class="f">sealTo</span>(&amp;out, key, nonce, plain)
     <span class="k">return</span> out
 }
 
@@ -221,6 +219,7 @@ wrong: false</code></pre>
 <pre class="out"><code>48 bytes stored
 db password: hunter2
 CryptoError.tampered</code></pre>
+<p><code>sealTo(&amp;out, key, nonce, data)</code> adds the sealed data to the end of a String instead of making a new one, as <code>encrypt</code> does above after the nonce. A program that seals many packets keeps one String and clears it between them. <code>unsealTo</code> does the same for opening.</p>
 <p><code>aesSeal</code> and <code>aesUnseal</code> do the same with AES-GCM, which many file formats and protocols use. An optional <code>extra</code> text, such as a record's id, goes along unencrypted but is checked too. The <a href="../std/index.html#crypto">library</a> has them, and key agreement with X25519.</p>
 <p>Protocols that build their own encryption need the ciphers alone. <code>aesCtr(key, iv, data)</code> is AES in counter mode, as SSH's <code>aes128-ctr</code> uses, <code>aesBlock(key, block)</code> encrypts one 16-byte block, as QUIC's header protection does, and <code>chacha20(key, nonce, data, counter)</code> is the ChaCha20 stream. None of them checks that the data wasn't changed, so the protocol adds a MAC: <code>hmacSha256</code>, <code>hmacSha384</code>, <code>hmacSha512</code>, or <code>hmacSha1</code> for older ones such as TOTP codes. <code>wipe(bytes)</code> overwrites a key with zeros once it is done with, in a way the compiler can't leave out.</p>
 <h2 id="signatures"><a href="#signatures">Signatures</a></h2>
@@ -335,7 +334,7 @@ JwtError.invalid</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.76.0</span>
+    <span>Iris v0.77.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
