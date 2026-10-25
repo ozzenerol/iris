@@ -81,6 +81,14 @@ pub u32 crc32(str data, u32 before = 0) => u32(rawCrc32(i64(before), data.ptr, d
 // The Adler-32 checksum of data, as zlib uses it.
 pub u32 adler32(str data, u32 before = 1) => u32(rawAdler32(i64(before), data.ptr, data.len))
 
+@extern("iris_crc32c")
+u32 rawCrc32c(u32 before, u8 *p, i64 len)
+
+// The CRC32C (Castagnoli) of data, as iSCSI, ext4, BitTorrent's BEP 42
+// and many log formats use; before continues one over several pieces. The
+// CPU's crc32 instruction does it where there is one.
+pub u32 crc32c(str data, u32 before = 0) => rawCrc32c(before, data.ptr, data.len)
+
 // Compresses a part at a time: what comes out is added to out.
 pub struct Writer {
     u8 *z

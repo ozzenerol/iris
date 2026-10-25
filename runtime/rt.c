@@ -8138,6 +8138,14 @@ void iris_hmac_sha256(const char *key, int64_t keyLen, const char *data, int64_t
     shaEnd(&s, out);
 }
 
+/* Overwrites n bytes at p with zeros in a way the compiler can't leave
+   out, for keys and passwords that are done with. */
+void iris_wipe(void *p, int64_t n) {
+    volatile unsigned char *v = p;
+    for (int64_t i = 0; i < n; i++) v[i] = 0;
+    __asm__ __volatile__("" : : "r"(p) : "memory");
+}
+
 /* Equal without stopping at the first difference, so the time says
    nothing about where they differ. */
 int iris_const_equal(const char *a, int64_t na, const char *b, int64_t nb) {
@@ -9212,6 +9220,193 @@ int iris_aes_open(const uint8_t *key, int64_t keyLen, const uint8_t *nonce, cons
     free(pt);
     memset(&a, 0, sizeof a);
     return 1;
+}
+
+/* SHA-384 (FIPS 180-4): SHA-512 with its own start and 48 bytes kept. */
+static void sha384Init(Sha512 *s) {
+    static const uint64_t start[8] = {0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL, 0x9159015a3070dd17ULL,
+                                      0x152fecd8f70e5939ULL, 0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL,
+                                      0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL};
+    memcpy(s->h, start, sizeof start);
+    s->len = 0;
+    s->used = 0;
+}
+
+void iris_sha384(const char *data, int64_t len, unsigned char *out) {
+    Sha512 s;
+    unsigned char full[64];
+    sha384Init(&s);
+    sha512Add(&s, (const unsigned char *)data, (size_t)len);
+    sha512End(&s, full);
+    memcpy(out, full, 48);
+}
+
+/* HMAC-SHA384 (RFC 2104, 4868), with SHA-384's 128-byte blocks. */
+void iris_hmac_sha384(const char *key, int64_t keyLen, const char *data, int64_t len, unsigned char *out) {
+    unsigned char k[128] = {0};
+    if (keyLen > 128) {
+        iris_sha384(key, keyLen, k);
+    } else {
+        memcpy(k, key, (size_t)keyLen);
+    }
+    unsigned char ipad[128], opad[128], inner[64], outer[64];
+    for (int i = 0; i < 128; i++) {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    Sha512 s;
+    sha384Init(&s);
+    sha512Add(&s, ipad, 128);
+    sha512Add(&s, (const unsigned char *)data, (size_t)len);
+    sha512End(&s, inner);
+    sha384Init(&s);
+    sha512Add(&s, opad, 128);
+    sha512Add(&s, inner, 48);
+    sha512End(&s, outer);
+    memcpy(out, outer, 48);
+    iris_wipe(k, sizeof k);
+}
+
+void iris_sha1(const char *data, int64_t len, unsigned char *out);
+
+/* HMAC-SHA1 (RFC 2104), for older protocols such as TOTP (RFC 6238). */
+void iris_hmac_sha1(const char *key, int64_t keyLen, const char *data, int64_t len, unsigned char *out) {
+    unsigned char k[64] = {0};
+    if (keyLen > 64) {
+        iris_sha1(key, keyLen, k);
+    } else {
+        memcpy(k, key, (size_t)keyLen);
+    }
+    unsigned char *msg = malloc((size_t)len + 64);
+    if (!msg) outOfMemory();
+    for (int i = 0; i < 64; i++) msg[i] = k[i] ^ 0x36;
+    memcpy(msg + 64, data, (size_t)len);
+    unsigned char inner[20], outerMsg[84];
+    iris_sha1((const char *)msg, len + 64, inner);
+    free(msg);
+    for (int i = 0; i < 64; i++) outerMsg[i] = k[i] ^ 0x5c;
+    memcpy(outerMsg + 64, inner, 20);
+    iris_sha1((const char *)outerMsg, 84, out);
+    iris_wipe(k, sizeof k);
+}
+
+/* One AES block encrypted with key (16, 24 or 32 bytes): ECB, as QUIC's
+   header protection uses it. */
+void iris_aes_block(const uint8_t *key, int64_t keyLen, const uint8_t *in, uint8_t *out) {
+    AesGcm a;
+    aesExpand(&a, key, (int)keyLen);
+    a.hw = aesHasHw();
+    aesBlock(&a, in, out);
+    iris_wipe(&a, sizeof a);
+}
+
+/* AES in counter mode (NIST SP 800-38A): the 16-byte block iv is the first
+   counter, counted up as one big-endian number. Encrypting and decrypting
+   are the same; the result is added to out. */
+void iris_aes_ctr(const uint8_t *key, int64_t keyLen, const uint8_t *iv, const uint8_t *data, int64_t len,
+                  IrisString *out) {
+    AesGcm a;
+    aesExpand(&a, key, (int)keyLen);
+    a.hw = aesHasHw();
+    uint8_t ctr[16], ks[16];
+    memcpy(ctr, iv, 16);
+    uint8_t *buf = malloc(len ? (size_t)len : 1);
+    if (!buf) outOfMemory();
+    for (int64_t at = 0; at < len; at += 16) {
+        aesBlock(&a, ctr, ks);
+        int64_t take = len - at < 16 ? len - at : 16;
+        for (int64_t i = 0; i < take; i++) buf[at + i] = data[at + i] ^ ks[i];
+        for (int i = 15; i >= 0 && ++ctr[i] == 0; i--) {
+        }
+    }
+    iris_string_append(out, (const char *)buf, len);
+    free(buf);
+    iris_wipe(&a, sizeof a);
+    iris_wipe(ks, sizeof ks);
+}
+
+/* The ChaCha20 stream (RFC 8439) from block counter on, xored with data:
+   encrypting and decrypting are the same; added to out. */
+void iris_chacha20(const uint8_t *key, const uint8_t *nonce, uint32_t counter, const uint8_t *data, int64_t len,
+                   IrisString *out) {
+    uint8_t *buf = malloc(len ? (size_t)len : 1);
+    if (!buf) outOfMemory();
+    chachaXor(key, counter, nonce, data, buf, (size_t)len);
+    iris_string_append(out, (const char *)buf, len);
+    free(buf);
+}
+
+/* CRC32C (Castagnoli), as iSCSI, ext4, BEP 42 and WAL formats use: the
+   CPU's crc32 instruction where it has one, else 8 table lookups a word. */
+static uint32_t crc32cTable[8][256];
+static pthread_once_t crc32cOnce = PTHREAD_ONCE_INIT;
+static int crc32cHw;
+
+static void crc32cInit(void) {
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; k++) c = c & 1 ? (c >> 1) ^ 0x82F63B78u : c >> 1;
+        crc32cTable[0][i] = c;
+    }
+    for (int t = 1; t < 8; t++) {
+        for (int i = 0; i < 256; i++) {
+            uint32_t c = crc32cTable[t - 1][i];
+            crc32cTable[t][i] = (c >> 8) ^ crc32cTable[0][c & 0xff];
+        }
+    }
+    if (getenv("IRIS_CRC_SOFT")) return;
+#if defined(__x86_64__)
+    __builtin_cpu_init();
+    crc32cHw = __builtin_cpu_supports("sse4.2");
+#elif defined(__aarch64__) && defined(__APPLE__)
+    crc32cHw = 1;
+#elif defined(__aarch64__) && defined(__linux__)
+    crc32cHw = (getauxval(AT_HWCAP) & (1UL << 7)) != 0;    /* HWCAP_CRC32 */
+#endif
+}
+
+#if defined(__x86_64__)
+__attribute__((target("sse4.2"))) static uint32_t crc32cHwRun(uint32_t c, const uint8_t *p, size_t n) {
+    uint64_t c64 = c;
+    for (; n >= 8; p += 8, n -= 8) {
+        uint64_t v;
+        memcpy(&v, p, 8);
+        c64 = __builtin_ia32_crc32di(c64, v);
+    }
+    c = (uint32_t)c64;
+    for (; n > 0; p++, n--) c = __builtin_ia32_crc32qi(c, *p);
+    return c;
+}
+#elif defined(__aarch64__)
+__attribute__((target("crc"))) static uint32_t crc32cHwRun(uint32_t c, const uint8_t *p, size_t n) {
+    for (; n >= 8; p += 8, n -= 8) {
+        uint64_t v;
+        memcpy(&v, p, 8);
+        c = __builtin_arm_crc32cd(c, v);
+    }
+    for (; n > 0; p++, n--) c = __builtin_arm_crc32cb(c, *p);
+    return c;
+}
+#endif
+
+uint32_t iris_crc32c(uint32_t before, const uint8_t *p, int64_t len) {
+    pthread_once(&crc32cOnce, crc32cInit);
+    uint32_t c = ~before;
+    size_t n = (size_t)len;
+#if defined(__x86_64__) || defined(__aarch64__)
+    if (crc32cHw) return ~crc32cHwRun(c, p, n);
+#endif
+    for (; n >= 8; p += 8, n -= 8) {
+        uint32_t lo, hi;
+        memcpy(&lo, p, 4);
+        memcpy(&hi, p + 4, 4);
+        lo ^= c;
+        c = crc32cTable[7][lo & 0xff] ^ crc32cTable[6][(lo >> 8) & 0xff] ^ crc32cTable[5][(lo >> 16) & 0xff] ^
+            crc32cTable[4][lo >> 24] ^ crc32cTable[3][hi & 0xff] ^ crc32cTable[2][(hi >> 8) & 0xff] ^
+            crc32cTable[1][(hi >> 16) & 0xff] ^ crc32cTable[0][hi >> 24];
+    }
+    for (; n > 0; p++, n--) c = (c >> 8) ^ crc32cTable[0][(c ^ *p) & 0xff];
+    return ~c;
 }
 
 /* xoshiro256** (Blackman and Vigna): fast, not for secrets. The thread's

@@ -1,0 +1,75 @@
+// expect: sha384 0: 38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b
+// expect: sha384 3: cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+// expect: sha384 1000: f54480689c6b0b11d0303285d9a81b21a93bca6ba5a1b4472765dca4da45ee328082d469c650cd3b61b16d3266ab8ced
+// expect: hmacSha384: 60638fa0aa4b044fc6f50d5c4a11dd5c26863cd335e3aac16ac6434fc79505dfb05bc3d02a556e271979b41c9379f579
+// expect: hmacSha384 long key: b43d9b641c5b4566ffa375032128130382b21cd30639b529f1748825aa451da98dc91ad6d023bcb2c81849996cbd05a7
+// expect: hmacSha1: 75a48a19d4cbe100644e8ac1397eea747a2d33ab
+// expect: aesBlock 128: 281567ab2f4cf0d73d3198225b8b8393
+// expect: aesBlock 256: d8c95758e3353e530fa52bd10e73b986
+// expect: aesCtr: 63e4b601b11b4edaf2e4f3d595c1294bf988f60e58b266cd4b9e0b60419249f1d2b122950e6cb9f781dab041f10359afc06c449d7e8ca9d29ecfa10a74ff08024efdf79df169c5fa40e1e37e5461dfd6821204007cd43678d8c7e9d899a203092e3e84df
+// expect: aesCtr back: true
+// expect: chacha20: 6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b
+// expect: wiped: 0000000000
+
+import crypto, hex, str
+
+String bytesUpTo(i64 n) {
+    String s
+    for i in 0..n {
+        u8[1] b = [u8(i)]
+        s.append(b[0:1])
+    }
+    return s
+}
+
+void main() {
+    for m in ["", "abc"] {
+        h := crypto.sha384(m)
+        scoped String t = hex.encode(h[0:])
+        print("sha384 {m.len}: {t}")
+    }
+    scoped String thousand = str.repeat("a", 1000)
+    h := crypto.sha384(thousand)
+    scoped String th = hex.encode(h[0:])
+    print("sha384 1000: {th}")
+
+    m1 := crypto.hmacSha384("key", "The quick brown fox")
+    scoped String t1 = hex.encode(m1[0:])
+    print("hmacSha384: {t1}")
+    scoped String longKey = str.repeat("k", 200)
+    m2 := crypto.hmacSha384(longKey, "data")
+    scoped String t2 = hex.encode(m2[0:])
+    print("hmacSha384 long key: {t2}")
+    u8[8] counter = [0, 0, 0, 0, 0, 0, 0, 1]
+    m3 := crypto.hmacSha1("12345678901234567890", counter[0:])
+    scoped String t3 = hex.encode(m3[0:])
+    print("hmacSha1: {t3}")
+
+    scoped String k16 = bytesUpTo(16)
+    scoped String k32 = bytesUpTo(32)
+    b1 := crypto.aesBlock(k16, "0123456789abcdef")
+    scoped String bt1 = hex.encode(b1[0:])
+    print("aesBlock 128: {bt1}")
+    b2 := crypto.aesBlock(k32, "0123456789abcdef")
+    scoped String bt2 = hex.encode(b2[0:])
+    print("aesBlock 256: {bt2}")
+
+    u8[16] iv = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254]
+    scoped String data = bytesUpTo(100)
+    scoped String ct = crypto.aesCtr(k32, iv[0:], data)
+    scoped String ctt = hex.encode(ct)
+    print("aesCtr: {ctt}")
+    scoped String back = crypto.aesCtr(k32, iv[0:], ct)
+    print("aesCtr back: {back == data}")
+
+    scoped String nonce = hex.decode("000000000000004a00000000") catch e { "".copy() }
+    pt := "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    scoped String cc = crypto.chacha20(k32, nonce, pt, counter: 1)
+    scoped String cct = hex.encode(cc[0:32])
+    print("chacha20: {cct}")
+
+    u8[5] secret = [1, 2, 3, 4, 5]
+    crypto.wipe(secret[0:])
+    scoped String w = hex.encode(secret[0:])
+    print("wiped: {w}")
+}

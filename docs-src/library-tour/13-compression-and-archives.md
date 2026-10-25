@@ -60,6 +60,8 @@ hello hello hello
 CompressError.broken
 ```
 
+`compress.crc32(data)` and `compress.adler32(data)` are the checksums gzip and zlib use. `compress.crc32c(data)` is CRC32C, which iSCSI, ext4 and many log formats use, done by the CPU's crc32 instruction where it has one. Each takes the value so far as a second argument, to go on over data that comes in parts.
+
 ## A limit for data from outside
 
 A few kilobytes of compressed data can grow into gigabytes. Decompress data from a client or another service with a `limit`. Anything that would grow past it fails with `CompressError.tooLarge`.

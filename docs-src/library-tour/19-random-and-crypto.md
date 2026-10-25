@@ -107,7 +107,7 @@ void main() {
 matches: true
 ```
 
-`sha512` gives 64 bytes. `sha1` and `md5` are there for older protocols that still use them and are not safe for anything new.
+`sha384` gives 48 bytes and `sha512` 64. `sha1` and `md5` are there for older protocols that still use them and are not safe for anything new.
 
 ## Signing messages with a shared key
 
@@ -239,6 +239,8 @@ CryptoError.tampered
 ```
 
 `aesSeal` and `aesUnseal` do the same with AES-GCM, which many file formats and protocols use. An optional `extra` text, such as a record's id, goes along unencrypted but is checked too. The [library](../std/index.html#crypto) has them, and key agreement with X25519.
+
+Protocols that build their own encryption need the ciphers alone. `aesCtr(key, iv, data)` is AES in counter mode, as SSH's `aes128-ctr` uses, `aesBlock(key, block)` encrypts one 16-byte block, as QUIC's header protection does, and `chacha20(key, nonce, data, counter)` is the ChaCha20 stream. None of them checks that the data wasn't changed, so the protocol adds a MAC: `hmacSha256`, `hmacSha384`, `hmacSha512`, or `hmacSha1` for older ones such as TOTP codes. `wipe(bytes)` overwrites a key with zeros once it is done with, in a way the compiler can't leave out.
 
 ## Signatures
 

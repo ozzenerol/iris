@@ -1,0 +1,23 @@
+// expect: e3069283 00000000 8a9136aa 62a8ab43
+// expect: in pieces: true
+
+import compress, str
+
+String hex8(u32 v) => format("{v:08x}")
+
+void main() {
+    u8[32] zeros
+    u8[32] ones
+    for i in 0..32 {
+        ones[i] = 255
+    }
+    scoped String a = hex8(compress.crc32c("123456789"))
+    scoped String b = hex8(compress.crc32c(""))
+    scoped String c = hex8(compress.crc32c(zeros[0:]))
+    scoped String d = hex8(compress.crc32c(ones[0:]))
+    print("{a} {b} {c} {d}")
+    scoped String long = str.repeat("abcdefghijklmnopqrstuvwxyz", 1000)
+    whole := compress.crc32c(long)
+    first := compress.crc32c(long[0:12345])
+    print("in pieces: {compress.crc32c(long[12345:], first) == whole}")
+}
