@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.74.0</span>
+    <span class="ver">v0.75.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -143,7 +143,7 @@ try {
 405 allowed: GET</code></pre>
 <ul><li>A path that matches no pattern gets 404 with the text <code>not found</code> and a newline, which <code>str.trim</code> removes here.</li><li>A path that exists for other methods gets 405 with an <code>Allow</code> header that lists them.</li><li>When several patterns match, the one with the most fixed parts wins. <code>/users/me</code> goes before <code>/users/:id</code>, whatever order they were added in.</li></ul>
 <h2 id="what-a-request-holds"><a href="#what-a-request-holds">What a request holds</a></h2>
-<div class="table"><table><thead><tr><th>Field or method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>req.method</code></td><td><code>&quot;GET&quot;</code>, <code>&quot;POST&quot;</code>, …</td></tr><tr><td><code>req.path</code></td><td>the path, with its query</td></tr><tr><td><code>req.route()</code></td><td>the path without its query</td></tr><tr><td><code>req.body</code></td><td>the body, as text</td></tr><tr><td><code>req.param(&quot;id&quot;)</code></td><td>a part of the path, from the pattern</td></tr><tr><td><code>req.query(&quot;page&quot;)</code></td><td>a value from the query</td></tr><tr><td><code>req.form(&quot;email&quot;)</code></td><td>a field of a form in the body</td></tr><tr><td><code>req.file(&quot;photo&quot;)</code></td><td>a file sent in a form</td></tr><tr><td><code>req.cookie(&quot;session&quot;)</code></td><td>a cookie the client sent</td></tr><tr><td><code>req.header(&quot;Authorization&quot;)</code></td><td>a header, by its name in any case</td></tr><tr><td><code>req.protocol</code></td><td><code>&quot;HTTP/1.1&quot;</code> or <code>&quot;HTTP/2&quot;</code></td></tr><tr><td><code>req.received</code></td><td>when it came in, by <code>time.clock()</code></td></tr><tr><td><code>req.remote</code></td><td>who sent it, a <code>net.Addr</code>: <code>req.remote.ipText()</code> and <code>req.remote.port</code></td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>Field or method</th><th>What it gives</th></tr></thead><tbody><tr><td><code>req.method</code></td><td><code>&quot;GET&quot;</code>, <code>&quot;POST&quot;</code>, …</td></tr><tr><td><code>req.path</code></td><td>the path, with its query</td></tr><tr><td><code>req.route()</code></td><td>the path without its query</td></tr><tr><td><code>req.body</code></td><td>the body, as text</td></tr><tr><td><code>req.param(&quot;id&quot;)</code></td><td>a part of the path, from the pattern</td></tr><tr><td><code>req.query(&quot;page&quot;)</code></td><td>a value from the query</td></tr><tr><td><code>req.form(&quot;email&quot;)</code></td><td>a field of a form in the body</td></tr><tr><td><code>req.file(&quot;photo&quot;)</code></td><td>a file sent in a form</td></tr><tr><td><code>req.cookie(&quot;session&quot;)</code></td><td>a cookie the client sent</td></tr><tr><td><code>req.header(&quot;Authorization&quot;)</code></td><td>a header, by its name in any case</td></tr><tr><td><code>req.headers()</code></td><td>every header, as a <code>List[http.Header]</code> of <code>name</code> and <code>value</code></td></tr><tr><td><code>req.protocol</code></td><td><code>&quot;HTTP/1.1&quot;</code> or <code>&quot;HTTP/2&quot;</code></td></tr><tr><td><code>req.received</code></td><td>when it came in, by <code>time.clock()</code></td></tr><tr><td><code>req.remote</code></td><td>who sent it, a <code>net.Addr</code>: <code>req.remote.ipText()</code> and <code>req.remote.port</code></td></tr><tr><td><code>req.local</code></td><td>the address it came to, which tells a handler serving several listeners which one</td></tr></tbody></table></div>
 <h2 id="answers"><a href="#answers">Answers</a></h2>
 <ul><li><code>res.text(s)</code> answers with text, <code>res.json(s)</code> with JSON and <code>res.html(s)</code> with HTML. Each sets the <code>Content-Type</code>.</li><li><code>res.send(s, type)</code> answers with any other type, such as <code>text/csv</code>.</li><li>The status is 200 unless <code>res.status</code> sets another.</li><li><code>res.error(status, message)</code> sets the status and answers with <code>{&quot;error&quot;: message}</code>.</li><li><code>res.header(name, value)</code> adds a header. A <code>Content-Type</code> set with <code>header</code> replaces the type of the answer, so there is only ever one.</li></ul>
 <p>A handler can return <code>!void</code>. An error that leaves it is answered with 500 and the error's message, so <code>try</code> works in a handler as anywhere else.</p>
@@ -445,7 +445,7 @@ stopped</code></pre>
 }</code></pre>
 <pre class="out"><code>3 open, up 86400s (application/json)
 HttpError.badUrl: ftp://example.com/: the address should start with http:// or https://</code></pre>
-<p><code>http.get</code> and the other functions open a connection for each request and wait at most 30 seconds for each step. A <code>Client</code> keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its <code>timeout</code> sets how long it waits. Tasks and threads can share one <code>Client</code>.</p>
+<p><code>http.get</code> and the other functions open a connection for each request and wait at most 30 seconds for each step. A <code>Client</code> keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its <code>timeout</code> sets how long it waits for each step, and <code>connectTimeout</code>, when set, how long connecting may take, so a proxy can give up on a server that is down long before it gives up on a slow answer. Tasks and threads can share one <code>Client</code>.</p>
 <pre class="code run"><code><span class="k">import</span> http, net
 
 <span class="t">void</span> <span class="f">ping</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
@@ -480,6 +480,7 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
 1: 200 pong
 2: 200 pong</code></pre>
 <p>Each of them takes <code>headers</code>, the request's own as <code>&quot;Name: value&quot;</code>, such as an <code>Authorization</code>, a <code>Range</code> for part of a file, or a <code>User-Agent</code> in place of iris's: <code>c.get(url, [&quot;Range: bytes=0-1023&quot;])</code>. A header with a line break in it is an error, so a value from outside can't add headers of its own.</p>
+<p>A <code>Reply</code>'s <code>headers()</code> lists every header of the answer. A proxy passes requests on with a <code>Client</code> whose <code>raw</code> is true: the client adds no <code>Accept-Encoding</code> of its own and leaves a gzip body as it came, and a <code>Host</code> among the request's headers goes to the server in place of the one from the URL.</p>
 <h2 id="bodies-a-part-at-a-time"><a href="#bodies-a-part-at-a-time">Bodies a part at a time</a></h2>
 <p><code>c.stream(method, url)</code> gives a <code>ReplyStream</code> as soon as the status and headers have come. <code>read(buf)</code> gives the body a part at a time, so a large download goes to a file without being held whole, and <code>readAll()</code> the rest of it. <code>close()</code> gives the connection back to the <code>Client</code> once the whole body was read. <code>c.begin(method, url, contentType)</code> is the other way round: an <code>Upload</code> to write the body to, a part at a time, sent in chunks unless <code>length</code> gives its size, and <code>finish()</code> gives the reply as a <code>ReplyStream</code>. Both go over HTTP/1.1.</p>
 <p>A handler streams its answer with <code>res.write(data)</code>: the status and headers go with the first part, each part goes out at once, chunked on HTTP/1.1 and as DATA frames on HTTP/2, and the body ends when the handler returns. A client that reads slowly makes <code>write</code> wait, and once it has gone <code>write</code> fails, which is when the handler stops. <code>res.event(data, event, id)</code> sends a server-sent event, which a browser's <code>EventSource</code> gets as one message.</p>
@@ -542,7 +543,7 @@ data: tick 3</code></pre>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.74.0</span>
+    <span>Iris v0.75.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>

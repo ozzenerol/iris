@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.74.0</span>
+    <span class="ver">v0.75.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -335,7 +335,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
 <span class="k">scoped</span> <span class="t">String</span> who = conn.<span class="f">peerSubject</span>()
 <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>conn.<span class="f">serverName</span>()<span class="e">}</span><span class="s"> for </span><span class="e">{</span>who<span class="e">}</span><span class="s">&quot;</span>)</code></pre>
 <h2 id="unix-sockets-and-passing-sockets-on"><a href="#unix-sockets-and-passing-sockets-on">Unix sockets and passing sockets on</a></h2>
-<p><code>listenUnix</code> and <code>dialUnix</code> work like <code>listen</code> and <code>dial</code>, on a path. Over a Unix socket, <code>sendFds</code> sends open file descriptors along with some bytes, and <code>readFds</code> receives them. <code>adoptListener</code> and <code>adoptConn</code> turn a descriptor from elsewhere into a <code>Listener</code> or a <code>Conn</code>. A server uses this to hand its listening sockets to its next version, so a restart drops no connection.</p>
+<p><code>listenUnix</code> and <code>dialUnix</code> work like <code>listen</code> and <code>dial</code>, on a path. Over a Unix socket, <code>sendFds</code> sends open file descriptors along with some bytes, and <code>readFds</code> receives them. <code>adoptListener</code> and <code>adoptConn</code> turn a descriptor from elsewhere into a <code>Listener</code> or a <code>Conn</code>. A server uses this to hand its listening sockets to its next version, so a restart drops no connection. Once the new version accepts, the old one calls <code>interrupt</code> on its listeners: its accepts stop, while the socket stays open for the new version.</p>
 <pre class="code run"><code><span class="k">import</span> fs, net, os
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -406,7 +406,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.74.0</span>
+    <span>Iris v0.75.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
