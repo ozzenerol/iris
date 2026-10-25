@@ -169,6 +169,37 @@ struct Pool {
 
 The second backend has no `"weight"`, so it keeps the default, 1.
 
+## Maps
+
+A `Map` with `str` or `String` keys is a JSON object whose keys aren't known in advance, like the headers a route adds. `decode` fills the map, and a key given twice keeps its last value. `encode` writes the keys in the map's own order, which isn't the order they were added in. The struct's `free` frees the map, its keys and its values. `json.decode(Map[str, T], text)` reads a whole object into a new map.
+
+```iris run
+import json
+
+@json
+struct Route {
+    String prefix
+    Map[str, String] headers
+}
+
+!void main() {
+    scoped Route r = try json.decode(Route, r"""
+        {"prefix": "/api", "headers": {"x-team": "billing", "cache-control": "no-store"}}
+        """)
+    team, _ := r.headers.get("x-team")
+    print("{r.headers.len} headers, x-team is {team}")
+
+    limits := try json.decode(Map[str, i64], r"""{"api": 100, "web": 20}""")
+    print("api {limits.getOr("api", 0)}, web {limits.getOr("web", 0)}")
+    limits.free()
+}
+```
+
+```output
+2 headers, x-team is billing
+api 100, web 20
+```
+
 ## Enums
 
 An enum field is a JSON string that names one of the enum's values. `decode` turns the string back into the value. A slice of an enum is read from an array of strings. A string that names no value is a `wrongType` error.
@@ -278,6 +309,7 @@ JsonError.missing: the required field "request_id" is missing
 - `String` and plain enums
 - other `@json` structs
 - slices, arrays and `List`s of these
+- `Map`s from `str` or `String` keys to these
 
 The fields of an embedded struct appear as fields of the outer one. A `str` field encodes but doesn't decode, because a `str` can't own the text it points to. Decoded text goes in a `String`.
 

@@ -1,0 +1,14 @@
+// error: 8: a Map in JSON needs str or String keys, since JSON keys are text
+
+import json
+
+@json
+struct Counts {
+    Map[str, i64] byName
+    Map[i64, i64] byId
+}
+
+void main() {
+    Counts c
+    scoped s := json.encode(c)
+}

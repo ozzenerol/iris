@@ -1,0 +1,68 @@
+// expect: edge 2 3 two
+// expect: 10 4 5 9
+// expect: g 3 3
+// expect: 10 55 10
+// expect: two 10 2
+// expect: limits.api.rate: expected a number, found a string
+// expect: headers: expected an object, found an array
+// expect: example.com 7 1
+// @json structs hold Maps with str or String keys, read and written as
+// JSON objects; yaml.decode reads them the same way.
+import json, yaml
+
+@json
+struct Limit {
+    i64 rate
+    u8 burst = 4
+}
+
+@json
+struct Config {
+    String name
+    Map[str, String] headers
+    Map[str, Limit] limits
+    Map[String, List[i32]] groups
+    Map[str, u8] small
+}
+
+void main() {
+    text := "{{\"name\":\"edge\",\"headers\":{{\"x-a\":\"1\",\"x-b\":\"two\",\"x-a\":\"3\"}},\"limits\":{{\"api\":{{\"rate\":10}},\"web\":{{\"rate\":5,\"burst\":9}}}},\"groups\":{{\"g\":[1,2,3]}},\"small\":{{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9,\"j\":10}}}}"
+    scoped c := json.decode(Config, text) catch e {
+        print("error: {e.message}")
+        return
+    }
+    a, _ := c.headers.get("x-a")
+    b, _ := c.headers.get("x-b")
+    print("{c.name} {c.headers.len} {a} {b}")
+    api, _ := c.limits.get("api")
+    web, _ := c.limits.get("web")
+    print("{api.rate} {api.burst} {web.rate} {web.burst}")
+    for k, g in c.groups {
+        print("{k} {g.len} {g.at(2)}")
+    }
+    i64 sum = 0
+    for k, v in c.small {
+        sum += i64(v)
+    }
+    print("{c.small.len} {sum} {c.small.getOr("j", 0)}")
+    scoped out := json.encode(c)
+    scoped back := json.decode(Config, out) catch e {
+        print("error: {e.message}")
+        return
+    }
+    b2, _ := back.headers.get("x-b")
+    print("{b2} {back.small.len} {back.limits.len}")
+    for bad in ["{{\"limits\":{{\"api\":{{\"rate\":\"x\"}}}}}}", "{{\"headers\":[1]}}"] {
+        scoped x := json.decode(Config, bad) catch e {
+            print(e.message)
+            continue
+        }
+    }
+    scoped y := yaml.decode[Config]("name: y\nheaders:\n  host: example.com\n  x-id: \"7\"\nlimits:\n  a:\n    rate: 1\n") catch e {
+        print("error: {e.message}")
+        return
+    }
+    h, _ := y.headers.get("host")
+    id, _ := y.headers.get("x-id")
+    print("{h} {id} {y.limits.len}")
+}
