@@ -1,5 +1,7 @@
 // Running other programs.
 
+import net
+
 // What run fails with: notFound for a program that isn't there, failed when it
 // can't be started.
 pub enum ProcessError { notFound, failed }
@@ -59,12 +61,88 @@ void rawSignal(i64 pid, i32 kill9)
 @extern("iris_process_release")
 void rawRelease(i32 handle)
 
-// A program that start runs beside this one. pid is its process id.
+// A program that start runs beside this one. pid is its process id, and
+// with Options.pipes, stdin, stdout and stderr are the other ends of its
+// standard input, output and error.
 pub struct Child {
     pub i64 pid
     i32 handle
     bool ended
     i32 status
+    pub net.Conn stdin
+    pub net.Conn stdout
+    pub net.Conn stderr
+}
+
+// How startWith starts a program. Each field's zero value is what start
+// does.
+pub struct Options {
+    // descriptors the program gets as 3, 4 and so on
+    pub i32[] keep
+    // NAME=value entries that replace or add to this program's environment,
+    // or are the whole of it with cleanEnv
+    pub str[] env
+    pub bool cleanEnv
+    // the folder it starts in
+    pub str dir
+    // its argv[0], when it isn't argv's first: "-bash" starts a login shell
+    pub str argv0
+    // its standard input, output and error as Conns on the Child
+    pub bool pipes
+    // a session and process group of its own, as a daemon or a job has
+    pub bool newSession
+    // the user it runs as, in that user's groups (root only)
+    pub str user
+    // a pty's terminalFd(): its standard input, output and error and its
+    // controlling terminal, in a session of its own (-1, the start, none)
+    pub i32 terminal = -1
+}
+
+@extern("iris_process_spawn")
+i32 rawSpawn(str *argv, i64 argc, i32 *keep, i64 nkeep, str *env, i64 nenv, i32 cleanEnv, u8 *dir, i64 dirLen,
+    u8 *argv0, i64 argv0Len, i32 pipes, i32 newSession, u8 *user, i64 userLen, i32 terminal, i64 *pid, i32 *handle,
+    i32 *io)
+
+// Starts argv[0] as start does, set up as o says: in a folder, with an
+// environment, as another user, on a terminal, with its standard streams
+// as connections to read and write.
+pub !Child startWith(str[] argv, Options o) {
+    if argv.len == 0 {
+        return error(ProcessError.notFound, "startWith needs the program's name")
+    }
+    if o.keep.len > 256 {
+        return error(ProcessError.failed, "{argv[0]}: at most 256 descriptors can be kept")
+    }
+    Child c
+    i32[3] io
+    code := rawSpawn(argv.ptr, argv.len, o.keep.ptr, o.keep.len, o.env.ptr, o.env.len, if o.cleanEnv { 1 } else { 0 },
+        o.dir.ptr, o.dir.len, o.argv0.ptr, o.argv0.len, if o.pipes { 1 } else { 0 }, if o.newSession { 1 } else { 0 },
+        o.user.ptr, o.user.len, o.terminal, &c.pid, &c.handle, &io[0])
+    if code == 1 {
+        return error(ProcessError.notFound, "{argv[0]}: no such program")
+    }
+    if code == 3 {
+        return error(ProcessError.failed, "{argv[0]}: no user {o.user}")
+    }
+    if code != 0 {
+        return error(ProcessError.failed, "{argv[0]}: can't be started")
+    }
+    if o.pipes {
+        c.stdin = try net.adoptConn(io[0])
+        c.stdout = try net.adoptConn(io[1])
+        c.stderr = try net.adoptConn(io[2])
+    }
+    return c
+}
+
+// Closes the connections to the program's standard streams that pipes
+// made; wait doesn't close them.
+pub void Child.closePipes() {
+    for c in [&self.stdin, &self.stdout, &self.stderr] {
+        if c.fd() > 0 {
+            c.close()
+        }
+    }
 }
 
 // Starts argv[0] with the arguments that follow, as run does, and doesn't

@@ -200,6 +200,71 @@ import net, os, process
 
 Connections that wait to be accepted stay in the socket's queue while the versions change, so none is refused. `os.arg(0)` is the program's own path. `iris run` deletes the program it built once the program starts, so a program that starts itself has to be built.
 
+`process.startWith(argv, options)` starts a program set up as a `process.Options` says. Each field left out is as `start` has it.
+
+- `env` holds `NAME=value` entries that replace or add to this program's environment, and with `cleanEnv` they are the whole of it.
+- `dir` is the folder it starts in, and `argv0` its `argv[0]`: `-bash` starts a login shell.
+- `pipes` makes its standard input, output and error connections on the `Child`, `stdin`, `stdout` and `stderr`, which this program writes and reads like any `net.Conn`. `closePipes` closes them.
+- `newSession` puts it in a session and process group of its own, so `signal.sendGroup(child.pid, s)` reaches it and everything it starts.
+- `user` runs it as another user, in that user's groups; only root may.
+- `keep` hands it descriptors, as with `start`.
+
+```iris run
+import process, str
+
+!void main() {
+    c := try process.startWith(["tr", "a-z", "A-Z"], process.Options{pipes: true, env: ["LC_ALL=C"]})
+    try c.stdin.write("shout this\n")
+    try c.stdin.closeWrite()
+    scoped String out = try c.stdout.readAll()
+    print(str.trim(out))
+    print("status {c.wait()}")
+    c.closePipes()
+}
+```
+
+```output
+SHOUT THIS
+status 0
+```
+
+## Programs on a terminal
+
+A shell, an editor or `top` wants a terminal, not pipes. `pty.open(rows, cols)` makes a pseudo-terminal: a terminal side for the program and this side, which reads what the program writes and writes what it reads, as an SSH server or a terminal emulator does. `Options.terminal` takes `terminalFd()`, and the program then has the terminal as its standard input, output and error and as its controlling terminal, in a session of its own. Once it has started, `closeTerminal()` closes this program's copy, so `read` gives 0 when the program and everything it started have closed it.
+
+```iris run
+import process, pty, str
+
+!void main() {
+    t := try pty.open(rows: 24, cols: 80)
+    defer t.close()
+    child := try process.startWith(["sh", "-c", "stty size; tty > /dev/null && echo on a terminal"], process.Options{terminal: t.terminalFd()})
+    t.closeTerminal()
+
+    String all
+    defer all.free()
+    u8[256] buf
+    for {
+        n := try t.read(buf[:])
+        if n == 0 {
+            break
+        }
+        all.append(buf[0:n])
+    }
+    _ = child.wait()
+    for line in str.lines(str.trim(all)) {
+        print(str.trim(line))
+    }
+}
+```
+
+```output
+24 80
+on a terminal
+```
+
+`write` sends what the program reads, as if typed: `"\x03"` is Ctrl-C. `resize(rows, cols)` changes the size, and the program gets `windowChange`. `setFlag(.echo, false)` and the other `pty.Flag`s set termios's flags, and `setChar(.interrupt, 3)` the characters with a meaning, which is what SSH's terminal modes carry. `setSpeed(baud)` sets the speed for programs that ask.
+
 ## Running as another user
 
 A server that listens on a port below 1024 starts as root, binds its ports, and then gives up root with `os.runAs(user)`. From then on every thread of the program runs as that user, in its groups and its own group, or in `group` when one is given. The program can't become root again, and on Linux it also loses every capability. The sockets it already has keep working.

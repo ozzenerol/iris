@@ -1,0 +1,191 @@
+// Pseudo-terminals: a terminal for a program to run on, such as a shell,
+// whose other side this program reads and writes, as an SSH server or a
+// terminal emulator does. process.startWith runs the program on it.
+
+// What the calls fail with: unsupported for a setting this system lacks.
+pub enum PtyError { failed, unsupported }
+
+@extern("iris_pty_open")
+i32 rawOpen(i32 rows, i32 cols, i32 *master, i32 *terminal, String *name)
+
+@extern("iris_pty_read")
+i64 rawRead(i32 fd, u8 *buf, i64 len)
+
+@extern("iris_pty_write")
+i32 rawWrite(i32 fd, u8 *data, i64 len)
+
+@extern("iris_pty_resize")
+i32 rawResize(i32 fd, i32 rows, i32 cols, i32 xpixel, i32 ypixel)
+
+@extern("iris_pty_set")
+i32 rawSet(i32 fd, i32 op, i32 which, i64 value)
+
+@extern("iris_net_close")
+void rawClose(i32 fd)
+
+@extern("iris_errno_text")
+void rawErrnoText(i32 e, String *out)
+
+// A pseudo-terminal: this side reads what the program writes and writes
+// what it reads. name is the terminal's path, such as /dev/pts/3.
+pub struct Pty {
+    i32 master
+    i32 terminal
+    pub String name
+}
+
+// The terminal's settings that SSH's terminal modes carry, for setFlag:
+// input (ignpar to iutf8), local (isig to pendin), output (opost to
+// onlret) and control (cs7 to parodd) flags of termios.
+pub enum Flag {
+    ignpar, parmrk, inpck, istrip, inlcr, igncr, icrnl, iuclc, ixon, ixany, ixoff, imaxbel, iutf8,
+    isig, icanon, xcase, echo, echoe, echok, echonl, noflsh, tostop, iexten, echoctl, echoke, pendin,
+    opost, olcuc, onlcr, ocrnl, onocr, onlret,
+    cs7, cs8, parenb, parodd
+}
+
+// The characters with a meaning, for setChar: interrupt is Ctrl-C (VINTR),
+// erase the backspace, eof Ctrl-D, suspend Ctrl-Z, and so on; min and time
+// are VMIN and VTIME of a terminal that isn't canonical.
+pub enum Char {
+    interrupt, quit, erase, kill, eof, eol, eol2, start, stop, suspend, delayedSuspend, reprint,
+    wordErase, literalNext, discard, status, min, time
+}
+
+i32 flagCode(Flag f) => match f {
+    .ignpar => 0
+    .parmrk => 1
+    .inpck => 2
+    .istrip => 3
+    .inlcr => 4
+    .igncr => 5
+    .icrnl => 6
+    .iuclc => 7
+    .ixon => 8
+    .ixany => 9
+    .ixoff => 10
+    .imaxbel => 11
+    .iutf8 => 12
+    .isig => 13
+    .icanon => 14
+    .xcase => 15
+    .echo => 16
+    .echoe => 17
+    .echok => 18
+    .echonl => 19
+    .noflsh => 20
+    .tostop => 21
+    .iexten => 22
+    .echoctl => 23
+    .echoke => 24
+    .pendin => 25
+    .opost => 26
+    .olcuc => 27
+    .onlcr => 28
+    .ocrnl => 29
+    .onocr => 30
+    .onlret => 31
+    .cs7 => 32
+    .cs8 => 33
+    .parenb => 34
+    .parodd => 35
+}
+
+i32 charCode(Char c) => match c {
+    .interrupt => 0
+    .quit => 1
+    .erase => 2
+    .kill => 3
+    .eof => 4
+    .eol => 5
+    .eol2 => 6
+    .start => 7
+    .stop => 8
+    .suspend => 9
+    .delayedSuspend => 10
+    .reprint => 11
+    .wordErase => 12
+    .literalNext => 13
+    .discard => 14
+    .status => 15
+    .min => 16
+    .time => 17
+}
+
+!void fail(i32 e, str what) {
+    if e == 0 {
+        return
+    }
+    if e == -1 {
+        return error(PtyError.unsupported, "{what}: not on this system")
+    }
+    scoped String text
+    rawErrnoText(e, &text)
+    return error(PtyError.failed, "{what}: {text}")
+}
+
+// A new pseudo-terminal of rows lines and cols columns.
+pub !Pty open(i64 rows = 24, i64 cols = 80) {
+    Pty p
+    try fail(rawOpen(i32(rows), i32(cols), &p.master, &p.terminal, &p.name), "opening a pseudo-terminal")
+    return p
+}
+
+// The terminal side's descriptor, for process.Options.terminal.
+pub i32 Pty.terminalFd() => self.terminal
+
+// Closes this program's copy of the terminal side, once the program that
+// runs on it has started: read then gives 0 when that program, and all it
+// started, have closed it.
+pub void Pty.closeTerminal() {
+    if self.terminal >= 0 {
+        rawClose(self.terminal)
+        self.terminal = -1
+    }
+}
+
+// Reads what the program wrote into buf: how many bytes, 0 when it has
+// closed the terminal. The other tasks run while it waits.
+pub !i64 Pty.read(u8[] buf) {
+    n := rawRead(self.master, buf.ptr, buf.len)
+    if n < 0 {
+        try fail(i32(-n), "reading the terminal")
+    }
+    return n
+}
+
+// Writes data for the program to read, as if typed: "\x03" is Ctrl-C when
+// the program's terminal has isig on.
+pub !void Pty.write(str data) => try fail(rawWrite(self.master, data.ptr, data.len), "writing to the terminal")
+
+// Sets the terminal's size; the program gets windowChange (SIGWINCH).
+pub !void Pty.resize(i64 rows, i64 cols, i64 pixelWidth = 0, i64 pixelHeight = 0) {
+    try fail(rawResize(self.master, i32(rows), i32(cols), i32(pixelWidth), i32(pixelHeight)), "resizing the terminal")
+}
+
+i32 Pty.settingsFd() => if self.terminal >= 0 { self.terminal } else { self.master }
+
+// Turns a termios flag of the terminal on or off: setFlag(.echo, false)
+// stops it echoing what is typed, as for a password.
+pub !void Pty.setFlag(Flag f, bool on) {
+    try fail(rawSet(self.settingsFd(), 0, flagCode(f), if on { 1 } else { 0 }), "setting {f}")
+}
+
+// Sets a character with a meaning: setChar(.interrupt, 3) makes Ctrl-C
+// send interrupt.
+pub !void Pty.setChar(Char c, u8 value) {
+    try fail(rawSet(self.settingsFd(), 1, charCode(c), i64(value)), "setting {c}")
+}
+
+// Sets the terminal's speed in baud, for programs that ask.
+pub !void Pty.setSpeed(i64 baud) => try fail(rawSet(self.settingsFd(), 2, 0, baud), "setting the speed {baud}")
+
+// Closes the pseudo-terminal, both sides this program holds.
+pub void Pty.close() {
+    self.closeTerminal()
+    if self.master >= 0 {
+        rawClose(self.master)
+        self.master = -1
+    }
+    self.name.free()
+}

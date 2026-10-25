@@ -173,6 +173,25 @@ request 4 502
 }</code></pre>
 <pre class="out"><code>4 bytes: 137 80 78 71
 17 bytes in all</code></pre>
+<h2 id="reading-and-writing-in-place"><a href="#reading-and-writing-in-place">Reading and writing in place</a></h2>
+<p><code>fs.openReadWrite(path)</code> opens a file for both, as it is, making it when it isn't there. <code>readAt(buf, offset)</code> and <code>writeAt(data, offset)</code> work at any offset without moving the file's position, so tasks can share one open file, as a database or a download with many pieces does. Writing past the end grows the file, and the gap reads as zeros. <code>seek(offset)</code> moves the position that <code>read</code> and <code>write</code> use.</p>
+<pre class="code run"><code><span class="k">import</span> fs
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    path := <span class="s">&quot;/tmp/iris-tour-pieces.bin&quot;</span>
+    f := <span class="k">try</span> fs.<span class="f">openReadWrite</span>(path)
+    <span class="k">defer</span> f.<span class="f">close</span>()
+
+    <span class="k">try</span> f.<span class="f">writeAt</span>(<span class="s">&quot;second&quot;</span>, <span class="n">6</span>)
+    <span class="k">try</span> f.<span class="f">writeAt</span>(<span class="s">&quot;first &quot;</span>, <span class="n">0</span>)
+    <span class="t">u8</span>[<span class="n">12</span>] buf
+    n := <span class="k">try</span> f.<span class="f">readAt</span>(buf[:], <span class="n">0</span>)
+    <span class="f">print</span>(buf[<span class="n">0</span>:n])
+    <span class="k">try</span> fs.<span class="f">remove</span>(path)
+}</code></pre>
+<pre class="out"><code>first second</code></pre>
+<p><code>truncate(size)</code> cuts the file or grows it with zeros, and <code>allocate(offset, size)</code> sets aside room on the disk, so writing there later can't fail for lack of space. A disk that is full fails with <code>FsError.full</code>.</p>
+<p>A write is first kept in memory and reaches the disk later. <code>sync()</code> returns once the data and the file's size and times are on the disk, so they survive a crash or a power cut. <code>syncData()</code> is enough when only the data matters, as for a log written in place. A file made or renamed in a folder survives a crash only once the folder is synced too, with <code>fs.syncDir(dir)</code>: a program that replaces a file safely writes a new one, syncs it, renames it over the old one and syncs the folder.</p>
 <h2 id="information-about-a-file"><a href="#information-about-a-file">Information about a file</a></h2>
 <p><code>fs.stat(path)</code> gives an <code>fs.Info</code> with the size in bytes, whether the path is a folder, and the time it last changed as a <code>time.Time</code>:</p>
 <pre class="code run"><code><span class="k">import</span> fs
@@ -191,6 +210,9 @@ request 4 502
 }</code></pre>
 <pre class="out"><code>5 bytes, a folder: false
 /tmp is a folder: true</code></pre>
+<p><code>Info</code> also has <code>accessed</code>, the time the file was last read, <code>mode</code> with the permission bits, <code>uid</code> and <code>gid</code> for the owner and the group, <code>links</code>, how many names the file has, and <code>inode</code>. <code>fs.stat</code> follows a symbolic link to what it points to, and <code>fs.lstat</code> tells about the link itself, with <code>isLink</code> set. <code>File.info()</code> gives the same for an open file.</p>
+<p><code>fs.chmod(path, 0o600)</code> sets the permission bits, here read and write for the owner alone, as a file holding keys needs. <code>fs.chown(path, uid, gid)</code> gives a file to another user and group; only root may do it. <code>fs.setTimes(path, accessed, modified)</code> sets its times.</p>
+<p><code>fs.symlink(target, path)</code> makes a symbolic link, <code>fs.readLink(path)</code> says where one points, and <code>fs.link(existing, path)</code> gives a file a second name on the same file system. <code>fs.realPath(path)</code> is the absolute path with every link, <code>.</code> and <code>..</code> resolved. <code>fs.space(path)</code> gives the <code>total</code>, <code>free</code> and <code>available</code> bytes of the file system the path is on.</p>
 <h2 id="moving-and-removing"><a href="#moving-and-removing">Moving and removing</a></h2>
 <ul><li><code>fs.rename(from, to)</code> moves or renames a file or folder.</li><li><code>fs.remove(path)</code> removes a file or an empty folder.</li><li><code>fs.removeAll(path)</code> removes a folder and everything in it. A missing path is no error.</li></ul>
 <pre class="code run"><code><span class="k">import</span> fs
@@ -406,7 +428,7 @@ OsError.notFound</code></pre>
     <nav class="pager"><a class="prev" href="01-json.html"><span>Previous</span>JSON</a><a class="next" href="03-time.html"><span>Next</span>Time</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#finding-files-by-name">Finding files by name</a></li><li><a href="#temporary-files-and-copies">Temporary files and copies</a></li><li><a href="#paths">Paths</a></li><li><a href="#the-working-folder">The working folder</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#reading-and-writing-in-place">Reading and writing in place</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#finding-files-by-name">Finding files by name</a></li><li><a href="#temporary-files-and-copies">Temporary files and copies</a></li><li><a href="#paths">Paths</a></li><li><a href="#the-working-folder">The working folder</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

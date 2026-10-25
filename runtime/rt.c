@@ -7376,6 +7376,372 @@ int iris_process_start(const Slice *argv, int64_t argc, const int *keep, int64_t
     return 0;
 }
 
+/* The executable for name: itself when it has a /, else the first one on
+   path (a PATH value); NULL when there is none. */
+static char *findProgram(const char *name, const char *path) {
+    if (strchr(name, '/')) return strdup(name);
+    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+    char buf[PATH_MAX];
+    while (*path) {
+        const char *end = strchr(path, ':');
+        size_t len = end ? (size_t)(end - path) : strlen(path);
+        int n = snprintf(buf, sizeof buf, "%.*s%s%s", (int)len, path, len ? "/" : "", name);
+        if (n > 0 && n < (int)sizeof buf && access(buf, X_OK) == 0) {
+            struct stat st;
+            if (stat(buf, &st) == 0 && S_ISREG(st.st_mode)) return strdup(buf);
+        }
+        if (!end) break;
+        path = end + 1;
+    }
+    return NULL;
+}
+
+/* process.startWith: argv with the options set. env holds NAME=value
+   entries that replace or add to this program's environment, or are the
+   whole of it with cleanEnv. user, when not empty, is who it runs as (its
+   groups, its group, then it). terminal, when not -1, is a pty's terminal
+   side: the program gets it as 0, 1 and 2 and as its controlling terminal,
+   in a session of its own. pipes gives *io three sockets, the other ends
+   of its standard input, output and error. 0, 1 not found, 2 can't start,
+   3 no such user. */
+int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t nkeep, const Slice *env,
+                       int64_t nenv, int cleanEnv, const char *dir, int64_t dirLen, const char *argv0,
+                       int64_t argv0Len, int pipes, int newSession, const char *user, int64_t userLen,
+                       int terminal, int64_t *pid, int *handle, int *io) {
+    if (argc < 1) return 1;
+    /* the environment: this one's, with env's entries replacing those of
+       the same name, or env alone */
+    int64_t cap = nenv + 1;
+    int64_t have = 0;
+    if (!cleanEnv) {
+        for (char **e = environ; *e; e++) cap++;
+    }
+    char **envp = calloc((size_t)cap + 1, sizeof(char *));
+    if (!envp) outOfMemory();
+    if (!cleanEnv) {
+        for (char **e = environ; *e; e++) {
+            const char *eq = strchr(*e, '=');
+            size_t nl = eq ? (size_t)(eq - *e) : strlen(*e);
+            bool replaced = false;
+            for (int64_t i = 0; i < nenv && !replaced; i++) {
+                const char *q = memchr(env[i].ptr, '=', (size_t)env[i].len);
+                size_t il = q ? (size_t)(q - (const char *)env[i].ptr) : (size_t)env[i].len;
+                replaced = il == nl && memcmp(env[i].ptr, *e, nl) == 0;
+            }
+            if (!replaced) envp[have++] = strdup(*e);
+        }
+    }
+    const char *pathVar = getenv("PATH");
+    for (int64_t i = 0; i < nenv; i++) {
+        envp[have] = cpath(env[i].ptr, env[i].len);
+        if (envp[have] && strncmp(envp[have], "PATH=", 5) == 0) pathVar = envp[have] + 5;
+        have++;
+    }
+    char **args = calloc((size_t)argc + 1, sizeof(char *));
+    if (!args) outOfMemory();
+    for (int64_t i = 0; i < argc; i++) args[i] = cpath(argv[i].ptr, argv[i].len);
+    char *prog = findProgram(args[0], pathVar);
+    if (argv0Len > 0) {
+        free(args[0]);
+        args[0] = cpath(argv0, argv0Len);
+    }
+    char *wd = dirLen > 0 ? cpath(dir, dirLen) : NULL;
+    int code = 0;
+    uid_t uid = 0;
+    gid_t gid = 0;
+    gid_t groups[512];
+    int ngroups = 0;
+    if (userLen > 0) {
+        char *u = cpath(user, userLen);
+        char buf[16384];
+        struct passwd pw, *pwp = NULL;
+        if (u && getpwnam_r(u, &pw, buf, sizeof buf, &pwp) == 0 && pwp) {
+            uid = pw.pw_uid;
+            gid = pw.pw_gid;
+            ngroups = 512;
+#ifdef __APPLE__
+            getgrouplist(u, (int)gid, (int *)groups, &ngroups);
+#else
+            getgrouplist(u, gid, groups, &ngroups);
+#endif
+            if (ngroups > 512) ngroups = 512;
+        } else {
+            code = 3;
+        }
+        free(u);
+    }
+    if (!prog && !code) code = 1;
+    int sv[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+    int execP[2] = {-1, -1};
+    if (!code && pipes) {
+        for (int i = 0; i < 3 && !code; i++) {
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv[i]) != 0) code = 2;
+        }
+    }
+    if (!code && pipe(execP) != 0) code = 2;
+    pid_t p = -1;
+    if (!code) {
+        fcntl(execP[0], F_SETFD, FD_CLOEXEC);
+        fcntl(execP[1], F_SETFD, FD_CLOEXEC);
+        fflush(stdout);
+        fflush(stderr);
+        p = fork();
+        if (p == 0) {
+            if (newSession || terminal >= 0) setsid();
+            if (terminal >= 0) {
+                ioctl(terminal, TIOCSCTTY, 0);
+                for (int i = 0; i < 3; i++) dup2(terminal, i);
+            } else if (pipes) {
+                for (int i = 0; i < 3; i++) dup2(sv[i][1], i);
+            }
+            /* the kept descriptors go out of the way first, then to 3 + i */
+            int base = 3 + (int)nkeep + 1;
+            for (int64_t i = 0; i < nkeep; i++) {
+                if (keep[i] >= base) base = keep[i] + 1;
+            }
+            int moved[256];
+            for (int64_t i = 0; i < nkeep && i < 256; i++) moved[i] = fcntl(keep[i], F_DUPFD, base);
+            for (int64_t i = 0; i < nkeep && i < 256; i++) {
+                if (moved[i] < 0 || dup2(moved[i], 3 + (int)i) < 0) _exit(126);
+                close(moved[i]);
+            }
+            sigset_t none;
+            sigemptyset(&none);
+            sigprocmask(SIG_SETMASK, &none, NULL);
+            int e = 0;
+            if (userLen > 0 && (setgroups((size_t)ngroups, groups) != 0 || setgid(gid) != 0 || setuid(uid) != 0)) {
+                e = errno ? errno : EPERM;
+            }
+            if (!e && wd && chdir(wd) != 0) e = errno;
+            if (!e) {
+                execve(prog, args, envp);
+                e = errno;
+            }
+            ssize_t w = write(execP[1], &e, sizeof e);
+            (void)w;
+            _exit(127);
+        }
+        if (p < 0) code = 2;
+    }
+    if (execP[1] >= 0) close(execP[1]);
+    for (int i = 0; i < 3; i++) {
+        if (sv[i][1] >= 0) close(sv[i][1]);
+    }
+    if (!code) {
+        int execErr = 0;
+        ssize_t got = read(execP[0], &execErr, sizeof execErr);
+        if (got == (ssize_t)sizeof execErr) {
+            waitpid(p, NULL, 0);
+            code = execErr == ENOENT ? 1 : 2;
+        }
+    }
+    if (execP[0] >= 0) close(execP[0]);
+    if (!code) {
+        *pid = p;
+        *handle = -1;
+#ifdef __linux__
+        int h = (int)syscall(434 /* pidfd_open */, p, 0);
+        if (h >= 0) {
+            fcntl(h, F_SETFD, FD_CLOEXEC);
+            *handle = h;
+        }
+#endif
+        for (int i = 0; i < 3; i++) {
+            io[i] = -1;
+            if (pipes) {
+                fcntl(sv[i][0], F_SETFD, FD_CLOEXEC);
+                nonBlocking(sv[i][0]);
+                fdForget(sv[i][0]);
+                io[i] = sv[i][0];
+            }
+        }
+    } else {
+        for (int i = 0; i < 3; i++) {
+            if (sv[i][0] >= 0) close(sv[i][0]);
+        }
+    }
+    for (int64_t i = 0; i < have; i++) free(envp[i]);
+    free(envp);
+    for (int64_t i = 0; i < argc; i++) free(args[i]);
+    free(args);
+    free(prog);
+    free(wd);
+    return code;
+}
+
+/* ---------------------------------------------------------------- pseudo-terminals
+
+   A pty is a pair: the program side, which a shell runs on as its
+   terminal, and this side (the master), which reads what the program
+   writes and writes what it reads, as an SSH server or terminal emulator
+   does. The master doesn't block: reads and writes wait in the event loop. */
+
+int iris_pty_open(int rows, int cols, int *master, int *terminal, IrisString *name) {
+    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0) return errno;
+    if (grantpt(m) != 0 || unlockpt(m) != 0) {
+        int e = errno;
+        close(m);
+        return e;
+    }
+    char path[256];
+#ifdef __linux__
+    if (ptsname_r(m, path, sizeof path) != 0) {
+        int e = errno;
+        close(m);
+        return e;
+    }
+#else
+    const char *pn = ptsname(m);
+    if (!pn) {
+        close(m);
+        return ENOTTY;
+    }
+    snprintf(path, sizeof path, "%s", pn);
+#endif
+    int t = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (t < 0) {
+        int e = errno;
+        close(m);
+        return e;
+    }
+    fcntl(m, F_SETFD, FD_CLOEXEC);
+    struct winsize ws = {(unsigned short)rows, (unsigned short)cols, 0, 0};
+    ioctl(m, TIOCSWINSZ, &ws);
+    nonBlocking(m);
+    fdForget(m);
+    *master = m;
+    *terminal = t;
+    iris_string_append(name, path, (int64_t)strlen(path));
+    return 0;
+}
+
+/* What the program wrote: bytes read, 0 once it closed its terminal side,
+   or -errno. */
+int64_t iris_pty_read(int fd, char *buf, int64_t len) {
+    for (;;) {
+        ssize_t n = read(fd, buf, (size_t)len);
+        if (n >= 0) return n;
+        if (errno == EIO) return 0;     /* Linux: every program side is closed */
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            waitFd(fd, 0);
+            continue;
+        }
+        return -errno;
+    }
+}
+
+int iris_pty_write(int fd, const char *data, int64_t len) {
+    while (len > 0) {
+        ssize_t n = write(fd, data, (size_t)len);
+        if (n > 0) {
+            data += n;
+            len -= n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            waitFd(fd, 1);
+            continue;
+        }
+        return n < 0 ? errno : EIO;
+    }
+    return 0;
+}
+
+int iris_pty_resize(int fd, int rows, int cols, int xpixel, int ypixel) {
+    struct winsize ws = {(unsigned short)rows, (unsigned short)cols, (unsigned short)xpixel, (unsigned short)ypixel};
+    return ioctl(fd, TIOCSWINSZ, &ws) == 0 ? 0 : errno;
+}
+
+/* The terminal's settings, by the case numbers of pty.Flag and pty.Char:
+   which flag set (0 input, 1 output, 2 control, 3 local) and its bit. */
+static const struct { int set; tcflag_t bit; } ptyFlags[] = {
+    {0, IGNPAR}, {0, PARMRK}, {0, INPCK}, {0, ISTRIP}, {0, INLCR}, {0, IGNCR}, {0, ICRNL},
+#ifdef IUCLC
+    {0, IUCLC},
+#else
+    {0, 0},
+#endif
+    {0, IXON}, {0, IXANY}, {0, IXOFF}, {0, IMAXBEL},
+#ifdef IUTF8
+    {0, IUTF8},
+#else
+    {0, 0},
+#endif
+    {3, ISIG}, {3, ICANON},
+#ifdef XCASE
+    {3, XCASE},
+#else
+    {3, 0},
+#endif
+    {3, ECHO}, {3, ECHOE}, {3, ECHOK}, {3, ECHONL}, {3, NOFLSH}, {3, TOSTOP}, {3, IEXTEN}, {3, ECHOCTL},
+    {3, ECHOKE}, {3, PENDIN}, {1, OPOST},
+#ifdef OLCUC
+    {1, OLCUC},
+#else
+    {1, 0},
+#endif
+    {1, ONLCR}, {1, OCRNL}, {1, ONOCR}, {1, ONLRET}, {2, CS7}, {2, CS8}, {2, PARENB}, {2, PARODD},
+};
+
+static const int ptyChars[] = {VINTR, VQUIT, VERASE, VKILL, VEOF, VEOL, VEOL2, VSTART, VSTOP, VSUSP,
+#ifdef VDSUSP
+                               VDSUSP,
+#else
+                               -1,
+#endif
+                               VREPRINT, VWERASE, VLNEXT,
+#ifdef VDISCARD
+                               VDISCARD,
+#else
+                               -1,
+#endif
+#ifdef VSTATUS
+                               VSTATUS,
+#else
+                               -1,
+#endif
+                               VMIN, VTIME};
+
+/* op 0 a flag (which, on), 1 a control character (which, value), 2 the
+   speed (value, in and out): 0, errno, or -1 when this system has none. */
+int iris_pty_set(int fd, int op, int which, int64_t value) {
+    struct termios t;
+    if (tcgetattr(fd, &t) != 0) return errno;
+    if (op == 0) {
+        if (which < 0 || which >= (int)(sizeof ptyFlags / sizeof ptyFlags[0]) || !ptyFlags[which].bit) return -1;
+        tcflag_t *set = ptyFlags[which].set == 0 ? &t.c_iflag : ptyFlags[which].set == 1 ? &t.c_oflag
+                       : ptyFlags[which].set == 2 ? &t.c_cflag : &t.c_lflag;
+        if (ptyFlags[which].set == 2 && (ptyFlags[which].bit == CS7 || ptyFlags[which].bit == CS8)) {
+            *set &= ~(tcflag_t)CSIZE;
+            if (value) *set |= ptyFlags[which].bit;
+        } else if (value) {
+            *set |= ptyFlags[which].bit;
+        } else {
+            *set &= ~ptyFlags[which].bit;
+        }
+    } else if (op == 1) {
+        if (which < 0 || which >= (int)(sizeof ptyChars / sizeof ptyChars[0]) || ptyChars[which] < 0) return -1;
+        t.c_cc[ptyChars[which]] = (cc_t)value;
+    } else {
+        speed_t sp = (speed_t)value;
+#ifdef __linux__
+        static const struct { int64_t baud; speed_t code; } speeds[] = {
+            {0, B0}, {50, B50}, {75, B75}, {110, B110}, {134, B134}, {150, B150}, {200, B200}, {300, B300},
+            {600, B600}, {1200, B1200}, {1800, B1800}, {2400, B2400}, {4800, B4800}, {9600, B9600},
+            {19200, B19200}, {38400, B38400}, {57600, B57600}, {115200, B115200}, {230400, B230400}};
+        sp = (speed_t)-1;
+        for (size_t i = 0; i < sizeof speeds / sizeof speeds[0]; i++) {
+            if (speeds[i].baud == value) sp = speeds[i].code;
+        }
+        if (sp == (speed_t)-1) return -1;
+#endif
+        cfsetispeed(&t, sp);
+        cfsetospeed(&t, sp);
+    }
+    return tcsetattr(fd, TCSANOW, &t) == 0 ? 0 : errno;
+}
+
 /* Whether a started program ended: 1 with *status (its exit status, or
    128 + the signal), 0 while it runs. */
 int iris_process_poll(int64_t pid, int *status) {

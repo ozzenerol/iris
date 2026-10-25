@@ -1,0 +1,81 @@
+// expect: env and dir: from-iris /
+// expect: clean env: [ONLY=1]
+// expect: argv0: -iris-name
+// expect: pipes: HELLO | err: oops | status 0
+// expect: own session: true
+// expect: ProcessError.failed: id: no user no-such-user-iris
+// expect: on a terminal: tty yes, echo off: true, size 30 100
+// expect: Ctrl-C ended it: 130
+
+import os, process, pty, str
+
+!String readAll(process.Child *c) {
+    scoped String out = try c.stdout.readAll()
+    return str.trim(out).copy()
+}
+
+!void main() {
+    a := try process.startWith(["sh", "-c", "echo $IRIS_X $(pwd)"], process.Options{env: ["IRIS_X=from-iris"], dir: "/", pipes: true})
+    try a.stdin.closeWrite()
+    scoped String aOut = try readAll(&a)
+    _ = a.wait()
+    a.closePipes()
+    print("env and dir: {aOut}")
+
+    b := try process.startWith(["/usr/bin/env"], process.Options{env: ["ONLY=1"], cleanEnv: true, pipes: true})
+    scoped String bOut = try readAll(&b)
+    _ = b.wait()
+    b.closePipes()
+    print("clean env: [{bOut}]")
+
+    c := try process.startWith(["sh", "-c", "echo $0"], process.Options{argv0: "-iris-name", pipes: true})
+    scoped String cOut = try readAll(&c)
+    _ = c.wait()
+    c.closePipes()
+    print("argv0: {cOut}")
+
+    d := try process.startWith(["sh", "-c", "tr a-z A-Z; echo oops >&2"], process.Options{pipes: true})
+    try d.stdin.write("hello\n")
+    try d.stdin.closeWrite()
+    scoped String dOut = try readAll(&d)
+    scoped String dErr = try d.stderr.readAll()
+    st := d.wait()
+    d.closePipes()
+    print("pipes: {dOut} | err: {str.trim(dErr)} | status {st}")
+
+    // in a session of its own, its process group is its own pid
+    e := try process.startWith(["sh", "-c", "ps -o pgid= -p $$"], process.Options{newSession: true, pipes: true})
+    scoped String eOut = try readAll(&e)
+    _ = e.wait()
+    e.closePipes()
+    scoped String pidText = format("{e.pid}")
+    print("own session: {eOut == pidText}")
+
+    _ = process.startWith(["id"], process.Options{user: "no-such-user-iris"}) catch err {
+        print("{err.code}: {err.message}")
+        process.Child{}
+    }
+
+    t := try pty.open(rows: 24, cols: 80)
+    defer t.close()
+    try t.setFlag(.echo, false)
+    try t.resize(30, 100)
+    f := try process.startWith(["sh", "-c", "[ -t 0 ] && echo tty yes; stty -a | grep -c -- -echo; stty size; sleep 5"], process.Options{terminal: t.terminalFd()})
+    t.closeTerminal()
+    String got
+    defer got.free()
+    u8[] buf = alloc(u8, 256)
+    defer free(buf)
+    for str.count(got, "\n") < 3 {
+        n := try t.read(buf)
+        if n == 0 {
+            break
+        }
+        got.append(buf[0:n])
+    }
+    lines := str.lines(str.trim(got))
+    defer lines.free()
+    print("on a terminal: {str.trim(lines.at(0))}, echo off: {str.trim(lines.at(1)) == "1"}, size {str.trim(lines.at(2))}")
+    try t.write("\x03")
+    print("Ctrl-C ended it: {f.wait()}")
+}

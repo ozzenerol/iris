@@ -184,10 +184,19 @@ WARN slow request path=/search ms=950 query=&quot;status 502&quot;</code></pre>
 }</code></pre>
 <pre class="out"><code>INFO written to the file n=1
 </code></pre>
+<h2 id="the-system-log"><a href="#the-system-log">The system log</a></h2>
+<p><code>log.toSyslog(ident, facility)</code> sends the lines to the system log instead: journald or rsyslog on Linux, the unified log on macOS. Each line carries <code>ident</code>, the program's name when it is empty, and the process id, and its level becomes syslog's priority. syslog adds the time itself. <code>facility</code> says where the system files the lines: <code>.daemon</code> for a server, the start, <code>.auth</code> or <code>.authPriv</code> for logins, as SSH servers use, so tools like fail2ban find them, and <code>.local0</code> to <code>.local7</code> for a site's own uses.</p>
+<pre class="code"><code><span class="k">import</span> log
+
+<span class="t">void</span> <span class="f">main</span>() {
+    log.<span class="f">toSyslog</span>(<span class="s">&quot;myserver&quot;</span>, .daemon)
+    log.<span class="f">info</span>(<span class="s">&quot;listening&quot;</span>, [(<span class="s">&quot;port&quot;</span>, .<span class="f">int</span>(<span class="n">8080</span>))])
+}</code></pre>
+<p><code>journalctl -t myserver</code> then shows <code>myserver[4242]: listening port=8080</code>. <code>log.toStderr()</code> goes back to standard error.</p>
     <nav class="pager"><a class="prev" href="03-time.html"><span>Previous</span>Time</a><a class="next" href="05-flags.html"><span>Next</span>Command-line flags</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#output-and-error">Output and error</a></li><li><a href="#reading-standard-input">Reading standard input</a></li><li><a href="#log-lines">Log lines</a></li><li><a href="#fields">Fields</a></li><li><a href="#levels">Levels</a></li><li><a href="#json-lines">JSON lines</a></li><li><a href="#writing-to-a-file">Writing to a file</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#output-and-error">Output and error</a></li><li><a href="#reading-standard-input">Reading standard input</a></li><li><a href="#log-lines">Log lines</a></li><li><a href="#fields">Fields</a></li><li><a href="#levels">Levels</a></li><li><a href="#json-lines">JSON lines</a></li><li><a href="#writing-to-a-file">Writing to a file</a></li><li><a href="#the-system-log">The system log</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

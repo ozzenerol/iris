@@ -34,6 +34,7 @@
       {"name": "path", "title": "Paths", "summary": "Joining file paths, taking them apart, cleaning them and making one relative to another."},
       {"name": "os", "title": "The program", "summary": "Its arguments, its environment, the working folder, the machine, and leaving it."},
       {"name": "process", "title": "Processes", "summary": "Running other programs and reading what they print."},
+      {"name": "pty", "title": "Pseudo-terminals", "summary": "A terminal for a program to run on, read and written from this side, as SSH servers and terminal emulators do."},
       {"name": "env", "title": "Settings", "summary": "Environment variables into an @env struct."},
       {"name": "flags", "title": "Flags", "summary": "Command-line flags into a @flags struct, with --help made from it."},
       {"name": "signal", "title": "Signals", "summary": "Waiting for Ctrl-C and SIGTERM while the other tasks run."},

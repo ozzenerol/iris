@@ -183,6 +183,49 @@ the job ended with 4</code></pre>
     _ = newer.<span class="f">wait</span>()
 }</code></pre>
 <p>Connections that wait to be accepted stay in the socket's queue while the versions change, so none is refused. <code>os.arg(0)</code> is the program's own path. <code>iris run</code> deletes the program it built once the program starts, so a program that starts itself has to be built.</p>
+<p><code>process.startWith(argv, options)</code> starts a program set up as a <code>process.Options</code> says. Each field left out is as <code>start</code> has it.</p>
+<ul><li><code>env</code> holds <code>NAME=value</code> entries that replace or add to this program's environment, and with <code>cleanEnv</code> they are the whole of it.</li><li><code>dir</code> is the folder it starts in, and <code>argv0</code> its <code>argv[0]</code>: <code>-bash</code> starts a login shell.</li><li><code>pipes</code> makes its standard input, output and error connections on the <code>Child</code>, <code>stdin</code>, <code>stdout</code> and <code>stderr</code>, which this program writes and reads like any <code>net.Conn</code>. <code>closePipes</code> closes them.</li><li><code>newSession</code> puts it in a session and process group of its own, so <code>signal.sendGroup(child.pid, s)</code> reaches it and everything it starts.</li><li><code>user</code> runs it as another user, in that user's groups; only root may.</li><li><code>keep</code> hands it descriptors, as with <code>start</code>.</li></ul>
+<pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    c := <span class="k">try</span> process.<span class="f">startWith</span>([<span class="s">&quot;tr&quot;</span>, <span class="s">&quot;a-z&quot;</span>, <span class="s">&quot;A-Z&quot;</span>], process.<span class="t">Options</span>{pipes: <span class="k">true</span>, env: [<span class="s">&quot;LC_ALL=C&quot;</span>]})
+    <span class="k">try</span> c.stdin.<span class="f">write</span>(<span class="s">&quot;shout this</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">try</span> c.stdin.<span class="f">closeWrite</span>()
+    <span class="k">scoped</span> <span class="t">String</span> out = <span class="k">try</span> c.stdout.<span class="f">readAll</span>()
+    <span class="f">print</span>(<span class="t">str</span>.<span class="f">trim</span>(out))
+    <span class="f">print</span>(<span class="s">&quot;status </span><span class="e">{</span>c.<span class="f">wait</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">closePipes</span>()
+}</code></pre>
+<pre class="out"><code>SHOUT THIS
+status 0</code></pre>
+<h2 id="programs-on-a-terminal"><a href="#programs-on-a-terminal">Programs on a terminal</a></h2>
+<p>A shell, an editor or <code>top</code> wants a terminal, not pipes. <code>pty.open(rows, cols)</code> makes a pseudo-terminal: a terminal side for the program and this side, which reads what the program writes and writes what it reads, as an SSH server or a terminal emulator does. <code>Options.terminal</code> takes <code>terminalFd()</code>, and the program then has the terminal as its standard input, output and error and as its controlling terminal, in a session of its own. Once it has started, <code>closeTerminal()</code> closes this program's copy, so <code>read</code> gives 0 when the program and everything it started have closed it.</p>
+<pre class="code run"><code><span class="k">import</span> process, pty, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    t := <span class="k">try</span> pty.<span class="f">open</span>(rows: <span class="n">24</span>, cols: <span class="n">80</span>)
+    <span class="k">defer</span> t.<span class="f">close</span>()
+    child := <span class="k">try</span> process.<span class="f">startWith</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;stty size; tty &gt; /dev/null &amp;&amp; echo on a terminal&quot;</span>], process.<span class="t">Options</span>{terminal: t.<span class="f">terminalFd</span>()})
+    t.<span class="f">closeTerminal</span>()
+
+    <span class="t">String</span> all
+    <span class="k">defer</span> all.<span class="f">free</span>()
+    <span class="t">u8</span>[<span class="n">256</span>] buf
+    <span class="k">for</span> {
+        n := <span class="k">try</span> t.<span class="f">read</span>(buf[:])
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        all.<span class="f">append</span>(buf[<span class="n">0</span>:n])
+    }
+    _ = child.<span class="f">wait</span>()
+    <span class="k">for</span> line <span class="k">in</span> <span class="t">str</span>.<span class="f">lines</span>(<span class="t">str</span>.<span class="f">trim</span>(all)) {
+        <span class="f">print</span>(<span class="t">str</span>.<span class="f">trim</span>(line))
+    }
+}</code></pre>
+<pre class="out"><code>24 80
+on a terminal</code></pre>
+<p><code>write</code> sends what the program reads, as if typed: <code>&quot;\x03&quot;</code> is Ctrl-C. <code>resize(rows, cols)</code> changes the size, and the program gets <code>windowChange</code>. <code>setFlag(.echo, false)</code> and the other <code>pty.Flag</code>s set termios's flags, and <code>setChar(.interrupt, 3)</code> the characters with a meaning, which is what SSH's terminal modes carry. <code>setSpeed(baud)</code> sets the speed for programs that ask.</p>
 <h2 id="running-as-another-user"><a href="#running-as-another-user">Running as another user</a></h2>
 <p>A server that listens on a port below 1024 starts as root, binds its ports, and then gives up root with <code>os.runAs(user)</code>. From then on every thread of the program runs as that user, in its groups and its own group, or in <code>group</code> when one is given. The program can't become root again, and on Linux it also loses every capability. The sockets it already has keep working.</p>
 <pre class="code"><code><span class="k">import</span> net, os
@@ -194,6 +237,15 @@ the job ended with 4</code></pre>
     <span class="c">// accept on ln as www-data</span>
 }</code></pre>
 <p>Only root may change to another user: anyone else gets <code>OsError.permission</code>, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives <code>OsError.notFound</code>. <code>os.uid()</code> and <code>os.gid()</code> give the ids the program runs as, and <code>os.user()</code> the user's name.</p>
+<p><code>os.lookupUser(name)</code> and <code>os.lookupUserId(uid)</code> give a <code>User</code> from the system's user database: its <code>name</code>, <code>uid</code>, <code>gid</code>, <code>home</code>, <code>shell</code> and <code>gecos</code>, and <code>groups()</code>, the ids of every group it is in. <code>os.lookupGroup(name)</code> and <code>os.lookupGroupId(gid)</code> give a <code>Group</code> with its <code>name</code>, <code>gid</code> and <code>members</code>.</p>
+<pre class="code run"><code><span class="k">import</span> os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> root := <span class="k">try</span> os.<span class="f">lookupUser</span>(<span class="s">&quot;root&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>root.name<span class="e">}</span><span class="s"> is </span><span class="e">{</span>root.uid<span class="e">}</span><span class="s">, in group </span><span class="e">{</span>root.gid<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>root is 0, in group 0</code></pre>
+<p><code>os.cpuCount()</code> is how many cores the program may run on, and <code>os.pinThread(core)</code>, on Linux, keeps the calling thread on one of them, so a thread per core keeps its caches warm.</p>
 <h2 id="input"><a href="#input">Input</a></h2>
 <p>The second argument to <code>run</code> goes to the program's standard input:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
@@ -224,7 +276,8 @@ the job ended with 4</code></pre>
     <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, saving and stopping&quot;</span>)
 }</code></pre>
 <pre class="out"><code>got terminate, saving and stopping</code></pre>
-<p>From then on, <code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> instead of ending the program. <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals. Many programs take <code>hangup</code> (SIGHUP) as a request to read their settings again. <code>user1</code> and <code>user2</code> (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version.</p>
+<p>From then on, <code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> instead of ending the program. <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals. Many programs take <code>hangup</code> (SIGHUP) as a request to read their settings again. <code>user1</code> and <code>user2</code> (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version. <code>child</code> comes when a program this one started ends, <code>windowChange</code> when the terminal changes size, and <code>quit</code> is Ctrl-\\.</p>
+<p><code>signal.send(pid, s)</code> sends a signal to another process, and <code>signal.sendGroup(group, s)</code> to every process of a process group. Besides the ones above, <code>kill</code> ends a process at once, <code>pause</code> stops it and <code>resume</code> lets it go on; those three can be sent but not watched. A process that isn't there gives <code>SignalError.notFound</code>, and one this program may not signal <code>SignalError.permission</code>.</p>
 <p>A server waits for the signal in one task while other tasks serve:</p>
 <pre class="code"><code><span class="k">import</span> signal
 
@@ -243,7 +296,7 @@ the job ended with 4</code></pre>
     <nav class="pager"><a class="prev" href="05-flags.html"><span>Previous</span>Command-line flags</a><a class="next" href="07-terminal.html"><span>Next</span>Terminal output and input</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></li><li><a href="#running-as-another-user">Running as another user</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></li><li><a href="#programs-on-a-terminal">Programs on a terminal</a></li><li><a href="#running-as-another-user">Running as another user</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
