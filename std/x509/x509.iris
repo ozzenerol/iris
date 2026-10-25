@@ -1,0 +1,602 @@
+// X.509 certificates: reading them from DER or PEM, their names, dates,
+// keys and extensions, checking a certificate's signature, matching it
+// to a host name (RFC 6125), and building and checking a chain to the
+// certificates a program trusts (RFC 5280).
+
+import base64, crypto, der, fs, net, str, time
+
+// What the calls fail with: invalid for bytes that aren't a certificate,
+// untrusted for a chain that doesn't end at a trusted certificate,
+// expired for one outside its dates, badName for a host the certificate
+// isn't for, badSignature, and unsupported for a key or extension this
+// module doesn't check.
+pub enum X509Error { invalid, untrusted, expired, badName, badSignature, unsupported }
+
+// A certificate. The views (tbs, signature, publicKeyDer, serial) point
+// into der, which the certificate owns.
+pub struct Certificate {
+    pub String der
+    // the part the issuer signed
+    pub str tbs
+    pub i64 version
+    pub str serial
+    pub String issuer
+    pub String subject
+    // the subject's common name (CN), "" when it has none
+    pub String commonName
+    pub str issuerDer
+    pub str subjectDer
+    pub time.Time notBefore
+    pub time.Time notAfter
+    // the key's SubjectPublicKeyInfo in DER, for crypto.loadPublicKey
+    pub str publicKeyDer
+    pub String publicKeyAlgorithm
+    pub List[String] dnsNames
+    pub List[String] ipAddresses
+    pub List[String] emails
+    pub List[String] uris
+    pub bool isCA
+    // the most CA certificates allowed below this one, -1 for no limit
+    pub i64 maxPathLen
+    // keyUsage's bits (digitalSignature is 1, keyCertSign 32), -1 when
+    // the certificate has no keyUsage
+    pub i64 keyUsage
+    pub List[String] extKeyUsage
+    pub str subjectKeyId
+    pub str authorityKeyId
+    pub String signatureAlgorithm
+    pub str signature
+    // critical extensions this module doesn't know, by OID
+    pub List[String] unknownCritical
+    pub bool hasNameConstraints
+}
+
+// keyUsage's bits
+pub const i64 DIGITAL_SIGNATURE = 1
+pub const i64 KEY_ENCIPHERMENT = 4
+pub const i64 KEY_CERT_SIGN = 32
+pub const i64 CRL_SIGN = 64
+
+// extKeyUsage's purposes
+pub const str SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
+pub const str CLIENT_AUTH = "1.3.6.1.5.5.7.3.2"
+
+// Gives the certificate's memory back.
+pub void Certificate.free() {
+    self.der.free()
+    self.issuer.free()
+    self.subject.free()
+    self.commonName.free()
+    self.publicKeyAlgorithm.free()
+    self.dnsNames.freeEach()
+    self.ipAddresses.freeEach()
+    self.emails.freeEach()
+    self.uris.freeEach()
+    self.extKeyUsage.freeEach()
+    self.signatureAlgorithm.free()
+    self.unknownCritical.freeEach()
+}
+
+str attrName(str oid) {
+    if oid == "2.5.4.3" {
+        return "CN"
+    }
+    if oid == "2.5.4.6" {
+        return "C"
+    }
+    if oid == "2.5.4.7" {
+        return "L"
+    }
+    if oid == "2.5.4.8" {
+        return "ST"
+    }
+    if oid == "2.5.4.10" {
+        return "O"
+    }
+    if oid == "2.5.4.11" {
+        return "OU"
+    }
+    if oid == "2.5.4.5" {
+        return "serialNumber"
+    }
+    if oid == "1.2.840.113549.1.9.1" {
+        return "emailAddress"
+    }
+    if oid == "0.9.2342.19200300.100.1.25" {
+        return "DC"
+    }
+    return oid
+}
+
+// A Name as "C=US, O=Example, CN=example.com", in its own order, and its
+// common name.
+!void nameText(der.Value name, String *out, String *cn) {
+    rdns := name.inner()
+    for rdns.more() {
+        set := try rdns.expect(der.SET)
+        atvs := set.inner()
+        for atvs.more() {
+            atv := try atvs.expect(der.SEQUENCE)
+            parts := atv.inner()
+            o := try parts.expect(der.OID)
+            scoped String oid = try o.oid()
+            v := try parts.next()
+            scoped String text = v.text() catch e { v.contents.copy() }
+            if out.len > 0 {
+                out.append(", ")
+            }
+            out.append(attrName(oid))
+            out.append("=")
+            out.append(text)
+            if oid == "2.5.4.3" {
+                cn.truncate(0)
+                cn.append(text)
+            }
+        }
+    }
+}
+
+String ipText(str b) {
+    if b.len == 4 {
+        return format("{b[0]}.{b[1]}.{b[2]}.{b[3]}")
+    }
+    if b.len == 16 {
+        net.Addr a
+        for i in 0..16 {
+            a.ip[i] = b[i]
+        }
+        return a.ipText()
+    }
+    return "".copy()
+}
+
+!void extension(Certificate *c, der.Value ext) {
+    parts := ext.inner()
+    o := try parts.expect(der.OID)
+    scoped String oid = try o.oid()
+    critical := false
+    cv, hasCritical := try parts.optional(der.BOOLEAN)
+    if hasCritical {
+        critical = try cv.bool()
+    }
+    value := try parts.expect(der.OCTET_STRING)
+    inner := der.reader(value.contents)
+    if oid == "2.5.29.17" {
+        names := (try inner.expect(der.SEQUENCE)).inner()
+        for names.more() {
+            g := try names.next()
+            if g.tag == 0x82 {
+                c.dnsNames.push(str.lower(g.contents))
+            } else if g.tag == 0x87 {
+                c.ipAddresses.push(ipText(g.contents))
+            } else if g.tag == 0x81 {
+                c.emails.push(g.contents.copy())
+            } else if g.tag == 0x86 {
+                c.uris.push(g.contents.copy())
+            }
+        }
+    } else if oid == "2.5.29.19" {
+        bc := (try inner.expect(der.SEQUENCE)).inner()
+        ca, hasCa := try bc.optional(der.BOOLEAN)
+        if hasCa {
+            c.isCA = try ca.bool()
+        }
+        pl, hasPl := try bc.optional(der.INTEGER)
+        if hasPl {
+            c.maxPathLen = try pl.int()
+        }
+    } else if oid == "2.5.29.15" {
+        bits := try inner.expect(der.BIT_STRING)
+        b := try bits.bits()
+        i64 v = 0
+        // bit 0 is the top bit of the first byte
+        for i in 0..(if b.len < 2 { b.len } else { 2 }) {
+            for k in 0..8 {
+                if b[i] & u8(0x80 >> k) != 0 {
+                    v |= 1 << (i * 8 + k)
+                }
+            }
+        }
+        c.keyUsage = v
+    } else if oid == "2.5.29.37" {
+        ekus := (try inner.expect(der.SEQUENCE)).inner()
+        for ekus.more() {
+            e := try ekus.expect(der.OID)
+            c.extKeyUsage.push(try e.oid())
+        }
+    } else if oid == "2.5.29.14" {
+        k := try inner.expect(der.OCTET_STRING)
+        c.subjectKeyId = k.contents
+    } else if oid == "2.5.29.35" {
+        aki := (try inner.expect(der.SEQUENCE)).inner()
+        k, has := try aki.optional(0x80)
+        if has {
+            c.authorityKeyId = k.contents
+        }
+    } else if oid == "2.5.29.30" {
+        c.hasNameConstraints = true
+    } else if critical && oid != "2.5.29.32" && oid != "2.5.29.36" && oid != "2.5.29.54" {
+        // certificate policies and their constraints are taken as they are
+        c.unknownCritical.push(oid.copy())
+    }
+}
+
+// A certificate from its DER bytes.
+pub !Certificate parse(str bytes) {
+    Certificate c
+    c.der = bytes.copy()
+    errdefer c.free()
+    c.maxPathLen = -1
+    c.keyUsage = -1
+    c.version = 1
+    top := der.reader(c.der)
+    cert := try top.expect(der.SEQUENCE)
+    parts := cert.inner()
+    tbs := try parts.expect(der.SEQUENCE)
+    c.tbs = tbs.whole
+    alg := try parts.expect(der.SEQUENCE)
+    algOid := try alg.inner().expect(der.OID)
+    c.signatureAlgorithm = try algOid.oid()
+    sig := try parts.expect(der.BIT_STRING)
+    c.signature = try sig.bits()
+
+    f := tbs.inner()
+    ver, hasVer := try f.optional(der.context(0))
+    if hasVer {
+        v := try ver.inner().expect(der.INTEGER)
+        c.version = (try v.int()) + 1
+    }
+    serial := try f.expect(der.INTEGER)
+    c.serial = serial.unsigned()
+    _ = try f.expect(der.SEQUENCE)
+    issuer := try f.expect(der.SEQUENCE)
+    c.issuerDer = issuer.whole
+    scoped String unused
+    try nameText(issuer, &c.issuer, &unused)
+    validity := try f.expect(der.SEQUENCE)
+    vr := validity.inner()
+    nb := try vr.next()
+    c.notBefore = try nb.time()
+    na := try vr.next()
+    c.notAfter = try na.time()
+    subject := try f.expect(der.SEQUENCE)
+    c.subjectDer = subject.whole
+    try nameText(subject, &c.subject, &c.commonName)
+    spki := try f.expect(der.SEQUENCE)
+    c.publicKeyDer = spki.whole
+    keyAlg := try spki.inner().expect(der.SEQUENCE)
+    keyOid := try keyAlg.inner().expect(der.OID)
+    c.publicKeyAlgorithm = try keyOid.oid()
+    _, _ = try f.optional(der.context(1, false))
+    _, _ = try f.optional(der.context(2, false))
+    exts, hasExts := try f.optional(der.context(3))
+    if hasExts {
+        list := (try exts.inner().expect(der.SEQUENCE)).inner()
+        for list.more() {
+            e := try list.expect(der.SEQUENCE)
+            try extension(&c, e)
+        }
+    }
+    return c
+}
+
+// A block of PEM text: its label, such as CERTIFICATE, and its bytes.
+pub struct PemBlock {
+    pub String label
+    pub String bytes
+}
+
+// Gives the block's memory back.
+pub void PemBlock.free() {
+    self.label.free()
+    self.bytes.free()
+}
+
+// The blocks of PEM text, -----BEGIN LABEL----- to -----END LABEL-----,
+// in order; text around them is left out.
+pub !List[PemBlock] pemBlocks(str text) {
+    List[PemBlock] out
+    errdefer out.freeEach()
+    rest := text
+    for {
+        _, after, found := str.cut(rest, "-----BEGIN ")
+        if !found {
+            return out
+        }
+        label, body, ok := str.cut(after, "-----")
+        if !ok {
+            return error(X509Error.invalid, "a PEM block without the end of its BEGIN line")
+        }
+        scoped String endMark = format("-----END {label}-----")
+        inside, tail, closed := str.cut(body, endMark)
+        if !closed {
+            return error(X509Error.invalid, "a PEM block {label} without its END line")
+        }
+        bytes := base64.decode(str.trim(inside)) catch e {
+            return error(X509Error.invalid, "a PEM block {label} that isn't base64")
+        }
+        out.push(PemBlock{label: label.copy(), bytes: bytes})
+        rest = tail
+    }
+    return out
+}
+
+// The certificates in PEM text, such as a chain or a bundle of trusted
+// ones.
+pub !List[Certificate] parsePem(str text) {
+    scoped blocks := try pemBlocks(text)
+    List[Certificate] out
+    errdefer out.freeEach()
+    for b in blocks {
+        if b.label == "CERTIFICATE" || b.label == "TRUSTED CERTIFICATE" {
+            out.push(try parse(b.bytes))
+        }
+    }
+    return out
+}
+
+// The hash and padding of a signature algorithm, by OID.
+!(crypto.Hash, crypto.Padding, bool) algorithm(str oid, str tbs) {
+    if oid == "1.2.840.113549.1.1.11" || oid == "1.2.840.10045.4.3.2" {
+        return (crypto.Hash.sha256, crypto.Padding.pkcs1, false)
+    }
+    if oid == "1.2.840.113549.1.1.12" || oid == "1.2.840.10045.4.3.3" {
+        return (crypto.Hash.sha384, crypto.Padding.pkcs1, false)
+    }
+    if oid == "1.2.840.113549.1.1.13" || oid == "1.2.840.10045.4.3.4" {
+        return (crypto.Hash.sha512, crypto.Padding.pkcs1, false)
+    }
+    if oid == "1.2.840.113549.1.1.5" || oid == "1.2.840.10045.4.1" {
+        return (crypto.Hash.sha1, crypto.Padding.pkcs1, false)
+    }
+    if oid == "1.3.101.112" {
+        return (crypto.Hash.sha512, crypto.Padding.pkcs1, true)
+    }
+    return error(X509Error.unsupported, "the signature algorithm {oid}")
+}
+
+// The hash RSA-PSS's parameters name in the algorithm of a certificate.
+!crypto.Hash pssHash(Certificate *c) {
+    top := der.reader(c.der)
+    cert := try top.expect(der.SEQUENCE)
+    parts := cert.inner()
+    _ = try parts.expect(der.SEQUENCE)
+    alg := try parts.expect(der.SEQUENCE)
+    a := alg.inner()
+    _ = try a.expect(der.OID)
+    params, has := try a.optional(der.SEQUENCE)
+    if !has {
+        return crypto.Hash.sha1
+    }
+    p := params.inner()
+    h, hasHash := try p.optional(der.context(0))
+    if !hasHash {
+        return crypto.Hash.sha1
+    }
+    hashAlg := try h.inner().expect(der.SEQUENCE)
+    o := try hashAlg.inner().expect(der.OID)
+    scoped String oid = try o.oid()
+    if oid == "2.16.840.1.101.3.4.2.1" {
+        return crypto.Hash.sha256
+    }
+    if oid == "2.16.840.1.101.3.4.2.2" {
+        return crypto.Hash.sha384
+    }
+    if oid == "2.16.840.1.101.3.4.2.3" {
+        return crypto.Hash.sha512
+    }
+    return error(X509Error.unsupported, "RSA-PSS with the hash {oid}")
+}
+
+// Whether issuer's key made the certificate's signature.
+pub !bool Certificate.signedBy(Certificate *issuer) {
+    if issuer.publicKeyAlgorithm == "1.3.101.112" {
+        if self.signatureAlgorithm != "1.3.101.112" {
+            return false
+        }
+        r := der.reader(issuer.publicKeyDer)
+        spki := try r.expect(der.SEQUENCE)
+        sr := spki.inner()
+        _ = try sr.expect(der.SEQUENCE)
+        bits := try sr.expect(der.BIT_STRING)
+        key := try bits.bits()
+        return crypto.ed25519Verify(key, self.tbs, self.signature)
+    }
+    crypto.Hash hash = .sha256
+    crypto.Padding padding = .pkcs1
+    if self.signatureAlgorithm == "1.2.840.113549.1.1.10" {
+        hash = try pssHash(self)
+        padding = .pss
+    } else {
+        h, p, ed := try algorithm(self.signatureAlgorithm, self.tbs)
+        if ed {
+            return false
+        }
+        hash = h
+        padding = p
+    }
+    scoped key := crypto.loadPublicKey(issuer.publicKeyDer) catch e {
+        return error(X509Error.unsupported, "the issuer's key: {e.message}")
+    }
+    return key.verify(self.tbs, self.signature, hash, padding)
+}
+
+// Whether the certificate is for host: a DNS name, matched case-blind,
+// with one * standing for the whole leftmost label (*.example.com is for
+// a.example.com, not for example.com or a.b.example.com), or an IP
+// address. The common name counts only when there are no DNS names.
+pub bool Certificate.matchesHost(str host) {
+    scoped String h = str.lower(str.trimSuffix(host, "."))
+    addr := net.ip(h) catch e {
+        if self.dnsNames.len == 0 {
+            scoped String cn = str.lower(self.commonName)
+            return nameMatches(cn, h)
+        }
+        for n in self.dnsNames {
+            if nameMatches(n, h) {
+                return true
+            }
+        }
+        return false
+    }
+    scoped String want = addr.ipText()
+    for a in self.ipAddresses {
+        if a == want {
+            return true
+        }
+    }
+    return false
+}
+
+bool nameMatches(str pattern, str host) {
+    if pattern.len == 0 {
+        return false
+    }
+    if !str.startsWith(pattern, "*.") {
+        return pattern == host
+    }
+    // the * is one whole label, never the last two
+    rest := pattern[1:]
+    if str.count(rest, ".") < 2 {
+        return false
+    }
+    _, hostRest, found := str.cut(host, ".")
+    return found && str.startsWith(rest, ".") && rest[1:] == hostRest
+}
+
+// Certificates that a program trusts: the roots a chain must end at.
+pub struct Pool {
+    pub List[Certificate] certs
+}
+
+// Gives the pool's memory back.
+pub void Pool.free() => self.certs.freeEach()
+
+// Adds the certificates in PEM text.
+pub !void Pool.addPem(str text) {
+    scoped List[Certificate] certs = try parsePem(text)
+    for c in certs {
+        self.certs.push(c)
+    }
+    certs.clear()
+}
+
+// A pool of the certificates in the PEM file at path.
+pub !Pool loadPool(str path) {
+    scoped String text = try fs.readAll(path)
+    Pool p
+    try p.addPem(text)
+    return p
+}
+
+// The system's trusted certificates, from the first bundle found:
+// /etc/ssl/certs/ca-certificates.crt (Debian, Ubuntu, Alpine),
+// /etc/pki/tls/certs/ca-bundle.crt (Fedora, RHEL), /etc/ssl/cert.pem
+// (macOS, BSDs), or Homebrew's.
+pub !Pool systemPool() {
+    for path in ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem",
+        "/opt/homebrew/etc/openssl@3/cert.pem", "/usr/local/etc/openssl@3/cert.pem"] {
+            if fs.exists(path) {
+                return try loadPool(path)
+            }
+        }
+    return error(X509Error.untrusted, "no bundle of trusted certificates on this system")
+}
+
+!void checkDates(Certificate *c, time.Time now) {
+    if now.before(c.notBefore) {
+        return error(X509Error.expired, "{c.subject}: not valid before {c.notBefore.iso()}")
+    }
+    if now.after(c.notAfter) {
+        return error(X509Error.expired, "{c.subject}: expired at {c.notAfter.iso()}")
+    }
+}
+
+!void checkKnown(Certificate *c) {
+    if c.unknownCritical.len > 0 {
+        return error(X509Error.unsupported, "{c.subject}: a critical extension {c.unknownCritical.at(0)} isn't known")
+    }
+    if c.hasNameConstraints {
+        return error(X509Error.unsupported, "{c.subject}: name constraints aren't checked, so it is refused")
+    }
+}
+
+// Whether issuer could have issued c: its subject is c's issuer, and the
+// key ids agree when both have them.
+bool mayIssue(Certificate *issuer, Certificate *c) {
+    if issuer.subjectDer != c.issuerDer {
+        return false
+    }
+    return c.authorityKeyId.len == 0 || issuer.subjectKeyId.len == 0 || c.authorityKeyId == issuer.subjectKeyId
+}
+
+bool hasPurpose(Certificate *c, str purpose) {
+    for p in c.extKeyUsage {
+        if p == purpose {
+            return true
+        }
+    }
+    return false
+}
+
+// Checks a chain as a TLS client does: chain[0] is the certificate of
+// host ("" skips the name), the rest are certificates it came with, in
+// any order. It must lead, through CA certificates that may sign, to one
+// of roots, every certificate within its dates at now (time.Time{} for
+// the time now), and be for purpose when the certificate names its
+// purposes (SERVER_AUTH, CLIENT_AUTH, or "" for any).
+pub !void verify(Certificate[] chain, Pool *roots, str host = "", time.Time now = time.Time{}, str purpose = SERVER_AUTH) {
+    if chain.len == 0 {
+        return error(X509Error.invalid, "an empty chain")
+    }
+    at := if now.ns == 0 { time.now() } else { now }
+    leaf := &chain[0]
+    if host.len > 0 && !leaf.matchesHost(host) {
+        return error(X509Error.badName, "the certificate is for {leaf.subject}, not {host}")
+    }
+    if purpose.len > 0 && leaf.extKeyUsage.len > 0 && !hasPurpose(leaf, purpose) {
+        return error(X509Error.untrusted, "the certificate isn't for that purpose ({purpose})")
+    }
+    Certificate *cur = leaf
+    // the CA certificates between the leaf and cur's issuer
+    i64 below = 0
+    for step in 0..10 {
+        try checkDates(cur, at)
+        try checkKnown(cur)
+        // a root that signed it ends the chain
+        for i in 0..roots.certs.len {
+            r := &roots.certs.items()[i]
+            if mayIssue(r, cur) && (cur.signedBy(r) catch e { false }) {
+                try checkDates(r, at)
+                if r.maxPathLen >= 0 && below > r.maxPathLen {
+                    return error(X509Error.untrusted, "{r.subject}: allows {r.maxPathLen} CA certificates below it")
+                }
+                return
+            }
+        }
+        // else one it came with
+        Certificate *next = null
+        for i in 1..chain.len {
+            c := &chain[i]
+            if c != cur && mayIssue(c, cur) && (cur.signedBy(c) catch e { false }) {
+                next = c
+                break
+            }
+        }
+        if next == null {
+            return error(X509Error.untrusted, "no trusted certificate issued {cur.subject}")
+        }
+        if !next.isCA {
+            return error(X509Error.untrusted, "{next.subject} isn't a CA")
+        }
+        if next.keyUsage >= 0 && next.keyUsage & KEY_CERT_SIGN == 0 {
+            return error(X509Error.untrusted, "{next.subject} may not sign certificates")
+        }
+        if next.maxPathLen >= 0 && below > next.maxPathLen {
+            return error(X509Error.untrusted, "{next.subject}: allows {next.maxPathLen} CA certificates below it")
+        }
+        cur = next
+        below += 1
+    }
+    return error(X509Error.untrusted, "a chain longer than 10 certificates")
+}

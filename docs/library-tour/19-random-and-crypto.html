@@ -241,6 +241,44 @@ CryptoError.tampered</code></pre>
 }</code></pre>
 <pre class="out"><code>true
 false</code></pre>
+<p>Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A <code>crypto.PrivateKey</code> comes from <code>loadPrivateKey(pem)</code>, PEM or DER as openssl writes it, or from <code>generateKey(.ecP256)</code>, <code>.ecP384</code> or <code>.rsa</code> with its bits. <code>sign(data, hash, padding)</code> signs, and <code>publicKey()</code> gives the half to share. A <code>crypto.PublicKey</code> comes from <code>loadPublicKey</code> too, from an EC point with <code>ecPublicKey(curve, point)</code>, or from RSA's modulus and exponent with <code>rsaPublicKey(n, e)</code>, as DNSSEC records hold them. <code>verify(data, signature, hash, padding)</code> checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or <code>.pss</code>, as TLS 1.3 does. ECDSA signatures are in DER, and <code>ecdsaRaw(sig, 32)</code> and <code>ecdsaDer(raw)</code> turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.</p>
+<pre class="code run"><code><span class="k">import</span> crypto
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> key := <span class="k">try</span> crypto.<span class="f">generateKey</span>(.ecP256)
+    <span class="k">scoped</span> public := key.<span class="f">publicKey</span>()
+    <span class="k">scoped</span> <span class="t">String</span> sig = <span class="k">try</span> key.<span class="f">sign</span>(<span class="s">&quot;release 0.73&quot;</span>, .sha256)
+
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>public.<span class="f">verify</span>(<span class="s">&quot;release 0.73&quot;</span>, sig)<span class="e">}</span><span class="s"> </span><span class="e">{</span>public.<span class="f">verify</span>(<span class="s">&quot;release 0.74&quot;</span>, sig)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> pem = public.<span class="f">pem</span>()
+    <span class="f">print</span>(pem[<span class="n">0</span>:<span class="n">26</span>])
+}</code></pre>
+<pre class="out"><code>true false
+-----BEGIN PUBLIC KEY-----</code></pre>
+<p>They come from OpenSSL's libcrypto, as TLS does, and <code>generateKey</code> needs OpenSSL 3.</p>
+<h2 id="certificates"><a href="#certificates">Certificates</a></h2>
+<p>TLS checks certificates itself. A program that speaks a protocol of its own over certificates, such as QUIC, or looks into them, uses <code>x509</code>. <code>x509.parse(der)</code> reads a certificate and <code>x509.parsePem(text)</code> every one in PEM text. A <code>Certificate</code> has its <code>subject</code> and <code>issuer</code> as text, such as <code>CN=example.com</code>, <code>notBefore</code> and <code>notAfter</code>, <code>dnsNames</code> and <code>ipAddresses</code>, whether it <code>isCA</code>, its <code>keyUsage</code> and <code>extKeyUsage</code>, and <code>publicKeyDer</code> for <code>crypto.loadPublicKey</code>.</p>
+<p><code>matchesHost(host)</code> says whether a certificate is for a host, with a <code>*</code> only as the whole leftmost label. <code>signedBy(issuer)</code> checks a signature. <code>x509.verify(chain, roots, host)</code> does what a TLS client does: from the server's certificate, through the ones it came with, to one of <code>roots</code>, each within its dates, every issuer a CA that may sign. <code>x509.systemPool()</code> gives the certificates the system trusts, and <code>loadPool(path)</code> those in a PEM file.</p>
+<pre class="code run"><code><span class="k">import</span> fs, x509
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> pem = <span class="k">try</span> fs.<span class="f">readAll</span>(<span class="s">&quot;tests/data/tls/server.pem&quot;</span>)
+    <span class="k">scoped</span> certs := <span class="k">try</span> x509.<span class="f">parsePem</span>(pem)
+    c := &amp;certs.<span class="f">items</span>()[<span class="n">0</span>]
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.subject<span class="e">}</span><span class="s">, issued by </span><span class="e">{</span>c.issuer<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;for localhost: </span><span class="e">{</span>c.<span class="f">matchesHost</span>(<span class="s">&quot;localhost&quot;</span>)<span class="e">}</span><span class="s">, for example.com: </span><span class="e">{</span>c.<span class="f">matchesHost</span>(<span class="s">&quot;example.com&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">scoped</span> roots := <span class="k">try</span> x509.<span class="f">loadPool</span>(<span class="s">&quot;tests/data/tls/ca.pem&quot;</span>)
+    x509.<span class="f">verify</span>(certs.<span class="f">items</span>(), &amp;roots, <span class="s">&quot;localhost&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">return</span>
+    }
+    <span class="f">print</span>(<span class="s">&quot;the chain checks out&quot;</span>)
+}</code></pre>
+<pre class="out"><code>CN=localhost, issued by CN=Iris test CA
+for localhost: true, for example.com: false
+the chain checks out</code></pre>
+<p><code>der</code> reads ASN.1 in DER, the encoding of certificates and keys, one value after another: <code>der.reader(bytes)</code>, <code>next()</code> and <code>expect(tag)</code>, <code>inner()</code> for what a SEQUENCE holds, and <code>int()</code>, <code>oid()</code>, <code>text()</code>, <code>bits()</code> and <code>time()</code> for the values.</p>
 <h2 id="tokens-for-logins"><a href="#tokens-for-logins">Tokens for logins</a></h2>
 <p>A JSON Web Token carries claims, such as who the user is and when the token ends. They are signed, so the server can trust them when the client sends them back. <code>jwt.sign(claims, key)</code> signs a <code>@json</code> struct with HS256, and <code>jwt.verify[T](token, key)</code> checks the signature and reads the claims back. When the claims have <code>exp</code>, in seconds since 1970, a token past it fails with <code>JwtError.expired</code>:</p>
 <pre class="code run"><code><span class="k">import</span> jwt, time
@@ -284,7 +322,7 @@ JwtError.invalid</code></pre>
     <nav class="pager"><a class="prev" href="18-postgres-and-redis.html"><span>Previous</span>PostgreSQL and Redis</a><a class="next" href="20-math-and-big-numbers.html"><span>Next</span>Math and big numbers</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#random-numbers">Random numbers</a></li><li><a href="#random-bytes-for-secrets">Random bytes for secrets</a></li><li><a href="#hashes">Hashes</a></li><li><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></li><li><a href="#passwords">Passwords</a></li><li><a href="#encrypting-data">Encrypting data</a></li><li><a href="#signatures">Signatures</a></li><li><a href="#tokens-for-logins">Tokens for logins</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#random-numbers">Random numbers</a></li><li><a href="#random-bytes-for-secrets">Random bytes for secrets</a></li><li><a href="#hashes">Hashes</a></li><li><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></li><li><a href="#passwords">Passwords</a></li><li><a href="#encrypting-data">Encrypting data</a></li><li><a href="#signatures">Signatures</a></li><li><a href="#certificates">Certificates</a></li><li><a href="#tokens-for-logins">Tokens for logins</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

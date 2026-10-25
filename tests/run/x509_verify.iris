@@ -1,0 +1,103 @@
+// expect: subject: CN=example.test
+// expect: issuer: O=Iris Test, CN=Iris Test Intermediate
+// expect: names: example.test *.wild.test | ip 10.1.2.3 | CA false | serial 20 bytes
+// expect: root: C=US, O=Iris Test, CN=Iris Test Root, CA true, may sign: true
+// expect: chain: ok
+// expect: RSA-PSS leaf: ok
+// expect: Ed25519 chain: ok
+// expect: hosts: example.test true, a.wild.test true, wild.test false, a.b.wild.test false, 10.1.2.3 true, other.test false
+// expect: wrong host: X509Error.badName
+// expect: no intermediate: X509Error.untrusted
+// expect: expired: X509Error.expired
+// expect: for clients only: X509Error.untrusted
+// expect: below pathlen 0: X509Error.untrusted
+// expect: der: SEQUENCE, OID 1.2.840.10045.2.1
+
+import der, fs, time, x509
+
+!List[x509.Certificate] load(str name) {
+    scoped String path = format("tests/data/x509/{name}")
+    scoped String pem = try fs.readAll(path)
+    return try x509.parsePem(pem)
+}
+
+!void check(str what, x509.Certificate[] chain, x509.Pool *roots, str host = "", time.Time now = time.Time{}) {
+    x509.verify(chain, roots, host, now) catch e {
+        print("{what}: {e.code}")
+        return
+    }
+    print("{what}: ok")
+}
+
+!void main() {
+    at := time.date(2027, 6, 1)
+    scoped leafs := try load("leaf.pem")
+    leaf := &leafs.items()[0]
+    print("subject: {leaf.subject}")
+    print("issuer: {leaf.issuer}")
+    print("names: {leaf.dnsNames.at(0)} {leaf.dnsNames.at(1)} | ip {leaf.ipAddresses.at(0)} | CA {leaf.isCA} | serial {leaf.serial.len} bytes")
+
+    x509.Pool roots
+    defer roots.free()
+    scoped String rootPem = try fs.readAll("tests/data/x509/root.pem")
+    try roots.addPem(rootPem)
+    r := &roots.certs.items()[0]
+    print("root: {r.subject}, CA {r.isCA}, may sign: {r.keyUsage & x509.KEY_CERT_SIGN != 0}")
+
+    scoped inters := try load("inter.pem")
+    scoped List[x509.Certificate] chain
+    // the chain borrows the certificates: cleared, not freed, at the end
+    defer chain.clear()
+    chain.push(leafs.at(0))
+    chain.push(inters.at(0))
+    try check("chain", chain.items(), &roots, "example.test", at)
+
+    scoped pss := try load("leafpss.pem")
+    scoped List[x509.Certificate] pssChain
+    defer pssChain.clear()
+    pssChain.push(pss.at(0))
+    pssChain.push(inters.at(0))
+    try check("RSA-PSS leaf", pssChain.items(), &roots, "example.test", at)
+
+    x509.Pool edRoots
+    defer edRoots.free()
+    scoped String edRootPem = try fs.readAll("tests/data/x509/edroot.pem")
+    try edRoots.addPem(edRootPem)
+    scoped ed := try load("edleaf.pem")
+    try check("Ed25519 chain", ed.items(), &edRoots, "", at)
+
+    print("hosts: example.test {leaf.matchesHost("example.test")}, a.wild.test {leaf.matchesHost("A.Wild.Test")}, wild.test {leaf.matchesHost("wild.test")}, a.b.wild.test {leaf.matchesHost("a.b.wild.test")}, 10.1.2.3 {leaf.matchesHost("10.1.2.3")}, other.test {leaf.matchesHost("other.test")}")
+    try check("wrong host", chain.items(), &roots, "other.test", at)
+    try check("no intermediate", leafs.items(), &roots, "example.test", at)
+
+    scoped expired := try load("expired.pem")
+    scoped List[x509.Certificate] exChain
+    defer exChain.clear()
+    exChain.push(expired.at(0))
+    exChain.push(inters.at(0))
+    try check("expired", exChain.items(), &roots, "example.test", at)
+
+    scoped client := try load("client.pem")
+    scoped List[x509.Certificate] clChain
+    defer clChain.clear()
+    clChain.push(client.at(0))
+    clChain.push(inters.at(0))
+    try check("for clients only", clChain.items(), &roots, "client.test", at)
+
+    scoped deep := try load("deep.pem")
+    scoped zero := try load("inter0.pem")
+    scoped sub := try load("sub.pem")
+    scoped List[x509.Certificate] deepChain
+    defer deepChain.clear()
+    deepChain.push(deep.at(0))
+    deepChain.push(sub.at(0))
+    deepChain.push(zero.at(0))
+    try check("below pathlen 0", deepChain.items(), &roots, "example.test", at)
+
+    rd := der.reader(r.publicKeyDer)
+    spki := try rd.next()
+    alg := try spki.inner().expect(der.SEQUENCE)
+    o := try alg.inner().expect(der.OID)
+    scoped String oid = try o.oid()
+    print("der: {der.tagName(spki.tag)}, OID {oid}")
+}

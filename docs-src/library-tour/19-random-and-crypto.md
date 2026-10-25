@@ -294,6 +294,39 @@ true false
 
 They come from OpenSSL's libcrypto, as TLS does, and `generateKey` needs OpenSSL 3.
 
+## Certificates
+
+TLS checks certificates itself. A program that speaks a protocol of its own over certificates, such as QUIC, or looks into them, uses `x509`. `x509.parse(der)` reads a certificate and `x509.parsePem(text)` every one in PEM text. A `Certificate` has its `subject` and `issuer` as text, such as `CN=example.com`, `notBefore` and `notAfter`, `dnsNames` and `ipAddresses`, whether it `isCA`, its `keyUsage` and `extKeyUsage`, and `publicKeyDer` for `crypto.loadPublicKey`.
+
+`matchesHost(host)` says whether a certificate is for a host, with a `*` only as the whole leftmost label. `signedBy(issuer)` checks a signature. `x509.verify(chain, roots, host)` does what a TLS client does: from the server's certificate, through the ones it came with, to one of `roots`, each within its dates, every issuer a CA that may sign. `x509.systemPool()` gives the certificates the system trusts, and `loadPool(path)` those in a PEM file.
+
+```iris run
+import fs, x509
+
+!void main() {
+    scoped String pem = try fs.readAll("tests/data/tls/server.pem")
+    scoped certs := try x509.parsePem(pem)
+    c := &certs.items()[0]
+    print("{c.subject}, issued by {c.issuer}")
+    print("for localhost: {c.matchesHost("localhost")}, for example.com: {c.matchesHost("example.com")}")
+
+    scoped roots := try x509.loadPool("tests/data/tls/ca.pem")
+    x509.verify(certs.items(), &roots, "localhost") catch e {
+        print("{e.code}: {e.message}")
+        return
+    }
+    print("the chain checks out")
+}
+```
+
+```output
+CN=localhost, issued by CN=Iris test CA
+for localhost: true, for example.com: false
+the chain checks out
+```
+
+`der` reads ASN.1 in DER, the encoding of certificates and keys, one value after another: `der.reader(bytes)`, `next()` and `expect(tag)`, `inner()` for what a SEQUENCE holds, and `int()`, `oid()`, `text()`, `bits()` and `time()` for the values.
+
 ## Tokens for logins
 
 A JSON Web Token carries claims, such as who the user is and when the token ends. They are signed, so the server can trust them when the client sends them back. `jwt.sign(claims, key)` signs a `@json` struct with HS256, and `jwt.verify[T](token, key)` checks the signature and reads the claims back. When the claims have `exp`, in seconds since 1970, a token past it fails with `JwtError.expired`:

@@ -1,0 +1,262 @@
+// ASN.1 in DER, the encoding of certificates, keys and many protocols'
+// structures (X.509, PKCS, LDAP, SNMP, Kerberos): a value is a tag, a
+// length and its contents, and a constructed one holds more values.
+
+import str, time
+
+// What reading fails with: invalid for bytes that aren't DER.
+pub enum DerError { invalid }
+
+// Tags of the universal class, as their first byte: a SEQUENCE is 0x30,
+// a SET 0x31, both constructed.
+pub const i64 BOOLEAN = 0x01
+pub const i64 INTEGER = 0x02
+pub const i64 BIT_STRING = 0x03
+pub const i64 OCTET_STRING = 0x04
+pub const i64 NULL = 0x05
+pub const i64 OID = 0x06
+pub const i64 ENUMERATED = 0x0a
+pub const i64 UTF8_STRING = 0x0c
+pub const i64 PRINTABLE_STRING = 0x13
+pub const i64 T61_STRING = 0x14
+pub const i64 IA5_STRING = 0x16
+pub const i64 UTC_TIME = 0x17
+pub const i64 GENERALIZED_TIME = 0x18
+pub const i64 BMP_STRING = 0x1e
+pub const i64 SEQUENCE = 0x30
+pub const i64 SET = 0x31
+
+// One value: its tag byte, its contents, and all of its bytes with the
+// tag and length. Both are views of the data it was read from.
+pub struct Value {
+    pub i64 tag
+    pub str contents
+    pub str whole
+}
+
+// Reads the values one after another.
+pub struct Reader {
+    str data
+    i64 at
+}
+
+// A Reader of the values in data.
+pub Reader reader(str data) => Reader{data: data}
+
+// Whether there is another value.
+pub bool Reader.more() => self.at < self.data.len
+
+// The next value.
+pub !Value Reader.next() {
+    d := self.data
+    start := self.at
+    if self.at + 2 > d.len {
+        return error(DerError.invalid, "a value cut short at byte {self.at}")
+    }
+    tag := i64(d[self.at])
+    if tag & 0x1f == 0x1f {
+        return error(DerError.invalid, "a tag of more than one byte at byte {self.at}")
+    }
+    self.at += 1
+    i64 len = i64(d[self.at])
+    self.at += 1
+    if len & 0x80 != 0 {
+        n := len & 0x7f
+        if n == 0 || n > 4 || self.at + n > d.len {
+            return error(DerError.invalid, "a length that isn't DER at byte {start}")
+        }
+        len = 0
+        for i in 0..n {
+            len = len << 8 | i64(d[self.at + i])
+        }
+        if len < 128 || (n > 1 && d[self.at] == 0) {
+            return error(DerError.invalid, "a length not in its shortest form at byte {start}")
+        }
+        self.at += n
+    }
+    if self.at + len > d.len {
+        return error(DerError.invalid, "a value longer than its data at byte {start}")
+    }
+    v := Value{tag: tag, contents: d[self.at:self.at + len], whole: d[start:self.at + len]}
+    self.at += len
+    return v
+}
+
+// The next value, which must have tag.
+pub !Value Reader.expect(i64 tag) {
+    v := try self.next()
+    if v.tag != tag {
+        return error(DerError.invalid, "{tagName(tag)} wanted, {tagName(v.tag)} found")
+    }
+    return v
+}
+
+// The next value when it has tag; found false, and nothing read, when
+// there is none or it has another tag: for OPTIONAL and DEFAULT fields.
+pub !(Value, bool) Reader.optional(i64 tag) {
+    if !self.more() || i64(self.data[self.at]) != tag {
+        return (Value{}, false)
+    }
+    v := try self.next()
+    return (v, true)
+}
+
+// A Reader of the values a constructed value (a SEQUENCE, a SET, a
+// context-specific [n]) holds.
+pub Reader Value.inner() => Reader{data: self.contents}
+
+// Whether the value is constructed: it holds other values.
+pub bool Value.constructed() => self.tag & 0x20 != 0
+
+// The tag byte of [n] in a SEQUENCE, constructed (explicit) or not
+// (implicit).
+pub i64 context(i64 n, bool constructed = true) => 0x80 | n | (if constructed { 0x20 } else { 0 })
+
+// The value as an INTEGER that fits in an i64.
+pub !i64 Value.int() {
+    c := self.contents
+    if c.len == 0 || c.len > 8 {
+        return error(DerError.invalid, "an INTEGER of {c.len} bytes doesn't fit in an i64")
+    }
+    i64 v = if c[0] & 0x80 != 0 { -1 } else { 0 }
+    for i in 0..c.len {
+        v = v << 8 | i64(c[i])
+    }
+    return v
+}
+
+// The magnitude of a positive INTEGER, without its leading 0: for serial
+// numbers and RSA's n and e.
+pub str Value.unsigned() {
+    c := self.contents
+    i64 i = 0
+    for i < c.len - 1 && c[i] == 0 {
+        i += 1
+    }
+    return c[i:]
+}
+
+// A BOOLEAN's value.
+pub !bool Value.bool() {
+    if self.contents.len != 1 {
+        return error(DerError.invalid, "a BOOLEAN of {self.contents.len} bytes")
+    }
+    return self.contents[0] != 0
+}
+
+// A BIT STRING's bytes, without the count of unused bits in front.
+pub !str Value.bits() {
+    if self.contents.len == 0 {
+        return error(DerError.invalid, "an empty BIT STRING")
+    }
+    return self.contents[1:]
+}
+
+// An OBJECT IDENTIFIER in dotted form, such as "2.5.4.3".
+pub !String Value.oid() {
+    c := self.contents
+    if c.len == 0 {
+        return error(DerError.invalid, "an empty OBJECT IDENTIFIER")
+    }
+    String out
+    i64 v = 0
+    bool first = true
+    for i in 0..c.len {
+        v = v << 7 | i64(c[i] & 0x7f)
+        if v > (1 << 56) {
+            out.free()
+            return error(DerError.invalid, "an OBJECT IDENTIFIER arc too large")
+        }
+        if c[i] & 0x80 != 0 {
+            continue
+        }
+        if first {
+            // the first byte holds two arcs: 40 * a + b
+            a := if v < 80 { v / 40 } else { 2 }
+            out.append("{a}.{v - a * 40}")
+            first = false
+        } else {
+            out.append(".{v}")
+        }
+        v = 0
+    }
+    if c[c.len - 1] & 0x80 != 0 {
+        out.free()
+        return error(DerError.invalid, "an OBJECT IDENTIFIER cut short")
+    }
+    return out
+}
+
+// A text value (UTF8String, PrintableString, IA5String, T61String, or
+// BMPString turned into UTF-8).
+pub !String Value.text() {
+    if self.tag == BMP_STRING {
+        String out
+        c := self.contents
+        if c.len % 2 != 0 {
+            return error(DerError.invalid, "a BMPString of an odd length")
+        }
+        for i in 0..c.len / 2 {
+            str.appendRune(&out, i32(i64(c[2 * i]) << 8 | i64(c[2 * i + 1])))
+        }
+        return out
+    }
+    return self.contents.copy()
+}
+
+i64 digits(str s, i64 at, i64 n) {
+    i64 v = 0
+    for i in at..at + n {
+        if s[i] < '0' || s[i] > '9' {
+            return -1
+        }
+        v = v * 10 + i64(s[i] - '0')
+    }
+    return v
+}
+
+// A UTCTime or GeneralizedTime, in UTC: YYMMDDhhmmssZ (a year below 50
+// is 20YY) or YYYYMMDDhhmmssZ.
+pub !time.Time Value.time() {
+    c := self.contents
+    i64 year = 0
+    i64 at = 0
+    if self.tag == UTC_TIME && c.len == 13 {
+        year = digits(c, 0, 2)
+        year += if year < 50 { 2000 } else { 1900 }
+        at = 2
+    } else if self.tag == GENERALIZED_TIME && c.len == 15 {
+        year = digits(c, 0, 4)
+        at = 4
+    } else {
+        return error(DerError.invalid, "a time that isn't YYMMDDhhmmssZ or YYYYMMDDhhmmssZ: '{c}'")
+    }
+    month := digits(c, at, 2)
+    day := digits(c, at + 2, 2)
+    hour := digits(c, at + 4, 2)
+    minute := digits(c, at + 6, 2)
+    second := digits(c, at + 8, 2)
+    if year < 0 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 ||
+        minute > 59 || second < 0 || second > 60 || c[c.len - 1] != 'Z' {
+            return error(DerError.invalid, "a time that isn't one: '{c}'")
+        }
+    return time.date(year, month, day, hour, minute, second)
+}
+
+// A tag's name, for messages.
+pub str tagName(i64 tag) => match tag {
+    0x01 => "BOOLEAN"
+    0x02 => "INTEGER"
+    0x03 => "BIT STRING"
+    0x04 => "OCTET STRING"
+    0x05 => "NULL"
+    0x06 => "OBJECT IDENTIFIER"
+    0x0c => "UTF8String"
+    0x13 => "PrintableString"
+    0x16 => "IA5String"
+    0x17 => "UTCTime"
+    0x18 => "GeneralizedTime"
+    0x30 => "SEQUENCE"
+    0x31 => "SET"
+    _ => if tag & 0xc0 == 0x80 { "a context-specific value" } else { "another tag" }
+}
