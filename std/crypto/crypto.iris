@@ -185,6 +185,16 @@ pub String seal(str key, str nonce, str data, str extra = "") {
     return out
 }
 
+// seal, adding to the end of out instead of making a new String: a
+// program that seals many packets keeps one out and empties it between
+// them.
+pub void sealTo(String *out, str key, str nonce, str data, str extra = "") {
+    if key.len != 32 || nonce.len != 12 {
+        panic("sealTo takes a 32-byte key and a 12-byte nonce, not {key.len} and {nonce.len}")
+    }
+    rawSeal(key.ptr, nonce.ptr, data.ptr, data.len, extra.ptr, extra.len, out)
+}
+
 @extern("iris_aes_seal")
 void rawAesSeal(u8 *key, i64 keyLen, u8 *nonce, u8 *data, i64 len, u8 *extra, i64 extraLen, String *out)
 
@@ -233,6 +243,17 @@ pub !String unseal(str key, str nonce, str sealed, str extra = "") {
         return error(CryptoError.tampered, "the sealed data was changed, or the key doesn't fit")
     }
     return out
+}
+
+// unseal, adding the data to the end of out. out is left as it was when
+// the data doesn't open.
+pub !void unsealTo(String *out, str key, str nonce, str sealed, str extra = "") {
+    if key.len != 32 || nonce.len != 12 {
+        panic("unsealTo takes a 32-byte key and a 12-byte nonce, not {key.len} and {nonce.len}")
+    }
+    if rawOpen(key.ptr, nonce.ptr, sealed.ptr, sealed.len, extra.ptr, extra.len, out) == 0 {
+        return error(CryptoError.tampered, "the sealed data was changed, or the key doesn't fit")
+    }
 }
 
 // Whether a and b are the same, taking the same time wherever they differ.

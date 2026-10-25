@@ -13117,17 +13117,29 @@ static void aeadTag(const unsigned char key[32], const unsigned char nonce[12], 
     polyFinish(&p, tag);
 }
 
+/* Room for n more bytes at the end of out. data and aad may point into
+   out: they are moved along with it. */
+static unsigned char *aeadRoom(IrisString *out, int64_t n, const unsigned char **data, const unsigned char **aad) {
+    if (out->len + n > out->cap) {
+        int64_t at = -1;
+        if (*aad && out->ptr && (const char *)*aad >= out->ptr && (const char *)*aad < out->ptr + out->len) {
+            at = (const char *)*aad - out->ptr;
+        }
+        const char *d = (const char *)*data;
+        stringGrow(out, &d, n);
+        *data = (const unsigned char *)d;
+        if (at >= 0) *aad = (const unsigned char *)out->ptr + at;
+    }
+    return (unsigned char *)out->ptr + out->len;
+}
+
 /* ChaCha20-Poly1305: the data sealed, then its 16-byte tag, added to out */
 void iris_chacha_seal(const unsigned char *key, const unsigned char *nonce, const unsigned char *data, int64_t len,
                       const unsigned char *aad, int64_t aadLen, IrisString *out) {
-    unsigned char *ct = malloc((size_t)len + 16);
-    if (!ct) {
-        outOfMemory();
-    }
+    unsigned char *ct = aeadRoom(out, len + 16, &data, &aad);
     chachaXor(key, 1, nonce, data, ct, (size_t)len);
     aeadTag(key, nonce, aad, (size_t)aadLen, ct, (size_t)len, ct + len);
-    iris_string_append(out, (const char *)ct, len + 16);
-    free(ct);
+    out->len += len + 16;
 }
 
 /* Opens what seal made: 1 and the data added to out, or 0 when the tag
@@ -13143,13 +13155,12 @@ int iris_chacha_open(const unsigned char *key, const unsigned char *nonce, const
     if (!iris_const_equal((const char *)tag, 16, (const char *)sealed + n, 16)) {
         return 0;
     }
-    unsigned char *pt = malloc(n ? n : 1);
-    if (!pt) {
-        outOfMemory();
+    if (n == 0) {
+        return 1;
     }
+    unsigned char *pt = aeadRoom(out, (int64_t)n, &sealed, &aad);
     chachaXor(key, 1, nonce, sealed, pt, n);
-    iris_string_append(out, (const char *)pt, (int64_t)n);
-    free(pt);
+    out->len += (int64_t)n;
     return 1;
 }
 

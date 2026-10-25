@@ -204,11 +204,9 @@ import crypto, random
 String encrypt(str key, str plain) {
     u8[12] nonce
     random.bytes(nonce)
-    scoped String sealed = crypto.seal(key, nonce, plain)
-
     String out
     out.append(nonce[:])
-    out.append(sealed)
+    crypto.sealTo(&out, key, nonce, plain)
     return out
 }
 
@@ -237,6 +235,8 @@ String encrypt(str key, str plain) {
 db password: hunter2
 CryptoError.tampered
 ```
+
+`sealTo(&out, key, nonce, data)` adds the sealed data to the end of a String instead of making a new one, as `encrypt` does above after the nonce. A program that seals many packets keeps one String and clears it between them. `unsealTo` does the same for opening.
 
 `aesSeal` and `aesUnseal` do the same with AES-GCM, which many file formats and protocols use. An optional `extra` text, such as a record's id, goes along unencrypted but is checked too. The [library](../std/index.html#crypto) has them, and key agreement with X25519.
 

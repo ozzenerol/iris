@@ -1,0 +1,45 @@
+// expect: 21 true hello
+// expect: 4 hdr: hello
+// expect: true 4
+// expect: true
+// sealTo and unsealTo add to a String that is kept and emptied.
+import crypto
+
+!void main() {
+    u8[32] key
+    key[0] = 1
+    u8[12] nonce
+    scoped String msg
+    crypto.sealTo(&msg, key[:], nonce[:], "hello", "hdr")
+    scoped String plain = try crypto.unseal(key[:], nonce[:], msg, "hdr")
+    scoped String whole = crypto.seal(key[:], nonce[:], "hello", "hdr")
+    print("{msg.len} {crypto.equal(msg, whole)} {plain}")
+
+    scoped String out
+    out.append("hdr: ")
+    try crypto.unsealTo(&out, key[:], nonce[:], msg, "hdr")
+    print("{msg.len - 17} {out}")
+
+    // a changed byte leaves out as it was
+    msg.clear()
+    crypto.sealTo(&msg, key[:], nonce[:], "data")
+    scoped String keep
+    keep.append("kept")
+    u8[64] bad
+    for i in 0..msg.len {
+        bad[i] = msg[i]
+    }
+    bad[0] ^= 1
+    failed := false
+    crypto.unsealTo(&keep, key[:], nonce[:], bad[0:msg.len]) catch e {
+        failed = true
+    }
+    print("{failed} {keep.len}")
+
+    // the data may be part of out itself
+    scoped String self
+    self.append("abcdefgh")
+    crypto.sealTo(&self, key[:], nonce[:], self[0:8])
+    scoped String back = try crypto.unseal(key[:], nonce[:], self[8:])
+    print("{back == "abcdefgh"}")
+}
