@@ -301,6 +301,23 @@ root is 0, in group 0
 
 `os.cpuCount()` is how many cores the program may run on, and `os.pinThread(core)`, on Linux, keeps the calling thread on one of them, so a thread per core keeps its caches warm.
 
+## Limits and sandboxes
+
+`os.setLimit(.openFiles, 4096)` sets a resource limit, and `os.limit(l)` reads one as its soft and hard values: open descriptors, processes, the largest file, memory, CPU seconds and the others of `os.Limit`. A server that holds many connections raises `.openFiles` first.
+
+A program that parses what comes from the network can shut itself in, so a bug in that code reaches little. `os.chroot(dir)` makes a folder the root of what it can see, which only root may do, before it gives up root with `runAs`. `os.noNewPrivileges()` stops any program it starts from gaining privileges. On Linux, `os.allowSyscalls(["openat", ...])` lets only the system calls named through from then on, for every thread, besides those the runtime makes itself to run tasks and use what it has open; any other fails with permission denied, or with `kill: true` ends the program.
+
+```iris
+import os
+
+!void main() {
+    try os.setLimit(.openFiles, 1024)
+    try os.allowSyscalls([])
+    // from here the program can read and write the sockets it has, and
+    // nothing else: opening a file fails with FsError.permission
+}
+```
+
 ## Input
 
 The second argument to `run` goes to the program's standard input:

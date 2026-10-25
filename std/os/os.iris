@@ -356,3 +356,98 @@ pub !Group lookupGroupId(i64 gid) {
     }
     return groupFrom(n, id, members)
 }
+
+@extern("iris_os_chroot")
+i32 rawChroot(u8 *path, i64 len)
+
+@extern("iris_os_set_limit")
+i32 rawSetLimit(i32 which, i64 soft, i64 hard)
+
+@extern("iris_os_get_limit")
+i32 rawGetLimit(i32 which, i64 *soft, i64 *hard)
+
+@extern("iris_os_no_new_privs")
+i32 rawNoNewPrivs()
+
+@extern("iris_os_allow_syscalls")
+i32 rawAllowSyscalls(u8 *names, i64 len, i32 kill, String *bad)
+
+@extern("iris_errno_text")
+void rawErrnoText(i32 e, String *out)
+
+!void sysFail(i32 e, str what) {
+    if e == 0 {
+        return
+    }
+    if e == -1 {
+        return error(OsError.other, "{what}: only on Linux")
+    }
+    if e == 1 || e == 13 {
+        return error(OsError.permission, "{what}: not allowed")
+    }
+    scoped String text
+    rawErrnoText(e, &text)
+    return error(OsError.other, "{what}: {text}")
+}
+
+// Makes path the root of the file system for the program, and goes to it:
+// nothing outside it can be reached by name from then on. Only root may;
+// a program then gives up root with runAs, or chroot is no barrier.
+pub !void chroot(str path) => try sysFail(rawChroot(path.ptr, path.len), "chroot to {path}")
+
+// The resource limits setLimit sets: openFiles (descriptors), processes,
+// fileSize (the largest file it may write), memory (address space),
+// coreSize, cpuTime (seconds), stack, data and lockedMemory, in bytes.
+pub enum Limit { openFiles, processes, fileSize, memory, coreSize, cpuTime, stack, data, lockedMemory }
+
+i32 limitCode(Limit l) => match l {
+    .openFiles => 0
+    .processes => 1
+    .fileSize => 2
+    .memory => 3
+    .coreSize => 4
+    .cpuTime => 5
+    .stack => 6
+    .data => 7
+    .lockedMemory => 8
+}
+
+// Sets a limit: soft is what holds, hard how far soft may be raised again
+// (only root raises hard); -1 for no limit.
+pub !void setLimit(Limit l, i64 soft, i64 hard = -1) {
+    try sysFail(rawSetLimit(limitCode(l), soft, hard), "setting the limit {l}")
+}
+
+// A limit as (soft, hard); -1 for none.
+pub !(i64, i64) limit(Limit l) {
+    i64 soft
+    i64 hard
+    try sysFail(rawGetLimit(limitCode(l), &soft, &hard), "reading the limit {l}")
+    return (soft, hard)
+}
+
+// From now on no program this one starts can gain privileges, through a
+// setuid file or file capabilities (Linux).
+pub !void noNewPrivileges() => try sysFail(rawNoNewPrivs(), "no_new_privs")
+
+// Lets only the system calls named through from now on, for every thread
+// (seccomp, Linux), besides those the runtime makes itself (memory,
+// threads, the event loop, reading and writing what is open): any other
+// fails with permission denied, or with kill ends the program. A network
+// child that only talks over sockets it has needs little more. A name the
+// system doesn't know fails.
+pub !void allowSyscalls(str[] names, bool kill = false) {
+    String packed
+    defer packed.free()
+    for n in names {
+        packed.append(n)
+        u8[1] z = [0]
+        packed.append(z[0:1])
+    }
+    scoped String bad
+    e := rawAllowSyscalls(packed.ptr, packed.len, if kill { 1 } else { 0 }, &bad)
+    if e == -2 {
+        return error(OsError.invalid, "allowing system calls: no system call {bad}")
+    }
+    try sysFail(e, "allowing only some system calls")
+}

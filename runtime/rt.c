@@ -7823,6 +7823,1267 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
     return code;
 }
 
+/* ---------------------------------------------------------------- limits and sandboxes
+
+   os.chroot, os.setLimit, os.noNewPrivileges, and os.allowSyscalls: a
+   seccomp filter (Linux) that lets the system calls named through, with
+   those the runtime itself makes, and fails the rest with EPERM or ends
+   the process. The numbers come from this system's headers. */
+
+#include <sys/resource.h>
+
+int iris_os_chroot(const char *path, int64_t len) {
+    char *p = cpath(path, len);
+    if (!p) return ENOENT;
+    int r = chroot(p);
+    int e = errno;
+    free(p);
+    if (r != 0) return e;
+    return chdir("/") == 0 ? 0 : errno;
+}
+
+static const int limitIds[] = {RLIMIT_NOFILE, RLIMIT_NPROC, RLIMIT_FSIZE, RLIMIT_AS, RLIMIT_CORE, RLIMIT_CPU,
+                               RLIMIT_STACK, RLIMIT_DATA, RLIMIT_MEMLOCK};
+
+/* -1 for no limit. 0, or errno. */
+int iris_os_set_limit(int which, int64_t soft, int64_t hard) {
+    if (which < 0 || which >= (int)(sizeof limitIds / sizeof limitIds[0])) return EINVAL;
+    struct rlimit r;
+    r.rlim_cur = soft < 0 ? RLIM_INFINITY : (rlim_t)soft;
+    r.rlim_max = hard < 0 ? RLIM_INFINITY : (rlim_t)hard;
+    return setrlimit(limitIds[which], &r) == 0 ? 0 : errno;
+}
+
+int iris_os_get_limit(int which, int64_t *soft, int64_t *hard) {
+    if (which < 0 || which >= (int)(sizeof limitIds / sizeof limitIds[0])) return EINVAL;
+    struct rlimit r;
+    if (getrlimit(limitIds[which], &r) != 0) return errno;
+    *soft = r.rlim_cur == RLIM_INFINITY ? -1 : (int64_t)r.rlim_cur;
+    *hard = r.rlim_max == RLIM_INFINITY ? -1 : (int64_t)r.rlim_max;
+    return 0;
+}
+
+int iris_os_no_new_privs(void) {
+#ifdef __linux__
+    return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 ? 0 : errno;
+#else
+    return -1;
+#endif
+}
+
+#ifdef __linux__
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <linux/audit.h>
+
+static const struct {
+    const char *name;
+    int nr;
+} sysNames[] = {
+#ifdef SYS_accept
+    {"accept", SYS_accept},
+#endif
+#ifdef SYS_accept4
+    {"accept4", SYS_accept4},
+#endif
+#ifdef SYS_access
+    {"access", SYS_access},
+#endif
+#ifdef SYS_acct
+    {"acct", SYS_acct},
+#endif
+#ifdef SYS_add_key
+    {"add_key", SYS_add_key},
+#endif
+#ifdef SYS_adjtimex
+    {"adjtimex", SYS_adjtimex},
+#endif
+#ifdef SYS_afs_syscall
+    {"afs_syscall", SYS_afs_syscall},
+#endif
+#ifdef SYS_alarm
+    {"alarm", SYS_alarm},
+#endif
+#ifdef SYS_arch_prctl
+    {"arch_prctl", SYS_arch_prctl},
+#endif
+#ifdef SYS_bind
+    {"bind", SYS_bind},
+#endif
+#ifdef SYS_bpf
+    {"bpf", SYS_bpf},
+#endif
+#ifdef SYS_brk
+    {"brk", SYS_brk},
+#endif
+#ifdef SYS_cachestat
+    {"cachestat", SYS_cachestat},
+#endif
+#ifdef SYS_capget
+    {"capget", SYS_capget},
+#endif
+#ifdef SYS_capset
+    {"capset", SYS_capset},
+#endif
+#ifdef SYS_chdir
+    {"chdir", SYS_chdir},
+#endif
+#ifdef SYS_chmod
+    {"chmod", SYS_chmod},
+#endif
+#ifdef SYS_chown
+    {"chown", SYS_chown},
+#endif
+#ifdef SYS_chroot
+    {"chroot", SYS_chroot},
+#endif
+#ifdef SYS_clock_adjtime
+    {"clock_adjtime", SYS_clock_adjtime},
+#endif
+#ifdef SYS_clock_getres
+    {"clock_getres", SYS_clock_getres},
+#endif
+#ifdef SYS_clock_gettime
+    {"clock_gettime", SYS_clock_gettime},
+#endif
+#ifdef SYS_clock_nanosleep
+    {"clock_nanosleep", SYS_clock_nanosleep},
+#endif
+#ifdef SYS_clock_settime
+    {"clock_settime", SYS_clock_settime},
+#endif
+#ifdef SYS_clone
+    {"clone", SYS_clone},
+#endif
+#ifdef SYS_clone3
+    {"clone3", SYS_clone3},
+#endif
+#ifdef SYS_close
+    {"close", SYS_close},
+#endif
+#ifdef SYS_close_range
+    {"close_range", SYS_close_range},
+#endif
+#ifdef SYS_connect
+    {"connect", SYS_connect},
+#endif
+#ifdef SYS_copy_file_range
+    {"copy_file_range", SYS_copy_file_range},
+#endif
+#ifdef SYS_creat
+    {"creat", SYS_creat},
+#endif
+#ifdef SYS_create_module
+    {"create_module", SYS_create_module},
+#endif
+#ifdef SYS_delete_module
+    {"delete_module", SYS_delete_module},
+#endif
+#ifdef SYS_dup
+    {"dup", SYS_dup},
+#endif
+#ifdef SYS_dup2
+    {"dup2", SYS_dup2},
+#endif
+#ifdef SYS_dup3
+    {"dup3", SYS_dup3},
+#endif
+#ifdef SYS_epoll_create
+    {"epoll_create", SYS_epoll_create},
+#endif
+#ifdef SYS_epoll_create1
+    {"epoll_create1", SYS_epoll_create1},
+#endif
+#ifdef SYS_epoll_ctl
+    {"epoll_ctl", SYS_epoll_ctl},
+#endif
+#ifdef SYS_epoll_ctl_old
+    {"epoll_ctl_old", SYS_epoll_ctl_old},
+#endif
+#ifdef SYS_epoll_pwait
+    {"epoll_pwait", SYS_epoll_pwait},
+#endif
+#ifdef SYS_epoll_pwait2
+    {"epoll_pwait2", SYS_epoll_pwait2},
+#endif
+#ifdef SYS_epoll_wait
+    {"epoll_wait", SYS_epoll_wait},
+#endif
+#ifdef SYS_epoll_wait_old
+    {"epoll_wait_old", SYS_epoll_wait_old},
+#endif
+#ifdef SYS_eventfd
+    {"eventfd", SYS_eventfd},
+#endif
+#ifdef SYS_eventfd2
+    {"eventfd2", SYS_eventfd2},
+#endif
+#ifdef SYS_execve
+    {"execve", SYS_execve},
+#endif
+#ifdef SYS_execveat
+    {"execveat", SYS_execveat},
+#endif
+#ifdef SYS_exit
+    {"exit", SYS_exit},
+#endif
+#ifdef SYS_exit_group
+    {"exit_group", SYS_exit_group},
+#endif
+#ifdef SYS_faccessat
+    {"faccessat", SYS_faccessat},
+#endif
+#ifdef SYS_faccessat2
+    {"faccessat2", SYS_faccessat2},
+#endif
+#ifdef SYS_fadvise64
+    {"fadvise64", SYS_fadvise64},
+#endif
+#ifdef SYS_fallocate
+    {"fallocate", SYS_fallocate},
+#endif
+#ifdef SYS_fanotify_init
+    {"fanotify_init", SYS_fanotify_init},
+#endif
+#ifdef SYS_fanotify_mark
+    {"fanotify_mark", SYS_fanotify_mark},
+#endif
+#ifdef SYS_fchdir
+    {"fchdir", SYS_fchdir},
+#endif
+#ifdef SYS_fchmod
+    {"fchmod", SYS_fchmod},
+#endif
+#ifdef SYS_fchmodat
+    {"fchmodat", SYS_fchmodat},
+#endif
+#ifdef SYS_fchmodat2
+    {"fchmodat2", SYS_fchmodat2},
+#endif
+#ifdef SYS_fchown
+    {"fchown", SYS_fchown},
+#endif
+#ifdef SYS_fchownat
+    {"fchownat", SYS_fchownat},
+#endif
+#ifdef SYS_fcntl
+    {"fcntl", SYS_fcntl},
+#endif
+#ifdef SYS_fdatasync
+    {"fdatasync", SYS_fdatasync},
+#endif
+#ifdef SYS_fgetxattr
+    {"fgetxattr", SYS_fgetxattr},
+#endif
+#ifdef SYS_finit_module
+    {"finit_module", SYS_finit_module},
+#endif
+#ifdef SYS_flistxattr
+    {"flistxattr", SYS_flistxattr},
+#endif
+#ifdef SYS_flock
+    {"flock", SYS_flock},
+#endif
+#ifdef SYS_fork
+    {"fork", SYS_fork},
+#endif
+#ifdef SYS_fremovexattr
+    {"fremovexattr", SYS_fremovexattr},
+#endif
+#ifdef SYS_fsconfig
+    {"fsconfig", SYS_fsconfig},
+#endif
+#ifdef SYS_fsetxattr
+    {"fsetxattr", SYS_fsetxattr},
+#endif
+#ifdef SYS_fsmount
+    {"fsmount", SYS_fsmount},
+#endif
+#ifdef SYS_fsopen
+    {"fsopen", SYS_fsopen},
+#endif
+#ifdef SYS_fspick
+    {"fspick", SYS_fspick},
+#endif
+#ifdef SYS_fstat
+    {"fstat", SYS_fstat},
+#endif
+#ifdef SYS_fstatfs
+    {"fstatfs", SYS_fstatfs},
+#endif
+#ifdef SYS_fsync
+    {"fsync", SYS_fsync},
+#endif
+#ifdef SYS_ftruncate
+    {"ftruncate", SYS_ftruncate},
+#endif
+#ifdef SYS_futex
+    {"futex", SYS_futex},
+#endif
+#ifdef SYS_futex_requeue
+    {"futex_requeue", SYS_futex_requeue},
+#endif
+#ifdef SYS_futex_wait
+    {"futex_wait", SYS_futex_wait},
+#endif
+#ifdef SYS_futex_waitv
+    {"futex_waitv", SYS_futex_waitv},
+#endif
+#ifdef SYS_futex_wake
+    {"futex_wake", SYS_futex_wake},
+#endif
+#ifdef SYS_futimesat
+    {"futimesat", SYS_futimesat},
+#endif
+#ifdef SYS_getcpu
+    {"getcpu", SYS_getcpu},
+#endif
+#ifdef SYS_getcwd
+    {"getcwd", SYS_getcwd},
+#endif
+#ifdef SYS_getdents
+    {"getdents", SYS_getdents},
+#endif
+#ifdef SYS_getdents64
+    {"getdents64", SYS_getdents64},
+#endif
+#ifdef SYS_getegid
+    {"getegid", SYS_getegid},
+#endif
+#ifdef SYS_geteuid
+    {"geteuid", SYS_geteuid},
+#endif
+#ifdef SYS_getgid
+    {"getgid", SYS_getgid},
+#endif
+#ifdef SYS_getgroups
+    {"getgroups", SYS_getgroups},
+#endif
+#ifdef SYS_getitimer
+    {"getitimer", SYS_getitimer},
+#endif
+#ifdef SYS_get_kernel_syms
+    {"get_kernel_syms", SYS_get_kernel_syms},
+#endif
+#ifdef SYS_get_mempolicy
+    {"get_mempolicy", SYS_get_mempolicy},
+#endif
+#ifdef SYS_getpeername
+    {"getpeername", SYS_getpeername},
+#endif
+#ifdef SYS_getpgid
+    {"getpgid", SYS_getpgid},
+#endif
+#ifdef SYS_getpgrp
+    {"getpgrp", SYS_getpgrp},
+#endif
+#ifdef SYS_getpid
+    {"getpid", SYS_getpid},
+#endif
+#ifdef SYS_getpmsg
+    {"getpmsg", SYS_getpmsg},
+#endif
+#ifdef SYS_getppid
+    {"getppid", SYS_getppid},
+#endif
+#ifdef SYS_getpriority
+    {"getpriority", SYS_getpriority},
+#endif
+#ifdef SYS_getrandom
+    {"getrandom", SYS_getrandom},
+#endif
+#ifdef SYS_getresgid
+    {"getresgid", SYS_getresgid},
+#endif
+#ifdef SYS_getresuid
+    {"getresuid", SYS_getresuid},
+#endif
+#ifdef SYS_getrlimit
+    {"getrlimit", SYS_getrlimit},
+#endif
+#ifdef SYS_get_robust_list
+    {"get_robust_list", SYS_get_robust_list},
+#endif
+#ifdef SYS_getrusage
+    {"getrusage", SYS_getrusage},
+#endif
+#ifdef SYS_getsid
+    {"getsid", SYS_getsid},
+#endif
+#ifdef SYS_getsockname
+    {"getsockname", SYS_getsockname},
+#endif
+#ifdef SYS_getsockopt
+    {"getsockopt", SYS_getsockopt},
+#endif
+#ifdef SYS_get_thread_area
+    {"get_thread_area", SYS_get_thread_area},
+#endif
+#ifdef SYS_gettid
+    {"gettid", SYS_gettid},
+#endif
+#ifdef SYS_gettimeofday
+    {"gettimeofday", SYS_gettimeofday},
+#endif
+#ifdef SYS_getuid
+    {"getuid", SYS_getuid},
+#endif
+#ifdef SYS_getxattr
+    {"getxattr", SYS_getxattr},
+#endif
+#ifdef SYS_init_module
+    {"init_module", SYS_init_module},
+#endif
+#ifdef SYS_inotify_add_watch
+    {"inotify_add_watch", SYS_inotify_add_watch},
+#endif
+#ifdef SYS_inotify_init
+    {"inotify_init", SYS_inotify_init},
+#endif
+#ifdef SYS_inotify_init1
+    {"inotify_init1", SYS_inotify_init1},
+#endif
+#ifdef SYS_inotify_rm_watch
+    {"inotify_rm_watch", SYS_inotify_rm_watch},
+#endif
+#ifdef SYS_io_cancel
+    {"io_cancel", SYS_io_cancel},
+#endif
+#ifdef SYS_ioctl
+    {"ioctl", SYS_ioctl},
+#endif
+#ifdef SYS_io_destroy
+    {"io_destroy", SYS_io_destroy},
+#endif
+#ifdef SYS_io_getevents
+    {"io_getevents", SYS_io_getevents},
+#endif
+#ifdef SYS_ioperm
+    {"ioperm", SYS_ioperm},
+#endif
+#ifdef SYS_io_pgetevents
+    {"io_pgetevents", SYS_io_pgetevents},
+#endif
+#ifdef SYS_iopl
+    {"iopl", SYS_iopl},
+#endif
+#ifdef SYS_ioprio_get
+    {"ioprio_get", SYS_ioprio_get},
+#endif
+#ifdef SYS_ioprio_set
+    {"ioprio_set", SYS_ioprio_set},
+#endif
+#ifdef SYS_io_setup
+    {"io_setup", SYS_io_setup},
+#endif
+#ifdef SYS_io_submit
+    {"io_submit", SYS_io_submit},
+#endif
+#ifdef SYS_io_uring_enter
+    {"io_uring_enter", SYS_io_uring_enter},
+#endif
+#ifdef SYS_io_uring_register
+    {"io_uring_register", SYS_io_uring_register},
+#endif
+#ifdef SYS_io_uring_setup
+    {"io_uring_setup", SYS_io_uring_setup},
+#endif
+#ifdef SYS_kcmp
+    {"kcmp", SYS_kcmp},
+#endif
+#ifdef SYS_kexec_file_load
+    {"kexec_file_load", SYS_kexec_file_load},
+#endif
+#ifdef SYS_kexec_load
+    {"kexec_load", SYS_kexec_load},
+#endif
+#ifdef SYS_keyctl
+    {"keyctl", SYS_keyctl},
+#endif
+#ifdef SYS_kill
+    {"kill", SYS_kill},
+#endif
+#ifdef SYS_landlock_add_rule
+    {"landlock_add_rule", SYS_landlock_add_rule},
+#endif
+#ifdef SYS_landlock_create_ruleset
+    {"landlock_create_ruleset", SYS_landlock_create_ruleset},
+#endif
+#ifdef SYS_landlock_restrict_self
+    {"landlock_restrict_self", SYS_landlock_restrict_self},
+#endif
+#ifdef SYS_lchown
+    {"lchown", SYS_lchown},
+#endif
+#ifdef SYS_lgetxattr
+    {"lgetxattr", SYS_lgetxattr},
+#endif
+#ifdef SYS_link
+    {"link", SYS_link},
+#endif
+#ifdef SYS_linkat
+    {"linkat", SYS_linkat},
+#endif
+#ifdef SYS_listen
+    {"listen", SYS_listen},
+#endif
+#ifdef SYS_listmount
+    {"listmount", SYS_listmount},
+#endif
+#ifdef SYS_listxattr
+    {"listxattr", SYS_listxattr},
+#endif
+#ifdef SYS_llistxattr
+    {"llistxattr", SYS_llistxattr},
+#endif
+#ifdef SYS_lookup_dcookie
+    {"lookup_dcookie", SYS_lookup_dcookie},
+#endif
+#ifdef SYS_lremovexattr
+    {"lremovexattr", SYS_lremovexattr},
+#endif
+#ifdef SYS_lseek
+    {"lseek", SYS_lseek},
+#endif
+#ifdef SYS_lsetxattr
+    {"lsetxattr", SYS_lsetxattr},
+#endif
+#ifdef SYS_lsm_get_self_attr
+    {"lsm_get_self_attr", SYS_lsm_get_self_attr},
+#endif
+#ifdef SYS_lsm_list_modules
+    {"lsm_list_modules", SYS_lsm_list_modules},
+#endif
+#ifdef SYS_lsm_set_self_attr
+    {"lsm_set_self_attr", SYS_lsm_set_self_attr},
+#endif
+#ifdef SYS_lstat
+    {"lstat", SYS_lstat},
+#endif
+#ifdef SYS_madvise
+    {"madvise", SYS_madvise},
+#endif
+#ifdef SYS_map_shadow_stack
+    {"map_shadow_stack", SYS_map_shadow_stack},
+#endif
+#ifdef SYS_mbind
+    {"mbind", SYS_mbind},
+#endif
+#ifdef SYS_membarrier
+    {"membarrier", SYS_membarrier},
+#endif
+#ifdef SYS_memfd_create
+    {"memfd_create", SYS_memfd_create},
+#endif
+#ifdef SYS_memfd_secret
+    {"memfd_secret", SYS_memfd_secret},
+#endif
+#ifdef SYS_migrate_pages
+    {"migrate_pages", SYS_migrate_pages},
+#endif
+#ifdef SYS_mincore
+    {"mincore", SYS_mincore},
+#endif
+#ifdef SYS_mkdir
+    {"mkdir", SYS_mkdir},
+#endif
+#ifdef SYS_mkdirat
+    {"mkdirat", SYS_mkdirat},
+#endif
+#ifdef SYS_mknod
+    {"mknod", SYS_mknod},
+#endif
+#ifdef SYS_mknodat
+    {"mknodat", SYS_mknodat},
+#endif
+#ifdef SYS_mlock
+    {"mlock", SYS_mlock},
+#endif
+#ifdef SYS_mlock2
+    {"mlock2", SYS_mlock2},
+#endif
+#ifdef SYS_mlockall
+    {"mlockall", SYS_mlockall},
+#endif
+#ifdef SYS_mmap
+    {"mmap", SYS_mmap},
+#endif
+#ifdef SYS_modify_ldt
+    {"modify_ldt", SYS_modify_ldt},
+#endif
+#ifdef SYS_mount
+    {"mount", SYS_mount},
+#endif
+#ifdef SYS_mount_setattr
+    {"mount_setattr", SYS_mount_setattr},
+#endif
+#ifdef SYS_move_mount
+    {"move_mount", SYS_move_mount},
+#endif
+#ifdef SYS_move_pages
+    {"move_pages", SYS_move_pages},
+#endif
+#ifdef SYS_mprotect
+    {"mprotect", SYS_mprotect},
+#endif
+#ifdef SYS_mq_getsetattr
+    {"mq_getsetattr", SYS_mq_getsetattr},
+#endif
+#ifdef SYS_mq_notify
+    {"mq_notify", SYS_mq_notify},
+#endif
+#ifdef SYS_mq_open
+    {"mq_open", SYS_mq_open},
+#endif
+#ifdef SYS_mq_timedreceive
+    {"mq_timedreceive", SYS_mq_timedreceive},
+#endif
+#ifdef SYS_mq_timedsend
+    {"mq_timedsend", SYS_mq_timedsend},
+#endif
+#ifdef SYS_mq_unlink
+    {"mq_unlink", SYS_mq_unlink},
+#endif
+#ifdef SYS_mremap
+    {"mremap", SYS_mremap},
+#endif
+#ifdef SYS_mseal
+    {"mseal", SYS_mseal},
+#endif
+#ifdef SYS_msgctl
+    {"msgctl", SYS_msgctl},
+#endif
+#ifdef SYS_msgget
+    {"msgget", SYS_msgget},
+#endif
+#ifdef SYS_msgrcv
+    {"msgrcv", SYS_msgrcv},
+#endif
+#ifdef SYS_msgsnd
+    {"msgsnd", SYS_msgsnd},
+#endif
+#ifdef SYS_msync
+    {"msync", SYS_msync},
+#endif
+#ifdef SYS_munlock
+    {"munlock", SYS_munlock},
+#endif
+#ifdef SYS_munlockall
+    {"munlockall", SYS_munlockall},
+#endif
+#ifdef SYS_munmap
+    {"munmap", SYS_munmap},
+#endif
+#ifdef SYS_name_to_handle_at
+    {"name_to_handle_at", SYS_name_to_handle_at},
+#endif
+#ifdef SYS_nanosleep
+    {"nanosleep", SYS_nanosleep},
+#endif
+#ifdef SYS_newfstatat
+    {"newfstatat", SYS_newfstatat},
+#endif
+#ifdef SYS_nfsservctl
+    {"nfsservctl", SYS_nfsservctl},
+#endif
+#ifdef SYS_open
+    {"open", SYS_open},
+#endif
+#ifdef SYS_openat
+    {"openat", SYS_openat},
+#endif
+#ifdef SYS_openat2
+    {"openat2", SYS_openat2},
+#endif
+#ifdef SYS_open_by_handle_at
+    {"open_by_handle_at", SYS_open_by_handle_at},
+#endif
+#ifdef SYS_open_tree
+    {"open_tree", SYS_open_tree},
+#endif
+#ifdef SYS_pause
+    {"pause", SYS_pause},
+#endif
+#ifdef SYS_perf_event_open
+    {"perf_event_open", SYS_perf_event_open},
+#endif
+#ifdef SYS_personality
+    {"personality", SYS_personality},
+#endif
+#ifdef SYS_pidfd_getfd
+    {"pidfd_getfd", SYS_pidfd_getfd},
+#endif
+#ifdef SYS_pidfd_open
+    {"pidfd_open", SYS_pidfd_open},
+#endif
+#ifdef SYS_pidfd_send_signal
+    {"pidfd_send_signal", SYS_pidfd_send_signal},
+#endif
+#ifdef SYS_pipe
+    {"pipe", SYS_pipe},
+#endif
+#ifdef SYS_pipe2
+    {"pipe2", SYS_pipe2},
+#endif
+#ifdef SYS_pivot_root
+    {"pivot_root", SYS_pivot_root},
+#endif
+#ifdef SYS_pkey_alloc
+    {"pkey_alloc", SYS_pkey_alloc},
+#endif
+#ifdef SYS_pkey_free
+    {"pkey_free", SYS_pkey_free},
+#endif
+#ifdef SYS_pkey_mprotect
+    {"pkey_mprotect", SYS_pkey_mprotect},
+#endif
+#ifdef SYS_poll
+    {"poll", SYS_poll},
+#endif
+#ifdef SYS_ppoll
+    {"ppoll", SYS_ppoll},
+#endif
+#ifdef SYS_prctl
+    {"prctl", SYS_prctl},
+#endif
+#ifdef SYS_pread64
+    {"pread64", SYS_pread64},
+#endif
+#ifdef SYS_preadv
+    {"preadv", SYS_preadv},
+#endif
+#ifdef SYS_preadv2
+    {"preadv2", SYS_preadv2},
+#endif
+#ifdef SYS_prlimit64
+    {"prlimit64", SYS_prlimit64},
+#endif
+#ifdef SYS_process_madvise
+    {"process_madvise", SYS_process_madvise},
+#endif
+#ifdef SYS_process_mrelease
+    {"process_mrelease", SYS_process_mrelease},
+#endif
+#ifdef SYS_process_vm_readv
+    {"process_vm_readv", SYS_process_vm_readv},
+#endif
+#ifdef SYS_process_vm_writev
+    {"process_vm_writev", SYS_process_vm_writev},
+#endif
+#ifdef SYS_pselect6
+    {"pselect6", SYS_pselect6},
+#endif
+#ifdef SYS_ptrace
+    {"ptrace", SYS_ptrace},
+#endif
+#ifdef SYS_putpmsg
+    {"putpmsg", SYS_putpmsg},
+#endif
+#ifdef SYS_pwrite64
+    {"pwrite64", SYS_pwrite64},
+#endif
+#ifdef SYS_pwritev
+    {"pwritev", SYS_pwritev},
+#endif
+#ifdef SYS_pwritev2
+    {"pwritev2", SYS_pwritev2},
+#endif
+#ifdef SYS_query_module
+    {"query_module", SYS_query_module},
+#endif
+#ifdef SYS_quotactl
+    {"quotactl", SYS_quotactl},
+#endif
+#ifdef SYS_quotactl_fd
+    {"quotactl_fd", SYS_quotactl_fd},
+#endif
+#ifdef SYS_read
+    {"read", SYS_read},
+#endif
+#ifdef SYS_readahead
+    {"readahead", SYS_readahead},
+#endif
+#ifdef SYS_readlink
+    {"readlink", SYS_readlink},
+#endif
+#ifdef SYS_readlinkat
+    {"readlinkat", SYS_readlinkat},
+#endif
+#ifdef SYS_readv
+    {"readv", SYS_readv},
+#endif
+#ifdef SYS_reboot
+    {"reboot", SYS_reboot},
+#endif
+#ifdef SYS_recvfrom
+    {"recvfrom", SYS_recvfrom},
+#endif
+#ifdef SYS_recvmmsg
+    {"recvmmsg", SYS_recvmmsg},
+#endif
+#ifdef SYS_recvmsg
+    {"recvmsg", SYS_recvmsg},
+#endif
+#ifdef SYS_remap_file_pages
+    {"remap_file_pages", SYS_remap_file_pages},
+#endif
+#ifdef SYS_removexattr
+    {"removexattr", SYS_removexattr},
+#endif
+#ifdef SYS_rename
+    {"rename", SYS_rename},
+#endif
+#ifdef SYS_renameat
+    {"renameat", SYS_renameat},
+#endif
+#ifdef SYS_renameat2
+    {"renameat2", SYS_renameat2},
+#endif
+#ifdef SYS_request_key
+    {"request_key", SYS_request_key},
+#endif
+#ifdef SYS_restart_syscall
+    {"restart_syscall", SYS_restart_syscall},
+#endif
+#ifdef SYS_rmdir
+    {"rmdir", SYS_rmdir},
+#endif
+#ifdef SYS_rseq
+    {"rseq", SYS_rseq},
+#endif
+#ifdef SYS_rt_sigaction
+    {"rt_sigaction", SYS_rt_sigaction},
+#endif
+#ifdef SYS_rt_sigpending
+    {"rt_sigpending", SYS_rt_sigpending},
+#endif
+#ifdef SYS_rt_sigprocmask
+    {"rt_sigprocmask", SYS_rt_sigprocmask},
+#endif
+#ifdef SYS_rt_sigqueueinfo
+    {"rt_sigqueueinfo", SYS_rt_sigqueueinfo},
+#endif
+#ifdef SYS_rt_sigreturn
+    {"rt_sigreturn", SYS_rt_sigreturn},
+#endif
+#ifdef SYS_rt_sigsuspend
+    {"rt_sigsuspend", SYS_rt_sigsuspend},
+#endif
+#ifdef SYS_rt_sigtimedwait
+    {"rt_sigtimedwait", SYS_rt_sigtimedwait},
+#endif
+#ifdef SYS_rt_tgsigqueueinfo
+    {"rt_tgsigqueueinfo", SYS_rt_tgsigqueueinfo},
+#endif
+#ifdef SYS_sched_getaffinity
+    {"sched_getaffinity", SYS_sched_getaffinity},
+#endif
+#ifdef SYS_sched_getattr
+    {"sched_getattr", SYS_sched_getattr},
+#endif
+#ifdef SYS_sched_getparam
+    {"sched_getparam", SYS_sched_getparam},
+#endif
+#ifdef SYS_sched_get_priority_max
+    {"sched_get_priority_max", SYS_sched_get_priority_max},
+#endif
+#ifdef SYS_sched_get_priority_min
+    {"sched_get_priority_min", SYS_sched_get_priority_min},
+#endif
+#ifdef SYS_sched_getscheduler
+    {"sched_getscheduler", SYS_sched_getscheduler},
+#endif
+#ifdef SYS_sched_rr_get_interval
+    {"sched_rr_get_interval", SYS_sched_rr_get_interval},
+#endif
+#ifdef SYS_sched_setaffinity
+    {"sched_setaffinity", SYS_sched_setaffinity},
+#endif
+#ifdef SYS_sched_setattr
+    {"sched_setattr", SYS_sched_setattr},
+#endif
+#ifdef SYS_sched_setparam
+    {"sched_setparam", SYS_sched_setparam},
+#endif
+#ifdef SYS_sched_setscheduler
+    {"sched_setscheduler", SYS_sched_setscheduler},
+#endif
+#ifdef SYS_sched_yield
+    {"sched_yield", SYS_sched_yield},
+#endif
+#ifdef SYS_seccomp
+    {"seccomp", SYS_seccomp},
+#endif
+#ifdef SYS_security
+    {"security", SYS_security},
+#endif
+#ifdef SYS_select
+    {"select", SYS_select},
+#endif
+#ifdef SYS_semctl
+    {"semctl", SYS_semctl},
+#endif
+#ifdef SYS_semget
+    {"semget", SYS_semget},
+#endif
+#ifdef SYS_semop
+    {"semop", SYS_semop},
+#endif
+#ifdef SYS_semtimedop
+    {"semtimedop", SYS_semtimedop},
+#endif
+#ifdef SYS_sendfile
+    {"sendfile", SYS_sendfile},
+#endif
+#ifdef SYS_sendmmsg
+    {"sendmmsg", SYS_sendmmsg},
+#endif
+#ifdef SYS_sendmsg
+    {"sendmsg", SYS_sendmsg},
+#endif
+#ifdef SYS_sendto
+    {"sendto", SYS_sendto},
+#endif
+#ifdef SYS_setdomainname
+    {"setdomainname", SYS_setdomainname},
+#endif
+#ifdef SYS_setfsgid
+    {"setfsgid", SYS_setfsgid},
+#endif
+#ifdef SYS_setfsuid
+    {"setfsuid", SYS_setfsuid},
+#endif
+#ifdef SYS_setgid
+    {"setgid", SYS_setgid},
+#endif
+#ifdef SYS_setgroups
+    {"setgroups", SYS_setgroups},
+#endif
+#ifdef SYS_sethostname
+    {"sethostname", SYS_sethostname},
+#endif
+#ifdef SYS_setitimer
+    {"setitimer", SYS_setitimer},
+#endif
+#ifdef SYS_set_mempolicy
+    {"set_mempolicy", SYS_set_mempolicy},
+#endif
+#ifdef SYS_set_mempolicy_home_node
+    {"set_mempolicy_home_node", SYS_set_mempolicy_home_node},
+#endif
+#ifdef SYS_setns
+    {"setns", SYS_setns},
+#endif
+#ifdef SYS_setpgid
+    {"setpgid", SYS_setpgid},
+#endif
+#ifdef SYS_setpriority
+    {"setpriority", SYS_setpriority},
+#endif
+#ifdef SYS_setregid
+    {"setregid", SYS_setregid},
+#endif
+#ifdef SYS_setresgid
+    {"setresgid", SYS_setresgid},
+#endif
+#ifdef SYS_setresuid
+    {"setresuid", SYS_setresuid},
+#endif
+#ifdef SYS_setreuid
+    {"setreuid", SYS_setreuid},
+#endif
+#ifdef SYS_setrlimit
+    {"setrlimit", SYS_setrlimit},
+#endif
+#ifdef SYS_set_robust_list
+    {"set_robust_list", SYS_set_robust_list},
+#endif
+#ifdef SYS_setsid
+    {"setsid", SYS_setsid},
+#endif
+#ifdef SYS_setsockopt
+    {"setsockopt", SYS_setsockopt},
+#endif
+#ifdef SYS_set_thread_area
+    {"set_thread_area", SYS_set_thread_area},
+#endif
+#ifdef SYS_set_tid_address
+    {"set_tid_address", SYS_set_tid_address},
+#endif
+#ifdef SYS_settimeofday
+    {"settimeofday", SYS_settimeofday},
+#endif
+#ifdef SYS_setuid
+    {"setuid", SYS_setuid},
+#endif
+#ifdef SYS_setxattr
+    {"setxattr", SYS_setxattr},
+#endif
+#ifdef SYS_shmat
+    {"shmat", SYS_shmat},
+#endif
+#ifdef SYS_shmctl
+    {"shmctl", SYS_shmctl},
+#endif
+#ifdef SYS_shmdt
+    {"shmdt", SYS_shmdt},
+#endif
+#ifdef SYS_shmget
+    {"shmget", SYS_shmget},
+#endif
+#ifdef SYS_shutdown
+    {"shutdown", SYS_shutdown},
+#endif
+#ifdef SYS_sigaltstack
+    {"sigaltstack", SYS_sigaltstack},
+#endif
+#ifdef SYS_signalfd
+    {"signalfd", SYS_signalfd},
+#endif
+#ifdef SYS_signalfd4
+    {"signalfd4", SYS_signalfd4},
+#endif
+#ifdef SYS_socket
+    {"socket", SYS_socket},
+#endif
+#ifdef SYS_socketpair
+    {"socketpair", SYS_socketpair},
+#endif
+#ifdef SYS_splice
+    {"splice", SYS_splice},
+#endif
+#ifdef SYS_stat
+    {"stat", SYS_stat},
+#endif
+#ifdef SYS_statfs
+    {"statfs", SYS_statfs},
+#endif
+#ifdef SYS_statmount
+    {"statmount", SYS_statmount},
+#endif
+#ifdef SYS_statx
+    {"statx", SYS_statx},
+#endif
+#ifdef SYS_swapoff
+    {"swapoff", SYS_swapoff},
+#endif
+#ifdef SYS_swapon
+    {"swapon", SYS_swapon},
+#endif
+#ifdef SYS_symlink
+    {"symlink", SYS_symlink},
+#endif
+#ifdef SYS_symlinkat
+    {"symlinkat", SYS_symlinkat},
+#endif
+#ifdef SYS_sync
+    {"sync", SYS_sync},
+#endif
+#ifdef SYS_sync_file_range
+    {"sync_file_range", SYS_sync_file_range},
+#endif
+#ifdef SYS_syncfs
+    {"syncfs", SYS_syncfs},
+#endif
+#ifdef SYS__sysctl
+    {"_sysctl", SYS__sysctl},
+#endif
+#ifdef SYS_sysfs
+    {"sysfs", SYS_sysfs},
+#endif
+#ifdef SYS_sysinfo
+    {"sysinfo", SYS_sysinfo},
+#endif
+#ifdef SYS_syslog
+    {"syslog", SYS_syslog},
+#endif
+#ifdef SYS_tee
+    {"tee", SYS_tee},
+#endif
+#ifdef SYS_tgkill
+    {"tgkill", SYS_tgkill},
+#endif
+#ifdef SYS_time
+    {"time", SYS_time},
+#endif
+#ifdef SYS_timer_create
+    {"timer_create", SYS_timer_create},
+#endif
+#ifdef SYS_timer_delete
+    {"timer_delete", SYS_timer_delete},
+#endif
+#ifdef SYS_timerfd_create
+    {"timerfd_create", SYS_timerfd_create},
+#endif
+#ifdef SYS_timerfd_gettime
+    {"timerfd_gettime", SYS_timerfd_gettime},
+#endif
+#ifdef SYS_timerfd_settime
+    {"timerfd_settime", SYS_timerfd_settime},
+#endif
+#ifdef SYS_timer_getoverrun
+    {"timer_getoverrun", SYS_timer_getoverrun},
+#endif
+#ifdef SYS_timer_gettime
+    {"timer_gettime", SYS_timer_gettime},
+#endif
+#ifdef SYS_timer_settime
+    {"timer_settime", SYS_timer_settime},
+#endif
+#ifdef SYS_times
+    {"times", SYS_times},
+#endif
+#ifdef SYS_tkill
+    {"tkill", SYS_tkill},
+#endif
+#ifdef SYS_truncate
+    {"truncate", SYS_truncate},
+#endif
+#ifdef SYS_tuxcall
+    {"tuxcall", SYS_tuxcall},
+#endif
+#ifdef SYS_umask
+    {"umask", SYS_umask},
+#endif
+#ifdef SYS_umount2
+    {"umount2", SYS_umount2},
+#endif
+#ifdef SYS_uname
+    {"uname", SYS_uname},
+#endif
+#ifdef SYS_unlink
+    {"unlink", SYS_unlink},
+#endif
+#ifdef SYS_unlinkat
+    {"unlinkat", SYS_unlinkat},
+#endif
+#ifdef SYS_unshare
+    {"unshare", SYS_unshare},
+#endif
+#ifdef SYS_uretprobe
+    {"uretprobe", SYS_uretprobe},
+#endif
+#ifdef SYS_uselib
+    {"uselib", SYS_uselib},
+#endif
+#ifdef SYS_userfaultfd
+    {"userfaultfd", SYS_userfaultfd},
+#endif
+#ifdef SYS_ustat
+    {"ustat", SYS_ustat},
+#endif
+#ifdef SYS_utime
+    {"utime", SYS_utime},
+#endif
+#ifdef SYS_utimensat
+    {"utimensat", SYS_utimensat},
+#endif
+#ifdef SYS_utimes
+    {"utimes", SYS_utimes},
+#endif
+#ifdef SYS_vfork
+    {"vfork", SYS_vfork},
+#endif
+#ifdef SYS_vhangup
+    {"vhangup", SYS_vhangup},
+#endif
+#ifdef SYS_vmsplice
+    {"vmsplice", SYS_vmsplice},
+#endif
+#ifdef SYS_vserver
+    {"vserver", SYS_vserver},
+#endif
+#ifdef SYS_wait4
+    {"wait4", SYS_wait4},
+#endif
+#ifdef SYS_waitid
+    {"waitid", SYS_waitid},
+#endif
+#ifdef SYS_write
+    {"write", SYS_write},
+#endif
+#ifdef SYS_writev
+    {"writev", SYS_writev},
+#endif
+};
+
+/* What the runtime calls on its own: memory, threads, signals, time, the
+   event loop, sockets it already has, and leaving. */
+static const char *const runtimeCalls[] = {
+    "read", "write", "readv", "writev", "pread64", "pwrite64", "close", "mmap", "munmap", "mremap", "mprotect",
+    "madvise", "brk", "futex", "rt_sigreturn", "rt_sigprocmask", "rt_sigaction", "rt_sigtimedwait", "rt_sigpending",
+    "sigaltstack", "exit", "exit_group", "clock_gettime", "clock_nanosleep", "nanosleep", "gettid", "getpid",
+    "sched_yield", "sched_getaffinity", "io_uring_enter", "epoll_wait", "epoll_pwait", "epoll_ctl", "poll", "ppoll",
+    "recvfrom", "sendto", "recvmsg", "sendmsg", "recvmmsg", "sendmmsg", "getrandom", "restart_syscall",
+    "membarrier", "tgkill", "rseq", "set_robust_list", "fstat", "newfstatat", "lseek", "fcntl", "eventfd2",
+    "getsockname", "getpeername", "getsockopt", "setsockopt", "shutdown", "splice", "dup", "uname", NULL};
+
+static int sysNumber(const char *name, size_t len) {
+    for (size_t i = 0; i < sizeof sysNames / sizeof sysNames[0]; i++) {
+        if (strlen(sysNames[i].name) == len && memcmp(sysNames[i].name, name, len) == 0) return sysNames[i].nr;
+    }
+    return -1;
+}
+#endif
+
+/* The filter: names holds the calls let through, each followed by a 0
+   byte. 0, -1 off Linux, -2 with the first unknown name in bad, or errno. */
+int iris_os_allow_syscalls(const char *names, int64_t len, int kill, IrisString *bad) {
+#ifdef __linux__
+    int nrs[1024];
+    int n = 0;
+    for (const char *const *r = runtimeCalls; *r; r++) {
+        int nr = sysNumber(*r, strlen(*r));
+        if (nr >= 0 && n < 1024) nrs[n++] = nr;
+    }
+    for (int64_t at = 0; at < len;) {
+        const char *e = memchr(names + at, 0, (size_t)(len - at));
+        size_t l = e ? (size_t)(e - (names + at)) : (size_t)(len - at);
+        int nr = sysNumber(names + at, l);
+        if (nr < 0) {
+            iris_string_append(bad, names + at, (int64_t)l);
+            return -2;
+        }
+        if (n < 1024) nrs[n++] = nr;
+        at += (int64_t)l + 1;
+    }
+#if defined(__x86_64__)
+    uint32_t arch = AUDIT_ARCH_X86_64;
+#elif defined(__aarch64__)
+    uint32_t arch = AUDIT_ARCH_AARCH64;
+#else
+    return -1;
+#endif
+    struct sock_filter *f = calloc((size_t)(2 * n) + 8, sizeof *f);
+    if (!f) outOfMemory();
+    int k = 0;
+    /* another architecture's calls would mean other numbers: ended */
+    f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
+    f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0);
+    f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    f[k++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
+    for (int i = 0; i < n; i++) {
+        /* a match goes on to the allow after it, any other number skips it */
+        f[k++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)nrs[i], 0, 1);
+        f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
+    }
+    f[k++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, kill ? SECCOMP_RET_KILL_PROCESS : SECCOMP_RET_ERRNO | EPERM);
+    struct sock_fprog prog = {(unsigned short)k, f};
+    int r = 0;
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) r = errno;
+    /* every thread of the program, not only this one */
+    else if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC, &prog) != 0) r = errno;
+    free(f);
+    return r;
+#else
+    (void)names;
+    (void)len;
+    (void)kill;
+    (void)bad;
+    return -1;
+#endif
+}
+
 /* ---------------------------------------------------------------- TUN and TAP devices
 
    A TUN device carries IP packets between the kernel and this program, a

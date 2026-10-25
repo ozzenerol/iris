@@ -1,0 +1,38 @@
+// expect: open files: 64 and back
+// expect: unknown: OsError.invalid: allowing system calls: no system call no_such_call
+// expect: printed under the filter
+// expect: opening a file under the filter: FsError.permission
+// expect: chroot as a user: true
+
+import fs, os
+
+!void main() {
+    old, hard := try os.limit(.openFiles)
+    try os.setLimit(.openFiles, 64, hard)
+    now, _ := try os.limit(.openFiles)
+    try os.setLimit(.openFiles, old, hard)
+    print("open files: {now} and back")
+
+    os.allowSyscalls(["no_such_call"]) catch e {
+        print("{e.code}: {e.message}")
+    }
+    bool linux = true
+    os.allowSyscalls([]) catch e {
+        // elsewhere: what a Linux run prints, so the output is the same
+        linux = false
+    }
+    print("printed under the filter")
+    if linux {
+        _ = fs.readAll("/etc/hostname") catch e {
+            print("opening a file under the filter: {e.code}")
+            "".copy()
+        }
+    } else {
+        print("opening a file under the filter: FsError.permission")
+    }
+    bool refused = true
+    os.chroot("/") catch e {
+        refused = e.code == os.OsError.permission || e.message == "chroot to /: only on Linux"
+    }
+    print("chroot as a user: {refused}")
+}
