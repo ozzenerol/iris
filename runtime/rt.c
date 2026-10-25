@@ -7862,6 +7862,7 @@ static struct {
     void (*bioClearFlags)(void *, int);
     void (*sslSetBio)(void *, void *, void *);
     void *sockMeth;
+    void *cryptoLib;
 } ossl;
 
 static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
@@ -8059,6 +8060,7 @@ static void osslLoad(void) {
 #undef SYM
     *(void **)&ossl.ctxSetAlpnSelect = dlsym(ssl, "SSL_CTX_set_alpn_select_cb");
     sockBioLoad(ssl, crypto);
+    ossl.cryptoLib = crypto;
     *(void **)&ossl.sslSetAlpnProtos = dlsym(ssl, "SSL_set_alpn_protos");
     *(void **)&ossl.sslGetAlpn = dlsym(ssl, "SSL_get0_alpn_selected");
     ossl.loaded = 1;
@@ -8120,6 +8122,379 @@ static void *sharedClientCtx(void) {
     void *c = clientCtx;
     spinUnlock(&lockedClientCtx);
     return c;
+}
+
+/* ---------------------------------------------------------------- public-key signatures
+
+   ECDSA (P-256, P-384) and RSA (PKCS#1 v1.5 and PSS) through libcrypto's
+   EVP calls, which OpenSSL 1.1 and 3 both have. A key is an EVP_PKEY. */
+
+static struct {
+    int loaded;
+    void *(*bioMemBuf)(const void *, int);
+    void *(*bioNew)(const void *);
+    const void *(*bioSMem)(void);
+    void (*bioFree)(void *);
+    long (*bioCtrl)(void *, int, long, void *);
+    void *(*readPriv)(void *, void **, void *, void *);
+    void *(*readPub)(void *, void **, void *, void *);
+    int (*writePriv)(void *, void *, const void *, void *, int, void *, void *);
+    int (*writePub)(void *, void *);
+    void *(*d2iPriv)(void **, const unsigned char **, long);
+    void *(*d2iPub)(void **, const unsigned char **, long);
+    int (*i2dPub)(void *, unsigned char **);
+    void (*pkeyFree)(void *);
+    int (*baseId)(const void *);
+    int (*bits)(const void *);
+    void *(*keygen)(void *, const char *, const char *, ...);
+    void *(*mdNew)(void);
+    void (*mdFree)(void *);
+    int (*signInit)(void *, void **, const void *, void *, void *);
+    int (*sign)(void *, unsigned char *, size_t *, const unsigned char *, size_t);
+    int (*verifyInit)(void *, void **, const void *, void *, void *);
+    int (*verify)(void *, const unsigned char *, size_t, const unsigned char *, size_t);
+    const void *(*md[4])(void);
+    int (*setPadding)(void *, int);
+    int (*setSaltLen)(void *, int);
+    int (*pkeyCtrl)(void *, int, int, int, int, void *);
+    void (*cryptoFree)(void *, const char *, int);
+} pk;
+
+static pthread_once_t pkOnce = PTHREAD_ONCE_INIT;
+
+static void pkLoad(void) {
+    if (!tlsReady() || !ossl.cryptoLib) return;
+    void *c = ossl.cryptoLib;
+#define PK(field, name)                                         \
+    do {                                                        \
+        *(void **)&pk.field = dlsym(c, name);                   \
+        if (!pk.field) return;                                  \
+    } while (0)
+    PK(bioMemBuf, "BIO_new_mem_buf");
+    PK(bioNew, "BIO_new");
+    PK(bioSMem, "BIO_s_mem");
+    PK(bioFree, "BIO_free");
+    PK(bioCtrl, "BIO_ctrl");
+    PK(readPriv, "PEM_read_bio_PrivateKey");
+    PK(readPub, "PEM_read_bio_PUBKEY");
+    PK(writePriv, "PEM_write_bio_PKCS8PrivateKey");
+    PK(writePub, "PEM_write_bio_PUBKEY");
+    PK(d2iPriv, "d2i_AutoPrivateKey");
+    PK(d2iPub, "d2i_PUBKEY");
+    PK(i2dPub, "i2d_PUBKEY");
+    PK(pkeyFree, "EVP_PKEY_free");
+    PK(mdNew, "EVP_MD_CTX_new");
+    PK(mdFree, "EVP_MD_CTX_free");
+    PK(signInit, "EVP_DigestSignInit");
+    PK(sign, "EVP_DigestSign");
+    PK(verifyInit, "EVP_DigestVerifyInit");
+    PK(verify, "EVP_DigestVerify");
+    PK(md[0], "EVP_sha1");
+    PK(md[1], "EVP_sha256");
+    PK(md[2], "EVP_sha384");
+    PK(md[3], "EVP_sha512");
+    PK(cryptoFree, "CRYPTO_free");
+    *(void **)&pk.baseId = dlsym(c, "EVP_PKEY_get_base_id");
+    if (!pk.baseId) *(void **)&pk.baseId = dlsym(c, "EVP_PKEY_base_id");
+    *(void **)&pk.bits = dlsym(c, "EVP_PKEY_get_bits");
+    if (!pk.bits) *(void **)&pk.bits = dlsym(c, "EVP_PKEY_bits");
+    *(void **)&pk.keygen = dlsym(c, "EVP_PKEY_Q_keygen");       /* OpenSSL 3 */
+    *(void **)&pk.setPadding = dlsym(c, "EVP_PKEY_CTX_set_rsa_padding");
+    *(void **)&pk.setSaltLen = dlsym(c, "EVP_PKEY_CTX_set_rsa_pss_saltlen");
+    *(void **)&pk.pkeyCtrl = dlsym(c, "EVP_PKEY_CTX_ctrl");
+    if (!pk.baseId || !pk.bits) return;
+#undef PK
+    pk.loaded = 1;
+}
+
+static bool pkReady(void) {
+    pthread_once(&pkOnce, pkLoad);
+    if (!pk.loaded) {
+        if (tlsMsgLen == 0) tlsSay("public-key signatures need OpenSSL's libcrypto");
+        return false;
+    }
+    return true;
+}
+
+/* A private key from PEM (PKCS#8, or SEC1 and PKCS#1 with their headers)
+   or DER: NULL with the message set when it isn't one. */
+void *iris_pk_load_private(const char *data, int64_t len) {
+    if (!pkReady()) return NULL;
+    void *key = NULL;
+    if (len > 10 && memmem(data, (size_t)len, "-----BEGIN", 10)) {
+        void *b = pk.bioMemBuf(data, (int)len);
+        if (b) {
+            key = pk.readPriv(b, NULL, NULL, NULL);
+            pk.bioFree(b);
+        }
+    } else {
+        const unsigned char *p = (const unsigned char *)data;
+        key = pk.d2iPriv(NULL, &p, (long)len);
+    }
+    if (!key) tlsSayOpenssl("reading the private key");
+    return key;
+}
+
+/* A public key from PEM or DER (SubjectPublicKeyInfo). */
+void *iris_pk_load_public(const char *data, int64_t len) {
+    if (!pkReady()) return NULL;
+    void *key = NULL;
+    if (len > 10 && memmem(data, (size_t)len, "-----BEGIN", 10)) {
+        void *b = pk.bioMemBuf(data, (int)len);
+        if (b) {
+            key = pk.readPub(b, NULL, NULL, NULL);
+            pk.bioFree(b);
+        }
+    } else {
+        const unsigned char *p = (const unsigned char *)data;
+        key = pk.d2iPub(NULL, &p, (long)len);
+    }
+    if (!key) tlsSayOpenssl("reading the public key");
+    return key;
+}
+
+/* A DER length at out (room for 5): its size in bytes. */
+static int derLen(unsigned char *out, size_t n) {
+    if (n < 128) {
+        out[0] = (unsigned char)n;
+        return 1;
+    }
+    int k = 0;
+    for (size_t m = n; m; m >>= 8) k++;
+    out[0] = (unsigned char)(0x80 | k);
+    for (int i = 0; i < k; i++) out[1 + i] = (unsigned char)(n >> (8 * (k - 1 - i)));
+    return 1 + k;
+}
+
+/* An INTEGER of the big-endian bytes v, with a 0 in front when the top
+   bit is set; at out (room for n + 7). */
+static size_t derInt(unsigned char *out, const unsigned char *v, size_t n) {
+    while (n > 1 && v[0] == 0) {
+        v++;
+        n--;
+    }
+    bool pad = n > 0 && (v[0] & 0x80);
+    size_t at = 0;
+    out[at++] = 0x02;
+    at += (size_t)derLen(out + at, n + pad);
+    if (pad) out[at++] = 0;
+    memcpy(out + at, v, n);
+    return at + n;
+}
+
+/* An EC public key from its point, uncompressed (04, x, y) or x and y
+   alone: curve 0 P-256, 1 P-384. */
+void *iris_pk_ec_public(int curve, const char *point, int64_t len) {
+    if (!pkReady()) return NULL;
+    static const unsigned char p256[] = {0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02,
+                                         0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03,
+                                         0x42, 0x00, 0x04};
+    static const unsigned char p384[] = {0x30, 0x76, 0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02,
+                                         0x01, 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22, 0x03, 0x62, 0x00, 0x04};
+    size_t coord = curve == 0 ? 32 : 48;
+    const unsigned char *prefix = curve == 0 ? p256 : p384;
+    size_t plen = curve == 0 ? sizeof p256 : sizeof p384;
+    const unsigned char *xy = (const unsigned char *)point;
+    if ((size_t)len == 2 * coord + 1 && xy[0] == 4) {
+        xy++;
+    } else if ((size_t)len != 2 * coord) {
+        tlsSay("an EC point is 04, x and y, or x and y");
+        return NULL;
+    }
+    unsigned char der[160];
+    memcpy(der, prefix, plen);
+    memcpy(der + plen, xy, 2 * coord);
+    const unsigned char *p = der;
+    void *key = pk.d2iPub(NULL, &p, (long)(plen + 2 * coord));
+    if (!key) tlsSayOpenssl("the EC point isn't on the curve");
+    return key;
+}
+
+/* An RSA public key from its modulus n and exponent e, big-endian. */
+void *iris_pk_rsa_public(const char *n, int64_t nLen, const char *e, int64_t eLen) {
+    if (!pkReady()) return NULL;
+    if (nLen <= 0 || eLen <= 0 || nLen > 2048 || eLen > 64) {
+        tlsSay("an RSA key's n is up to 16384 bits and e up to 512");
+        return NULL;
+    }
+    unsigned char *inner = malloc((size_t)(nLen + eLen + 32));
+    unsigned char *der = malloc((size_t)(nLen + eLen + 96));
+    if (!inner || !der) outOfMemory();
+    /* RSAPublicKey: SEQUENCE { n, e } */
+    unsigned char ints[2200];
+    size_t il = derInt(ints, (const unsigned char *)n, (size_t)nLen);
+    il += derInt(ints + il, (const unsigned char *)e, (size_t)eLen);
+    size_t at = 0;
+    inner[at++] = 0x30;
+    at += (size_t)derLen(inner + at, il);
+    memcpy(inner + at, ints, il);
+    at += il;
+    /* SubjectPublicKeyInfo: SEQUENCE { AlgorithmIdentifier rsaEncryption NULL, BIT STRING } */
+    static const unsigned char alg[] = {0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00};
+    unsigned char bits[8];
+    size_t bl = 0;
+    bits[bl++] = 0x03;
+    bl += (size_t)derLen(bits + bl, at + 1);
+    bits[bl++] = 0;
+    size_t body = sizeof alg + bl + at;
+    size_t dl = 0;
+    der[dl++] = 0x30;
+    dl += (size_t)derLen(der + dl, body);
+    memcpy(der + dl, alg, sizeof alg);
+    dl += sizeof alg;
+    memcpy(der + dl, bits, bl);
+    dl += bl;
+    memcpy(der + dl, inner, at);
+    dl += at;
+    const unsigned char *p = der;
+    void *key = pk.d2iPub(NULL, &p, (long)dl);
+    free(inner);
+    free(der);
+    if (!key) tlsSayOpenssl("the RSA key isn't one");
+    return key;
+}
+
+/* A new key: kind 0 P-256, 1 P-384, 2 RSA of bits. OpenSSL 3. */
+void *iris_pk_generate(int kind, int64_t bits) {
+    if (!pkReady()) return NULL;
+    if (!pk.keygen) {
+        tlsSay("making keys needs OpenSSL 3");
+        return NULL;
+    }
+    /* EVP_PKEY_Q_keygen(library context, properties, type, its parameter) */
+    void *key = kind == 2 ? pk.keygen(NULL, NULL, "RSA", (size_t)bits)
+                          : pk.keygen(NULL, NULL, "EC", kind == 0 ? "P-256" : "P-384");
+    if (!key) tlsSayOpenssl("making the key");
+    return key;
+}
+
+/* 1 EC, 2 RSA, 0 another kind; and its size in bits. */
+int iris_pk_kind(void *key, int64_t *bits) {
+    *bits = pk.bits(key);
+    int id = pk.baseId(key);
+    return id == 408 ? 1 : (id == 6 || id == 912) ? 2 : 0;     /* EVP_PKEY_EC, RSA, RSA_PSS */
+}
+
+/* The key as PEM (private: PKCS#8; public: SubjectPublicKeyInfo), or as
+   DER for a public key with der; added to out. */
+int iris_pk_export(void *key, int private, int der, IrisString *out) {
+    if (der) {
+        unsigned char *buf = NULL;
+        int n = pk.i2dPub(key, &buf);
+        if (n <= 0) return 0;
+        iris_string_append(out, (const char *)buf, n);
+        pk.cryptoFree(buf, "", 0);
+        return 1;
+    }
+    void *b = pk.bioNew(pk.bioSMem());
+    if (!b) return 0;
+    int ok = private ? pk.writePriv(b, key, NULL, NULL, 0, NULL, NULL) : pk.writePub(b, key);
+    char *data = NULL;
+    long n = pk.bioCtrl(b, 3 /* BIO_CTRL_INFO */, 0, &data);
+    if (ok && n > 0) iris_string_append(out, data, n);
+    pk.bioFree(b);
+    return ok;
+}
+
+void iris_pk_free(void *key) {
+    if (key && pk.loaded) pk.pkeyFree(key);
+}
+
+static void *pkCtx(void *key, int hash, int pss, bool signing, void **mdOut) {
+    if (hash < 0 || hash > 3) return NULL;
+    void *md = pk.mdNew();
+    if (!md) return NULL;
+    void *pctx = NULL;
+    int r = signing ? pk.signInit(md, &pctx, pk.md[hash](), NULL, key) : pk.verifyInit(md, &pctx, pk.md[hash](), NULL, key);
+    if (r != 1) {
+        pk.mdFree(md);
+        return NULL;
+    }
+    if (pss) {
+        /* PSS with a salt as long as the hash, as TLS and QUIC use */
+        bool ok = pk.setPadding ? pk.setPadding(pctx, 6) == 1 && pk.setSaltLen(pctx, -1) == 1
+                                : pk.pkeyCtrl(pctx, 6, -1, 0x1001, 6, NULL) == 1 &&
+                                      pk.pkeyCtrl(pctx, 6, 24, 0x1002, -1, NULL) == 1;
+        if (!ok) {
+            pk.mdFree(md);
+            return NULL;
+        }
+    }
+    *mdOut = md;
+    return md;
+}
+
+/* Signs data: ECDSA's signature in DER, or RSA's. 0 with the message set
+   on an error. hash: 0 SHA-1, 1 SHA-256, 2 SHA-384, 3 SHA-512. */
+int iris_pk_sign(void *key, const char *data, int64_t len, int hash, int pss, IrisString *out) {
+    void *md = NULL;
+    if (!pkCtx(key, hash, pss, true, &md)) {
+        tlsSayOpenssl("signing");
+        return 0;
+    }
+    size_t n = 0;
+    int ok = pk.sign(md, NULL, &n, (const unsigned char *)data, (size_t)len) == 1;
+    unsigned char *sig = ok ? malloc(n ? n : 1) : NULL;
+    ok = ok && sig && pk.sign(md, sig, &n, (const unsigned char *)data, (size_t)len) == 1;
+    if (ok) iris_string_append(out, (const char *)sig, (int64_t)n);
+    else tlsSayOpenssl("signing");
+    free(sig);
+    pk.mdFree(md);
+    return ok;
+}
+
+/* 1 when sig is key's signature of data, 0 when it isn't. */
+int iris_pk_verify(void *key, const char *data, int64_t len, const char *sig, int64_t sigLen, int hash, int pss) {
+    void *md = NULL;
+    if (!pkCtx(key, hash, pss, false, &md)) return 0;
+    int r = pk.verify(md, (const unsigned char *)sig, (size_t)sigLen, (const unsigned char *)data, (size_t)len);
+    pk.mdFree(md);
+    if (ossl.errClear) ossl.errClear();
+    return r == 1;
+}
+
+/* ECDSA's DER signature (SEQUENCE { r, s }) as r and s of size bytes
+   each, and back: 1, or 0 for one that isn't. */
+int iris_ecdsa_der_to_raw(const unsigned char *d, int64_t n, int64_t size, IrisString *out) {
+    int64_t at = 0;
+    if (n < 8 || d[at++] != 0x30) return 0;
+    int64_t seqLen = d[at++];
+    if (seqLen & 0x80) {
+        if (seqLen != 0x81 || at >= n) return 0;
+        seqLen = d[at++];
+    }
+    if (at + seqLen != n) return 0;
+    unsigned char raw[132] = {0};
+    if (size > 66) return 0;
+    for (int k = 0; k < 2; k++) {
+        if (at + 2 > n || d[at++] != 0x02) return 0;
+        int64_t il = d[at++];
+        if (il <= 0 || at + il > n) return 0;
+        const unsigned char *v = d + at;
+        int64_t vl = il;
+        while (vl > 0 && v[0] == 0) {
+            v++;
+            vl--;
+        }
+        if (vl > size) return 0;
+        memcpy(raw + k * size + (size - vl), v, (size_t)vl);
+        at += il;
+    }
+    iris_string_append(out, (const char *)raw, 2 * size);
+    return 1;
+}
+
+void iris_ecdsa_raw_to_der(const unsigned char *raw, int64_t n, IrisString *out) {
+    int64_t size = n / 2;
+    unsigned char ints[150];
+    size_t il = derInt(ints, raw, (size_t)size);
+    il += derInt(ints + il, raw + size, (size_t)size);
+    unsigned char head[4];
+    size_t hl = 0;
+    head[hl++] = 0x30;
+    hl += (size_t)derLen(head + hl, il);
+    iris_string_append(out, (const char *)head, (int64_t)hl);
+    iris_string_append(out, (const char *)ints, (int64_t)il);
 }
 
 /* Waits for what OpenSSL asked for; false for any other answer. *timedOut

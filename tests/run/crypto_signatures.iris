@@ -1,53 +1,83 @@
-// expect: ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
-// expect: b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a
-// expect: 3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865
-// expect: d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
-// expect: e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b
-// expect: 3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c
-// expect: 92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00
-// expect: true false false false
-// expect: true true
+// expect: P-256 from openssl: true, type ecP256
+// expect: P-384 from openssl: true, type ecP384
+// expect: RSA PKCS#1 from openssl: true, PSS SHA-384: true, type rsa
+// expect: wrong message: false, wrong padding: false
+// expect: point key checks it: true
+// expect: n and e key checks it: true
+// expect: own P-256: true, raw r and s: 64 bytes, back: true
+// expect: own RSA PSS: true, PKCS#1: true
+// expect: PEM round trip: true, public PEM: true, DER: true
+// expect: CryptoError.badKey
+// expect: generated: ecP256 ecP384 rsa
 
-import crypto, hex, random
+import crypto, fs, hex, str
+
+!String file(str name) {
+    scoped String path = format("tests/data/keys/{name}")
+    return try fs.readAll(path)
+}
 
 !void main() {
-    scoped String h = hex.encode(crypto.sha512("abc"))
-    print(h)
-    scoped String m = hex.encode(crypto.hmacSha512("key", "The quick brown fox jumps over the lazy dog"))
-    print(m)
+    scoped String msg = try file("msg")
 
-    // RFC 5869, test case 1
-    scoped String ikm = try hex.decode("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
-    scoped String salt = try hex.decode("000102030405060708090a0b0c")
-    scoped String info = try hex.decode("f0f1f2f3f4f5f6f7f8f9")
-    scoped String okm = crypto.hkdfSha256(ikm, salt, info, 42)
-    scoped String okmHex = hex.encode(okm)
-    print(okmHex)
+    scoped String ecPub = try file("ecpub.pem")
+    scoped String ecSig = try file("ec.sig")
+    scoped k1 := try crypto.loadPublicKey(ecPub)
+    print("P-256 from openssl: {k1.verify(msg, ecSig)}, type {k1.kind()}")
 
-    // RFC 8032, tests 1 and 2
-    scoped String seed1 = try hex.decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
-    scoped String seed2 = try hex.decode("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
-    for t in [(seed1, ""), (seed2, "\x72")] {
-        seed, msg := t
-        scoped String pk = hex.encode(crypto.ed25519Public(seed))
-        scoped String sig = hex.encode(crypto.ed25519Sign(seed, msg))
-        print(pk)
-        print(sig)
+    scoped String ec384Pub = try file("ec384pub.pem")
+    scoped String ec384Sig = try file("ec384.sig")
+    scoped k2 := try crypto.loadPublicKey(ec384Pub)
+    print("P-384 from openssl: {k2.verify(msg, ec384Sig, .sha384)}, type {k2.kind()}")
+
+    scoped String rsaPub = try file("rsapub.pem")
+    scoped String rsaSig = try file("rsa1.sig")
+    scoped String pssSig = try file("rsapss.sig")
+    scoped k3 := try crypto.loadPublicKey(rsaPub)
+    print("RSA PKCS#1 from openssl: {k3.verify(msg, rsaSig)}, PSS SHA-384: {k3.verify(msg, pssSig, .sha384, .pss)}, type {k3.kind()}")
+    print("wrong message: {k3.verify("another", rsaSig)}, wrong padding: {k3.verify(msg, rsaSig, .sha256, .pss)}")
+
+    scoped String pointHex = try file("ecpoint.hex")
+    scoped String point = try hex.decode(str.trim(pointHex))
+    scoped k4 := try crypto.ecPublicKey(.ecP256, point)
+    print("point key checks it: {k4.verify(msg, ecSig)}")
+
+    scoped String nHex = try file("rsan.hex")
+    scoped String n = try hex.decode(str.trim(nHex))
+    u8[3] e = [1, 0, 1]
+    scoped k5 := try crypto.rsaPublicKey(n, e[0:])
+    print("n and e key checks it: {k5.verify(msg, rsaSig)}")
+
+    scoped String ecPriv = try file("ec.pem")
+    scoped p1 := try crypto.loadPrivateKey(ecPriv)
+    scoped String s1 = try p1.sign("signed by iris")
+    scoped pub1 := p1.publicKey()
+    scoped String raw = try crypto.ecdsaRaw(s1, 32)
+    scoped String der = crypto.ecdsaDer(raw)
+    print("own P-256: {pub1.verify("signed by iris", s1)}, raw r and s: {raw.len} bytes, back: {pub1.verify("signed by iris", der)}")
+
+    scoped String rsaPriv = try file("rsa.pem")
+    scoped p2 := try crypto.loadPrivateKey(rsaPriv)
+    scoped String s2 = try p2.sign("signed by iris", .sha256, .pss)
+    scoped String s3 = try p2.sign("signed by iris", .sha512)
+    print("own RSA PSS: {k3.verify("signed by iris", s2, .sha256, .pss)}, PKCS#1: {k3.verify("signed by iris", s3, .sha512)}")
+
+    scoped String pem = p1.pem()
+    scoped p1b := try crypto.loadPrivateKey(pem)
+    scoped String s4 = try p1b.sign("again")
+    scoped String pubPem = pub1.pem()
+    scoped String pubDer = pub1.der()
+    scoped pub1b := try crypto.loadPublicKey(pubPem)
+    scoped pub1c := try crypto.loadPublicKey(pubDer)
+    print("PEM round trip: {pub1.verify("again", s4)}, public PEM: {pub1b.verify("again", s4)}, DER: {pub1c.verify("again", s4)}")
+
+    _ = crypto.loadPrivateKey("not a key") catch err {
+        print("{err.code}")
+        crypto.PrivateKey{}
     }
 
-    u8[32] key = crypto.ed25519Public(seed2)
-    u8[64] sig = crypto.ed25519Sign(seed2, "deploy v2")
-    good := crypto.ed25519Verify(key[0:32], "deploy v2", sig[0:64])
-    other := crypto.ed25519Verify(key[0:32], "deploy v3", sig[0:64])
-    sig[10] ^= 1
-    flipped := crypto.ed25519Verify(key[0:32], "deploy v2", sig[0:64])
-    short := crypto.ed25519Verify(key[0:31], "deploy v2", sig[0:64])
-    print("{good} {other} {flipped} {short}")
-
-    u8[32] fresh
-    random.bytes(fresh[0:32])
-    u8[32] freshKey = crypto.ed25519Public(fresh[0:32])
-    u8[64] freshSig = crypto.ed25519Sign(fresh[0:32], "")
-    scoped String none = crypto.hkdfSha256("s", "", "", 0)
-    print("{crypto.ed25519Verify(freshKey[0:32], "", freshSig[0:64])} {none.len == 0}")
+    scoped g1 := try crypto.generateKey(.ecP256)
+    scoped g2 := try crypto.generateKey(.ecP384)
+    scoped g3 := try crypto.generateKey(.rsa, 2048)
+    print("generated: {g1.kind()} {g2.kind()} {g3.kind()}")
 }

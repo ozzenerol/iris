@@ -374,3 +374,232 @@ pub String chacha20(str key, str nonce, str data, u32 counter = 0) {
 // for keys and passwords that are done with: wipe(key[0:]) or
 // wipe(secret.items()).
 pub void wipe(u8[] bytes) => rawWipe(bytes.ptr, bytes.len)
+
+// ------------------------------------------------------------ ECDSA and RSA
+
+@extern("iris_pk_load_private")
+u8 *rawLoadPrivate(u8 *data, i64 len)
+
+@extern("iris_pk_load_public")
+u8 *rawLoadPublic(u8 *data, i64 len)
+
+@extern("iris_pk_ec_public")
+u8 *rawEcPublic(i32 curve, u8 *point, i64 len)
+
+@extern("iris_pk_rsa_public")
+u8 *rawRsaPublic(u8 *n, i64 nLen, u8 *e, i64 eLen)
+
+@extern("iris_pk_generate")
+u8 *rawGenerate(i32 kind, i64 bits)
+
+@extern("iris_pk_kind")
+i32 rawKind(u8 *key, i64 *bits)
+
+@extern("iris_pk_export")
+i32 rawExport(u8 *key, i32 private, i32 der, String *out)
+
+@extern("iris_pk_free")
+void rawKeyFree(u8 *key)
+
+@extern("iris_pk_sign")
+i32 rawSign(u8 *key, u8 *data, i64 len, i32 hash, i32 pss, String *out)
+
+@extern("iris_pk_verify")
+i32 rawVerify(u8 *key, u8 *data, i64 len, u8 *sig, i64 sigLen, i32 hash, i32 pss)
+
+@extern("iris_ecdsa_der_to_raw")
+i32 rawDerToRaw(u8 *d, i64 n, i64 size, String *out)
+
+@extern("iris_ecdsa_raw_to_der")
+void rawRawToDer(u8 *raw, i64 n, String *out)
+
+@extern("iris_tls_message_ptr")
+u8 *rawMessagePtr()
+
+@extern("iris_tls_message_len")
+i64 rawMessageLen()
+
+str keyMessage() => rawMessagePtr()[0:rawMessageLen()]
+
+// The kinds of key for ECDSA and RSA signatures: ECDSA on the curves P-256
+// and P-384, and RSA.
+pub enum KeyType { ecP256, ecP384, rsa, other }
+
+// The hash a signature is made over.
+pub enum Hash { sha1, sha256, sha384, sha512 }
+
+// RSA's padding: PKCS#1 v1.5, as most certificates and DNSSEC use, or PSS,
+// as TLS 1.3 and QUIC do. ECDSA has none.
+pub enum Padding { pkcs1, pss }
+
+// A private key for ECDSA or RSA signatures. free gives it back.
+pub struct PrivateKey {
+    u8 *k
+}
+
+// A public key, to check ECDSA or RSA signatures with.
+pub struct PublicKey {
+    u8 *k
+}
+
+i32 hashCode(Hash h) => match h {
+    .sha1 => 0
+    .sha256 => 1
+    .sha384 => 2
+    .sha512 => 3
+}
+
+KeyType typeOf(u8 *k) {
+    i64 bits
+    kind := rawKind(k, &bits)
+    if kind == 1 {
+        return if bits <= 256 { KeyType.ecP256 } else { KeyType.ecP384 }
+    }
+    return if kind == 2 { KeyType.rsa } else { KeyType.other }
+}
+
+// A private key from PEM (PKCS#8, or EC and RSA keys in their own PEM) or
+// DER, as openssl and ssh-keygen -m PEM write them.
+pub !PrivateKey loadPrivateKey(str data) {
+    k := rawLoadPrivate(data.ptr, data.len)
+    if k == null {
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return PrivateKey{k: k}
+}
+
+// A public key from PEM or DER (a SubjectPublicKeyInfo, as in a
+// certificate).
+pub !PublicKey loadPublicKey(str data) {
+    k := rawLoadPublic(data.ptr, data.len)
+    if k == null {
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return PublicKey{k: k}
+}
+
+// An ECDSA public key from its point: 04 then x and y, or x and y alone,
+// as DNSSEC's DNSKEY records and JSON Web Keys hold it. curve is ecP256
+// or ecP384.
+pub !PublicKey ecPublicKey(KeyType curve, str point) {
+    if curve != .ecP256 && curve != .ecP384 {
+        return error(CryptoError.badKey, "an EC point needs the curve ecP256 or ecP384")
+    }
+    k := rawEcPublic(if curve == .ecP256 { 0 } else { 1 }, point.ptr, point.len)
+    if k == null {
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return PublicKey{k: k}
+}
+
+// An RSA public key from its modulus n and its exponent e, as big-endian
+// bytes, as DNSSEC's DNSKEY records hold them.
+pub !PublicKey rsaPublicKey(str n, str e) {
+    k := rawRsaPublic(n.ptr, n.len, e.ptr, e.len)
+    if k == null {
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return PublicKey{k: k}
+}
+
+// A new private key of type: ecP256, ecP384, or rsa of bits (2048 or
+// more). It needs OpenSSL 3.
+pub !PrivateKey generateKey(KeyType t, i64 bits = 2048) {
+    if t == .other {
+        return error(CryptoError.badKey, "no key of type other")
+    }
+    k := rawGenerate(match t {
+        .ecP256 => 0
+        .ecP384 => 1
+        _ => 2
+    }, bits)
+    if k == null {
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return PrivateKey{k: k}
+}
+
+// The key's kind: ecP256, ecP384 or rsa.
+pub KeyType PrivateKey.kind() => typeOf(self.k)
+
+// The key's kind: ecP256, ecP384 or rsa.
+pub KeyType PublicKey.kind() => typeOf(self.k)
+
+// The public half of the key.
+pub PublicKey PrivateKey.publicKey() {
+    scoped String der
+    _ = rawExport(self.k, 0, 1, &der)
+    return PublicKey{k: rawLoadPublic(der.ptr, der.len)}
+}
+
+// The key in PEM, PKCS#8, unencrypted: keep it where only its owner reads.
+pub String PrivateKey.pem() {
+    String out
+    _ = rawExport(self.k, 1, 0, &out)
+    return out
+}
+
+// The key in PEM (BEGIN PUBLIC KEY).
+pub String PublicKey.pem() {
+    String out
+    _ = rawExport(self.k, 0, 0, &out)
+    return out
+}
+
+// The key in DER, as a SubjectPublicKeyInfo.
+pub String PublicKey.der() {
+    String out
+    _ = rawExport(self.k, 0, 1, &out)
+    return out
+}
+
+// Signs data, hashed with hash: ECDSA's signature in DER (ecdsaRaw turns
+// it into r and s), or RSA's with padding.
+pub !String PrivateKey.sign(str data, Hash hash = .sha256, Padding padding = .pkcs1) {
+    String out
+    if rawSign(self.k, data.ptr, data.len, hashCode(hash), if padding == .pss { 1 } else { 0 }, &out) == 0 {
+        out.free()
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return out
+}
+
+// Whether signature is the key's signature of data, hashed with hash: in
+// DER for ECDSA (ecdsaDer makes one from r and s), with padding for RSA.
+pub bool PublicKey.verify(str data, str signature, Hash hash = .sha256, Padding padding = .pkcs1) {
+    return rawVerify(self.k, data.ptr, data.len, signature.ptr, signature.len, hashCode(hash),
+        if padding == .pss { 1 } else { 0 }) != 0
+}
+
+// Gives the key back.
+pub void PrivateKey.free() {
+    rawKeyFree(self.k)
+    self.k = null
+}
+
+// Gives the key back.
+pub void PublicKey.free() {
+    rawKeyFree(self.k)
+    self.k = null
+}
+
+// An ECDSA signature in DER as r and s of size bytes each (32 for P-256,
+// 48 for P-384), as DNSSEC and JSON Web Tokens carry it.
+pub !String ecdsaRaw(str der, i64 size) {
+    String out
+    if rawDerToRaw(der.ptr, der.len, size, &out) == 0 {
+        out.free()
+        return error(CryptoError.badKey, "not an ECDSA signature in DER of {size}-byte numbers")
+    }
+    return out
+}
+
+// An ECDSA signature given as r and s, of the same size each, in DER.
+pub String ecdsaDer(str raw) {
+    if raw.len == 0 || raw.len % 2 != 0 || raw.len > 132 {
+        panic("an ECDSA signature as r and s has two halves of the same size, not {raw.len} bytes")
+    }
+    String out
+    rawRawToDer(raw.ptr, raw.len, &out)
+    return out
+}

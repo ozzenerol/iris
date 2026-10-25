@@ -271,6 +271,29 @@ true
 false
 ```
 
+Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A `crypto.PrivateKey` comes from `loadPrivateKey(pem)`, PEM or DER as openssl writes it, or from `generateKey(.ecP256)`, `.ecP384` or `.rsa` with its bits. `sign(data, hash, padding)` signs, and `publicKey()` gives the half to share. A `crypto.PublicKey` comes from `loadPublicKey` too, from an EC point with `ecPublicKey(curve, point)`, or from RSA's modulus and exponent with `rsaPublicKey(n, e)`, as DNSSEC records hold them. `verify(data, signature, hash, padding)` checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or `.pss`, as TLS 1.3 does. ECDSA signatures are in DER, and `ecdsaRaw(sig, 32)` and `ecdsaDer(raw)` turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.
+
+```iris run
+import crypto
+
+!void main() {
+    scoped key := try crypto.generateKey(.ecP256)
+    scoped public := key.publicKey()
+    scoped String sig = try key.sign("release 0.73", .sha256)
+
+    print("{public.verify("release 0.73", sig)} {public.verify("release 0.74", sig)}")
+    scoped String pem = public.pem()
+    print(pem[0:26])
+}
+```
+
+```output
+true false
+-----BEGIN PUBLIC KEY-----
+```
+
+They come from OpenSSL's libcrypto, as TLS does, and `generateKey` needs OpenSSL 3.
+
 ## Tokens for logins
 
 A JSON Web Token carries claims, such as who the user is and when the token ends. They are signed, so the server can trust them when the client sends them back. `jwt.sign(claims, key)` signs a `@json` struct with HS256, and `jwt.verify[T](token, key)` checks the signature and reads the claims back. When the claims have `exp`, in seconds since 1970, a token past it fails with `JwtError.expired`:
