@@ -1,0 +1,47 @@
+// expect: HTTP/1.1 200 OK
+// expect: Connection: close
+// expect: hello
+// expect: the server returned after the request was answered
+
+import http, net, str
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello")
+}
+
+void serve(http.Router *r, net.Listener ln, chan[bool] done) {
+    r.serveOn(ln) catch e { }
+    done <- true
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    ln := try net.listen(0, "127.0.0.1")
+    done := chan[bool](1)
+    defer done.free()
+    spawn serve(&r, ln, done)
+
+    // a connection the server has taken but whose request comes late
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    sleep(30ms)
+    stopper := thread r.shutdown(2s)
+    sleep(50ms)
+    try c.write("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    for {
+        scoped String line = try c.readLine()
+        if line.len == 0 {
+            break
+        }
+        if str.startsWith(line, "HTTP/") || str.startsWith(line, "Connection") {
+            print(line)
+        }
+    }
+    scoped String body = try c.readExactly(5)
+    print(body)
+    stopper.join()
+    _ = <-done
+    print("the server returned after the request was answered")
+}

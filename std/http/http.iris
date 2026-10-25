@@ -807,6 +807,15 @@ void serveConn(net.Conn conn, Target target) {
     Watch w = Watch{conn: &conn, last: time.clock()}
     watch(&w, &limits, target.router)
     defer unwatch(&w)
+    // a new connection counts as busy until its first request is under
+    // way, so a server that stops waits for it as for a request; the
+    // accept loop counted it already
+    bool fresh = target.router != null
+    defer {
+        if fresh {
+            target.router.busy.sub(1)
+        }
+    }
     if target.tls != null {
         conn.acceptTls(target.tls) catch e {
             return
@@ -816,6 +825,10 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if preface == PREFACE {
+                if fresh {
+                    fresh = false
+                    target.router.busy.sub(1)
+                }
                 serveH2(&conn, target, limits, &w, remote, local)
             } else {
                 scoped String bye = goawayFrame(0, E_PROTOCOL)
@@ -833,10 +846,14 @@ void serveConn(net.Conn conn, Target target) {
         res.headers.free()
         res.contentType.free()
     }
+    bool served = false
     for {
-        if target.router != null && target.router.stopping.load() != 0 {
+        // a stopping server closes connections between requests; one it
+        // has just accepted still gets its first request answered
+        if served && target.router != null && target.router.stopping.load() != 0 {
             return
         }
+        served = true
         Request req
         req.remote = remote
         req.local = local
@@ -863,6 +880,10 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if rest == "SM\r\n\r\n" {
+                if fresh {
+                    fresh = false
+                    target.router.busy.sub(1)
+                }
                 serveH2(&conn, target, limits, &w, remote, local)
             }
             return
@@ -870,11 +891,19 @@ void serveConn(net.Conn conn, Target target) {
         if target.router != null {
             route := target.router.socketRoute(&req)
             if route != null {
+                if fresh {
+                    fresh = false
+                    target.router.busy.sub(1)
+                }
                 upgrade(&conn, &req, route, &w, &limits)
                 req.free()
                 return
             }
             target.router.busy.add(1)
+            if fresh {
+                fresh = false
+                target.router.busy.sub(1)
+            }
         }
         res.status = 200
         keepAlive := !sameName(req.header("Connection"), "close")
@@ -1000,7 +1029,9 @@ void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target t
     r := target.router
     r.lock.lock()
     r.listeners.push(ln)
+    r.accepting.add(1)
     r.lock.unlock()
+    defer r.leaveAccept()
     Duration wait
     when os == .macos {
         wait = 200ms
@@ -1015,9 +1046,9 @@ void startThreads(i64 n, net.Listener ln, bool own, u16 port, str host, Target t
             }
             return e
         }
+        r.busy.add(1) // serveConn gives it back once the first request is under way
         spawn serveConn(conn, target)
     }
-    ln.close()
     // serve returns when the requests being answered are done
     for r.busy.load() > 0 && time.clock() < r.drainEnd.load() {
         sleep(5ms)
@@ -1082,6 +1113,7 @@ pub struct Router {
     pub bool gzip
     Atomic[i64] stopping
     Atomic[i64] busy
+    Atomic[i64] accepting // accept loops that run
     Mutex lock
     List[net.Listener] listeners
     Atomic[i64] drainEnd
@@ -1098,9 +1130,29 @@ pub void Router.shutdown(Duration wait = 10s) {
     }
     self.lock.unlock()
     start := time.clock()
-    for self.busy.load() > 0 && time.clock() - start < wait {
+    // an accept loop that hasn't left yet may hold a connection it took
+    for (self.busy.load() > 0 || self.accepting.load() > 0) && time.clock() - start < wait {
         sleep(5ms)
     }
+}
+
+// An accept loop leaves. The last one to leave a stopped server closes
+// the listeners: none waits on them any more.
+void Router.leaveAccept() {
+    self.lock.lock()
+    defer self.lock.unlock()
+    if self.accepting.sub(1) > 0 || self.stopping.load() == 0 {
+        return
+    }
+    List[i32] closed
+    defer closed.free()
+    for ln in self.listeners {
+        if !closed.has(ln.fd()) {
+            closed.push(ln.fd())
+            ln.close()
+        }
+    }
+    self.listeners.clear()
 }
 
 struct Hook {
@@ -1649,7 +1701,10 @@ H2Conn *Client.h2For(Dest *d) {
 pub !Reply Client.send(str method, str url, str body = "", str contentType = "", str[] headers = []) {
     try checkHeaders(headers)
     d := try destOf(url)
-    for attempt in 0..2 {
+    // a request the server didn't take (GOAWAY, REFUSED_STREAM) goes again,
+    // on a new connection, up to twice: during a restart the next
+    // connection can meet a server that is going away too
+    for attempt in 0..3 {
         H2Conn *h = self.h2For(&d)
         net.Conn fresh
         bool dialed = false
@@ -1660,7 +1715,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "",
         if h != null {
             bool retry
             r := h.request(method, &d, body, contentType, self.wait(), &retry, headers, self.raw) catch e {
-                if retry && attempt == 0 {
+                if retry && attempt < 2 {
                     continue
                 }
                 return e
