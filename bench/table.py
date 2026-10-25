@@ -16,13 +16,14 @@ ROWS = [
     ("strings", "build, count, split, replace"),
     ("channels", "ping-pong, then 1000 tasks on one channel"),
     ("http-hello", "HTTP/1.1 hello, wrk"),
+    ("https-hello", "HTTP/1.1 hello over TLS, wrk"),
     ("http-json", "HTTP/1.1 JSON in and out, wrk"),
     ("tcp-echo", "TCP echo, 100 connections"),
     ("http2", "HTTP/2 hello, h2load"),
     ("tcp-proxy", "TCP proxy, 64-byte messages, 100 connections"),
     ("tcp-proxy-bulk", "TCP proxy, 256 KiB messages, 16 connections"),
 ]
-NET = {"http-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"}
+NET = {"http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"}
 UNITS = {"tcp-echo": "msg/s", "tcp-proxy": "msg/s", "tcp-proxy-bulk": "MiB/s each way"}
 # the standard library against Go's and the best-known Rust crates
 LIB_ROWS = [

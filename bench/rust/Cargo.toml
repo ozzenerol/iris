@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["http2"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 serde = { version = "1", features = ["derive"] }
 async-channel = "2"
 num-bigint = "0.4"
@@ -49,6 +50,10 @@ path = "../http2/main.rs"
 [[bin]]
 name = "http-hello"
 path = "../http-hello/main.rs"
+
+[[bin]]
+name = "https-hello"
+path = "../https-hello/main.rs"
 
 [[bin]]
 name = "http-json"

@@ -16,7 +16,7 @@ LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "so
        "xml-parse", "toml-parse", "zip", "tar", "template"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
-NET = ["http-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"]
+NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"]
 # a benchmark that runs another one's programs under a different load
 SAME_AS = {"tcp-proxy-bulk": "tcp-proxy"}
 # the cores this process may use (a container may get any of the host's):
@@ -48,6 +48,9 @@ def build(names, iris):
     sh(["go", "build", "-o", f"{OUT}/echo-load", "./tools/echo-load"], cwd=HERE)
     sh(["go", "build", "-o", f"{OUT}/echo-server", "./tools/echo-server"], cwd=HERE)
     sh(["cc", "-O2", "-o", f"{OUT}/memrun", f"{HERE}/tools/memrun.c"])
+    # the TLS servers' certificate: ECDSA P-256, made for this run
+    sh(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+        "-days", "2", "-subj", "/CN=127.0.0.1", "-keyout", f"{OUT}/key.pem", "-out", f"{OUT}/cert.pem"])
 
 
 def timed(binary, runs, cores=None):
@@ -82,8 +85,9 @@ def wait_port(port):
 
 def load(name):
     pin = ["taskset", "-c", LOAD_CORES]
-    if name == "http-hello":
-        out = sh(pin + ["wrk", "-t4", "-c256", f"-d{LOAD_TIME}s", "http://127.0.0.1:9000/"])
+    if name in ("http-hello", "https-hello"):
+        scheme = "https" if name == "https-hello" else "http"
+        out = sh(pin + ["wrk", "-t4", "-c256", f"-d{LOAD_TIME}s", f"{scheme}://127.0.0.1:9000/"])
         return float(re.search(r"Requests/sec:\s+([\d.]+)", out).group(1))
     if name == "http-json":
         lua = f"{OUT}/post.lua"
@@ -118,8 +122,9 @@ def serve(binary, name):
         # the same backend for every proxy, on the load's cores
         backend = subprocess.Popen(["taskset", "-c", LOAD_CORES, f"{OUT}/echo-server"])
         wait_port(9001)
+    # TLS servers read cert.pem and key.pem from the folder they run in
     p = subprocess.Popen(["taskset", "-c", SERVER_CORES, binary], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+                         stderr=subprocess.DEVNULL, cwd=OUT)
     try:
         wait_port(9000)
         if name == "http-json":

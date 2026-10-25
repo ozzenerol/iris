@@ -1,0 +1,13 @@
+import http
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello, world\n")
+}
+
+// cert.pem and key.pem are in the folder it runs in
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    try r.serveTls(9000, "cert.pem", "key.pem", "127.0.0.1")
+}
