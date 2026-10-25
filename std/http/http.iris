@@ -231,6 +231,28 @@ pub str Request.header(str name) {
     return ""
 }
 
+// One header of a request or a reply.
+pub struct Header {
+    pub str name
+    pub str value
+}
+
+// Every header of the request, in the order they came: for a proxy that
+// passes them on. They point into the request, so they are gone when the
+// handler returns. Free only the list.
+pub List[Header] Request.headers() {
+    List[Header] out
+    rest := self.head
+    for rest.len > 0 {
+        n, v, after := nextHeader(rest)
+        if n.len > 0 {
+            out.push(Header{name: n, value: v})
+        }
+        rest = after
+    }
+    return out
+}
+
 // Whether the request has a header of this name, even an empty one.
 bool Request.hasHeader(str name) {
     rest := self.head
@@ -1333,6 +1355,16 @@ pub struct Reply {
     }
 }
 
+// Every header of the reply, in the order they came. The names and values
+// belong to the reply: free only the list.
+pub List[Header] Reply.headers() {
+    List[Header] out
+    for i in 0..self.names.len {
+        out.push(Header{name: self.names.at(i), value: self.values.at(i)})
+    }
+    return out
+}
+
 // The value of a header of the reply, "" when it has none.
 pub str Reply.header(str name) {
     for i in 0..self.names.len {
@@ -1418,7 +1450,12 @@ bool hasHeader(str[] headers, str name) {
 
 String requestText(str method, Dest *d, str body, str contentType, bool keepAlive, str[] headers = [],
     bool gzip = true) {
-        String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\n")
+        String req = format("{method} {d.path} HTTP/1.1\r\n")
+        if !hasHeader(headers, "Host") {
+            req.append("Host: ")
+            req.append(d.hostPort)
+            req.append("\r\n")
+        }
         if !hasHeader(headers, "User-Agent") {
             req.append("User-Agent: iris\r\n")
         }
@@ -1487,6 +1524,9 @@ pub struct Client {
     pub bool priorKnowledge
     // a file of the certificates to trust instead of the system's ("")
     pub str ca
+    // keep bodies as the server sends them: no Accept-Encoding of its
+    // own, and a gzip body stays gzip, for a proxy that passes it on
+    pub bool raw
     Mutex lock
     Map[str, List[net.Conn]] idle
     Map[str, H2Conn *] h2
@@ -1579,7 +1619,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "",
         }
         if h != null {
             bool retry
-            r := h.request(method, &d, body, contentType, self.wait(), &retry, headers) catch e {
+            r := h.request(method, &d, body, contentType, self.wait(), &retry, headers, self.raw) catch e {
                 if retry && attempt == 0 {
                     continue
                 }
@@ -1604,7 +1644,7 @@ bool Client.hasIdle(Dest *d) {
 // connection, and on a new one when the idle one turns out to be closed.
 !Reply Client.sendH1(str method, Dest *d, str body, str contentType, net.Conn fresh, bool dialed,
     str[] headers = []) {
-        scoped String req = requestText(method, d, body, contentType, true, headers)
+        scoped String req = requestText(method, d, body, contentType, true, headers, !self.raw)
         for attempt in 0..2 {
             net.Conn c = fresh
             reused := !dialed
@@ -1621,7 +1661,7 @@ bool Client.hasIdle(Dest *d) {
                 return e
             }
             bool reusable
-            r := readReply(&c, &reusable) catch e {
+            r := readReply(&c, &reusable, !self.raw) catch e {
                 c.close()
                 if reused && e.code == net.NetError.closed {
                     continue
@@ -1671,8 +1711,11 @@ pub void Client.close() {
 
 // Reads a reply. reusable says whether the connection can take another
 // request: the reply's end was known and the server didn't close it.
-!Reply readReply(net.Conn *c, bool *reusable) {
+!Reply readReply(net.Conn *c, bool *reusable, bool decode = true) {
     r := try readRawReply(c, reusable)
+    if !decode {
+        return r
+    }
     r.decode() catch e {
         r.free()
         return e

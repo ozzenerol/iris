@@ -248,19 +248,26 @@ H2Conn *startH2(net.Conn c, Dest *d) {
 
 // Sends a request on the connection and waits for its reply.
 !Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry,
-    str[] headers = []) {
+    str[] headers = [], bool raw = false) {
         *retry = false
         start := time.clock()
         String block
         defer block.free()
         encodeHeader(&block, ":method", method)
         encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
-        encodeHeader(&block, ":authority", self.authority)
+        authority := self.authority[:]
+        for line in headers {
+            name, value, _ := str.cut(line, ":")
+            if sameName(str.trim(name), "host") {
+                authority = str.trim(value)
+            }
+        }
+        encodeHeader(&block, ":authority", authority)
         encodeHeader(&block, ":path", d.path)
         if !hasHeader(headers, "user-agent") {
             encodeHeader(&block, "user-agent", "iris")
         }
-        if !hasHeader(headers, "accept-encoding") {
+        if !raw && !hasHeader(headers, "accept-encoding") {
             encodeHeader(&block, "accept-encoding", "gzip")
         }
         for line in headers {
@@ -348,6 +355,9 @@ H2Conn *startH2(net.Conn c, Dest *d) {
             *retry = r.retry
             defer r.why.free()
             return error(net.NetError.closed, "{r.why}")
+        }
+        if raw {
+            return r.reply
         }
         r.reply.decode() catch e {
             r.reply.free()

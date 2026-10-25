@@ -142,6 +142,7 @@ void serve(http.Router *r, net.Listener ln) {
 | `req.file("photo")` | a file sent in a form |
 | `req.cookie("session")` | a cookie the client sent |
 | `req.header("Authorization")` | a header, by its name in any case |
+| `req.headers()` | every header, as a `List[http.Header]` of `name` and `value` |
 | `req.protocol` | `"HTTP/1.1"` or `"HTTP/2"` |
 | `req.received` | when it came in, by `time.clock()` |
 | `req.remote` | who sent it, a `net.Addr`: `req.remote.ipText()` and `req.remote.port` |
@@ -576,6 +577,8 @@ void serve(http.Router *r, net.Listener ln) {
 ```
 
 Each of them takes `headers`, the request's own as `"Name: value"`, such as an `Authorization`, a `Range` for part of a file, or a `User-Agent` in place of iris's: `c.get(url, ["Range: bytes=0-1023"])`. A header with a line break in it is an error, so a value from outside can't add headers of its own.
+
+A `Reply`'s `headers()` lists every header of the answer. A proxy passes requests on with a `Client` whose `raw` is true: the client adds no `Accept-Encoding` of its own and leaves a gzip body as it came, and a `Host` among the request's headers goes to the server in place of the one from the URL.
 
 ## Bodies a part at a time
 

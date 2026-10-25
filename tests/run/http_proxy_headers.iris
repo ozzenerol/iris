@@ -1,0 +1,79 @@
+// expect: HTTP/1.1 host=backend.example x-trace=7
+// expect: HTTP/2 x-trace=7 host=backend.example
+// expect: raw HTTP/1.1: gzip, gzip magic true
+// expect: raw HTTP/2: gzip, gzip magic true
+// expect: decoded: 2000 bytes, encoding ''
+// expect: reply headers include X-Upstream: true
+
+import http, net, str
+
+void echo(http.Request *req, http.Response *res) {
+    scoped List[http.Header] hs = req.headers()
+    String out
+    defer out.free()
+    out.append(req.protocol)
+    for h in hs {
+        lower := str.lower(h.name)
+        defer lower.free()
+        if lower == "host" || lower == "x-trace" {
+            scoped String part = format(" {lower}={h.value}")
+            out.append(part)
+        }
+    }
+    res.header("X-Upstream", "yes")
+    res.text(out)
+}
+
+void big(http.Request *req, http.Response *res) {
+    scoped String body = str.repeat("a", 2000)
+    res.text(body)
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.gzip = true
+    r.get("/echo", echo)
+    r.get("/big", big)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    scoped String echoUrl = format("http://127.0.0.1:{ln.port}/echo")
+    scoped String bigUrl = format("http://127.0.0.1:{ln.port}/big")
+    for h2 in [false, true] {
+        http.Client c
+        c.priorKnowledge = h2
+        c.raw = true
+        defer c.close()
+        scoped http.Reply a = try c.get(echoUrl, ["Host: backend.example", "X-Trace: 7"])
+        print(a.body)
+    }
+    for h2 in [false, true] {
+        http.Client c
+        c.priorKnowledge = h2
+        c.raw = true
+        defer c.close()
+        scoped http.Reply b = try c.get(bigUrl, ["Accept-Encoding: gzip"])
+        print("raw {b.protocol}: {b.header("Content-Encoding")}, gzip magic {b.body.len > 2 && b.body[0] == 0x1f && b.body[1] == 0x8b}")
+    }
+    http.Client plain
+    defer plain.close()
+    scoped http.Reply d = try plain.get(bigUrl)
+    print("decoded: {d.body.len} bytes, encoding '{d.header("Content-Encoding")}'")
+
+    scoped http.Reply e = try plain.get(echoUrl)
+    scoped List[http.Header] hs = e.headers()
+    bool found = false
+    for h in hs {
+        if h.name == "X-Upstream" && h.value == "yes" {
+            found = true
+        }
+    }
+    print("reply headers include X-Upstream: {found}")
+}
