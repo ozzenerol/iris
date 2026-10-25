@@ -755,6 +755,13 @@ int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
     return (int64_t)(op == 0 ? x + y : op == 1 ? x - y : x * y);
 }
 
+/* math.mulHigh and math.mulFull: the 128-bit product of two u64s. */
+uint64_t iris_math_mul_full(uint64_t a, uint64_t b, uint64_t *lo) {
+    __uint128_t p = (__uint128_t)a * b;
+    if (lo) *lo = (uint64_t)p;
+    return (uint64_t)(p >> 64);
+}
+
 /* str.validUtf8: ASCII 8 bytes at a time, then each sequence checked as
    decodeRune does (no overlong forms, surrogates or values past U+10FFFF).
    With count, the characters of valid text are counted on the way: -1 when
