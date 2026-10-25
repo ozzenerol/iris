@@ -25,11 +25,11 @@ pub struct ReplyStream {
     net.Conn conn
     Client *client
     String url
-    i64 mode        // 0 a length, 1 chunked, 2 up to the end of the connection
-    i64 left        // length: bytes to come; chunked: of this chunk
+    i64 mode // 0 a length, 1 chunked, 2 up to the end of the connection
+    i64 left // length: bytes to come; chunked: of this chunk
     bool done
     bool reusable
-    bool given      // the connection went back to the Client
+    bool given // the connection went back to the Client
 }
 
 // The value of a header of the reply, "" when it has none.

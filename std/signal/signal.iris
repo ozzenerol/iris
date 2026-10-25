@@ -72,10 +72,10 @@ pub Signal wait() {
     if e == 0 {
         return
     }
-    if e == 3 {     // ESRCH
+    if e == 3 { // ESRCH
         return error(SignalError.notFound, "{what}: no such process")
     }
-    if e == 1 {     // EPERM
+    if e == 1 { // EPERM
         return error(SignalError.permission, "{what}: not allowed")
     }
     return error(SignalError.other, "{what}: the system refused")

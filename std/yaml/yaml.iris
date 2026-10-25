@@ -85,7 +85,7 @@ pub void Value.set(str key, Value v) {
 struct Line {
     i64 no
     i64 indent
-    str text    // after the indentation, without the line break
+    str text // after the indentation, without the line break
 }
 
 struct Parser {
@@ -116,10 +116,10 @@ str uncomment(str t) {
             continue
         }
         if (c == '"' || c == '\'') && (i == 0 || t[i - 1] == ' ' || t[i - 1] == '[' || t[i - 1] == '{' ||
-            t[i - 1] == ',' || t[i - 1] == ':') {
-                quote = c
-                continue
-            }
+                t[i - 1] == ',' || t[i - 1] == ':') {
+                    quote = c
+                    continue
+                }
         if c == '#' && (i == 0 || t[i - 1] == ' ' || t[i - 1] == '\t') {
             return str.trimRight(t[0:i])
         }
@@ -434,7 +434,7 @@ bool balanced(str t) {
 // the final line break, + keeps all of them; a digit sets the indentation.
 !Value Parser.block(str header, i64 line, i64 parent) {
     literal := header[0] == '|'
-    i64 chomp = 0       // -1 strip, 0 clip, 1 keep
+    i64 chomp = 0 // -1 strip, 0 clip, 1 keep
     i64 given = 0
     for i in 1..header.len {
         c := header[i]
@@ -785,9 +785,9 @@ void Flow.space() {
             break
         }
         if ch == ':' && (self.at + 1 == self.t.len || self.t[self.at + 1] == ' ' || self.t[self.at + 1] == ',' ||
-            key) {
-                break
-            }
+                key) {
+                    break
+                }
         self.at += 1
     }
     return resolve(str.trim(self.t[start:self.at]))

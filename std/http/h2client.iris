@@ -249,112 +249,112 @@ H2Conn *startH2(net.Conn c, Dest *d) {
 // Sends a request on the connection and waits for its reply.
 !Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry,
     str[] headers = []) {
-    *retry = false
-    start := time.clock()
-    String block
-    defer block.free()
-    encodeHeader(&block, ":method", method)
-    encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
-    encodeHeader(&block, ":authority", self.authority)
-    encodeHeader(&block, ":path", d.path)
-    if !hasHeader(headers, "user-agent") {
-        encodeHeader(&block, "user-agent", "iris")
-    }
-    if !hasHeader(headers, "accept-encoding") {
-        encodeHeader(&block, "accept-encoding", "gzip")
-    }
-    for line in headers {
-        name, value, _ := str.cut(line, ":")
-        scoped String lower = str.lower(str.trim(name))
-        // HTTP/2 has no connection headers, and :authority stands for Host
-        if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" || lower == "upgrade" ||
-            lower == "host" {
-                continue
-            }
-        encodeHeader(&block, lower, str.trim(value))
-    }
-    if contentType.len > 0 {
-        encodeHeader(&block, "content-type", contentType)
-    }
-    if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
-        scoped String length = format("{body.len}")
-        encodeHeader(&block, "content-length", length)
-    }
-    done := chan[H2Result](1)
-    i64 id = 0
-    for {
-        self.lock.lock()
-        if self.dead {
-            self.lock.unlock()
-            *retry = true
-            return error(net.NetError.closed, "the connection is closing")
+        *retry = false
+        start := time.clock()
+        String block
+        defer block.free()
+        encodeHeader(&block, ":method", method)
+        encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
+        encodeHeader(&block, ":authority", self.authority)
+        encodeHeader(&block, ":path", d.path)
+        if !hasHeader(headers, "user-agent") {
+            encodeHeader(&block, "user-agent", "iris")
         }
-        if self.streams.len < self.maxStreams {
-            id = self.nextId
-            self.nextId += 2
-            self.streams.set(id, H2Pending{done: done})
-            String frames
-            i64 at = 0
-            for {
-                n := if block.len - at > 16384 { 16384 } else { block.len - at }
-                last := at + n == block.len
-                i64 flags = if last { END_HEADERS } else { 0 }
-                if at == 0 && body.len == 0 {
-                    flags |= END_STREAM
+        if !hasHeader(headers, "accept-encoding") {
+            encodeHeader(&block, "accept-encoding", "gzip")
+        }
+        for line in headers {
+            name, value, _ := str.cut(line, ":")
+            scoped String lower = str.lower(str.trim(name))
+            // HTTP/2 has no connection headers, and :authority stands for Host
+            if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" || lower == "upgrade" ||
+                lower == "host" {
+                    continue
                 }
-                putFrame(&frames, if at == 0 { F_HEADERS } else { F_CONTINUATION }, flags, id, block[at:at + n])
-                at += n
-                if last {
-                    break
-                }
-            }
-            // in the writer's order, which is the order of the ids
-            self.jobs.put(Out{job: .frame, data: frames})
-            if body.len > 0 {
-                self.jobs.put(Out{job: .body, stream: id, data: body.copy()})
-            }
-            self.lock.unlock()
-            break
+            encodeHeader(&block, lower, str.trim(value))
         }
-        self.lock.unlock()
-        // as many requests as the server allows are open: wait for one
-        if timeout > 0s && time.clock() - start > timeout {
-            return error(net.NetError.timeout, "no stream became free")
+        if contentType.len > 0 {
+            encodeHeader(&block, "content-type", contentType)
         }
-        sleep(1ms)
-    }
-    Duration left = if timeout > 0s { timeout - (time.clock() - start) } else { 0s }
-    if timeout > 0s && left <= 0s {
-        left = 1ns
-    }
-    H2Result r
-    if timeout > 0s {
-        bool timedOut = false
-        select {
-            got := <-done => r = got,
-            after(left) => timedOut = true,
+        if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
+            scoped String length = format("{body.len}")
+            encodeHeader(&block, "content-length", length)
         }
-        if timedOut {
+        done := chan[H2Result](1)
+        i64 id = 0
+        for {
             self.lock.lock()
-            _ = self.streams.remove(id)
+            if self.dead {
+                self.lock.unlock()
+                *retry = true
+                return error(net.NetError.closed, "the connection is closing")
+            }
+            if self.streams.len < self.maxStreams {
+                id = self.nextId
+                self.nextId += 2
+                self.streams.set(id, H2Pending{done: done})
+                String frames
+                i64 at = 0
+                for {
+                    n := if block.len - at > 16384 { 16384 } else { block.len - at }
+                    last := at + n == block.len
+                    i64 flags = if last { END_HEADERS } else { 0 }
+                    if at == 0 && body.len == 0 {
+                        flags |= END_STREAM
+                    }
+                    putFrame(&frames, if at == 0 { F_HEADERS } else { F_CONTINUATION }, flags, id, block[at:at + n])
+                    at += n
+                    if last {
+                        break
+                    }
+                }
+                // in the writer's order, which is the order of the ids
+                self.jobs.put(Out{job: .frame, data: frames})
+                if body.len > 0 {
+                    self.jobs.put(Out{job: .body, stream: id, data: body.copy()})
+                }
+                self.lock.unlock()
+                break
+            }
             self.lock.unlock()
-            self.jobs.put(Out{job: .frame, data: rstFrame(id, E_CANCEL)})
-            return error(net.NetError.timeout, "no reply in {timeout}")
+            // as many requests as the server allows are open: wait for one
+            if timeout > 0s && time.clock() - start > timeout {
+                return error(net.NetError.timeout, "no stream became free")
+            }
+            sleep(1ms)
         }
-    } else {
-        r = <-done
+        Duration left = if timeout > 0s { timeout - (time.clock() - start) } else { 0s }
+        if timeout > 0s && left <= 0s {
+            left = 1ns
+        }
+        H2Result r
+        if timeout > 0s {
+            bool timedOut = false
+            select {
+                got := <-done => r = got,
+                after(left) => timedOut = true,
+            }
+            if timedOut {
+                self.lock.lock()
+                _ = self.streams.remove(id)
+                self.lock.unlock()
+                self.jobs.put(Out{job: .frame, data: rstFrame(id, E_CANCEL)})
+                return error(net.NetError.timeout, "no reply in {timeout}")
+            }
+        } else {
+            r = <-done
+        }
+        if !r.ok {
+            *retry = r.retry
+            defer r.why.free()
+            return error(net.NetError.closed, "{r.why}")
+        }
+        r.reply.decode() catch e {
+            r.reply.free()
+            return e
+        }
+        return r.reply
     }
-    if !r.ok {
-        *retry = r.retry
-        defer r.why.free()
-        return error(net.NetError.closed, "{r.why}")
-    }
-    r.reply.decode() catch e {
-        r.reply.free()
-        return e
-    }
-    return r.reply
-}
 
 // Ends the connection, after the requests that wait for replies fail.
 void H2Conn.close() {

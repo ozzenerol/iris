@@ -144,7 +144,7 @@ struct Out {
     String data // frame: the bytes; reply: the body
     i32 status
     String contentType
-    String headers // "Name: value\r\n" lines, as Response keeps them
+    String headers  // "Name: value\r\n" lines, as Response keeps them
     StreamOut *sink // head, chunk and end: the streamed answer
 }
 
@@ -172,7 +172,7 @@ struct Sending {
     String body
     i64 at
     i64 window
-    bool open       // a streamed answer whose end hasn't come yet
+    bool open // a streamed answer whose end hasn't come yet
     StreamOut *sink
 }
 

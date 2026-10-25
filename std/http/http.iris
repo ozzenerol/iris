@@ -1418,32 +1418,32 @@ bool hasHeader(str[] headers, str name) {
 
 String requestText(str method, Dest *d, str body, str contentType, bool keepAlive, str[] headers = [],
     bool gzip = true) {
-    String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\n")
-    if !hasHeader(headers, "User-Agent") {
-        req.append("User-Agent: iris\r\n")
-    }
-    if gzip && !hasHeader(headers, "Accept-Encoding") {
-        req.append("Accept-Encoding: gzip\r\n")
-    }
-    for h in headers {
-        req.append(h)
-        req.append("\r\n")
-    }
-    if !keepAlive {
-        req.append("Connection: close\r\n")
-    }
-    if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
-        scoped String length = format("Content-Length: {body.len}\r\n")
-        req.append(length)
-        if contentType.len > 0 {
-            scoped String ct = format("Content-Type: {contentType}\r\n")
-            req.append(ct)
+        String req = format("{method} {d.path} HTTP/1.1\r\nHost: {d.hostPort}\r\n")
+        if !hasHeader(headers, "User-Agent") {
+            req.append("User-Agent: iris\r\n")
         }
+        if gzip && !hasHeader(headers, "Accept-Encoding") {
+            req.append("Accept-Encoding: gzip\r\n")
+        }
+        for h in headers {
+            req.append(h)
+            req.append("\r\n")
+        }
+        if !keepAlive {
+            req.append("Connection: close\r\n")
+        }
+        if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
+            scoped String length = format("Content-Length: {body.len}\r\n")
+            req.append(length)
+            if contentType.len > 0 {
+                scoped String ct = format("Content-Type: {contentType}\r\n")
+                req.append(ct)
+            }
+        }
+        req.append("\r\n")
+        req.append(body)
+        return req
     }
-    req.append("\r\n")
-    req.append(body)
-    return req
-}
 
 !net.Conn dialDest(Dest *d, Duration timeout, str protocols = "", str ca = "") {
     c := try net.dial(d.host, d.port, timeout)
@@ -1604,39 +1604,39 @@ bool Client.hasIdle(Dest *d) {
 // connection, and on a new one when the idle one turns out to be closed.
 !Reply Client.sendH1(str method, Dest *d, str body, str contentType, net.Conn fresh, bool dialed,
     str[] headers = []) {
-    scoped String req = requestText(method, d, body, contentType, true, headers)
-    for attempt in 0..2 {
-        net.Conn c = fresh
-        reused := !dialed
-        if reused && !self.take(d, &c) {
-            c = try dialDest(d, self.wait(), ca: self.ca)
-            reused = false
-        }
-        dialed = false
-        c.write(req) catch e {
-            c.close()
-            if reused {
-                continue // the server closed it while it was idle
+        scoped String req = requestText(method, d, body, contentType, true, headers)
+        for attempt in 0..2 {
+            net.Conn c = fresh
+            reused := !dialed
+            if reused && !self.take(d, &c) {
+                c = try dialDest(d, self.wait(), ca: self.ca)
+                reused = false
             }
-            return e
-        }
-        bool reusable
-        r := readReply(&c, &reusable) catch e {
-            c.close()
-            if reused && e.code == net.NetError.closed {
-                continue
+            dialed = false
+            c.write(req) catch e {
+                c.close()
+                if reused {
+                    continue // the server closed it while it was idle
+                }
+                return e
             }
-            return e
+            bool reusable
+            r := readReply(&c, &reusable) catch e {
+                c.close()
+                if reused && e.code == net.NetError.closed {
+                    continue
+                }
+                return e
+            }
+            if reusable {
+                self.keep(d, c)
+            } else {
+                c.close()
+            }
+            return r
         }
-        if reusable {
-            self.keep(d, c)
-        } else {
-            c.close()
-        }
-        return r
+        return error(net.NetError.closed, "{d.host}: the connection closed")
     }
-    return error(net.NetError.closed, "{d.host}: the connection closed")
-}
 
 // Sends a GET request to url.
 pub !Reply Client.get(str url, str[] headers = []) => try self.send("GET", url, headers: headers)
