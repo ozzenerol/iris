@@ -139,6 +139,11 @@ pub !Message WebSocket.read() {
     }
 }
 
+// Wakes a task that waits in read on the WebSocket, which then fails with
+// NetError.closed: a relay between two WebSockets stops one direction when
+// the other ends. close still has to be called.
+pub void WebSocket.interrupt() => self.c().interrupt()
+
 // Closes the WebSocket: the other side is told, and the connection goes.
 pub void WebSocket.close() {
     if !self.closed {

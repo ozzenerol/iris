@@ -1,0 +1,50 @@
+// expect: echo: hello
+// expect: the reader woke: NetError.closed
+
+import http, net
+
+!void echo(http.WebSocket *ws, http.Request *req) {
+    for {
+        m := try ws.read()
+        defer m.free()
+        try ws.send(m.data)
+    }
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+void reader(http.WebSocket *ws, chan[String] out) {
+    for {
+        m := ws.read() catch e {
+            out <- format("the reader woke: {e.code}")
+            return
+        }
+        out <- format("echo: {m.data}")
+        m.free()
+    }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.websocket("/ws", echo)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+
+    scoped String url = format("ws://127.0.0.1:{ln.port}/ws")
+    ws := try http.dialWebSocket(url)
+    out := chan[String](4)
+    defer out.free()
+    spawn reader(&ws, out)
+    try ws.send("hello")
+    a := <-out
+    print(a)
+    a.free()
+    ws.interrupt()
+    b := <-out
+    print(b)
+    b.free()
+    ws.close()
+}
