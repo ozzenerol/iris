@@ -5276,7 +5276,8 @@ int iris_udp_multicast(int fd, int family, int op, const uint8_t *ip, const char
 }
 
 /* Sends one datagram, to ip and port, or where the socket is connected
- * (ip NULL). 0, or a code. */
+ * (ip NULL). 0, or a code. A timeout below 0 doesn't wait: 3 when the
+ * send buffer is full. */
 int iris_udp_send(int fd, int family, const char *buf, int64_t len, const uint8_t *ip, int64_t port,
                   int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
@@ -5289,8 +5290,9 @@ int iris_udp_send(int fd, int family, const char *buf, int64_t len, const uint8_
     for (;;) {
         ssize_t n = ip ? sendto(fd, buf, (size_t)len, 0, (struct sockaddr *)&ss, sl) : send(fd, buf, (size_t)len, 0);
         if (n >= 0) return 0;
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            if (!waitFdUntil(fd, 1, deadline)) return 3;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (timeout < 0 || !waitFdUntil(fd, 1, deadline)) return 3;
             continue;
         }
         if (errno == EMSGSIZE) return 9;

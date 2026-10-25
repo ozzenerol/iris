@@ -440,7 +440,7 @@ A service that systemd runs with `Type=notify` says it is ready with `net.notify
 
 ## UDP and multicast
 
-`net.listenUdp(port)` makes a socket for datagrams. `readFrom(buf)` reads one with the address it came from, and `sendTo(data, addr)` sends one. `dialUdp(addr)` ties a socket to one peer, so `send` and `read` need no address. `readMany` and `sendMany` move a batch of `Datagram` in one call.
+`net.listenUdp(port)` makes a socket for datagrams. `readFrom(buf)` reads one with the address it came from, and `sendTo(data, addr)` sends one. `dialUdp(addr)` ties a socket to one peer, so `send` and `read` need no address. `readMany` and `sendMany` move a batch of `Datagram` in one call. `sendTo` waits while the send buffer is full; `trySendTo(data, addr)` never waits and gives false instead, so a server answering a flood from addresses that don't reply drops answers rather than stalling.
 
 A socket joins a multicast group with `joinGroup(addr, iface)`, where `addr` is a group such as `239.255.255.250` for SSDP or `224.0.0.251` for mDNS, and `iface` is the interface to join on (empty for the default). `leaveGroup` leaves it. `setMulticastHops(n)` sets how many routers a datagram may cross, `1` keeping it on the local network. `setMulticastLoop(on)` says whether what the socket sends also comes back to groups it joined on this machine, and `setMulticastInterface(iface)` picks the interface its multicast goes out of. `setBroadcast(true)` allows sending to the broadcast address.
 

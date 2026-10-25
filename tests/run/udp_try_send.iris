@@ -1,0 +1,14 @@
+// expect: true hello
+// trySendTo sends when the buffer has room, and never waits.
+import net
+
+!void main() {
+    a := try net.listenUdp(0, "127.0.0.1")
+    defer a.close()
+    b := try net.listenUdp(0, "127.0.0.1")
+    defer b.close()
+    sent := try a.trySendTo("hello", b.localAddr())
+    u8[16] buf
+    n, _ := try b.readFrom(buf[:])
+    print("{sent} {buf[0:n]}")
+}

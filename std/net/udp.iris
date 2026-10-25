@@ -338,6 +338,22 @@ pub !void Udp.sendTo(str data, Addr addr) {
     }
 }
 
+// Sends data as one datagram to addr if the socket's send buffer has
+// room, and false when it hasn't: it never waits. A server that answers
+// whoever writes to it uses this, so a flood from addresses that don't
+// answer can't hold it up.
+pub !bool Udp.trySendTo(str data, Addr addr) {
+    code := rawUdpSend(self.sock, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port), -1)
+    if code == 3 {
+        return false
+    }
+    if code != 0 {
+        scoped String where = addr.format()
+        try udpFail(code, "sending to {where}")
+    }
+    return true
+}
+
 // Sends data as one datagram to where a dialUdp socket is connected.
 pub !void Udp.send(str data) {
     code := rawUdpSend(self.sock, self.family, data.ptr, data.len, null, 0, self.timeout)
