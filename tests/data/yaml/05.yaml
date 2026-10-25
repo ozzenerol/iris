@@ -1,0 +1,12 @@
+base: &base
+  host: localhost
+  port: 5432
+dev:
+  <<: *base
+  db: dev
+prod:
+  <<: *base
+  port: 6432
+  db: prod
+list: &l [1, 2]
+again: *l

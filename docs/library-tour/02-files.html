@@ -336,6 +336,22 @@ FsError.exists</code></pre>
 /tmp/iris-tour-glob/src/net/udp.iris
 true false</code></pre>
 <p><code>fs.matches(pattern, name)</code> says whether one name matches one part of a pattern. A pattern that starts with a wildcard is searched from the working folder and gives paths without <code>./</code> in front.</p>
+<h2 id="watching-a-folder"><a href="#watching-a-folder">Watching a folder</a></h2>
+<p><code>fs.watch(dir)</code> gives a <code>Watcher</code>, and <code>next()</code> waits for the next change in the folder: an <code>Event</code> with its <code>change</code>, <code>created</code>, <code>removed</code> or <code>changed</code>, its <code>path</code>, and whether it <code>isDir</code>. With <code>recursive: true</code> it watches the folders inside too, and those made later. <code>next(timeout)</code> gives up with <code>FsError.end</code> when nothing changes for that long. On Linux the system tells of each change at once; elsewhere the folder is looked at every 200 ms. One write can be told of more than once, so a program that reloads a file on a change doesn't count them.</p>
+<pre class="code run"><code><span class="k">import</span> fs, path
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> dir = <span class="k">try</span> fs.<span class="f">tempDir</span>(<span class="s">&quot;iris-tour-watch&quot;</span>)
+    w := <span class="k">try</span> fs.<span class="f">watch</span>(dir)
+    <span class="k">defer</span> w.<span class="f">close</span>()
+
+    <span class="k">scoped</span> <span class="t">String</span> file = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>dir<span class="e">}</span><span class="s">/config.toml&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">writeAll</span>(file, <span class="s">&quot;port = 8080&quot;</span>)
+    <span class="k">scoped</span> e := <span class="k">try</span> w.<span class="f">next</span>(<span class="n">2s</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.change<span class="e">}</span><span class="s"> </span><span class="e">{</span>path.<span class="f">base</span>(e.path)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">try</span> fs.<span class="f">removeAll</span>(dir)
+}</code></pre>
+<pre class="out"><code>created config.toml</code></pre>
 <h2 id="temporary-files-and-copies"><a href="#temporary-files-and-copies">Temporary files and copies</a></h2>
 <p><code>fs.tempDir(prefix)</code> makes a new folder with a unique name, the prefix and six random characters, and gives its path. <code>fs.tempFile(prefix)</code> does the same for an empty file. Both go in <code>$TMPDIR</code>, or <code>/tmp</code>, or the folder given as <code>dir</code>. <code>fs.copy(from, to)</code> copies a file with its permissions and replaces whatever is at <code>to</code>.</p>
 <pre class="code run"><code><span class="k">import</span> fs, path, <span class="t">str</span>
@@ -428,7 +444,7 @@ OsError.notFound</code></pre>
     <nav class="pager"><a class="prev" href="01-json.html"><span>Previous</span>JSON</a><a class="next" href="03-time.html"><span>Next</span>Time</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#reading-and-writing-in-place">Reading and writing in place</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#finding-files-by-name">Finding files by name</a></li><li><a href="#temporary-files-and-copies">Temporary files and copies</a></li><li><a href="#paths">Paths</a></li><li><a href="#the-working-folder">The working folder</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#whole-files">Whole files</a></li><li><a href="#when-a-file-isn-t-there">When a file isn&#x27;t there</a></li><li><a href="#line-by-line">Line by line</a></li><li><a href="#writing-a-part-at-a-time">Writing a part at a time</a></li><li><a href="#bytes">Bytes</a></li><li><a href="#reading-and-writing-in-place">Reading and writing in place</a></li><li><a href="#information-about-a-file">Information about a file</a></li><li><a href="#moving-and-removing">Moving and removing</a></li><li><a href="#folders">Folders</a></li><li><a href="#walking-a-tree">Walking a tree</a></li><li><a href="#finding-files-by-name">Finding files by name</a></li><li><a href="#watching-a-folder">Watching a folder</a></li><li><a href="#temporary-files-and-copies">Temporary files and copies</a></li><li><a href="#paths">Paths</a></li><li><a href="#the-working-folder">The working folder</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

@@ -1,0 +1,7 @@
+multi: this is
+  a plain scalar
+  over lines
+nested:
+  a:
+    b:
+      c: deep

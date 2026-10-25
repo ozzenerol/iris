@@ -1,0 +1,8 @@
+quotes:
+  single: 'it''s'
+  double: "a\nb \u00e9 \x41"
+  colon: "a: b"
+  hash: 'x # not a comment'
+# a comment
+plain: some text # a comment
+url: http://example.com/a#b

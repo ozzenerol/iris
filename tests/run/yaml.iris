@@ -1,0 +1,134 @@
+// expect: {"name":"web","port":8080,"ratio":0.5,"on":true,"nothing":null,"tilde":null,"empty":null}
+// expect: {"list":["a","b",3],"flow":[1,2,[3,4],{"x":1,"y":"two"}],"map":{"a":1,"b c":"d\te"}}
+// expect: {"servers":[{"name":"one","ports":[80,443],"tags":["edge","public"]},{"name":"two","ports":[]}]}
+// expect: {"text":"line one\nline two\n","folded":"a long sentence here\nnew paragraph\n","keep":"kept\n\n","strip":"stripped","last":"end"}
+// expect: {"quotes":{"single":"it's","double":"a\nb é A","colon":"a: b","hash":"x # not a comment"},"plain":"some text","url":"http://example.com/a#b"}
+// expect: {"base":{"host":"localhost","port":5432},"dev":{"host":"localhost","port":5432,"db":"dev"},"prod":{"host":"localhost","port":6432,"db":"prod"},"list":[1,2],"again":[1,2]}
+// expect: {"ints":[0,-12,7,31,15,"1_000"],"floats":[1.5,-2000,0.5],"strings":["1.2.3","0x","true1","true","123"]}
+// expect: {"multi":"this is a plain scalar over lines","nested":{"a":{"b":{"c":"deep"}}}}
+// expect: ["top",["inner","two"],{"key":"v","other":"w"},{"later":"x"}]
+// expect: {"k8s":{"apiVersion":"v1","kind":"Pod","metadata":{"name":"app","labels":{"app":"web","tier":"front"}},"spec":{"containers":[{"name":"web","image":"nginx:1.27","args":["--port","80"],"env":[{"name":"A","value":"1"}]}]}}}
+// expect: {"long":["a","b","c"],"empty_map":{},"empty_list":[]}
+// expect: documents: 3: one, [two], {"three":3}
+// expect: decoded: web on 8080, 2 tags (edge, public), debug false
+// expect: wrong type: YamlError.wrongType
+// expect: syntax: YamlError.syntax: line 3: a line indented more than the mapping's keys
+// expect: tab: YamlError.syntax: line 2: a tab in the indentation
+// expect: alias: YamlError.syntax: line 1: an alias *nope without its anchor
+// expect: written:
+// expect: name: web
+// expect: port: 8080
+// expect: tags:
+// expect:   - edge
+// expect:   - "true"
+// expect: note: "a: b"
+// expect: written reads back the same: true
+// expect: encoded: name: api|port: 9000|tags:|  - x|debug: true|
+
+import fs, json, str, yaml
+
+void dump(String *out, yaml.Value *v) {
+    match v.kind {
+        .none => out.append("null"),
+        .boolean => out.append(if v.boolean { "true" } else { "false" }),
+        .integer => out.append("{v.int}"),
+        .float => out.append("{v.float}"),
+        .string => {
+            scoped String q = json.quote(v.text)
+            out.append(q)
+        },
+        .sequence => {
+            out.append("[")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(",")
+                }
+                dump(out, v.at(i))
+            }
+            out.append("]")
+        },
+        .mapping => {
+            out.append("{{")
+            for i in 0..v.len() {
+                if i > 0 {
+                    out.append(",")
+                }
+                scoped String k = json.quote(v.keys.at(i))
+                out.append(k)
+                out.append(":")
+                dump(out, v.at(i))
+            }
+            out.append("}}")
+        },
+    }
+}
+
+
+@json
+struct Config {
+    String name
+    i64 port
+    List[String] tags
+    bool debug
+}
+
+!void main() {
+    for i in 0..11 {
+        scoped String num = format("{i}")
+        scoped String path = format("tests/data/yaml/{if i < 10 { "0" } else { "" }}{num}.yaml")
+        scoped String text = try fs.readAll(path)
+        scoped v := try yaml.parse(text)
+        scoped String out
+        dump(&out, &v)
+        print(out)
+    }
+
+    docs := try yaml.parseAll("--- one\n---\n- two\n---\nthree: 3\n...\n")
+    scoped String d0
+    dump(&d0, &docs.items()[0])
+    scoped String d1
+    dump(&d1, &docs.items()[1])
+    scoped String d2
+    dump(&d2, &docs.items()[2])
+    print("documents: {docs.len}: {docs.at(0).text}, [{docs.at(1).at(0).text}], {d2}")
+    for i in 0..docs.len {
+        docs.items()[i].free()
+    }
+    docs.free()
+
+    scoped c := try yaml.decode[Config]("name: web\nport: 8080\ntags: [edge, public]\ndebug: false\n")
+    print("decoded: {c.name} on {c.port}, {c.tags.len} tags ({c.tags.at(0)}, {c.tags.at(1)}), debug {c.debug}")
+    _ = yaml.decode[Config]("name: web\nport: eighty\n") catch e {
+        print("wrong type: {e.code}")
+        Config{}
+    }
+    _ = yaml.parse("a:\n    b: 1\n  c: 2\n") catch e {
+        print("syntax: {e.code}: {e.message}")
+        yaml.Value{}
+    }
+    _ = yaml.parse("a:\n\tb: 1\n") catch e {
+        print("tab: {e.code}: {e.message}")
+        yaml.Value{}
+    }
+    _ = yaml.parse("a: *nope\n") catch e {
+        print("alias: {e.code}: {e.message}")
+        yaml.Value{}
+    }
+
+    scoped doc := try yaml.parse("name: web\nport: 8080\ntags: [edge, 'true']\nnote: 'a: b'\n")
+    scoped String w = yaml.write(doc)
+    print("written:")
+    print(w[0:w.len - 1])
+    scoped again := try yaml.parse(w)
+    scoped String a1
+    dump(&a1, &doc)
+    scoped String a2
+    dump(&a2, &again)
+    print("written reads back the same: {a1 == a2}")
+
+    scoped Config api = Config{name: "api".copy(), port: 9000, debug: true}
+    api.tags.push("x".copy())
+    scoped String enc = try yaml.encode(api)
+    scoped String flat = str.replace(enc, "\n", "|")
+    print("encoded: {flat}")
+}

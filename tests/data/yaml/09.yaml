@@ -1,0 +1,13 @@
+k8s:
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: app
+    labels: {app: web, tier: "front"}
+  spec:
+    containers:
+      - name: web
+        image: nginx:1.27
+        args: ["--port", "80"]
+        env:
+          - {name: A, value: "1"}

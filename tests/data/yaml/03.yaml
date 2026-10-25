@@ -1,0 +1,15 @@
+text: |
+  line one
+  line two
+
+folded: >
+  a long
+  sentence here
+
+  new paragraph
+keep: |+
+  kept
+
+strip: |-
+  stripped
+last: end

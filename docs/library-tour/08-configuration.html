@@ -201,6 +201,36 @@ worker: 2 replicas, has a port: false
 queue mail
 queue thumbs</code></pre>
 <p><code>toml.table()</code>, <code>toml.string(s)</code>, <code>toml.integer(n)</code> and the others make values. <code>set</code> and <code>push</code> put them in a table or an array, and <code>toml.write(doc)</code> gives the text. The <a href="../std/index.html#toml">library</a> lists them.</p>
+<h2 id="yaml"><a href="#yaml">YAML</a></h2>
+<p><code>yaml.decode[T](text)</code> reads YAML into a <code>@json</code> struct, field by field, as <code>json.decode</code> does. It reads YAML as configuration files use it: mappings and sequences by indentation, flow <code>[lists]</code> and <code>{maps}</code>, quoted, plain and block scalars (<code>|</code> keeps the line breaks, <code>&gt;</code> folds them), comments, anchors with aliases and <code>&lt;&lt;</code> merges, and several documents separated by <code>---</code>. Types follow YAML 1.2: <code>true</code> and <code>false</code>, <code>null</code> and <code>~</code>, integers in decimal, <code>0x</code> and <code>0o</code>, floats, and strings for the rest, so <code>on</code> and <code>yes</code> stay text.</p>
+<pre class="code run"><code><span class="k">import</span> yaml
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Service</span> {
+    <span class="t">String</span> image
+    <span class="t">List</span>[<span class="t">String</span>] ports
+    <span class="t">i64</span> replicas
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    text := <span class="s">r&quot;&quot;&quot;
+defaults: &amp;defaults
+  replicas: 2
+web:
+  &lt;&lt;: *defaults
+  image: nginx:1.27
+  ports: [&quot;80&quot;, &quot;443&quot;]
+&quot;&quot;&quot;</span>
+    <span class="k">scoped</span> doc := <span class="k">try</span> yaml.<span class="f">parse</span>(text)
+    web := doc.<span class="f">get</span>(<span class="s">&quot;web&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>web.<span class="f">get</span>(<span class="s">&quot;image&quot;</span>).text<span class="e">}</span><span class="s">, </span><span class="e">{</span>web.<span class="f">get</span>(<span class="s">&quot;replicas&quot;</span>).int<span class="e">}</span><span class="s"> replicas&quot;</span>)
+
+    <span class="k">scoped</span> s := <span class="k">try</span> yaml.decode[<span class="t">Service</span>](<span class="s">&quot;image: redis:7</span><span class="e">\n</span><span class="s">ports: [</span><span class="e">\&quot;</span><span class="s">6379</span><span class="e">\&quot;</span><span class="s">]</span><span class="e">\n</span><span class="s">replicas: 1</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>s.image<span class="e">}</span><span class="s"> on </span><span class="e">{</span>s.ports.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>nginx:1.27, 2 replicas
+redis:7 on 6379</code></pre>
+<p><code>yaml.parse</code> gives a <code>yaml.Value</code>: its <code>kind</code>, and <code>text</code>, <code>int</code>, <code>float</code> or <code>boolean</code>, <code>get(key)</code> and <code>at(i)</code> for mappings and sequences. <code>parseAll</code> gives every document. <code>yaml.write(value)</code> and <code>yaml.encode(struct)</code> write YAML back in block style, quoting strings that would otherwise read as something else.</p>
 <h2 id="ini-files"><a href="#ini-files">INI files</a></h2>
 <p>Older programs and many system tools keep settings in INI files: <code>[sections]</code> of <code>key = value</code> lines, with <code>;</code> or <code>#</code> comments. <code>ini.parse(text)</code> reads one. <code>get(section, key)</code> gives a value, or <code>&quot;&quot;</code> when it isn't there, and <code>lookup</code> says whether it is there. Keys before the first section are in the section <code>&quot;&quot;</code>.</p>
 <pre class="code run"><code><span class="k">import</span> ini
@@ -325,7 +355,7 @@ port 9000, timeout 10s, debug true</code></pre>
     <nav class="pager"><a class="prev" href="07-terminal.html"><span>Previous</span>Terminal output and input</a><a class="next" href="09-regular-expressions.html"><span>Next</span>Regular expressions</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#toml-into-a-struct">TOML into a struct</a></li><li><a href="#errors-in-the-file">Errors in the file</a></li><li><a href="#writing-a-file">Writing a file</a></li><li><a href="#any-toml-document">Any TOML document</a></li><li><a href="#ini-files">INI files</a></li><li><a href="#the-environment-and-env-files">The environment and .env files</a></li><li><a href="#a-file-then-the-environment">A file, then the environment</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#toml-into-a-struct">TOML into a struct</a></li><li><a href="#errors-in-the-file">Errors in the file</a></li><li><a href="#writing-a-file">Writing a file</a></li><li><a href="#any-toml-document">Any TOML document</a></li><li><a href="#yaml">YAML</a></li><li><a href="#ini-files">INI files</a></li><li><a href="#the-environment-and-env-files">The environment and .env files</a></li><li><a href="#a-file-then-the-environment">A file, then the environment</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

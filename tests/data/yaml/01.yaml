@@ -1,0 +1,6 @@
+list:
+  - a
+  - b
+  - 3
+flow: [1, 2, [3, 4], {x: 1, y: two}]
+map: {a: 1, 'b c': "d\te"}

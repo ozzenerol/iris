@@ -1,0 +1,8 @@
+servers:
+- name: one
+  ports: [80, 443]
+  tags:
+  - edge
+  - public
+- name: two
+  ports: []

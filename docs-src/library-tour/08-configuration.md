@@ -202,6 +202,45 @@ queue thumbs
 
 `toml.table()`, `toml.string(s)`, `toml.integer(n)` and the others make values. `set` and `push` put them in a table or an array, and `toml.write(doc)` gives the text. The [library](../std/index.html#toml) lists them.
 
+## YAML
+
+`yaml.decode[T](text)` reads YAML into a `@json` struct, field by field, as `json.decode` does. It reads YAML as configuration files use it: mappings and sequences by indentation, flow `[lists]` and `{maps}`, quoted, plain and block scalars (`|` keeps the line breaks, `>` folds them), comments, anchors with aliases and `<<` merges, and several documents separated by `---`. Types follow YAML 1.2: `true` and `false`, `null` and `~`, integers in decimal, `0x` and `0o`, floats, and strings for the rest, so `on` and `yes` stay text.
+
+```iris run
+import yaml
+
+@json
+struct Service {
+    String image
+    List[String] ports
+    i64 replicas
+}
+
+!void main() {
+    text := r"""
+defaults: &defaults
+  replicas: 2
+web:
+  <<: *defaults
+  image: nginx:1.27
+  ports: ["80", "443"]
+"""
+    scoped doc := try yaml.parse(text)
+    web := doc.get("web")
+    print("{web.get("image").text}, {web.get("replicas").int} replicas")
+
+    scoped s := try yaml.decode[Service]("image: redis:7\nports: [\"6379\"]\nreplicas: 1\n")
+    print("{s.image} on {s.ports.at(0)}")
+}
+```
+
+```output
+nginx:1.27, 2 replicas
+redis:7 on 6379
+```
+
+`yaml.parse` gives a `yaml.Value`: its `kind`, and `text`, `int`, `float` or `boolean`, `get(key)` and `at(i)` for mappings and sequences. `parseAll` gives every document. `yaml.write(value)` and `yaml.encode(struct)` write YAML back in block style, quoting strings that would otherwise read as something else.
+
 ## INI files
 
 Older programs and many system tools keep settings in INI files: `[sections]` of `key = value` lines, with `;` or `#` comments. `ini.parse(text)` reads one. `get(section, key)` gives a value, or `""` when it isn't there, and `lookup` says whether it is there. Keys before the first section are in the section `""`.

@@ -1,0 +1,1083 @@
+// YAML, as configuration files use it: block mappings and sequences by
+// indentation, flow [lists] and {maps}, plain, quoted and block (| and >)
+// scalars, comments, documents, anchors and aliases with << merges, and
+// YAML 1.2's types (null, booleans, integers, floats, strings). decode
+// reads a file into a struct, as json.decode does.
+
+import json, math, str
+
+// What reading fails with: syntax for text that isn't YAML this module
+// reads, wrongType, missing and range when decode's struct doesn't fit.
+pub enum YamlError { syntax, wrongType, missing, range }
+
+// The kinds of value: none is null, ~ or nothing.
+pub enum Kind { none, string, integer, float, boolean, sequence, mapping }
+
+// A YAML value. A mapping keeps its keys in the order they were written,
+// each with its value at the same place in items.
+pub struct Value {
+    pub Kind kind
+    pub bool boolean
+    pub String text
+    pub i64 int
+    pub f64 float
+    pub List[Value] items
+    pub List[String] keys
+}
+
+@builtin
+void tableOf()
+
+// Gives the value's memory back, and that of the values it holds.
+pub void Value.free() {
+    self.text.free()
+    for i in 0..self.items.len {
+        self.items.items()[i].free()
+    }
+    self.items.free()
+    self.keys.freeEach()
+}
+
+// A copy that owns its own memory.
+pub Value Value.copy() {
+    Value v = Value{kind: self.kind, boolean: self.boolean, int: self.int, float: self.float}
+    v.text = self.text.copy()
+    for i in 0..self.items.len {
+        v.items.push(self.items.items()[i].copy())
+    }
+    for k in self.keys {
+        v.keys.push(k.copy())
+    }
+    return v
+}
+
+// The value of key in a mapping, null when there is none.
+pub Value *Value.get(str key) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            return &self.items.items()[i]
+        }
+    }
+    return null
+}
+
+// The ith value of a sequence, or of a mapping in its order.
+pub Value *Value.at(i64 i) => &self.items.items()[i]
+
+// How many values a sequence or a mapping holds.
+pub i64 Value.len() => self.items.len
+
+// Sets key in a mapping, in place of its value when it has one.
+pub void Value.set(str key, Value v) {
+    for i in 0..self.keys.len {
+        if self.keys.at(i) == key {
+            self.items.items()[i].free()
+            self.items.set(i, v)
+            return
+        }
+    }
+    self.keys.push(key.copy())
+    self.items.push(v)
+}
+
+// ------------------------------------------------------------ reading
+
+struct Line {
+    i64 no
+    i64 indent
+    str text    // after the indentation, without the line break
+}
+
+struct Parser {
+    List[Line] lines
+    i64 at
+    List[String] anchorNames
+    List[Value] anchors
+}
+
+Error Parser.fail(i64 line, str msg) => error(YamlError.syntax, "line {line}: {msg}")
+
+// Whether a line holds only a comment, or nothing.
+bool blank(str t) => t.len == 0 || t[0] == '#'
+
+// The line without a comment at its end: # after a space, outside quotes.
+str uncomment(str t) {
+    u8 quote = 0
+    i64 depth = 0
+    for i in 0..t.len {
+        c := t[i]
+        if quote != 0 {
+            if c == '\\' && quote == '"' {
+                continue
+            }
+            if c == quote {
+                quote = 0
+            }
+            continue
+        }
+        if (c == '"' || c == '\'') && (i == 0 || t[i - 1] == ' ' || t[i - 1] == '[' || t[i - 1] == '{' ||
+            t[i - 1] == ',' || t[i - 1] == ':') {
+                quote = c
+                continue
+            }
+        if c == '#' && (i == 0 || t[i - 1] == ' ' || t[i - 1] == '\t') {
+            return str.trimRight(t[0:i])
+        }
+    }
+    return str.trimRight(t)
+}
+
+// Skips lines that are blank or only a comment; false at the end.
+bool Parser.next() {
+    for self.at < self.lines.len {
+        if !blank(self.lines.at(self.at).text) {
+            return true
+        }
+        self.at += 1
+    }
+    return false
+}
+
+// The place of the ': ' that ends a mapping's key on the line, or -1.
+i64 keyEnd(str t) {
+    if t.len == 0 || t[0] == '[' || t[0] == '{' || t[0] == '#' || t[0] == '|' || t[0] == '>' ||
+        (t[0] == '-' && (t.len == 1 || t[1] == ' ')) {
+            return -1
+        }
+    i64 i = 0
+    if t[0] == '"' || t[0] == '\'' {
+        q := t[0]
+        i = 1
+        for i < t.len && t[i] != q {
+            if q == '"' && t[i] == '\\' {
+                i += 1
+            } else if q == '\'' && t[i] == '\'' && i + 1 < t.len && t[i + 1] == '\'' {
+                i += 1
+            }
+            i += 1
+        }
+        i += 1
+        if i < t.len && t[i] == ':' && (i + 1 == t.len || t[i + 1] == ' ') {
+            return i
+        }
+        return -1
+    }
+    for i < t.len {
+        if t[i] == ':' && (i + 1 == t.len || t[i + 1] == ' ' || t[i + 1] == '\t') {
+            return i
+        }
+        if t[i] == ' ' && i + 1 < t.len && t[i + 1] == '#' {
+            return -1
+        }
+        i += 1
+    }
+    return -1
+}
+
+// A key's text: quoted or plain.
+!String Parser.keyText(str k, i64 line) {
+    k2 := str.trim(k)
+    if k2.len > 0 && (k2[0] == '"' || k2[0] == '\'') {
+        v := try self.quoted(k2, line)
+        return v
+    }
+    if k2.len > 0 && k2[0] == '?' {
+        return self.fail(line, "complex keys (? key) aren't read")
+    }
+    return k2.copy()
+}
+
+// A quoted scalar, which must be all of t.
+!String Parser.quoted(str t, i64 line) {
+    q := t[0]
+    String out
+    errdefer out.free()
+    i64 i = 1
+    for i < t.len {
+        c := t[i]
+        if c == q {
+            if q == '\'' && i + 1 < t.len && t[i + 1] == '\'' {
+                out.append("'")
+                i += 2
+                continue
+            }
+            if str.trim(t[i + 1:]).len != 0 {
+                return self.fail(line, "text after a closing quote: '{t[i + 1:]}'")
+            }
+            return out
+        }
+        if q == '"' && c == '\\' && i + 1 < t.len {
+            e := t[i + 1]
+            i += 2
+            if e == 'n' {
+                out.append("\n")
+            } else if e == 't' {
+                out.append("\t")
+            } else if e == 'r' {
+                out.append("\r")
+            } else if e == '0' {
+                u8[1] z = [0]
+                out.append(z[0:1])
+            } else if e == '"' || e == '\\' || e == '/' || e == ' ' {
+                out.append(t[i - 1:i])
+            } else if e == 'x' || e == 'u' || e == 'U' {
+                n := if e == 'x' { 2 } else if e == 'u' { 4 } else { 8 }
+                if i + n > t.len {
+                    return self.fail(line, "a \\{t[i - 1:i]} escape cut short")
+                }
+                code := str.parseIntBase(t[i:i + n], 16) catch err {
+                    return self.fail(line, "a \\{t[i - 1:i]} escape that isn't hex")
+                }
+                str.appendRune(&out, i32(code))
+                i += n
+            } else {
+                return self.fail(line, "an unknown escape \\{t[i - 1:i]}")
+            }
+            continue
+        }
+        out.append(t[i:i + 1])
+        i += 1
+    }
+    return self.fail(line, "a quoted scalar without its closing quote")
+}
+
+// A plain scalar's text as its type: null, a boolean, an integer, a
+// float, or a string (YAML 1.2's core schema).
+Value resolve(str s) {
+    if s.len == 0 || s == "~" || s == "null" || s == "Null" || s == "NULL" {
+        return Value{kind: .none}
+    }
+    if s == "true" || s == "True" || s == "TRUE" {
+        return Value{kind: .boolean, boolean: true}
+    }
+    if s == "false" || s == "False" || s == "FALSE" {
+        return Value{kind: .boolean, boolean: false}
+    }
+    c := s[0]
+    if (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' {
+        body := if c == '+' { s[1:] } else { s }
+        if str.startsWith(body, "0x") {
+            n := str.parseIntBase(body[2:], 16) catch e { return Value{kind: .string, text: s.copy()} }
+            return Value{kind: .integer, int: n}
+        }
+        if str.startsWith(body, "0o") {
+            n := str.parseIntBase(body[2:], 8) catch e { return Value{kind: .string, text: s.copy()} }
+            return Value{kind: .integer, int: n}
+        }
+        n := str.parseInt(body) catch e {
+            scoped String lower = str.lower(body)
+            if lower == ".inf" || lower == "-.inf" {
+                return Value{kind: .float, float: if lower[0] == '-' { -math.inf() } else { math.inf() }}
+            }
+            if lower == ".nan" {
+                return Value{kind: .float, float: math.inf() - math.inf()}
+            }
+            f := str.parseFloat(body) catch e2 { return Value{kind: .string, text: s.copy()} }
+            return Value{kind: .float, float: f}
+        }
+        return Value{kind: .integer, int: n}
+    }
+    if s == ".inf" || s == ".Inf" || s == ".INF" {
+        return Value{kind: .float, float: math.inf()}
+    }
+    if s == ".nan" || s == ".NaN" || s == ".NAN" {
+        return Value{kind: .float, float: math.inf() - math.inf()}
+    }
+    return Value{kind: .string, text: s.copy()}
+}
+
+// An anchor (&name) or a tag (!x, !!str) at the start of t: what is left,
+// and the anchor's name ("" for none). A !!str tag makes plain text a
+// string.
+str props(str t, str *anchor, bool *forceString) {
+    rest := t
+    for rest.len > 0 && (rest[0] == '&' || rest[0] == '!') {
+        name, after, _ := str.cut(rest, " ")
+        if rest[0] == '&' {
+            *anchor = name[1:]
+        } else if name == "!!str" {
+            *forceString = true
+        }
+        rest = str.trimLeft(after)
+    }
+    return rest
+}
+
+// Remembers v as anchor.
+void Parser.keep(str anchor, Value *v) {
+    if anchor.len == 0 {
+        return
+    }
+    for i in 0..self.anchorNames.len {
+        if self.anchorNames.at(i) == anchor {
+            self.anchors.items()[i].free()
+            self.anchors.set(i, v.copy())
+            return
+        }
+    }
+    self.anchorNames.push(anchor.copy())
+    self.anchors.push(v.copy())
+}
+
+!Value Parser.alias(str name, i64 line) {
+    for i in 0..self.anchorNames.len {
+        if self.anchorNames.at(i) == name {
+            return self.anchors.items()[i].copy()
+        }
+    }
+    return self.fail(line, "an alias *{name} without its anchor")
+}
+
+// A value written on one line, or a flow collection that goes on over
+// the lines that follow until its brackets close.
+!Value Parser.inline(str t, i64 line, i64 parent) {
+    str anchor = ""
+    bool forceString = false
+    rest := props(t, &anchor, &forceString)
+    Value v
+    if rest.len > 0 && rest[0] == '*' {
+        v = try self.alias(str.trim(rest[1:]), line)
+    } else if rest.len > 0 && (rest[0] == '[' || rest[0] == '{') {
+        scoped String text = rest.copy()
+        // the brackets may close on later lines
+        for !balanced(text) {
+            self.at += 1
+            if self.at >= self.lines.len {
+                return self.fail(line, "a flow collection without its closing bracket")
+            }
+            text.append(" ")
+            text.append(uncomment(self.lines.at(self.at).text))
+        }
+        Flow f = Flow{t: text, p: self, line: line}
+        v = try f.value()
+        f.space()
+        if f.at < f.t.len {
+            v.free()
+            return self.fail(line, "text after a flow collection: '{f.t[f.at:]}'")
+        }
+    } else if rest.len > 0 && (rest[0] == '|' || rest[0] == '>') {
+        v = try self.block(rest, line, parent)
+    } else if rest.len > 0 && (rest[0] == '"' || rest[0] == '\'') {
+        scoped String text = rest.copy()
+        // a quoted scalar may go on over several lines, joined by spaces
+        for !closesQuote(text) && self.at + 1 < self.lines.len {
+            self.at += 1
+            text.append(" ")
+            text.append(str.trim(self.lines.at(self.at).text))
+        }
+        v = Value{kind: .string, text: try self.quoted(text, line)}
+    } else {
+        // a plain scalar may go on over more indented lines
+        scoped String text = rest.copy()
+        for self.at + 1 < self.lines.len {
+            nl := self.lines.at(self.at + 1)
+            if blank(nl.text) || nl.indent <= parent || keyEnd(nl.text) >= 0 || str.startsWith(nl.text, "- ") {
+                break
+            }
+            self.at += 1
+            text.append(" ")
+            text.append(uncomment(nl.text))
+        }
+        v = if forceString { Value{kind: .string, text: text.copy()} } else { resolve(text) }
+    }
+    self.keep(anchor, &v)
+    return v
+}
+
+bool closesQuote(str t) {
+    q := t[0]
+    i64 i = 1
+    for i < t.len {
+        if q == '"' && t[i] == '\\' {
+            i += 2
+            continue
+        }
+        if t[i] == q {
+            if q == '\'' && i + 1 < t.len && t[i + 1] == '\'' {
+                i += 2
+                continue
+            }
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+bool balanced(str t) {
+    i64 depth = 0
+    u8 quote = 0
+    i64 i = 0
+    for i < t.len {
+        c := t[i]
+        if quote != 0 {
+            if quote == '"' && c == '\\' {
+                i += 2
+                continue
+            }
+            if c == quote {
+                quote = 0
+            }
+        } else if c == '"' || c == '\'' {
+            quote = c
+        } else if c == '[' || c == '{' {
+            depth += 1
+        } else if c == ']' || c == '}' {
+            depth -= 1
+        }
+        i += 1
+    }
+    return depth <= 0
+}
+
+// A block scalar: | keeps the line breaks, > folds lines into one; - drops
+// the final line break, + keeps all of them; a digit sets the indentation.
+!Value Parser.block(str header, i64 line, i64 parent) {
+    literal := header[0] == '|'
+    i64 chomp = 0       // -1 strip, 0 clip, 1 keep
+    i64 given = 0
+    for i in 1..header.len {
+        c := header[i]
+        if c == '-' {
+            chomp = -1
+        } else if c == '+' {
+            chomp = 1
+        } else if c >= '1' && c <= '9' {
+            given = i64(c - '0')
+        } else if c == ' ' || c == '#' {
+            break
+        } else {
+            return self.fail(line, "a block scalar header '{header}'")
+        }
+    }
+    i64 indent = if given > 0 { parent + given } else { -1 }
+    List[String] body
+    defer body.freeEach()
+    for self.at + 1 < self.lines.len {
+        nl := self.lines.at(self.at + 1)
+        if nl.text.len == 0 {
+            body.push("".copy())
+            self.at += 1
+            continue
+        }
+        if indent < 0 {
+            if nl.indent <= parent {
+                break
+            }
+            indent = nl.indent
+        }
+        if nl.indent < indent {
+            break
+        }
+        self.at += 1
+        // the text keeps what is indented past the block's own indentation
+        raw := self.lines.at(self.at)
+        String pad
+        for k in 0..raw.indent - indent {
+            pad.append(" ")
+        }
+        pad.append(raw.text)
+        body.push(pad)
+    }
+    // trailing empty lines belong to chomping
+    i64 last = body.len
+    for last > 0 && body.at(last - 1).len == 0 {
+        last -= 1
+    }
+    String out
+    // folded: lines join with a space, a run of empty lines between two
+    // stands for that many line breaks, and more indented lines keep theirs
+    i64 empty = 0
+    str prev = ""
+    for i in 0..last {
+        l := body.at(i)
+        if literal {
+            if i > 0 {
+                out.append("\n")
+            }
+            out.append(l)
+            continue
+        }
+        if l.len == 0 {
+            empty += 1
+            continue
+        }
+        if i > 0 {
+            if empty > 0 {
+                for k in 0..empty {
+                    out.append("\n")
+                }
+            } else if l[0] == ' ' || prev[0] == ' ' {
+                out.append("\n")
+            } else {
+                out.append(" ")
+            }
+        }
+        empty = 0
+        out.append(l)
+        prev = l
+    }
+    if chomp >= 0 && last > 0 {
+        out.append("\n")
+    }
+    if chomp == 1 {
+        for i in last..body.len {
+            out.append("\n")
+        }
+    }
+    return Value{kind: .string, text: out}
+}
+
+// A block node whose first line is at self.at, indented by indent.
+!Value Parser.node(i64 indent) {
+    l := self.lines.at(self.at)
+    t := uncomment(l.text)
+    if t == "-" || str.startsWith(t, "- ") {
+        return try self.sequence(l.indent)
+    }
+    if keyEnd(t) >= 0 {
+        return try self.mapping(l.indent)
+    }
+    v := try self.inline(t, l.no, indent - 1)
+    self.at += 1
+    return v
+}
+
+// The value after "key:" or "- ", on the rest of the line or below it.
+!Value Parser.after(str rest, i64 line, i64 parent, bool inSequence) {
+    t := str.trim(rest)
+    str anchor = ""
+    bool forceString = false
+    bare := props(t, &anchor, &forceString)
+    if bare.len > 0 {
+        v := try self.inline(t, line, parent)
+        self.at += 1
+        return v
+    }
+    // nothing more on the line: the value is below, more indented, or a
+    // sequence at the key's own indentation
+    self.at += 1
+    if !self.next() {
+        Value none = Value{kind: .none}
+        self.keep(anchor, &none)
+        return none
+    }
+    nl := self.lines.at(self.at)
+    nt := uncomment(nl.text)
+    isSeq := nt == "-" || str.startsWith(nt, "- ")
+    if nl.indent > parent || (!inSequence && nl.indent == parent && isSeq) {
+        v := try self.node(nl.indent)
+        self.keep(anchor, &v)
+        return v
+    }
+    Value none = Value{kind: .none}
+    self.keep(anchor, &none)
+    return none
+}
+
+!Value Parser.sequence(i64 indent) {
+    Value seq = Value{kind: .sequence}
+    errdefer seq.free()
+    for self.next() {
+        l := self.lines.at(self.at)
+        t := uncomment(l.text)
+        if l.indent != indent || !(t == "-" || str.startsWith(t, "- ")) {
+            if l.indent > indent {
+                return self.fail(l.no, "a line indented more than the sequence's items")
+            }
+            break
+        }
+        rest := if t.len > 2 { t[2:] } else { "" }
+        inner := str.trimLeft(rest)
+        // "- key: value" starts a mapping at the column after "- "
+        col := indent + 2 + (rest.len - inner.len)
+        if keyEnd(inner) >= 0 && inner[0] != '&' {
+            m := try self.compactMapping(inner, l.no, col)
+            seq.items.push(m)
+            continue
+        }
+        if str.startsWith(inner, "- ") || inner == "-" {
+            // a sequence in a sequence on one line
+            self.lines.items()[self.at].indent = col
+            self.lines.items()[self.at].text = inner
+            v := try self.sequence(col)
+            seq.items.push(v)
+            continue
+        }
+        v := try self.after(rest, l.no, indent, true)
+        seq.items.push(v)
+    }
+    return seq
+}
+
+// A mapping whose first key is on a sequence item's line.
+!Value Parser.compactMapping(str first, i64 line, i64 col) {
+    self.lines.items()[self.at].indent = col
+    self.lines.items()[self.at].text = first
+    return try self.mapping(col)
+}
+
+!Value Parser.mapping(i64 indent) {
+    Value m = Value{kind: .mapping}
+    errdefer m.free()
+    for self.next() {
+        l := self.lines.at(self.at)
+        if l.indent != indent {
+            if l.indent > indent {
+                return self.fail(l.no, "a line indented more than the mapping's keys")
+            }
+            break
+        }
+        t := uncomment(l.text)
+        k := keyEnd(t)
+        if k < 0 {
+            if t == "-" || str.startsWith(t, "- ") {
+                break
+            }
+            return self.fail(l.no, "a line that is neither 'key: value' nor '- item': '{t}'")
+        }
+        scoped String key = try self.keyText(t[0:k], l.no)
+        v := try self.after(t[k + 1:], l.no, indent, false)
+        if key == "<<" {
+            // merge: the keys of the mapping (or mappings) that aren't here yet
+            try merge(&m, &v, l.no, self)
+            v.free()
+            continue
+        }
+        m.set(key, v)
+    }
+    return m
+}
+
+!void merge(Value *into, Value *from, i64 line, Parser *p) {
+    if from.kind == .sequence {
+        for i in 0..from.items.len {
+            try merge(into, &from.items.items()[i], line, p)
+        }
+        return
+    }
+    if from.kind != .mapping {
+        return p.fail(line, "<< merges a mapping, or a list of them")
+    }
+    for i in 0..from.keys.len {
+        if into.get(from.keys.at(i)) == null {
+            into.set(from.keys.at(i), from.items.items()[i].copy())
+        }
+    }
+}
+
+// The flow syntax: [a, b], {a: 1, b: 2}, and JSON.
+struct Flow {
+    str t
+    i64 at
+    Parser *p
+    i64 line
+}
+
+void Flow.space() {
+    for self.at < self.t.len && (self.t[self.at] == ' ' || self.t[self.at] == '\t') {
+        self.at += 1
+    }
+}
+
+!Value Flow.value() {
+    self.space()
+    if self.at >= self.t.len {
+        return Value{kind: .none}
+    }
+    c := self.t[self.at]
+    if c == '[' {
+        self.at += 1
+        Value seq = Value{kind: .sequence}
+        errdefer seq.free()
+        for {
+            self.space()
+            if self.at < self.t.len && self.t[self.at] == ']' {
+                self.at += 1
+                return seq
+            }
+            seq.items.push(try self.value())
+            self.space()
+            if self.at < self.t.len && self.t[self.at] == ',' {
+                self.at += 1
+                continue
+            }
+            if self.at < self.t.len && self.t[self.at] == ']' {
+                self.at += 1
+                return seq
+            }
+            return self.p.fail(self.line, "a [ list without its , or ]")
+        }
+    }
+    if c == '{' {
+        self.at += 1
+        Value m = Value{kind: .mapping}
+        errdefer m.free()
+        for {
+            self.space()
+            if self.at < self.t.len && self.t[self.at] == '}' {
+                self.at += 1
+                return m
+            }
+            kv := try self.scalar(true)
+            scoped String key = if kv.kind == .string { kv.text.copy() } else { scalarText(&kv) }
+            kv.free()
+            self.space()
+            Value v = Value{kind: .none}
+            if self.at < self.t.len && self.t[self.at] == ':' {
+                self.at += 1
+                v = try self.value()
+            }
+            m.set(key, v)
+            self.space()
+            if self.at < self.t.len && self.t[self.at] == ',' {
+                self.at += 1
+                continue
+            }
+            if self.at < self.t.len && self.t[self.at] == '}' {
+                self.at += 1
+                return m
+            }
+            return self.p.fail(self.line, "a {{ map without its , or }}")
+        }
+    }
+    if c == '*' {
+        start := self.at + 1
+        for self.at < self.t.len && self.t[self.at] != ',' && self.t[self.at] != ']' && self.t[self.at] != '}' &&
+            self.t[self.at] != ' ' {
+                self.at += 1
+            }
+        return try self.p.alias(self.t[start:self.at], self.line)
+    }
+    return try self.scalar(false)
+}
+
+// A scalar in a flow collection: quoted, or plain up to , ] } or, for a
+// key, a : that ends it.
+!Value Flow.scalar(bool key) {
+    self.space()
+    c := self.t[self.at]
+    if c == '"' || c == '\'' {
+        start := self.at
+        self.at += 1
+        for self.at < self.t.len {
+            if c == '"' && self.t[self.at] == '\\' {
+                self.at += 2
+                continue
+            }
+            if self.t[self.at] == c {
+                if c == '\'' && self.at + 1 < self.t.len && self.t[self.at + 1] == '\'' {
+                    self.at += 2
+                    continue
+                }
+                break
+            }
+            self.at += 1
+        }
+        self.at += 1
+        text := try self.p.quoted(self.t[start:self.at], self.line)
+        return Value{kind: .string, text: text}
+    }
+    start := self.at
+    for self.at < self.t.len {
+        ch := self.t[self.at]
+        if ch == ',' || ch == ']' || ch == '}' {
+            break
+        }
+        if ch == ':' && (self.at + 1 == self.t.len || self.t[self.at + 1] == ' ' || self.t[self.at + 1] == ',' ||
+            key) {
+                break
+            }
+        self.at += 1
+    }
+    return resolve(str.trim(self.t[start:self.at]))
+}
+
+// Every document in text, separated by --- lines.
+pub !List[Value] parseAll(str text) {
+    List[Value] docs
+    errdefer {
+        for i in 0..docs.len {
+            docs.items()[i].free()
+        }
+        docs.free()
+    }
+    scoped List[str] raws = str.lines(text)
+    // each document's lines, split at --- and ...
+    List[List[Line]] parts
+    defer {
+        for i in 0..parts.len {
+            parts.items()[i].free()
+        }
+        parts.free()
+    }
+    List[Line] cur
+    bool open = false
+    i64 no = 0
+    for raw in raws {
+        no += 1
+        line := str.trimSuffix(raw, "\r")
+        i64 ind = 0
+        for ind < line.len && line[ind] == ' ' {
+            ind += 1
+        }
+        body := line[ind:]
+        if ind < line.len && line[ind] == '\t' {
+            cur.free()
+            return error(YamlError.syntax, "line {no}: a tab in the indentation")
+        }
+        if ind == 0 && (body == "---" || str.startsWith(body, "--- ") || body == "...") {
+            if open || cur.len > 0 {
+                parts.push(cur)
+                List[Line] fresh
+                cur = fresh
+            }
+            open = body != "..."
+            if str.startsWith(body, "--- ") {
+                // a value on the --- line itself
+                cur.push(Line{no: no, indent: 4, text: body[4:]})
+            }
+            continue
+        }
+        if ind == 0 && str.startsWith(body, "%") {
+            continue
+        }
+        cur.push(Line{no: no, indent: ind, text: body})
+    }
+    if open || cur.len > 0 {
+        parts.push(cur)
+    } else {
+        cur.free()
+    }
+    for i in 0..parts.len {
+        Parser p = Parser{lines: parts.at(i)}
+        bool has = p.next()
+        if !has {
+            docs.push(Value{kind: .none})
+        } else {
+            v := p.node(0) catch e {
+                p.anchorNames.freeEach()
+                for k in 0..p.anchors.len {
+                    p.anchors.items()[k].free()
+                }
+                p.anchors.free()
+                return e
+            }
+            if p.next() {
+                bad := p.lines.at(p.at)
+                v.free()
+                return error(YamlError.syntax, "line {bad.no}: more after the document's value")
+            }
+            docs.push(v)
+        }
+        p.anchorNames.freeEach()
+        for k in 0..p.anchors.len {
+            p.anchors.items()[k].free()
+        }
+        p.anchors.free()
+    }
+    return docs
+}
+
+// The first document in text (null when it has none).
+pub !Value parse(str text) {
+    docs := try parseAll(text)
+    defer {
+        for i in 1..docs.len {
+            docs.items()[i].free()
+        }
+        docs.free()
+    }
+    if docs.len == 0 {
+        return Value{kind: .none}
+    }
+    return docs.at(0)
+}
+
+// ------------------------------------------------------------ structs
+
+String scalarText(Value *v) => match v.kind {
+    .none => "null".copy()
+    .boolean => if v.boolean { "true".copy() } else { "false".copy() }
+    .integer => format("{v.int}")
+    .float => format("{v.float}")
+    _ => v.text.copy()
+}
+
+void toJson(String *out, Value *v) {
+    match v.kind {
+        .none => out.append("null"),
+        .boolean => out.append(if v.boolean { "true" } else { "false" }),
+        .integer => out.append("{v.int}"),
+        .float => {
+            if math.isNaN(v.float) || v.float == math.inf() || v.float == -math.inf() {
+                out.append("null")
+            } else {
+                out.append("{v.float}")
+            }
+        },
+        .string => {
+            scoped String q = json.quote(v.text)
+            out.append(q)
+        },
+        .sequence => {
+            out.append("[")
+            for i in 0..v.items.len {
+                if i > 0 {
+                    out.append(",")
+                }
+                toJson(out, &v.items.items()[i])
+            }
+            out.append("]")
+        },
+        .mapping => {
+            out.append("{{")
+            for i in 0..v.keys.len {
+                if i > 0 {
+                    out.append(",")
+                }
+                scoped String k = json.quote(v.keys.at(i))
+                out.append(k)
+                out.append(":")
+                toJson(out, &v.items.items()[i])
+            }
+            out.append("}}")
+        },
+    }
+}
+
+// The first document of text read into a T, a @json struct: its fields
+// by name, as json.decode reads them.
+pub !T decode[T](str text) {
+    scoped Value doc = try parse(text)
+    String j
+    defer j.free()
+    toJson(&j, &doc)
+    T v
+    json.decodeInto(tableOf(&v), j, &v) catch e {
+        code := match e.code {
+            json.JsonError.wrongType => YamlError.wrongType
+            json.JsonError.missing => YamlError.missing
+            json.JsonError.range => YamlError.range
+            _ => YamlError.syntax
+        }
+        return error(code, "{e.message}")
+    }
+    return v
+}
+
+// ------------------------------------------------------------ writing
+
+// Whether s needs quotes to stay a string: empty, another type when plain,
+// or holding what YAML gives a meaning.
+bool needsQuotes(str s) {
+    if s.len == 0 || s[0] == ' ' || s[s.len - 1] == ' ' {
+        return true
+    }
+    scoped Value r = resolve(s)
+    if r.kind != .string {
+        return true
+    }
+    c := s[0]
+    if c == '-' || c == '?' || c == ':' || c == ',' || c == '[' || c == ']' || c == '{' || c == '}' || c == '#' ||
+        c == '&' || c == '*' || c == '!' || c == '|' || c == '>' || c == '\'' || c == '"' || c == '%' || c == '@' ||
+        c == '`' {
+            return true
+        }
+    for i in 0..s.len {
+        if s[i] < ' ' || s[i] == 127 {
+            return true
+        }
+        if s[i] == ':' && (i + 1 == s.len || s[i + 1] == ' ') {
+            return true
+        }
+        if s[i] == '#' && s[i - 1] == ' ' {
+            return true
+        }
+    }
+    return false
+}
+
+void writeScalar(String *out, Value *v) {
+    if v.kind == .string {
+        if needsQuotes(v.text) {
+            // JSON's quoting is YAML's double-quoted style
+            scoped String q = json.quote(v.text)
+            out.append(q)
+        } else {
+            out.append(v.text)
+        }
+        return
+    }
+    if v.kind == .float {
+        if math.isNaN(v.float) {
+            out.append(".nan")
+            return
+        }
+        if v.float == math.inf() || v.float == -math.inf() {
+            out.append(if v.float > 0.0 { ".inf" } else { "-.inf" })
+            return
+        }
+    }
+    scoped String t = scalarText(v)
+    out.append(t)
+}
+
+void writeNode(String *out, Value *v, i64 indent) {
+    for i in 0..v.items.len {
+        item := &v.items.items()[i]
+        for k in 0..indent {
+            out.append(" ")
+        }
+        if v.kind == .sequence {
+            out.append("-")
+        } else {
+            k := v.keys.at(i)
+            if needsQuotes(k) {
+                scoped String q = json.quote(k)
+                out.append(q)
+            } else {
+                out.append(k)
+            }
+            out.append(":")
+        }
+        if (item.kind == .sequence || item.kind == .mapping) && item.items.len > 0 {
+            out.append("\n")
+            writeNode(out, item, indent + 2)
+            continue
+        }
+        out.append(" ")
+        if item.kind == .sequence {
+            out.append("[]")
+        } else if item.kind == .mapping {
+            out.append("{{}}")
+        } else {
+            writeScalar(out, item)
+        }
+        out.append("\n")
+    }
+}
+
+// The value as YAML text, in block style.
+pub String write(Value v) {
+    String out
+    if v.kind == .sequence || v.kind == .mapping {
+        if v.items.len == 0 {
+            out.append(if v.kind == .sequence { "[]\n" } else { "{{}}\n" })
+            return out
+        }
+        writeNode(&out, &v, 0)
+        return out
+    }
+    writeScalar(&out, &v)
+    out.append("\n")
+    return out
+}
+
+// A @json struct as YAML text.
+pub !String encode[T](T v) {
+    scoped String j = json.encode(v)
+    // JSON is YAML's flow syntax: read it back as a Value, and write that
+    scoped Value doc = try parse(j)
+    return write(doc)
+}
