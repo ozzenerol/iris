@@ -6682,6 +6682,20 @@ static struct {
     void *(*ctxGetKey)(const void *);
     int (*ctxUseCert)(void *, void *);
     int (*ctxUsePkey)(void *, void *);
+    /* the connection's socket as a BIO of the runtime's own (1.1.0) */
+    void *(*bioMethNew)(int, const char *);
+    int (*bioMethSetWrite)(void *, int (*)(void *, const char *, int));
+    int (*bioMethSetRead)(void *, int (*)(void *, char *, int));
+    int (*bioMethSetCtrl)(void *, long (*)(void *, int, long, void *));
+    int (*bioMethSetCreate)(void *, int (*)(void *));
+    void *(*bioNew)(const void *);
+    void (*bioSetData)(void *, void *);
+    void *(*bioGetData)(void *);
+    void (*bioSetInit)(void *, int);
+    void (*bioSetFlags)(void *, int);
+    void (*bioClearFlags)(void *, int);
+    void (*sslSetBio)(void *, void *, void *);
+    void *sockMeth;
 } ossl;
 
 static pthread_once_t osslOnce = PTHREAD_ONCE_INIT;
@@ -6726,6 +6740,77 @@ static void *openLib(const char *const *names, const char *dirOf, const char *ba
         if (h) return h;
     }
     return NULL;
+}
+
+/* A connection's socket as OpenSSL's BIO: like OpenSSL's own socket BIO,
+   but its sends can't raise SIGPIPE (MSG_NOSIGNAL), so no call into
+   OpenSSL has to hold the signal. The BIO's data is the descriptor. */
+enum { BIO_TYPE_IRIS_SOCK = 0x0505, BIO_FL_READ = 1, BIO_FL_WRITE = 2, BIO_FL_RWS = 7, BIO_FL_RETRY = 8,
+       BIO_CTRL_FLUSH_ = 11, BIO_C_GET_FD_ = 105 };
+
+static int sockBioWrite(void *b, const char *buf, int len) {
+    int fd = (int)(intptr_t)ossl.bioGetData(b);
+    ossl.bioClearFlags(b, BIO_FL_RWS | BIO_FL_RETRY);
+    errno = 0;
+#ifdef MSG_NOSIGNAL
+    ssize_t n = send(fd, buf, (size_t)len, MSG_NOSIGNAL);
+#else
+    ssize_t n = send(fd, buf, (size_t)len, 0);     /* macOS sockets have SO_NOSIGPIPE */
+#endif
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        ossl.bioSetFlags(b, BIO_FL_WRITE | BIO_FL_RETRY);
+    }
+    return (int)n;
+}
+
+static int sockBioRead(void *b, char *buf, int len) {
+    int fd = (int)(intptr_t)ossl.bioGetData(b);
+    ossl.bioClearFlags(b, BIO_FL_RWS | BIO_FL_RETRY);
+    errno = 0;
+    ssize_t n = recv(fd, buf, (size_t)len, 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        ossl.bioSetFlags(b, BIO_FL_READ | BIO_FL_RETRY);
+    }
+    return (int)n;
+}
+
+static long sockBioCtrl(void *b, int cmd, long num, void *ptr) {
+    (void)num;
+    if (cmd == BIO_CTRL_FLUSH_) return 1;
+    if (cmd == BIO_C_GET_FD_) {
+        int fd = (int)(intptr_t)ossl.bioGetData(b);
+        if (ptr) *(int *)ptr = fd;
+        return fd;
+    }
+    return 0;
+}
+
+static int sockBioCreate(void *b) {
+    ossl.bioSetInit(b, 1);
+    return 1;
+}
+
+static void sockBioLoad(void *ssl, void *crypto) {
+    void **f[] = {(void **)&ossl.bioMethNew, (void **)&ossl.bioMethSetWrite, (void **)&ossl.bioMethSetRead,
+                  (void **)&ossl.bioMethSetCtrl, (void **)&ossl.bioMethSetCreate, (void **)&ossl.bioNew,
+                  (void **)&ossl.bioSetData, (void **)&ossl.bioGetData, (void **)&ossl.bioSetInit,
+                  (void **)&ossl.bioSetFlags, (void **)&ossl.bioClearFlags};
+    const char *names[] = {"BIO_meth_new", "BIO_meth_set_write", "BIO_meth_set_read", "BIO_meth_set_ctrl",
+                           "BIO_meth_set_create", "BIO_new", "BIO_set_data", "BIO_get_data", "BIO_set_init",
+                           "BIO_set_flags", "BIO_clear_flags"};
+    for (size_t i = 0; i < sizeof f / sizeof f[0]; i++) {
+        *f[i] = dlsym(crypto, names[i]);
+        if (!*f[i]) return;
+    }
+    *(void **)&ossl.sslSetBio = dlsym(ssl, "SSL_set_bio");
+    if (!ossl.sslSetBio) return;
+    void *m = ossl.bioMethNew(BIO_TYPE_IRIS_SOCK, "iris socket");
+    if (!m) return;
+    ossl.bioMethSetWrite(m, sockBioWrite);
+    ossl.bioMethSetRead(m, sockBioRead);
+    ossl.bioMethSetCtrl(m, sockBioCtrl);
+    ossl.bioMethSetCreate(m, sockBioCreate);
+    ossl.sockMeth = m;
 }
 
 static void osslLoad(void) {
@@ -6807,6 +6892,7 @@ static void osslLoad(void) {
     SYM(ssl, ctxUsePkey, "SSL_CTX_use_PrivateKey");
 #undef SYM
     *(void **)&ossl.ctxSetAlpnSelect = dlsym(ssl, "SSL_CTX_set_alpn_select_cb");
+    sockBioLoad(ssl, crypto);
     *(void **)&ossl.sslSetAlpnProtos = dlsym(ssl, "SSL_set_alpn_protos");
     *(void **)&ossl.sslGetAlpn = dlsym(ssl, "SSL_get0_alpn_selected");
     ossl.loaded = 1;
@@ -6895,6 +6981,7 @@ typedef struct {
 
 static void pipeHold(PipeGuard *g) {
 #ifdef __linux__
+    if (ossl.sockMeth) return;      /* the runtime's BIO sends without the signal */
     sigset_t set, now;
     sigemptyset(&set);
     sigaddset(&set, SIGPIPE);
@@ -6908,6 +6995,7 @@ static void pipeHold(PipeGuard *g) {
 
 static void pipeRelease(PipeGuard *g) {
 #ifdef __linux__
+    if (ossl.sockMeth) return;
     if (!g->pending) {
         sigset_t set, now;
         sigemptyset(&set);
@@ -6922,6 +7010,21 @@ static void pipeRelease(PipeGuard *g) {
 #else
     (void)g;
 #endif
+}
+
+/* Gives ssl the socket fd, through the runtime's BIO when there is one;
+   records are read ahead, as many as one read brings. */
+static void tlsSetSock(void *ssl, int fd) {
+    void *b = ossl.sockMeth ? ossl.bioNew(ossl.sockMeth) : NULL;
+    if (b) {
+        ossl.bioSetData(b, (void *)(intptr_t)fd);
+        ossl.sslSetBio(ssl, b, b);
+    } else {
+        ossl.sslSetFd(ssl, fd);
+    }
+    ossl.sslCtrl(ssl, 41 /* SSL_CTRL_SET_READ_AHEAD */, 1, NULL);
+    /* an idle connection gives its record buffers back */
+    ossl.sslCtrl(ssl, 33 /* SSL_CTRL_MODE */, 0x10 /* SSL_MODE_RELEASE_BUFFERS */, NULL);
 }
 
 static bool tlsWait(void *ssl, int r) {
@@ -6957,7 +7060,7 @@ void *iris_tls_connect(int fd, const char *host, int64_t hostLen, const char *ca
         free(h);
         return NULL;
     }
-    ossl.sslSetFd(ssl, fd);
+    tlsSetSock(ssl, fd);
     unsigned char ipBuf[16];
     bool isIp = inet_pton(AF_INET, h, ipBuf) == 1 || inet_pton(AF_INET6, h, ipBuf) == 1;
     if (!isIp) ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);     /* SNI names hosts, never IPs */
@@ -7322,7 +7425,7 @@ void *iris_tls_accept(void *server, int fd, int64_t timeout) {
         genRelease(g);
         return NULL;
     }
-    ossl.sslSetFd(ssl, fd);
+    tlsSetSock(ssl, fd);
     for (;;) {
         PipeGuard pg;
         pipeHold(&pg);
