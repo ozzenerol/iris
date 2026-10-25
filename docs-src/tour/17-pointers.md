@@ -135,7 +135,13 @@ i64 *counter() {
 }
 ```
 
-Return the value itself, or `alloc` memory the caller frees.
+An array literal given back as a slice is rejected the same way, as it lives in the function too:
+
+```iris error
+i64[] primes() => [2, 3, 5] // error: this array is gone when primes returns; make it a global, or return memory from alloc
+```
+
+Return the value itself, a fixed array (`i64[3]`), a global, or `alloc` memory the caller frees.
 
 ## Raw memory
 

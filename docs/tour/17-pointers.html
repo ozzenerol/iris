@@ -138,7 +138,9 @@ try {
     <span class="t">i64</span> n = <span class="n">0</span>
     <span class="k">return</span> &amp;n <span class="c">// error: this points into n, which is gone when counter returns; return a copy, or memory from alloc</span>
 }</code></pre>
-<p>Return the value itself, or <code>alloc</code> memory the caller frees.</p>
+<p>An array literal given back as a slice is rejected the same way, as it lives in the function too:</p>
+<pre class="code bad"><span class="tag">does not compile</span><code><span class="t">i64</span>[] <span class="f">primes</span>() =&gt; [<span class="n">2</span>, <span class="n">3</span>, <span class="n">5</span>] <span class="c">// error: this array is gone when primes returns; make it a global, or return memory from alloc</span></code></pre>
+<p>Return the value itself, a fixed array (<code>i64[3]</code>), a global, or <code>alloc</code> memory the caller frees.</p>
 <h2 id="raw-memory"><a href="#raw-memory">Raw memory</a></h2>
 <p><code>u8 *</code> is the generic pointer, like C's <code>void *</code>. Every pointer converts to <code>u8 *</code> and back implicitly. C memory passes through it.</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {

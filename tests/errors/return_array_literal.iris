@@ -1,0 +1,14 @@
+// error: 6: this array is gone when nums returns; make it a global, or return memory from alloc
+// error: 9: this array is gone when names returns; make it a global, or return memory from alloc
+// An array literal lives in the function that makes it; giving it back as
+// a slice would leave the caller reading a stack that is gone.
+
+i64[] nums() => [1, 2, 3]
+
+str[] names() {
+    return ["a", "b"]
+}
+
+void main() {
+    print("{nums().len} {names().len}")
+}

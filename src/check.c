@@ -1420,7 +1420,13 @@ static void checkEscape(Checker *c, Node *e) {
     } else if (e->kind == N_SLICE && e->a->type && e->a->type->kind == TY_ARRAY) {
         place = e->a;
     }
+    if (e->kind == N_ARRAY_LIT && e->type && e->type->kind == TY_SLICE) place = e;
     if (!place) return;
+    if (place->kind == N_ARRAY_LIT) {
+        error(c, e, "this array is gone when %s returns; make it a global, or return memory from alloc",
+              c->func->name);
+        return;
+    }
     Node *root = placeRoot(place);
     if (root && (root->kind == N_VAR || root->kind == N_PARAM || root->kind == N_IDENT) && isLocalDecl(c, root)) {
         error(c, e, "this points into %s, which is gone when %s returns; return a copy, or memory from alloc",
