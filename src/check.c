@@ -4033,7 +4033,8 @@ static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
         {TY_ATOMIC, "swap", BI_ATOMIC_SWAP, 1}, {TY_ATOMIC, "cas", BI_ATOMIC_CAS, 2},
         {TY_MUTEX, "lock", BI_MUTEX_LOCK, 0}, {TY_MUTEX, "unlock", BI_MUTEX_UNLOCK, 0},
         {TY_MUTEX, "tryLock", BI_MUTEX_TRY_LOCK, 0}, {TY_THREAD, "join", BI_THREAD_JOIN, 0},
-        {TY_CHAN, "free", BI_CHAN_FREE, 0},
+        {TY_CHAN, "free", BI_CHAN_FREE, 0}, {TY_CHAN, "trySend", BI_CHAN_TRY_SEND, 1},
+        {TY_CHAN, "len", BI_CHAN_LEN, 0},
     };
     for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
         if ((int)base->kind != methods[i].kind || strcmp(methods[i].name, name) != 0) continue;
@@ -4066,8 +4067,10 @@ static Type *checkSyncMethod(Checker *c, Node *e, Type *t, const char *name) {
         switch (bi) {
         case BI_ATOMIC_LOAD: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB: case BI_ATOMIC_SWAP:
             return setType(e, base->elem);
-        case BI_ATOMIC_CAS: case BI_MUTEX_TRY_LOCK:
+        case BI_ATOMIC_CAS: case BI_MUTEX_TRY_LOCK: case BI_CHAN_TRY_SEND:
             return setType(e, &tyBool);
+        case BI_CHAN_LEN:
+            return setType(e, &tyI64);
         default:
             return setType(e, &tyVoid);
         }

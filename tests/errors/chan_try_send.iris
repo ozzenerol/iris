@@ -1,0 +1,9 @@
+// error: 6: the value is str, but i64 is needed
+// error: 7: len takes no arguments
+
+void main() {
+    ch := chan[i64](1)
+    _ = ch.trySend("text")
+    _ = ch.len(1)
+    ch.free()
+}

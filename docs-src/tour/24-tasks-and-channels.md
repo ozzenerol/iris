@@ -265,6 +265,35 @@ no reply within 50ms
 
 When several channels have values, `select` takes the first arm in order. An arm takes from a channel or waits with `after`. Sending is done outside `select`.
 
+`ch.trySend(v)` sends without waiting. It gives `true` when the value went in, and `false` when the channel is full, or, for a channel without room, when no task waits to take it. After a `false` the value still belongs to the sender, which frees a `String` it drops. `ch.len()` says how many values wait in the channel. A request handler that logs through a channel uses them so a slow log writer drops lines instead of holding up requests:
+
+```iris run
+void main() {
+    lines := chan[String](2)
+    defer lines.free()
+    i64 dropped = 0
+    for i in 0..3 {
+        line := format("request {i}")
+        if !lines.trySend(line) {
+            line.free()
+            dropped += 1
+        }
+    }
+    print("{lines.len()} queued, {dropped} dropped")
+    for lines.len() > 0 {
+        line := <-lines
+        print(line)
+        line.free()
+    }
+}
+```
+
+```output
+2 queued, 1 dropped
+request 0
+request 1
+```
+
 ## Deadlocks
 
 When every task waits for something that no other task can give, the program can never go on. It stops with a panic that says so instead of hanging:

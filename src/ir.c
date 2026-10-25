@@ -1533,6 +1533,23 @@ static Val emitSync(IR *ir, Node *e) {
         }
         return val("", &tyVoid);
     }
+    if (e->builtin == BI_CHAN_TRY_SEND || e->builtin == BI_CHAN_LEN) {
+        Val h = emitExpr(ir, recv);
+        if (rt->kind == TY_PTR) {
+            const char *l = tmp(ir);
+            ins(ir, "%s = load ptr, ptr %s", l, h.s);
+            h.s = l;
+        }
+        const char *r = tmp(ir);
+        if (e->builtin == BI_CHAN_LEN) {
+            ins(ir, "%s = call i64 @iris_chan_len(ptr %s)", r, h.s);
+            return val(r, &tyI64);
+        }
+        Val v = emitExpr(ir, e->list.items[0]);
+        const char *slot = spill(ir, v);
+        ins(ir, "%s = call i1 @iris_chan_try_send(ptr %s, ptr %s)", r, h.s, slot);
+        return val(r, &tyBool);
+    }
     const char *addr = rt->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
     switch (e->builtin) {
     case BI_MUTEX_LOCK:
@@ -1764,7 +1781,7 @@ static Val emitBuiltin(IR *ir, Node *e) {
     case BI_ATOMIC_LOAD: case BI_ATOMIC_STORE: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB:
     case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS:
     case BI_MUTEX_LOCK: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK:
-    case BI_THREAD_JOIN: case BI_CHAN_FREE:
+    case BI_THREAD_JOIN: case BI_CHAN_FREE: case BI_CHAN_TRY_SEND: case BI_CHAN_LEN:
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
@@ -2331,6 +2348,7 @@ static bool touchesErrors(Node *n, int depth) {
         case BI_STRING_INSERT: case BI_STRING_TRUNCATE: case BI_STRING_CLEAR: case BI_ENUM_NEW:
         case BI_FLAGS_HAS: case BI_ATOMIC_LOAD: case BI_ATOMIC_STORE: case BI_ATOMIC_ADD: case BI_ATOMIC_SUB:
         case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK: case BI_CHAN_FREE:
+        case BI_CHAN_TRY_SEND: case BI_CHAN_LEN:
         case BI_JSON_ENCODE: case BI_JSON_FREE: case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: case BI_GROW:
         case BI_TABLE_OF: case BI_ARENA_ALLOC:
             break;
@@ -4306,6 +4324,8 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_sleep(i64)\n"
            "declare ptr @iris_chan_new(i64, i64, ptr, i32, i32, ptr)\n"
            "declare void @iris_chan_send(ptr, ptr)\n"
+           "declare i1 @iris_chan_try_send(ptr, ptr)\n"
+           "declare i64 @iris_chan_len(ptr)\n"
            "declare void @iris_chan_recv(ptr, ptr)\n"
            "declare void @iris_chan_free(ptr, ptr, i32, i32, ptr)\n"
            "declare i64 @iris_select(i64, ptr, ptr, i64)\n"

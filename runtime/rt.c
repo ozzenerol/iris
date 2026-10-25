@@ -4437,6 +4437,42 @@ void iris_chan_send(Chan *c, const void *value) {
     spinUnlock(&c->lock);
 }
 
+/* ch.trySend(v): puts the value in when there is room, or hands it to a
+   waiting receiver on a channel without a buffer, and never waits. False
+   when it couldn't; the value then still belongs to the caller. */
+bool iris_chan_try_send(Chan *c, const void *value) {
+    spinLock(&c->lock);
+    if (c->cap == 0) {
+        Waiter *r = takeWaiter(&c->recvWaiters);
+        if (!r) {
+            spinUnlock(&c->lock);
+            return false;
+        }
+        memcpy(r->data, value, (size_t)c->elemSize);
+        *r->got = r->arm + 1;
+        spinUnlock(&c->lock);
+        wakeTask(r->task);
+        return true;
+    }
+    if (c->len == c->cap) {
+        spinUnlock(&c->lock);
+        return false;
+    }
+    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->elemSize, value, (size_t)c->elemSize);
+    c->len++;
+    wakeOne(&c->recvWaiters);
+    spinUnlock(&c->lock);
+    return true;
+}
+
+/* ch.len(): how many values wait in the channel. */
+int64_t iris_chan_len(Chan *c) {
+    spinLock(&c->lock);
+    int64_t n = c->len;
+    spinUnlock(&c->lock);
+    return n;
+}
+
 /* Takes the next value; the lock is held. */
 static void chanTake(Chan *c, void *out) {
     memcpy(out, c->buf + c->head * c->elemSize, (size_t)c->elemSize);

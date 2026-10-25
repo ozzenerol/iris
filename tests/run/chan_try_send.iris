@@ -1,0 +1,39 @@
+// expect: true true false 2
+// expect: dropped: third
+// expect: first second 0
+// expect: hand-off with nobody waiting: false
+// expect: hand-off to a waiting task: true
+// expect: got 7
+
+void take(chan[i64] ch, chan[i64] done) {
+    done <- <-ch
+}
+
+void main() {
+    ch := chan[String](2)
+    defer ch.free()
+    a := ch.trySend("first".copy())
+    b := ch.trySend("second".copy())
+    String third = "third".copy()
+    c := ch.trySend(third)
+    print("{a} {b} {c} {ch.len()}")
+    if !c {
+        print("dropped: {third}")
+        third.free()
+    }
+    x := <-ch
+    y := <-ch
+    print("{x} {y} {ch.len()}")
+    x.free()
+    y.free()
+
+    hand := chan[i64](0)
+    defer hand.free()
+    print("hand-off with nobody waiting: {hand.trySend(1)}")
+    done := chan[i64](1)
+    defer done.free()
+    spawn take(hand, done)
+    sleep(10ms)
+    print("hand-off to a waiting task: {hand.trySend(7)}")
+    print("got {<-done}")
+}
