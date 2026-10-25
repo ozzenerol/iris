@@ -116,7 +116,7 @@ picked one of them: true
 }</code></pre>
 <pre class="out"><code>22220c10fb3e49e6f04249e177d1f1a90b1ffd6498599a74355de72dcde32f18
 matches: true</code></pre>
-<p><code>sha512</code> gives 64 bytes. <code>sha1</code> and <code>md5</code> are there for older protocols that still use them and are not safe for anything new.</p>
+<p><code>sha384</code> gives 48 bytes and <code>sha512</code> 64. <code>sha1</code> and <code>md5</code> are there for older protocols that still use them and are not safe for anything new.</p>
 <h2 id="signing-messages-with-a-shared-key"><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></h2>
 <p>An HMAC is a hash mixed with a secret key, so only someone with the key can make it. A service that sends webhooks signs each body with <code>crypto.hmacSha256</code>, and the receiver makes the same HMAC and compares. <code>crypto.equal</code> takes the same time wherever the values differ, so its timing gives nothing away:</p>
 <pre class="code run"><code><span class="k">import</span> crypto, hex
@@ -222,6 +222,7 @@ wrong: false</code></pre>
 db password: hunter2
 CryptoError.tampered</code></pre>
 <p><code>aesSeal</code> and <code>aesUnseal</code> do the same with AES-GCM, which many file formats and protocols use. An optional <code>extra</code> text, such as a record's id, goes along unencrypted but is checked too. The <a href="../std/index.html#crypto">library</a> has them, and key agreement with X25519.</p>
+<p>Protocols that build their own encryption need the ciphers alone. <code>aesCtr(key, iv, data)</code> is AES in counter mode, as SSH's <code>aes128-ctr</code> uses, <code>aesBlock(key, block)</code> encrypts one 16-byte block, as QUIC's header protection does, and <code>chacha20(key, nonce, data, counter)</code> is the ChaCha20 stream. None of them checks that the data wasn't changed, so the protocol adds a MAC: <code>hmacSha256</code>, <code>hmacSha384</code>, <code>hmacSha512</code>, or <code>hmacSha1</code> for older ones such as TOTP codes. <code>wipe(bytes)</code> overwrites a key with zeros once it is done with, in a way the compiler can't leave out.</p>
 <h2 id="signatures"><a href="#signatures">Signatures</a></h2>
 <p>A signature lets anyone check that a message came from one signer, without being able to sign anything themselves. Ed25519 signs with a secret seed of 32 random bytes.</p>
 <ul><li><code>crypto.ed25519Public(seed)</code> gives the public key, which is shared.</li><li><code>ed25519Sign</code> makes a 64-byte signature.</li><li><code>ed25519Verify</code> checks it with the public key alone.</li></ul>

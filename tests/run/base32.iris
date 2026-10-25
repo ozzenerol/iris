@@ -1,0 +1,50 @@
+// expect: [] []
+// expect: [MY======] [CO======]
+// expect: [MZXQ====] [CPNG====]
+// expect: [MZXW6===] [CPNMU===]
+// expect: [MZXW6YQ=] [CPNMUOG=]
+// expect: [MZXW6YTB] [CPNMUOJ1]
+// expect: [MZXW6YTBOI======] [CPNMUOJ1E8======]
+// expect: round trips: true
+// expect: no padding: GEZDGNBVGY3TQOJQ, back: 1234567890
+// expect: lower case: foobar
+// expect: Base32Error.invalid: '1' isn't base32
+// expect: Base32Error.invalid: base32 text that ends in the middle of a byte
+
+import base32
+
+void main() {
+    for d in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+        scoped String a = base32.encode(d)
+        scoped String b = base32.encodeHex(d)
+        print("[{a}] [{b}]")
+    }
+    bool ok = true
+    String all
+    defer all.free()
+    for i in 0..256 {
+        u8[1] one = [u8(i)]
+        all.append(one[0:1])
+        scoped String e = base32.encode(all)
+        scoped String back = base32.decode(e) catch err { "".copy() }
+        scoped String h = base32.encodeHex(all, pad: false)
+        scoped String hback = base32.decodeHex(h) catch err { "".copy() }
+        if back != all || hback != all {
+            ok = false
+        }
+    }
+    print("round trips: {ok}")
+    scoped String np = base32.encode("1234567890", pad: false)
+    scoped String npBack = base32.decode(np) catch e { "".copy() }
+    print("no padding: {np}, back: {npBack}")
+    scoped String lower = base32.decode("mzxw6ytboi") catch e { "".copy() }
+    print("lower case: {lower}")
+    _ = base32.decode("MZ1W") catch e {
+        print("{e.code}: {e.message}")
+        "".copy()
+    }
+    _ = base32.decode("MZXW6Y") catch e {
+        print("{e.code}: {e.message}")
+        "".copy()
+    }
+}

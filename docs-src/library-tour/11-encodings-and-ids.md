@@ -1,6 +1,6 @@
 # Encodings and ids
 
-Bytes often travel as text: in a header, a URL, a JSON field or a log line. The `base64` and `hex` modules write any bytes as text and read them back. `url` takes URLs apart and escapes their parts. `uuid` makes the ids that services hand out.
+Bytes often travel as text: in a header, a URL, a JSON field or a log line. The `base64`, `base32` and `hex` modules write any bytes as text and read them back. `url` takes URLs apart and escapes their parts. `uuid` makes the ids that services hand out.
 
 ## Base64
 
@@ -55,6 +55,28 @@ c3ViamVjdD9pZD03Jng9fn5+
 c3ViamVjdD9pZD03Jng9fn5-
 subject?id=7&x=~~~
 ```
+
+## Base32
+
+`base32.encode(data)` writes bytes with 32 characters, upper-case letters and the digits 2 to 7, eight characters for every five bytes. Case, and most systems that pass text along, leave it alone, which is why TOTP secrets and magnet links use it. `pad: false` leaves out the `=` at the end, as they do. `base32.decode` takes either case and skips spaces and line breaks.
+
+```iris run
+import base32
+
+!void main() {
+    scoped String secret = base32.encode("12345678901234567890", pad: false)
+    print(secret)
+    scoped String back = try base32.decode("gezd gnbv gy3t qojq")
+    print(back)
+}
+```
+
+```output
+GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+1234567890
+```
+
+`encodeHex` and `decodeHex` use base32hex, the digits and then A to V, which sorts in the same order as the bytes. DNSSEC's NSEC3 records name hashes with it.
 
 ## Hex
 

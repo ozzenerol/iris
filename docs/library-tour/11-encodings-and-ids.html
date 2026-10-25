@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Encodings and ids - Iris</title>
-<meta name="description" content="Bytes often travel as text: in a header, a URL, a JSON field or a log line. The base64 and hex modules write any bytes as text and read them back. url takes URLs apart and escapes their parts. uuid makes the ids that services hand out.">
+<meta name="description" content="Bytes often travel as text: in a header, a URL, a JSON field or a log line. The base64, base32 and hex modules write any bytes as text and read them back. url takes URLs apart and escapes their parts. uuid makes the ids that services hand out.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
@@ -46,7 +46,7 @@ try {
   <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html" class="on"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
   <article class="prose">
 <h1>Encodings and ids</h1>
-<p class="lede">Bytes often travel as text: in a header, a URL, a JSON field or a log line. The <code>base64</code> and <code>hex</code> modules write any bytes as text and read them back. <code>url</code> takes URLs apart and escapes their parts. <code>uuid</code> makes the ids that services hand out.</p>
+<p class="lede">Bytes often travel as text: in a header, a URL, a JSON field or a log line. The <code>base64</code>, <code>base32</code> and <code>hex</code> modules write any bytes as text and read them back. <code>url</code> takes URLs apart and escapes their parts. <code>uuid</code> makes the ids that services hand out.</p>
 <h2 id="base64"><a href="#base64">Base64</a></h2>
 <p><code>base64.encode(data)</code> writes bytes as Base64 text, four characters for every three bytes. <code>base64.decode(text)</code> reads them back. Each gives a new <code>String</code>. Text that isn't Base64 fails with <code>Base64Error.invalid</code>.</p>
 <pre class="code run"><code><span class="k">import</span> base64
@@ -85,6 +85,19 @@ Base64Error.invalid</code></pre>
 <pre class="out"><code>c3ViamVjdD9pZD03Jng9fn5+
 c3ViamVjdD9pZD03Jng9fn5-
 subject?id=7&amp;x=~~~</code></pre>
+<h2 id="base32"><a href="#base32">Base32</a></h2>
+<p><code>base32.encode(data)</code> writes bytes with 32 characters, upper-case letters and the digits 2 to 7, eight characters for every five bytes. Case, and most systems that pass text along, leave it alone, which is why TOTP secrets and magnet links use it. <code>pad: false</code> leaves out the <code>=</code> at the end, as they do. <code>base32.decode</code> takes either case and skips spaces and line breaks.</p>
+<pre class="code run"><code><span class="k">import</span> base32
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> secret = base32.<span class="f">encode</span>(<span class="s">&quot;12345678901234567890&quot;</span>, pad: <span class="k">false</span>)
+    <span class="f">print</span>(secret)
+    <span class="k">scoped</span> <span class="t">String</span> back = <span class="k">try</span> base32.<span class="f">decode</span>(<span class="s">&quot;gezd gnbv gy3t qojq&quot;</span>)
+    <span class="f">print</span>(back)
+}</code></pre>
+<pre class="out"><code>GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+1234567890</code></pre>
+<p><code>encodeHex</code> and <code>decodeHex</code> use base32hex, the digits and then A to V, which sorts in the same order as the bytes. DNSSEC's NSEC3 records name hashes with it.</p>
 <h2 id="hex"><a href="#hex">Hex</a></h2>
 <p><code>hex.encode(data)</code> writes each byte as two hex digits. <code>hex.decode(text)</code> reads them back in either case. Hex is twice as long as the bytes and easy to read, so use it for hashes, keys and dumps of a few bytes.</p>
 <pre class="code run"><code><span class="k">import</span> hex
@@ -178,7 +191,7 @@ UuidError.invalid</code></pre>
     <nav class="pager"><a class="prev" href="10-csv-and-xml.html"><span>Previous</span>CSV and XML</a><a class="next" href="12-templates.html"><span>Next</span>Templates</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#base64">Base64</a></li><li><a href="#hex">Hex</a></li><li><a href="#urls">URLs</a></li><li><a href="#uuids">UUIDs</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#base64">Base64</a></li><li><a href="#base32">Base32</a></li><li><a href="#hex">Hex</a></li><li><a href="#urls">URLs</a></li><li><a href="#uuids">UUIDs</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

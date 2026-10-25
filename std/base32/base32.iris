@@ -1,0 +1,111 @@
+// Base32 (RFC 4648): bytes as text of letters and digits that case and
+// most transports leave alone, as TOTP secrets and magnet links use, and
+// base32hex, which keeps the order of the bytes, as DNSSEC's NSEC3 uses.
+
+// What decoding fails with: invalid for text that isn't Base32.
+pub enum Base32Error { invalid }
+
+const STANDARD = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+const HEX = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+
+String encodeWith(str data, str alphabet, bool pad) {
+    String out
+    out.reserve((data.len + 4) / 5 * 8)
+    i64 acc = 0
+    i64 bits = 0
+    for i in 0..data.len {
+        acc = (acc << 8 | i64(data[i])) & 0xffff
+        bits += 8
+        for bits >= 5 {
+            bits -= 5
+            k := acc >> bits & 31
+            out.append(alphabet[k:k + 1])
+        }
+    }
+    if bits > 0 {
+        k := acc << (5 - bits) & 31
+        out.append(alphabet[k:k + 1])
+    }
+    if pad {
+        for out.len % 8 != 0 {
+            out.append("=")
+        }
+    }
+    return out
+}
+
+i64 value(u8 c, bool hex) {
+    // either case is taken
+    u8 u = if c >= 'a' && c <= 'z' { c - 32 } else { c }
+    if hex {
+        if u >= '0' && u <= '9' {
+            return i64(u - '0')
+        }
+        if u >= 'A' && u <= 'V' {
+            return i64(u - 'A') + 10
+        }
+        return -1
+    }
+    if u >= 'A' && u <= 'Z' {
+        return i64(u - 'A')
+    }
+    if u >= '2' && u <= '7' {
+        return i64(u - '2') + 26
+    }
+    return -1
+}
+
+!String decodeWith(str text, bool hex) {
+    String out
+    errdefer out.free()
+    i64 acc = 0
+    i64 bits = 0
+    i64 n = 0
+    for i in 0..text.len {
+        c := text[i]
+        if c == '=' {
+            for k in i..text.len {
+                if text[k] != '=' {
+                    return error(Base32Error.invalid, "'=' in the middle of base32 text")
+                }
+            }
+            break
+        }
+        if c == '\n' || c == '\r' || c == ' ' {
+            continue
+        }
+        v := value(c, hex)
+        if v < 0 {
+            return error(Base32Error.invalid, "'{text[i:i + 1]}' isn't base32")
+        }
+        acc = (acc << 5 | v) & 0xffff
+        bits += 5
+        n += 1
+        if bits >= 8 {
+            bits -= 8
+            u8[1] b = [u8(acc >> bits & 255)]
+            out.append(b)
+        }
+    }
+    // 1, 3 and 6 characters of a group of 8 can't end a whole byte
+    r := n % 8
+    if r == 1 || r == 3 || r == 6 {
+        return error(Base32Error.invalid, "base32 text that ends in the middle of a byte")
+    }
+    return out
+}
+
+// The bytes of data as base32, upper case, with = to a multiple of 8;
+// pad false leaves the = out, as TOTP secrets and magnet links do.
+pub String encode(str data, bool pad = true) => encodeWith(data, STANDARD, pad)
+
+// The bytes of base32 text, in either case; = at the end, spaces and line
+// breaks may be left out.
+pub !String decode(str text) => try decodeWith(text, false)
+
+// The bytes of data as base32hex (0-9 and A-V), which sorts as the bytes
+// do; DNSSEC's NSEC3 names use it lower case and without =.
+pub String encodeHex(str data, bool pad = true) => encodeWith(data, HEX, pad)
+
+// The bytes of base32hex text, in either case.
+pub !String decodeHex(str text) => try decodeWith(text, true)

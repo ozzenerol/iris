@@ -85,6 +85,7 @@ the same after a round trip: true</code></pre>
 }</code></pre>
 <pre class="out"><code>hello hello hello
 CompressError.broken</code></pre>
+<p><code>compress.crc32(data)</code> and <code>compress.adler32(data)</code> are the checksums gzip and zlib use. <code>compress.crc32c(data)</code> is CRC32C, which iSCSI, ext4 and many log formats use, done by the CPU's crc32 instruction where it has one. Each takes the value so far as a second argument, to go on over data that comes in parts.</p>
 <h2 id="a-limit-for-data-from-outside"><a href="#a-limit-for-data-from-outside">A limit for data from outside</a></h2>
 <p>A few kilobytes of compressed data can grow into gigabytes. Decompress data from a client or another service with a <code>limit</code>. Anything that would grow past it fails with <code>CompressError.tooLarge</code>.</p>
 <pre class="code run"><code><span class="k">import</span> compress, <span class="t">str</span>

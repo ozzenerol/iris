@@ -18,6 +18,7 @@
       {"name": "xml", "title": "XML", "summary": "XML read as a stream of events or as a tree of elements, and written."},
       {"name": "regex", "title": "Regular expressions", "summary": "Patterns in RE2's syntax, matched in time linear in the text."},
       {"name": "base64", "title": "Base64", "summary": "Base64, the standard and the URL-safe alphabet."},
+      {"name": "base32", "title": "Base32", "summary": "Base32 and base32hex, as TOTP secrets, magnet links and DNSSEC use them."},
       {"name": "hex", "title": "Hex", "summary": "Bytes as hexadecimal digits, and back."},
       {"name": "url", "title": "URLs", "summary": "Taking URLs apart, and the %XX encoding of their parts."},
       {"name": "compress", "title": "Compression", "summary": "Deflate in the gzip, zlib and raw formats."},
