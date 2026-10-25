@@ -1,0 +1,45 @@
+// expect: connectTimeout 100ms, timeout 2s: 200 slow
+// expect: timeout 100ms: NetError.timeout
+// expect: a dial that can't connect gives up within a second: true
+
+import http, net, time
+
+void slow(http.Request *req, http.Response *res) {
+    sleep(300ms)
+    res.text("slow")
+}
+
+void serve(net.Listener ln) {
+    http.serveOn(ln, slow) catch e { }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln)
+    scoped String url = format("http://127.0.0.1:{ln.port}/")
+
+    http.Client a
+    a.connectTimeout = 100ms
+    a.timeout = 2s
+    defer a.close()
+    scoped http.Reply r = try a.get(url)
+    print("connectTimeout 100ms, timeout 2s: {r.status} {r.body}")
+
+    http.Client b
+    b.timeout = 100ms
+    defer b.close()
+    _ = b.get(url) catch e {
+        print("timeout 100ms: {e.code}")
+        http.Reply{}
+    }
+
+    http.Client c
+    c.connectTimeout = 200ms
+    c.timeout = 30s
+    defer c.close()
+    start := time.clock()
+    _ = c.get("http://192.0.2.1:81/") catch e {
+        http.Reply{}
+    }
+    print("a dial that can't connect gives up within a second: {time.since(start) < 1s}")
+}

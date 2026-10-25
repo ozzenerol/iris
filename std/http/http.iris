@@ -1574,8 +1574,8 @@ String requestText(str method, Dest *d, str body, str contentType, bool keepAliv
         return req
     }
 
-!net.Conn dialDest(Dest *d, Duration timeout, str protocols = "", str ca = "") {
-    c := try net.dial(d.host, d.port, timeout)
+!net.Conn dialDest(Dest *d, Duration timeout, str protocols = "", str ca = "", Duration connect = 0s) {
+    c := try net.dial(d.host, d.port, if connect > 0s { connect } else { timeout })
     c.setTimeout(timeout)
     if d.secure {
         c.startTls(d.host, ca, protocols) catch e {
@@ -1609,6 +1609,8 @@ pub struct Client {
     // how long dialing and each read and write may wait (0: 30s, below 0:
     // no limit), and how many idle connections it keeps for each host (0: 4)
     pub Duration timeout
+    // how long connecting may take, when it should be shorter than timeout
+    pub Duration connectTimeout
     pub i64 maxIdle
     // https uses HTTP/2 when the server offers it, unless noHttp2; http://
     // uses it only with priorKnowledge, for servers known to speak it
@@ -1680,7 +1682,8 @@ H2Conn *Client.h2For(Dest *d) {
 !net.Conn Client.dialFor(Dest *d, H2Conn **h) {
     *h = null
     want := d.secure && !self.noHttp2 || !d.secure && self.priorKnowledge
-    c := try dialDest(d, self.wait(), if want && d.secure { "\x02h2\x08http/1.1" } else { "" }, self.ca)
+    c := try dialDest(d, self.wait(), if want && d.secure { "\x02h2\x08http/1.1" } else { "" }, self.ca,
+        self.connectTimeout)
     if !want || d.secure && c.protocol() != "h2" {
         return c
     }
@@ -1746,7 +1749,7 @@ bool Client.hasIdle(Dest *d) {
             // a retry dials: the other idle connections may have been
             // closed by the same server
             if reused && (attempt > 0 || !self.take(d, &c)) {
-                c = try dialDest(d, self.wait(), ca: self.ca)
+                c = try dialDest(d, self.wait(), ca: self.ca, connect: self.connectTimeout)
                 reused = false
             }
             dialed = false

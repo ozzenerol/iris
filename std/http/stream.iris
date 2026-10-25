@@ -55,7 +55,7 @@ pub !Upload Client.begin(str method, str url, str contentType = "", str[] header
     errdefer u.url.free()
     u.reused = self.take(&d, &u.conn)
     if !u.reused {
-        u.conn = try dialDest(&d, self.wait(), ca: self.ca)
+        u.conn = try dialDest(&d, self.wait(), ca: self.ca, connect: self.connectTimeout)
     }
     String all
     defer all.free()
@@ -90,7 +90,7 @@ pub !Upload Client.begin(str method, str url, str contentType = "", str[] header
         }
         // the server closed the idle connection: once more on a new one
         u.reused = false
-        u.conn = try dialDest(&d, self.wait(), ca: self.ca)
+        u.conn = try dialDest(&d, self.wait(), ca: self.ca, connect: self.connectTimeout)
         u.conn.write(head) catch e2 {
             u.conn.close()
             return e2

@@ -536,7 +536,7 @@ void serve(http.Router *r, net.Listener ln) {
 HttpError.badUrl: ftp://example.com/: the address should start with http:// or https://
 ```
 
-`http.get` and the other functions open a connection for each request and wait at most 30 seconds for each step. A `Client` keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its `timeout` sets how long it waits. Tasks and threads can share one `Client`.
+`http.get` and the other functions open a connection for each request and wait at most 30 seconds for each step. A `Client` keeps connections open between requests, so a program that makes many calls to one host is faster with one. Its `timeout` sets how long it waits for each step, and `connectTimeout`, when set, how long connecting may take, so a proxy can give up on a server that is down long before it gives up on a slow answer. Tasks and threads can share one `Client`.
 
 ```iris run
 import http, net
