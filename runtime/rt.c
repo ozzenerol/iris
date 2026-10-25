@@ -9915,7 +9915,12 @@ static void onSignal(int sig) {
     (void)r;
 }
 
-void iris_signal_watch(int sig) {
+/* signal.Signal's cases, in order, as the system numbers them */
+static const int sigNumbers[] = {SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2};
+
+void iris_signal_watch(int which) {
+    if (which < 0 || which >= (int)(sizeof sigNumbers / sizeof sigNumbers[0])) return;
+    int sig = sigNumbers[which];
     spinLock(&sigLock);
     if (sigPipe[0] < 0) {
         if (pipe(sigPipe) != 0) {
@@ -9936,12 +9941,17 @@ void iris_signal_watch(int sig) {
     sigaction(sig, &sa, NULL);
 }
 
-/* The next signal that came, by its number. */
+/* The next signal that came, as its case of signal.Signal. */
 int iris_signal_wait(void) {
     for (;;) {
         unsigned char b;
         ssize_t n = read(sigPipe[0], &b, 1);
-        if (n == 1) return b;
+        if (n == 1) {
+            for (int i = 0; i < (int)(sizeof sigNumbers / sizeof sigNumbers[0]); i++) {
+                if (sigNumbers[i] == b) return i;
+            }
+            continue;
+        }
         waitFd(sigPipe[0], 0);
     }
 }

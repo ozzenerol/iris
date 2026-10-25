@@ -1,16 +1,26 @@
 // expect: got interrupt
+// expect: got user1
+// expect: got user2
+// expect: got hangup
 
 import process, signal
 
-void sendLater() {
-    scoped process.Output o = process.run(["sh", "-c", "sleep 0.1; kill -INT $PPID"]) catch e {
+void send(str which) {
+    scoped String cmd = format("sleep 0.1; kill -{which} $PPID")
+    scoped process.Output o = process.run(["sh", "-c", cmd]) catch e {
         return
     }
 }
 
 void main() {
     signal.watch()
-    spawn sendLater()
+    spawn send("INT")
     s := signal.wait()
     print("got {s}")
+    signal.watch([.user1, .user2, .hangup])
+    for which in ["USR1", "USR2", "HUP"] {
+        spawn send(which)
+        got := signal.wait()
+        print("got {got}")
+    }
 }

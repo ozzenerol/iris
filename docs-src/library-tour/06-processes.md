@@ -190,7 +190,7 @@ import process, signal
 got terminate, saving and stopping
 ```
 
-From then on, `signal.watch()` makes `interrupt` and `terminate` wait for `wait` instead of ending the program. `wait` calls it when nothing is watched yet. `signal.watch([.hangup])` watches other signals. Many programs take `hangup` (SIGHUP) as a request to read their settings again.
+From then on, `signal.watch()` makes `interrupt` and `terminate` wait for `wait` instead of ending the program. `wait` calls it when nothing is watched yet. `signal.watch([.hangup])` watches other signals. Many programs take `hangup` (SIGHUP) as a request to read their settings again. `user1` and `user2` (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version.
 
 A server waits for the signal in one task while other tasks serve:
 
