@@ -155,8 +155,16 @@ pub !void Response.event(str data, str event = "", str id = "") {
 }
 
 // Adds a header to the answer: res.header("Cache-Control", "no-store").
-// Content-Type replaces the type the answer has, as send does.
+// Content-Type replaces the type the answer has, as send does. The server
+// writes Connection itself: Connection: close makes it close the
+// connection after this answer, and other values are dropped.
 pub void Response.header(str name, str value) {
+    if sameName(name, "Connection") {
+        if str.contains(value, "close") || str.contains(value, "Close") {
+            self.keepAlive = false
+        }
+        return
+    }
     if sameName(name, "Content-Type") {
         self.contentType.free()
         self.contentType = value.copy()
@@ -878,6 +886,9 @@ void serveConn(net.Conn conn, Target target) {
         } else {
             run(target.handler, &req, &res)
         }
+        // a handler can end the connection, and a server that is stopping
+        // ends each one after its answer
+        keepAlive = res.keepAlive && (target.router == null || target.router.stopping.load() == 0)
         bool failed = false
         if res.streaming {
             // the last chunk ends the body
@@ -1677,7 +1688,9 @@ bool Client.hasIdle(Dest *d) {
         for attempt in 0..2 {
             net.Conn c = fresh
             reused := !dialed
-            if reused && !self.take(d, &c) {
+            // a retry dials: the other idle connections may have been
+            // closed by the same server
+            if reused && (attempt > 0 || !self.take(d, &c)) {
                 c = try dialDest(d, self.wait(), ca: self.ca)
                 reused = false
             }

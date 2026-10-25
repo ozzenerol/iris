@@ -1,0 +1,75 @@
+// expect: Connection: close
+// expect: closed after the answer: true
+// expect: 3 requests after the server dropped its idle connections: ok
+
+import http, net, str
+
+void bye(http.Request *req, http.Response *res) {
+    res.header("Connection", "close")
+    res.text("bye")
+}
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello")
+}
+
+void serve(net.Listener ln, http.Handler h) {
+    http.serveOn(ln, h) catch e { }
+}
+
+void dropIdle(net.Listener ln, chan[bool] go) {
+    // a server that keeps each connection for one request and then closes
+    // it without saying so, as one that restarts does
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        scoped String req = c.readLine() catch e {
+            c.close()
+            continue
+        }
+        for {
+            scoped String line = c.readLine() catch e { break }
+            if line.len == 0 {
+                break
+            }
+        }
+        c.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok") catch e { }
+        c.close()
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln, bye)
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    try c.write("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    bool closeSeen = false
+    for {
+        scoped String line = try c.readLine()
+        if line.len == 0 {
+            break
+        }
+        if str.startsWith(line, "Connection:") {
+            print(line)
+        }
+    }
+    scoped String body = try c.readExactly(3)
+    u8[8] buf
+    n := c.read(buf) catch e { 0 }
+    print("closed after the answer: {n == 0}")
+
+    drop := try net.listen(0, "127.0.0.1")
+    go := chan[bool](1)
+    defer go.free()
+    spawn dropIdle(drop, go)
+    http.Client client
+    defer client.close()
+    scoped String url = format("http://127.0.0.1:{drop.port}/")
+    // two connections in the pool, both closed by the server
+    for i in 0..3 {
+        scoped http.Reply r = try client.get(url)
+    }
+    print("3 requests after the server dropped its idle connections: ok")
+}
