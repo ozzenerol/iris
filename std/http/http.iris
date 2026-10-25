@@ -28,6 +28,8 @@ pub struct Request {
     // who sent the request: the client's address and port, or the
     // proxy's when there is one in front
     pub net.Addr remote
+    // the address the request came to: which of the server's listeners
+    pub net.Addr local
     // the header lines, "Name: value", each ending in \n or \r\n: a
     // view of the connection's buffer, or of own
     str head
@@ -768,6 +770,7 @@ void serveConn(net.Conn conn, Target target) {
     defer conn.close()
     limits := target.limits
     remote := conn.remoteAddr()
+    local := conn.localAddr()
     Watch w = Watch{conn: &conn, last: time.clock()}
     watch(&w, &limits, target.router)
     defer unwatch(&w)
@@ -780,7 +783,7 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if preface == PREFACE {
-                serveH2(&conn, target, limits, &w, remote)
+                serveH2(&conn, target, limits, &w, remote, local)
             } else {
                 scoped String bye = goawayFrame(0, E_PROTOCOL)
                 conn.write(bye) catch e { }
@@ -803,6 +806,7 @@ void serveConn(net.Conn conn, Target target) {
         }
         Request req
         req.remote = remote
+        req.local = local
         more := readRequest(&conn, &req, &limits) catch e {
             req.free()
             if e.code == net.NetError.tooLong {
@@ -826,7 +830,7 @@ void serveConn(net.Conn conn, Target target) {
                 return
             }
             if rest == "SM\r\n\r\n" {
-                serveH2(&conn, target, limits, &w, remote)
+                serveH2(&conn, target, limits, &w, remote, local)
             }
             return
         }

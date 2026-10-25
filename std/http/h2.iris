@@ -536,6 +536,7 @@ struct Reader {
     Watch *watch
     Queue *jobs
     net.Addr remote
+    net.Addr local
     Decoder headers
     Work *work
     Map[i64, Incoming] open
@@ -813,6 +814,7 @@ void Reader.refuseBody(i64 stream, Incoming *inc) {
     }
     Incoming fresh
     fresh.req.remote = self.remote
+    fresh.req.local = self.local
     code := fillRequest(&fresh.req, &names, &values, &fresh.length)
     if code != E_NONE {
         fresh.req.free()
@@ -993,7 +995,7 @@ void Reader.dataFrame(Frame *f) {
 
 // Serves HTTP/2 on a connection whose preface was read already, until the
 // client goes away.
-void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr remote) {
+void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr remote, net.Addr local) {
     Queue q
     q.ch = chan[Out](64)
     jobs := &q
@@ -1002,7 +1004,7 @@ void serveH2(net.Conn *conn, Target target, Limits limits, Watch *w, net.Addr re
     done := chan[bool](0)
     spawn runWriter(&writer, done)
     Work work = Work{target: target, jobs: jobs}
-    Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, remote: remote, inFlight: &inFlight,
+    Reader r = Reader{conn: conn, target: target, limits: limits, watch: w, jobs: jobs, remote: remote, local: local, inFlight: &inFlight,
         headers: decoder(4096), work: &work}
     // our settings: how many requests at once, a larger window for request
     // bodies, and no server push

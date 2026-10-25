@@ -1,0 +1,38 @@
+// expect: a HTTP/1.1 true
+// expect: b HTTP/1.1 true
+// expect: a HTTP/2 true
+// expect: b HTTP/2 true
+
+import http, net
+
+Atomic[i64] portA
+
+void which(http.Request *req, http.Response *res) {
+    name := if i64(req.local.port) == portA.load() { "a" } else { "b" }
+    scoped String ip = req.local.ipText()
+    res.text("{name} {req.protocol} {ip == "127.0.0.1"}")
+}
+
+void serve(net.Listener ln) {
+    http.serveOn(ln, which) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void main() {
+    a := try net.listen(0, "127.0.0.1")
+    b := try net.listen(0, "127.0.0.1")
+    portA.store(i64(a.port))
+    spawn serve(a)
+    spawn serve(b)
+    for h2 in [false, true] {
+        http.Client c
+        c.priorKnowledge = h2
+        defer c.close()
+        for port in [a.port, b.port] {
+            scoped String url = format("http://127.0.0.1:{port}/")
+            scoped http.Reply r = try c.get(url)
+            print(r.body)
+        }
+    }
+}

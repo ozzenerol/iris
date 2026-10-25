@@ -146,6 +146,7 @@ void serve(http.Router *r, net.Listener ln) {
 | `req.protocol` | `"HTTP/1.1"` or `"HTTP/2"` |
 | `req.received` | when it came in, by `time.clock()` |
 | `req.remote` | who sent it, a `net.Addr`: `req.remote.ipText()` and `req.remote.port` |
+| `req.local` | the address it came to, which tells a handler serving several listeners which one |
 
 ## Answers
 
