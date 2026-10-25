@@ -1,0 +1,23 @@
+// expect: 0 7
+// expect: 0 5 0 7
+
+// large locals with no starting value are zeroed with memset
+struct Big {
+    u8[1000] data
+    i64 n = 5
+}
+
+void f() {
+    u8[65536] buf
+    buf[65535] = 7
+    print("{buf[0]} {buf[65535]}")
+}
+
+!void main() {
+    f()
+    i64[5000] nums
+    Big b
+    u8[100000] more
+    more[99999] = 7
+    print("{nums[4999]} {b.n} {b.data[999]} {more[99999]}")
+}

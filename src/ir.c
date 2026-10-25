@@ -3551,7 +3551,15 @@ static void emitStmtInner(IR *ir, Node *s) {
             }
         } else {
             /* zeros, or the defaults of the structs in it */
-            ins(ir, "store %s %s, ptr %s", llType(ir, s->type), constValue(ir, NULL, s->type), s->ir);
+            const char *zero = constValue(ir, NULL, s->type);
+            if (strcmp(zero, "zeroinitializer") == 0 && typeSizeOf(s->type) > 256) {
+                /* one store of a large aggregate is more than instruction
+                 * selection handles at -O0 (u8[65536] crashed it) */
+                ins(ir, "call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %lld, i1 false)", s->ir,
+                    (long long)typeSizeOf(s->type));
+            } else {
+                ins(ir, "store %s %s, ptr %s", llType(ir, s->type), zero, s->ir);
+            }
         }
         if ((s->flags & F_SCOPED) && ir->defers) {
             listPush(ir->arena, &ir->defers->items, s);
