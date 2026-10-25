@@ -52,26 +52,35 @@ The servers do less work than the rates show, since the load generator limits th
 | tcp-proxy | 16,160 | **16,032** | 16,897 | 19,527 |
 | tcp-proxy-bulk | 19,340 | **18,521** | 120,265 | 22,640 |
 
-`bench/` also has 14 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
+`bench/` also has 23 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
 
 | Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
 |---|---|--:|--:|--:|---|---|
-| fmt-text | 2M lines with widths, hex and precision | **0.236** | 0.433 | 0.721 | `write!` | `fmt.Fprintf` |
+| fmt-text | 2M lines with widths, hex and precision | **0.236** | 0.433 | 0.714 | `write!` | `fmt.Fprintf` |
 | utf8 | count, walk and check 16 MB of UTF-8 | **0.050** | 0.052 | 0.114 | `chars`, `from_utf8` | `unicode/utf8` |
 | bigint | 20000!, its digits, 300 modular powers | 0.043 | 0.071 | **0.037** | num-bigint | `math/big` |
 | rwlock | 4 threads reading and writing | 0.039 | 0.108 | **0.019** | `RwLock` | `sync.RWMutex` |
-| heap | 2M pushes and pops | **0.179** | 0.223 | 0.486 | `BinaryHeap` | `container/heap` |
-| sortedmap | 1M inserts, lookups and range scans | **0.253** | 0.276 | 0.376 | `BTreeMap` | a sorted slice |
-| deque | 27M pushes and pops at both ends | **0.089** | 0.096 | 0.178 | `VecDeque` | a ring buffer |
-| sort-by | 5M structs by a key | **0.209** | 0.225 | 0.579 | `sort_unstable_by_key` | `slices.SortFunc` |
-| fs-walk | make, walk and remove 50k files | 0.769 | **0.765** | 1.008 | `std::fs` | `filepath.WalkDir` |
-| xml-parse | 30 MB of XML as events | **0.094** | 0.121 | 0.730 | quick-xml | `encoding/xml` |
-| toml-parse | a 2 MB TOML file, 20 times | **0.813** | 1.219 | 3.937 | toml | BurntSushi/toml |
-| zip | 2000 files deflated and read back | **0.166** | 0.267 | 0.203 | zip | `archive/zip` |
-| tar | 2000 files into a tar and back | **0.031** | 0.037 | 0.144 | tar | `archive/tar` |
-| template | a 1000-row HTML page, 2000 times | **0.433** | 0.693 | 4.494 | minijinja | `html/template` |
+| heap | 2M pushes and pops | **0.177** | 0.224 | 0.489 | `BinaryHeap` | `container/heap` |
+| sortedmap | 1M inserts, lookups and range scans | **0.250** | 0.277 | 0.375 | `BTreeMap` | a sorted slice |
+| deque | 27M pushes and pops at both ends | **0.091** | 0.097 | 0.178 | `VecDeque` | a ring buffer |
+| sort-by | 5M structs by a key | **0.208** | 0.223 | 0.579 | `sort_unstable_by_key` | `slices.SortFunc` |
+| fs-walk | make, walk and remove 50k files | 0.772 | **0.766** | 1.002 | `std::fs` | `filepath.WalkDir` |
+| xml-parse | 30 MB of XML as events | **0.094** | 0.119 | 0.736 | quick-xml | `encoding/xml` |
+| toml-parse | a 2 MB TOML file, 20 times | **0.813** | 1.212 | 3.914 | toml | BurntSushi/toml |
+| zip | 2000 files deflated and read back | **0.166** | 0.268 | 0.202 | zip | `archive/zip` |
+| tar | 2000 files into a tar and back | **0.031** | 0.036 | 0.141 | tar | `archive/tar` |
+| template | a 1000-row HTML page, 2000 times | **0.433** | 0.623 | 4.489 | minijinja | `html/template` |
+| sha-hmac | SHA-384 of 256 MiB, 1M HMAC-SHA384 | 1.123 | **1.114** | 1.193 | sha2, hmac | `crypto/sha512`, `crypto/hmac` |
+| aes-ctr | 256 MiB with AES-256 in counter mode | 0.038 | 0.050 | **0.035** | aes, ctr | `crypto/cipher` |
+| chacha20 | 256 MiB with ChaCha20 | **0.080** | 0.088 | 0.299 | chacha20 | `x/crypto/chacha20` |
+| crc32c | CRC32C of 1 GiB | 0.087 | 0.136 | **0.033** | crc32c | `hash/crc32` |
+| base32 | 64 KiB to base32 and back, 2000 times | **0.169** | 0.171 | 0.445 | data-encoding | `encoding/base32` |
+| ecdsa | 4000 P-256 signatures, each checked | 0.276 | **0.223** | 0.327 | ring | `crypto/ecdsa` |
+| rsa | 500 RSA-2048 signatures, each checked 20 times | **0.385** | 0.386 | 0.622 | ring | `crypto/rsa` |
+| x509-parse | a certificate parsed 200000 times | **0.232** | 0.378 | 1.115 | x509-parser | `crypto/x509` |
+| yaml-parse | a 6.7 MB YAML list, 3 times | **0.461** | 1.247 | 2.459 | serde_yaml | `gopkg.in/yaml.v3` |
 
-In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB.
+In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
 
 ## Building and installing
 

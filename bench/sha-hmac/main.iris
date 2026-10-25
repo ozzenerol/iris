@@ -1,0 +1,32 @@
+import crypto, hex
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// SHA-384 of a 64 KiB block 4000 times, then HMAC-SHA384 of a million
+// 64-byte messages, each keyed with the one before.
+void main() {
+    i64 seed = 1
+    String chunk
+    defer chunk.free()
+    for chunk.len < 65536 {
+        chunk.append(WORDS[next(&seed) % 10])
+    }
+    chunk.truncate(65536)
+    i64 acc = 0
+    for i in 0..4000 {
+        h := crypto.sha384(chunk)
+        acc += i64(h[i % 48])
+    }
+    u8[48] key = crypto.sha384("key")
+    for i in 0..1000000 {
+        at := i * 7 % 60000
+        key = crypto.hmacSha384(key[0:], chunk[at:at + 64])
+    }
+    scoped String t = hex.encode(key[0:])
+    print("{acc} {t}")
+}

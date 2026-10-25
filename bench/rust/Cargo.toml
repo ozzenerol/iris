@@ -16,6 +16,16 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 crc32fast = "1"
 tar = "0.4"
 minijinja = "2"
+sha2 = "0.10"
+hmac = "0.12"
+aes = "0.8"
+ctr = "0.9"
+chacha20 = "0.9"
+crc32c = "0.6"
+data-encoding = "2"
+ring = "0.17"
+x509-parser = "0.18"
+serde_yaml = "0.9"
 
 [profile.release]
 opt-level = 3
@@ -146,3 +156,39 @@ path = "../tar/main.rs"
 [[bin]]
 name = "template"
 path = "../template/main.rs"
+
+[[bin]]
+name = "sha-hmac"
+path = "../sha-hmac/main.rs"
+
+[[bin]]
+name = "aes-ctr"
+path = "../aes-ctr/main.rs"
+
+[[bin]]
+name = "chacha20"
+path = "../chacha20/main.rs"
+
+[[bin]]
+name = "crc32c"
+path = "../crc32c/main.rs"
+
+[[bin]]
+name = "base32"
+path = "../base32/main.rs"
+
+[[bin]]
+name = "ecdsa"
+path = "../ecdsa/main.rs"
+
+[[bin]]
+name = "rsa"
+path = "../rsa/main.rs"
+
+[[bin]]
+name = "x509-parse"
+path = "../x509-parse/main.rs"
+
+[[bin]]
+name = "yaml-parse"
+path = "../yaml-parse/main.rs"

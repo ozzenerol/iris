@@ -1,0 +1,27 @@
+import yaml
+
+const i64 N = 50000
+
+// A YAML list of 50000 records (nested maps, a flow list, quoted and plain
+// text, numbers, booleans) parsed into values and read back, 3 times.
+!void main() {
+    String text
+    defer text.free()
+    for i in 0..N {
+        text.append("- id: {i}\n  name: \"user {i}\"\n  active: {i % 3 == 0}\n  score: {i % 100}.5\n")
+        text.append("  tags: [net, \"tag {i % 7}\", edge]\n  address:\n    city: Iasi\n    zip: \"7000{i % 10}\"\n")
+    }
+    i64 total = 0
+    for _ in 0..3 {
+        scoped yaml.Value v = try yaml.parse(text)
+        for i in 0..v.len() {
+            r := v.at(i)
+            total += r.get("id").int + r.get("name").text.len + r.get("tags").len()
+            total += r.get("address").get("city").text.len + i64(r.get("score").float)
+            if r.get("active").boolean {
+                total += 1
+            }
+        }
+    }
+    print("{text.len} {total}")
+}

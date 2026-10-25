@@ -1,0 +1,21 @@
+import crypto, hex
+
+str KEY = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420c1ac5e74c316ff54dfd13d0a034956ba1b5b656e892a670669beb1af9f5a8af8a1440342000411553b572004d7ab330c2cab9855252d50dcc8ba9ef9c16918af6bfd93e18f2ce061f3467cb60de84632be7425c9f41453f606fe372bf6c2a89c5f603398cb1e"
+
+// 4000 messages signed with ECDSA P-256 and SHA-256, each signature checked.
+!void main() {
+    scoped String der = try hex.decode(KEY)
+    scoped key := try crypto.loadPrivateKey(der)
+    scoped public := key.publicKey()
+    i64 ok = 0
+    for i in 0..4000 {
+        scoped String msg = format("message {i} for the signature benchmark")
+        scoped String sig = try key.sign(msg)
+        for _ in 0..1 {
+            if public.verify(msg, sig) {
+                ok += 1
+            }
+        }
+    }
+    print("{ok}")
+}

@@ -1,0 +1,29 @@
+import crypto, compress
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// A 64 KiB block encrypted with ChaCha20 4000 times over, each round on
+// the result of the one before with its own key.
+void main() {
+    i64 seed = 1
+    String chunk
+    defer chunk.free()
+    for chunk.len < 65536 {
+        chunk.append(WORDS[next(&seed) % 10])
+    }
+    chunk.truncate(65536)
+    String data = chunk.copy()
+    for i in 0..4000 {
+        at := i % 997
+        next := crypto.chacha20(chunk[at:at + 32], chunk[at + 32:at + 44], data)
+        data.free()
+        data = next
+    }
+    print("{compress.crc32(data)}")
+    data.free()
+}

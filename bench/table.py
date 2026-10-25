@@ -41,6 +41,15 @@ LIB_ROWS = [
     ("zip", "2000 files deflated and read back", "zip", "`archive/zip`"),
     ("tar", "2000 files into a tar and back", "tar", "`archive/tar`"),
     ("template", "a 1000-row HTML page, 2000 times", "minijinja", "`html/template`"),
+    ("sha-hmac", "SHA-384 of 256 MiB, 1M HMAC-SHA384", "sha2, hmac", "`crypto/sha512`, `crypto/hmac`"),
+    ("aes-ctr", "256 MiB with AES-256 in counter mode", "aes, ctr", "`crypto/cipher`"),
+    ("chacha20", "256 MiB with ChaCha20", "chacha20", "`x/crypto/chacha20`"),
+    ("crc32c", "CRC32C of 1 GiB", "crc32c", "`hash/crc32`"),
+    ("base32", "64 KiB to base32 and back, 2000 times", "data-encoding", "`encoding/base32`"),
+    ("ecdsa", "4000 P-256 signatures, each checked", "ring", "`crypto/ecdsa`"),
+    ("rsa", "500 RSA-2048 signatures, each checked 20 times", "ring", "`crypto/rsa`"),
+    ("x509-parse", "a certificate parsed 200000 times", "x509-parser", "`crypto/x509`"),
+    ("yaml-parse", "a 6.7 MB YAML list, 3 times", "serde_yaml", "`gopkg.in/yaml.v3`"),
 ]
 
 
