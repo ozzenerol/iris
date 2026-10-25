@@ -144,7 +144,7 @@ static bool runComptime(Arena *a, const char *path, const char **includes, int n
     Target saved = gTarget;
     gTarget.triple = NULL;          /* the helper runs here */
     char *ir = ok ? writeIR(&ha, helper, MODE_DEBUG) : NULL;
-    char dir[4096];
+    char dir[4096] = "";
     ok = ok && makeTempDir(dir, sizeof dir);
     char exe[4200], outPath[4200], errPath[4200];
     if (ok) {
@@ -193,7 +193,7 @@ static bool runComptime(Arena *a, const char *path, const char **includes, int n
         unlink(outPath);
         unlink(errPath);
     }
-    if (dir[0] && ok) removeTree(dir);
+    if (dir[0]) removeTree(dir);   /* also after an error */
     /* the keys and results live in a; the helper's own tree goes */
     for (int i = 0; i < gComptimeKeyCount; i++) {
         gComptimeKeys[i] = arenaStrndup(a, gComptimeKeys[i], strlen(gComptimeKeys[i]));
