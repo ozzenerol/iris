@@ -7823,7 +7823,114 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
     return code;
 }
 
-/* ---------------------------------------------------------------- limits and sandboxes
+/* ---------------------------------------------------------------- passwords (crypt)
+
+   crypt_r from libcrypt, loaded with dlopen, checks a password against a
+   hash in the format of /etc/shadow ($6$... and the rest). The runtime
+   doesn't link libcrypt otherwise. */
+
+#include <dlfcn.h>
+void iris_wipe(void *p, int64_t n);
+int iris_const_equal(const char *a, int64_t na, const char *b, int64_t nb);
+
+struct cryptData {               /* the start of struct crypt_data */
+    char out[256];
+    char setting[256];
+    char input[256];
+    char rest[32768];
+};
+
+static char *(*cryptFn)(const char *, const char *, struct cryptData *);
+static int cryptTried;
+
+static bool cryptReady(void) {
+    if (!cryptTried) {
+        cryptTried = 1;
+        void *lib = dlopen("libcrypt.so.2", RTLD_NOW);
+        if (!lib) lib = dlopen("libcrypt.so.1", RTLD_NOW);
+        if (!lib) lib = dlopen("libcrypt.so", RTLD_NOW);
+        if (lib) *(void **)&cryptFn = dlsym(lib, "crypt_r");
+    }
+    return cryptFn != NULL;
+}
+
+/* 1 when password matches the crypt hash, 0 when it doesn't, -1 when the
+   hash's method isn't available (no libcrypt, or an unknown prefix). The
+   compare is in constant time once the hash is made. */
+int iris_crypt_check(const char *password, int64_t plen, const char *hash, int64_t hlen) {
+    if (!cryptReady() || hlen <= 0 || hlen >= 256 || plen >= 256) return -1;
+    struct cryptData *d = calloc(1, sizeof *d);
+    if (!d) outOfMemory();
+    memcpy(d->setting, hash, (size_t)hlen);
+    char pw[256];
+    memcpy(pw, password, (size_t)plen);
+    pw[plen] = 0;
+    char *got = cryptFn(pw, d->setting, d);
+    int result = -1;
+    if (got && got[0] && got[0] != '*') {
+        result = iris_const_equal(got, (int64_t)strlen(got), hash, hlen) ? 1 : 0;
+    }
+    iris_wipe(pw, sizeof pw);
+    iris_wipe(d, sizeof *d);
+    free(d);
+    return result;
+}
+
+/* Hashes password with setting (a prefix like "$6$salt" or a whole hash):
+   the hash into out (room for 256) and *len, or -1 when it can't. */
+int iris_crypt_hash(const char *password, int64_t plen, const char *setting, int64_t slen, char *out, int64_t *len) {
+    if (!cryptReady() || slen <= 0 || slen >= 256 || plen >= 256) return -1;
+    struct cryptData *d = calloc(1, sizeof *d);
+    if (!d) outOfMemory();
+    memcpy(d->setting, setting, (size_t)slen);
+    char pw[256];
+    memcpy(pw, password, (size_t)plen);
+    pw[plen] = 0;
+    char *got = cryptFn(pw, d->setting, d);
+    int code = -1;
+    if (got && got[0] && got[0] != '*') {
+        int64_t n = (int64_t)strlen(got);
+        if (n < 256) {
+            memcpy(out, got, (size_t)n);
+            *len = n;
+            code = 0;
+        }
+    }
+    iris_wipe(pw, sizeof pw);
+    iris_wipe(d, sizeof *d);
+    free(d);
+    return code;
+}
+
+/* Reads user's hash from /etc/shadow into out (room for 256): 0 and sets
+   *len, 1 for no such user, 2 when it can't be read (not root). */
+int iris_shadow_hash(const char *user, int64_t ulen, char *out, int64_t *len) {
+    FILE *f = fopen("/etc/shadow", "r");
+    if (!f) return 2;
+    char line[4096];
+    int code = 1;
+    while (fgets(line, sizeof line, f)) {
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+        if ((int64_t)(colon - line) == ulen && memcmp(line, user, (size_t)ulen) == 0) {
+            char *end = strchr(colon + 1, ':');
+            int64_t n = end ? (int64_t)(end - colon - 1) : (int64_t)strlen(colon + 1);
+            if (n > 0 && n < 256) {
+                memcpy(out, colon + 1, (size_t)n);
+                *len = n;
+                code = 0;
+            } else {
+                code = 1;       /* no password set, or locked (* or !) */
+            }
+            break;
+        }
+    }
+    iris_wipe(line, sizeof line);
+    fclose(f);
+    return code;
+}
+
+/* ---------------------------------------------------------------- limits and sandboxes/* ---------------------------------------------------------------- limits and sandboxes
 
    os.chroot, os.setLimit, os.noNewPrivileges, and os.allowSyscalls: a
    seccomp filter (Linux) that lets the system calls named through, with

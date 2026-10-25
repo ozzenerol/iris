@@ -1,0 +1,31 @@
+// expect: sha512 right: true, wrong: false
+// expect: made hash checks: true
+// expect: yescrypt or sha512 available: true
+// expect: no such user: ShadowError.denied
+// expect: not root reading shadow: ShadowError.denied
+
+import shadow
+
+!void main() {
+    h := "$6$saltsalt$8iYtNHxjWRl.NF6oNZ5tF.iKFlQREaXBLlSmZKP6dy9l5z3vsooWNW0/GZ6Nej73/TFug6pIPSqbJoCT6dfnj."
+    print("sha512 right: {try shadow.check("hunter2", h)}, wrong: {shadow.check("wrong", h) catch e { true }}")
+
+    scoped made := try shadow.crypt("my secret", "$6$0123456789abcdef")
+    print("made hash checks: {try shadow.check("my secret", made)}")
+
+    bool any = false
+    _ = shadow.crypt("x", "$y$j9T$aaaaaaaaaaaaaaaaaaaaaa") catch e { "".copy() }
+    any = shadow.check("hunter2", h) catch e { false }
+    print("yescrypt or sha512 available: {any}")
+
+    // nobody's entry is locked (! or *), so no password is set
+    _ = shadow.checkLogin("no-such-user-xyz", "x") catch e {
+        print("no such user: {e.code}")
+        false
+    }
+    _ = shadow.checkLogin("root", "whatever") catch e {
+        // run as a normal user, /etc/shadow can't be read
+        print("not root reading shadow: {e.code}")
+        false
+    }
+}

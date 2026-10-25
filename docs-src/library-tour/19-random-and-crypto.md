@@ -327,6 +327,21 @@ the chain checks out
 
 `der` reads ASN.1 in DER, the encoding of certificates and keys, one value after another: `der.reader(bytes)`, `next()` and `expect(tag)`, `inner()` for what a SEQUENCE holds, and `int()`, `oid()`, `text()`, `bits()` and `time()` for the values.
 
+## Login passwords
+
+A server that logs users in with the system's accounts checks a password with `shadow`. `shadow.checkLogin(user, password)` reads the user's hash from `/etc/shadow`, which needs root, and says whether the password fits. `shadow.check(password, hash)` checks against a hash a program holds itself, and `shadow.crypt(password, setting)` makes one, with `"$6$"` and a salt for SHA-512 or `"$y$"` for yescrypt. The comparison is in constant time once the hash is made. They use the system's `crypt`, loaded when first used.
+
+```iris
+import shadow
+
+!void main() {
+    scoped hash := try shadow.crypt("hunter2", "$6$Xy7sQ2bK9pLmN3vR")
+    print("{try shadow.check("hunter2", hash)} {try shadow.check("wrong", hash)}")
+}
+```
+
+An SSH or a web server reads the password over the connection, checks it with `checkLogin`, and then gives up root with `os.runAs`.
+
 ## Tokens for logins
 
 A JSON Web Token carries claims, such as who the user is and when the token ends. They are signed, so the server can trust them when the client sends them back. `jwt.sign(claims, key)` signs a `@json` struct with HS256, and `jwt.verify[T](token, key)` checks the signature and reads the claims back. When the claims have `exp`, in seconds since 1970, a token past it fails with `JwtError.expired`:

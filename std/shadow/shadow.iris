@@ -1,0 +1,59 @@
+// Checking a login password against the system's hashes, the way an SSH
+// server or a login tool does: crypt (from libcrypt) for the hash format
+// of /etc/shadow ($6$ for SHA-512, $y$ for yescrypt, and the rest), and
+// reading a user's hash from /etc/shadow, which needs root.
+
+// What the calls fail with: notFound for a user with no password set or
+// no account, denied when /etc/shadow can't be read, and unsupported when
+// the hash's method isn't available (no libcrypt, or a prefix it lacks).
+pub enum ShadowError { notFound, denied, unsupported }
+
+@extern("iris_crypt_check")
+i32 rawCheck(u8 *password, i64 plen, u8 *hash, i64 hlen)
+
+@extern("iris_shadow_hash")
+i32 rawHash(u8 *user, i64 ulen, u8 *out, i64 *len)
+
+@extern("iris_crypt_hash")
+i32 rawCryptHash(u8 *password, i64 plen, u8 *setting, i64 slen, u8 *out, i64 *len)
+
+// Hashes password with setting, which gives the method and the salt:
+// "$6$" and up to 16 salt characters for SHA-512, "$y$..." for yescrypt,
+// as crypt wants them. The result is a full hash that check takes.
+pub !String crypt(str password, str setting) {
+    u8[256] buf
+    i64 len
+    if rawCryptHash(password.ptr, password.len, setting.ptr, setting.len, &buf[0], &len) != 0 {
+        return error(ShadowError.unsupported, "crypt can't hash with '{setting}'")
+    }
+    return buf[0:len].copy()
+}
+
+// Whether password hashes to hash, a crypt hash as /etc/shadow holds it,
+// such as "$6$salt$...". The hash names its own method and salt. Text
+// that hashes the same way the stored hash did is compared in constant
+// time. unsupported when the method isn't available.
+pub !bool check(str password, str hash) {
+    r := rawCheck(password.ptr, password.len, hash.ptr, hash.len)
+    if r < 0 {
+        return error(ShadowError.unsupported, "the hash's method isn't available")
+    }
+    return r == 1
+}
+
+// Whether password is user's login password, checked against
+// /etc/shadow. It needs to run as root, or wherever /etc/shadow can be
+// read. notFound when the user has no account or no password set, denied
+// when the file can't be read.
+pub !bool checkLogin(str user, str password) {
+    u8[256] buf
+    i64 len
+    code := rawHash(user.ptr, user.len, &buf[0], &len)
+    if code == 1 {
+        return error(ShadowError.notFound, "{user}: no account, or no password set")
+    }
+    if code == 2 {
+        return error(ShadowError.denied, "/etc/shadow can't be read (run as root)")
+    }
+    return try check(password, buf[0:len])
+}

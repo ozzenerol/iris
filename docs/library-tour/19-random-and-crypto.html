@@ -279,6 +279,15 @@ false</code></pre>
 for localhost: true, for example.com: false
 the chain checks out</code></pre>
 <p><code>der</code> reads ASN.1 in DER, the encoding of certificates and keys, one value after another: <code>der.reader(bytes)</code>, <code>next()</code> and <code>expect(tag)</code>, <code>inner()</code> for what a SEQUENCE holds, and <code>int()</code>, <code>oid()</code>, <code>text()</code>, <code>bits()</code> and <code>time()</code> for the values.</p>
+<h2 id="login-passwords"><a href="#login-passwords">Login passwords</a></h2>
+<p>A server that logs users in with the system's accounts checks a password with <code>shadow</code>. <code>shadow.checkLogin(user, password)</code> reads the user's hash from <code>/etc/shadow</code>, which needs root, and says whether the password fits. <code>shadow.check(password, hash)</code> checks against a hash a program holds itself, and <code>shadow.crypt(password, setting)</code> makes one, with <code>&quot;$6$&quot;</code> and a salt for SHA-512 or <code>&quot;$y$&quot;</code> for yescrypt. The comparison is in constant time once the hash is made. They use the system's <code>crypt</code>, loaded when first used.</p>
+<pre class="code"><code><span class="k">import</span> shadow
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> hash := <span class="k">try</span> shadow.<span class="f">crypt</span>(<span class="s">&quot;hunter2&quot;</span>, <span class="s">&quot;$6$Xy7sQ2bK9pLmN3vR&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">try</span> shadow.<span class="f">check</span>(<span class="s">&quot;hunter2&quot;</span>, hash)<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="k">try</span> shadow.<span class="f">check</span>(<span class="s">&quot;wrong&quot;</span>, hash)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<p>An SSH or a web server reads the password over the connection, checks it with <code>checkLogin</code>, and then gives up root with <code>os.runAs</code>.</p>
 <h2 id="tokens-for-logins"><a href="#tokens-for-logins">Tokens for logins</a></h2>
 <p>A JSON Web Token carries claims, such as who the user is and when the token ends. They are signed, so the server can trust them when the client sends them back. <code>jwt.sign(claims, key)</code> signs a <code>@json</code> struct with HS256, and <code>jwt.verify[T](token, key)</code> checks the signature and reads the claims back. When the claims have <code>exp</code>, in seconds since 1970, a token past it fails with <code>JwtError.expired</code>:</p>
 <pre class="code run"><code><span class="k">import</span> jwt, time
@@ -322,7 +331,7 @@ JwtError.invalid</code></pre>
     <nav class="pager"><a class="prev" href="18-postgres-and-redis.html"><span>Previous</span>PostgreSQL and Redis</a><a class="next" href="20-math-and-big-numbers.html"><span>Next</span>Math and big numbers</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#random-numbers">Random numbers</a></li><li><a href="#random-bytes-for-secrets">Random bytes for secrets</a></li><li><a href="#hashes">Hashes</a></li><li><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></li><li><a href="#passwords">Passwords</a></li><li><a href="#encrypting-data">Encrypting data</a></li><li><a href="#signatures">Signatures</a></li><li><a href="#certificates">Certificates</a></li><li><a href="#tokens-for-logins">Tokens for logins</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#random-numbers">Random numbers</a></li><li><a href="#random-bytes-for-secrets">Random bytes for secrets</a></li><li><a href="#hashes">Hashes</a></li><li><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></li><li><a href="#passwords">Passwords</a></li><li><a href="#encrypting-data">Encrypting data</a></li><li><a href="#signatures">Signatures</a></li><li><a href="#certificates">Certificates</a></li><li><a href="#login-passwords">Login passwords</a></li><li><a href="#tokens-for-logins">Tokens for logins</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

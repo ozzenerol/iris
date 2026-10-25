@@ -236,6 +236,7 @@ on a terminal</code></pre>
     <span class="f">print</span>(<span class="s">&quot;serving as </span><span class="e">{</span>os.<span class="f">uid</span>()<span class="e">}</span><span class="s">&quot;</span>)
     <span class="c">// accept on ln as www-data</span>
 }</code></pre>
+<p>On Linux, <code>keep</code> holds on to some of root's power: <code>os.runAs(&quot;vpn&quot;, keep: [.netAdmin])</code> leaves the program able to set up interfaces and routes, and nothing else, and <code>.netBindService</code> lets it bind ports below 1024 later. The thread that calls <code>runAs</code> keeps them, and the threads it starts after, so a program calls it before it starts its threads. <code>os.hasCapability(.netAdmin)</code> says whether the thread has one.</p>
 <p>Only root may change to another user: anyone else gets <code>OsError.permission</code>, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives <code>OsError.notFound</code>. <code>os.uid()</code> and <code>os.gid()</code> give the ids the program runs as, and <code>os.user()</code> the user's name.</p>
 <p><code>os.lookupUser(name)</code> and <code>os.lookupUserId(uid)</code> give a <code>User</code> from the system's user database: its <code>name</code>, <code>uid</code>, <code>gid</code>, <code>home</code>, <code>shell</code> and <code>gecos</code>, and <code>groups()</code>, the ids of every group it is in. <code>os.lookupGroup(name)</code> and <code>os.lookupGroupId(gid)</code> give a <code>Group</code> with its <code>name</code>, <code>gid</code> and <code>members</code>.</p>
 <pre class="code run"><code><span class="k">import</span> os
@@ -246,6 +247,17 @@ on a terminal</code></pre>
 }</code></pre>
 <pre class="out"><code>root is 0, in group 0</code></pre>
 <p><code>os.cpuCount()</code> is how many cores the program may run on, and <code>os.pinThread(core)</code>, on Linux, keeps the calling thread on one of them, so a thread per core keeps its caches warm.</p>
+<h2 id="limits-and-sandboxes"><a href="#limits-and-sandboxes">Limits and sandboxes</a></h2>
+<p><code>os.setLimit(.openFiles, 4096)</code> sets a resource limit, and <code>os.limit(l)</code> reads one as its soft and hard values: open descriptors, processes, the largest file, memory, CPU seconds and the others of <code>os.Limit</code>. A server that holds many connections raises <code>.openFiles</code> first.</p>
+<p>A program that parses what comes from the network can shut itself in, so a bug in that code reaches little. <code>os.chroot(dir)</code> makes a folder the root of what it can see, which only root may do, before it gives up root with <code>runAs</code>. <code>os.noNewPrivileges()</code> stops any program it starts from gaining privileges. On Linux, <code>os.allowSyscalls([&quot;openat&quot;, ...])</code> lets only the system calls named through from then on, for every thread, besides those the runtime makes itself to run tasks and use what it has open; any other fails with permission denied, or with <code>kill: true</code> ends the program.</p>
+<pre class="code"><code><span class="k">import</span> os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">try</span> os.<span class="f">setLimit</span>(.openFiles, <span class="n">1024</span>)
+    <span class="k">try</span> os.<span class="f">allowSyscalls</span>([])
+    <span class="c">// from here the program can read and write the sockets it has, and</span>
+    <span class="c">// nothing else: opening a file fails with FsError.permission</span>
+}</code></pre>
 <h2 id="input"><a href="#input">Input</a></h2>
 <p>The second argument to <code>run</code> goes to the program's standard input:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
@@ -296,7 +308,7 @@ on a terminal</code></pre>
     <nav class="pager"><a class="prev" href="05-flags.html"><span>Previous</span>Command-line flags</a><a class="next" href="07-terminal.html"><span>Next</span>Terminal output and input</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></li><li><a href="#programs-on-a-terminal">Programs on a terminal</a></li><li><a href="#running-as-another-user">Running as another user</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></li><li><a href="#programs-on-a-terminal">Programs on a terminal</a></li><li><a href="#running-as-another-user">Running as another user</a></li><li><a href="#limits-and-sandboxes">Limits and sandboxes</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
