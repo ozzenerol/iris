@@ -36,6 +36,9 @@ void rawClose(i32 fd)
 @extern("iris_net_shutdown")
 void rawShutdown(i32 fd)
 
+@extern("iris_net_stop_listener")
+void rawStopListener(i32 fd)
+
 @extern("iris_tls_connect")
 u8 *rawTlsConnect(i32 fd, u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen, u8 *cert, i64 certLen,
     u8 *key, i64 keyLen)
@@ -185,9 +188,11 @@ pub i32 Listener.fd() => self.sock
 // Stops listening and closes the socket.
 pub void Listener.close() => rawClose(self.sock)
 
-// Wakes a task that waits in accept, which then fails: for stopping a
-// server.
-pub void Listener.interrupt() => rawShutdown(self.sock)
+// Stops accepting: tasks that wait in accept, on any thread, wake up and
+// fail with NetError.closed, and so does every accept after. The socket
+// itself stays open, so a process it was handed to with sendFds goes on
+// accepting on it. close still closes it.
+pub void Listener.interrupt() => rawStopListener(self.sock)
 
 // Connects to host:port, waiting at most timeout when it isn't 0. host is
 // a name or an IP. Each of the name's addresses is tried in turn until one

@@ -3467,10 +3467,22 @@ typedef struct Sched {
     Task *inboxHead, *inboxTail;
     int wakeR, wakeW;           /* an eventfd on Linux (both the same), a pipe elsewhere */
     int wakeSent;               /* the descriptor has been written since the loop last read it */
+    int stopSeen;               /* the listener stops it has acted on */
 } Sched;
 
 static _Thread_local Sched *mySched;
 static int liveThreads = 1;
+
+/* Listeners that Listener.interrupt stopped: accept on them fails with the
+   connection closed. The socket is left as it is, since a process it was
+   handed to may still accept on it; each thread's loop instead cancels its
+   own waits on it. Every scheduler is listed, so all can be told. */
+static int stopLock;
+static int *stoppedFds;
+static int stoppedLen, stoppedCap;
+static int stopGen;
+static Sched **allScheds;
+static int schedsLen, schedsCap;
 
 /* A hint to the CPU that this is a spin loop. */
 static inline void cpuRelax(void) {
@@ -3527,6 +3539,17 @@ static Task *startThread(void) {
     s->wakeW = fds[1];
 #endif
     mySched = s;
+    spinLock(&stopLock);
+    if (schedsLen == schedsCap) {
+        schedsCap = schedsCap ? schedsCap * 2 : 16;
+        allScheds = realloc(allScheds, (size_t)schedsCap * sizeof *allScheds);
+        if (!allScheds) {
+            outOfMemory();
+        }
+    }
+    allScheds[schedsLen++] = s;
+    s->stopSeen = stopGen;
+    spinUnlock(&stopLock);
     mainTask.sched = s;
     currentTask = &mainTask;
     return currentTask;
@@ -3579,6 +3602,9 @@ static void drainInbox(void) {
     }
 }
 
+static void checkStops(void);
+static bool fdStopped(int fd);
+
 /* The wake descriptor was written: empty it, so the next write is seen. */
 static void wakeArrived(void) {
     Sched *s = mySched;
@@ -3591,6 +3617,7 @@ static void wakeArrived(void) {
     s->wakeSent = 0;
     spinUnlock(&s->lock);
     drainInbox();
+    checkStops();
 }
 
 static int64_t nowNs(void) {
@@ -4942,12 +4969,16 @@ static int64_t deadlineOf(int64_t timeout) { return timeout > 0 ? nowNs() + time
 int iris_net_accept(int fd, int *err, int64_t timeout) {
     int64_t deadline = deadlineOf(timeout);
     for (;;) {
+        if (fdStopped(fd)) {
+            *err = 2;
+            return -1;
+        }
 #ifdef __linux__
         int c;
         if (useRing()) {
             c = ringOpUntil(RING_OP_ACCEPT, fd, NULL, 0, SOCK_NONBLOCK | SOCK_CLOEXEC, deadline);
             if (c == -ECANCELED) {
-                *err = 3;
+                *err = fdStopped(fd) ? 2 : 3;
                 return -1;
             }
             if (c < 0) {
@@ -5709,8 +5740,97 @@ int iris_net_write(int fd, const char *buf, int64_t len, int64_t timeout) {
     return 0;
 }
 
+/* Whether Listener.interrupt stopped fd. */
+static bool fdStopped(int fd) {
+    if (!__atomic_load_n(&stoppedLen, __ATOMIC_ACQUIRE)) return false;
+    bool found = false;
+    spinLock(&stopLock);
+    for (int i = 0; i < stoppedLen && !found; i++) found = stoppedFds[i] == fd;
+    spinUnlock(&stopLock);
+    return found;
+}
+
+/* Cancels this thread's waits on the listeners stopped since it last
+   looked: the waiting tasks wake, and their accept fails. */
+static void checkStops(void) {
+    Sched *s = mySched;
+    if (!s || __atomic_load_n(&stopGen, __ATOMIC_ACQUIRE) == s->stopSeen) return;
+    int fds[64];
+    int n = 0;
+    spinLock(&stopLock);
+    s->stopSeen = stopGen;
+    for (int i = 0; i < stoppedLen && n < 64; i++) fds[n++] = stoppedFds[i];
+    spinUnlock(&stopLock);
+    for (int i = 0; i < n; i++) {
+        int fd = fds[i];
+#ifdef __linux__
+        if (ring.fd >= 0) {
+            /* IORING_OP_ASYNC_CANCEL of every operation on fd (5.19+);
+               its own result is skipped like a linked timeout's */
+            ringPush(14, fd, NULL, 0, (1u << 0) | (1u << 1), 1);
+            continue;
+        }
+#endif
+        if (fd < fdWaitsCap && fdWaits[fd].reader) {
+            makeReady(fdWaits[fd].reader);
+            fdWaits[fd].reader = NULL;
+            waitingIo--;
+        }
+    }
+}
+
+/* Listener.interrupt: accept on fd fails from now on, and the tasks that
+   wait in it, on any thread, wake up. */
+void iris_net_stop_listener(int fd) {
+    if (fd < 0) return;
+    (void)current;
+    spinLock(&stopLock);
+    bool there = false;
+    for (int i = 0; i < stoppedLen; i++) there = there || stoppedFds[i] == fd;
+    if (!there) {
+        if (stoppedLen == stoppedCap) {
+            stoppedCap = stoppedCap ? stoppedCap * 2 : 8;
+            stoppedFds = realloc(stoppedFds, (size_t)stoppedCap * sizeof *stoppedFds);
+            if (!stoppedFds) {
+                outOfMemory();
+            }
+        }
+        stoppedFds[stoppedLen] = fd;
+        __atomic_store_n(&stoppedLen, stoppedLen + 1, __ATOMIC_RELEASE);
+    }
+    __atomic_add_fetch(&stopGen, 1, __ATOMIC_ACQ_REL);
+    int n = schedsLen;
+    Sched **list = malloc((size_t)(n ? n : 1) * sizeof *list);
+    if (!list) {
+        outOfMemory();
+    }
+    memcpy(list, allScheds, (size_t)n * sizeof *list);
+    spinUnlock(&stopLock);
+    for (int i = 0; i < n; i++) {
+        if (list[i] == mySched) {
+            checkStops();
+            continue;
+        }
+        uint64_t one = 1;
+        ssize_t r = write(list[i]->wakeW, &one, list[i]->wakeW == list[i]->wakeR ? 8 : 1);
+        (void)r;
+    }
+    free(list);
+}
+
 void iris_net_close(int fd) {
     if (fd >= 0) {
+        if (__atomic_load_n(&stoppedLen, __ATOMIC_ACQUIRE)) {
+            /* the number may come back for another socket */
+            spinLock(&stopLock);
+            for (int i = 0; i < stoppedLen; i++) {
+                if (stoppedFds[i] == fd) {
+                    stoppedFds[i] = stoppedFds[--stoppedLen];
+                    break;
+                }
+            }
+            spinUnlock(&stopLock);
+        }
         fdForget(fd);
         close(fd);
     }

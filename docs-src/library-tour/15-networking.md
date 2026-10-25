@@ -396,7 +396,7 @@ print("{conn.serverName()} for {who}")
 
 ## Unix sockets and passing sockets on
 
-`listenUnix` and `dialUnix` work like `listen` and `dial`, on a path. Over a Unix socket, `sendFds` sends open file descriptors along with some bytes, and `readFds` receives them. `adoptListener` and `adoptConn` turn a descriptor from elsewhere into a `Listener` or a `Conn`. A server uses this to hand its listening sockets to its next version, so a restart drops no connection.
+`listenUnix` and `dialUnix` work like `listen` and `dial`, on a path. Over a Unix socket, `sendFds` sends open file descriptors along with some bytes, and `readFds` receives them. `adoptListener` and `adoptConn` turn a descriptor from elsewhere into a `Listener` or a `Conn`. A server uses this to hand its listening sockets to its next version, so a restart drops no connection. Once the new version accepts, the old one calls `interrupt` on its listeners: its accepts stop, while the socket stays open for the new version.
 
 ```iris run
 import fs, net, os

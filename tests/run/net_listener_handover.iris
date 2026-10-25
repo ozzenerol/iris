@@ -1,0 +1,63 @@
+// expect: old loop: 1 accepted, then NetError.closed
+// expect: after interrupt: NetError.closed
+// expect: the adopted copy accepts: true
+// expect: a new listener on the closed number accepts: true
+
+import net
+
+void oldLoop(net.Listener ln, chan[String] out) {
+    i64 n = 0
+    for {
+        c := ln.accept() catch e {
+            out <- format("old loop: {n} accepted, then {e.code}")
+            return
+        }
+        n += 1
+        c.close()
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    a, b := try net.socketPair()
+    try a.sendFds("listener", [ln.fd()])
+    u8[16] buf
+    i32[1] fds
+    _, _ = try b.readFds(buf, fds)
+    copy := try net.adoptListener(fds[0])
+
+    out := chan[String](1)
+    defer out.free()
+    t := thread oldLoop(ln, out)
+    first := try net.dial("127.0.0.1", ln.port)
+    first.close()
+    sleep(50ms)
+    ln.interrupt()
+    line := <-out
+    print(line)
+    line.free()
+    t.join()
+
+    _ = ln.accept() catch e {
+        print("after interrupt: {e.code}")
+        net.Conn{}
+    }
+
+    c := try net.dial("127.0.0.1", copy.port)
+    s := try copy.accept(1s)
+    print("the adopted copy accepts: {s.remoteAddr().port == c.localAddr().port}")
+    s.close()
+    c.close()
+
+    ln.close()
+    again := try net.listen(0, "127.0.0.1")
+    c2 := try net.dial("127.0.0.1", again.port)
+    s2 := try again.accept(1s)
+    print("a new listener on the closed number accepts: {s2.fd() > 0}")
+    s2.close()
+    c2.close()
+    again.close()
+    copy.close()
+    a.close()
+    b.close()
+}
