@@ -110,6 +110,7 @@ str reason(i32 code) => match code {
     4 => "no such host"
     5 => "address in use"
     7 => tlsMessage()
+    8 => "permission denied"
     _ => "network error"
 }
 
@@ -159,6 +160,9 @@ pub !Listener listen(u16 port, str host = "", bool shared = false) {
     i32 err
     fd := rawListen(host.ptr, host.len, i64(port), if shared { 1 } else { 0 }, &err)
     if fd < 0 {
+        if err == 8 && port < 1024 {
+            return error(netCode(err), "listening on port {port}: permission denied: a port below 1024 needs root or CAP_NET_BIND_SERVICE")
+        }
         return error(netCode(err), "listening on port {port}: {reason(err)}")
     }
     return Listener{sock: fd, port: u16(rawPort(fd))}

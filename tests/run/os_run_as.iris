@@ -1,0 +1,26 @@
+// expect: the same user again: true
+// expect: OsError.notFound: no-such-user-iris: no such user
+// expect: OsError.notFound: no-such-group-iris: no such group
+// expect: nobody: not root afterwards: true
+
+import os
+
+!void main() {
+    scoped String me = try os.user()
+    before := os.uid()
+    try os.runAs(me)
+    print("the same user again: {os.uid() == before}")
+    os.runAs("no-such-user-iris") catch e {
+        print("{e.code}: {e.message}")
+    }
+    os.runAs(me, "no-such-group-iris") catch e {
+        print("{e.code}: {e.message}")
+    }
+    // as root this changes user; anyone else may not
+    os.runAs("nobody") catch e {
+        if e.code != os.OsError.permission {
+            print("nobody: {e.message}")
+        }
+    }
+    print("nobody: not root afterwards: {os.uid() != 0}")
+}

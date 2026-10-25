@@ -2516,6 +2516,7 @@ void iris_fs_close(int fd) {
 
 /* ---------------------------------------------------------------- fs (0.66) */
 #include <pwd.h>
+#include <grp.h>
 
 /* Copies a file's bytes to another path, replaced if it is there, with the
    permissions of the first. 0, or a code. */
@@ -2604,6 +2605,60 @@ int iris_os_chdir(const char *path, int64_t n) {
     int code = chdir(p) == 0 ? 0 : fsCode(errno);
     free(p);
     return code;
+}
+
+/* Runs the program as user from now on, and as group, or the user's own
+   group when group is empty: the user's groups, then the group, then the
+   user, so root can't be taken back (and on Linux every capability goes).
+   0; 1 no such user, 2 no such group, 3 not allowed, 4 root could be
+   taken back, 5 another error. Already that user and group: 0. */
+int iris_os_run_as(const char *user, int64_t ulen, const char *group, int64_t glen) {
+    char *u = cpath(user, ulen);
+    if (!u) return 1;
+    char buf[16384];
+    struct passwd pw, *pwp = NULL;
+    if (getpwnam_r(u, &pw, buf, sizeof buf, &pwp) != 0 || !pwp) {
+        free(u);
+        return 1;
+    }
+    uid_t uid = pw.pw_uid;
+    gid_t gid = pw.pw_gid;
+    if (glen > 0) {
+        char *g = cpath(group, glen);
+        char gbuf[16384];
+        struct group gr, *grp = NULL;
+        int r = g ? getgrnam_r(g, &gr, gbuf, sizeof gbuf, &grp) : 1;
+        free(g);
+        if (r != 0 || !grp) {
+            free(u);
+            return 2;
+        }
+        gid = gr.gr_gid;
+    }
+    if (getuid() == uid && geteuid() == uid && getgid() == gid && getegid() == gid) {
+        free(u);
+        return 0;
+    }
+    int code = 0;
+    if (initgroups(u, (int)gid) != 0 || setgid(gid) != 0 || setuid(uid) != 0) {
+        code = errno == EPERM ? 3 : 5;
+    } else if (uid != 0 && setuid(0) == 0) {
+        code = 4;
+    }
+    free(u);
+    return code;
+}
+
+int64_t iris_os_uid(void) { return (int64_t)geteuid(); }
+int64_t iris_os_gid(void) { return (int64_t)getegid(); }
+
+/* The name of the user the program runs as: 0, or 1 when it has none. */
+int iris_os_user(IrisString *out) {
+    char buf[16384];
+    struct passwd pw, *pwp = NULL;
+    if (getpwuid_r(geteuid(), &pw, buf, sizeof buf, &pwp) != 0 || !pwp) return 1;
+    iris_string_append(out, pw.pw_name, (int64_t)strlen(pw.pw_name));
+    return 0;
 }
 
 int iris_os_hostname(IrisString *out) {
@@ -4462,6 +4517,7 @@ static int netCode(int e) {
     case ETIMEDOUT: return 3;
     case EADDRINUSE: return 5;
     case ENOENT: return 4;          /* a Unix socket's file */
+    case EACCES: case EPERM: return 8;
     default: return 6;
     }
 }

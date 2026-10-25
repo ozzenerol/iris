@@ -188,7 +188,7 @@ import net, os, process
     ln := try net.listen(0, "127.0.0.1")
     port := ln.port
     newer := try process.start([os.arg(0), "--next"], keep: [ln.fd()])
-    ln.close()      // the new version has its own copy of the socket
+    ln.close() // the new version has its own copy of the socket
 
     c := try net.dial("127.0.0.1", port)
     defer c.close()
@@ -199,6 +199,23 @@ import net, os, process
 ```
 
 Connections that wait to be accepted stay in the socket's queue while the versions change, so none is refused. `os.arg(0)` is the program's own path. `iris run` deletes the program it built once the program starts, so a program that starts itself has to be built.
+
+## Running as another user
+
+A server that listens on a port below 1024 starts as root, binds its ports, and then gives up root with `os.runAs(user)`. From then on every thread of the program runs as that user, in its groups and its own group, or in `group` when one is given. The program can't become root again, and on Linux it also loses every capability. The sockets it already has keep working.
+
+```iris
+import net, os
+
+!void main() {
+    ln := try net.listen(443)
+    try os.runAs("www-data")
+    print("serving as {os.uid()}")
+    // accept on ln as www-data
+}
+```
+
+Only root may change to another user: anyone else gets `OsError.permission`, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives `OsError.notFound`. `os.uid()` and `os.gid()` give the ids the program runs as, and `os.user()` the user's name.
 
 ## Input
 

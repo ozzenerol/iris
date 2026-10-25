@@ -120,6 +120,54 @@ pub !String hostname() {
 // The process id of the program.
 pub i64 pid() => i64(rawPid())
 
+@extern("iris_os_run_as")
+i32 rawRunAs(u8 *user, i64 ulen, u8 *group, i64 glen)
+
+@extern("iris_os_uid")
+i64 rawUid()
+
+@extern("iris_os_gid")
+i64 rawGid()
+
+@extern("iris_os_user")
+i32 rawUser(String *out)
+
+// Runs the program as user from now on, every thread of it, and as group,
+// or the user's own group when group is "". A server started as root does
+// this once it has bound its ports: it takes the user's groups, then the
+// group, then the user, and can't become root again; on Linux it loses
+// every capability too. Only root may change to another user, so the rest
+// fail with OsError.permission; asking for the user and group the program
+// already runs as does nothing. notFound for a user or group that doesn't
+// exist.
+pub !void runAs(str user, str group = "") {
+    code := rawRunAs(user.ptr, user.len, group.ptr, group.len)
+    match code {
+        0 => {}
+        1 => return error(OsError.notFound, "{user}: no such user")
+        2 => return error(OsError.notFound, "{group}: no such group")
+        3 => return error(OsError.permission, "running as {user}: only root may change user")
+        4 => return error(OsError.other, "running as {user}: root could still be taken back")
+        _ => return error(OsError.other, "running as {user}: the system refused")
+    }
+}
+
+// The user id the program runs as: 0 for root.
+pub i64 uid() => rawUid()
+
+// The group id the program runs as.
+pub i64 gid() => rawGid()
+
+// The name of the user the program runs as.
+pub !String user() {
+    String out
+    if rawUser(&out) != 0 {
+        out.free()
+        return error(OsError.notFound, "user {uid()} has no name")
+    }
+    return out
+}
+
 // The user's home folder: $HOME, or the one the system has for the user
 // when HOME isn't set.
 pub !String home() {

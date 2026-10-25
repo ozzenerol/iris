@@ -552,7 +552,7 @@ void relayHalf(Conn *to, Conn *from, i64 *active, Duration idle, RelayHalf *out,
 pub !(i64, i64) relay(Conn *a, Conn *b, Duration idle = 0s) {
     i64 active = rawClock()
     i64 *shared = if idle > 0s { &active } else { null }
-    done := chan[i64](2)  // room for both halves: this task sends before it takes
+    done := chan[i64](2) // room for both halves: this task sends before it takes
     defer done.free()
     RelayHalf back
     spawn relayHalf(a, b, shared, idle, &back, done)
