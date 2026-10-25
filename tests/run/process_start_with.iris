@@ -60,13 +60,13 @@ import os, process, pty, str
     defer t.close()
     try t.setFlag(.echo, false)
     try t.resize(30, 100)
-    f := try process.startWith(["sh", "-c", "[ -t 0 ] && echo tty yes; stty -a | grep -c -- -echo; stty size; sleep 5"], process.Options{terminal: t.terminalFd()})
+    f := try process.startWith(["sh", "-c", "[ -t 0 ] && echo tty yes; stty size; sleep 5"], process.Options{terminal: t.terminalFd()})
     t.closeTerminal()
     String got
     defer got.free()
     u8[] buf = alloc(u8, 256)
     defer free(buf)
-    for str.count(got, "\n") < 3 {
+    for str.count(got, "\n") < 2 {
         n := try t.read(buf)
         if n == 0 {
             break
@@ -75,7 +75,19 @@ import os, process, pty, str
     }
     lines := str.lines(str.trim(got))
     defer lines.free()
-    print("on a terminal: {str.trim(lines.at(0))}, echo off: {str.trim(lines.at(1)) == "1"}, size {str.trim(lines.at(2))}")
-    try t.write("\x03")
-    print("Ctrl-C ended it: {f.wait()}")
+    // echo is off: what is typed comes back as nothing (with echo on the
+    // pty would send it straight back). Ctrl-C then ends the shell.
+    try t.write("xyz\x03")
+    status := f.wait()
+    String rest
+    defer rest.free()
+    for {
+        n := try t.read(buf)
+        if n == 0 {
+            break
+        }
+        rest.append(buf[0:n])
+    }
+    print("on a terminal: {str.trim(lines.at(0))}, echo off: {!str.contains(rest, "xyz")}, size {str.trim(lines.at(1))}")
+    print("Ctrl-C ended it: {status}")
 }

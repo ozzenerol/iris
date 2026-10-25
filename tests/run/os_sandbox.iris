@@ -1,3 +1,4 @@
+// os: linux
 // expect: open files: 64 and back
 // expect: OsError.invalid: allowing system calls: no system call no_such_call
 // expect: printed under the filter

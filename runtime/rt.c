@@ -7939,6 +7939,7 @@ int iris_shadow_hash(const char *user, int64_t ulen, char *out, int64_t *len) {
 
 #include <sys/resource.h>
 
+extern int chroot(const char *);
 int iris_os_chroot(const char *path, int64_t len) {
     char *p = cpath(path, len);
     if (!p) return ENOENT;
