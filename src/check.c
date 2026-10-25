@@ -5762,7 +5762,8 @@ static void checkStmt(Checker *c, Node *s) {
         } else if (t->kind == TY_NULL) {
             error(c, s->b, "the type of null can't be worked out here; declare the pointer's type");
             t = &tyError;
-        } else if (t->kind == TY_TUPLE) {
+        } else if (t->kind == TY_TUPLE && s->b->kind == N_CALL) {
+            /* q := divmod(17, 5) is a mistake; v := items[i] of a List[(K, V)] isn't */
             error(c, s->b, "this gives %d values; unpack them into names: a, b := ...", t->nelems);
             t = &tyError;
         }

@@ -1,0 +1,34 @@
+// expect: 1 a
+// expect: 0 1 a
+// expect: 3 c
+// expect: 1 a 2
+// expect: 1 2
+// expect: 1 2
+// A List or Deque of tuples: pushed, unpacked in for, popped and removed.
+
+void main() {
+    List[(i64, str)] l
+    l.push((1, "a"))
+    for (n, s) in l {
+        print("{n} {s}")
+    }
+    for i, (n, s) in l.items() {
+        print("{i} {n} {s}")
+    }
+    l.push((2, "b"))
+    l.push((3, "c"))
+    n, s := l.pop()
+    print("{n} {s}")
+    l.insert(0, (0, "z"))
+    m, t := l.remove(1)
+    print("{m} {t} {l.len}")
+    Deque[(i64, i64)] d
+    d.push((1, 2))
+    for (a, b) in d {
+        print("{a} {b}")
+    }
+    x, y := d.popFront()
+    print("{x} {y}")
+    l.free()
+    d.free()
+}

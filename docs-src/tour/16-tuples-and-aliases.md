@@ -27,7 +27,7 @@ void main() {
 host db.lan, port 5432
 ```
 
-Unpack into new variables with `:=` or existing ones with `=`. `_` discards a value. A tuple can't be stored whole. Values that stay together belong in a struct.
+Unpack into new variables with `:=` or existing ones with `=`. `_` discards a value. The values of a call can't be stored under one name. Values that stay together belong in a struct. A `List` or `Deque` of tuples works, and `for (a, b) in list` unpacks each one.
 
 ```iris error
 pair := hostPort("db.lan:5432") // error: this gives 2 values; unpack them into names: a, b := ...
