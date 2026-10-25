@@ -1,5 +1,5 @@
 // expect: open files: 64 and back
-// expect: unknown: OsError.invalid: allowing system calls: no system call no_such_call
+// expect: OsError.invalid: allowing system calls: no system call no_such_call
 // expect: printed under the filter
 // expect: opening a file under the filter: FsError.permission
 // expect: chroot as a user: true
