@@ -1,0 +1,28 @@
+// expect: HTTP/1.1 308 Permanent Redirect
+// expect: HTTP/1.1 307 Temporary Redirect
+// expect: HTTP/1.1 304 Not Modified
+// expect: HTTP/1.1 502 Bad Gateway
+// expect: HTTP/1.1 299 Status
+
+import http, net, str
+
+void answer(http.Request *req, http.Response *res) {
+    res.status = i32(str.parseInt(req.route()[1:]) catch e { 500 })
+    res.text("")
+}
+
+void serve(net.Listener ln) {
+    http.serveOn(ln, answer) catch e { }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(ln)
+    for code in ["308", "307", "304", "502", "299"] {
+        c := try net.dial("127.0.0.1", ln.port)
+        defer c.close()
+        try c.write("GET /{code} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        scoped String line = try c.readLine()
+        print(line)
+    }
+}
