@@ -12659,49 +12659,197 @@ int iris_ed25519_verify(const unsigned char *pub, const char *msg, int64_t len, 
     return iris_const_equal((const char *)sig, 32, (const char *)t, 32);
 }
 
-/* X25519 key exchange (RFC 7748), with the field arithmetic of Ed25519
-   above. Gives 0 when the result is all zeros: the peer's key was one of
-   the few points that give away nothing secret. */
+/* X25519 key exchange (RFC 7748). Its field elements have five limbs of
+   51 bits, multiplied into 128-bit sums: many times faster than the 16
+   limbs of Ed25519 above. No branch or index depends on the secret. */
+typedef unsigned __int128 X128;
+typedef uint64_t F51[5];
+#define M51 0x7ffffffffffffULL
+
+static uint64_t x25519Le64(const unsigned char *p) {
+    uint64_t v;
+    memcpy(&v, p, 8);
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    v = __builtin_bswap64(v);
+#endif
+    return v;
+}
+
+static void f51Unpack(F51 r, const unsigned char *s) {
+    r[0] = x25519Le64(s) & M51;
+    r[1] = (x25519Le64(s + 6) >> 3) & M51;
+    r[2] = (x25519Le64(s + 12) >> 6) & M51;
+    r[3] = (x25519Le64(s + 19) >> 1) & M51;
+    r[4] = (x25519Le64(s + 24) >> 12) & M51;   /* the top bit is ignored */
+}
+
+/* the five 128-bit sums carried into limbs of 51 bits */
+static void f51Carry(F51 r, X128 t0, X128 t1, X128 t2, X128 t3, X128 t4) {
+    t1 += t0 >> 51;
+    t2 += t1 >> 51;
+    t3 += t2 >> 51;
+    t4 += t3 >> 51;
+    X128 r0 = ((uint64_t)t0 & M51) + (t4 >> 51) * 19;
+    r[1] = ((uint64_t)t1 & M51) + (uint64_t)(r0 >> 51);
+    r[0] = (uint64_t)r0 & M51;
+    r[2] = (uint64_t)t2 & M51;
+    r[3] = (uint64_t)t3 & M51;
+    r[4] = (uint64_t)t4 & M51;
+}
+
+static void f51Mul(F51 r, const F51 a, const F51 b) {
+    uint64_t a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4];
+    uint64_t b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3], b4 = b[4];
+    uint64_t b1_19 = b1 * 19, b2_19 = b2 * 19, b3_19 = b3 * 19, b4_19 = b4 * 19;
+    X128 t0 = (X128)a0 * b0 + (X128)a1 * b4_19 + (X128)a2 * b3_19 + (X128)a3 * b2_19 + (X128)a4 * b1_19;
+    X128 t1 = (X128)a0 * b1 + (X128)a1 * b0 + (X128)a2 * b4_19 + (X128)a3 * b3_19 + (X128)a4 * b2_19;
+    X128 t2 = (X128)a0 * b2 + (X128)a1 * b1 + (X128)a2 * b0 + (X128)a3 * b4_19 + (X128)a4 * b3_19;
+    X128 t3 = (X128)a0 * b3 + (X128)a1 * b2 + (X128)a2 * b1 + (X128)a3 * b0 + (X128)a4 * b4_19;
+    X128 t4 = (X128)a0 * b4 + (X128)a1 * b3 + (X128)a2 * b2 + (X128)a3 * b1 + (X128)a4 * b0;
+    f51Carry(r, t0, t1, t2, t3, t4);
+}
+
+static void f51Sq(F51 r, const F51 a) {
+    uint64_t a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4];
+    uint64_t d0 = a0 * 2, d1 = a1 * 2, d2_19 = a2 * 38, a3_19 = a3 * 19, a4_19 = a4 * 19, d4_19 = a4 * 38;
+    X128 t0 = (X128)a0 * a0 + (X128)d4_19 * a1 + (X128)d2_19 * a3;
+    X128 t1 = (X128)d0 * a1 + (X128)d4_19 * a2 + (X128)a3 * a3_19;
+    X128 t2 = (X128)d0 * a2 + (X128)a1 * a1 + (X128)d4_19 * a3;
+    X128 t3 = (X128)d0 * a3 + (X128)d1 * a2 + (X128)a4 * a4_19;
+    X128 t4 = (X128)d0 * a4 + (X128)d1 * a3 + (X128)a2 * a2;
+    f51Carry(r, t0, t1, t2, t3, t4);
+}
+
+static void f51SqN(F51 r, const F51 a, int n) {
+    f51Sq(r, a);
+    while (--n > 0) f51Sq(r, r);
+}
+
+static void f51MulSmall(F51 r, const F51 a, uint64_t k) {
+    f51Carry(r, (X128)a[0] * k, (X128)a[1] * k, (X128)a[2] * k, (X128)a[3] * k, (X128)a[4] * k);
+}
+
+static void f51Add(F51 r, const F51 a, const F51 b) {
+    for (int i = 0; i < 5; i++) r[i] = a[i] + b[i];
+}
+
+/* a - b, with 4p added so no limb goes below zero (b's limbs stay under 2^53) */
+static void f51Sub(F51 r, const F51 a, const F51 b) {
+    r[0] = a[0] + 0x1fffffffffffb4ULL - b[0];
+    for (int i = 1; i < 5; i++) r[i] = a[i] + 0x1ffffffffffffcULL - b[i];
+}
+
+static void f51Swap(F51 a, F51 b, uint64_t bit) {
+    uint64_t mask = 0 - bit;
+    for (int i = 0; i < 5; i++) {
+        uint64_t t = mask & (a[i] ^ b[i]);
+        a[i] ^= t;
+        b[i] ^= t;
+    }
+}
+
+/* z^(p - 2), which is 1/z */
+static void f51Invert(F51 r, const F51 z) {
+    F51 z2, z9, z11, z5, z10, z20, z50, z100, t;
+    f51Sq(z2, z);
+    f51SqN(t, z2, 2);
+    f51Mul(z9, t, z);
+    f51Mul(z11, z9, z2);
+    f51Sq(t, z11);
+    f51Mul(z5, t, z9);          /* 2^5 - 1 */
+    f51SqN(t, z5, 5);
+    f51Mul(z10, t, z5);         /* 2^10 - 1 */
+    f51SqN(t, z10, 10);
+    f51Mul(z20, t, z10);
+    f51SqN(t, z20, 20);
+    f51Mul(t, t, z20);          /* 2^40 - 1 */
+    f51SqN(t, t, 10);
+    f51Mul(z50, t, z10);
+    f51SqN(t, z50, 50);
+    f51Mul(z100, t, z50);
+    f51SqN(t, z100, 100);
+    f51Mul(t, t, z100);         /* 2^200 - 1 */
+    f51SqN(t, t, 50);
+    f51Mul(t, t, z50);          /* 2^250 - 1 */
+    f51SqN(t, t, 5);
+    f51Mul(r, t, z11);          /* 2^255 - 21 */
+}
+
+/* the one value below p, as 32 bytes */
+static void f51Pack(unsigned char *out, const F51 a) {
+    uint64_t t[5] = {a[0], a[1], a[2], a[3], a[4]};
+    for (int k = 0; k < 2; k++) {
+        for (int i = 0; i < 4; i++) {
+            t[i + 1] += t[i] >> 51;
+            t[i] &= M51;
+        }
+        t[0] += 19 * (t[4] >> 51);
+        t[4] &= M51;
+    }
+    /* t + 19 reaches 2^255 when t >= p: then that is the carry to take away */
+    t[0] += 19;
+    for (int i = 0; i < 4; i++) {
+        t[i + 1] += t[i] >> 51;
+        t[i] &= M51;
+    }
+    t[0] += 19 * (t[4] >> 51);
+    t[4] &= M51;
+    /* take the 19 back: add 2^255 - 19 and drop 2^255 */
+    t[0] += 0x8000000000000ULL - 19;
+    for (int i = 1; i < 5; i++) t[i] += 0x8000000000000ULL - 1;
+    for (int i = 0; i < 4; i++) {
+        t[i + 1] += t[i] >> 51;
+        t[i] &= M51;
+    }
+    t[4] &= M51;
+    uint64_t o[4] = {t[0] | t[1] << 51, t[1] >> 13 | t[2] << 38, t[2] >> 26 | t[3] << 25, t[3] >> 39 | t[4] << 12};
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 8; j++) out[8 * i + j] = (unsigned char)(o[i] >> (8 * j));
+    }
+}
+
+/* Gives 0 when the result is all zeros: the peer's key was one of the few
+   points that give away nothing secret. */
 int iris_x25519(const unsigned char *scalar, const unsigned char *point, unsigned char *out) {
-    static const Fe f121665 = {0xdb41, 1};
     unsigned char z[32];
     memcpy(z, scalar, 32);
     z[31] = (unsigned char)((z[31] & 127) | 64);
     z[0] &= 248;
-    Fe x, a, b, c, d, e, f;
-    feUnpack(x, point);
-    feCopy(b, x);
-    feCopy(a, fe1);
-    feCopy(c, fe0);
-    feCopy(d, fe1);
+    F51 x, a = {1}, b, c = {0}, d = {1}, e, f;
+    f51Unpack(x, point);
+    memcpy(b, x, sizeof b);
+    uint64_t swap = 0;
     for (int i = 254; i >= 0; i--) {
-        int r = (z[i >> 3] >> (i & 7)) & 1;
-        feSwap(a, b, r);
-        feSwap(c, d, r);
-        feAdd(e, a, c);
-        feSub(a, a, c);
-        feAdd(c, b, d);
-        feSub(b, b, d);
-        feMul(d, e, e);
-        feMul(f, a, a);
-        feMul(a, c, a);
-        feMul(c, b, e);
-        feAdd(e, a, c);
-        feSub(a, a, c);
-        feMul(b, a, a);
-        feSub(c, d, f);
-        feMul(a, c, f121665);
-        feAdd(a, a, d);
-        feMul(c, c, a);
-        feMul(a, d, f);
-        feMul(d, b, x);
-        feMul(b, e, e);
-        feSwap(a, b, r);
-        feSwap(c, d, r);
+        uint64_t bit = (z[i >> 3] >> (i & 7)) & 1;
+        swap ^= bit;
+        f51Swap(a, b, swap);
+        f51Swap(c, d, swap);
+        swap = bit;
+        f51Add(e, a, c);
+        f51Sub(a, a, c);
+        f51Add(c, b, d);
+        f51Sub(b, b, d);
+        f51Sq(d, e);
+        f51Sq(f, a);
+        f51Mul(a, c, a);
+        f51Mul(c, b, e);
+        f51Add(e, a, c);
+        f51Sub(a, a, c);
+        f51Sq(b, a);
+        f51Sub(c, d, f);
+        f51MulSmall(a, c, 121665);
+        f51Add(a, a, d);
+        f51Mul(c, c, a);
+        f51Mul(a, d, f);
+        f51Mul(d, b, x);
+        f51Sq(b, e);
     }
-    feInvert(c, c);
-    feMul(a, a, c);
-    fePack(out, a);
+    f51Swap(a, b, swap);
+    f51Swap(c, d, swap);
+    f51Invert(c, c);
+    f51Mul(a, a, c);
+    f51Pack(out, a);
+    iris_wipe(z, sizeof z);
     unsigned char any = 0;
     for (int i = 0; i < 32; i++) any |= out[i];
     return any != 0;

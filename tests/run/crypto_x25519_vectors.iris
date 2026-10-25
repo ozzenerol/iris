@@ -1,0 +1,41 @@
+// expect: c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552
+// expect: 95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957
+// expect: 04db3dbc57e3b24de8a6da891e9d602c3722ac824afb7a2e374a10572bb75a15
+// expect: 1cd1762312485af1f70b795e7766bfc6bfacc90f490eb77abe05de9966bbed05
+// expect: 1: 422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079
+// expect: 1000: 684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51
+// X25519 against RFC 7748 (5.2), a u at or above p, a u with the top bit
+// set, and the iterated vector of 5.2 (its 10^6 round passes too, slowly).
+import crypto, hex
+
+!void one(str k, str u) {
+    scoped String kb = try hex.decode(k)
+    scoped String ub = try hex.decode(u)
+    r := try crypto.x25519(kb, ub)
+    scoped String h = hex.encode(r[:])
+    print(h)
+}
+
+!void main() {
+    try one("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+        "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+    try one("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+        "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493")
+    try one("a4f0a7e62ff406681a6afb397b6c564fca505d33987ebd64640c255e89cb856b",
+        "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+    try one("d755b20c4a52a35190154eadaf4abf12d64f66b25858fbc8a5c0a31d514d3fe6",
+        "791a8137092d476741003e2c466dd4c2bb7d9cb6d4f05ac8038e707820578cc0")
+    u8[32] k
+    k[0] = 9
+    u8[32] u
+    u[0] = 9
+    for i in 1..1001 {
+        r := try crypto.x25519(k[:], u[:])
+        u = k
+        k = r
+        if i == 1 || i == 1000 {
+            scoped String h = hex.encode(k[:])
+            print("{i}: {h}")
+        }
+    }
+}
