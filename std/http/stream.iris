@@ -1,8 +1,9 @@
 // Requests whose bodies go a part at a time: an upload written as it is
 // made, and a reply read as it comes, such as a large download or
-// server-sent events. They go over HTTP/1.1.
+// server-sent events. They go over HTTP/2 when the Client has or makes an
+// HTTP/2 connection to the host, and over HTTP/1.1 otherwise.
 
-import net, str
+import net, str, time
 
 // A request whose body is being written: write sends each part, and
 // finish ends the body and gives the reply.
@@ -14,6 +15,13 @@ pub struct Upload {
     i64 left
     bool reused
     String trailers // "Name: value\r\n" lines sent after the body
+    // over HTTP/2: the stream, what the writer still has to send of it,
+    // and where its reply comes
+    H2Conn *h2
+    i64 stream
+    StreamOut *sink
+    chan[H2Result] done
+    BodyIn *piped
 }
 
 // A reply whose body is read as it comes: status and the headers are
@@ -32,6 +40,9 @@ pub struct ReplyStream {
     bool reusable
     bool given         // the connection went back to the Client
     String trailerText // the trailer lines after the body, "Name: value\n"
+    H2Conn *h2         // over HTTP/2: the body comes in piped
+    i64 stream
+    BodyIn *piped
 }
 
 // The value of a header of the reply, "" when it has none.
@@ -62,9 +73,31 @@ pub !Upload Client.begin(str method, str url, str contentType = "", str[] header
     u.client = self
     u.url = url.copy()
     errdefer u.url.free()
-    u.reused = self.take(&d, &u.conn)
-    if !u.reused {
-        u.conn = try dialDest(&d, self.wait(), ca: self.ca, connect: self.connectTimeout)
+    for attempt in 0..3 {
+        H2Conn *h = self.h2For(&d)
+        net.Conn fresh
+        if h == null && !self.hasIdle(&d) {
+            fresh = try self.dialFor(&d, &h)
+            if h == null {
+                u.conn = fresh
+                break
+            }
+        }
+        if h == null {
+            u.reused = self.take(&d, &u.conn)
+            if !u.reused {
+                u.conn = try dialDest(&d, self.wait(), ca: self.ca, connect: self.connectTimeout)
+            }
+            break
+        }
+        bool retry
+        h.beginUpload(&u, method, &d, contentType, headers, length, &retry) catch e {
+            if retry && attempt < 2 {
+                continue
+            }
+            return e
+        }
+        return u
     }
     String all
     defer all.free()
@@ -113,6 +146,24 @@ pub !void Upload.write(str data) {
     if data.len == 0 {
         return
     }
+    if self.h2 != null {
+        if self.left >= 0 && data.len > self.left {
+            return error(HttpError.badRequest, "the body is longer than its Content-Length")
+        }
+        // at most 1 MiB waits for a slow server
+        for self.sink.queued.load() > 1MiB && self.sink.gone.load() == 0 {
+            sleep(1ms)
+        }
+        if self.sink.gone.load() != 0 {
+            return error(net.NetError.closed, "the server reset the stream")
+        }
+        if self.left >= 0 {
+            self.left -= data.len
+        }
+        self.sink.queued.add(data.len)
+        self.h2.jobs.put(Out{job: .chunk, stream: self.stream, data: data.copy(), sink: self.sink})
+        return
+    }
     if self.chunked {
         scoped String size = format("{data.len:x}\r\n")
         try self.conn.write(size)
@@ -127,8 +178,8 @@ pub !void Upload.write(str data) {
     try self.conn.write(data)
 }
 
-// Adds a trailer, a header sent after the body. It takes a body sent in
-// chunks (begin with length -1).
+// Adds a trailer, a header sent after the body. Over HTTP/1.1 it takes a
+// body sent in chunks (begin with length -1).
 pub void Upload.trailer(str name, str value) {
     self.trailers.append(name)
     self.trailers.append(": ")
@@ -139,6 +190,9 @@ pub void Upload.trailer(str name, str value) {
 // Ends the body and waits for the reply's status and headers; the body
 // is read from the ReplyStream.
 pub !ReplyStream Upload.finish() {
+    if self.h2 != null {
+        return try self.finishH2()
+    }
     defer self.trailers.free()
     errdefer {
         self.conn.close()
@@ -223,8 +277,7 @@ pub !ReplyStream Client.stream(str method, str url, str body = "", str contentTy
     u := try self.begin(method, url, contentType, headers,
         if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" { body.len } else { -1 })
     u.write(body) catch e {
-        u.conn.close()
-        u.url.free()
+        u.abandon()
         return e
     }
     return try u.finish()
@@ -234,6 +287,13 @@ pub !ReplyStream Client.stream(str method, str url, str body = "", str contentTy
 pub !i64 ReplyStream.read(u8[] buf) {
     if self.done || buf.len == 0 {
         return 0
+    }
+    if self.h2 != null {
+        n := try self.piped.read(buf, &self.trailerText)
+        if n == 0 {
+            self.done = true
+        }
+        return n
     }
     if self.mode == 1 && self.left == 0 {
         scoped String sizeLine = try self.conn.readLine()
@@ -305,11 +365,93 @@ void ReplyStream.finished() {
 // Ends the reply: the connection goes back to the Client when the whole
 // body was read, and closes otherwise.
 pub void ReplyStream.close() {
-    if !self.given {
+    if self.h2 != null {
+        if !self.done {
+            self.h2.cancel(self.stream)
+        }
+        self.piped.release()
+    } else if !self.given {
         self.conn.close()
     }
     self.names.freeEach()
     self.values.freeEach()
     self.url.free()
     self.trailerText.free()
+}
+
+// Opens the stream of an Upload over HTTP/2.
+!void H2Conn.beginUpload(Upload *u, str method, Dest *d, str contentType, str[] headers, i64 length,
+    bool *retry) {
+        *retry = false
+        String block
+        defer block.free()
+        self.requestBlock(&block, method, d, headers, contentType, length, true)
+        StreamOut[] mem = alloc(StreamOut, 1)
+        sink := &mem[0]
+        sink.jobs = self.jobs
+        done := chan[H2Result](1)
+        piped := newBodyIn(self.jobs, 0)
+        id := self.open(block, H2Pending{done: done, piped: piped}, "", sink, u.client.wait(), retry) catch e {
+            free(mem)
+            piped.release()
+            piped.release()
+            return e
+        }
+        piped.stream = id
+        u.h2 = self
+        u.stream = id
+        u.sink = sink
+        u.done = done
+        u.piped = piped
+        u.left = length
+    }
+
+// Gives up on an Upload that won't be finished.
+void Upload.abandon() {
+    self.trailers.free()
+    self.url.free()
+    if self.h2 == null {
+        self.conn.close()
+        return
+    }
+    self.h2.cancel(self.stream)
+    // the writer frees the sink
+    self.h2.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink})
+    self.piped.release()
+}
+
+!ReplyStream Upload.finishH2() {
+    if self.left > 0 {
+        n := self.left
+        self.abandon()
+        return error(HttpError.badRequest, "{n} bytes of the body are missing")
+    }
+    h := self.h2
+    // the writer has the trailers and the sink now
+    h.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink, trailers: self.trailers})
+    String none
+    self.trailers = none
+    defer self.url.free()
+    r := h.wait(self.stream, self.done, self.client.wait()) catch e {
+        self.piped.release()
+        return e
+    }
+    if !r.ok {
+        defer r.why.free()
+        // the reader dropped the stream with its body
+        self.piped.release()
+        self.piped.release()
+        return error(net.NetError.closed, "{r.why}")
+    }
+    ReplyStream out
+    out.status = r.reply.status
+    out.names = r.reply.names
+    out.values = r.reply.values
+    r.reply.body.free()
+    r.reply.trailerText.free()
+    out.h2 = h
+    out.stream = self.stream
+    out.piped = self.piped
+    out.url = self.url.copy()
+    return out
 }

@@ -482,7 +482,7 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
 <p>Each of them takes <code>headers</code>, the request's own as <code>&quot;Name: value&quot;</code>, such as an <code>Authorization</code>, a <code>Range</code> for part of a file, or a <code>User-Agent</code> in place of iris's: <code>c.get(url, [&quot;Range: bytes=0-1023&quot;])</code>. A header with a line break in it is an error, so a value from outside can't add headers of its own.</p>
 <p>A <code>Reply</code>'s <code>headers()</code> lists every header of the answer. A proxy passes requests on with a <code>Client</code> whose <code>raw</code> is true: the client adds no <code>Accept-Encoding</code> of its own and leaves a gzip body as it came, and a <code>Host</code> among the request's headers goes to the server in place of the one from the URL.</p>
 <h2 id="bodies-a-part-at-a-time"><a href="#bodies-a-part-at-a-time">Bodies a part at a time</a></h2>
-<p><code>c.stream(method, url)</code> gives a <code>ReplyStream</code> as soon as the status and headers have come. <code>read(buf)</code> gives the body a part at a time, so a large download goes to a file without being held whole, and <code>readAll()</code> the rest of it. <code>close()</code> gives the connection back to the <code>Client</code> once the whole body was read. <code>c.begin(method, url, contentType)</code> is the other way round: an <code>Upload</code> to write the body to, a part at a time, sent in chunks unless <code>length</code> gives its size, and <code>finish()</code> gives the reply as a <code>ReplyStream</code>. Both go over HTTP/1.1.</p>
+<p><code>c.stream(method, url)</code> gives a <code>ReplyStream</code> as soon as the status and headers have come. <code>read(buf)</code> gives the body a part at a time, so a large download goes to a file without being held whole, and <code>readAll()</code> the rest of it. <code>close()</code> gives the connection back to the <code>Client</code> once the whole body was read. <code>c.begin(method, url, contentType)</code> is the other way round: an <code>Upload</code> to write the body to, a part at a time, sent in chunks unless <code>length</code> gives its size, and <code>finish()</code> gives the reply as a <code>ReplyStream</code>. Both go over HTTP/2 when the <code>Client</code> has or makes an HTTP/2 connection to the host, and over HTTP/1.1 otherwise. Closing a <code>ReplyStream</code> before the end of its body resets the HTTP/2 stream, and the connection goes on.</p>
 <p>A handler streams its answer with <code>res.write(data)</code>: the status and headers go with the first part, each part goes out at once, chunked on HTTP/1.1 and as DATA frames on HTTP/2, and the body ends when the handler returns. A client that reads slowly makes <code>write</code> wait, and once it has gone <code>write</code> fails, which is when the handler stops. <code>res.event(data, event, id)</code> sends a server-sent event, which a browser's <code>EventSource</code> gets as one message.</p>
 <pre class="code run"><code><span class="k">import</span> http, net, <span class="t">str</span>
 
@@ -533,6 +533,97 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
 data: tick 1
 data: tick 2
 data: tick 3</code></pre>
+<p>A route added with <code>r.stream(pattern, handler)</code> gets the request before its body has come. <code>req.read(buf)</code> gives the body a part at a time, as <code>ReplyStream.read</code> does, and <code>req.readAll(limit)</code> the rest of it. Other routes get the body whole, up to <code>maxBody</code>, and <code>read</code> and <code>readAll</code> work on them too. A streamed route has no <code>maxBody</code> limit, and what the handler leaves unread is read and dropped after it returns.</p>
+<p>Trailers are headers sent after the body, such as gRPC's <code>grpc-status</code>. <code>res.trailer(name, value)</code> adds one to an answer, which then goes in chunks on HTTP/1.1. <code>req.trailer(name)</code> reads one once the body has been read, and <code>req.trailers()</code> gives them all. On the client side <code>Upload.trailer(name, value)</code> sends one, and <code>Reply.trailer(name)</code> and <code>ReplyStream.trailer(name)</code> read them; a <code>ReplyStream</code> has them once <code>read</code> has given 0.</p>
+<p>A proxy puts these together. It passes the body each way as it comes, and the trailers after it:</p>
+<pre class="code run"><code><span class="k">import</span> http, net, <span class="t">str</span>
+
+!<span class="t">void</span> <span class="f">echo</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    res.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>, req.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>))
+    <span class="t">u8</span>[<span class="n">4096</span>] buf
+    <span class="k">for</span> {
+        n := <span class="k">try</span> req.<span class="f">read</span>(buf[:])
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">try</span> res.<span class="f">write</span>(buf[<span class="n">0</span>:n])
+    }
+    res.<span class="f">trailer</span>(<span class="s">&quot;grpc-status&quot;</span>, <span class="s">&quot;0&quot;</span>)
+}
+
+http.<span class="t">Client</span> up
+<span class="t">String</span> upstream
+
+!<span class="t">void</span> <span class="f">proxy</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;</span><span class="e">{</span>upstream<span class="e">}</span><span class="e">{</span>req.path<span class="e">}</span><span class="s">&quot;</span>)
+    u := <span class="k">try</span> up.<span class="f">begin</span>(req.method, url, req.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>))
+    <span class="t">u8</span>[<span class="n">4096</span>] buf
+    <span class="k">for</span> {
+        n := <span class="k">try</span> req.<span class="f">read</span>(buf[:])
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">try</span> u.<span class="f">write</span>(buf[<span class="n">0</span>:n])
+    }
+    <span class="k">for</span> t <span class="k">in</span> req.<span class="f">trailers</span>() {
+        u.<span class="f">trailer</span>(t.name, t.value)
+    }
+    reply := <span class="k">try</span> u.<span class="f">finish</span>()
+    <span class="k">defer</span> reply.<span class="f">close</span>()
+    res.status = reply.status
+    res.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>, reply.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>))
+    <span class="k">for</span> {
+        n := <span class="k">try</span> reply.<span class="f">read</span>(buf[:])
+        <span class="k">if</span> n == <span class="n">0</span> {
+            <span class="k">break</span>
+        }
+        <span class="k">try</span> res.<span class="f">write</span>(buf[<span class="n">0</span>:n])
+    }
+    <span class="k">for</span> t <span class="k">in</span> reply.<span class="f">trailers</span>() {
+        res.<span class="f">trailer</span>(t.name, t.value)
+    }
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, net.<span class="t">Listener</span> ln) {
+    r.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> back
+    <span class="k">defer</span> back.<span class="f">free</span>()
+    back.<span class="f">stream</span>(<span class="s">&quot;POST /echo&quot;</span>, echo)
+    backLn := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;back, backLn)
+    upstream = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>backLn.port<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">defer</span> upstream.<span class="f">free</span>()
+    up.priorKnowledge = <span class="k">true</span> <span class="c">// HTTP/2 without TLS</span>
+    <span class="k">defer</span> up.<span class="f">close</span>()
+
+    http.<span class="t">Router</span> front
+    <span class="k">defer</span> front.<span class="f">free</span>()
+    front.<span class="f">stream</span>(<span class="s">&quot;POST /echo&quot;</span>, proxy)
+    frontLn := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;front, frontLn)
+
+    http.<span class="t">Client</span> c
+    c.priorKnowledge = <span class="k">true</span>
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;http://127.0.0.1:</span><span class="e">{</span>frontLn.port<span class="e">}</span><span class="s">/echo&quot;</span>)
+    u := <span class="k">try</span> c.<span class="f">begin</span>(<span class="s">&quot;POST&quot;</span>, url, <span class="s">&quot;application/grpc&quot;</span>)
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        <span class="k">scoped</span> <span class="t">String</span> part = <span class="f">format</span>(<span class="s">&quot;part </span><span class="e">{</span>i<span class="e">}</span><span class="s"> &quot;</span>)
+        <span class="k">try</span> u.<span class="f">write</span>(part)
+    }
+    reply := <span class="k">try</span> u.<span class="f">finish</span>()
+    <span class="k">defer</span> reply.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> body = <span class="k">try</span> reply.<span class="f">readAll</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reply.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>reply.<span class="f">header</span>(<span class="s">&quot;Content-Type&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(body)
+    <span class="f">print</span>(<span class="s">&quot;grpc-status: </span><span class="e">{</span>reply.<span class="f">trailer</span>(<span class="s">&quot;grpc-status&quot;</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>200 application/grpc
+part 0 part 1 part 2 
+grpc-status: 0</code></pre>
 <h2 id="https"><a href="#https">HTTPS</a></h2>
 <p><code>r.serveTls(8443, &quot;cert.pem&quot;, &quot;key.pem&quot;)</code> serves HTTPS with a certificate and its key in PEM files. Clients that offer HTTP/2 get it and the others get HTTP/1.1. The client does HTTPS for <code>https://</code> addresses and checks the server's certificate against the ones the system trusts. A <code>Client</code>'s <code>ca</code> field names a file of certificates to trust instead, for a server with a self-made certificate. TLS comes from OpenSSL, loaded the first time a program uses it.</p>
 <p>The library page for <a href="../std/index.html#http">http</a> lists everything, including WebSockets.</p>

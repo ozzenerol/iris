@@ -583,7 +583,7 @@ A `Reply`'s `headers()` lists every header of the answer. A proxy passes request
 
 ## Bodies a part at a time
 
-`c.stream(method, url)` gives a `ReplyStream` as soon as the status and headers have come. `read(buf)` gives the body a part at a time, so a large download goes to a file without being held whole, and `readAll()` the rest of it. `close()` gives the connection back to the `Client` once the whole body was read. `c.begin(method, url, contentType)` is the other way round: an `Upload` to write the body to, a part at a time, sent in chunks unless `length` gives its size, and `finish()` gives the reply as a `ReplyStream`. Both go over HTTP/1.1.
+`c.stream(method, url)` gives a `ReplyStream` as soon as the status and headers have come. `read(buf)` gives the body a part at a time, so a large download goes to a file without being held whole, and `readAll()` the rest of it. `close()` gives the connection back to the `Client` once the whole body was read. `c.begin(method, url, contentType)` is the other way round: an `Upload` to write the body to, a part at a time, sent in chunks unless `length` gives its size, and `finish()` gives the reply as a `ReplyStream`. Both go over HTTP/2 when the `Client` has or makes an HTTP/2 connection to the host, and over HTTP/1.1 otherwise. Closing a `ReplyStream` before the end of its body resets the HTTP/2 stream, and the connection goes on.
 
 A handler streams its answer with `res.write(data)`: the status and headers go with the first part, each part goes out at once, chunked on HTTP/1.1 and as DATA frames on HTTP/2, and the body ends when the handler returns. A client that reads slowly makes `write` wait, and once it has gone `write` fails, which is when the handler stops. `res.event(data, event, id)` sends a server-sent event, which a browser's `EventSource` gets as one message.
 
@@ -640,6 +640,106 @@ void serve(http.Router *r, net.Listener ln) {
 data: tick 1
 data: tick 2
 data: tick 3
+```
+
+A route added with `r.stream(pattern, handler)` gets the request before its body has come. `req.read(buf)` gives the body a part at a time, as `ReplyStream.read` does, and `req.readAll(limit)` the rest of it. Other routes get the body whole, up to `maxBody`, and `read` and `readAll` work on them too. A streamed route has no `maxBody` limit, and what the handler leaves unread is read and dropped after it returns.
+
+Trailers are headers sent after the body, such as gRPC's `grpc-status`. `res.trailer(name, value)` adds one to an answer, which then goes in chunks on HTTP/1.1. `req.trailer(name)` reads one once the body has been read, and `req.trailers()` gives them all. On the client side `Upload.trailer(name, value)` sends one, and `Reply.trailer(name)` and `ReplyStream.trailer(name)` read them; a `ReplyStream` has them once `read` has given 0.
+
+A proxy puts these together. It passes the body each way as it comes, and the trailers after it:
+
+```iris run
+import http, net, str
+
+!void echo(http.Request *req, http.Response *res) {
+    res.header("Content-Type", req.header("Content-Type"))
+    u8[4096] buf
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try res.write(buf[0:n])
+    }
+    res.trailer("grpc-status", "0")
+}
+
+http.Client up
+String upstream
+
+!void proxy(http.Request *req, http.Response *res) {
+    scoped String url = format("{upstream}{req.path}")
+    u := try up.begin(req.method, url, req.header("Content-Type"))
+    u8[4096] buf
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try u.write(buf[0:n])
+    }
+    for t in req.trailers() {
+        u.trailer(t.name, t.value)
+    }
+    reply := try u.finish()
+    defer reply.close()
+    res.status = reply.status
+    res.header("Content-Type", reply.header("Content-Type"))
+    for {
+        n := try reply.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try res.write(buf[0:n])
+    }
+    for t in reply.trailers() {
+        res.trailer(t.name, t.value)
+    }
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    http.Router back
+    defer back.free()
+    back.stream("POST /echo", echo)
+    backLn := try net.listen(0, "127.0.0.1")
+    spawn serve(&back, backLn)
+    upstream = format("http://127.0.0.1:{backLn.port}")
+    defer upstream.free()
+    up.priorKnowledge = true // HTTP/2 without TLS
+    defer up.close()
+
+    http.Router front
+    defer front.free()
+    front.stream("POST /echo", proxy)
+    frontLn := try net.listen(0, "127.0.0.1")
+    spawn serve(&front, frontLn)
+
+    http.Client c
+    c.priorKnowledge = true
+    defer c.close()
+    scoped String url = format("http://127.0.0.1:{frontLn.port}/echo")
+    u := try c.begin("POST", url, "application/grpc")
+    for i in 0..3 {
+        scoped String part = format("part {i} ")
+        try u.write(part)
+    }
+    reply := try u.finish()
+    defer reply.close()
+    scoped String body = try reply.readAll()
+    print("{reply.status} {reply.header("Content-Type")}")
+    print(body)
+    print("grpc-status: {reply.trailer("grpc-status")}")
+}
+```
+
+```output
+200 application/grpc
+part 0 part 1 part 2 
+grpc-status: 0
 ```
 
 ## HTTPS

@@ -235,7 +235,7 @@ void BodyIn.release() {
 // ------------------------------------------------------------ the writer
 
 // What the writer is asked to do.
-enum Job { frame, reply, body, window, settings, reset, open, close, head, chunk, end }
+enum Job { frame, reply, body, window, settings, reset, open, close, head, chunk, end, upload }
 
 // A streamed answer's state, which its handler and the writer share: the
 // bytes queued and not yet sent, and whether the client reset the stream.
@@ -558,6 +558,15 @@ void Writer.handle(Out o) {
         .head => self.reply(&o),
         .chunk => self.chunk(&o),
         .end => self.end(&o),
+        .upload => {
+            // a client's request body written as it goes: chunk adds to
+            // it and end ends it, as for a streamed answer
+            extra, _ := self.early.get(o.stream)
+            _ = self.early.remove(o.stream)
+            self.active += 1
+            *self.inFlight += 1
+            self.sending.push(Sending{stream: o.stream, window: self.initial + extra, open: true, sink: o.sink})
+        },
         .body => {
             // a client's request body, sent as the windows allow
             extra, _ := self.early.get(o.stream)
@@ -637,6 +646,10 @@ void Writer.handle(Out o) {
                     self.finished()
                     return
                 }
+            }
+            if o.n == 1 {
+                // the peer reset it: nothing to send back
+                return
             }
             self.reset.push(o.stream)
         },

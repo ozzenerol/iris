@@ -18,6 +18,8 @@ struct H2Pending {
     chan[H2Result] done
     Reply reply
     bool started
+    // a reply read as it comes: done gets its head, and the body goes here
+    BodyIn *piped
 }
 
 struct H2Conn {
@@ -53,10 +55,58 @@ void H2Conn.deliver(i64 stream, H2Result r) {
     p.done <- r
 }
 
+// A streamed reply's DATA, or its trailers when data is false, goes to
+// the one reading it; end ends it. Under the lock, so close can't free the
+// body meanwhile.
+void H2Conn.pipe(i64 stream, str bytes, bool data, bool end) {
+    self.lock.lock()
+    defer self.lock.unlock()
+    pend, found := self.streams.get(stream)
+    if !found || pend.piped == null {
+        return
+    }
+    if data {
+        pend.piped.add(bytes)
+    }
+    if end {
+        pend.piped.end("" if data else bytes)
+        _ = self.streams.remove(stream)
+        pend.piped.release()
+        return
+    }
+    self.streams.set(stream, pend)
+}
+
+// Fails a streamed reply whose head went already. True when it was one.
+bool H2Conn.failPiped(i64 stream) {
+    self.lock.lock()
+    defer self.lock.unlock()
+    pend, found := self.streams.get(stream)
+    if !found || pend.piped == null || !pend.started {
+        return false
+    }
+    _ = self.streams.remove(stream)
+    pend.reply.free()
+    pend.piped.fail()
+    pend.piped.release()
+    return true
+}
+
 // Fails every request still waiting.
 void H2Conn.failAll(str why) {
     self.lock.lock()
     self.dead = true
+    scoped List[i64] streamed
+    for id, pend in self.streams {
+        if pend.piped != null && pend.started {
+            streamed.push(id)
+        }
+    }
+    self.lock.unlock()
+    for id in streamed {
+        _ = self.failPiped(id)
+    }
+    self.lock.lock()
     scoped List[i64] ids = self.streams.keys()
     self.lock.unlock()
     for id in ids {
@@ -76,13 +126,15 @@ void h2Reader(H2Conn *h) {
         }
         defer f.free()
         str p = f.payload
+        scoped String trailers
         if f.kind == F_HEADERS || f.kind == F_DATA {
             h.lock.lock()
             pend, found := h.streams.get(f.stream)
             h.lock.unlock()
             if f.kind == F_DATA && p.len > 0 {
                 h.jobs.put(Out{job: .frame, data: windowFrame(0, p.len)})
-                if found && f.flags & END_STREAM == 0 {
+                // a body read as it comes gets its window back as it is read
+                if found && f.flags & END_STREAM == 0 && pend.piped == null {
                     h.jobs.put(Out{job: .frame, data: windowFrame(f.stream, p.len)})
                 }
             }
@@ -153,23 +205,41 @@ void h2Reader(H2Conn *h) {
                         pend.reply.names.push(names.at(i).copy())
                         pend.reply.values.push(values.at(i).copy())
                     }
+                    if pend.piped != null {
+                        // the head goes now, the body as it comes
+                        Reply head = pend.reply
+                        pend.reply = Reply{}
+                        h.lock.lock()
+                        h.streams.set(f.stream, pend)
+                        h.lock.unlock()
+                        pend.done <- H2Result{reply: head, ok: true}
+                    }
                 } else {
                     // a block after the body's: the trailers
+                    String *into = &pend.reply.trailerText
+                    if pend.piped != null {
+                        into = &trailers
+                    }
                     for i in 0..names.len {
                         if names.at(i).len > 0 && names.at(i)[0] != ':' {
-                            pend.reply.trailerText.append(names.at(i))
-                            pend.reply.trailerText.append(": ")
-                            pend.reply.trailerText.append(values.at(i))
-                            pend.reply.trailerText.append("\n")
+                            into.append(names.at(i))
+                            into.append(": ")
+                            into.append(values.at(i))
+                            into.append("\n")
                         }
                     }
                 }
                 names.freeEach()
                 values.freeEach()
-            } else if found {
+            } else if found && pend.piped == null {
                 pend.reply.body.append(p[at:p.len - pad])
             }
             if !found {
+                continue
+            }
+            if pend.piped != null && pend.started {
+                str data = p[at:p.len - pad] if f.kind == F_DATA else trailers
+                h.pipe(f.stream, data, f.kind == F_DATA, f.flags & END_STREAM != 0)
                 continue
             }
             if f.flags & END_STREAM != 0 {
@@ -181,6 +251,11 @@ void h2Reader(H2Conn *h) {
             }
         } else if f.kind == F_RST && p.len == 4 {
             code := get32(p, 0)
+            // an upload still being written stops; nothing is sent back
+            h.jobs.put(Out{job: .reset, stream: f.stream, n: 1})
+            if h.failPiped(f.stream) {
+                continue
+            }
             h.deliver(f.stream, H2Result{retry: code == E_REFUSED, why: format("the server reset the request (error {code})")})
         } else if f.kind == F_SETTINGS && f.flags & ACK == 0 && p.len % 6 == 0 {
             for i in 0..p.len / 6 {
@@ -258,110 +333,160 @@ H2Conn *startH2(net.Conn c, Dest *d) {
 }
 
 // Sends a request on the connection and waits for its reply.
+// A request's header block. length is the body's size, -1 when it has
+// no content-length.
+void H2Conn.requestBlock(String *block, str method, Dest *d, str[] headers, str contentType, i64 length, bool raw) {
+    encodeHeader(block, ":method", method)
+    encodeHeader(block, ":scheme", if self.secure { "https" } else { "http" })
+    authority := self.authority[:]
+    for line in headers {
+        name, value, _ := str.cut(line, ":")
+        if sameName(str.trim(name), "host") {
+            authority = str.trim(value)
+        }
+    }
+    encodeHeader(block, ":authority", authority)
+    encodeHeader(block, ":path", d.path)
+    if !hasHeader(headers, "user-agent") {
+        encodeHeader(block, "user-agent", "iris")
+    }
+    if !raw && !hasHeader(headers, "accept-encoding") {
+        encodeHeader(block, "accept-encoding", "gzip")
+    }
+    for line in headers {
+        name, value, _ := str.cut(line, ":")
+        scoped String lower = str.lower(str.trim(name))
+        // HTTP/2 has no connection headers, and :authority stands for Host
+        if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" || lower == "upgrade" ||
+            lower == "host" {
+                continue
+            }
+        encodeHeader(block, lower, str.trim(value))
+    }
+    if contentType.len > 0 {
+        encodeHeader(block, "content-type", contentType)
+    }
+    if length >= 0 {
+        scoped String text = format("{length}")
+        encodeHeader(block, "content-length", text)
+    }
+}
+
+// Opens a stream: its headers go, then body, or with sink a body written
+// as it goes. The reply comes on pend.done. Gives the stream's id.
+!i64 H2Conn.open(str block, H2Pending pend, str body, StreamOut *sink, Duration timeout, bool *retry) {
+    start := time.clock()
+    for {
+        self.lock.lock()
+        if self.dead {
+            self.lock.unlock()
+            *retry = true
+            return error(net.NetError.closed, "the connection is closing")
+        }
+        if self.streams.len < self.maxStreams {
+            id := self.nextId
+            self.nextId += 2
+            self.streams.set(id, pend)
+            String frames
+            i64 at = 0
+            for {
+                n := if block.len - at > 16384 { 16384 } else { block.len - at }
+                last := at + n == block.len
+                i64 flags = if last { END_HEADERS } else { 0 }
+                if at == 0 && body.len == 0 && sink == null {
+                    flags |= END_STREAM
+                }
+                putFrame(&frames, if at == 0 { F_HEADERS } else { F_CONTINUATION }, flags, id, block[at:at + n])
+                at += n
+                if last {
+                    break
+                }
+            }
+            // in the writer's order, which is the order of the ids
+            self.jobs.put(Out{job: .frame, data: frames})
+            if body.len > 0 {
+                self.jobs.put(Out{job: .body, stream: id, data: body.copy()})
+            }
+            if sink != null {
+                sink.stream = id
+                self.jobs.put(Out{job: .upload, stream: id, sink: sink})
+            }
+            self.lock.unlock()
+            return id
+        }
+        self.lock.unlock()
+        // as many requests as the server allows are open: wait for one
+        if timeout > 0s && time.clock() - start > timeout {
+            return error(net.NetError.timeout, "no stream became free")
+        }
+        sleep(1ms)
+    }
+    return 0
+}
+
+// Stops a stream the reply of which is no longer wanted: it is reset, and
+// a body read as it comes no longer gets anything.
+void H2Conn.cancel(i64 stream) {
+    self.lock.lock()
+    pend, found := self.streams.get(stream)
+    if found {
+        _ = self.streams.remove(stream)
+        pend.reply.free()
+        if pend.piped != null {
+            pend.piped.release()
+        }
+    }
+    self.lock.unlock()
+    self.jobs.put(Out{job: .reset, stream: stream, n: 1})
+    if found {
+        self.jobs.put(Out{job: .frame, data: rstFrame(stream, E_CANCEL)})
+    }
+}
+
+// Waits for a reply on done, up to timeout when it isn't 0s.
+!H2Result H2Conn.wait(i64 id, chan[H2Result] done, Duration timeout) {
+    if timeout <= 0s {
+        return <-done
+    }
+    H2Result r
+    bool timedOut = false
+    select {
+        got := <-done => r = got,
+        after(timeout) => timedOut = true,
+    }
+    if !timedOut {
+        return r
+    }
+    self.lock.lock()
+    pend, found := self.streams.get(id)
+    self.lock.unlock()
+    if found && pend.started && pend.piped != null {
+        // the head came meanwhile
+        return <-done
+    }
+    if !found {
+        // the reply came meanwhile
+        return <-done
+    }
+    self.cancel(id)
+    return error(net.NetError.timeout, "no reply in {timeout}")
+}
+
 !Reply H2Conn.request(str method, Dest *d, str body, str contentType, Duration timeout, bool *retry,
     str[] headers = [], bool raw = false) {
         *retry = false
         start := time.clock()
         String block
         defer block.free()
-        encodeHeader(&block, ":method", method)
-        encodeHeader(&block, ":scheme", if self.secure { "https" } else { "http" })
-        authority := self.authority[:]
-        for line in headers {
-            name, value, _ := str.cut(line, ":")
-            if sameName(str.trim(name), "host") {
-                authority = str.trim(value)
-            }
-        }
-        encodeHeader(&block, ":authority", authority)
-        encodeHeader(&block, ":path", d.path)
-        if !hasHeader(headers, "user-agent") {
-            encodeHeader(&block, "user-agent", "iris")
-        }
-        if !raw && !hasHeader(headers, "accept-encoding") {
-            encodeHeader(&block, "accept-encoding", "gzip")
-        }
-        for line in headers {
-            name, value, _ := str.cut(line, ":")
-            scoped String lower = str.lower(str.trim(name))
-            // HTTP/2 has no connection headers, and :authority stands for Host
-            if lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" || lower == "upgrade" ||
-                lower == "host" {
-                    continue
-                }
-            encodeHeader(&block, lower, str.trim(value))
-        }
-        if contentType.len > 0 {
-            encodeHeader(&block, "content-type", contentType)
-        }
-        if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" {
-            scoped String length = format("{body.len}")
-            encodeHeader(&block, "content-length", length)
-        }
+        i64 length = if body.len > 0 || method == "POST" || method == "PUT" || method == "PATCH" { body.len } else { -1 }
+        self.requestBlock(&block, method, d, headers, contentType, length, raw)
         done := chan[H2Result](1)
-        i64 id = 0
-        for {
-            self.lock.lock()
-            if self.dead {
-                self.lock.unlock()
-                *retry = true
-                return error(net.NetError.closed, "the connection is closing")
-            }
-            if self.streams.len < self.maxStreams {
-                id = self.nextId
-                self.nextId += 2
-                self.streams.set(id, H2Pending{done: done})
-                String frames
-                i64 at = 0
-                for {
-                    n := if block.len - at > 16384 { 16384 } else { block.len - at }
-                    last := at + n == block.len
-                    i64 flags = if last { END_HEADERS } else { 0 }
-                    if at == 0 && body.len == 0 {
-                        flags |= END_STREAM
-                    }
-                    putFrame(&frames, if at == 0 { F_HEADERS } else { F_CONTINUATION }, flags, id, block[at:at + n])
-                    at += n
-                    if last {
-                        break
-                    }
-                }
-                // in the writer's order, which is the order of the ids
-                self.jobs.put(Out{job: .frame, data: frames})
-                if body.len > 0 {
-                    self.jobs.put(Out{job: .body, stream: id, data: body.copy()})
-                }
-                self.lock.unlock()
-                break
-            }
-            self.lock.unlock()
-            // as many requests as the server allows are open: wait for one
-            if timeout > 0s && time.clock() - start > timeout {
-                return error(net.NetError.timeout, "no stream became free")
-            }
-            sleep(1ms)
-        }
+        id := try self.open(block, H2Pending{done: done}, body, null, timeout, retry)
         Duration left = if timeout > 0s { timeout - (time.clock() - start) } else { 0s }
         if timeout > 0s && left <= 0s {
             left = 1ns
         }
-        H2Result r
-        if timeout > 0s {
-            bool timedOut = false
-            select {
-                got := <-done => r = got,
-                after(left) => timedOut = true,
-            }
-            if timedOut {
-                self.lock.lock()
-                _ = self.streams.remove(id)
-                self.lock.unlock()
-                self.jobs.put(Out{job: .frame, data: rstFrame(id, E_CANCEL)})
-                return error(net.NetError.timeout, "no reply in {timeout}")
-            }
-        } else {
-            r = <-done
-        }
+        r := try self.wait(id, done, left)
         if !r.ok {
             *retry = r.retry
             defer r.why.free()

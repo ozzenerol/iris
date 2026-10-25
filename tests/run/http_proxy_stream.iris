@@ -1,0 +1,171 @@
+// expect: h2: 200 application/grpc, 2000000 bytes, sum 254616000, grpc-status=0, got-x-req=yes
+// expect: h1: 200 application/grpc, 2000000 bytes, sum 254616000, grpc-status=0, got-x-req=yes
+// expect: closed early: ok, then: pong
+// expect: Client.stream over HTTP/2: HTTP/2 tick 0 tick 1 tick 2 trailer done=3
+
+import http, net, str
+
+// the upstream: answers each piece as it comes, with trailers after
+!void echo(http.Request *req, http.Response *res) {
+    res.header("Content-Type", "application/grpc")
+    u8[16384] buf
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try res.write(buf[0:n])
+    }
+    res.trailer("grpc-status", "0")
+    res.trailer("got-x-req", "yes" if req.trailer("x-req") == "1" else "no")
+}
+
+void ping(http.Request *req, http.Response *res) {
+    res.text("pong")
+}
+
+!void ticks(http.Request *req, http.Response *res) {
+    res.header("Content-Type", "text/plain")
+    for i in 0..3 {
+        scoped String line = format("tick {i} ")
+        try res.write(line)
+    }
+    res.trailer("done", "3")
+}
+
+// many pieces, more than the windows hold, so the far side has to read
+!void endless(http.Request *req, http.Response *res) {
+    scoped String piece = str.repeat("x", 65536)
+    for i in 0..1000 {
+        try res.write(piece)
+    }
+}
+
+struct Proxy {
+    http.Client up
+    String upstream
+}
+
+// passes the body each way as it comes, and the trailers after it
+!void pass(Proxy *p, http.Request *req, http.Response *res) {
+    scoped String url = format("{p.upstream}{req.path}")
+    u := try p.up.begin(req.method, url, req.header("content-type"))
+    u8[16384] buf
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try u.write(buf[0:n])
+    }
+    for t in req.trailers() {
+        u.trailer(t.name, t.value)
+    }
+    rs := try u.finish()
+    defer rs.close()
+    res.status = rs.status
+    res.header("Content-Type", rs.header("content-type"))
+    for {
+        n := try rs.read(buf[:])
+        if n == 0 {
+            break
+        }
+        try res.write(buf[0:n])
+    }
+    for t in rs.trailers() {
+        res.trailer(t.name, t.value)
+    }
+}
+
+Proxy *theProxy = null
+
+!void proxied(http.Request *req, http.Response *res) {
+    try pass(theProxy, req, res)
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e {
+        print("server: {e.message}")
+    }
+}
+
+!void call(str base, bool h2) {
+    http.Client c
+    c.priorKnowledge = h2
+    defer c.close()
+    scoped String url = format("{base}/echo")
+    u := try c.begin("POST", url, "application/grpc")
+    u8[10000] piece
+    for i in 0..piece.len {
+        piece[i] = u8(i % 256)
+    }
+    for i in 0..200 {
+        try u.write(piece[:])
+    }
+    u.trailer("x-req", "1")
+    rs := try u.finish()
+    defer rs.close()
+    u8[7000] buf
+    i64 total = 0
+    i64 sum = 0
+    for {
+        n := try rs.read(buf[:])
+        if n == 0 {
+            break
+        }
+        for i in 0..n {
+            sum += i64(buf[i])
+        }
+        total += n
+    }
+    name := "h2" if h2 else "h1"
+    print("{name}: {rs.status} {rs.header("content-type")}, {total} bytes, sum {sum}, grpc-status={rs.trailer("grpc-status")}, got-x-req={rs.trailer("got-x-req")}")
+}
+
+!void main() {
+    http.Router up
+    defer up.free()
+    up.stream("POST /echo", echo)
+    up.get("/ping", ping)
+    up.get("/ticks", ticks)
+    up.get("/endless", endless)
+    upLn := try net.listen(0, "127.0.0.1")
+    spawn serve(&up, upLn)
+
+    Proxy p
+    p.up.priorKnowledge = true
+    p.upstream = format("http://127.0.0.1:{upLn.port}")
+    defer p.upstream.free()
+    defer p.up.close()
+    theProxy = &p
+    http.Router front
+    defer front.free()
+    front.stream("POST /echo", proxied)
+    frontLn := try net.listen(0, "127.0.0.1")
+    spawn serve(&front, frontLn)
+    scoped String base = format("http://127.0.0.1:{frontLn.port}")
+
+    try call(base, true)
+    try call(base, false)
+
+    // a reply closed before its end resets the stream; the connection goes on
+    http.Client c
+    c.priorKnowledge = true
+    defer c.close()
+    scoped String endlessUrl = format("{p.upstream}/endless")
+    rs := try c.stream("GET", endlessUrl)
+    u8[1000] buf
+    n := try rs.read(buf[:])
+    rs.close()
+    scoped String pingUrl = format("{p.upstream}/ping")
+    scoped http.Reply pr = try c.get(pingUrl)
+    print("closed early: {"ok" if n > 0 else "nothing"}, then: {pr.body}")
+
+    scoped String ticksUrl = format("{p.upstream}/ticks")
+    ts := try c.stream("GET", ticksUrl)
+    defer ts.close()
+    scoped String all = try ts.readAll()
+    print("Client.stream over HTTP/2: HTTP/2 {all}trailer done={ts.trailer("done")}")
+    front.shutdown(0s)
+    up.shutdown(0s)
+}

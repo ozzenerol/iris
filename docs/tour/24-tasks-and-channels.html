@@ -248,7 +248,30 @@ took 20</code></pre>
 }</code></pre>
 <pre class="out"><code>control: reload
 no reply within 50ms</code></pre>
-<p>When several channels have values, <code>select</code> takes the first arm in order. An arm takes from a channel or waits with <code>after</code>. Sending is done outside <code>select</code>.</p>
+<p>When several channels have values, <code>select</code> takes the first arm in order. An arm takes from a channel, sends to one, waits with <code>after</code>, or is <code>else</code>.</p>
+<p>A send arm, <code>ch &lt;- v =&gt; ...</code>, goes when the channel has room or, for a channel without room, when a task waits to take the value. The value is made before <code>select</code> picks an arm, so when another arm goes, it still belongs to the code that made it: send a named value, and free a <code>String</code> that didn't go out. An <code>else</code> arm runs at once when no other arm can go, so the <code>select</code> never waits. A <code>select</code> has <code>else</code> or <code>after</code>, not both.</p>
+<pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
+    jobs := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
+    <span class="k">defer</span> jobs.<span class="f">free</span>()
+    stop := <span class="k">chan</span>[<span class="t">bool</span>](<span class="n">1</span>)
+    <span class="k">defer</span> stop.<span class="f">free</span>()
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">3</span> {
+        <span class="k">select</span> {
+            jobs &lt;- i =&gt; <span class="f">print</span>(<span class="s">&quot;queued </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>)
+            <span class="k">else</span> =&gt; <span class="f">print</span>(<span class="s">&quot;full, </span><span class="e">{</span>i<span class="e">}</span><span class="s"> dropped&quot;</span>)
+        }
+    }
+    stop &lt;- <span class="k">true</span>
+    <span class="t">i64</span> next = <span class="n">9</span>
+    <span class="k">select</span> {
+        _ := &lt;-stop =&gt; <span class="f">print</span>(<span class="s">&quot;stopped before sending </span><span class="e">{</span>next<span class="e">}</span><span class="s">&quot;</span>)
+        jobs &lt;- next =&gt; <span class="f">print</span>(<span class="s">&quot;sent </span><span class="e">{</span>next<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>queued 0
+queued 1
+full, 2 dropped
+stopped before sending 9</code></pre>
 <p><code>ch.trySend(v)</code> sends without waiting. It gives <code>true</code> when the value went in, and <code>false</code> when the channel is full, or, for a channel without room, when no task waits to take it. After a <code>false</code> the value still belongs to the sender, which frees a <code>String</code> it drops. <code>ch.len()</code> says how many values wait in the channel. A request handler that logs through a channel uses them so a slow log writer drops lines instead of holding up requests:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
     lines := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">2</span>)

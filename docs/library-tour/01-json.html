@@ -179,6 +179,29 @@ try {
 {&quot;name&quot;:&quot;billing&quot;,&quot;backends&quot;:[{&quot;addr&quot;:&quot;10.0.0.11:8080&quot;,&quot;weight&quot;:3},{&quot;addr&quot;:&quot;10.0.0.12:8080&quot;,&quot;weight&quot;:1},{&quot;addr&quot;:&quot;10.0.0.13:8080&quot;,&quot;weight&quot;:1}]}
 3 ports, the last 8080</code></pre>
 <p>The second backend has no <code>&quot;weight&quot;</code>, so it keeps the default, 1.</p>
+<h2 id="maps"><a href="#maps">Maps</a></h2>
+<p>A <code>Map</code> with <code>str</code> or <code>String</code> keys is a JSON object whose keys aren't known in advance, like the headers a route adds. <code>decode</code> fills the map, and a key given twice keeps its last value. <code>encode</code> writes the keys in the map's own order, which isn't the order they were added in. The struct's <code>free</code> frees the map, its keys and its values. <code>json.decode(Map[str, T], text)</code> reads a whole object into a new map.</p>
+<pre class="code run"><code><span class="k">import</span> json
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Route</span> {
+    <span class="t">String</span> prefix
+    <span class="t">Map</span>[<span class="t">str</span>, <span class="t">String</span>] headers
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">Route</span> r = <span class="k">try</span> json.<span class="f">decode</span>(<span class="t">Route</span>, <span class="s">r&quot;&quot;&quot;
+        {&quot;prefix&quot;: &quot;/api&quot;, &quot;headers&quot;: {&quot;x-team&quot;: &quot;billing&quot;, &quot;cache-control&quot;: &quot;no-store&quot;}}
+        &quot;&quot;&quot;</span>)
+    team, _ := r.headers.<span class="f">get</span>(<span class="s">&quot;x-team&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.headers.len<span class="e">}</span><span class="s"> headers, x-team is </span><span class="e">{</span>team<span class="e">}</span><span class="s">&quot;</span>)
+
+    limits := <span class="k">try</span> json.<span class="f">decode</span>(<span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>], <span class="s">r&quot;&quot;&quot;{&quot;api&quot;: 100, &quot;web&quot;: 20}&quot;&quot;&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;api </span><span class="e">{</span>limits.<span class="f">getOr</span>(<span class="s">&quot;api&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s">, web </span><span class="e">{</span>limits.<span class="f">getOr</span>(<span class="s">&quot;web&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    limits.<span class="f">free</span>()
+}</code></pre>
+<pre class="out"><code>2 headers, x-team is billing
+api 100, web 20</code></pre>
 <h2 id="enums"><a href="#enums">Enums</a></h2>
 <p>An enum field is a JSON string that names one of the enum's values. <code>decode</code> turns the string back into the value. A slice of an enum is read from an array of strings. A string that names no value is a <code>wrongType</code> error.</p>
 <pre class="code run"><code><span class="k">import</span> json
@@ -266,7 +289,7 @@ JsonError.wrongType: level: &quot;fatal&quot; isn&#x27;t one of the enum&#x27;s 
 {&quot;request_id&quot;:3,&quot;remote_addr&quot;:&quot;10.0.0.5&quot;,&quot;status&quot;:200}
 JsonError.missing: the required field &quot;request_id&quot; is missing</code></pre>
 <h2 id="what-a-json-struct-can-hold"><a href="#what-a-json-struct-can-hold">What a @json struct can hold</a></h2>
-<ul><li>integers, floats and <code>bool</code></li><li><code>String</code> and plain enums</li><li>other <code>@json</code> structs</li><li>slices, arrays and <code>List</code>s of these</li></ul>
+<ul><li>integers, floats and <code>bool</code></li><li><code>String</code> and plain enums</li><li>other <code>@json</code> structs</li><li>slices, arrays and <code>List</code>s of these</li><li><code>Map</code>s from <code>str</code> or <code>String</code> keys to these</li></ul>
 <p>The fields of an embedded struct appear as fields of the outer one. A <code>str</code> field encodes but doesn't decode, because a <code>str</code> can't own the text it points to. Decoded text goes in a <code>String</code>.</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
 <p>The errors are values of <code>json.JsonError</code>. The message says where in the text the problem is.</p>
@@ -305,7 +328,7 @@ JsonError.syntax: line 1, column 2: expected a key in quotes</code></pre>
     <nav class="pager"><a class="next" href="02-files.html"><span>Next</span>Files</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#encoding">Encoding</a></li><li><a href="#decoding">Decoding</a></li><li><a href="#lists">Lists</a></li><li><a href="#enums">Enums</a></li><li><a href="#keys-and-required-fields">Keys and required fields</a></li><li><a href="#what-a-json-struct-can-hold">What a @json struct can hold</a></li><li><a href="#errors">Errors</a></li><li><a href="#quoting-text">Quoting text</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#encoding">Encoding</a></li><li><a href="#decoding">Decoding</a></li><li><a href="#lists">Lists</a></li><li><a href="#maps">Maps</a></li><li><a href="#enums">Enums</a></li><li><a href="#keys-and-required-fields">Keys and required fields</a></li><li><a href="#what-a-json-struct-can-hold">What a @json struct can hold</a></li><li><a href="#errors">Errors</a></li><li><a href="#quoting-text">Quoting text</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
