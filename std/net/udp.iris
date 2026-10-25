@@ -240,6 +240,95 @@ pub !void Udp.setBroadcast(bool on) {
         "setting SO_BROADCAST", "")
 }
 
+@extern("iris_udp_info")
+i32 rawUdpInfo(i32 fd, i32 family, i32 op, i32 value)
+
+@extern("iris_udp_recvmsg")
+i64 rawRecvMsg(i32 fd, u8 *buf, i64 len, u8 *ip, i64 *port, u8 *to, i64 *tos, i64 *segment, i64 *flags,
+    i64 timeout)
+
+@extern("iris_udp_sendmsg")
+i32 rawSendMsg(i32 fd, i32 family, u8 *buf, i64 len, u8 *ip, i64 port, u8 *from, i64 tos, i64 segment,
+    i64 timeout)
+
+// A datagram readMsg read, with what came with it.
+pub struct Message {
+    // its length, cut to the buffer's when truncated is set
+    pub i64 len
+    pub bool truncated
+    // who sent it, and the local address it came to (zeros when
+    // setReceiveInfo is off)
+    pub Addr from
+    pub Addr to
+    // its TOS byte (the traffic class on IPv6): DSCP in the top six bits,
+    // ECN in the low two; -1 when unknown
+    pub i64 tos
+    // with setGro, the size of each datagram it holds, the last maybe
+    // shorter; 0 when it is one
+    pub i64 segment
+}
+
+// Asks for the local address and the TOS byte of each datagram readMsg
+// reads: what a server on several addresses answers from, and ECN.
+pub !void Udp.setReceiveInfo(bool on) {
+    try optionFail(rawUdpInfo(self.sock, self.family, 1, if on { 1 } else { 0 }), "asking for the datagrams' details")
+}
+
+// The TOS byte of what the socket sends, such as 0x02 for ECT(0) or 0xb8
+// for expedited forwarding (the traffic class on IPv6).
+pub !void Udp.setTos(i64 tos) {
+    try optionFail(rawUdpInfo(self.sock, self.family, 2, i32(tos)), "setting the TOS byte")
+}
+
+// Turns generic receive offload on (Linux): one readMsg may take several
+// datagrams of one size from a sender at once, as Message.segment says.
+pub !void Udp.setGro(bool on) {
+    e := rawUdpInfo(self.sock, self.family, 3, if on { 1 } else { 0 })
+    if e == -1 {
+        return error(NetError.other, "UDP GRO: only on Linux")
+    }
+    try optionFail(e, "turning GRO on")
+}
+
+// Reads one datagram into buf, with its sender, the address it came to
+// and its TOS byte, as setReceiveInfo asks.
+pub !Message Udp.readMsg(u8[] buf) {
+    Message m
+    i64 port
+    i64 flags
+    n := rawRecvMsg(self.sock, buf.ptr, buf.len, &m.from.ip[0], &port, &m.to.ip[0], &m.tos, &m.segment, &flags,
+        self.timeout)
+    if n < 0 {
+        return error(netCode(i32(-n)), "reading a datagram: {reason(i32(-n))}")
+    }
+    m.len = n
+    m.from.port = u16(port)
+    m.truncated = flags & 1 != 0
+    return m
+}
+
+// Sends data to addr as sendTo does, from the local address from when it
+// isn't zero (one of this machine's), with the TOS byte tos when it isn't
+// -1, and, when segment is above 0, cut by the kernel into datagrams of
+// segment bytes (GSO, Linux), so one call sends many.
+pub !void Udp.sendMsg(str data, Addr addr, Addr from = Addr{}, i64 tos = -1, i64 segment = 0) {
+    bool hasFrom = false
+    for b in from.ip {
+        if b != 0 {
+            hasFrom = true
+        }
+    }
+    code := rawSendMsg(self.sock, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port),
+        if hasFrom { &from.ip[0] } else { null }, tos, segment, self.timeout)
+    if code == 10 {
+        return error(NetError.other, "sending in segments (GSO): not here")
+    }
+    if code != 0 {
+        scoped String where = addr.format()
+        try udpFail(code, "sending to {where}")
+    }
+}
+
 // Sends data as one datagram to addr.
 pub !void Udp.sendTo(str data, Addr addr) {
     code := rawUdpSend(self.sock, self.family, data.ptr, data.len, &addr.ip[0], i64(addr.port), self.timeout)

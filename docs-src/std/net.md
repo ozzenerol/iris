@@ -315,6 +315,34 @@ ping from 127.0.0.1: true
 
 Several sockets can listen on the same UDP port, such as one per thread. The kernel gives each datagram to one of them.
 
+## What comes with a datagram
+
+A server on several addresses answers from the one a datagram came to, and QUIC reads each datagram's ECN bits. `setReceiveInfo(true)` asks for them, and `readMsg(buf)` gives a `Message` with the datagram's `len`, its sender in `from`, the local address it came to in `to`, and its TOS byte in `tos`, DSCP in the top six bits and ECN in the low two. `truncated` says a datagram was longer than `buf`.
+
+`sendMsg(data, addr, from, tos, segment)` sends from a chosen local address, with a TOS byte, and, on Linux, with `segment` the kernel cuts `data` into datagrams of that size (GSO), so one call sends many. `setGro(true)` does the opposite on reading: `readMsg` may take several datagrams of one size at once, and `segment` gives their size. `setTos` sets the TOS byte of everything the socket sends.
+
+```iris run
+import net
+
+!void main() {
+    rx := try net.listenUdp(0, "127.0.0.1")
+    defer rx.close()
+    try rx.setReceiveInfo(true)
+    tx := try net.listenUdp(0, "127.0.0.1")
+    defer tx.close()
+
+    try tx.sendMsg("marked", rx.localAddr(), tos: 0x02)
+    u8[64] buf
+    m := try rx.readMsg(buf)
+    scoped String to = m.to.ipText()
+    print("{buf[0:m.len]} came to {to}, ECN bits {m.tos & 3}")
+}
+```
+
+```output
+marked came to 127.0.0.1, ECN bits 2
+```
+
 ## Multicast
 
 `joinGroup(group)` makes a socket receive what is sent to a multicast group, such as SSDP's 239.255.255.250 or mDNS's ff02::fb, and `leaveGroup` stops it. An optional interface name chooses where to listen. An IPv4 group needs an IPv4 socket, `listenUdp(port, "0.0.0.0")`. For sending, `setMulticastHops` says how many routers a datagram may pass (1, this network only, is the start), `setMulticastLoop` whether it also comes back to this machine, and `setMulticastInterface` which interface it goes out of. `setBroadcast(true)` lets a socket send to a broadcast address.

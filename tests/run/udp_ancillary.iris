@@ -1,0 +1,61 @@
+// expect: got hello, came to 127.0.0.1: true, from the sender: true
+// expect: tos with ECT(0): 2
+// expect: from 127.0.0.1, came to 127.0.0.1: true
+// expect: GSO and GRO: true
+// expect: truncated: true, 4 bytes of 11
+
+import net, str
+
+!void main() {
+    rx := try net.listenUdp(0, "127.0.0.1")
+    defer rx.close()
+    rx.setTimeout(2s)
+    try rx.setReceiveInfo(true)
+    tx := try net.listenUdp(0, "127.0.0.1")
+    defer tx.close()
+    to := rx.localAddr()
+
+    try tx.sendTo("hello", to)
+    u8[] buf = alloc(u8, 65536)
+    defer free(buf)
+    m := try rx.readMsg(buf)
+    scoped String dest = m.to.ipText()
+    print("got {buf[0:m.len]}, came to 127.0.0.1: {dest == "127.0.0.1"}, from the sender: {m.from.port == tx.localAddr().port}")
+
+    try tx.sendMsg("ecn", to, tos: 2)
+    m2 := try rx.readMsg(buf)
+    print("tos with ECT(0): {m2.tos & 3}")
+
+    src := try net.ip("127.0.0.1")
+    try tx.sendMsg("from", to, from: src)
+    m3 := try rx.readMsg(buf)
+    scoped String f = m3.from.ipText()
+    scoped String d3 = m3.to.ipText()
+    print("from {f}, came to 127.0.0.1: {d3 == "127.0.0.1"}")
+
+    // 10 datagrams of 1000 bytes sent with one call (Linux), read back
+    // as they come: one at a time, or together with GRO
+    rx.setGro(true) catch e { }
+    bool ok = true
+    bool sent = true
+    scoped String block = str.repeat("x", 10000)
+    tx.sendMsg(block, to, segment: 1000) catch e {
+        sent = false
+        ok = e.message == "sending in segments (GSO): not here"
+    }
+    if sent {
+        i64 got = 0
+        for got < 10000 {
+            mm := try rx.readMsg(buf)
+            got += mm.len
+        }
+        ok = got == 10000
+    }
+    print("GSO and GRO: {ok}")
+
+    try tx.sendTo("hello world", to)
+    small := alloc(u8, 4)
+    defer free(small)
+    m5 := try rx.readMsg(small)
+    print("truncated: {m5.truncated}, {m5.len} bytes of 11")
+}

@@ -4,6 +4,7 @@
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE        /* MAP_ANON and SO_NOSIGPIPE on macOS */
 #define _GNU_SOURCE             /* sched_getaffinity on Linux */
+#define __APPLE_USE_RFC_3542    /* IPV6_RECVPKTINFO on macOS */
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -5152,6 +5153,210 @@ int64_t iris_udp_recv(int fd, char *buf, int64_t len, uint8_t *ip, int64_t *port
             continue;
         }
         return -netCode(errno);
+    }
+}
+
+/* Ancillary data on UDP sockets (RFC 3542 and Linux's): op 1 asks for the
+   local address and the TOS byte of each datagram read with recvmsg
+   (value on or off), 2 sets the TOS byte of what is sent (IP_TOS,
+   IPV6_TCLASS), 3 turns GRO on (Linux), so one read can take several
+   datagrams of one size. 0, errno, or -1 off Linux for GRO. */
+int iris_udp_info(int fd, int family, int op, int value) {
+    int r = 0;
+    int on = value != 0;
+    if (op == 1) {
+        if (family == AF_INET6) {
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &on, sizeof on);
+            if (!r) r = setsockopt(fd, IPPROTO_IPV6, IPV6_RECVTCLASS, &on, sizeof on);
+#ifdef __linux__
+            /* IPv4 datagrams on a dual-stack socket carry IPv4's */
+            setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof on);
+            setsockopt(fd, IPPROTO_IP, IP_RECVTOS, &on, sizeof on);
+#endif
+        } else {
+#ifdef __linux__
+            r = setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof on);
+#else
+            r = setsockopt(fd, IPPROTO_IP, IP_RECVPKTINFO, &on, sizeof on);
+#endif
+            if (!r) r = setsockopt(fd, IPPROTO_IP, IP_RECVTOS, &on, sizeof on);
+        }
+    } else if (op == 2) {
+        if (family == AF_INET6) {
+            r = setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, &value, sizeof value);
+#ifdef __linux__
+            setsockopt(fd, IPPROTO_IP, IP_TOS, &value, sizeof value);
+#endif
+        } else {
+            r = setsockopt(fd, IPPROTO_IP, IP_TOS, &value, sizeof value);
+        }
+    } else if (op == 3) {
+#ifdef __linux__
+        r = setsockopt(fd, IPPROTO_UDP, 104 /* UDP_GRO */, &on, sizeof on);
+#else
+        return -1;
+#endif
+    } else {
+        return EINVAL;
+    }
+    return r == 0 ? 0 : errno;
+}
+
+/* Reads one datagram with what came with it: its length (cut to len, and
+   *flags 1 when it was cut), the sender in ip and port, the local address
+   it came to in to (zeros when unknown), its TOS byte (-1 when unknown),
+   and with GRO the size of each datagram it holds (0 for one). -code. */
+int64_t iris_udp_recvmsg(int fd, char *buf, int64_t len, uint8_t *ip, int64_t *port, uint8_t *to, int64_t *tos,
+                         int64_t *segment, int64_t *flags, int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        struct sockaddr_storage ss;
+        struct iovec v = {buf, (size_t)len};
+        union {
+            char space[256];
+            struct cmsghdr align;
+        } cm;
+        struct msghdr h;
+        memset(&h, 0, sizeof h);
+        h.msg_name = &ss;
+        h.msg_namelen = sizeof ss;
+        h.msg_iov = &v;
+        h.msg_iovlen = 1;
+        h.msg_control = cm.space;
+        h.msg_controllen = sizeof cm.space;
+        ssize_t n = recvmsg(fd, &h, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                if (!waitFdUntil(fd, 0, deadline)) return -3;
+                continue;
+            }
+            return -netCode(errno);
+        }
+        fromSockaddr(&ss, ip, port);
+        memset(to, 0, 16);
+        *tos = -1;
+        *segment = 0;
+        *flags = (h.msg_flags & MSG_TRUNC) ? 1 : 0;
+        for (struct cmsghdr *c = CMSG_FIRSTHDR(&h); c; c = CMSG_NXTHDR(&h, c)) {
+            if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
+                struct in_pktinfo pi;
+                memcpy(&pi, CMSG_DATA(c), sizeof pi);
+                to[10] = to[11] = 0xff;
+                memcpy(to + 12, &pi.ipi_addr, 4);
+            } else if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO) {
+                struct in6_pktinfo pi;
+                memcpy(&pi, CMSG_DATA(c), sizeof pi);
+                memcpy(to, &pi.ipi6_addr, 16);
+            } else if (c->cmsg_level == IPPROTO_IP && (c->cmsg_type == IP_TOS
+#ifdef IP_RECVTOS
+                                                      || c->cmsg_type == IP_RECVTOS
+#endif
+                                                      )) {
+                *tos = *(unsigned char *)CMSG_DATA(c);
+            } else if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_TCLASS) {
+                int t;
+                memcpy(&t, CMSG_DATA(c), sizeof t);
+                *tos = t;
+#ifdef __linux__
+            } else if (c->cmsg_level == IPPROTO_UDP && c->cmsg_type == 104 /* UDP_GRO */) {
+                int g;
+                memcpy(&g, CMSG_DATA(c), sizeof g);
+                *segment = g;
+#endif
+            }
+        }
+        return n;
+    }
+}
+
+/* Sends one datagram to ip and port with what goes with it: from, when not
+   NULL, the local address it leaves from; tos when not -1; and segment,
+   when above 0, the size of each datagram data is cut into by the kernel
+   (GSO, Linux). 0, or a code (9 too large, 10 GSO not here). */
+int iris_udp_sendmsg(int fd, int family, const char *buf, int64_t len, const uint8_t *ip, int64_t port,
+                     const uint8_t *from, int64_t tos, int64_t segment, int64_t timeout) {
+    if (family == AF_INET && !isMapped(ip)) return 6;
+#ifndef __linux__
+    if (segment > 0) return 10;
+#endif
+    int64_t deadline = deadlineOf(timeout);
+    struct sockaddr_storage ss;
+    socklen_t sl = toSockaddr(ip, port, family, &ss);
+    union {
+        char space[256];
+        struct cmsghdr align;
+    } cm;
+    memset(cm.space, 0, sizeof cm.space);
+    struct iovec v = {(void *)buf, (size_t)len};
+    struct msghdr h;
+    memset(&h, 0, sizeof h);
+    h.msg_name = &ss;
+    h.msg_namelen = sl;
+    h.msg_iov = &v;
+    h.msg_iovlen = 1;
+    h.msg_control = cm.space;
+    h.msg_controllen = sizeof cm.space;
+    size_t used = 0;
+    struct cmsghdr *c = CMSG_FIRSTHDR(&h);
+    bool v4 = family == AF_INET || isMapped(ip);
+    if (from) {
+        if (v4) {
+            struct in_pktinfo pi;
+            memset(&pi, 0, sizeof pi);
+            memcpy(&pi.ipi_spec_dst, from + 12, 4);
+            c->cmsg_level = IPPROTO_IP;
+            c->cmsg_type = IP_PKTINFO;
+            c->cmsg_len = CMSG_LEN(sizeof pi);
+            memcpy(CMSG_DATA(c), &pi, sizeof pi);
+            used += CMSG_SPACE(sizeof pi);
+        } else {
+            struct in6_pktinfo pi;
+            memset(&pi, 0, sizeof pi);
+            memcpy(&pi.ipi6_addr, from, 16);
+            c->cmsg_level = IPPROTO_IPV6;
+            c->cmsg_type = IPV6_PKTINFO;
+            c->cmsg_len = CMSG_LEN(sizeof pi);
+            memcpy(CMSG_DATA(c), &pi, sizeof pi);
+            used += CMSG_SPACE(sizeof pi);
+        }
+        c = (struct cmsghdr *)(cm.space + used);
+    }
+    if (tos >= 0) {
+        int t = (int)tos;
+        if (v4) {
+            c->cmsg_level = IPPROTO_IP;
+            c->cmsg_type = IP_TOS;
+        } else {
+            c->cmsg_level = IPPROTO_IPV6;
+            c->cmsg_type = IPV6_TCLASS;
+        }
+        c->cmsg_len = CMSG_LEN(sizeof t);
+        memcpy(CMSG_DATA(c), &t, sizeof t);
+        used += CMSG_SPACE(sizeof t);
+        c = (struct cmsghdr *)(cm.space + used);
+    }
+#ifdef __linux__
+    if (segment > 0) {
+        uint16_t sz = (uint16_t)segment;
+        c->cmsg_level = IPPROTO_UDP;
+        c->cmsg_type = 103;     /* UDP_SEGMENT */
+        c->cmsg_len = CMSG_LEN(sizeof sz);
+        memcpy(CMSG_DATA(c), &sz, sizeof sz);
+        used += CMSG_SPACE(sizeof sz);
+    }
+#endif
+    h.msg_controllen = used;
+    if (!used) h.msg_control = NULL;
+    for (;;) {
+        ssize_t n = sendmsg(fd, &h, 0);
+        if (n >= 0) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (!waitFdUntil(fd, 1, deadline)) return 3;
+            continue;
+        }
+        if (errno == EMSGSIZE) return 9;
+        if (errno == EIO && segment > 0) return 10;
+        return netCode(errno);
     }
 }
 
