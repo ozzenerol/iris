@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.71.0</span>
+    <span class="ver">v0.72.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -139,6 +139,61 @@ it printed: listening on 8080</code></pre>
 <pre class="out"><code>status 3, ok false, stderr: oops
 ProcessError.notFound: no-such-program: no such program</code></pre>
 <p>A shell command with pipes and <code>&gt;</code> runs through <code>sh -c</code>, as above.</p>
+<h2 id="programs-that-run-beside-this-one"><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></h2>
+<p><code>process.start(argv)</code> starts a program and returns at once with a <code>Child</code>. The program shares this one's standard input, output and error. <code>wait</code> waits for it to end and gives its exit status, while the other tasks run. <code>running</code> says whether it still runs, <code>stop</code> asks it to end (SIGTERM) and <code>kill</code> ends it at once (SIGKILL). A program a signal ended has the status 128 plus the signal's number.</p>
+<pre class="code run"><code><span class="k">import</span> process
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    sleeper := <span class="k">try</span> process.<span class="f">start</span>([<span class="s">&quot;sleep&quot;</span>, <span class="s">&quot;10&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;running: </span><span class="e">{</span>sleeper.<span class="f">running</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    sleeper.<span class="f">stop</span>()
+    <span class="f">print</span>(<span class="s">&quot;ended with </span><span class="e">{</span>sleeper.<span class="f">wait</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
+    job := <span class="k">try</span> process.<span class="f">start</span>([<span class="s">&quot;sh&quot;</span>, <span class="s">&quot;-c&quot;</span>, <span class="s">&quot;exit 4&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;the job ended with </span><span class="e">{</span>job.<span class="f">wait</span>()<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>running: true
+ended with 143
+the job ended with 4</code></pre>
+<p><code>keep</code> hands the program open descriptors, which it gets as 3, 4 and so on, in order. A server upgrades this way without dropping a connection: it starts its next version with its listening socket, the new process takes it with <code>net.adoptListener(3)</code> and accepts on it, and the old one stops accepting and lets its own connections finish. Here the program starts itself again as its next version. Built with <code>iris build</code> and run, it prints <code>served by the new version</code>:</p>
+<pre class="code"><code><span class="k">import</span> net, os, process
+
+!<span class="t">void</span> <span class="f">next</span>() {
+    ln := <span class="k">try</span> net.<span class="f">adoptListener</span>(<span class="n">3</span>)
+    <span class="k">defer</span> ln.<span class="f">close</span>()
+    c := <span class="k">try</span> ln.<span class="f">accept</span>()
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;served by the new version</span><span class="e">\n</span><span class="s">&quot;</span>)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">if</span> os.<span class="f">argc</span>() &gt; <span class="n">1</span> &amp;&amp; os.<span class="f">arg</span>(<span class="n">1</span>) == <span class="s">&quot;--next&quot;</span> {
+        <span class="k">try</span> <span class="f">next</span>()
+        <span class="k">return</span>
+    }
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    port := ln.port
+    newer := <span class="k">try</span> process.<span class="f">start</span>([os.<span class="f">arg</span>(<span class="n">0</span>), <span class="s">&quot;--next&quot;</span>], keep: [ln.<span class="f">fd</span>()])
+    ln.<span class="f">close</span>() <span class="c">// the new version has its own copy of the socket</span>
+
+    c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, port)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> line = <span class="k">try</span> c.<span class="f">readLine</span>()
+    <span class="f">print</span>(line)
+    _ = newer.<span class="f">wait</span>()
+}</code></pre>
+<p>Connections that wait to be accepted stay in the socket's queue while the versions change, so none is refused. <code>os.arg(0)</code> is the program's own path. <code>iris run</code> deletes the program it built once the program starts, so a program that starts itself has to be built.</p>
+<h2 id="running-as-another-user"><a href="#running-as-another-user">Running as another user</a></h2>
+<p>A server that listens on a port below 1024 starts as root, binds its ports, and then gives up root with <code>os.runAs(user)</code>. From then on every thread of the program runs as that user, in its groups and its own group, or in <code>group</code> when one is given. The program can't become root again, and on Linux it also loses every capability. The sockets it already has keep working.</p>
+<pre class="code"><code><span class="k">import</span> net, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">443</span>)
+    <span class="k">try</span> os.<span class="f">runAs</span>(<span class="s">&quot;www-data&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;serving as </span><span class="e">{</span>os.<span class="f">uid</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="c">// accept on ln as www-data</span>
+}</code></pre>
+<p>Only root may change to another user: anyone else gets <code>OsError.permission</code>, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives <code>OsError.notFound</code>. <code>os.uid()</code> and <code>os.gid()</code> give the ids the program runs as, and <code>os.user()</code> the user's name.</p>
 <h2 id="input"><a href="#input">Input</a></h2>
 <p>The second argument to <code>run</code> goes to the program's standard input:</p>
 <pre class="code run"><code><span class="k">import</span> process, <span class="t">str</span>
@@ -169,7 +224,7 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
     <span class="f">print</span>(<span class="s">&quot;got </span><span class="e">{</span>s<span class="e">}</span><span class="s">, saving and stopping&quot;</span>)
 }</code></pre>
 <pre class="out"><code>got terminate, saving and stopping</code></pre>
-<p>From then on, <code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> instead of ending the program. <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals. Many programs take <code>hangup</code> (SIGHUP) as a request to read their settings again.</p>
+<p>From then on, <code>signal.watch()</code> makes <code>interrupt</code> and <code>terminate</code> wait for <code>wait</code> instead of ending the program. <code>wait</code> calls it when nothing is watched yet. <code>signal.watch([.hangup])</code> watches other signals. Many programs take <code>hangup</code> (SIGHUP) as a request to read their settings again. <code>user1</code> and <code>user2</code> (SIGUSR1 and SIGUSR2) mean whatever the program says, such as starting its next version.</p>
 <p>A server waits for the signal in one task while other tasks serve:</p>
 <pre class="code"><code><span class="k">import</span> signal
 
@@ -188,11 +243,11 @@ ProcessError.notFound: no-such-program: no such program</code></pre>
     <nav class="pager"><a class="prev" href="05-flags.html"><span>Previous</span>Command-line flags</a><a class="next" href="07-terminal.html"><span>Next</span>Terminal output and input</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#arguments">Arguments</a></li><li><a href="#exit-status">Exit status</a></li><li><a href="#environment-variables">Environment variables</a></li><li><a href="#running-other-programs">Running other programs</a></li><li><a href="#programs-that-run-beside-this-one">Programs that run beside this one</a></li><li><a href="#running-as-another-user">Running as another user</a></li><li><a href="#input">Input</a></li><li><a href="#signals">Signals</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.71.0</span>
+    <span>Iris v0.72.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>

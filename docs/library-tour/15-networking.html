@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.71.0</span>
+    <span class="ver">v0.72.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -164,6 +164,9 @@ keepalive: false</code></pre>
 }</code></pre>
 <pre class="out"><code>from 127.0.0.1, the client&#x27;s port: true</code></pre>
 <p><code>net.Addr{port: 8080}</code> is every address on port 8080. A <code>Socket</code> is IPv6 and accepts IPv4 too. <code>Family.v4</code> and <code>Family.v6</code> give only one of them.</p>
+<p>These options have methods of their own, so a program doesn't need the system's numbers for them:</p>
+<ul><li><code>setReusePort(true)</code> lets several sockets listen on one port, one per thread or process, and the kernel spreads the connections between them.</li><li><code>setTransparent(true)</code> is for a transparent proxy with TPROXY. A listener takes connections for addresses that aren't the machine's, and their <code>localAddr()</code> is where the client was going. A client socket can bind to the client's own address before it connects, so the backend sees that address.</li><li><code>setFreeBind(true)</code> binds to an address the machine doesn't have yet.</li><li><code>setFastOpen(queue)</code> lets clients that have connected before send data with their SYN; <code>setFastOpenConnect(true)</code> does it from a client.</li><li><code>setMark(mark)</code>, on a <code>Socket</code> or a <code>Conn</code>, sets the mark the packets carry, for policy routing.</li></ul>
+<p>On a connection, <code>setLinger(0s)</code> makes <code>close</code> reset it, as a proxy does to pass a reset on. <code>originalDst()</code> gives where a connection that iptables or nftables redirected was going: the address a transparent proxy forwards it to. <code>setTransparent</code>, <code>setFreeBind</code>, <code>setMark</code> and <code>originalDst</code> are Linux only, and transparent and mark need <code>CAP_NET_ADMIN</code>; elsewhere they return an error that says so.</p>
 <h2 id="half-closing"><a href="#half-closing">Half-closing</a></h2>
 <p><code>closeWrite</code> ends this side's writes. The other side reads the end of the data, and this side can still read what comes back. A client that sends a whole request and then waits for the answer uses it to say it is done.</p>
 <pre class="code run"><code><span class="k">import</span> net, <span class="t">str</span>
@@ -210,7 +213,7 @@ keepalive: false</code></pre>
 <p>Over TLS, <code>closeWrite</code> first sends TLS's own end of data.</p>
 <h2 id="copying-between-connections"><a href="#copying-between-connections">Copying between connections</a></h2>
 <p><code>net.copy(to, from)</code> copies what one connection reads to another until the first one's data ends, and returns the number of bytes. Small messages go through a buffer. On Linux, when neither connection uses TLS, a steady stream moves from socket to socket inside the kernel with <code>splice</code> and never reaches the program.</p>
-<p>A TCP proxy is two copies, one each way. When one direction ends, the proxy passes the end on with <code>closeWrite</code> and the other direction continues.</p>
+<p>A TCP proxy copies both ways at once. <code>net.relay(a, b)</code> does that: it runs one copy in each direction until both sides have ended their writes, passes the end of each direction on with <code>closeWrite</code> while the other keeps flowing, and returns the bytes that went each way.</p>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="t">void</span> <span class="f">backend</span>(net.<span class="t">Listener</span> ln) {
@@ -225,16 +228,7 @@ keepalive: false</code></pre>
     c.<span class="f">write</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="s">, from the backend</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
 }
 
-<span class="t">void</span> <span class="f">oneWay</span>(net.<span class="t">Conn</span> *to, net.<span class="t">Conn</span> *from, <span class="k">chan</span>[<span class="t">i64</span>] done) {
-    n := net.<span class="f">copy</span>(to, from) <span class="k">catch</span> e {
-        done &lt;- -<span class="n">1</span>
-        <span class="k">return</span>
-    }
-    to.<span class="f">closeWrite</span>() <span class="k">catch</span> e { }
-    done &lt;- n
-}
-
-<span class="t">void</span> <span class="f">proxy</span>(net.<span class="t">Listener</span> ln, <span class="t">u16</span> backendPort, <span class="k">chan</span>[<span class="t">i64</span>] counts) {
+<span class="t">void</span> <span class="f">proxy</span>(net.<span class="t">Listener</span> ln, <span class="t">u16</span> backendPort, <span class="k">chan</span>[<span class="t">String</span>] log) {
     client := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
         <span class="k">return</span>
     }
@@ -245,14 +239,11 @@ keepalive: false</code></pre>
     }
     <span class="k">defer</span> server.<span class="f">close</span>()
 
-    done := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
-    <span class="k">defer</span> done.<span class="f">free</span>()
-    <span class="k">spawn</span> <span class="f">oneWay</span>(&amp;server, &amp;client, done)
-    <span class="f">oneWay</span>(&amp;client, &amp;server, done)
-    _ = &lt;-done
-
-    counts &lt;- client.received
-    counts &lt;- server.received
+    up, down := net.<span class="f">relay</span>(&amp;client, &amp;server, idle: <span class="n">30s</span>) <span class="k">catch</span> e {
+        log &lt;- <span class="f">format</span>(<span class="s">&quot;relay ended: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="k">return</span>
+    }
+    log &lt;- <span class="f">format</span>(<span class="s">&quot;the proxy moved </span><span class="e">{</span>up<span class="e">}</span><span class="s"> bytes up and </span><span class="e">{</span>down<span class="e">}</span><span class="s"> bytes down&quot;</span>)
 }
 
 !<span class="t">void</span> <span class="f">main</span>() {
@@ -260,9 +251,9 @@ keepalive: false</code></pre>
     <span class="k">spawn</span> <span class="f">backend</span>(back)
 
     front := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
-    counts := <span class="k">chan</span>[<span class="t">i64</span>](<span class="n">2</span>)
-    <span class="k">defer</span> counts.<span class="f">free</span>()
-    <span class="k">spawn</span> <span class="f">proxy</span>(front, back.port, counts)
+    log := <span class="k">chan</span>[<span class="t">String</span>](<span class="n">1</span>)
+    <span class="k">defer</span> log.<span class="f">free</span>()
+    <span class="k">spawn</span> <span class="f">proxy</span>(front, back.port, log)
 
     c := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, front.port)
     <span class="k">defer</span> c.<span class="f">close</span>()
@@ -271,14 +262,13 @@ keepalive: false</code></pre>
 
     <span class="k">scoped</span> <span class="t">String</span> reply = <span class="k">try</span> c.<span class="f">readLine</span>()
     <span class="f">print</span>(reply)
-
-    up := &lt;-counts
-    down := &lt;-counts
-    <span class="f">print</span>(<span class="s">&quot;the proxy moved </span><span class="e">{</span>up<span class="e">}</span><span class="s"> bytes up and </span><span class="e">{</span>down<span class="e">}</span><span class="s"> bytes down&quot;</span>)
+    <span class="k">scoped</span> <span class="t">String</span> line = &lt;-log
+    <span class="f">print</span>(line)
 }</code></pre>
 <pre class="out"><code>hello, from the backend
 the proxy moved 6 bytes up and 24 bytes down</code></pre>
-<p><code>received</code> and <code>sent</code> count the bytes each connection moved, even through an error, which is what a proxy logs. Each copy waits for data as long as its connection's <code>setTimeout</code> allows, so that timeout acts as an idle timeout. <code>limit</code> stops a copy after that many bytes.</p>
+<p><code>idle</code> ends the relay with <code>NetError.timeout</code> once no byte has moved either way for that long. A download that only goes one way keeps it going. An error in one direction ends both, and the relay doesn't close either connection.</p>
+<p><code>net.copy(to, from)</code> is one direction alone. Each of its waits is as long as its connection's <code>setTimeout</code> allows, and <code>limit</code> stops it after that many bytes. <code>received</code> and <code>sent</code> count the bytes each connection moved, even through an error, which is what a proxy logs.</p>
 <h2 id="the-first-bytes"><a href="#the-first-bytes">The first bytes</a></h2>
 <p><code>peek(n)</code> gives the next n bytes without consuming them. A server can look at them to tell what a connection is before it decides who handles it. On a connection without TLS the bytes stay in the socket, so whatever reads next gets them, <code>acceptTls</code> and <code>copy</code> included.</p>
 <pre class="code run"><code><span class="k">import</span> net, <span class="t">str</span>
@@ -379,7 +369,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.71.0</span>
+    <span>Iris v0.72.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
