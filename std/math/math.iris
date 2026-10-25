@@ -211,3 +211,17 @@ pub i64 subWrap(i64 a, i64 b) => rawWrap(a, b, 1)
 
 // a * b, wrapping around past the ends of i64, in every build.
 pub i64 mulWrap(i64 a, i64 b) => rawWrap(a, b, 2)
+
+@extern("iris_math_mul_full")
+u64 rawMulFull(u64 a, u64 b, u64 *lo)
+
+// The high 64 bits of the 128-bit product a * b, for hashing and
+// fixed-point math: mulHigh(x, n) is x scaled into 0..n.
+pub u64 mulHigh(u64 a, u64 b) => rawMulFull(a, b, null)
+
+// The 128-bit product a * b as (high, low) 64 bits.
+pub (u64, u64) mulFull(u64 a, u64 b) {
+    u64 lo
+    hi := rawMulFull(a, b, &lo)
+    return (hi, lo)
+}

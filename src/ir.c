@@ -1231,7 +1231,7 @@ static void addTemp(IR *ir, const char *slot) {
  * or array points at its element's table; an enum at its values' names,
  * { ptr name, i64 len, i64 value }. */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP };
 
 static void jsonFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n) {
     NodeList *fields = &t->decl->list;
@@ -1318,6 +1318,20 @@ static const char *jsonType(IR *ir, Type *t) {
         if (isJsonList(t)) {
             kind = J_LIST;
             items = jsonType(ir, t->args[0]);
+            break;
+        }
+        if (isJsonMap(t)) {
+            /* the value's table, the key's size, and where the value is in an entry */
+            kind = J_MAP;
+            Type *k = t->args[0], *v = t->args[1];
+            int64_t ks = typeSizeOf(k), va = typeAlignOf(v);
+            int64_t vo = (ks + va - 1) / va * va;
+            int64_t es = vo + typeSizeOf(v), ea = va > 8 ? va : 8;
+            es = (es + ea - 1) / ea * ea;
+            const char *vt = jsonType(ir, v);
+            items = fmt(ir, "@json.%d.map", id);
+            sbPrintf(&ir->head, "%s = private constant { ptr, i64, i64, i64 } { ptr %s, i64 %lld, i64 %lld, i64 %lld }\n",
+                     items, vt, (long long)ks, (long long)vo, (long long)es);
             break;
         }
         kind = J_STRUCT;

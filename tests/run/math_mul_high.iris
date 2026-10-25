@@ -1,0 +1,20 @@
+// expect: 18446744073709551614 1
+// expect: 1 0
+// expect: 0 6
+// expect: 2 12297829382473034410
+// expect: 2 7
+import math
+
+void main() {
+    max := ~u64(0)
+    hi, lo := math.mulFull(max, max)
+    print("{hi} {lo}")
+    hi2, lo2 := math.mulFull(u64(1) << 32, u64(1) << 32)
+    print("{hi2} {lo2}")
+    hi3, lo3 := math.mulFull(2, 3)
+    print("{hi3} {lo3}")
+    u64 x = 0xaaaaaaaaaaaaaaaa
+    print("{math.mulHigh(x, 4)} {x}")
+    // a 64-bit hash scaled into 0..n: the high half of h * n
+    print("{math.mulHigh(u64(1) << 62, 10)} {math.mulHigh(max, 8)}")
+}

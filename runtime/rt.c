@@ -755,6 +755,13 @@ int64_t iris_math_wrap(int64_t a, int64_t b, int op) {
     return (int64_t)(op == 0 ? x + y : op == 1 ? x - y : x * y);
 }
 
+/* math.mulHigh and math.mulFull: the 128-bit product of two u64s. */
+uint64_t iris_math_mul_full(uint64_t a, uint64_t b, uint64_t *lo) {
+    __uint128_t p = (__uint128_t)a * b;
+    if (lo) *lo = (uint64_t)p;
+    return (uint64_t)(p >> 64);
+}
+
 /* str.validUtf8: ASCII 8 bytes at a time, then each sequence checked as
    decodeRune does (no overlong forms, surrogates or values past U+10FFFF).
    With count, the characters of valid text are counted on the way: -1 when
@@ -6632,7 +6639,7 @@ int iris_group_lookup(const char *name, int64_t nameLen, int64_t gid, IrisString
    json.encode, json.decode and the free of @json structs work from a table
    the compiler writes for each type (ir.c, jsonType). */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP };
 
 typedef struct JsonType {
     int32_t kind, size;
@@ -6664,6 +6671,22 @@ typedef struct {
     Slice buf;
     int64_t len;
 } JsonList;
+
+/* A Map[K, V] of std/core with str or String keys, which JSON reads and
+   writes as an object. Its slots are entries of a key and a value; state
+   has 0 for an empty slot, 1 for a removed one and 0x80 | 7 bits of the
+   key's hash for a used one (std/core/map.iris). */
+typedef struct {
+    Slice slots, state;
+    int64_t len, removed;
+} JsonMap;
+
+typedef struct {
+    const JsonType *val;
+    int64_t keySize, valOffset, entrySize;  /* keySize: 16 for str, 24 for String */
+} JsonMapInfo;
+
+int64_t iris_hash_bytes(const char *p, int64_t n);
 
 static int64_t readInt(const char *p, int size, bool sign) {
     switch (size) {
@@ -6789,6 +6812,23 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
         iris_string_append(out, "}", 1);
         break;
     }
+    case J_MAP: {
+        const JsonMapInfo *mi = t->items;
+        const JsonMap *m = (const JsonMap *)p;
+        bool first = true;
+        iris_string_append(out, "{", 1);
+        for (int64_t i = 0; i < m->state.len; i++) {
+            if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+            const char *e = m->slots.ptr + i * mi->entrySize;
+            if (!first) iris_string_append(out, ",", 1);
+            first = false;
+            jsonQuote(out, ((const Slice *)e)->ptr, ((const Slice *)e)->len);
+            iris_string_append(out, ":", 1);
+            jsonEncode(out, mi->val, e + mi->valOffset);
+        }
+        iris_string_append(out, "}", 1);
+        break;
+    }
     case J_SLICE: case J_ARRAY: case J_LIST: {
         const JsonType *et = t->items;
         const char *base = p;
@@ -6822,7 +6862,7 @@ void iris_json_encode(const JsonType *t, const char *value, IrisString *out) {
 
 static bool jsonOwns(const JsonType *t) {
     switch (t->kind) {
-    case J_STRING: case J_SLICE: case J_LIST: return true;
+    case J_STRING: case J_SLICE: case J_LIST: case J_MAP: return true;
     case J_ARRAY: return jsonOwns(t->items);
     case J_STRUCT: {
         const JsonField *fs = t->items;
@@ -6834,6 +6874,8 @@ static bool jsonOwns(const JsonType *t) {
     default: return false;
     }
 }
+
+static void jsonMapFree(const JsonType *t, char *p);
 
 /* Frees the Strings and slices inside the value at p, and empties them. */
 static void jsonFree(const JsonType *t, char *p) {
@@ -6866,6 +6908,9 @@ static void jsonFree(const JsonType *t, char *p) {
         s->len = 0;
         break;
     }
+    case J_MAP:
+        jsonMapFree(t, p);
+        break;
     case J_LIST: {
         const JsonType *et = t->items;
         JsonList *l = (JsonList *)p;
@@ -6877,6 +6922,21 @@ static void jsonFree(const JsonType *t, char *p) {
         break;
     }
     }
+}
+
+static void jsonMapFree(const JsonType *t, char *p) {
+    const JsonMapInfo *mi = t->items;
+    JsonMap *m = (JsonMap *)p;
+    bool owns = jsonOwns(mi->val);
+    for (int64_t i = 0; i < m->state.len; i++) {
+        if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+        char *e = m->slots.ptr + i * mi->entrySize;
+        free(((Slice *)e)->ptr);
+        if (owns) jsonFree(mi->val, e + mi->valOffset);
+    }
+    free(m->slots.ptr);
+    free(m->state.ptr);
+    memset(m, 0, sizeof *m);
 }
 
 void iris_json_free(const JsonType *t, char *value) {
@@ -7272,6 +7332,130 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
     return ok;
 }
 
+/* The slot of a key in a map, or of the place it would go, as
+   Map[K, V].slot does it. */
+static int64_t jsonMapSlot(const JsonMap *m, const JsonMapInfo *mi, const char *k, int64_t n, bool *found,
+                           unsigned char *tag) {
+    uint64_t h = (uint64_t)iris_hash_bytes(k, n);
+    int64_t mask = m->state.len - 1, i = (int64_t)(h & (uint64_t)mask), firstRemoved = -1;
+    *tag = (unsigned char)(h >> 57) | 0x80;
+    for (;;) {
+        unsigned char s = (unsigned char)m->state.ptr[i];
+        if (s == 0) {
+            *found = false;
+            return firstRemoved >= 0 ? firstRemoved : i;
+        }
+        if (s == *tag) {
+            const Slice *key = (const Slice *)(m->slots.ptr + i * mi->entrySize);
+            if (key->len == n && !memcmp(key->ptr, k, (size_t)n)) {
+                *found = true;
+                return i;
+            }
+        } else if (s == 1 && firstRemoved < 0) {
+            firstRemoved = i;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+/* Map[K, V].grow: twice the room once half of it is used. */
+static void jsonMapGrow(JsonMap *m, const JsonMapInfo *mi) {
+    JsonMap old = *m;
+    int64_t size = old.slots.len == 0 ? 8 : m->len * 2 >= old.slots.len ? old.slots.len * 2 : old.slots.len;
+    m->slots.ptr = calloc((size_t)size, (size_t)mi->entrySize);
+    m->state.ptr = calloc((size_t)size, 1);
+    if (!m->slots.ptr || !m->state.ptr) outOfMemory();
+    m->slots.len = m->state.len = size;
+    m->removed = 0;
+    for (int64_t i = 0; i < old.state.len; i++) {
+        if ((unsigned char)old.state.ptr[i] < 0x80) continue;
+        const char *e = old.slots.ptr + i * mi->entrySize;
+        bool found;
+        unsigned char tag;
+        int64_t at = jsonMapSlot(m, mi, ((const Slice *)e)->ptr, ((const Slice *)e)->len, &found, &tag);
+        memcpy(m->slots.ptr + at * mi->entrySize, e, (size_t)mi->entrySize);
+        m->state.ptr[at] = (char)tag;
+    }
+    free(old.slots.ptr);
+    free(old.state.ptr);
+}
+
+/* A JSON object into a map: each key's value read in place in its slot. */
+static bool jsonMap(JsonIn *in, const JsonType *t, char *p) {
+    const JsonMapInfo *mi = t->items;
+    JsonMap *m = (JsonMap *)p;
+    jsonMapFree(t, p);          /* what was there before */
+    if (!jsonDeeper(in)) return false;
+    in->p++;
+    jsonWs(in);
+    bool ok = true;
+    IrisString key = {0};
+    if (in->p < in->end && *in->p == '}') {
+        in->p++;
+    } else {
+        for (;;) {
+            jsonWs(in);
+            if (in->p >= in->end || *in->p != '"') {
+                ok = jsonFail(in, 1, "expected a key in quotes");
+                break;
+            }
+            key.len = 0;
+            if (!jsonString(in, &key)) {
+                ok = false;
+                break;
+            }
+            jsonWs(in);
+            if (in->p >= in->end || *in->p != ':') {
+                ok = jsonFail(in, 1, "expected ':' after the key");
+                break;
+            }
+            in->p++;
+            if ((m->len + m->removed + 1) * 4 > m->state.len * 3) jsonMapGrow(m, mi);
+            bool found;
+            unsigned char tag;
+            const char *kp = key.ptr ? key.ptr : "";
+            int64_t at = jsonMapSlot(m, mi, kp, key.len, &found, &tag);
+            char *e = m->slots.ptr + at * mi->entrySize;
+            char *v = e + mi->valOffset;
+            if (found) {
+                jsonFree(mi->val, v); /* a key given twice: the last value wins */
+                memset(v, 0, (size_t)mi->val->size);
+            } else {
+                if (m->state.ptr[at] == 1) m->removed--;
+                Slice *k = (Slice *)e;
+                k->ptr = malloc(key.len ? (size_t)key.len : 1);
+                if (!k->ptr) outOfMemory();
+                memcpy(k->ptr, kp, (size_t)key.len);
+                k->len = key.len;
+                if (mi->keySize == 24) ((IrisString *)e)->cap = key.len;
+                m->state.ptr[at] = (char)tag;
+                m->len++;
+            }
+            if (mi->val->init) memcpy(v, mi->val->init, (size_t)mi->val->size);
+            size_t saved = in->pathLen;
+            pathField(in, kp, key.len);
+            ok = jsonValue(in, mi->val, v);
+            in->pathLen = saved;
+            in->path[saved] = 0;
+            if (!ok) break;
+            jsonWs(in);
+            if (in->p < in->end && *in->p == ',') {
+                in->p++;
+                continue;
+            }
+            if (in->p < in->end && *in->p == '}') {
+                in->p++;
+                break;
+            }
+            ok = jsonFail(in, 1, "expected ',' or '}'");
+            break;
+        }
+    }
+    in->depth--;
+    iris_string_free(&key);
+    return ok;
+}
+
 static bool jsonList(JsonIn *in, const JsonType *t, char *p) {
     const JsonType *et = t->items;
     bool slice = t->kind == J_SLICE || t->kind == J_LIST;
@@ -7450,6 +7634,9 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
     case J_STRUCT:
         if (*in->p != '{') return jsonExpected(in, "an object");
         return jsonStruct(in, t, p);
+    case J_MAP:
+        if (*in->p != '{') return jsonExpected(in, "an object");
+        return jsonMap(in, t, p);
     case J_SLICE: case J_ARRAY: case J_LIST:
         if (*in->p != '[') return jsonExpected(in, "an array");
         return jsonList(in, t, p);

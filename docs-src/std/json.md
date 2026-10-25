@@ -58,7 +58,7 @@ struct Point {
 3,4
 ```
 
-`json.decode(List[Point], text)` reads it into a `List` instead. A `List` field of a `@json` struct is read and written as an array the same way.
+`json.decode(List[Point], text)` reads it into a `List` instead. A `List` field of a `@json` struct is read and written as an array the same way. A `Map` with `str` or `String` keys is read and written as an object.
 
 ## Errors
 
