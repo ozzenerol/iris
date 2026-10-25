@@ -3171,6 +3171,8 @@ enum {
     RING_FEAT_EXT_ARG = 1 << 8,
     RING_ENTER_GETEVENTS = 1 << 0,
     RING_ENTER_EXT_ARG = 1 << 3,
+    RING_SETUP_SINGLE_ISSUER = 1 << 12,
+    RING_SETUP_DEFER_TASKRUN = 1 << 13,
     RING_ENTRIES = 256,         /* a full ring is submitted and refilled */
 };
 
@@ -3195,7 +3197,14 @@ static bool ringSetup(void) {
     }
     RingParams p;
     memset(&p, 0, sizeof p);
+    /* only this thread uses its ring, and the kernel finishes its work
+       when this thread asks for results, in place of interrupting it */
+    p.flags = RING_SETUP_SINGLE_ISSUER | RING_SETUP_DEFER_TASKRUN;
     int fd = (int)syscall(__NR_io_uring_setup, RING_ENTRIES, &p);
+    if (fd < 0) {
+        memset(&p, 0, sizeof p);    /* a kernel before 6.1 */
+        fd = (int)syscall(__NR_io_uring_setup, RING_ENTRIES, &p);
+    }
     if (fd < 0) {
         return false;
     }
