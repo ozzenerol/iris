@@ -3619,7 +3619,16 @@ static void pollEvents(void) {
         fflush(stdout);
     }
 #ifdef __linux__
-    if (block && useRing()) {
+    if (block && useRing() && waitingIo == 0) {
+        /* only another thread can wake this one: it waits on the wake
+           descriptor itself, which wakes it sooner than the ring does with
+           its completions deferred. The ring's own wait on it ends later,
+           and makes no difference then. */
+        if (ring.pending) ringEnter(false, 0);
+        struct pollfd pf = {mySched->wakeR, POLLIN, 0};
+        struct timespec ts = {timeout / 1000000000LL, timeout % 1000000000LL};
+        if (ppoll(&pf, 1, timeout < 0 ? NULL : &ts, NULL) > 0) wakeArrived();
+    } else if (block && useRing()) {
         ringEnter(true, timeout);
         ringReap();
     } else

@@ -174,7 +174,7 @@ def main():
             r[lang + "_mem"] = round(mem, 1)
             cpu = f"  {r[lang + '_cpu_ns']} ns CPU each" if lang + "_cpu_ns" in r else ""
             print(f"{n:15} {lang:5} {r[lang]}  {r[lang + '_mem']} MiB{cpu}", flush=True)
-        if (n in CPU or n in LIB) and len({r["iris_out"], r["rust_out"]}) != 1:
+        if (n in CPU or n in LIB) and "rust_out" in r and len({r["iris_out"], r["rust_out"]}) != 1:
             print(f"warning: {n}: iris and rust print different results", flush=True)
         data["results"][n] = r
     cpu = re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read())
