@@ -9935,7 +9935,7 @@ void *iris_z_new(int compress, int format, int level) {
     int bits = format == 0 ? 31 : format == 1 ? 15 : -15;
     int rc;
     if (compress) {
-        rc = zl.deflateInit2(&z->s, level < 0 ? 6 : level > 9 ? 9 : level, 8, bits, 8, 0, zl.version(),
+        rc = zl.deflateInit2(&z->s, level < 0 ? 5 : level > 9 ? 9 : level, 8, bits, 8, 0, zl.version(),
                              (int)sizeof(ZStream));
     } else {
         rc = zl.inflateInit2(&z->s, format == 0 ? 47 : bits, zl.version(), (int)sizeof(ZStream));
@@ -10669,7 +10669,7 @@ int iris_zip_deflate(const char *in, int64_t n, int level, IrisString *out) {
     if (level != 0) {
         /* the runtime's own deflate (above): zip writes whole entries */
         DfOut o = {0};
-        dfDeflate((const uint8_t *)in, n, level < 0 ? 6 : level, &o);
+        dfDeflate((const uint8_t *)in, n, level < 0 ? 5 : level, &o);
         iris_string_append(out, (const char *)o.out, o.len);
         free(o.out);
         return 0;

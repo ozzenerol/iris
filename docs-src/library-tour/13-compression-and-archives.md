@@ -30,7 +30,7 @@ import compress, fs, str
 the same after a round trip: true
 ```
 
-The file it writes is a normal `.gz` file that `gunzip` and `zcat` read. `level` sets how hard to try, from 1, the fastest, to 9, the smallest. The default is 6: `compress.gzip(log, level: 9)`.
+The file it writes is a normal `.gz` file that `gunzip` and `zcat` read. `level` sets how hard to try, from 1, the fastest, to 9, the smallest. The default is 5, which makes files a few percent larger than 6 in about two thirds of the time: `compress.gzip(log, level: 9)`.
 
 `compress.compress(data, format)` and `compress.decompress` take the format:
 

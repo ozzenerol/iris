@@ -256,7 +256,7 @@ pub !void Archive.extract(str dir) {
 // archive, to write to a file.
 pub struct Writer {
     pub String out
-    // how hard deflate works, from 1 (fastest) to 9 (smallest); 0 is 6
+    // how hard deflate works, from 1 (fastest) to 9 (smallest); 0 is 5
     pub i64 level
     String central
     i64 count
@@ -347,7 +347,7 @@ pub !void Writer.add(str name, str data, Method method = .deflated, i64 mode = 4
         offset := self.out.len
         self.local(name, 8, crc, 0, data.len, date, clock)
         start := self.out.len
-        if rawDeflate(data.ptr, data.len, i32(if self.level >= 1 && self.level <= 9 { self.level } else { 6 }), &self.out) != 0 {
+        if rawDeflate(data.ptr, data.len, i32(if self.level >= 1 && self.level <= 9 { self.level } else { 5 }), &self.out) != 0 {
             truncate(&self.out, offset)
             return error(ZipError.broken, "{name}: {messagePtr()[0:messageLen()]}")
         }

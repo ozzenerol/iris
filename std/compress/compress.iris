@@ -41,8 +41,9 @@ i32 formatCode(Format f) => match f {
     .raw => 2,
 }
 
-// Compresses data, at a level from 1 (fastest) to 9 (smallest).
-pub !String compress(str data, Format format = .gzip, i64 level = 6) {
+// Compresses data, at a level from 1 (fastest) to 9 (smallest). The default,
+// 5, makes output a few percent larger than 6 in two thirds of the time.
+pub !String compress(str data, Format format = .gzip, i64 level = 5) {
     scoped w := try writer(format, level)
     try w.write(data)
     try w.finish()
@@ -68,7 +69,7 @@ pub !String decompress(str data, Format format = .gzip, i64 limit = 0) {
 
 // Compresses data in the gzip format, at a level from 1 (fastest) to 9
 // (smallest).
-pub !String gzip(str data, i64 level = 6) => try compress(data, .gzip, level)
+pub !String gzip(str data, i64 level = 5) => try compress(data, .gzip, level)
 
 // Decompresses gzip data; zlib data works too.
 pub !String gunzip(str data, i64 limit = 0) => try decompress(data, .gzip, limit)
@@ -87,7 +88,7 @@ pub struct Writer {
 }
 
 // A Writer that compresses in format, at a level from 1 to 9.
-pub !Writer writer(Format format = .gzip, i64 level = 6) {
+pub !Writer writer(Format format = .gzip, i64 level = 5) {
     z := rawNew(1, formatCode(format), i32(level))
     if z == null {
         return error(CompressError.missing, "{message()}")

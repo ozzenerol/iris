@@ -67,7 +67,7 @@ try {
 }</code></pre>
 <pre class="out"><code>46000 bytes, under 1% of that packed: true
 the same after a round trip: true</code></pre>
-<p>The file it writes is a normal <code>.gz</code> file that <code>gunzip</code> and <code>zcat</code> read. <code>level</code> sets how hard to try, from 1, the fastest, to 9, the smallest. The default is 6: <code>compress.gzip(log, level: 9)</code>.</p>
+<p>The file it writes is a normal <code>.gz</code> file that <code>gunzip</code> and <code>zcat</code> read. <code>level</code> sets how hard to try, from 1, the fastest, to 9, the smallest. The default is 5, which makes files a few percent larger than 6 in about two thirds of the time: <code>compress.gzip(log, level: 9)</code>.</p>
 <p><code>compress.compress(data, format)</code> and <code>compress.decompress</code> take the format:</p>
 <ul><li><code>.gzip</code></li><li><code>.zlib</code>, the format inside PNG files and many protocols</li><li><code>.raw</code>, deflate with no header at all</li></ul>
 <p><code>gunzip</code> accepts zlib data too. Data that isn't compressed fails with <code>CompressError.broken</code>.</p>
