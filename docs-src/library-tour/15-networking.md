@@ -430,13 +430,39 @@ the listener: 1 descriptor, same port: true
 
 For a descriptor used through `import c`, `net.waitRead` and `net.waitWrite` wait in the event loop until it is ready, so other tasks run in the meantime.
 
-The [net library page](../std/index.html#net) has the rest: UDP with `listenUdp` and batches of datagrams, names with `lookup` and `query`, and every function of the module.
+The [net library page](../std/index.html#net) has the rest: names with `lookup` and `query`, and every function of the module.
 
 `listenUnixDatagram(path)` is a Unix socket for messages, each sent and read whole, as syslog's `/dev/log` and systemd take them. `sendTo(data, path)` sends one, and `readFrom(buf)` reads one with the path of the socket it came from. `listenUnixDatagram()` without a path makes one that only sends, and `dialUnixDatagram(path)` one that sends to a single path with `send`. A path that starts with `@` is in Linux's abstract namespace and has no file.
 
 `net.socketPair()` gives two connected sockets: what one writes, the other reads. A program hands one to a program it starts, as a kept descriptor, and keeps the other.
 
 A service that systemd runs with `Type=notify` says it is ready with `net.notifySystemd("READY=1")`, and `"RELOADING=1"`, `"STOPPING=1"` or `"STATUS=..."` as it goes on. A server that hands its sockets to a new version sends `"MAINPID=..."` with the new process's id. It returns false when the program doesn't run under systemd.
+
+## UDP and multicast
+
+`net.listenUdp(port)` makes a socket for datagrams. `readFrom(buf)` reads one with the address it came from, and `sendTo(data, addr)` sends one. `dialUdp(addr)` ties a socket to one peer, so `send` and `read` need no address. `readMany` and `sendMany` move a batch of `Datagram` in one call.
+
+A socket joins a multicast group with `joinGroup(addr, iface)`, where `addr` is a group such as `239.255.255.250` for SSDP or `224.0.0.251` for mDNS, and `iface` is the interface to join on (empty for the default). `leaveGroup` leaves it. `setMulticastHops(n)` sets how many routers a datagram may cross, `1` keeping it on the local network. `setMulticastLoop(on)` says whether what the socket sends also comes back to groups it joined on this machine, and `setMulticastInterface(iface)` picks the interface its multicast goes out of. `setBroadcast(true)` allows sending to the broadcast address.
+
+`readMsg` and `sendMsg` carry more than the bytes. `readMsg(buf)` gives a `Message` with the sender in `from`, and with `setReceiveInfo(true)` the local address it came to in `to` and its TOS byte in `tos`, so a server on several addresses knows which one a datagram reached and can read ECN. `sendMsg(data, addr, from: ..., tos: ...)` sends from a chosen local address with a chosen TOS. On Linux `setGro(true)` lets one `readMsg` take several datagrams of one size at once, their size in `Message.segment`, and passing `segment` to `sendMsg` splits a large buffer into datagrams of that size on the way out.
+
+```iris
+import net
+
+!void main() {
+    u := try net.listenUdp(1900)
+    defer u.close()
+    group := try net.ip("239.255.255.250", 1900)
+    try u.joinGroup(group, "")
+    try u.setMulticastLoop(true)
+    defer u.leaveGroup(group, "") catch e {}
+
+    try u.sendTo("M-SEARCH", group)
+    u8[2048] buf
+    m := try u.readMsg(buf[:])
+    print("{m.len} bytes from {m.from.format()}")
+}
+```
 
 ## TUN devices and the kernel's routes
 
