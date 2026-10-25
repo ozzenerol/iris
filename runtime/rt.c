@@ -4902,11 +4902,13 @@ int iris_rw_size(void) { return (int)sizeof(RwLock); }
 
 /* ---------------------------------------------------------------- net */
 
-/* errno as net's error codes: 1 refused, 2 closed, 3 timeout, 4 notFound, 5 inUse, 6 other */
+/* errno as net's error codes: 1 refused, 2 closed, 3 timeout, 4 notFound, 5 inUse, 6 other,
+ * 8 permission, 9 reset (closed, with its own message) */
 static int netCode(int e) {
     switch (e) {
     case ECONNREFUSED: return 1;
-    case ECONNRESET: case EPIPE: case ENOTCONN: return 2;
+    case ECONNRESET: return 9;
+    case EPIPE: case ENOTCONN: return 2;
     case ETIMEDOUT: return 3;
     case EADDRINUSE: return 5;
     case ENOENT: return 4;          /* a Unix socket's file */

@@ -1,0 +1,25 @@
+// expect: closed: NetError.closed, reading: connection reset by the other side
+
+// a connection closed with SO_LINGER 0 reads as a reset, not a plain close
+import net
+
+void resetOne(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    c.setLinger(0s) catch e { }
+    c.close()
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn resetOne(ln)
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    u8[10] buf
+    _ = c.read(buf[:]) catch e {
+        print("closed: {e.code}, {e.message}")
+        return
+    }
+    print("no error")
+}
