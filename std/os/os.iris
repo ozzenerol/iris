@@ -121,7 +121,40 @@ pub !String hostname() {
 pub i64 pid() => i64(rawPid())
 
 @extern("iris_os_run_as")
-i32 rawRunAs(u8 *user, i64 ulen, u8 *group, i64 glen)
+i32 rawRunAs(u8 *user, i64 ulen, u8 *group, i64 glen, u64 keep)
+
+@extern("iris_os_has_cap")
+i32 rawHasCap(i32 cap)
+
+// Linux's capabilities, the parts of root's power a program can keep
+// after runAs: netAdmin to set up interfaces, routes and SO_MARK,
+// netBindService to bind ports below 1024, netRaw for raw sockets, and
+// the others by their CAP_ names.
+pub enum Capability {
+    chown, dacOverride, fowner, kill, setgid, setuid, netBindService, netAdmin, netRaw, ipcLock, sysChroot,
+    sysAdmin, sysResource, sysTime, auditWrite
+}
+
+i64 capNumber(Capability c) => match c {
+    .chown => 0
+    .dacOverride => 1
+    .fowner => 3
+    .kill => 5
+    .setgid => 6
+    .setuid => 7
+    .netBindService => 10
+    .netAdmin => 12
+    .netRaw => 13
+    .ipcLock => 14
+    .sysChroot => 18
+    .sysAdmin => 21
+    .sysResource => 24
+    .sysTime => 25
+    .auditWrite => 29
+}
+
+// Whether the thread has the capability (off Linux: whether it is root).
+pub bool hasCapability(Capability c) => rawHasCap(i32(capNumber(c))) != 0
 
 @extern("iris_os_uid")
 i64 rawUid()
@@ -139,15 +172,22 @@ i32 rawUser(String *out)
 // every capability too. Only root may change to another user, so the rest
 // fail with OsError.permission; asking for the user and group the program
 // already runs as does nothing. notFound for a user or group that doesn't
-// exist.
-pub !void runAs(str user, str group = "") {
-    code := rawRunAs(user.ptr, user.len, group.ptr, group.len)
+// exist. keep names capabilities the thread that calls it keeps, and the
+// threads it starts later, on Linux: keep: [.netAdmin] for a VPN that
+// sets routes, nothing else.
+pub !void runAs(str user, str group = "", Capability[] keep = []) {
+    u64 mask = 0
+    for c in keep {
+        mask |= u64(1) << u64(capNumber(c))
+    }
+    code := rawRunAs(user.ptr, user.len, group.ptr, group.len, mask)
     match code {
         0 => {}
         1 => return error(OsError.notFound, "{user}: no such user")
         2 => return error(OsError.notFound, "{group}: no such group")
         3 => return error(OsError.permission, "running as {user}: only root may change user")
         4 => return error(OsError.other, "running as {user}: root could still be taken back")
+        6 => return error(OsError.other, "running as {user}: capabilities can be kept only on Linux")
         _ => return error(OsError.other, "running as {user}: the system refused")
     }
 }

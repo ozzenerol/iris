@@ -2846,7 +2846,38 @@ int iris_os_chdir(const char *path, int64_t n) {
    user, so root can't be taken back (and on Linux every capability goes).
    0; 1 no such user, 2 no such group, 3 not allowed, 4 root could be
    taken back, 5 another error. Already that user and group: 0. */
-int iris_os_run_as(const char *user, int64_t ulen, const char *group, int64_t glen) {
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <linux/capability.h>
+#include <sys/syscall.h>
+
+/* The calling thread's capabilities: effective and permitted set to
+   keep's bits (CAP_* numbers below 64), none inheritable. */
+static int capsSet(uint64_t keep) {
+    struct __user_cap_header_struct h = {_LINUX_CAPABILITY_VERSION_3, 0};
+    struct __user_cap_data_struct d[2];
+    memset(d, 0, sizeof d);
+    d[0].effective = d[0].permitted = (uint32_t)keep;
+    d[1].effective = d[1].permitted = (uint32_t)(keep >> 32);
+    return (int)syscall(SYS_capset, &h, d);
+}
+
+/* Whether the calling thread has capability cap in its effective set. */
+int iris_os_has_cap(int cap) {
+    struct __user_cap_header_struct h = {_LINUX_CAPABILITY_VERSION_3, 0};
+    struct __user_cap_data_struct d[2];
+    memset(d, 0, sizeof d);
+    if (syscall(SYS_capget, &h, d) != 0 || cap < 0 || cap >= 64) return 0;
+    return (d[cap / 32].effective >> (cap % 32)) & 1;
+}
+#else
+int iris_os_has_cap(int cap) {
+    (void)cap;
+    return geteuid() == 0;
+}
+#endif
+
+int iris_os_run_as(const char *user, int64_t ulen, const char *group, int64_t glen, uint64_t keep) {
     char *u = cpath(user, ulen);
     if (!u) return 1;
     char buf[16384];
@@ -2874,11 +2905,29 @@ int iris_os_run_as(const char *user, int64_t ulen, const char *group, int64_t gl
         return 0;
     }
     int code = 0;
+#ifdef __linux__
+    /* the capabilities to keep stay permitted through setuid */
+    if (keep && prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) {
+        free(u);
+        return 5;
+    }
+#else
+    if (keep) {
+        free(u);
+        return 6;
+    }
+#endif
     if (initgroups(u, (int)gid) != 0 || setgid(gid) != 0 || setuid(uid) != 0) {
         code = errno == EPERM ? 3 : 5;
-    } else if (uid != 0 && setuid(0) == 0) {
+    } else if (uid != 0 && !(keep & (1ULL << 7)) && setuid(0) == 0) {    /* CAP_SETUID could do it */
         code = 4;
     }
+#ifdef __linux__
+    if (keep) {
+        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+        if (!code && capsSet(keep) != 0) code = 5;
+    }
+#endif
     free(u);
     return code;
 }

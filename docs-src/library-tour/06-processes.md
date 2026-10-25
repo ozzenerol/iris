@@ -280,6 +280,8 @@ import net, os
 }
 ```
 
+On Linux, `keep` holds on to some of root's power: `os.runAs("vpn", keep: [.netAdmin])` leaves the program able to set up interfaces and routes, and nothing else, and `.netBindService` lets it bind ports below 1024 later. The thread that calls `runAs` keeps them, and the threads it starts after, so a program calls it before it starts its threads. `os.hasCapability(.netAdmin)` says whether the thread has one.
+
 Only root may change to another user: anyone else gets `OsError.permission`, except when asking for the user and group the program already runs as, which does nothing. A user or group that doesn't exist gives `OsError.notFound`. `os.uid()` and `os.gid()` give the ids the program runs as, and `os.user()` the user's name.
 
 `os.lookupUser(name)` and `os.lookupUserId(uid)` give a `User` from the system's user database: its `name`, `uid`, `gid`, `home`, `shell` and `gecos`, and `groups()`, the ids of every group it is in. `os.lookupGroup(name)` and `os.lookupGroupId(gid)` give a `Group` with its `name`, `gid` and `members`.
