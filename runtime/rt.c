@@ -6710,6 +6710,120 @@ int iris_process_run(const Slice *argv, int64_t argc, const char *input, int64_t
     return 0;
 }
 
+/* Starts argv without waiting for it: it shares this program's standard
+   input, output and error, and gets keep[i] as descriptor 3 + i. 0 with
+   *pid and *handle (a pidfd on Linux, else -1), 1 when it can't be found,
+   2 when it can't be started. */
+int iris_process_start(const Slice *argv, int64_t argc, const int *keep, int64_t nkeep, int64_t *pid,
+                       int *handle) {
+    if (argc < 1) return 1;
+    char **args = calloc((size_t)argc + 1, sizeof(char *));
+    if (!args) outOfMemory();
+    for (int64_t i = 0; i < argc; i++) args[i] = cpath(argv[i].ptr, argv[i].len);
+    int execP[2];
+    if (pipe(execP)) {
+        for (int64_t i = 0; i < argc; i++) free(args[i]);
+        free(args);
+        return 2;
+    }
+    fcntl(execP[0], F_SETFD, FD_CLOEXEC);
+    fcntl(execP[1], F_SETFD, FD_CLOEXEC);
+    fflush(stdout);
+    fflush(stderr);
+    pid_t p = fork();
+    if (p == 0) {
+        /* each kept descriptor goes out of the way first, so moving one
+           to 3 + i can't close another that is still to move */
+        int base = 3 + (int)nkeep + 1;
+        for (int64_t i = 0; i < nkeep; i++) {
+            if (keep[i] >= base) base = keep[i] + 1;
+        }
+        int moved[256];
+        for (int64_t i = 0; i < nkeep && i < 256; i++) moved[i] = fcntl(keep[i], F_DUPFD, base);
+        for (int64_t i = 0; i < nkeep && i < 256; i++) {
+            if (moved[i] < 0 || dup2(moved[i], 3 + (int)i) < 0) _exit(126);
+            close(moved[i]);
+        }
+        /* threads that splice hold SIGPIPE: the program starts without that */
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, NULL);
+        execvp(args[0], args);
+        int e = errno;
+        ssize_t w = write(execP[1], &e, sizeof e);
+        (void)w;
+        _exit(127);
+    }
+    close(execP[1]);
+    for (int64_t i = 0; i < argc; i++) free(args[i]);
+    free(args);
+    if (p < 0) {
+        close(execP[0]);
+        return 2;
+    }
+    int execErr = 0;
+    ssize_t got = read(execP[0], &execErr, sizeof execErr);
+    close(execP[0]);
+    if (got == (ssize_t)sizeof execErr) {
+        waitpid(p, NULL, 0);
+        return execErr == ENOENT ? 1 : 2;
+    }
+    *pid = p;
+    *handle = -1;
+#ifdef __linux__
+    int h = (int)syscall(434 /* pidfd_open */, p, 0);
+    if (h >= 0) {
+        fcntl(h, F_SETFD, FD_CLOEXEC);
+        *handle = h;
+    }
+#endif
+    return 0;
+}
+
+/* Whether a started program ended: 1 with *status (its exit status, or
+   128 + the signal), 0 while it runs. */
+int iris_process_poll(int64_t pid, int *status) {
+    int st = 0;
+    pid_t r = waitpid((pid_t)pid, &st, WNOHANG);
+    if (r == 0) return 0;
+    if (r < 0) {
+        *status = -1;
+        return 1;
+    }
+    *status = WIFEXITED(st) ? WEXITSTATUS(st) : WIFSIGNALED(st) ? 128 + WTERMSIG(st) : 1;
+    return 1;
+}
+
+/* Waits for a started program to end, letting the other tasks run: on
+   Linux its pidfd in the event loop, elsewhere checks with growing sleeps.
+   Gives its status; closes handle. */
+int iris_process_wait(int64_t pid, int handle) {
+    int status = 0;
+    int64_t pause = 1000000;
+    while (!iris_process_poll(pid, &status)) {
+        if (handle >= 0) {
+            waitFd(handle, 0);
+            continue;
+        }
+        iris_sleep(pause);
+        if (pause < 50000000) pause *= 2;
+    }
+    if (handle >= 0) {
+        fdForget(handle);
+        close(handle);
+    }
+    return status;
+}
+
+void iris_process_signal(int64_t pid, int kill9) { kill((pid_t)pid, kill9 ? SIGKILL : SIGTERM); }
+
+void iris_process_release(int handle) {
+    if (handle >= 0) {
+        fdForget(handle);
+        close(handle);
+    }
+}
+
 /* ---------------------------------------------------------------- TLS
 
    TLS uses OpenSSL, loaded with dlopen the first time a program uses it,

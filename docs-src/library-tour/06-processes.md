@@ -143,6 +143,63 @@ ProcessError.notFound: no-such-program: no such program
 
 A shell command with pipes and `>` runs through `sh -c`, as above.
 
+## Programs that run beside this one
+
+`process.start(argv)` starts a program and returns at once with a `Child`. The program shares this one's standard input, output and error. `wait` waits for it to end and gives its exit status, while the other tasks run. `running` says whether it still runs, `stop` asks it to end (SIGTERM) and `kill` ends it at once (SIGKILL). A program a signal ended has the status 128 plus the signal's number.
+
+```iris run
+import process
+
+!void main() {
+    sleeper := try process.start(["sleep", "10"])
+    print("running: {sleeper.running()}")
+    sleeper.stop()
+    print("ended with {sleeper.wait()}")
+
+    job := try process.start(["sh", "-c", "exit 4"])
+    print("the job ended with {job.wait()}")
+}
+```
+
+```output
+running: true
+ended with 143
+the job ended with 4
+```
+
+`keep` hands the program open descriptors, which it gets as 3, 4 and so on, in order. A server upgrades this way without dropping a connection: it starts its next version with its listening socket, the new process takes it with `net.adoptListener(3)` and accepts on it, and the old one stops accepting and lets its own connections finish. Here the program starts itself again as its next version. Built with `iris build` and run, it prints `served by the new version`:
+
+```iris
+import net, os, process
+
+!void next() {
+    ln := try net.adoptListener(3)
+    defer ln.close()
+    c := try ln.accept()
+    defer c.close()
+    try c.write("served by the new version\n")
+}
+
+!void main() {
+    if os.argc() > 1 && os.arg(1) == "--next" {
+        try next()
+        return
+    }
+    ln := try net.listen(0, "127.0.0.1")
+    port := ln.port
+    newer := try process.start([os.arg(0), "--next"], keep: [ln.fd()])
+    ln.close()      // the new version has its own copy of the socket
+
+    c := try net.dial("127.0.0.1", port)
+    defer c.close()
+    scoped String line = try c.readLine()
+    print(line)
+    _ = newer.wait()
+}
+```
+
+Connections that wait to be accepted stay in the socket's queue while the versions change, so none is refused. `os.arg(0)` is the program's own path. `iris run` deletes the program it built once the program starts, so a program that starts itself has to be built.
+
 ## Input
 
 The second argument to `run` goes to the program's standard input:

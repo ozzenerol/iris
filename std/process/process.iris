@@ -43,3 +43,89 @@ pub !Output run(str[] argv, str input = "") {
     }
     return o
 }
+
+@extern("iris_process_start")
+i32 rawStart(str *argv, i64 argc, i32 *keep, i64 nkeep, i64 *pid, i32 *handle)
+
+@extern("iris_process_poll")
+i32 rawPoll(i64 pid, i32 *status)
+
+@extern("iris_process_wait")
+i32 rawWaitChild(i64 pid, i32 handle)
+
+@extern("iris_process_signal")
+void rawSignal(i64 pid, i32 kill9)
+
+@extern("iris_process_release")
+void rawRelease(i32 handle)
+
+// A program that start runs beside this one. pid is its process id.
+pub struct Child {
+    pub i64 pid
+    i32 handle
+    bool ended
+    i32 status
+}
+
+// Starts argv[0] with the arguments that follow, as run does, and doesn't
+// wait for it: it shares this program's standard input, output and error,
+// and its environment. keep are descriptors it gets as 3, 4 and so on, in
+// order: a server passes its listening sockets to its next version this
+// way, which takes the first with net.adoptListener(3).
+pub !Child start(str[] argv, i32[] keep = []) {
+    if argv.len == 0 {
+        return error(ProcessError.notFound, "start needs the program's name")
+    }
+    if keep.len > 256 {
+        return error(ProcessError.failed, "{argv[0]}: at most 256 descriptors can be kept")
+    }
+    Child c
+    code := rawStart(argv.ptr, argv.len, keep.ptr, keep.len, &c.pid, &c.handle)
+    if code == 1 {
+        return error(ProcessError.notFound, "{argv[0]}: no such program")
+    }
+    if code != 0 {
+        return error(ProcessError.failed, "{argv[0]}: can't be started")
+    }
+    return c
+}
+
+// Waits for the program to end, while the other tasks run, and gives its
+// exit status: 128 + the signal's number when a signal ended it.
+pub i32 Child.wait() {
+    if !self.ended {
+        self.status = rawWaitChild(self.pid, self.handle)
+        self.ended = true
+        self.handle = -1
+    }
+    return self.status
+}
+
+// Whether the program still runs. Once it ended, wait gives its status
+// at once.
+pub bool Child.running() {
+    if self.ended {
+        return false
+    }
+    if rawPoll(self.pid, &self.status) == 0 {
+        return true
+    }
+    self.ended = true
+    rawRelease(self.handle)
+    self.handle = -1
+    return false
+}
+
+// Asks the program to stop (SIGTERM).
+pub void Child.stop() {
+    if !self.ended {
+        rawSignal(self.pid, 0)
+    }
+}
+
+// Ends the program at once (SIGKILL).
+pub void Child.kill() {
+    if !self.ended {
+        rawSignal(self.pid, 1)
+    }
+}

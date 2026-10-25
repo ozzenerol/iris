@@ -1,0 +1,54 @@
+// expect: exit status 3
+// expect: running before stop: true, status after: 143, running after: false
+// expect: through descriptor 3: from the child
+// expect: ProcessError.notFound
+// expect: ticks while waiting: true
+
+import fs, net, process
+
+void tick(chan[i64] out) {
+    i64 n = 0
+    for i in 0..5 {
+        sleep(10ms)
+        n += 1
+    }
+    out <- n
+}
+
+!void main() {
+    c := try process.start(["sh", "-c", "exit 3"])
+    print("exit status {c.wait()}")
+
+    s := try process.start(["sleep", "5"])
+    before := s.running()
+    s.stop()
+    status := s.wait()
+    print("running before stop: {before}, status after: {status}, running after: {s.running()}")
+
+    // the child writes to a connection it got as descriptor 3
+    scoped String dir = try fs.tempDir("iris-start")
+    scoped String path = format("{dir}/s")
+    ln := try net.listenUnix(path)
+    defer ln.close()
+    mine := try net.dialUnix(path)
+    defer mine.close()
+    theirs := try ln.accept()
+    w := try process.start(["sh", "-c", "echo from the child >&3"], keep: [theirs.fd()])
+    theirs.close()
+    _ = w.wait()
+    scoped String line = try mine.readLine()
+    print("through descriptor 3: {line}")
+    try fs.removeAll(dir)
+
+    _ = process.start(["no-such-program-iris"]) catch e {
+        print("{e.code}")
+        process.Child{}
+    }
+
+    ticks := chan[i64](1)
+    defer ticks.free()
+    spawn tick(ticks)
+    z := try process.start(["sleep", "0.2"])
+    _ = z.wait()
+    print("ticks while waiting: {<-ticks == 5}")
+}
