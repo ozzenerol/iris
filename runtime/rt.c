@@ -4193,9 +4193,8 @@ static _Thread_local unsigned yieldCount;
 /* lets the other ready tasks run */
 void iris_yield(void) {
     makeReady(current);
-    /* tasks that yield in a loop still let timers and I/O through, so
-       a task sleeping or waiting on a descriptor isn't starved */
-    if (sleepers) wakeSleepers();
+    /* tasks that yield in a loop still let timers and I/O through every
+       64 yields, so a task sleeping or waiting on a descriptor isn't starved */
     if (++yieldCount % 64 == 0) pollEventsHow(true);
     schedule();
 }
