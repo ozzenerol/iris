@@ -1,0 +1,106 @@
+// expect: matches: true true true true false false false
+// expect: v5 granted 2
+// expect:   home/x/temp 'kept' qos 1 retain true
+// expect:   home/kitchen/temp '0' qos 0 retain false
+// expect:   home/kitchen/temp '1' qos 1 retain false
+// expect:   home/kitchen/temp '2' qos 2 retain false
+// expect: v5 unsubscribed: MqttError.timeout
+// expect: v4 granted 2
+// expect:   home/x/temp 'kept' qos 1 retain true
+// expect:   home/kitchen/temp '0' qos 0 retain false
+// expect:   home/kitchen/temp '1' qos 1 retain false
+// expect:   home/kitchen/temp '2' qos 2 retain false
+// expect: v4 unsubscribed: MqttError.timeout
+// expect: will: sensor/1/status 'gone'
+// expect: wrong password: MqttError.refused
+// expect: not allowed: MqttError.refused
+// expect: big: 2000000 bytes
+
+import mqtt, net
+
+bool checkLogin(str id, str user, str password) => user != "eve" || password == "right"
+
+bool allowTopic(str user, str topic, bool write) => topic != "secret/#"
+
+void serveIt(net.Listener ln) {
+    mqtt.serveOn(ln, mqtt.Broker{login: checkLogin, allow: allowTopic}) catch e { }
+}
+
+!void round(u16 port, i64 v) {
+    sub := try mqtt.connect("127.0.0.1", port, mqtt.Options{version: v, clientId: "sub"})
+    defer sub.close()
+    pc := try mqtt.connect("127.0.0.1", port, mqtt.Options{version: v})
+    defer pc.close()
+    try pc.publish("home/x/temp", "kept", 1, true)
+    g := try sub.subscribe("home/+/temp", 2)
+    print("v{v} granted {g}")
+    for q in 0..3 {
+        scoped String text = format("{q}")
+        try pc.publish("home/kitchen/temp", text, q)
+    }
+    try pc.publish("home/kitchen/light", "on", 1)
+    for i in 0..4 {
+        m := try sub.next(5s)
+        print("  {m.topic} '{m.payload}' qos {m.qos} retain {m.retain}")
+        m.free()
+    }
+    try sub.unsubscribe("home/+/temp")
+    try pc.publish("home/kitchen/temp", "late", 1)
+    m := sub.next(200ms) catch e {
+        print("v{v} unsubscribed: {e.code}")
+        mqtt.Message{}
+    }
+    m.free()
+    try pc.publish("home/x/temp", "", 1, true)
+}
+
+// A client that logs in with a will and goes away without a DISCONNECT.
+!void vanish(u16 port) {
+    c := try net.dial("127.0.0.1", port)
+    // CONNECT, 3.1.1, clean, a will at QoS 1, keep alive 60, id "s1"
+    u8[10] head = [0, 4, 'M', 'Q', 'T', 'T', 4, 0x0e, 0, 60]
+    String body
+    defer body.free()
+    body.append(head[0:10])
+    for part in ["s1", "sensor/1/status", "gone"] {
+        u8[2] n = [0, u8(part.len)]
+        body.append(n[0:2])
+        body.append(part)
+    }
+    u8[2] fixed = [0x10, u8(body.len)]
+    try c.write(fixed[0:2])
+    try c.write(body)
+    scoped String ack = try c.readExactly(4)
+    c.close()
+}
+
+!void main() {
+    print("matches: {mqtt.matches("a/+/c", "a/b/c")} {mqtt.matches("a/#", "a")} {mqtt.matches("#", "a/b")} {mqtt.matches("+/+", "a/b")} {mqtt.matches("a/+", "a/b/c")} {mqtt.matches("#", "$SYS/x")} {mqtt.matches("a/b", "a")}")
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serveIt(ln)
+    try round(ln.port, 5)
+    try round(ln.port, 4)
+
+    w := try mqtt.connect("127.0.0.1", ln.port)
+    defer w.close()
+    _ = try w.subscribe("sensor/+/status", 1)
+    try vanish(ln.port)
+    m := try w.next(5s)
+    print("will: {m.topic} '{m.payload}'")
+    m.free()
+
+    bad := mqtt.connect("127.0.0.1", ln.port, mqtt.Options{user: "eve", password: "wrong"}) catch e {
+        print("wrong password: {e.code}")
+        w
+    }
+    _ = w.subscribe("secret/#") catch e {
+        print("not allowed: {e.code}")
+        0
+    }
+    scoped String big = "y".repeat(2000000)
+    _ = try w.subscribe("big", 1)
+    try w.publish("big", big, 1)
+    b := try w.next(5s)
+    print("big: {b.payload.len} bytes")
+    b.free()
+}

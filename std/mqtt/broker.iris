@@ -1,0 +1,588 @@
+// An MQTT broker: clients connect, subscribe and publish, and each message
+// goes to the clients whose subscriptions match its topic. Sessions last
+// while their client is connected, and retained messages while the broker
+// runs.
+
+import hex, net, random
+
+// What a broker allows. Each function that is null allows everything.
+pub struct Broker {
+    // whether a client may log in, from its id, user name and password
+    pub bool(str, str, str) login
+    // whether a user may publish to a topic (write) or subscribe to a
+    // filter (not write)
+    pub bool(str, str, bool) allow
+    // how long a new connection has to log in
+    pub Duration loginTimeout = 10s
+    // how many packets may wait for a slow client before it is dropped
+    pub i64 queue = 4096
+}
+
+struct Subscription {
+    String filter
+    i64 qos
+}
+
+struct Retained {
+    String topic
+    String payload
+    i64 qos
+}
+
+// A connected client.
+struct Peer {
+    State *state
+    net.Conn conn
+    i64 version
+    String clientId
+    String user
+    chan[String] out
+    List[Subscription] subs
+    // QoS 2 messages it sent whose PUBREL hasn't come
+    Map[i64, bool] received
+    i64 nextId
+    bool dead
+    bool clean
+    String willTopic
+    String willPayload
+    i64 willQos
+    bool willRetain
+    chan[bool] written
+}
+
+struct State {
+    Broker cfg
+    List[Peer *] peers
+    List[Retained] retained
+}
+
+// Listens on port (1883 is MQTT's) and serves each connection in a task
+// of its own.
+pub !void serve(u16 port, Broker b, str host = "") {
+    ln := try net.listen(port, host)
+    try serveOn(ln, b)
+}
+
+// Serves the connections that come to ln, until it is closed. They are
+// served on this thread.
+pub !void serveOn(net.Listener ln, Broker b) {
+    State[] mem = alloc(State, 1)
+    st := &mem[0]
+    st.cfg = b
+    defer {
+        for r in st.retained {
+            r.topic.free()
+            r.payload.free()
+        }
+        st.retained.free()
+        st.peers.free()
+        free(mem)
+    }
+    for {
+        c := ln.accept() catch e {
+            if e.code == net.NetError.closed {
+                return
+            }
+            continue
+        }
+        spawn peerTask(st, c)
+    }
+}
+
+// Whether topic is one that filter matches: + is any one level, # any
+// number at the end. Topics that start with $ aren't matched by a
+// wildcard at their first level.
+pub bool matches(str filter, str topic) {
+    if topic.len > 0 && topic[0] == '$' && filter.len > 0 && (filter[0] == '+' || filter[0] == '#') {
+        return false
+    }
+    i64 f = 0
+    i64 t = 0
+    for {
+        // the next level of each
+        fe := f
+        for fe < filter.len && filter[fe] != '/' {
+            fe += 1
+        }
+        level := filter[f:fe]
+        if level == "#" {
+            return true
+        }
+        if t > topic.len {
+            // the topic ended before the filter
+            return false
+        }
+        te := t
+        for te < topic.len && topic[te] != '/' {
+            te += 1
+        }
+        if level != "+" && level != topic[t:te] {
+            return false
+        }
+        if fe >= filter.len {
+            return te >= topic.len
+        }
+        f = fe + 1
+        t = te + 1
+    }
+}
+
+bool validFilter(str filter) {
+    if filter.len == 0 {
+        return false
+    }
+    for i in 0..filter.len {
+        c := filter[i]
+        if c == '+' && ((i > 0 && filter[i - 1] != '/') || (i + 1 < filter.len && filter[i + 1] != '/')) {
+            return false
+        }
+        if c == '#' && (i + 1 != filter.len || (i > 0 && filter[i - 1] != '/')) {
+            return false
+        }
+    }
+    return true
+}
+
+bool validTopic(str topic) {
+    if topic.len == 0 {
+        return false
+    }
+    for c in topic {
+        if c == '+' || c == '#' {
+            return false
+        }
+    }
+    return true
+}
+
+void Peer.send(i64 head, str body) {
+    if self.dead {
+        return
+    }
+    if !self.out.trySend(packet(head, body)) {
+        // too slow: dropped, as it can't keep up
+        self.fail()
+    }
+}
+
+void Peer.fail() {
+    if self.dead {
+        return
+    }
+    self.dead = true
+    self.conn.interrupt()
+}
+
+void peerWriter(Peer *p) {
+    for {
+        m := <-p.out
+        if m.len == 0 {
+            m.free()
+            break
+        }
+        p.conn.write(m) catch e {
+            m.free()
+            p.fail()
+            break
+        }
+        m.free()
+    }
+    p.written <- true
+}
+
+// Sends message to every peer subscribed to topic.
+void State.route(str topic, str payload, i64 qos) {
+    for p in self.peers {
+        if p.dead {
+            continue
+        }
+        i64 best = -1
+        for s in p.subs {
+            if s.qos > best && matches(s.filter, topic) {
+                best = s.qos
+            }
+        }
+        if best >= 0 {
+            p.deliver(topic, payload, qos if qos < best else best, false)
+        }
+    }
+}
+
+void Peer.deliver(str topic, str payload, i64 qos, bool retain) {
+    String b
+    b.reserve(topic.len + payload.len + 5)
+    putStr(&b, topic)
+    if qos > 0 {
+        putU16(&b, self.nextId)
+        self.nextId = self.nextId % 65535 + 1
+    }
+    if self.version == 5 {
+        putVarint(&b, 0)
+    }
+    b.append(payload)
+    self.send(PUBLISH << 4 | qos << 1 | (1 if retain else 0), b)
+    b.free()
+}
+
+void State.retain(str topic, str payload, i64 qos) {
+    for i in 0..self.retained.len {
+        r := self.retained.at(i)
+        if r.topic == topic {
+            r.topic.free()
+            r.payload.free()
+            _ = self.retained.remove(i)
+            break
+        }
+    }
+    if payload.len > 0 {
+        self.retained.push(Retained{topic: topic.copy(), payload: payload.copy(), qos: qos})
+    }
+}
+
+void Peer.free() {
+    self.clientId.free()
+    self.user.free()
+    for s in self.subs {
+        s.filter.free()
+    }
+    self.subs.free()
+    self.received.free()
+    self.willTopic.free()
+    self.willPayload.free()
+    for self.out.len() > 0 {
+        m := <-self.out
+        m.free()
+    }
+    self.out.free()
+    self.written.free()
+    free(self[0:1])
+}
+
+void peerTask(State *st, net.Conn conn) {
+    conn.setNoDelay(true) catch e { }
+    conn.setTimeout(st.cfg.loginTimeout)
+    head, body := readPacket(&conn, MAX_PACKET) catch e {
+        conn.close()
+        return
+    }
+    Peer[] mem = alloc(Peer, 1)
+    p := &mem[0]
+    p.state = st
+    p.conn = conn
+    p.nextId = 1
+    p.out = chan[String](st.cfg.queue if st.cfg.queue > 0 else 1)
+    p.written = chan[bool](1)
+    keepAlive := p.login(head, body)
+    body.free()
+    if keepAlive < 0 {
+        // the refusal goes out first
+        for p.out.len() > 0 {
+            m := <-p.out
+            p.conn.write(m) catch e { }
+            m.free()
+        }
+        p.conn.close()
+        p.free()
+        return
+    }
+    // a client silent for half again its keep alive is gone
+    p.conn.setTimeout(keepAlive * 1500ms if keepAlive > 0 else 0s)
+    // another connection with the same id is taken over
+    for other in st.peers {
+        if other.clientId == p.clientId {
+            other.fail()
+        }
+    }
+    st.peers.push(p)
+    spawn peerWriter(p)
+    for !p.dead {
+        h, b := readPacket(&p.conn, MAX_PACKET) catch e {
+            break
+        }
+        p.handle(h, b)
+        b.free()
+    }
+    p.dead = true
+    for i in 0..st.peers.len {
+        if st.peers.at(i) == p {
+            _ = st.peers.remove(i)
+            break
+        }
+    }
+    if !p.clean && p.willTopic.len > 0 {
+        if p.willRetain {
+            st.retain(p.willTopic, p.willPayload, p.willQos)
+        }
+        st.route(p.willTopic, p.willPayload, p.willQos)
+    }
+    if !p.out.trySend("".copy()) {
+        // full: the writer stops at its next write, as the socket is shut
+        p.conn.interrupt()
+    }
+    _ = <-p.written
+    p.conn.close()
+    p.free()
+}
+
+// Reads CONNECT and answers it: the keep alive in seconds, or -1 when the
+// client is refused.
+i64 Peer.login(i64 head, str body) {
+    r := Reader{data: body}
+    if head >> 4 != CONNECT {
+        return -1
+    }
+    name := r.string()
+    version := r.byte()
+    flags := r.byte()
+    keepAlive := r.u16()
+    if r.bad || name != "MQTT" {
+        return -1
+    }
+    if version != 4 && version != 5 {
+        // 3.1.1's code for it; a 5 client reads it as one too
+        String b
+        putByte(&b, 0)
+        putByte(&b, 1 if version < 5 else 0x84)
+        if version > 5 {
+            putVarint(&b, 0)
+        }
+        self.send(CONNACK << 4, b)
+        b.free()
+        return -1
+    }
+    self.version = version
+    if version == 5 {
+        props := readProperties(&r)
+        props.free()
+    }
+    id := r.string()
+    if flags & 0x04 != 0 {
+        if version == 5 {
+            props := readProperties(&r)
+            props.free()
+        }
+        self.willTopic = r.string().copy()
+        self.willPayload = r.string().copy()
+        self.willQos = flags >> 3 & 3
+        self.willRetain = flags & 0x20 != 0
+    }
+    str user = ""
+    str password = ""
+    if flags & 0x80 != 0 {
+        user = r.string()
+    }
+    if flags & 0x40 != 0 {
+        password = r.string()
+    }
+    if r.bad || flags & 1 != 0 {
+        return -1
+    }
+    self.user = user.copy()
+    bool assigned = false
+    if id.len == 0 {
+        u8[8] b
+        random.bytes(b[0:8])
+        scoped String h = hex.encode(b[0:8])
+        self.clientId = format("iris-{h}")
+        assigned = true
+    } else {
+        self.clientId = id.copy()
+    }
+    ok := self.state.cfg.login == null || self.state.cfg.login(self.clientId, user, password)
+    String b
+    defer b.free()
+    putByte(&b, 0)
+    if !ok {
+        putByte(&b, 0x86 if version == 5 else 4)
+        if version == 5 {
+            putVarint(&b, 0)
+        }
+        self.send(CONNACK << 4, b)
+        return -1
+    }
+    putByte(&b, 0)
+    if version == 5 {
+        String props
+        // no shared subscriptions or subscription ids
+        putByte(&props, 0x2a)
+        putByte(&props, 0)
+        putByte(&props, 0x29)
+        putByte(&props, 0)
+        if assigned {
+            putByte(&props, 0x12)
+            putStr(&props, self.clientId)
+        }
+        putVarint(&b, props.len)
+        b.append(props)
+        props.free()
+    }
+    self.send(CONNACK << 4, b)
+    return keepAlive
+}
+
+void Peer.ack(i64 kind, i64 id) {
+    String b
+    putU16(&b, id)
+    self.send(kind << 4 | (2 if kind == PUBREL else 0), b)
+    b.free()
+}
+
+bool Peer.allowed(str topic, bool write) {
+    f := self.state.cfg.allow
+    return f == null || f(self.user, topic, write)
+}
+
+void Peer.handle(i64 head, str body) {
+    st := self.state
+    kind := head >> 4
+    r := Reader{data: body}
+    if kind == PUBLISH {
+        qos := head >> 1 & 3
+        retain := head & 1 == 1
+        topic := r.string()
+        i64 id = 0
+        if qos > 0 {
+            id = r.u16()
+        }
+        if self.version == 5 {
+            props := readProperties(&r)
+            props.free()
+        }
+        if r.bad || qos == 3 || !validTopic(topic) {
+            self.fail()
+            return
+        }
+        payload := body[r.at:body.len]
+        bool fresh = true
+        if qos == 2 {
+            fresh = !self.received.has(id)
+            self.received.set(id, true)
+        }
+        if fresh && self.allowed(topic, true) {
+            if retain {
+                st.retain(topic, payload, qos)
+            }
+            st.route(topic, payload, qos)
+        }
+        if qos == 1 {
+            self.ack(PUBACK, id)
+        } else if qos == 2 {
+            self.ack(PUBREC, id)
+        }
+        return
+    }
+    if kind == PUBREL {
+        id := r.u16()
+        _ = self.received.remove(id)
+        self.ack(PUBCOMP, id)
+        return
+    }
+    if kind == PUBREC {
+        // a QoS 2 message we sent: released at once
+        self.ack(PUBREL, r.u16())
+        return
+    }
+    if kind == PUBACK || kind == PUBCOMP {
+        return
+    }
+    if kind == SUBSCRIBE {
+        id := r.u16()
+        if self.version == 5 {
+            props := readProperties(&r)
+            props.free()
+        }
+        String b
+        defer b.free()
+        putU16(&b, id)
+        if self.version == 5 {
+            putVarint(&b, 0)
+        }
+        List[str] added
+        defer added.free()
+        for r.at < body.len && !r.bad {
+            filter := r.string()
+            options := r.byte()
+            qos := options & 3
+            if r.bad || qos == 3 || !validFilter(filter) || !self.allowed(filter, false) {
+                putByte(&b, 0x87 if self.version == 5 else 0x80)
+                continue
+            }
+            bool replaced = false
+            for i in 0..self.subs.len {
+                ss := self.subs.items()
+                if ss[i].filter == filter {
+                    ss[i].qos = qos
+                    replaced = true
+                }
+            }
+            if !replaced {
+                self.subs.push(Subscription{filter: filter.copy(), qos: qos})
+            }
+            added.push(filter)
+            putByte(&b, qos)
+        }
+        if r.bad {
+            self.fail()
+            return
+        }
+        self.send(SUBACK << 4, b)
+        // retained messages for what was subscribed to
+        for filter in added {
+            for m in st.retained {
+                if matches(filter, m.topic) {
+                    i64 q = 0
+                    for s in self.subs {
+                        if s.filter == filter {
+                            q = s.qos
+                        }
+                    }
+                    self.deliver(m.topic, m.payload, m.qos if m.qos < q else q, true)
+                }
+            }
+        }
+        return
+    }
+    if kind == UNSUBSCRIBE {
+        id := r.u16()
+        if self.version == 5 {
+            props := readProperties(&r)
+            props.free()
+        }
+        String b
+        defer b.free()
+        putU16(&b, id)
+        if self.version == 5 {
+            putVarint(&b, 0)
+        }
+        for r.at < body.len && !r.bad {
+            filter := r.string()
+            bool found = false
+            for i in 0..self.subs.len {
+                s := self.subs.at(i)
+                if s.filter == filter {
+                    s.filter.free()
+                    _ = self.subs.remove(i)
+                    found = true
+                    break
+                }
+            }
+            if self.version == 5 {
+                putByte(&b, 0 if found else 0x11)
+            }
+        }
+        self.send(UNSUBACK << 4, b)
+        return
+    }
+    if kind == PINGREQ {
+        self.send(PINGRESP << 4, "")
+        return
+    }
+    if kind == DISCONNECT {
+        // a v5 client may still ask for its will with reason 4
+        code := r.byte() if body.len > 0 else 0
+        self.clean = code != 4
+        self.fail()
+        return
+    }
+    self.fail()
+}

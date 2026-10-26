@@ -1,0 +1,838 @@
+// MQTT, the publish and subscribe protocol of sensors, phones and message
+// brokers: a client for MQTT 5 and 3.1.1 brokers such as Mosquitto, and a
+// broker of its own. Messages go to topics ("home/kitchen/temp") and
+// reach the clients that subscribed to them, with + and # matching any
+// level and the rest of the levels.
+
+import hex, net, random, time
+
+pub enum MqttError { connect, refused, closed, protocol, timeout }
+
+const i64 CONNECT = 1
+const i64 CONNACK = 2
+const i64 PUBLISH = 3
+const i64 PUBACK = 4
+const i64 PUBREC = 5
+const i64 PUBREL = 6
+const i64 PUBCOMP = 7
+const i64 SUBSCRIBE = 8
+const i64 SUBACK = 9
+const i64 UNSUBSCRIBE = 10
+const i64 UNSUBACK = 11
+const i64 PINGREQ = 12
+const i64 PINGRESP = 13
+const i64 DISCONNECT = 14
+
+// the largest packet taken, as Mosquitto's default
+const i64 MAX_PACKET = 256MiB
+
+// ------------------------------------------------------------ encoding
+
+void putByte(String *out, i64 v) {
+    u8[1] b = [u8(v & 0xff)]
+    out.append(b[0:1])
+}
+
+void putU16(String *out, i64 v) {
+    u8[2] b = [u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:2])
+}
+
+void putU32(String *out, i64 v) {
+    putU16(out, v >> 16 & 0xffff)
+    putU16(out, v & 0xffff)
+}
+
+void putStr(String *out, str s) {
+    putU16(out, s.len)
+    out.append(s)
+}
+
+void putVarint(String *out, i64 v) {
+    for {
+        d := v & 127
+        v = v >> 7
+        if v > 0 {
+            putByte(out, d | 128)
+        } else {
+            putByte(out, d)
+            return
+        }
+    }
+}
+
+i64 varintSize(i64 v) => 1 if v < 128 else 2 if v < 16384 else 3 if v < 2097152 else 4
+
+// A whole packet: its first byte, its length, then body.
+String packet(i64 head, str body) {
+    String out
+    out.reserve(5 + body.len)
+    putByte(&out, head)
+    putVarint(&out, body.len)
+    out.append(body)
+    return out
+}
+
+// What a packet's body holds, read in order; bad is set once it runs out.
+struct Reader {
+    str data
+    i64 at
+    bool bad
+}
+
+i64 Reader.byte() {
+    if self.at + 1 > self.data.len {
+        self.bad = true
+        return 0
+    }
+    self.at += 1
+    return i64(self.data[self.at - 1])
+}
+
+i64 Reader.u16() {
+    if self.at + 2 > self.data.len {
+        self.bad = true
+        return 0
+    }
+    self.at += 2
+    return i64(self.data[self.at - 2]) << 8 | i64(self.data[self.at - 1])
+}
+
+i64 Reader.u32() => self.u16() << 16 | self.u16()
+
+str Reader.string() {
+    n := self.u16()
+    if self.bad || self.at + n > self.data.len {
+        self.bad = true
+        return ""
+    }
+    self.at += n
+    return self.data[self.at - n:self.at]
+}
+
+i64 Reader.varint() {
+    i64 v = 0
+    for i in 0..4 {
+        d := self.byte()
+        v |= (d & 127) << (7 * i)
+        if d & 128 == 0 {
+            return v
+        }
+    }
+    self.bad = true
+    return 0
+}
+
+// MQTT 5 properties: what the caller looks at, the rest skipped.
+struct Properties {
+    String assignedId
+    String reason
+    i64 keepAlive
+    i64 sessionExpiry
+}
+
+void Properties.free() {
+    self.assignedId.free()
+    self.reason.free()
+}
+
+Properties readProperties(Reader *r) {
+    Properties p
+    p.keepAlive = -1
+    n := r.varint()
+    end := r.at + n
+    if r.bad || end > r.data.len {
+        r.bad = true
+        return p
+    }
+    for r.at < end && !r.bad {
+        id := r.byte()
+        if id == 0x01 || id == 0x17 || id == 0x19 || id == 0x24 || id == 0x25 || id == 0x28 || id == 0x29 || id == 0x2a {
+            _ = r.byte()
+        } else if id == 0x13 {
+            p.keepAlive = r.u16()
+        } else if id == 0x21 || id == 0x22 || id == 0x23 {
+            _ = r.u16()
+        } else if id == 0x11 {
+            p.sessionExpiry = r.u32()
+        } else if id == 0x02 || id == 0x18 || id == 0x27 {
+            _ = r.u32()
+        } else if id == 0x0b {
+            _ = r.varint()
+        } else if id == 0x12 {
+            p.assignedId.free()
+            p.assignedId = r.string().copy()
+        } else if id == 0x1f {
+            p.reason.free()
+            p.reason = r.string().copy()
+        } else if id == 0x03 || id == 0x08 || id == 0x09 || id == 0x12 || id == 0x15 || id == 0x16 || id == 0x1a || id == 0x1c {
+            _ = r.string()
+        } else if id == 0x26 {
+            _ = r.string()
+            _ = r.string()
+        } else {
+            r.bad = true
+        }
+    }
+    if r.at != end {
+        r.bad = true
+    }
+    return p
+}
+
+// The next packet: its first byte and its body.
+!(i64, String) readPacket(net.Conn *c, i64 max) {
+    for {
+        b := c.buffered()
+        if b.len >= 2 {
+            i64 n = 0
+            i64 i = 1
+            bool done = false
+            for i < b.len && i <= 4 {
+                d := i64(b[i])
+                n |= (d & 127) << (7 * (i - 1))
+                i += 1
+                if d & 128 == 0 {
+                    done = true
+                    break
+                }
+            }
+            if !done && i > 4 {
+                return error(MqttError.protocol, "a packet length longer than 4 bytes")
+            }
+            if done {
+                if n > max {
+                    return error(MqttError.protocol, "a packet of {n} bytes, more than the {max} taken")
+                }
+                head := i64(b[0])
+                if b.len >= i + n {
+                    body := b[i:i + n].copy()
+                    c.skip(i + n)
+                    return (head, body)
+                }
+                c.skip(i)
+                body := try c.readExactly(n)
+                return (head, body)
+            }
+        }
+        more := try c.readMore()
+        if !more {
+            return error(MqttError.closed, "the connection is closed")
+        }
+    }
+}
+
+// ------------------------------------------------------------ the client
+
+// How to connect and log in.
+pub struct Options {
+    // the client's name, which the broker keeps its session under; "" lets
+    // an MQTT 5 broker choose one, or makes a random one for 3.1.1
+    pub str clientId
+    pub str user
+    pub str password
+    // a ping goes this often when nothing else does; the broker drops a
+    // client that is silent for half again as long. 0 is never.
+    pub Duration keepAlive = 60s
+    // false keeps the session: subscriptions and the QoS 1 and 2 messages
+    // the broker holds while the client is away
+    pub bool cleanStart = true
+    // 5 for MQTT 5, 4 for 3.1.1
+    pub i64 version = 5
+    // TLS, with the CA file to trust ("" is the system's), and a
+    // certificate and key file to log in with
+    pub bool tls
+    pub str ca
+    pub str cert
+    pub str key
+    // a message the broker publishes when the client goes away without
+    // disconnecting
+    pub str willTopic
+    pub str willMessage
+    pub i64 willQos
+    pub bool willRetain
+    // how long connecting, and each wait for the broker, may take
+    pub Duration timeout = 30s
+    // how many messages may wait for next before reading stops
+    pub i64 queue = 1024
+}
+
+// A message published to a topic.
+pub struct Message {
+    pub String topic
+    pub String payload
+    // 0 at most once, 1 at least once, 2 exactly once
+    pub i64 qos
+    // whether the broker kept it for clients that subscribe later
+    pub bool retain
+}
+
+pub void Message.free() {
+    self.topic.free()
+    self.payload.free()
+}
+
+// What the client and its tasks share.
+struct Shared {
+    net.Conn conn
+    i64 version
+    Duration timeout
+    Duration keepAlive
+    // packets for the writer; an empty one ends it
+    chan[String] out
+    chan[Message] messages
+    // replies waited for, by packet id
+    Map[i64, chan[String]] waiting
+    // QoS 2 messages that came and whose PUBREL hasn't
+    Map[i64, bool] received
+    i64 nextId
+    bool dead
+    String why
+    i64 tasks
+    chan[bool] done
+    chan[bool] stop
+}
+
+// A connection to a broker. It and its tasks stay on the thread that
+// connected.
+pub struct Client {
+    Shared *s
+    // the name the broker knows the client by
+    pub String clientId
+    // whether the broker had a session for it
+    pub bool sessionPresent
+}
+
+// Connects to the broker at host:port (1883, or 8883 with TLS) and logs
+// in. MqttError.refused when the broker won't take the client, with its
+// reason.
+pub !Client connect(str host, u16 port, Options o = Options{}) {
+    if o.version != 4 && o.version != 5 {
+        return error(MqttError.connect, "MQTT version {o.version}: only 5 and 4 (3.1.1) are spoken")
+    }
+    net.Conn conn
+    if o.tls {
+        conn = net.dialTls(host, port, o.ca, o.cert, o.key) catch e {
+            return error(MqttError.connect, "{host}:{port}: {e.message}")
+        }
+    } else {
+        conn = net.dial(host, port, o.timeout) catch e {
+            return error(MqttError.connect, "{host}:{port}: {e.message}")
+        }
+    }
+    conn.setNoDelay(true) catch e { }
+    conn.setTimeout(o.timeout)
+    String id
+    id.append(o.clientId)
+    if id.len == 0 && o.version == 4 {
+        u8[8] b
+        random.bytes(b[0:8])
+        scoped String h = hex.encode(b[0:8])
+        id.append("iris-")
+        id.append(h)
+    }
+    String body
+    putStr(&body, "MQTT")
+    putByte(&body, o.version)
+    i64 flags = 0
+    if o.user.len > 0 {
+        flags |= 0x80
+    }
+    if o.password.len > 0 {
+        flags |= 0x40
+    }
+    if o.willTopic.len > 0 {
+        flags |= 0x04 | (o.willQos & 3) << 3
+        if o.willRetain {
+            flags |= 0x20
+        }
+    }
+    if o.cleanStart {
+        flags |= 0x02
+    }
+    putByte(&body, flags)
+    putU16(&body, o.keepAlive / 1s)
+    if o.version == 5 {
+        if o.cleanStart {
+            putVarint(&body, 0)
+        } else {
+            // the session lasts while the client is away
+            putVarint(&body, 5)
+            putByte(&body, 0x11)
+            putU32(&body, 0xffffffff)
+        }
+    }
+    putStr(&body, id)
+    if o.willTopic.len > 0 {
+        if o.version == 5 {
+            putVarint(&body, 0)
+        }
+        putStr(&body, o.willTopic)
+        putStr(&body, o.willMessage)
+    }
+    if o.user.len > 0 {
+        putStr(&body, o.user)
+    }
+    if o.password.len > 0 {
+        putStr(&body, o.password)
+    }
+    scoped String p = packet(CONNECT << 4, body)
+    body.free()
+    conn.write(p) catch e {
+        id.free()
+        conn.close()
+        return error(MqttError.connect, "{host}:{port}: {e.message}")
+    }
+    head, reply := readPacket(&conn, MAX_PACKET) catch e {
+        id.free()
+        conn.close()
+        return error(MqttError.connect, "{host}:{port} didn't answer the login: {e.message}")
+    }
+    defer reply.free()
+    r := Reader{data: reply}
+    present := r.byte() & 1 == 1
+    code := r.byte()
+    Properties props
+    if o.version == 5 && !r.bad {
+        props = readProperties(&r)
+    }
+    defer props.free()
+    if head >> 4 != CONNACK || r.bad || code != 0 {
+        id.free()
+        conn.close()
+        if head >> 4 != CONNACK || r.bad {
+            return error(MqttError.protocol, "{host}:{port} answered the login with something else")
+        }
+        return error(MqttError.refused, "{host}:{port} refused the login: {connackReason(o.version, code, props.reason)}")
+    }
+    if props.assignedId.len > 0 {
+        id.free()
+        id = props.assignedId.copy()
+    }
+    Duration keepAlive = o.keepAlive
+    if props.keepAlive >= 0 {
+        keepAlive = props.keepAlive * 1s
+    }
+    conn.setTimeout(0s)
+
+    Shared[] mem = alloc(Shared, 1)
+    s := &mem[0]
+    s.conn = conn
+    s.version = o.version
+    s.timeout = o.timeout
+    s.keepAlive = keepAlive
+    s.out = chan[String](256)
+    s.messages = chan[Message](o.queue if o.queue > 0 else 1)
+    s.nextId = 1
+    s.done = chan[bool](3)
+    s.stop = chan[bool](1)
+    s.tasks = 2
+    spawn writer(s)
+    spawn reader(s)
+    if keepAlive > 0s {
+        s.tasks += 1
+        spawn pinger(s)
+    }
+    return Client{s: s, clientId: id, sessionPresent: present}
+}
+
+String connackReason(i64 version, i64 code, str reason) {
+    if reason.len > 0 {
+        return format("{reason} ({code})")
+    }
+    if version == 4 {
+        str[6] names = ["", "the protocol version isn't supported", "the client id isn't allowed", "the server is unavailable",
+            "wrong user name or password", "not authorized"]
+        if code > 0 && code < 6 {
+            return names[code].copy()
+        }
+        return format("code {code}")
+    }
+    return format("{reasonName(code)}")
+}
+
+str reasonName(i64 code) => match code {
+    0x80 => "unspecified error"
+    0x81 => "malformed packet"
+    0x82 => "protocol error"
+    0x83 => "implementation specific error"
+    0x84 => "the protocol version isn't supported"
+    0x85 => "the client id isn't allowed"
+    0x86 => "wrong user name or password"
+    0x87 => "not authorized"
+    0x88 => "the server is unavailable"
+    0x89 => "the server is busy"
+    0x8a => "banned"
+    0x8f => "the topic filter isn't allowed"
+    0x90 => "the topic name isn't allowed"
+    0x95 => "the packet is too large"
+    0x97 => "over quota"
+    0x99 => "the payload format is wrong"
+    0x9a => "retain isn't supported"
+    0x9b => "the QoS isn't supported"
+    0x9e => "shared subscriptions aren't supported"
+    0xa1 => "subscription ids aren't supported"
+    0xa2 => "wildcards aren't supported"
+    _ => "refused"
+}
+
+void Shared.fail(str why) {
+    if self.dead {
+        return
+    }
+    self.dead = true
+    self.why.append(why)
+    // whoever waits for a reply gets an empty one
+    i64 at = 0
+    for {
+        k, ch, ok := self.waiting.next(&at)
+        if !ok {
+            break
+        }
+        _ = ch.trySend("".copy())
+    }
+    _ = self.messages.trySend(Message{})
+    _ = self.out.trySend("".copy())
+    _ = self.stop.trySend(true)
+    self.conn.interrupt()
+}
+
+void writer(Shared *s) {
+    for {
+        m := <-s.out
+        if m.len == 0 {
+            m.free()
+            break
+        }
+        s.conn.write(m) catch e {
+            m.free()
+            s.fail(e.message)
+            break
+        }
+        m.free()
+    }
+    s.done <- true
+}
+
+void Shared.send(i64 head, str body) {
+    if !self.dead {
+        self.out <- packet(head, body)
+    }
+}
+
+void Shared.ack(i64 kind, i64 id) {
+    String b
+    putU16(&b, id)
+    self.send(kind << 4 | (2 if kind == PUBREL else 0), b)
+    b.free()
+}
+
+void reader(Shared *s) {
+    for !s.dead {
+        head, body := readPacket(&s.conn, MAX_PACKET) catch e {
+            s.fail(e.message)
+            break
+        }
+        s.handle(head, body)
+        body.free()
+    }
+    s.done <- true
+}
+
+void Shared.handle(i64 head, str body) {
+    kind := head >> 4
+    r := Reader{data: body}
+    if kind == PUBLISH {
+        qos := head >> 1 & 3
+        topic := r.string()
+        i64 id = 0
+        if qos > 0 {
+            id = r.u16()
+        }
+        if self.version == 5 {
+            p := readProperties(&r)
+            p.free()
+        }
+        if r.bad || qos == 3 {
+            self.fail("a broken PUBLISH")
+            return
+        }
+        m := Message{topic: topic.copy(), payload: body[r.at:body.len].copy(), qos: qos, retain: head & 1 == 1}
+        if qos == 2 {
+            if self.received.has(id) {
+                m.free()
+            } else {
+                self.received.set(id, true)
+                self.messages <- m
+            }
+            self.ack(PUBREC, id)
+            return
+        }
+        self.messages <- m
+        if qos == 1 {
+            self.ack(PUBACK, id)
+        }
+        return
+    }
+    if kind == PUBREL {
+        id := r.u16()
+        _ = self.received.remove(id)
+        self.ack(PUBCOMP, id)
+        return
+    }
+    if kind == PUBACK || kind == PUBREC || kind == PUBCOMP || kind == SUBACK || kind == UNSUBACK {
+        id := r.u16()
+        ch, ok := self.waiting.get(id)
+        if r.bad || !ok {
+            return
+        }
+        _ = self.waiting.remove(id)
+        String reply
+        putByte(&reply, kind)
+        reply.append(body[2:body.len])
+        _ = ch.trySend(reply)
+        return
+    }
+    if kind == PINGRESP {
+        return
+    }
+    if kind == DISCONNECT {
+        code := r.byte()
+        scoped String why = format("the broker disconnected: {reasonName(code) if code != 0 else "normal"}")
+        self.fail(why)
+        return
+    }
+    self.fail("a packet of kind {kind} from the broker")
+}
+
+void pinger(Shared *s) {
+    for !s.dead {
+        bool stopped = false
+        select {
+            _ := <-s.stop => stopped = true,
+            after(s.keepAlive) => stopped = false,
+        }
+        if stopped || s.dead {
+            break
+        }
+        s.send(PINGREQ << 4, "")
+    }
+    s.done <- true
+}
+
+// A packet id no reply is waited for under, with a channel for its reply.
+(i64, chan[String]) Shared.newId() {
+    for self.waiting.has(self.nextId) {
+        self.nextId = self.nextId % 65535 + 1
+    }
+    id := self.nextId
+    self.nextId = self.nextId % 65535 + 1
+    ch := chan[String](1)
+    self.waiting.set(id, ch)
+    return (id, ch)
+}
+
+// The reply on ch: its kind, then the rest of it after the packet id.
+!String Shared.wait(i64 id, chan[String] ch, str what) {
+    String reply
+    bool timedOut = false
+    select {
+        got := <-ch => reply = got,
+        after(self.timeout) => timedOut = true,
+    }
+    if timedOut {
+        _ = self.waiting.remove(id)
+        ch.free()
+        return error(MqttError.timeout, "{what}: the broker didn't answer in {self.timeout}")
+    }
+    ch.free()
+    if reply.len == 0 {
+        reply.free()
+        return error(MqttError.closed, "{what}: {self.why}")
+    }
+    return reply
+}
+
+// A reason code in a v5 acknowledgement that says no.
+!void ackOk(Shared *s, str reply, str what) {
+    if s.version == 5 && reply.len > 1 && i64(reply[1]) >= 0x80 {
+        return error(MqttError.refused, "{what}: {reasonName(i64(reply[1]))}")
+    }
+}
+
+// Publishes payload to topic. With QoS 1 it returns once the broker has
+// it; with QoS 2, once the broker has it exactly once. retain asks the
+// broker to keep it for clients that subscribe later; an empty retained
+// message removes the one kept.
+pub !void Client.publish(str topic, str payload, i64 qos = 0, bool retain = false) {
+    s := self.s
+    if s.dead {
+        return error(MqttError.closed, "publish {topic}: {s.why}")
+    }
+    if qos < 0 || qos > 2 {
+        return error(MqttError.protocol, "publish {topic}: QoS {qos}")
+    }
+    String b
+    b.reserve(topic.len + payload.len + 5)
+    putStr(&b, topic)
+    i64 id = 0
+    chan[String] ch
+    if qos > 0 {
+        id, ch = s.newId()
+        putU16(&b, id)
+    }
+    if s.version == 5 {
+        putVarint(&b, 0)
+    }
+    b.append(payload)
+    s.send(PUBLISH << 4 | qos << 1 | (1 if retain else 0), b)
+    b.free()
+    if qos == 0 {
+        return
+    }
+    scoped String reply = try s.wait(id, ch, "publish {topic}")
+    try ackOk(s, reply, "publish {topic}")
+    if qos == 2 {
+        // the release, and its completion under the same id
+        ch2 := chan[String](1)
+        s.waiting.set(id, ch2)
+        s.ack(PUBREL, id)
+        scoped String done = try s.wait(id, ch2, "publish {topic}")
+        try ackOk(s, done, "publish {topic}")
+    }
+}
+
+// Subscribes to the topics filter matches, at most at qos: the QoS the
+// broker grants. Retained messages for them come first.
+pub !i64 Client.subscribe(str filter, i64 qos = 0) {
+    s := self.s
+    if s.dead {
+        return error(MqttError.closed, "subscribe {filter}: {s.why}")
+    }
+    id, ch := s.newId()
+    String b
+    putU16(&b, id)
+    if s.version == 5 {
+        putVarint(&b, 0)
+    }
+    putStr(&b, filter)
+    putByte(&b, qos & 3)
+    s.send(SUBSCRIBE << 4 | 2, b)
+    b.free()
+    scoped String reply = try s.wait(id, ch, "subscribe {filter}")
+    r := Reader{data: reply, at: 1}
+    if s.version == 5 {
+        p := readProperties(&r)
+        p.free()
+    }
+    code := r.byte()
+    if r.bad {
+        return error(MqttError.protocol, "subscribe {filter}: a broken SUBACK")
+    }
+    if code >= 0x80 {
+        return error(MqttError.refused, "subscribe {filter}: {reasonName(code) if s.version == 5 else "refused"}")
+    }
+    return code
+}
+
+// Stops the subscription to filter.
+pub !void Client.unsubscribe(str filter) {
+    s := self.s
+    if s.dead {
+        return error(MqttError.closed, "unsubscribe {filter}: {s.why}")
+    }
+    id, ch := s.newId()
+    String b
+    putU16(&b, id)
+    if s.version == 5 {
+        putVarint(&b, 0)
+    }
+    putStr(&b, filter)
+    s.send(UNSUBSCRIBE << 4 | 2, b)
+    b.free()
+    scoped String reply = try s.wait(id, ch, "unsubscribe {filter}")
+}
+
+// The next message to a topic subscribed to, waiting for it; with a
+// timeout, MqttError.timeout when none came in that time. MqttError.closed
+// once the connection is gone.
+pub !Message Client.next(Duration timeout = 0s) {
+    s := self.s
+    Message m
+    if timeout > 0s {
+        bool timedOut = false
+        select {
+            got := <-s.messages => m = got,
+            after(timeout) => timedOut = true,
+        }
+        if timedOut {
+            return error(MqttError.timeout, "no message came in {timeout}")
+        }
+    } else {
+        m = <-s.messages
+    }
+    if m.topic.len == 0 {
+        // what fail put there, for the next caller too
+        _ = s.messages.trySend(Message{})
+        return error(MqttError.closed, "the connection is gone: {s.why}")
+    }
+    return m
+}
+
+// Whether the connection is still up.
+pub bool Client.alive() => !self.s.dead
+
+// Disconnects, so that the broker doesn't publish the will.
+pub void Client.close() {
+    s := self.s
+    if !s.dead {
+        String b
+        if s.version == 5 {
+            putByte(&b, 0)
+        }
+        s.send(DISCONNECT << 4, b)
+        b.free()
+        s.out <- "".copy()
+        // the writer has sent it all once it is done
+        _ = <-s.done
+        s.tasks -= 1
+    }
+    s.fail("closed")
+    for s.tasks > 0 {
+        // the reader may be waiting for room for a message
+        select {
+            d := <-s.done => s.tasks -= 1,
+            m := <-s.messages => m.free(),
+        }
+    }
+    s.conn.close()
+    for s.out.len() > 0 {
+        m := <-s.out
+        m.free()
+    }
+    for s.messages.len() > 0 {
+        m := <-s.messages
+        m.free()
+    }
+    i64 at = 0
+    for {
+        k, ch, ok := s.waiting.next(&at)
+        if !ok {
+            break
+        }
+        for ch.len() > 0 {
+            r := <-ch
+            r.free()
+        }
+        ch.free()
+    }
+    s.waiting.free()
+    s.received.free()
+    s.out.free()
+    s.messages.free()
+    s.done.free()
+    s.stop.free()
+    s.why.free()
+    free(s[0:1])
+    self.clientId.free()
+}
