@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metrics and tracing - Iris</title>
+<meta name="description" content="The metrics module counts what a program does and writes the counts in the Prometheus text format, for Prometheus to read from a /metrics path. The tracing module records spans, the steps of a request with when each started and ended. It sends them to an OpenTelemetry collector, and follows a request from one program to the next with the W3C traceparent header.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="25-protobuf-and-grpc.html"><span class="num">25</span>Protocol Buffers and gRPC</a></li><li><a href="26-msgpack-and-cbor.html"><span class="num">26</span>MessagePack and CBOR</a></li><li><a href="28-metrics-and-tracing.html" class="on"><span class="num">28</span>Metrics and tracing</a></li></ol></aside>
+  <article class="prose">
+<h1>Metrics and tracing</h1>
+<p class="lede">The <code>metrics</code> module counts what a program does and writes the counts in the Prometheus text format, for Prometheus to read from a <code>/metrics</code> path. The <code>tracing</code> module records spans, the steps of a request with when each started and ended. It sends them to an OpenTelemetry collector, and follows a request from one program to the next with the W3C <code>traceparent</code> header.</p>
+<h2 id="counters-gauges-and-histograms"><a href="#counters-gauges-and-histograms">Counters, gauges and histograms</a></h2>
+<p>A counter only goes up: requests served, bytes sent. A gauge goes up and down: connections open, items in a queue. A histogram counts observations, such as how long requests take, in buckets. Each has a name and a help line:</p>
+<pre class="code run"><code><span class="k">import</span> metrics
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    jobs := metrics.<span class="f">counter</span>(<span class="s">&quot;jobs_total&quot;</span>, <span class="s">&quot;Jobs done.&quot;</span>)
+    queue := metrics.<span class="f">gauge</span>(<span class="s">&quot;queue_length&quot;</span>, <span class="s">&quot;Jobs waiting.&quot;</span>)
+    took := metrics.<span class="f">histogram</span>(<span class="s">&quot;job_seconds&quot;</span>, <span class="s">&quot;How long a job took.&quot;</span>, buckets: [<span class="n">0.1</span>, <span class="n">0.5</span>, <span class="n">1</span>])
+
+    <span class="k">for</span> seconds <span class="k">in</span> [<span class="n">0.05</span>, <span class="n">0.3</span>, <span class="n">0.7</span>, <span class="n">2.0</span>] {
+        jobs.<span class="f">inc</span>()
+        took.<span class="f">observe</span>(seconds)
+    }
+    queue.<span class="f">set</span>(<span class="n">3</span>)
+    queue.<span class="f">dec</span>()
+
+    <span class="k">scoped</span> <span class="t">String</span> text = metrics.<span class="f">text</span>()
+    <span class="f">print</span>(text)
+}</code></pre>
+<pre class="out"><code># HELP jobs_total Jobs done.
+# TYPE jobs_total counter
+jobs_total 4
+# HELP queue_length Jobs waiting.
+# TYPE queue_length gauge
+queue_length 2
+# HELP job_seconds How long a job took.
+# TYPE job_seconds histogram
+job_seconds_bucket{le=&quot;0.1&quot;} 1
+job_seconds_bucket{le=&quot;0.5&quot;} 2
+job_seconds_bucket{le=&quot;1&quot;} 3
+job_seconds_bucket{le=&quot;+Inf&quot;} 4
+job_seconds_sum 3.05
+job_seconds_count 4
+</code></pre>
+<p>A histogram without buckets gets <code>metrics.DEFAULT_BUCKETS</code>, from 5ms to 10s. <code>took.since(start)</code> observes the seconds since a <code>time.clock()</code> value.</p>
+<p>Every method can be called from any thread at the same time. Asking for a name that exists already gives the same metric back, so two parts of a program can both ask for <code>jobs_total</code>.</p>
+<h2 id="labels"><a href="#labels">Labels</a></h2>
+<p>A metric with labels has one value for each set of label values. <code>counterVec</code>, <code>gaugeVec</code> and <code>histogramVec</code> take the label names, and <code>with</code> takes the values in the same order:</p>
+<pre class="code run"><code><span class="k">import</span> metrics
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    requests := metrics.<span class="f">counterVec</span>(<span class="s">&quot;requests_total&quot;</span>, <span class="s">&quot;Requests, by method and status.&quot;</span>, [<span class="s">&quot;method&quot;</span>, <span class="s">&quot;code&quot;</span>])
+    requests.<span class="f">with</span>([<span class="s">&quot;GET&quot;</span>, <span class="s">&quot;200&quot;</span>]).<span class="f">inc</span>()
+    requests.<span class="f">with</span>([<span class="s">&quot;GET&quot;</span>, <span class="s">&quot;200&quot;</span>]).<span class="f">inc</span>()
+    requests.<span class="f">with</span>([<span class="s">&quot;POST&quot;</span>, <span class="s">&quot;500&quot;</span>]).<span class="f">inc</span>()
+
+    <span class="k">scoped</span> <span class="t">String</span> text = metrics.<span class="f">text</span>()
+    <span class="f">print</span>(text)
+}</code></pre>
+<pre class="out"><code># HELP requests_total Requests, by method and status.
+# TYPE requests_total counter
+requests_total{method=&quot;GET&quot;,code=&quot;200&quot;} 2
+requests_total{method=&quot;POST&quot;,code=&quot;500&quot;} 1
+</code></pre>
+<p><code>with</code> looks the values up each time. A counter it gives can be kept in a variable to skip the lookup. Each set of values stays in memory until the end, so labels should have a few values each: a method or a status, and never a user id.</p>
+<h2 id="serving-metrics"><a href="#serving-metrics">Serving /metrics</a></h2>
+<p><code>metrics.handler</code> answers with every metric. <code>metrics.track(&amp;router)</code> counts each request the router answers in <code>http_requests_total</code>, by method and status, and how long it took in <code>http_request_duration_seconds</code>:</p>
+<pre class="code"><code><span class="k">import</span> http, metrics
+
+<span class="t">void</span> <span class="f">hello</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    res.<span class="f">send</span>(<span class="s">&quot;hello</span><span class="e">\n</span><span class="s">&quot;</span>, <span class="s">&quot;text/plain&quot;</span>)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> r
+    r.<span class="f">get</span>(<span class="s">&quot;/&quot;</span>, hello)
+    r.<span class="f">get</span>(<span class="s">&quot;/metrics&quot;</span>, metrics.handler)
+    metrics.<span class="f">track</span>(&amp;r)
+    <span class="k">try</span> r.<span class="f">serve</span>(<span class="n">8080</span>)
+}</code></pre>
+<p>A program with metrics of its own makes a <code>metrics.Registry</code> and calls the same methods on it: <code>reg.counter(...)</code>, <code>reg.text()</code>.</p>
+<h2 id="spans"><a href="#spans">Spans</a></h2>
+<p>A span is a named step with a start and an end. <code>tracing.start</code> begins a trace, and <code>span.child</code> a step inside one. Attributes say what the step worked on, and <code>fail</code> says it failed:</p>
+<pre class="code"><code><span class="k">import</span> tracing
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    tracing.<span class="f">setup</span>(<span class="s">&quot;shop&quot;</span>, <span class="s">&quot;http://localhost:4318&quot;</span>)
+    <span class="k">defer</span> tracing.<span class="f">shutdown</span>()
+
+    order := tracing.<span class="f">start</span>(<span class="s">&quot;place order&quot;</span>)
+    order.<span class="f">text</span>(<span class="s">&quot;customer&quot;</span>, <span class="s">&quot;Ana&quot;</span>)
+
+    check := order.<span class="f">child</span>(<span class="s">&quot;check stock&quot;</span>)
+    check.<span class="f">int</span>(<span class="s">&quot;items&quot;</span>, <span class="n">3</span>)
+    check.<span class="f">end</span>()
+
+    pay := order.<span class="f">child</span>(<span class="s">&quot;charge card&quot;</span>)
+    pay.<span class="f">fail</span>(<span class="s">&quot;card declined&quot;</span>)
+    pay.<span class="f">end</span>()
+
+    order.<span class="f">end</span>()
+}</code></pre>
+<p><code>setup</code> names the service and gives the collector's address. Spans that end are sent to its <code>/v1/traces</code> in batches, as OTLP/HTTP JSON, every second. <code>shutdown</code> sends the last ones. Before <code>setup</code>, spans go nowhere, so a library can make spans whether or not the program sends them.</p>
+<h2 id="across-programs"><a href="#across-programs">Across programs</a></h2>
+<p>A request carries its trace to the next program in the <code>traceparent</code> header. <code>tracing.track(&amp;router)</code> gives each request a server span, the child of the span in its <code>traceparent</code> when it has one. The handler gets it with <code>tracing.spanOf(req)</code>. <code>tracing.send</code> makes a request as a client span and adds its <code>traceparent</code>:</p>
+<pre class="code"><code><span class="k">import</span> http, tracing
+
+http.<span class="t">Client</span> client
+
+<span class="t">void</span> <span class="f">order</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    span := tracing.<span class="f">spanOf</span>(req)
+    reply := tracing.<span class="f">send</span>(&amp;client, span, <span class="s">&quot;GET&quot;</span>, <span class="s">&quot;http://stock:8080/count&quot;</span>) <span class="k">catch</span> e {
+        res.<span class="f">error</span>(<span class="n">502</span>, e.message)
+        <span class="k">return</span>
+    }
+    <span class="k">defer</span> reply.<span class="f">free</span>()
+    res.<span class="f">send</span>(reply.body, <span class="s">&quot;text/plain&quot;</span>)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    tracing.<span class="f">setup</span>(<span class="s">&quot;orders&quot;</span>, <span class="s">&quot;http://localhost:4318&quot;</span>)
+    http.<span class="t">Router</span> r
+    r.<span class="f">get</span>(<span class="s">&quot;/order&quot;</span>, order)
+    tracing.<span class="f">track</span>(&amp;r)
+    <span class="k">try</span> r.<span class="f">serve</span>(<span class="n">8080</span>)
+}</code></pre>
+<p>When the stock service also calls <code>track</code>, its span is a child of this one, and the collector shows both in one trace. <code>tracing.parse</code> reads a <code>traceparent</code> by hand, and <code>span.traceparent()</code> writes one, for messages that go some other way, such as a queue.</p>
+    <nav class="pager"><a class="prev" href="26-msgpack-and-cbor.html"><span>Previous</span>MessagePack and CBOR</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#counters-gauges-and-histograms">Counters, gauges and histograms</a></li><li><a href="#labels">Labels</a></li><li><a href="#serving-metrics">Serving /metrics</a></li><li><a href="#spans">Spans</a></li><li><a href="#across-programs">Across programs</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

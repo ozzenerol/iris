@@ -1,0 +1,572 @@
+// Counters, gauges and histograms that any thread can change, and the
+// Prometheus text format that a scrape reads: metrics.handler on a Router
+// path such as /metrics. A metric with labels is a Vec, which gives the
+// metric for each set of label values.
+
+import http, sync, time
+
+// What a metric is: a counter only goes up, a gauge goes up and down, a
+// histogram counts observations in buckets.
+pub enum Kind { counter, gauge, histogram }
+
+// The buckets a histogram gets when it is given none: seconds, from 5ms to
+// 10s.
+pub f64[11] DEFAULT_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+
+@extern("iris_metric_add")
+void rawAdd(f64 *p, f64 v)
+
+@extern("iris_metric_set")
+void rawSet(f64 *p, f64 v)
+
+@extern("iris_metric_get")
+f64 rawGet(f64 *p)
+
+@extern("iris_metric_count")
+void rawCount(i64 *p, i64 n)
+
+@extern("iris_metric_load")
+i64 rawLoad(i64 *p)
+
+@extern("iris_metric_observe")
+void rawObserve(f64 *bounds, i64 n, i64 *counts, f64 *sum, f64 v)
+
+@extern("iris_metric_slot")
+Series *slotLoad(Series **p)
+
+@extern("iris_metric_put_slot")
+void slotStore(Series **p, Series *s)
+
+// One series: a metric with one set of label values.
+struct Series {
+    Family *family
+    List[String] values
+    u64 hash
+    String labels // {a="x",b="y"}, or "" without labels
+    f64 value     // a counter's or gauge's value, a histogram's sum
+    i64[] counts  // a histogram's count in each bucket, then above the last
+}
+
+// Every series of one name.
+struct Family {
+    String name
+    String help
+    Kind kind
+    List[String] labelNames
+    f64[] bounds
+    Mutex lock
+    // the series by the hash of their values, read without the lock; a
+    // full table is copied into one twice as big, and the old ones are
+    // kept until the registry is freed, as a reader may still be in one
+    Atomic[Table *] table
+    List[Table *] tables
+    List[Series *] series
+}
+
+struct Slot {
+    u64 hash
+    Series *s
+}
+
+struct Table {
+    u64 mask
+    i64 used
+    Slot[] slots
+}
+
+Table *newTable(i64 size) {
+    Table[] mem = alloc(Table, 1)
+    t := &mem[0]
+    t.mask = u64(size - 1)
+    t.slots = alloc(Slot, size)
+    return t
+}
+
+// 32-bit FNV-1a over the values, each ended by a byte text can't hold.
+u64 hashOf(str[] values) {
+    u64 h = 2166136261
+    for v in values {
+        for c in v {
+            h = ((h ^ u64(c)) * 16777619) & 4294967295
+        }
+        h = ((h ^ 255) * 16777619) & 4294967295
+    }
+    return h
+}
+
+bool Series.same(str[] values) {
+    for i, v in values {
+        if self.values.at(i) != v {
+            return false
+        }
+    }
+    return true
+}
+
+Series *Table.find(u64 h, str[] values) {
+    i := h & self.mask
+    for {
+        s := slotLoad(&self.slots[i64(i)].s)
+        if s == null {
+            return null
+        }
+        if self.slots[i64(i)].hash == h && s.same(values) {
+            return s
+        }
+        i = (i + 1) & self.mask
+    }
+}
+
+void Table.put(u64 h, Series *s) {
+    i := h & self.mask
+    for self.slots[i64(i)].s != null {
+        i = (i + 1) & self.mask
+    }
+    self.slots[i64(i)].hash = h
+    slotStore(&self.slots[i64(i)].s, s)
+    self.used++
+}
+
+// A set of metrics that is written out together. Programs use the default
+// one, metrics.registry, unless they want metrics of their own.
+pub struct Registry {
+    Mutex lock
+    List[Family *] families
+}
+
+// The registry that counter, gauge, histogram and handler use.
+pub Registry registry
+
+// A number that only goes up: requests served, bytes sent.
+pub struct Counter {
+    Series *s
+}
+
+// A number that goes up and down: connections open, items in a queue.
+pub struct Gauge {
+    Series *s
+}
+
+// Observations, such as how long requests take, counted in buckets.
+pub struct Histogram {
+    Series *s
+}
+
+// Counters with labels: with gives the counter for a set of values.
+pub struct CounterVec {
+    Family *f
+}
+
+// Gauges with labels.
+pub struct GaugeVec {
+    Family *f
+}
+
+// Histograms with labels.
+pub struct HistogramVec {
+    Family *f
+}
+
+bool validName(str name) {
+    if name.len == 0 {
+        return false
+    }
+    for i, c in name {
+        letter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':'
+        if !letter && (i == 0 || c < '0' || c > '9') {
+            return false
+        }
+    }
+    return true
+}
+
+// The family of a name, made when there is none yet. Asking again for the
+// same name gives the same metric; another kind or other labels is a bug.
+Family *Registry.family(str name, str help, Kind kind, str[] labels, f64[] buckets) {
+    if !validName(name) {
+        panic("metrics: {name} isn't a metric name")
+    }
+    for l in labels {
+        if !validName(l) || l == "le" && kind == .histogram {
+            panic("metrics: {l} can't be a label of {name}")
+        }
+    }
+    self.lock.lock()
+    defer self.lock.unlock()
+    for f in self.families {
+        if f.name != name {
+            continue
+        }
+        same := f.kind == kind && f.labelNames.len == labels.len
+        for i, l in labels {
+            same = same && f.labelNames.at(i) == l
+        }
+        if !same {
+            panic("metrics: {name} was made before with another kind or other labels")
+        }
+        return f
+    }
+    Family[] mem = alloc(Family, 1)
+    f := &mem[0]
+    f.name = name.copy()
+    f.help = help.copy()
+    f.kind = kind
+    for l in labels {
+        f.labelNames.push(l.copy())
+    }
+    if kind == .histogram {
+        bs := if buckets.len > 0 { buckets } else { DEFAULT_BUCKETS[0:11] }
+        f.bounds = alloc(f64, bs.len)
+        for i, b in bs {
+            if i > 0 && b <= bs[i - 1] {
+                panic("metrics: the buckets of {name} must go up")
+            }
+            f.bounds[i] = b
+        }
+    }
+    self.families.push(f)
+    return f
+}
+
+// The labels as the text format writes them: {a="x",b="y"}.
+void putLabels(String *out, List[String] *names, str[] values, str le = "") {
+    if names.len == 0 && le.len == 0 {
+        return
+    }
+    out.append("{{")
+    for i in 0..names.len {
+        if i > 0 {
+            out.append(",")
+        }
+        out.append(names.at(i))
+        out.append("=\"")
+        putEscaped(out, values[i], true)
+        out.append("\"")
+    }
+    if le.len > 0 {
+        if names.len > 0 {
+            out.append(",")
+        }
+        out.append("le=\"")
+        out.append(le)
+        out.append("\"")
+    }
+    out.append("}}")
+}
+
+// \ and newlines escaped, and " in a label value.
+void putEscaped(String *out, str text, bool quote) {
+    start := 0
+    for i, c in text {
+        if c == '\\' || c == '\n' || (quote && c == '"') {
+            out.append(text[start:i])
+            out.append(if c == '\n' { "\\n" } else if c == '"' { "\\\"" } else { "\\\\" })
+            start = i + 1
+        }
+    }
+    out.append(text[start:])
+}
+
+// The series of a set of label values, made the first time.
+Series *Family.get(str[] values) {
+    if values.len != self.labelNames.len {
+        panic("metrics: {self.name} takes {self.labelNames.len} label values, not {values.len}")
+    }
+    h := hashOf(values)
+    t := self.table.load()
+    if t != null {
+        found := t.find(h, values)
+        if found != null {
+            return found
+        }
+    }
+    self.lock.lock()
+    defer self.lock.unlock()
+    t = self.table.load()
+    if t != null {
+        again := t.find(h, values)
+        if again != null {
+            return again
+        }
+    }
+    Series[] mem = alloc(Series, 1)
+    s := &mem[0]
+    s.family = self
+    s.hash = h
+    for v in values {
+        s.values.push(v.copy())
+    }
+    putLabels(&s.labels, &self.labelNames, values)
+    if self.kind == .histogram {
+        s.counts = alloc(i64, self.bounds.len + 1)
+    }
+    self.series.push(s)
+    if t == null || (t.used + 1) * 2 > t.slots.len {
+        bigger := newTable(if t == null { 8 } else { t.slots.len * 2 })
+        for old in self.series {
+            bigger.put(old.hash, old)
+        }
+        self.tables.push(bigger)
+        self.table.store(bigger)
+    } else {
+        t.put(h, s)
+    }
+    return s
+}
+
+// A counter without labels, in the default registry.
+pub Counter counter(str name, str help) => Counter{s: registry.family(name, help, .counter, [], []).get([])}
+
+// A gauge without labels, in the default registry.
+pub Gauge gauge(str name, str help) => Gauge{s: registry.family(name, help, .gauge, [], []).get([])}
+
+// A histogram without labels, in the default registry, with the bucket
+// bounds given, which go up, or DEFAULT_BUCKETS.
+pub Histogram histogram(str name, str help, f64[] buckets = []) {
+    return Histogram{s: registry.family(name, help, .histogram, [], buckets).get([])}
+}
+
+// Counters with these labels, in the default registry.
+pub CounterVec counterVec(str name, str help, str[] labels) {
+    return CounterVec{f: registry.family(name, help, .counter, labels, [])}
+}
+
+// Gauges with these labels, in the default registry.
+pub GaugeVec gaugeVec(str name, str help, str[] labels) => GaugeVec{f: registry.family(name, help, .gauge, labels, [])}
+
+// Histograms with these labels, in the default registry.
+pub HistogramVec histogramVec(str name, str help, str[] labels, f64[] buckets = []) {
+    return HistogramVec{f: registry.family(name, help, .histogram, labels, buckets)}
+}
+
+// A counter without labels in this registry.
+pub Counter Registry.counter(str name, str help) => Counter{s: self.family(name, help, .counter, [], []).get([])}
+
+// A gauge without labels in this registry.
+pub Gauge Registry.gauge(str name, str help) => Gauge{s: self.family(name, help, .gauge, [], []).get([])}
+
+// A histogram without labels in this registry.
+pub Histogram Registry.histogram(str name, str help, f64[] buckets = []) {
+    return Histogram{s: self.family(name, help, .histogram, [], buckets).get([])}
+}
+
+// Counters with labels in this registry.
+pub CounterVec Registry.counterVec(str name, str help, str[] labels) {
+    return CounterVec{f: self.family(name, help, .counter, labels, [])}
+}
+
+// Gauges with labels in this registry.
+pub GaugeVec Registry.gaugeVec(str name, str help, str[] labels) {
+    return GaugeVec{f: self.family(name, help, .gauge, labels, [])}
+}
+
+// Histograms with labels in this registry.
+pub HistogramVec Registry.histogramVec(str name, str help, str[] labels, f64[] buckets = []) {
+    return HistogramVec{f: self.family(name, help, .histogram, labels, buckets)}
+}
+
+// The counter for these label values, in the order the labels were given.
+// Keep it to skip the lookup next time.
+pub Counter CounterVec.with(str[] values) => Counter{s: self.f.get(values)}
+
+// The gauge for these label values.
+pub Gauge GaugeVec.with(str[] values) => Gauge{s: self.f.get(values)}
+
+// The histogram for these label values.
+pub Histogram HistogramVec.with(str[] values) => Histogram{s: self.f.get(values)}
+
+// Adds 1.
+pub void Counter.inc() => rawAdd(&self.s.value, 1.0)
+
+// Adds n, which can't be below 0.
+pub void Counter.add(f64 n) {
+    if n < 0.0 {
+        panic("metrics: a counter can't go down")
+    }
+    rawAdd(&self.s.value, n)
+}
+
+// The count so far.
+pub f64 Counter.value() => rawGet(&self.s.value)
+
+// Sets the value.
+pub void Gauge.set(f64 v) => rawSet(&self.s.value, v)
+
+// Adds 1.
+pub void Gauge.inc() => rawAdd(&self.s.value, 1.0)
+
+// Takes 1 away.
+pub void Gauge.dec() => rawAdd(&self.s.value, -1.0)
+
+// Adds n, which can be below 0.
+pub void Gauge.add(f64 n) => rawAdd(&self.s.value, n)
+
+// The value now.
+pub f64 Gauge.value() => rawGet(&self.s.value)
+
+// Counts v in its bucket and adds it to the sum.
+pub void Histogram.observe(f64 v) {
+    s := self.s
+    rawObserve(s.family.bounds.ptr, s.family.bounds.len, s.counts.ptr, &s.value, v)
+}
+
+// Observes the time since start, a time.clock() value, in seconds.
+pub void Histogram.since(Duration start) => self.observe(f64(i64(time.since(start))) / 1e9)
+
+// How many observations there were.
+pub i64 Histogram.count() {
+    i64 n = 0
+    for i in 0..self.s.counts.len {
+        n += rawLoad(&self.s.counts[i])
+    }
+    return n
+}
+
+// The sum of the observations.
+pub f64 Histogram.sum() => rawGet(&self.s.value)
+
+void putNumber(String *out, f64 v) {
+    if v != v {
+        out.append("NaN")
+    } else if v > 1.7976931348623157e308 {
+        out.append("+Inf")
+    } else if v < -1.7976931348623157e308 {
+        out.append("-Inf")
+    } else {
+        out.append("{v}")
+    }
+}
+
+void Family.write(String *out) {
+    out.append("# HELP ")
+    out.append(self.name)
+    out.append(" ")
+    putEscaped(out, self.help, false)
+    out.append("\n# TYPE ")
+    out.append(self.name)
+    out.append(match self.kind {
+        .counter => " counter\n",
+        .gauge => " gauge\n",
+        .histogram => " histogram\n",
+    })
+    self.lock.lock()
+    defer self.lock.unlock()
+    for s in self.series {
+        if self.kind != .histogram {
+            out.append(self.name)
+            out.append(s.labels)
+            out.append(" ")
+            putNumber(out, rawGet(&s.value))
+            out.append("\n")
+            continue
+        }
+        // the bucket lines take le after the series' labels
+        inner := if s.labels.len > 0 { s.labels[1:s.labels.len - 1] } else { "" }
+        i64 total = 0
+        for i in 0..s.counts.len {
+            total += rawLoad(&s.counts[i])
+            out.append(self.name)
+            out.append("_bucket{{")
+            if inner.len > 0 {
+                out.append(inner)
+                out.append(",")
+            }
+            out.append("le=\"")
+            if i < self.bounds.len {
+                putNumber(out, self.bounds[i])
+            } else {
+                out.append("+Inf")
+            }
+            out.append("\"}} ")
+            out.append("{total}\n")
+        }
+        out.append(self.name)
+        out.append("_sum")
+        out.append(s.labels)
+        out.append(" ")
+        putNumber(out, rawGet(&s.value))
+        out.append("\n")
+        out.append(self.name)
+        out.append("_count")
+        out.append(s.labels)
+        out.append(" {total}\n")
+    }
+}
+
+// Adds every metric of the registry to out, in the Prometheus text format,
+// in the order the metrics were made.
+pub void Registry.write(String *out) {
+    self.lock.lock()
+    defer self.lock.unlock()
+    for f in self.families {
+        f.write(out)
+    }
+}
+
+// The registry's metrics in the Prometheus text format, as a new String.
+pub String Registry.text() {
+    String out
+    self.write(&out)
+    return out
+}
+
+// The default registry's metrics in the Prometheus text format.
+pub String text() => registry.text()
+
+// The content type of the text format.
+pub const str CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+// A handler that answers with the default registry's metrics:
+// router.get("/metrics", metrics.handler).
+pub void handler(http.Request *req, http.Response *res) {
+    scoped String out
+    registry.write(&out)
+    res.send(out, CONTENT_TYPE)
+}
+
+HistogramVec httpSeconds
+CounterVec httpRequests
+sync.Once httpOnce
+
+void makeHttp() {
+    httpRequests = counterVec("http_requests_total", "HTTP requests answered, by method and status.", ["method", "code"])
+    httpSeconds = histogramVec("http_request_duration_seconds", "How long HTTP requests took, by method.", ["method"])
+}
+
+void countRequest(http.Request *req, http.Response *res) {
+    scoped String code = format("{res.status}")
+    httpRequests.with([req.method, code]).inc()
+    httpSeconds.with([req.method]).since(req.received)
+}
+
+// Counts every request a Router answers in http_requests_total, by
+// method and status, and how long it took in
+// http_request_duration_seconds, by method.
+pub void track(http.Router *router) {
+    httpOnce.run(makeHttp)
+    router.after(countRequest)
+}
+
+// Gives the registry's memory back. The metrics it made can't be used after.
+pub void Registry.free() {
+    for f in self.families {
+        for s in f.series {
+            s.values.freeEach()
+            s.labels.free()
+            free(s.counts)
+            free(s[0:1])
+        }
+        f.series.free()
+        for t in f.tables {
+            free(t.slots)
+            free(t[0:1])
+        }
+        f.tables.free()
+        f.name.free()
+        f.help.free()
+        f.labelNames.freeEach()
+        free(f.bounds)
+        free(f[0:1])
+    }
+    self.families.free()
+}

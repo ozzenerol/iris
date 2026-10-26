@@ -63,6 +63,8 @@ LIB_ROWS = [
     ("cbor", "100,000 orders read and written as CBOR, 20 times", "ciborium", "fxamacker/cbor"),
     ("sigv4", "200000 S3 requests signed with AWS Signature Version 4, each with a 1 KiB body", "aws-sigv4", "`aws-sdk-go-v2` signer"),
     ("mysql-query", "MySQL: 1000 inserts in a transaction, 20000 prepared selects by id, then the table read 100 times", "sqlx", "`go-sql-driver/mysql`"),
+    ("metrics", "10M requests counted with labels and a histogram, 2,000 series written 200 times", "prometheus", "client_golang"),
+    ("tracing", "1M spans with traceparent, written as OTLP JSON", "opentelemetry-proto + serde_json", "otlp + protojson"),
 ]
 
 

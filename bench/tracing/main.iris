@@ -1,0 +1,39 @@
+import tracing
+
+// 1,000,000 spans in pairs: a root, its traceparent written and read
+// back, and a child of it, each with three attributes. Every 512 go out
+// as OTLP JSON.
+void main() {
+    List[tracing.Span] batch
+    defer batch.free()
+    scoped String out
+    i64 bytes = 0
+    i64 spans = 0
+    for i in 0..500000 {
+        root := tracing.start("GET /orders", .server)
+        root.text("http.request.method", "GET")
+        root.text("url.path", "/orders")
+        root.int("http.response.status_code", 200)
+        scoped String tp = root.traceparent()
+        parent, _ := tracing.parse(tp)
+        child := tracing.startFrom(&parent, "SELECT orders", .client)
+        child.text("db.system", "postgresql")
+        child.text("db.statement", "SELECT * FROM orders WHERE id = $1")
+        child.int("db.rows", i % 100)
+        child.finish = child.start + 1000
+        root.finish = root.start + 5000
+        batch.push(child)
+        batch.push(root)
+        if batch.len >= 512 {
+            out.clear()
+            tracing.writeOtlp(&out, "shop", batch.items())
+            bytes += out.len
+            spans += batch.len
+            for s in batch.items() {
+                s.free()
+            }
+            batch.clear()
+        }
+    }
+    print("{spans} spans, {bytes > 0}")
+}

@@ -1,0 +1,480 @@
+// Spans: the parts of a request's work, with when they started and ended,
+// put together into a trace across programs by the W3C traceparent header.
+// A Router gets a span for each request with track, a client call with
+// send, and finished spans go to an OpenTelemetry collector over OTLP/HTTP
+// as JSON.
+
+import http, str, time
+
+// What a span is to its trace, with OpenTelemetry's numbers.
+pub enum SpanKind { internal = 1, server = 2, client = 3, producer = 4, consumer = 5 }
+
+// How a span's work went: unset until it is said, ok or failed.
+pub enum Status { unset, ok, failed }
+
+@extern("iris_trace_random")
+u64 rawRandom()
+
+@extern("iris_json_quote")
+void rawQuote(u8 *text, i64 len, String *out)
+
+// One attribute: a key with text, a number or a bool.
+struct Attr {
+    String key
+    i32 kind // 0 text, 1 int, 2 float, 3 bool
+    String text
+    i64 int
+    f64 float
+}
+
+// Where a span is in its trace: what a traceparent header carries.
+pub struct SpanContext {
+    pub u64 traceHigh
+    pub u64 traceLow
+    pub u64 spanId
+    // whether the trace is recorded; a span that isn't goes nowhere when
+    // it ends
+    pub bool sampled
+}
+
+// A span: a named piece of work from start to end. end sends it to the
+// tracer. Its methods add what is known about the work.
+pub struct Span {
+    pub SpanContext context
+    pub u64 parentId
+    pub String name
+    pub SpanKind kind
+    // when it started and ended, in nanoseconds since 1970
+    pub i64 start
+    pub i64 finish
+    List[Attr] attrs
+    Status status
+    String message
+    bool ended
+}
+
+// Where spans go when they end: an OTLP/HTTP collector, every interval,
+// in batches of up to batchSize.
+pub struct Tracer {
+    String service
+    String url
+    Duration interval
+    i64 batchSize
+    Mutex lock
+    List[Span] done
+    i64 dropped
+    Atomic[i64] stopping
+    Atomic[i64] running
+    http.Client client
+}
+
+// The tracer that spans end in.
+pub Tracer tracer
+
+// The most spans that wait for the next export; more are dropped.
+pub const i64 MAX_QUEUE = 8192
+
+// Sends the spans of this program, which runs as service, to an
+// OpenTelemetry collector: "http://localhost:4318" or the full URL of
+// its /v1/traces. Until this is called, spans that end go nowhere.
+pub void setup(str service, str endpoint, Duration interval = 1s, i64 batchSize = 512) {
+    tracer.lock.lock()
+    tracer.service.free()
+    tracer.service = service.copy()
+    tracer.url.free()
+    tracer.url = if str.endsWith(endpoint, "/v1/traces") {
+        endpoint.copy()
+    } else {
+        format("{str.trimSuffix(endpoint, "/")}/v1/traces")
+    }
+    tracer.interval = interval
+    tracer.batchSize = if batchSize > 0 { batchSize } else { 512 }
+    tracer.lock.unlock()
+    if tracer.running.swap(1) == 0 {
+        tracer.stopping.store(0)
+        thread exportLoop()
+    }
+}
+
+// Sends the spans that ended and stops sending. Call it before the
+// program exits.
+pub void shutdown() {
+    if tracer.running.load() == 0 {
+        return
+    }
+    tracer.stopping.store(1)
+    for tracer.running.load() != 0 {
+        sleep(1ms)
+    }
+}
+
+// How many spans were dropped: the queue was full, or the collector
+// didn't take them.
+pub i64 dropped() {
+    tracer.lock.lock()
+    defer tracer.lock.unlock()
+    return tracer.dropped
+}
+
+void exportLoop() {
+    for {
+        Duration waited = 0s
+        for tracer.stopping.load() == 0 && waited < tracer.interval {
+            sleep(10ms)
+            waited += 10ms
+        }
+        flush()
+        if tracer.stopping.load() != 0 {
+            tracer.running.store(0)
+            return
+        }
+    }
+}
+
+// Sends the spans that ended, in batches.
+void flush() {
+    tracer.lock.lock()
+    List[Span] taken = tracer.done
+    List[Span] none
+    tracer.done = none
+    scoped String url = tracer.url.copy()
+    scoped String service = tracer.service.copy()
+    size := tracer.batchSize
+    tracer.lock.unlock()
+    defer taken.free()
+    spans := taken.items()
+    i64 at = 0
+    for at < spans.len {
+        end := if at + size < spans.len { at + size } else { spans.len }
+        batch := spans[at:end]
+        scoped String body
+        writeOtlp(&body, service, batch)
+        for i in 0..batch.len {
+            batch[i].drop()
+        }
+        sent := false
+        reply := tracer.client.post(url, "application/json", body) catch e {
+            http.Reply{}
+        }
+        sent = reply.status / 100 == 2
+        reply.free()
+        if !sent {
+            tracer.lock.lock()
+            tracer.dropped += batch.len
+            tracer.lock.unlock()
+        }
+        at = end
+    }
+}
+
+i64 nowNs() => time.now().ns
+
+// A span with no parent: the first of a new trace.
+pub Span start(str name, SpanKind kind = .internal) {
+    Span s
+    s.context = SpanContext{traceHigh: rawRandom(), traceLow: rawRandom(), spanId: rawRandom(), sampled: true}
+    s.name = name.copy()
+    s.kind = kind
+    s.start = nowNs()
+    return s
+}
+
+// A span whose parent is in another program, from its traceparent.
+pub Span startFrom(SpanContext *parent, str name, SpanKind kind = .internal) {
+    Span s
+    s.context = SpanContext{traceHigh: parent.traceHigh, traceLow: parent.traceLow, spanId: rawRandom(),
+        sampled: parent.sampled}
+    s.parentId = parent.spanId
+    s.name = name.copy()
+    s.kind = kind
+    s.start = nowNs()
+    return s
+}
+
+// A span for work inside this one.
+pub Span Span.child(str name, SpanKind kind = .internal) => startFrom(&self.context, name, kind)
+
+// Adds an attribute with text.
+pub void Span.text(str key, str value) {
+    self.attrs.push(Attr{key: key.copy(), kind: 0, text: value.copy()})
+}
+
+// Adds an attribute with a whole number.
+pub void Span.int(str key, i64 value) {
+    self.attrs.push(Attr{key: key.copy(), kind: 1, int: value})
+}
+
+// Adds an attribute with a float.
+pub void Span.float(str key, f64 value) {
+    self.attrs.push(Attr{key: key.copy(), kind: 2, float: value})
+}
+
+// Adds an attribute with a bool.
+pub void Span.flag(str key, bool value) {
+    self.attrs.push(Attr{key: key.copy(), kind: 3, int: if value { 1 } else { 0 }})
+}
+
+// Says the work went well.
+pub void Span.ok() {
+    self.status = .ok
+}
+
+// Says the work failed, and why.
+pub void Span.fail(str message) {
+    self.status = .failed
+    self.message.free()
+    self.message = message.copy()
+}
+
+// The span's status.
+pub Status Span.statusOf() => self.status
+
+// Ends the span and hands it to the tracer, which sends it with the next
+// batch. Ending it again does nothing.
+pub void Span.end() {
+    if self.ended {
+        return
+    }
+    self.ended = true
+    self.finish = nowNs()
+    if !self.context.sampled || tracer.running.load() == 0 {
+        self.drop()
+        return
+    }
+    tracer.lock.lock()
+    if tracer.done.len >= MAX_QUEUE {
+        tracer.dropped++
+        tracer.lock.unlock()
+        self.drop()
+        return
+    }
+    tracer.done.push(*self)
+    tracer.lock.unlock()
+    Span blank
+    *self = blank
+    self.ended = true
+}
+
+// Gives the span's memory back without sending it: for a span that is
+// never ended, or one whose fields were read by hand.
+pub void Span.free() => self.drop()
+
+void Span.drop() {
+    self.name.free()
+    for a in self.attrs {
+        a.key.free()
+        a.text.free()
+    }
+    self.attrs.free()
+    self.message.free()
+}
+
+const str HEX = "0123456789abcdef"
+
+void putHex(String *out, u64 v, i64 digits) {
+    for i in 0..digits {
+        shift := u64((digits - 1 - i) * 4)
+        d := i64((v >> shift) & 15)
+        out.append(HEX[d:d + 1])
+    }
+}
+
+// The traceparent header's value for this context:
+// 00-<trace id>-<span id>-<flags>.
+pub String SpanContext.traceparent() {
+    String out
+    out.append("00-")
+    putHex(&out, self.traceHigh, 16)
+    putHex(&out, self.traceLow, 16)
+    out.append("-")
+    putHex(&out, self.spanId, 16)
+    out.append(if self.sampled { "-01" } else { "-00" })
+    return out
+}
+
+// The trace id as 32 hex digits.
+pub String SpanContext.traceId() {
+    String out
+    putHex(&out, self.traceHigh, 16)
+    putHex(&out, self.traceLow, 16)
+    return out
+}
+
+// The span's traceparent, to send to the next program.
+pub String Span.traceparent() => self.context.traceparent()
+
+(u64, bool) hexNumber(str text) {
+    u64 v = 0
+    for c in text {
+        u64 d = 0
+        if c >= '0' && c <= '9' {
+            d = u64(c - '0')
+        } else if c >= 'a' && c <= 'f' {
+            d = u64(c - 'a') + 10
+        } else {
+            return (0, false)
+        }
+        v = (v << 4) | d
+    }
+    return (v, true)
+}
+
+// Reads a traceparent header. false when it isn't one, or has an id of
+// zeros, which W3C says to ignore.
+pub (SpanContext, bool) parse(str header) {
+    h := str.trim(header)
+    if h.len < 55 || h[2] != '-' || h[35] != '-' || h[52] != '-' || (h.len > 55 && h[55] != '-') {
+        return (SpanContext{}, false)
+    }
+    version, okV := hexNumber(h[0:2])
+    high, okH := hexNumber(h[3:19])
+    low, okL := hexNumber(h[19:35])
+    span, okS := hexNumber(h[36:52])
+    flags, okF := hexNumber(h[53:55])
+    if !(okV && okH && okL && okS && okF) || version == 255 || (version == 0 && h.len != 55) {
+        return (SpanContext{}, false)
+    }
+    if (high | low) == 0 || span == 0 {
+        return (SpanContext{}, false)
+    }
+    return (SpanContext{traceHigh: high, traceLow: low, spanId: span, sampled: flags & 1 == 1}, true)
+}
+
+void putQuoted(String *out, str text) => rawQuote(text.ptr, text.len, out)
+
+void putSpan(String *out, Span *s) {
+    out.append("{{\"traceId\":\"")
+    putHex(out, s.context.traceHigh, 16)
+    putHex(out, s.context.traceLow, 16)
+    out.append("\",\"spanId\":\"")
+    putHex(out, s.context.spanId, 16)
+    if s.parentId != 0 {
+        out.append("\",\"parentSpanId\":\"")
+        putHex(out, s.parentId, 16)
+    }
+    out.append("\",\"name\":")
+    putQuoted(out, s.name)
+    out.append(",\"kind\":{s.kind.value},\"startTimeUnixNano\":\"{s.start}\",\"endTimeUnixNano\":\"{s.finish}\"")
+    if s.context.sampled {
+        out.append(",\"flags\":257")
+    }
+    if s.attrs.len > 0 {
+        out.append(",\"attributes\":[")
+        for i in 0..s.attrs.len {
+            a := &s.attrs.items()[i]
+            if i > 0 {
+                out.append(",")
+            }
+            out.append("{{\"key\":")
+            putQuoted(out, a.key)
+            match a.kind {
+                0 => {
+                    out.append(",\"value\":{{\"stringValue\":")
+                    putQuoted(out, a.text)
+                    out.append("}}}}")
+                },
+                1 => out.append(",\"value\":{{\"intValue\":\"{a.int}\"}}}}"),
+                2 => out.append(",\"value\":{{\"doubleValue\":{a.float}}}}}"),
+                _ => out.append(",\"value\":{{\"boolValue\":{a.int == 1}}}}}"),
+            }
+        }
+        out.append("]")
+    }
+    if s.status != .unset {
+        out.append(",\"status\":{{\"code\":{s.status.value}")
+        if s.message.len > 0 {
+            out.append(",\"message\":")
+            putQuoted(out, s.message)
+        }
+        out.append("}}")
+    }
+    out.append("}}")
+}
+
+// Adds spans to out as an OTLP/HTTP JSON export request from service.
+pub void writeOtlp(String *out, str service, Span[] spans) {
+    out.append("{{\"resourceSpans\":[{{\"resource\":{{\"attributes\":[{{\"key\":\"service.name\",\"value\":{{\"stringValue\":")
+    putQuoted(out, service)
+    out.append("}}}}]}},\"scopeSpans\":[{{\"scope\":{{\"name\":\"iris\"}},\"spans\":[")
+    for i, s in spans {
+        if i > 0 {
+            out.append(",")
+        }
+        putSpan(out, &spans[i])
+    }
+    out.append("]}}]}}]}}")
+}
+
+// ------------------------------------------------------------ http
+
+// The spans of the requests a thread is answering.
+threadlocal Map[http.Request *, Span *] serving
+
+bool startRequest(http.Request *req, http.Response *res) {
+    Span[] mem = alloc(Span, 1)
+    s := &mem[0]
+    scoped String name = format("{req.method} {req.path}")
+    parent, ok := parse(req.header("traceparent"))
+    *s = if ok { startFrom(&parent, name, .server) } else { start(name, .server) }
+    s.text("http.request.method", req.method)
+    s.text("url.path", req.path)
+    s.text("network.protocol.version", if req.protocol == "HTTP/2" { "2" } else { "1.1" })
+    serving.set(req, s)
+    return true
+}
+
+void endRequest(http.Request *req, http.Response *res) {
+    s, ok := serving.get(req)
+    if !ok {
+        return
+    }
+    serving.remove(req)
+    s.int("http.response.status_code", i64(res.status))
+    if res.status >= 500 {
+        s.fail("")
+    }
+    s.end()
+    free(s[0:1])
+}
+
+// Gives every request the Router answers a server span, a child of the
+// span in its traceparent header when it has one. A handler gets it with
+// spanOf(req) to add attributes or start children.
+pub void track(http.Router *router) {
+    router.use(startRequest)
+    router.after(endRequest)
+}
+
+// The span of a request on a Router that track was called on, or null.
+pub Span *spanOf(http.Request *req) {
+    s, ok := serving.get(req)
+    return if ok { s } else { null }
+}
+
+// Sends a request as a client span, a child of parent, with the span's
+// traceparent among the headers. The span ends when the reply has come.
+pub !http.Reply send(http.Client *client, Span *parent, str method, str url, str body = "", str contentType = "",
+    str[] headers = []) {
+        span := parent.child(method, .client)
+        span.text("http.request.method", method)
+        span.text("url.full", url)
+        scoped String tp = span.traceparent()
+        scoped String line = format("traceparent: {tp}")
+        List[str] all
+        defer all.free()
+        for h in headers {
+            all.push(h)
+        }
+        all.push(line)
+        reply := client.send(method, url, body, contentType, all.items()) catch e {
+            span.fail(e.message)
+            span.end()
+            return e
+        }
+        span.int("http.response.status_code", i64(reply.status))
+        if reply.status >= 500 {
+            span.fail("")
+        }
+        span.end()
+        return reply
+    }

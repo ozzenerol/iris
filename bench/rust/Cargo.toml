@@ -41,6 +41,9 @@ tower-service = "0.3"
 aws-sigv4 = "1"
 aws-credential-types = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "derive"] }
+prometheus = { version = "0.14", default-features = false }
+opentelemetry-proto = { version = "0.31", default-features = false, features = ["trace", "gen-tonic-messages", "with-serde"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = 3
@@ -259,3 +262,11 @@ path = "../sigv4/main.rs"
 [[bin]]
 name = "mysql-query"
 path = "../mysql-query/main.rs"
+
+[[bin]]
+name = "metrics"
+path = "../metrics/main.rs"
+
+[[bin]]
+name = "tracing"
+path = "../tracing/main.rs"
