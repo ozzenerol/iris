@@ -1,20 +1,32 @@
 // The server: logins, sessions with their terminals and commands, and
 // forwarded connections.
 
-import crypto, net, process, pty, signal, str
+import crypto, fs, net, os, process, pty, signal, str, time
 
 // What a server does. hostKey is its own key, which clients keep in their
-// known_hosts. password and publicKey check a login, and are null for a
-// way of logging in the server doesn't take; publicKey gets the key as a
-// public key line, which authorizedKey can look up. handle runs each shell,
-// command or subsystem a client asks for. forward, when set, says whether
-// a user may connect through the server to host:port (ssh -L).
+// known_hosts; with a certificate (setCertificate), clients that trust its
+// authority take it too. password and publicKey check a login, and are
+// null for a way of logging in the server doesn't take; publicKey gets the
+// key as a public key line, which authorizedKey can look up. handle runs
+// each shell, command or subsystem a client asks for. forward, when set,
+// says whether a user may connect through the server to host:port (ssh
+// -L).
 pub struct Server {
     pub Key hostKey
     pub bool(str, str) password
     pub bool(str, str) publicKey
+    // the certificate authorities whose user certificates log in: public
+    // key lines, one a line, as sshd's TrustedUserCAKeys. A certificate
+    // logs in as one of its principals.
+    pub str userCAs
     pub !void(Session *) handle
     pub bool(str, str, u16) forward
+    // says whether a user may have the server listen on host:port for
+    // them (ssh -R); null refuses
+    pub bool(str, str, u16) remoteForward
+    // lets sessions use the client's agent (ssh -A): programs that run
+    // find it in SSH_AUTH_SOCK
+    pub bool agentForwarding
     // how long a client has to log in
     pub Duration loginTimeout = 2m
 }
@@ -39,6 +51,11 @@ pub struct Session {
     // NAME=value entries the client sent (ssh's SendEnv)
     pub List[String] env
     pub i64 status
+    // the socket of the client's agent, with ssh -A, or ""
+    pub String agentSocket
+    String agentDir
+    net.Listener agentLn
+    chan[bool] agentDone
     Channel *channel
     bool started
     pty.Pty *pty
@@ -49,6 +66,11 @@ void Session.free() {
     self.command.free()
     self.term.free()
     self.env.freeEach()
+    if self.agentSocket.len > 0 {
+        self.agentDone.free()
+    }
+    self.agentSocket.free()
+    self.agentDir.free()
     free(self[0:1])
 }
 
@@ -100,7 +122,7 @@ pub !void serveConn(net.Conn conn, Server server) {
     conn.setTimeout(server.loginTimeout)
     l := newLink(conn, true)
     l.server = server
-    l.hostKey = keyFromSeed(server.hostKey.seed[0:32])
+    l.hostKey = &l.server.hostKey
     bool writing = false
     defer {
         if writing {
@@ -128,7 +150,7 @@ String failure(Server *s) {
     String m
     putByte(&m, MSG_USERAUTH_FAILURE)
     String methods
-    if s.publicKey != null {
+    if s.publicKey != null || s.userCAs.len > 0 {
         methods.append("publickey")
     }
     if s.password != null {
@@ -170,16 +192,26 @@ String failure(Server *s) {
             _ = a.flag()
             password := a.string()
             good = !a.bad && self.server.password(user, password)
-        } else if method == "publickey" && self.server.publicKey != null {
+        } else if method == "publickey" && (self.server.publicKey != null || self.server.userCAs.len > 0) {
             signed := a.flag()
             alg := a.string()
             blob := a.string()
-            k := blobKey(blob)
-            if !a.bad && alg == "ssh-ed25519" && k.len == 32 {
-                scoped String text = publicTextOf(blob, "")
+            if !a.bad && userAlgorithm(alg, blob) {
+                String force
+                defer force.free()
+                bool acceptable = false
+                String key
+                defer key.free()
+                if isCertType(alg) {
+                    acceptable = self.certAccepted(user, blob, &key, &force)
+                } else {
+                    key = blob.copy()
+                    scoped String text = publicTextOf(blob, "")
+                    acceptable = self.server.publicKey != null && self.server.publicKey(user, text)
+                }
                 if !signed {
                     // the client asks whether this key would do
-                    if self.server.publicKey(user, text) {
+                    if acceptable {
                         String m
                         putByte(&m, MSG_USERAUTH_PK_OK)
                         putString(&m, alg)
@@ -190,15 +222,14 @@ String failure(Server *s) {
                 } else {
                     sigAt := a.at
                     sigBlob := a.string()
-                    sr := Reader{data: sigBlob}
-                    kind := sr.string()
-                    sig := sr.string()
                     String data
                     putString(&data, self.sessionId)
                     data.append(p[0:sigAt])
-                    good = !a.bad && !sr.bad && kind == "ssh-ed25519" && crypto.ed25519Verify(k, data, sig) &&
-                        self.server.publicKey(user, text)
+                    good = !a.bad && acceptable && verifySignature(plainOf(alg), key, data, sigBlob)
                     data.free()
+                    if good && force.len > 0 {
+                        self.forceCommand = force.copy()
+                    }
                 }
             }
         }
@@ -213,6 +244,96 @@ String failure(Server *s) {
     }
     self.disconnect(14, "too many login attempts")
     return error(SshError.auth, "too many login attempts")
+}
+
+// Whether alg is a login algorithm the server takes for blob: Ed25519,
+// ECDSA, RSA with SHA-2, and their certificates.
+bool userAlgorithm(str alg, str blob) {
+    plain := plainOf(alg)
+    if plain != "ssh-ed25519" && plain != "rsa-sha2-256" && plain != "rsa-sha2-512" && !str.startsWith(plain, "ecdsa-sha2-") {
+        return false
+    }
+    kind := typeOfAlgorithm(plain)
+    if isCertType(alg) {
+        scoped String want = format("{kind}{CERT_SUFFIX}")
+        return blobType(blob) == want
+    }
+    return blobType(blob) == kind
+}
+
+// Whether a user certificate logs in as user: signed by one of userCAs,
+// for user, valid now and from the client's address. The key it certifies
+// goes in *key, and its forced command in *force.
+bool Link.certAccepted(str user, str blob, String *key, String *force) {
+    c := parseCertBlob(blob) catch e {
+        return false
+    }
+    defer c.free()
+    if c.host || !c.isFor(user) || !c.validAt(time.now().unix()) {
+        return false
+    }
+    bool trusted = false
+    for line in str.lines(self.server.userCAs) {
+        l := str.trim(line)
+        if l.len == 0 || l[0] == '#' {
+            continue
+        }
+        ca := parseBlob(l) catch e {
+            continue
+        }
+        same := crypto.equal(ca, c.ca)
+        ca.free()
+        if same {
+            trusted = true
+            break
+        }
+    }
+    if !trusted {
+        return false
+    }
+    if c.sourceAddress.len > 0 && !addressIn(self.conn.remoteAddr(), c.sourceAddress) {
+        return false
+    }
+    *key = c.key.copy()
+    *force = c.forceCommand.copy()
+    return true
+}
+
+// Whether a is in one of the comma-separated addresses and prefixes, as
+// "10.0.0.0/8,192.168.1.5,2001:db8::/32".
+bool addressIn(net.Addr a, str list) {
+    for one in str.split(list, ",") {
+        text, bitsText, hasBits := str.cut(str.trim(one), "/")
+        p := net.ip(text) catch e {
+            continue
+        }
+        i64 bits = 128
+        if hasBits {
+            bits = str.parseInt(bitsText) catch -1
+            if bits < 0 {
+                continue
+            }
+            if p.isV4() {
+                bits += 96
+            }
+        }
+        bool same = true
+        for i in 0..16 {
+            take := bits - 8 * i
+            if take <= 0 {
+                break
+            }
+            mask := 0xff if take >= 8 else (0xff << (8 - take)) & 0xff
+            if a.ip[i] & mask != p.ip[i] & mask {
+                same = false
+                break
+            }
+        }
+        if same {
+            return true
+        }
+    }
+    return false
 }
 
 // ------------------------------------------------------------ sessions
@@ -233,6 +354,9 @@ bool Link.sessionRequest(Channel *c, str name, Reader *r) {
         s.cols = cols
         s.rows = rows
         return true
+    }
+    if name == "auth-agent-req@openssh.com" {
+        return self.agentRequest(s)
     }
     if name == "env" {
         n := r.string()
@@ -281,6 +405,16 @@ bool Link.sessionRequest(Channel *c, str name, Reader *r) {
             s.command = what.copy()
         }
         s.kind = SessionKind.shell if name == "shell" else SessionKind.exec if name == "exec" else SessionKind.subsystem
+        if self.forceCommand.len > 0 {
+            // the certificate's command, whatever was asked; that goes in
+            // SSH_ORIGINAL_COMMAND, as sshd does
+            if s.command.len > 0 {
+                s.env.push(format("SSH_ORIGINAL_COMMAND={s.command}"))
+            }
+            s.command.free()
+            s.command = self.forceCommand.copy()
+            s.kind = SessionKind.exec
+        }
         s.started = true
         self.tasks += 1
         spawn sessionTask(self, c)
@@ -306,6 +440,7 @@ void sessionTask(Link *l, Channel *c) {
         c.request("exit-status", b, false) catch e { }
         b.free()
     }
+    s.endAgent()
     c.close()
     l.taskDone()
 }
@@ -342,6 +477,19 @@ pub !i32 Session.run(str[] argv, process.Options options = process.Options{}) {
     scoped String term = format("TERM={self.term}")
     if self.terminal {
         env.push(term)
+    }
+    scoped String agent = format("SSH_AUTH_SOCK={self.agentSocket}")
+    if self.agentSocket.len > 0 {
+        env.push(agent)
+        if options.user.len > 0 {
+            // the agent's socket is the user's, as the program runs as them
+            u := os.lookupUser(options.user) catch e {
+                return error(SshError.refused, "the user {options.user}: {e.message}")
+            }
+            fs.chown(self.agentDir, u.uid, u.gid) catch e { }
+            fs.chown(self.agentSocket, u.uid, u.gid) catch e { }
+            u.free()
+        }
     }
     for e in self.env {
         if str.startsWith(e, "LANG=") || str.startsWith(e, "LC_") {

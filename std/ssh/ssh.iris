@@ -14,7 +14,7 @@
 // The server's key is looked up in ~/.ssh/known_hosts, as ssh does,
 // unless Config.hostKey names it.
 
-import base64, crypto, fs, net, os, random, str
+import base64, big, crypto, der, fs, hex, net, os, random, str
 
 // What can go wrong: connect (the server can't be reached), hostKey (its
 // key isn't the one known for it), auth (the login is refused), protocol
@@ -118,13 +118,41 @@ bool listHas(str list, str name) {
 // the host keys a client takes, best first
 const str HOST_KEY_ALGORITHMS = "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256"
 
-// An Ed25519 key: the secret seed, the public half, and a comment such as
-// ada@laptop. generateKey makes one and loadKey reads one that ssh-keygen
-// wrote. A host key is one too.
+// The kinds of key: Ed25519, ECDSA on P-256, P-384 or P-521, and RSA.
+pub enum KeyKind { ed25519, ecdsaP256, ecdsaP384, ecdsaP521, rsa }
+
+// A key for logging in, or a server's own key: its kind, its public half
+// and a comment such as ada@laptop. generateKey makes an Ed25519 one,
+// generateKeyOf one of any kind, and loadKey reads one that ssh-keygen
+// wrote. free gives it back.
 pub struct Key {
+    pub KeyKind kind
     u8[32] seed
+    // the public half of an Ed25519 key
     pub u8[32] public
+    // the private key of ECDSA and RSA
+    crypto.PrivateKey pk
+    // the public key as SSH sends it
+    String blob
     pub String comment
+    // a certificate for the key, as SSH sends it, or ""
+    String cert
+}
+
+// The name SSH gives a kind of key.
+str typeName(KeyKind kind) => match kind {
+    .ed25519 => "ssh-ed25519"
+    .ecdsaP256 => "ecdsa-sha2-nistp256"
+    .ecdsaP384 => "ecdsa-sha2-nistp384"
+    .ecdsaP521 => "ecdsa-sha2-nistp521"
+    .rsa => "ssh-rsa"
+}
+
+// The size of an ECDSA key's numbers, and the hash its signatures use.
+(i64, crypto.Hash) curveOf(KeyKind kind) => match kind {
+    .ecdsaP384 => (48, crypto.Hash.sha384)
+    .ecdsaP521 => (66, crypto.Hash.sha512)
+    _ => (32, crypto.Hash.sha256)
 }
 
 // A new Ed25519 key from the system's random source.
@@ -132,8 +160,27 @@ pub Key generateKey(str comment = "") {
     Key k
     random.bytes(k.seed[0:32])
     k.public = crypto.ed25519Public(k.seed[0:32])
+    k.blob = blobOf(k.public[0:32])
     k.comment = comment.copy()
     return k
+}
+
+// A new key of any kind: bits is the size of an RSA key, 3072 unless set.
+// ECDSA and RSA keys need the system's OpenSSL 3.
+pub !Key generateKeyOf(KeyKind kind, str comment = "", i64 bits = 3072) {
+    if kind == .ed25519 {
+        return generateKey(comment)
+    }
+    t := match kind {
+        .ecdsaP256 => crypto.KeyType.ecP256
+        .ecdsaP384 => crypto.KeyType.ecP384
+        .ecdsaP521 => crypto.KeyType.ecP521
+        _ => crypto.KeyType.rsa
+    }
+    pk := crypto.generateKey(t, bits) catch e {
+        return error(SshError.key, "making a {typeName(kind)} key: {e.message}")
+    }
+    return try keyOfPrivate(kind, pk, comment)
 }
 
 // The key with the secret seed of 32 bytes.
@@ -146,14 +193,45 @@ pub Key keyFromSeed(str seed, str comment = "") {
         k.seed[i] = seed[i]
     }
     k.public = crypto.ed25519Public(seed)
+    k.blob = blobOf(k.public[0:32])
     k.comment = comment.copy()
     return k
 }
 
-// Wipes the secret seed and frees the comment.
+// An ECDSA or RSA key around an OpenSSL key, which it then owns.
+!Key keyOfPrivate(KeyKind kind, crypto.PrivateKey pk, str comment) {
+    Key k = Key{kind: kind, pk: pk}
+    scoped public := pk.publicKey()
+    k.blob = publicBlob(kind, &public) catch e {
+        pk.free()
+        return error(SshError.key, e.message)
+    }
+    k.comment = comment.copy()
+    return k
+}
+
+// Wipes the secret and frees the rest.
 pub void Key.free() {
     crypto.wipe(self.seed[0:32])
+    if self.kind != .ed25519 {
+        self.pk.free()
+    }
+    self.blob.free()
     self.comment.free()
+    self.cert.free()
+}
+
+// The kind of an OpenSSL key.
+!KeyKind kindOf(crypto.KeyType t) {
+    if t == .other {
+        return error(SshError.key, "a key that is neither ECDSA nor RSA")
+    }
+    return match t {
+        .ecP256 => KeyKind.ecdsaP256
+        .ecP384 => KeyKind.ecdsaP384
+        .ecP521 => KeyKind.ecdsaP521
+        _ => KeyKind.rsa
+    }
 }
 
 // The public key as SSH sends it: its type and its 32 bytes.
@@ -161,6 +239,35 @@ String blobOf(str public) {
     String b
     putString(&b, "ssh-ed25519")
     putString(&b, public)
+    return b
+}
+
+// The SSH blob of an ECDSA or RSA public key, from its DER.
+!String publicBlob(KeyKind kind, crypto.PublicKey *public) {
+    scoped String spki = public.der()
+    r := der.reader(spki)
+    outer := try r.expect(der.SEQUENCE)
+    inner := outer.inner()
+    _ = try inner.expect(der.SEQUENCE)
+    bits := try inner.expect(der.BIT_STRING)
+    if bits.contents.len < 2 {
+        return error(SshError.key, "a public key with no bits")
+    }
+    key := bits.contents[1:]
+    String b
+    putString(&b, typeName(kind))
+    if kind == .rsa {
+        kr := der.reader(key)
+        seq := try kr.expect(der.SEQUENCE)
+        ints := seq.inner()
+        n := try ints.expect(der.INTEGER)
+        e := try ints.expect(der.INTEGER)
+        putMpint(&b, e.unsigned())
+        putMpint(&b, n.unsigned())
+        return b
+    }
+    putString(&b, typeName(kind)[11:])
+    putString(&b, key)
     return b
 }
 
@@ -196,14 +303,23 @@ String publicTextOf(str blob, str comment) {
     return format("{blobType(blob)} {b}")
 }
 
-// Whether name is a type of public key that a server may have.
+// The public key as one line of an authorized_keys file:
+// "ssh-ed25519 AAAAC3Nza... ada@laptop".
+pub String Key.publicText() => publicTextOf(self.blob, self.comment)
+
+// The key's fingerprint as ssh-keygen -l shows it: "SHA256:" and the
+// Base64 of the public key's hash.
+pub String Key.fingerprint() => fingerprintOfBlob(self.blob)
+
+// Whether name is a type of public key.
 bool hostKeyType(str name) {
     return name == "ssh-ed25519" || name == "ssh-rsa" || name == "ecdsa-sha2-nistp256" || name == "ecdsa-sha2-nistp384" ||
         name == "ecdsa-sha2-nistp521"
 }
 
-// The key blob of a public key line of any type a server may have, as in
-// known_hosts: "ecdsa-sha2-nistp256 AAAA... comment".
+// The key blob of a public key line of any type, as in known_hosts or
+// authorized_keys: "ecdsa-sha2-nistp256 AAAA... comment", maybe after
+// options.
 !String parseBlob(str line) {
     fields := str.fields(line)
     defer fields.free()
@@ -222,9 +338,12 @@ bool hostKeyType(str name) {
     return error(SshError.key, "'{line}' isn't a public key line")
 }
 
-// The host key algorithms for a key type: an RSA key signs with SHA-512
+// The signature algorithms for a key type: an RSA key signs with SHA-512
 // or SHA-256.
 str algorithmsFor(str kind) => "rsa-sha2-512,rsa-sha2-256" if kind == "ssh-rsa" else kind
+
+// The key type a signature algorithm is for.
+str typeOfAlgorithm(str alg) => "ssh-rsa" if alg == "rsa-sha2-256" || alg == "rsa-sha2-512" else alg
 
 // An mpint's number without the zero byte in front.
 str unsignedOf(str n) {
@@ -235,9 +354,47 @@ str unsignedOf(str n) {
     return v
 }
 
-// Whether sigBlob is the host key's signature of h with alg, the host key
-// algorithm the key exchange chose.
-bool verifyHostSignature(str alg, str blob, str h, str sigBlob) {
+// The key's signature of data with alg (one of its algorithms), as SSH
+// sends it: the algorithm's name and the signature.
+!String Key.sign(str data, str alg) {
+    String out
+    putString(&out, alg)
+    if self.kind == .ed25519 {
+        sig := crypto.ed25519Sign(self.seed[0:32], data)
+        putString(&out, sig[0:64])
+        return out
+    }
+    if self.kind == .rsa {
+        scoped String sig = self.pk.sign(data, crypto.Hash.sha512 if alg == "rsa-sha2-512" else crypto.Hash.sha256) catch e {
+            out.free()
+            return error(SshError.key, "signing: {e.message}")
+        }
+        putString(&out, sig)
+        return out
+    }
+    size, hash := curveOf(self.kind)
+    scoped String sig = self.pk.sign(data, hash) catch e {
+        out.free()
+        return error(SshError.key, "signing: {e.message}")
+    }
+    scoped String raw = crypto.ecdsaRaw(sig, size) catch e {
+        out.free()
+        return error(SshError.key, "signing: {e.message}")
+    }
+    String rs
+    putMpint(&rs, raw[0:size])
+    putMpint(&rs, raw[size:])
+    putString(&out, rs)
+    rs.free()
+    return out
+}
+
+// The algorithm the key signs with: RSA with SHA-512.
+str Key.algorithm() => "rsa-sha2-512" if self.kind == .rsa else typeName(self.kind)
+
+// Whether sigBlob is the signature of h by the key blob, with alg, the
+// algorithm the two sides chose.
+bool verifySignature(str alg, str blob, str h, str sigBlob) {
     sr := Reader{data: sigBlob}
     sigKind := sr.string()
     sig := sr.string()
@@ -312,56 +469,35 @@ bool verifyHostSignature(str alg, str blob, str h, str sigBlob) {
         putByte(&raw, 0)
     }
     raw.append(s)
-    scoped String der = crypto.ecdsaDer(raw)
-    return key.verify(h, der, hash)
-}
-
-// The public key as one line of an authorized_keys file:
-// "ssh-ed25519 AAAAC3Nza... ada@laptop".
-pub String Key.publicText() {
-    scoped String blob = blobOf(self.public[0:32])
-    return publicTextOf(blob, self.comment)
-}
-
-// The key's fingerprint as ssh-keygen -l shows it: "SHA256:" and the
-// Base64 of the public key's hash.
-pub String Key.fingerprint() {
-    scoped String blob = blobOf(self.public[0:32])
-    return fingerprintOfBlob(blob)
+    scoped String sigDer = crypto.ecdsaDer(raw)
+    return key.verify(h, sigDer, hash)
 }
 
 // The 32 bytes of a public key line, "ssh-ed25519 AAAA... comment".
-// SshError.key when it isn't an Ed25519 key.
+// SshError.key when it isn't an Ed25519 key; parseBlob takes any kind.
 pub !u8[32] parsePublicKey(str line) {
-    fields := str.fields(line)
-    defer fields.free()
-    // an authorized_keys line can start with options
-    for i in 0..fields.len {
-        if fields.at(i) == "ssh-ed25519" && i + 1 < fields.len {
-            blob := base64.decode(fields.at(i + 1)) catch e {
-                return error(SshError.key, "the key in '{line}' isn't Base64")
-            }
-            defer blob.free()
-            k := blobKey(blob)
-            if k.len != 32 {
-                return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
-            }
-            u8[32] out
-            for j in 0..32 {
-                out[j] = k[j]
-            }
-            return out
-        }
+    blob := parseBlob(line) catch e {
+        return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
     }
-    return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
+    defer blob.free()
+    k := blobKey(blob)
+    if k.len != 32 {
+        return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
+    }
+    u8[32] out
+    for j in 0..32 {
+        out[j] = k[j]
+    }
+    return out
 }
 
-// The fingerprint of a public key line, "SHA256:...".
+// The fingerprint of a public key line of any kind, "SHA256:...".
 pub !String fingerprint(str publicLine) {
-    k := try parsePublicKey(publicLine)
-    scoped String blob = blobOf(k[0:32])
+    scoped String blob = try parseBlob(publicLine)
     return fingerprintOfBlob(blob)
 }
+
+// ------------------------------------------------------------ key files
 
 const str PRIVATE_BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----"
 const str PRIVATE_END = "-----END OPENSSH PRIVATE KEY-----"
@@ -377,12 +513,106 @@ const str KEY_MAGIC = "openssh-key-v1\x00"
     _ => (0, 0, false)
 }
 
+// A DER value: tag, length and contents.
+void derPut(String *out, i64 tag, str contents) {
+    putByte(out, tag)
+    n := contents.len
+    if n < 128 {
+        putByte(out, n)
+    } else if n < 256 {
+        putByte(out, 0x81)
+        putByte(out, n)
+    } else {
+        putByte(out, 0x82)
+        putByte(out, n >> 8)
+        putByte(out, n & 255)
+    }
+    out.append(contents)
+}
+
+// A DER INTEGER of an unsigned big-endian number.
+void derUnsigned(String *out, str n) {
+    v := unsignedOf(n)
+    String c
+    if v.len == 0 || v[0] & 0x80 != 0 {
+        putByte(&c, 0)
+    }
+    c.append(v)
+    derPut(out, der.INTEGER, c)
+    crypto.wipe(c.ptr[0:c.len])
+    c.free()
+}
+
+// n mod (p - 1), for RSA's CRT exponents.
+!String modMinusOne(str d, str p) {
+    scoped String dh = hex.encode(d)
+    scoped String ph = hex.encode(p)
+    scoped dn := try big.parse(dh, 16)
+    scoped pn := try big.parse(ph, 16)
+    scoped one := big.from(1)
+    scoped pm := pn.sub(one)
+    scoped r := dn.rem(pm)
+    scoped String rh = r.text(16)
+    scoped String even = format("0{rh}") if rh.len % 2 != 0 else rh.copy()
+    return try hex.decode(even)
+}
+
+// The parts of an ECDSA or RSA private key, in the order OpenSSH's format
+// keeps them: for RSA n, e, d, iqmp, p and q; for ECDSA the point Q and d.
+!List[String] privateParts(Key *k) {
+    scoped String pem = k.pk.pem()
+    String b64
+    defer {
+        crypto.wipe(b64.ptr[0:b64.len])
+        b64.free()
+    }
+    for line in str.lines(pem) {
+        if !str.startsWith(line, "-----") {
+            b64.append(str.trim(line))
+        }
+    }
+    scoped String p8 = try base64.decode(b64)
+    defer crypto.wipe(p8.ptr[0:p8.len])
+    r := der.reader(p8)
+    top := try r.expect(der.SEQUENCE)
+    fields := top.inner()
+    _ = try fields.expect(der.INTEGER)
+    _ = try fields.expect(der.SEQUENCE)
+    inner := try fields.expect(der.OCTET_STRING)
+    kr := der.reader(inner.contents)
+    seq := try kr.expect(der.SEQUENCE)
+    v := seq.inner()
+    _ = try v.expect(der.INTEGER)
+    List[String] parts
+    if k.kind == .rsa {
+        // n, e, d, p, q, dp, dq, qinv
+        n := try v.expect(der.INTEGER)
+        e := try v.expect(der.INTEGER)
+        d := try v.expect(der.INTEGER)
+        p := try v.expect(der.INTEGER)
+        q := try v.expect(der.INTEGER)
+        _ = try v.expect(der.INTEGER)
+        _ = try v.expect(der.INTEGER)
+        qinv := try v.expect(der.INTEGER)
+        for x in [n, e, d, qinv, p, q] {
+            parts.push(x.unsigned().copy())
+        }
+        return parts
+    }
+    d := try v.expect(der.OCTET_STRING)
+    br := Reader{data: k.blob}
+    _ = br.string()
+    _ = br.string()
+    parts.push(br.string().copy())
+    parts.push(d.contents.copy())
+    return parts
+}
+
 // The key in OpenSSH's private key format, as ssh-keygen writes it, for a
 // file only its owner can read. With a passphrase, the key is encrypted
 // with AES-256-CTR and a key from bcrypt_pbkdf of rounds, as ssh-keygen
 // does.
 pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
-    scoped String blob = blobOf(self.public[0:32])
     String secret
     defer {
         crypto.wipe(secret.ptr[0:secret.len])
@@ -392,11 +622,7 @@ pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
     random.bytes(check[0:4])
     secret.append(check[0:4])
     secret.append(check[0:4])
-    putString(&secret, "ssh-ed25519")
-    putString(&secret, self.public[0:32])
-    putU32(&secret, 64)
-    secret.append(self.seed[0:32])
-    secret.append(self.public[0:32])
+    self.putPrivate(&secret)
     putString(&secret, self.comment)
     i64 block = 8 if passphrase.len == 0 else 16
     i64 pad = 1
@@ -414,7 +640,7 @@ pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
         putString(&all, "none")
         putString(&all, "")
         putU32(&all, 1)
-        putString(&all, blob)
+        putString(&all, self.blob)
         putString(&all, secret)
     } else {
         u8[16] salt
@@ -427,7 +653,7 @@ pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
         putString(&all, options)
         options.free()
         putU32(&all, 1)
-        putString(&all, blob)
+        putString(&all, self.blob)
         scoped String made = crypto.bcryptPbkdf(passphrase, salt[0:16], rounds, 48)
         String sealed = crypto.aesCtr(made[0:32], made[32:48], secret)
         putString(&all, sealed)
@@ -453,13 +679,160 @@ pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
     return out
 }
 
-// The key in an OpenSSH private key, as ssh-keygen -t ed25519 writes it,
-// with its passphrase if it has one. SshError.key when it is another kind
-// of key, or the passphrase is missing or wrong.
+// The OpenSSL key of the parts OpenSSH's format keeps: a PKCS#1 key for
+// RSA, a SEC1 key for ECDSA.
+!crypto.PrivateKey privateOfParts(KeyKind kind, Reader *s) {
+    String d
+    defer {
+        crypto.wipe(d.ptr[0:d.len])
+        d.free()
+    }
+    String body
+    defer {
+        crypto.wipe(body.ptr[0:body.len])
+        body.free()
+    }
+    if kind == .rsa {
+        n := s.string()
+        e := s.string()
+        dd := s.string()
+        iqmp := s.string()
+        p := s.string()
+        q := s.string()
+        if s.bad {
+            return error(SshError.key, "the RSA key is cut short")
+        }
+        scoped String dp = try modMinusOne(unsignedOf(dd), unsignedOf(p))
+        scoped String dq = try modMinusOne(unsignedOf(dd), unsignedOf(q))
+        defer {
+            crypto.wipe(dp.ptr[0:dp.len])
+            crypto.wipe(dq.ptr[0:dq.len])
+        }
+        u8[1] zero = [0]
+        derUnsigned(&body, zero[0:1])
+        for x in [n, e, dd, p, q, dp[0:dp.len], dq[0:dq.len], iqmp] {
+            derUnsigned(&body, x)
+        }
+        derPut(&d, der.SEQUENCE, body)
+    } else {
+        curve := s.string()
+        _ = s.string()
+        secret := unsignedOf(s.string())
+        size, _ := curveOf(kind)
+        if s.bad || curve != typeName(kind)[11:] || secret.len > size {
+            return error(SshError.key, "the ECDSA key is broken")
+        }
+        u8[1] one = [1]
+        derUnsigned(&body, one[0:1])
+        String padded
+        for padded.len + secret.len < size {
+            putByte(&padded, 0)
+        }
+        padded.append(secret)
+        derPut(&body, der.OCTET_STRING, padded)
+        crypto.wipe(padded.ptr[0:padded.len])
+        padded.free()
+        String oid
+        if kind == .ecdsaP256 {
+            u8[10] o = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]
+            oid.append(o[0:10])
+        } else {
+            u8[7] o = [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22 if kind == .ecdsaP384 else 0x23]
+            oid.append(o[0:7])
+        }
+        derPut(&body, 0xa0, oid)
+        oid.free()
+        derPut(&d, der.SEQUENCE, body)
+    }
+    k := crypto.loadPrivateKey(d) catch e {
+        return error(SshError.key, "the {typeName(kind)} key: {e.message}")
+    }
+    return k
+}
+
+// The key's type and private fields, as OpenSSH's private key format and
+// ssh-agent keep them.
+void Key.putPrivate(String *out) {
+    putString(out, typeName(self.kind))
+    if self.kind == .ed25519 {
+        putString(out, self.public[0:32])
+        putU32(out, 64)
+        out.append(self.seed[0:32])
+        out.append(self.public[0:32])
+        return
+    }
+    parts := privateParts(self) catch e {
+        panic("reading the {typeName(self.kind)} key back: {e.message}")
+    }
+    defer {
+        for p in parts {
+            crypto.wipe(p.ptr[0:p.len])
+        }
+        parts.freeEach()
+    }
+    if self.kind == .rsa {
+        for p in parts {
+            putMpint(out, p)
+        }
+    } else {
+        putString(out, typeName(self.kind)[11:])
+        putString(out, parts.at(0))
+        putMpint(out, parts.at(1))
+    }
+}
+
+// The key in a type and private fields, as putPrivate writes them; the
+// comment that follows is left to the caller.
+!Key readPrivate(Reader *s) {
+    kind := s.string()
+    if kind == "ssh-ed25519" {
+        public := s.string()
+        both := s.string()
+        if s.bad || public.len != 32 || both.len != 64 {
+            return error(SshError.key, "the private key is broken")
+        }
+        k := keyFromSeed(both[0:32])
+        if !crypto.equal(k.public[0:32], public) {
+            k.free()
+            return error(SshError.key, "the private key doesn't match its public key")
+        }
+        return k
+    }
+    KeyKind kk = .rsa
+    if kind == "ecdsa-sha2-nistp256" {
+        kk = .ecdsaP256
+    } else if kind == "ecdsa-sha2-nistp384" {
+        kk = .ecdsaP384
+    } else if kind == "ecdsa-sha2-nistp521" {
+        kk = .ecdsaP521
+    } else if kind != "ssh-rsa" {
+        return error(SshError.key, "a {kind} key, which isn't supported")
+    }
+    pk := try privateOfParts(kk, s)
+    return try keyOfPrivate(kk, pk, "")
+}
+
+// The key in an OpenSSH private key, as ssh-keygen writes it, with its
+// passphrase if it has one. A PEM key (ssh-keygen -m PEM) without a
+// passphrase is read too. SshError.key when the passphrase is missing or
+// wrong.
 pub !Key parseKey(str text, str passphrase = "") {
     begin := str.find(text, PRIVATE_BEGIN)
     end := str.find(text, PRIVATE_END)
     if begin < 0 || end < begin {
+        if str.find(text, "-----BEGIN ") >= 0 && str.find(text, "PRIVATE KEY-----") >= 0 {
+            if str.find(text, "ENCRYPTED") >= 0 {
+                return error(SshError.key, "a PEM key with a passphrase: ssh-keygen -p -m RFC4716 turns it into OpenSSH's format")
+            }
+            pk := crypto.loadPrivateKey(text) catch e {
+                return error(SshError.key, "the PEM key: {e.message}")
+            }
+            kind := kindOf(pk.kind()) catch e {
+                pk.free()
+                return error(SshError.key, e.message)
+            }
+            return try keyOfPrivate(kind, pk, "")
+        }
         return error(SshError.key, "not an OpenSSH private key: no {PRIVATE_BEGIN} line")
     }
     String b64
@@ -488,7 +861,7 @@ pub !Key parseKey(str text, str passphrase = "") {
     kdf := r.string()
     options := r.string()
     count := r.u32()
-    _ = r.string()
+    publicBlob := r.string()
     str secret = r.string()
     if r.bad {
         return error(SshError.key, "the private key is cut short")
@@ -541,18 +914,15 @@ pub !Key parseKey(str text, str passphrase = "") {
         }
         return error(SshError.key, "the private key is broken")
     }
-    kind := s.string()
-    if kind != "ssh-ed25519" {
-        return error(SshError.key, "a {kind} key: only ssh-ed25519 keys are read")
-    }
-    public := s.string()
-    both := s.string()
+    k := try readPrivate(&s)
     comment := s.string()
-    if s.bad || a != b || public.len != 32 || both.len != 64 {
-        return error(SshError.key, "the private key is broken")
+    if s.bad {
+        k.free()
+        return error(SshError.key, "the private key is cut short")
     }
-    k := keyFromSeed(both[0:32], comment)
-    if !crypto.equal(k.public[0:32], public) {
+    k.comment.free()
+    k.comment = comment.copy()
+    if !crypto.equal(k.blob, publicBlob) {
         k.free()
         return error(SshError.key, "the private key doesn't match its public key")
     }
@@ -560,7 +930,8 @@ pub !Key parseKey(str text, str passphrase = "") {
 }
 
 // The key in the private key file at path, with its passphrase if it has
-// one.
+// one. A certificate next to it, at path with -cert.pub after it as
+// ssh-keygen -s writes, comes with it and is shown when logging in.
 pub !Key loadKey(str path, str passphrase = "") {
     text := fs.readAll(path) catch e {
         return error(SshError.key, "{path}: {e.message}")
@@ -572,15 +943,25 @@ pub !Key loadKey(str path, str passphrase = "") {
     k := parseKey(text, passphrase) catch e {
         return error(SshError.key, "{path}: {e.message}")
     }
+    scoped String certPath = format("{path}-cert.pub")
+    certText := fs.readAll(certPath) catch "".copy()
+    defer certText.free()
+    if certText.len > 0 {
+        k.setCertificate(certText) catch e {
+            k.free()
+            return error(SshError.key, "{certPath}: {e.message}")
+        }
+    }
     return k
 }
 
 // Whether key, a public key line, is one of the lines of the
 // authorized_keys file at path. A missing file has none.
 pub bool authorizedKey(str path, str key) {
-    want := parsePublicKey(key) catch e {
+    want := parseBlob(key) catch e {
         return false
     }
+    defer want.free()
     text := fs.readAll(path) catch e {
         return false
     }
@@ -590,14 +971,331 @@ pub bool authorizedKey(str path, str key) {
         if l.len == 0 || l[0] == '#' {
             continue
         }
-        k := parsePublicKey(l) catch e {
+        k := parseBlob(l) catch e {
             continue
         }
-        if crypto.equal(k[0:32], want[0:32]) {
+        same := crypto.equal(k, want)
+        k.free()
+        if same {
             return true
         }
     }
     return false
+}
+
+// ------------------------------------------------------------ certificates
+
+const str CERT_SUFFIX = "-cert-v01@openssh.com"
+// u64 all ones: a certificate valid forever
+const i64 FOREVER = -1
+
+// An OpenSSH certificate: a certificate authority's signature that a key
+// belongs to a user or a host, for some names and some time. ssh-keygen -s
+// makes them, and signCertificate too.
+pub struct Certificate {
+    // a host's certificate, or a user's
+    pub bool host
+    pub String keyId
+    // the users or host names it is for
+    pub List[String] principals
+    pub i64 serial
+    // when it is valid, in seconds since 1970; validBefore is -1 for ever
+    pub i64 validAfter
+    pub i64 validBefore
+    // a user's critical options: the only command it may run, and the
+    // addresses it may come from ("10.0.0.0/8,192.168.1.5")
+    pub String forceCommand
+    pub String sourceAddress
+    // a user's extensions, such as permit-pty
+    pub List[String] extensions
+    // the key it certifies and the authority's key, as SSH sends them
+    String key
+    String ca
+}
+
+pub void Certificate.free() {
+    self.keyId.free()
+    self.principals.freeEach()
+    self.forceCommand.free()
+    self.sourceAddress.free()
+    self.extensions.freeEach()
+    self.key.free()
+    self.ca.free()
+}
+
+// The certificate's key and the authority's key, as public key lines.
+pub String Certificate.keyText() => publicTextOf(self.key, "")
+
+pub String Certificate.caText() => publicTextOf(self.ca, "")
+
+// Whether the certificate is valid at the time now, in seconds since 1970.
+pub bool Certificate.validAt(i64 now) {
+    // validBefore is an unsigned number: -1 is for ever
+    return now >= self.validAfter && (self.validBefore == FOREVER || (self.validBefore > 0 && now < self.validBefore))
+}
+
+// Whether name is one of its principals.
+pub bool Certificate.isFor(str name) {
+    for p in self.principals {
+        if p == name {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether a type or algorithm is a certificate's.
+bool isCertType(str name) => str.endsWith(name, CERT_SUFFIX)
+
+// The plain algorithm of a certificate algorithm: rsa-sha2-512 for
+// rsa-sha2-512-cert-v01@openssh.com.
+str plainOf(str name) => name[0:name.len - CERT_SUFFIX.len] if isCertType(name) else name
+
+// The certificate algorithms for a plain key type.
+String certAlgorithmsFor(str kind) {
+    if kind == "ssh-rsa" {
+        return format("rsa-sha2-512{CERT_SUFFIX},rsa-sha2-256{CERT_SUFFIX}")
+    }
+    return format("{kind}{CERT_SUFFIX}")
+}
+
+i64 getU64(str m, i64 i) => getU32(m, i) << 32 | getU32(m, i + 4)
+
+void putU64(String *out, i64 v) {
+    putU32(out, v >> 32 & 0xffffffff)
+    putU32(out, v & 0xffffffff)
+}
+
+// The (name, data) pairs of critical options or extensions.
+!void certOptions(str packed, Certificate *c, bool critical) {
+    r := Reader{data: packed}
+    for r.at < packed.len {
+        name := r.string()
+        data := r.string()
+        if r.bad {
+            return error(SshError.key, "the certificate's options are broken")
+        }
+        if !critical {
+            c.extensions.push(name.copy())
+            continue
+        }
+        dr := Reader{data: data}
+        value := dr.string()
+        if name == "force-command" {
+            c.forceCommand = value.copy()
+        } else if name == "source-address" {
+            c.sourceAddress = value.copy()
+        } else {
+            // one that isn't understood can't be left out
+            return error(SshError.key, "the certificate has the critical option {name}, which isn't supported")
+        }
+    }
+}
+
+// The certificate in blob, with the authority's signature checked.
+!Certificate parseCertBlob(str blob) {
+    r := Reader{data: blob}
+    kind := r.string()
+    if !isCertType(kind) {
+        return error(SshError.key, "a {kind} key, not a certificate")
+    }
+    plain := plainOf(kind)
+    _ = r.string() // nonce
+    Certificate c
+    errdefer c.free()
+    putString(&c.key, plain)
+    if plain == "ssh-ed25519" {
+        putString(&c.key, r.string())
+    } else if plain == "ssh-rsa" {
+        e := r.string()
+        n := r.string()
+        putString(&c.key, e)
+        putString(&c.key, n)
+    } else if str.startsWith(plain, "ecdsa-sha2-") {
+        putString(&c.key, r.string())
+        putString(&c.key, r.string())
+    } else {
+        return error(SshError.key, "a certificate for a {plain} key, which isn't supported")
+    }
+    if r.at + 12 > blob.len {
+        return error(SshError.key, "the certificate is cut short")
+    }
+    c.serial = getU64(blob, r.at)
+    r.at += 8
+    t := r.u32()
+    c.host = t == 2
+    c.keyId = r.string().copy()
+    principals := r.string()
+    pr := Reader{data: principals}
+    for pr.at < principals.len {
+        p := pr.string()
+        if pr.bad {
+            return error(SshError.key, "the certificate's principals are broken")
+        }
+        c.principals.push(p.copy())
+    }
+    if r.at + 16 > blob.len {
+        return error(SshError.key, "the certificate is cut short")
+    }
+    c.validAfter = getU64(blob, r.at)
+    c.validBefore = getU64(blob, r.at + 8)
+    r.at += 16
+    critical := r.string()
+    extensions := r.string()
+    _ = r.string() // reserved
+    c.ca = r.string().copy()
+    signed := blob[0:r.at]
+    sig := r.string()
+    if r.bad || r.at != blob.len || (t != 1 && t != 2) {
+        return error(SshError.key, "the certificate is broken")
+    }
+    try certOptions(critical, &c, true)
+    try certOptions(extensions, &c, false)
+    if isCertType(blobType(c.ca)) {
+        return error(SshError.key, "the certificate is signed by another certificate")
+    }
+    sr := Reader{data: sig}
+    sigAlg := sr.string()
+    if typeOfAlgorithm(sigAlg) != blobType(c.ca) || !verifySignature(sigAlg, c.ca, signed, sig) {
+        return error(SshError.key, "the certificate's signature doesn't match its authority's key")
+    }
+    return c
+}
+
+// The certificate in a line such as the -cert.pub file ssh-keygen -s
+// writes, with the authority's signature checked.
+pub !Certificate parseCertificate(str line) {
+    fields := str.fields(line)
+    defer fields.free()
+    for i in 0..fields.len {
+        if isCertType(fields.at(i)) && i + 1 < fields.len {
+            scoped String blob = base64.decode(fields.at(i + 1)) catch e {
+                return error(SshError.key, "the certificate isn't Base64")
+            }
+            if blobType(blob) != fields.at(i) {
+                return error(SshError.key, "the certificate isn't a {fields.at(i)}")
+            }
+            return try parseCertBlob(blob)
+        }
+    }
+    return error(SshError.key, "'{line}' isn't a certificate line")
+}
+
+// Gives the key its certificate, from a line as parseCertificate takes:
+// it is shown when the key logs in, or when a server with the key is
+// connected to. The certificate has to be for this key.
+pub !void Key.setCertificate(str line) {
+    fields := str.fields(line)
+    defer fields.free()
+    for i in 0..fields.len {
+        if isCertType(fields.at(i)) && i + 1 < fields.len {
+            blob := base64.decode(fields.at(i + 1)) catch e {
+                return error(SshError.key, "the certificate isn't Base64")
+            }
+            c := parseCertBlob(blob) catch e {
+                blob.free()
+                return error(e.code, e.message)
+            }
+            same := crypto.equal(c.key, self.blob)
+            c.free()
+            if !same {
+                blob.free()
+                return error(SshError.key, "the certificate is for another key")
+            }
+            self.cert.free()
+            self.cert = blob
+            return
+        }
+    }
+    return error(SshError.key, "'{line}' isn't a certificate line")
+}
+
+// The key's certificate as a line, "" without one.
+pub String Key.certificateText() {
+    if self.cert.len == 0 {
+        return "".copy()
+    }
+    return publicTextOf(self.cert, self.comment)
+}
+
+// What a certificate says, for signCertificate.
+pub struct CertOptions {
+    // a host's certificate, or a user's
+    pub bool host
+    pub str keyId
+    // the users, or the host's names
+    pub str[] principals
+    pub i64 serial
+    // seconds since 1970; validBefore -1 is for ever
+    pub i64 validAfter = 0
+    pub i64 validBefore = -1
+    pub str forceCommand
+    pub str sourceAddress
+    // a user's certificate allows a terminal, forwarding and the rest, as
+    // ssh-keygen's does, unless this is set
+    pub bool noExtensions
+}
+
+void putOption(String *out, str name, str value, bool flag) {
+    putString(out, name)
+    if flag {
+        putString(out, "")
+        return
+    }
+    String inner
+    putString(&inner, value)
+    putString(out, inner)
+    inner.free()
+}
+
+// A certificate signed with this key as the authority, for the key in
+// publicLine, as ssh-keygen -s makes: the line to keep next to the key
+// (-cert.pub).
+pub !String Key.signCertificate(str publicLine, CertOptions o) {
+    scoped String keyBlob = try parseBlob(publicLine)
+    kind := blobType(keyBlob)
+    String b
+    defer b.free()
+    putString(&b, "{kind}{CERT_SUFFIX}")
+    u8[32] nonce
+    random.bytes(nonce[0:32])
+    putString(&b, nonce[0:32])
+    // the key's fields, after its type
+    b.append(keyBlob[4 + kind.len:])
+    putU64(&b, o.serial)
+    putU32(&b, 2 if o.host else 1)
+    putString(&b, o.keyId)
+    String principals
+    for p in o.principals {
+        putString(&principals, p)
+    }
+    putString(&b, principals)
+    principals.free()
+    putU64(&b, o.validAfter)
+    putU64(&b, o.validBefore)
+    String critical
+    // in name order, as the format wants
+    if o.forceCommand.len > 0 {
+        putOption(&critical, "force-command", o.forceCommand, false)
+    }
+    if o.sourceAddress.len > 0 {
+        putOption(&critical, "source-address", o.sourceAddress, false)
+    }
+    putString(&b, critical)
+    critical.free()
+    String extensions
+    if !o.host && !o.noExtensions {
+        for name in ["permit-X11-forwarding", "permit-agent-forwarding", "permit-port-forwarding", "permit-pty", "permit-user-rc"] {
+            putOption(&extensions, name, "", true)
+        }
+    }
+    putString(&b, extensions)
+    extensions.free()
+    putString(&b, "")
+    putString(&b, self.blob)
+    scoped String sig = try self.sign(b, self.algorithm())
+    putString(&b, sig)
+    return publicTextOf(b, o.keyId)
 }
 
 // ------------------------------------------------------------ known hosts
@@ -678,6 +1376,42 @@ bool glob(str p, str s) {
         return ("", "", false)
     }
     return (fields.at(at + 1), fields.at(at + 2), revoked)
+}
+
+// The keys of the certificate authorities known_hosts trusts for name
+// (@cert-authority lines), as blobs.
+List[String] knownCAs(str text, str name) {
+    List[String] out
+    for line in str.lines(text) {
+        l := str.trim(line)
+        if !str.startsWith(l, "@cert-authority") {
+            continue
+        }
+        fields := str.fields(l)
+        defer fields.free()
+        if fields.len < 4 || !hostKeyType(fields.at(2)) {
+            continue
+        }
+        bool hit = false
+        bool negated = false
+        for pattern in str.split(fields.at(1), ",") {
+            if pattern.len > 0 && pattern[0] == '!' {
+                if hostMatches(pattern[1:], name) {
+                    negated = true
+                }
+            } else if hostMatches(pattern, name) {
+                hit = true
+            }
+        }
+        if !hit || negated {
+            continue
+        }
+        blob := base64.decode(fields.at(3)) catch e {
+            continue
+        }
+        out.push(blob)
+    }
+    return out
 }
 
 // What known_hosts says about name's key blob: 1 when the key is there,
@@ -836,11 +1570,11 @@ test "host key signatures of each type" {
         t, alg, size, hash := c
         scoped key := try crypto.generateKey(t)
         scoped public := key.publicKey()
-        scoped String der = public.der()
+        scoped String spki = public.der()
         scoped String blob
         putString(&blob, alg)
         putString(&blob, alg[11:])
-        putString(&blob, der[der.len - 2 * size - 1:])
+        putString(&blob, spki[spki.len - 2 * size - 1:])
         scoped String sig = try key.sign(h, hash)
         scoped String raw = try crypto.ecdsaRaw(sig, size)
         scoped String inner
@@ -849,31 +1583,31 @@ test "host key signatures of each type" {
         scoped String sigBlob
         putString(&sigBlob, alg)
         putString(&sigBlob, inner)
-        expect(verifyHostSignature(alg, blob, h, sigBlob))
-        expect(!verifyHostSignature(alg, blob, "another hash", sigBlob))
-        expect(!verifyHostSignature("ssh-ed25519", blob, h, sigBlob))
+        expect(verifySignature(alg, blob, h, sigBlob))
+        expect(!verifySignature(alg, blob, "another hash", sigBlob))
+        expect(!verifySignature("ssh-ed25519", blob, h, sigBlob))
     }
     // RSA 2048 with e 65537: in the DER, n is at 33 and e at 291
     scoped key := try crypto.generateKey(.rsa, 2048)
     scoped public := key.publicKey()
-    scoped String der = public.der()
+    scoped String spki = public.der()
     scoped String blob
     putString(&blob, "ssh-rsa")
-    putMpint(&blob, der[291:294])
-    putMpint(&blob, der[33:289])
+    putMpint(&blob, spki[291:294])
+    putMpint(&blob, spki[33:289])
     for alg in ["rsa-sha2-256", "rsa-sha2-512"] {
         scoped String sig = try key.sign(h, if alg == "rsa-sha2-512" { crypto.Hash.sha512 } else { crypto.Hash.sha256 })
         scoped String sigBlob
         putString(&sigBlob, alg)
         putString(&sigBlob, sig)
-        expect(verifyHostSignature(alg, blob, h, sigBlob))
-        expect(!verifyHostSignature(alg, blob, "another hash", sigBlob))
+        expect(verifySignature(alg, blob, h, sigBlob))
+        expect(!verifySignature(alg, blob, "another hash", sigBlob))
     }
     scoped String wrongName
     putString(&wrongName, "rsa-sha2-256")
     scoped String sig512 = try key.sign(h, .sha512)
     putString(&wrongName, sig512)
-    expect(!verifyHostSignature("rsa-sha2-512", blob, h, wrongName))
+    expect(!verifySignature("rsa-sha2-512", blob, h, wrongName))
 }
 
 test "keys with a passphrase" {

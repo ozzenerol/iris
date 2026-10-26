@@ -1,0 +1,329 @@
+// Forwarding that the other side starts: ports the server listens on for a
+// client (ssh -R), and a client's agent that commands on the server use
+// (ssh -A).
+
+import fs, net, os, str
+
+// A port forwarded with ssh -R: on a client, the connections the server
+// hands over; on a server, the listener it took for the client.
+struct Forwarding {
+    String host
+    u16 port
+    // a client's: the channels the server opened for it, null once the
+    // connection is gone
+    chan[Channel *] incoming
+    // a server's
+    bool listens
+    net.Listener ln
+    bool closed
+}
+
+void Forwarding.free() {
+    self.host.free()
+    if !self.listens {
+        for self.incoming.len() > 0 {
+            c := <-self.incoming
+            if c != null {
+                c.released = true
+                c.destroy()
+            }
+        }
+        self.incoming.free()
+    }
+    free(self[0:1])
+}
+
+Forwarding *newForwarding(str host, u16 port) {
+    Forwarding[] mem = alloc(Forwarding, 1)
+    f := &mem[0]
+    f.host = host.copy()
+    f.port = port
+    return f
+}
+
+// ------------------------------------------------------------ the client
+
+// A port the server listens on for the client, as ssh -R does: each
+// connection to it comes as a Channel from accept.
+pub struct RemoteListener {
+    Link *link
+    Forwarding *f
+    // the port the server listens on, which it chose when 0 was asked
+    pub u16 port
+}
+
+// Asks the server to listen on host:port and hand each connection to it
+// over, as ssh -R does. host "" is every address of the server,
+// "localhost" its loopback; port 0 lets the server choose. SshError.refused
+// when the server won't.
+pub !RemoteListener Client.listen(str host, u16 port) {
+    l := self.link
+    String b
+    defer b.free()
+    putString(&b, host)
+    putU32(&b, i64(port))
+    ok, reply := try l.ask("tcpip-forward", b)
+    defer reply.free()
+    if !ok {
+        return error(SshError.refused, "the server won't listen on {host}:{port} for this client")
+    }
+    u16 got = port
+    if port == 0 {
+        r := Reader{data: reply}
+        got = u16(r.u32())
+        if r.bad {
+            return error(SshError.protocol, "the server took the port but didn't say which")
+        }
+    }
+    f := newForwarding(host, got)
+    f.incoming = chan[Channel *](16)
+    l.forwardings.push(f)
+    return RemoteListener{link: l, f: f, port: got}
+}
+
+// The next connection made to the port on the server. SshError.closed
+// once the listener or the connection is closed.
+pub !Channel *RemoteListener.accept() {
+    if self.f.closed || self.link.dead {
+        return error(SshError.closed, "the remote listener is closed")
+    }
+    c := <-self.f.incoming
+    if c == null {
+        return error(SshError.closed, "the connection is closed")
+    }
+    return c
+}
+
+// Asks the server to stop listening.
+pub void RemoteListener.close() {
+    if self.f.closed {
+        return
+    }
+    self.f.closed = true
+    _ = self.f.incoming.trySend(null)
+    l := self.link
+    if l.dead {
+        return
+    }
+    String b
+    defer b.free()
+    putString(&b, self.f.host)
+    putU32(&b, i64(self.f.port))
+    _, reply := l.ask("cancel-tcpip-forward", b) catch e {
+        return
+    }
+    reply.free()
+}
+
+// The connection ended: accept stops waiting.
+void Link.endForwardings() {
+    for f in self.forwardings {
+        if self.isServer {
+            if !f.closed {
+                f.closed = true
+                f.ln.interrupt()
+            }
+        } else {
+            f.closed = true
+            _ = f.incoming.trySend(null)
+        }
+    }
+}
+
+// A channel the server opens to the client: a connection to a port it
+// forwards, or one to the agent.
+void Link.clientOpened(str kind, i64 sender, i64 window, i64 maxPacket, Reader *r) {
+    if kind == "forwarded-tcpip" {
+        host := r.string()
+        port := r.u32()
+        _ = r.string()
+        _ = r.u32()
+        for f in self.forwardings {
+            if !r.bad && !f.closed && i64(f.port) == port && f.host == host {
+                c := self.newChannel()
+                c.remote = sender
+                c.window = window
+                c.maxPacket = maxPacket if maxPacket < PACKET_DATA else PACKET_DATA
+                c.opened = true
+                if !f.incoming.trySend(c) {
+                    c.released = true
+                    c.destroy()
+                    self.refuseOpen(sender, 4, "too many connections waiting")
+                    return
+                }
+                self.confirm(c)
+                return
+            }
+        }
+        self.refuseOpen(sender, 1, "this client doesn't forward {host}:{port}")
+        return
+    }
+    if kind == "auth-agent@openssh.com" && self.agentPath.len > 0 {
+        c := self.newChannel()
+        c.remote = sender
+        c.window = window
+        c.maxPacket = maxPacket if maxPacket < PACKET_DATA else PACKET_DATA
+        self.tasks += 1
+        spawn agentTask(self, c)
+        return
+    }
+    self.refuseOpen(sender, 1, "this client doesn't open {kind} channels")
+}
+
+// Joins a channel from the server to the local agent.
+void agentTask(Link *l, Channel *c) {
+    defer l.taskDone()
+    conn := net.dialUnix(l.agentPath) catch e {
+        l.refuseOpen(c.remote, 2, "no agent here")
+        c.closed = true
+        c.released = true
+        c.destroy()
+        return
+    }
+    defer conn.close()
+    c.opened = true
+    l.confirm(c)
+    c.pipe(&conn)
+    c.close()
+}
+
+// ------------------------------------------------------------ the server
+
+// A global request from the client: listening for it (ssh -R), or
+// stopping. reply gets what goes with the answer.
+bool Link.globalRequest(str name, Reader *r, String *reply) {
+    if !self.isServer || self.user.len == 0 {
+        return false
+    }
+    if name == "tcpip-forward" {
+        host := r.string()
+        port := r.u32()
+        if r.bad || port > 65535 || self.server.remoteForward == null || !self.server.remoteForward(self.user, host, u16(port)) {
+            return false
+        }
+        str bind = "127.0.0.1" if host == "localhost" else "" if host == "0.0.0.0" || host == "*" else host
+        ln := net.listen(u16(port), bind) catch e {
+            return false
+        }
+        if port == 0 {
+            putU32(reply, i64(ln.port))
+        }
+        f := newForwarding(host, ln.port)
+        f.ln = ln
+        f.listens = true
+        self.forwardings.push(f)
+        self.tasks += 1
+        spawn remoteAccept(self, f)
+        return true
+    }
+    if name == "cancel-tcpip-forward" {
+        host := r.string()
+        port := r.u32()
+        for f in self.forwardings {
+            if !f.closed && i64(f.port) == port && f.host == host {
+                f.closed = true
+                f.ln.interrupt()
+                return true
+            }
+        }
+        return false
+    }
+    return false
+}
+
+// Accepts connections to a forwarded port and opens a channel to the
+// client for each.
+void remoteAccept(Link *l, Forwarding *f) {
+    defer l.taskDone()
+    defer f.ln.close()
+    for !f.closed && !l.dead {
+        conn := f.ln.accept() catch e {
+            if e.code == net.NetError.closed {
+                return
+            }
+            continue
+        }
+        l.tasks += 1
+        spawn remoteConn(l, f, conn)
+    }
+}
+
+void remoteConn(Link *l, Forwarding *f, net.Conn conn) {
+    defer l.taskDone()
+    defer conn.close()
+    from := conn.remoteAddr()
+    scoped String ip = from.ipText()
+    String b
+    putString(&b, f.host)
+    putU32(&b, i64(f.port))
+    putString(&b, ip)
+    putU32(&b, i64(from.port))
+    c := l.openChannel("forwarded-tcpip", b) catch e {
+        b.free()
+        return
+    }
+    b.free()
+    c.pipe(&conn)
+    c.close()
+}
+
+// ssh -A on a session: a socket that commands find in SSH_AUTH_SOCK, each
+// connection to it a channel to the client's agent.
+bool Link.agentRequest(Session *s) {
+    if !self.server.agentForwarding || s.agentSocket.len > 0 {
+        return false
+    }
+    dir := fs.tempDir("iris-agent") catch e {
+        return false
+    }
+    path := format("{dir}/agent.sock")
+    ln := net.listenUnix(path) catch e {
+        fs.removeAll(dir) catch e2 { }
+        dir.free()
+        path.free()
+        return false
+    }
+    s.agentDir = dir
+    s.agentSocket = path
+    s.agentLn = ln
+    s.agentDone = chan[bool](1)
+    self.tasks += 1
+    spawn agentAccept(self, s)
+    return true
+}
+
+void agentAccept(Link *l, Session *s) {
+    defer l.taskDone()
+    for {
+        conn := s.agentLn.accept() catch e {
+            if e.code == net.NetError.closed {
+                break
+            }
+            continue
+        }
+        l.tasks += 1
+        spawn agentChannel(l, conn)
+    }
+    s.agentLn.close()
+    s.agentDone <- true
+}
+
+void agentChannel(Link *l, net.Conn conn) {
+    defer l.taskDone()
+    defer conn.close()
+    c := l.openChannel("auth-agent@openssh.com", "") catch e {
+        return
+    }
+    c.pipe(&conn)
+    c.close()
+}
+
+// The session ended: its agent socket goes.
+void Session.endAgent() {
+    if self.agentSocket.len == 0 {
+        return
+    }
+    self.agentLn.interrupt()
+    _ = <-self.agentDone
+    fs.removeAll(self.agentDir) catch e { }
+}

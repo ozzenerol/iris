@@ -419,6 +419,7 @@ void Link.readLoop() {
         }
     }
     self.dead = true
+    self.endForwardings()
     // every channel ends: owners see it closed and free theirs
     scoped List[i64] ids = self.channels.keys()
     for id in ids {
@@ -433,15 +434,28 @@ void Link.readLoop() {
     t := i64(p[0])
     r := Reader{data: p, at: 1}
     if t == MSG_GLOBAL_REQUEST {
-        _ = r.string()
-        if r.flag() {
+        name := r.string()
+        want := r.flag()
+        String reply
+        ok := self.globalRequest(name, &r, &reply)
+        if want {
             String m
-            putByte(&m, MSG_REQUEST_FAILURE)
+            putByte(&m, MSG_REQUEST_SUCCESS if ok else MSG_REQUEST_FAILURE)
+            m.append(reply)
             self.queue(m)
+        }
+        reply.free()
+        return
+    }
+    if t == MSG_REQUEST_SUCCESS || t == MSG_REQUEST_FAILURE {
+        // the answer to the oldest request still awaited
+        if self.globalsAsked > 0 {
+            self.globalsAsked -= 1
+            self.globals <- (t == MSG_REQUEST_SUCCESS, p[1:].copy())
         }
         return
     }
-    if t == MSG_REQUEST_SUCCESS || t == MSG_REQUEST_FAILURE || t == MSG_EXT_INFO || t == 53 {
+    if t == MSG_EXT_INFO || t == 53 {
         return
     }
     if t == MSG_CHANNEL_OPEN {
@@ -562,7 +576,7 @@ bool Link.channelRequest(Channel *c, str name, Reader *r) {
         return error(SshError.protocol, "a CHANNEL_OPEN that is cut short")
     }
     if !self.isServer {
-        self.refuseOpen(sender, 1, "this client opens no channels")
+        self.clientOpened(kind, sender, window, maxPacket, r)
         return
     }
     if kind == "session" {
@@ -597,6 +611,53 @@ bool Link.channelRequest(Channel *c, str name, Reader *r) {
         return
     }
     self.refuseOpen(sender, 3, "unknown channel type {kind}")
+}
+
+// Opens a channel of a kind, with what follows the window in the request,
+// and waits for the other side to take it.
+!Channel *Link.openChannel(str kind, str extra) {
+    if self.dead {
+        return error(SshError.closed, "the connection is closed: {self.why}")
+    }
+    c := self.newChannel()
+    String m
+    putByte(&m, MSG_CHANNEL_OPEN)
+    putString(&m, kind)
+    putU32(&m, c.local)
+    putU32(&m, WINDOW)
+    putU32(&m, PACKET_DATA)
+    m.append(extra)
+    self.queue(m)
+    ok := <-c.replies
+    if !ok {
+        String why = if c.why.len > 0 { format("the other side refused the {kind} channel: {c.why}") } else {
+            format("the connection closed")
+        }
+        defer why.free()
+        code := SshError.refused if c.why.len > 0 else SshError.closed
+        c.released = true
+        c.closed = true
+        c.destroy()
+        return error(code, why)
+    }
+    return c
+}
+
+// Sends a global request and waits for its answer: whether it was taken,
+// and what came with it.
+!(bool, String) Link.ask(str name, str body) {
+    if self.dead {
+        return error(SshError.closed, "the connection is closed: {self.why}")
+    }
+    String m
+    putByte(&m, MSG_GLOBAL_REQUEST)
+    putString(&m, name)
+    putBool(&m, true)
+    m.append(body)
+    self.globalsAsked += 1
+    self.queue(m)
+    ok, reply := <-self.globals
+    return (ok, reply)
 }
 
 void Link.confirm(Channel *c) {

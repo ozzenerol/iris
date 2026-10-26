@@ -1,0 +1,411 @@
+// ssh-agent: an agent holds private keys and signs with them for programs
+// on the same machine, which never see the keys. agent connects to one, as
+// ssh does through SSH_AUTH_SOCK; serveAgent is one.
+
+import crypto, net, os
+
+const i64 AGENT_FAILURE = 5
+const i64 AGENT_SUCCESS = 6
+const i64 AGENT_REQUEST_IDENTITIES = 11
+const i64 AGENT_IDENTITIES_ANSWER = 12
+const i64 AGENT_SIGN_REQUEST = 13
+const i64 AGENT_SIGN_RESPONSE = 14
+const i64 AGENT_ADD_IDENTITY = 17
+const i64 AGENT_REMOVE_IDENTITY = 18
+const i64 AGENT_REMOVE_ALL = 19
+// the sign request's flags for RSA's SHA-2 signatures
+const i64 AGENT_RSA_SHA2_256 = 2
+const i64 AGENT_RSA_SHA2_512 = 4
+const i64 AGENT_MAX = 256KiB
+
+// A connection to an agent.
+pub struct Agent {
+    net.Conn conn
+}
+
+// Connects to the agent at the Unix socket path; "" is SSH_AUTH_SOCK, as
+// ssh-agent sets it.
+pub !Agent agent(str path = "") {
+    String where
+    defer where.free()
+    if path.len > 0 {
+        where.append(path)
+    } else {
+        sock := os.env("SSH_AUTH_SOCK") catch e {
+            return error(SshError.connect, "no agent: SSH_AUTH_SOCK isn't set")
+        }
+        where.append(sock)
+    }
+    conn := net.dialUnix(where) catch e {
+        return error(SshError.connect, "the agent at {where}: {e.message}")
+    }
+    return Agent{conn: conn}
+}
+
+pub void Agent.close() => self.conn.close()
+
+// One message to the agent and its answer: its type, then the rest.
+!String Agent.ask(str message) {
+    String m
+    putU32(&m, message.len)
+    m.append(message)
+    self.conn.write(m) catch e {
+        crypto.wipe(m.ptr[0:m.len])
+        m.free()
+        return error(SshError.closed, "the agent went away: {e.message}")
+    }
+    crypto.wipe(m.ptr[0:m.len])
+    m.free()
+    scoped String head = self.conn.readExactly(4) catch e {
+        return error(SshError.closed, "the agent went away: {e.message}")
+    }
+    n := getU32(head, 0)
+    if n < 1 || n > AGENT_MAX {
+        return error(SshError.protocol, "an agent message of {n} bytes")
+    }
+    reply := self.conn.readExactly(n) catch e {
+        return error(SshError.closed, "the agent went away: {e.message}")
+    }
+    return reply
+}
+
+// The agent's keys as SSH sends them, each with its comment.
+!List[(String, String)] Agent.identities() {
+    u8[1] req = [u8(AGENT_REQUEST_IDENTITIES)]
+    scoped String reply = try self.ask(req[0:1])
+    if i64(reply[0]) != AGENT_IDENTITIES_ANSWER {
+        return error(SshError.refused, "the agent won't list its keys")
+    }
+    r := Reader{data: reply, at: 1}
+    n := r.u32()
+    List[(String, String)] out
+    for i in 0..n {
+        blob := r.string()
+        comment := r.string()
+        if r.bad {
+            for one in out {
+                b, c := one
+                b.free()
+                c.free()
+            }
+            out.free()
+            return error(SshError.protocol, "the agent's list of keys is cut short")
+        }
+        out.push((blob.copy(), comment.copy()))
+    }
+    return out
+}
+
+// The agent's keys, as public key lines with their comments.
+pub !List[String] Agent.keys() {
+    ids := try self.identities()
+    defer ids.free()
+    List[String] out
+    for one in ids {
+        b, c := one
+        out.push(publicTextOf(b, c))
+        b.free()
+        c.free()
+    }
+    return out
+}
+
+// The agent's signature of data by the key blob, with alg, as SSH sends
+// it.
+!String Agent.sign(str blob, str data, str alg) {
+    String m
+    defer m.free()
+    putByte(&m, AGENT_SIGN_REQUEST)
+    putString(&m, blob)
+    putString(&m, data)
+    putU32(&m, AGENT_RSA_SHA2_512 if alg == "rsa-sha2-512" else AGENT_RSA_SHA2_256 if alg == "rsa-sha2-256" else 0)
+    reply := try self.ask(m)
+    if i64(reply[0]) != AGENT_SIGN_RESPONSE {
+        reply.free()
+        return error(SshError.refused, "the agent won't sign with the key")
+    }
+    r := Reader{data: reply, at: 1}
+    sig := r.string()
+    if r.bad {
+        reply.free()
+        return error(SshError.protocol, "the agent's signature is cut short")
+    }
+    out := sig.copy()
+    reply.free()
+    return out
+}
+
+!void Agent.expectSuccess(str m, str what) {
+    scoped String reply = try self.ask(m)
+    if i64(reply[0]) != AGENT_SUCCESS {
+        return error(SshError.refused, "the agent won't {what}")
+    }
+}
+
+// Gives the agent a key to hold, as ssh-add does.
+pub !void Agent.add(Key *key) {
+    String m
+    defer {
+        crypto.wipe(m.ptr[0:m.len])
+        m.free()
+    }
+    putByte(&m, AGENT_ADD_IDENTITY)
+    key.putPrivate(&m)
+    putString(&m, key.comment)
+    try self.expectSuccess(m, "take the key")
+    if key.cert.len > 0 {
+        // the certificate too, as ssh-add does: the certificate in place of
+        // the type and public fields
+        String c
+        defer {
+            crypto.wipe(c.ptr[0:c.len])
+            c.free()
+        }
+        putByte(&c, AGENT_ADD_IDENTITY)
+        putString(&c, blobType(key.cert))
+        putString(&c, key.cert)
+        String plain
+        defer {
+            crypto.wipe(plain.ptr[0:plain.len])
+            plain.free()
+        }
+        key.putPrivate(&plain)
+        c.append(plain[publicLength(plain):])
+        putString(&c, key.comment)
+        try self.expectSuccess(c, "take the certificate")
+    }
+}
+
+// The length of a private key's type and public fields, as putPrivate
+// writes them: what a certificate stands in for.
+i64 publicLength(str fields) {
+    r := Reader{data: fields}
+    kind := r.string()
+    // RSA's n and e, ECDSA's curve and point; Ed25519 keeps its public half
+    if kind != "ssh-ed25519" {
+        _ = r.string()
+        _ = r.string()
+    }
+    return r.at
+}
+
+// Takes a key, a public key line, out of the agent.
+pub !void Agent.remove(str publicLine) {
+    scoped String blob = try parseBlob(publicLine)
+    String m
+    defer m.free()
+    putByte(&m, AGENT_REMOVE_IDENTITY)
+    putString(&m, blob)
+    try self.expectSuccess(m, "remove the key")
+}
+
+// Takes all keys out of the agent.
+pub !void Agent.removeAll() {
+    u8[1] m = [u8(AGENT_REMOVE_ALL)]
+    try self.expectSuccess(m[0:1], "remove its keys")
+}
+
+// ------------------------------------------------------------ an agent
+
+// The keys an agent holds, shared by its connections.
+struct Keyring {
+    List[Key] keys
+}
+
+// Serves the agent protocol on a Unix socket at path, as ssh-agent does:
+// keys come from add (ssh-add) and are kept in memory only. Each
+// connection is served in a task of its own; it returns when the listener
+// is closed.
+pub !void serveAgent(net.Listener ln) {
+    Keyring[] ring = alloc(Keyring, 1)
+    defer {
+        for k in ring[0].keys {
+            k.free()
+        }
+        ring[0].keys.free()
+        free(ring)
+    }
+    for {
+        c := ln.accept() catch e {
+            if e.code == net.NetError.closed {
+                return
+            }
+            continue
+        }
+        spawn agentConn(c, &ring[0])
+    }
+}
+
+void agentConn(net.Conn c, Keyring *ring) {
+    defer c.close()
+    for {
+        head := c.readExactly(4) catch e {
+            return
+        }
+        n := getU32(head, 0)
+        head.free()
+        if n < 1 || n > AGENT_MAX {
+            return
+        }
+        m := c.readExactly(n) catch e {
+            return
+        }
+        scoped String reply = agentAnswer(ring, m)
+        crypto.wipe(m.ptr[0:m.len])
+        m.free()
+        String out
+        putU32(&out, reply.len)
+        out.append(reply)
+        c.write(out) catch e {
+            out.free()
+            return
+        }
+        out.free()
+    }
+}
+
+// The index of the key with blob, or with it as its certificate, or -1.
+i64 Keyring.find(str blob) {
+    for i in 0..self.keys.len {
+        k := self.keys.at(i)
+        if crypto.equal(k.blob, blob) || crypto.equal(k.cert, blob) {
+            return i
+        }
+    }
+    return -1
+}
+
+// A key that ssh-add sends: a type and the private fields, or a
+// certificate and the private fields of its key.
+!Key readAgentKey(Reader *r) {
+    at := r.at
+    kind := r.string()
+    if !isCertType(kind) {
+        r.at = at
+        return try readPrivate(r)
+    }
+    cert := r.string()
+    c := try parseCertBlob(cert)
+    defer c.free()
+    // the plain key's fields: those of the certificate's key, then the
+    // private ones that follow
+    String fields
+    defer {
+        crypto.wipe(fields.ptr[0:fields.len])
+        fields.free()
+    }
+    plain := plainOf(kind)
+    putString(&fields, plain)
+    kr := Reader{data: c.key}
+    _ = kr.string()
+    if plain == "ssh-rsa" {
+        e := kr.string()
+        n := kr.string()
+        putString(&fields, n)
+        putString(&fields, e)
+    } else if plain != "ssh-ed25519" {
+        putString(&fields, kr.string())
+        putString(&fields, kr.string())
+    }
+    // the rest of the message, then the comment
+    rest := r.data[r.at:]
+    head := fields.len
+    fields.append(rest)
+    fr := Reader{data: fields}
+    k := try readPrivate(&fr)
+    r.at += fr.at - head
+    if !crypto.equal(k.blob, c.key) {
+        k.free()
+        return error(SshError.key, "the certificate is for another key")
+    }
+    k.cert = cert.copy()
+    return k
+}
+
+String agentAnswer(Keyring *ring, str m) {
+    String out
+    t := i64(m[0])
+    r := Reader{data: m, at: 1}
+    if t == AGENT_REQUEST_IDENTITIES {
+        i64 n = 0
+        for k in ring.keys {
+            n += 2 if k.cert.len > 0 else 1
+        }
+        putByte(&out, AGENT_IDENTITIES_ANSWER)
+        putU32(&out, n)
+        for k in ring.keys {
+            putString(&out, k.blob)
+            putString(&out, k.comment)
+            if k.cert.len > 0 {
+                putString(&out, k.cert)
+                putString(&out, k.comment)
+            }
+        }
+        return out
+    }
+    if t == AGENT_SIGN_REQUEST {
+        blob := r.string()
+        data := r.string()
+        flags := r.u32()
+        at := ring.find(blob)
+        if !r.bad && at >= 0 {
+            ks := ring.keys.items()
+            k := &ks[at]
+            alg := "rsa-sha2-512" if k.kind == .rsa && flags & AGENT_RSA_SHA2_512 != 0 else
+                "rsa-sha2-256" if k.kind == .rsa else k.algorithm()
+            sig := k.sign(data, alg) catch e {
+                putByte(&out, AGENT_FAILURE)
+                return out
+            }
+            putByte(&out, AGENT_SIGN_RESPONSE)
+            putString(&out, sig)
+            sig.free()
+            return out
+        }
+    } else if t == AGENT_ADD_IDENTITY {
+        k := readAgentKey(&r) catch e {
+            putByte(&out, AGENT_FAILURE)
+            return out
+        }
+        comment := r.string()
+        if r.bad {
+            k.free()
+            putByte(&out, AGENT_FAILURE)
+            return out
+        }
+        k.comment.free()
+        k.comment = comment.copy()
+        at := ring.find(k.blob)
+        if at >= 0 {
+            old := ring.keys.at(at)
+            if k.cert.len == 0 && old.cert.len > 0 {
+                k.cert = old.cert.copy()
+            }
+            old.free()
+            ring.keys.set(at, k)
+        } else {
+            ring.keys.push(k)
+        }
+        putByte(&out, AGENT_SUCCESS)
+        return out
+    } else if t == AGENT_REMOVE_IDENTITY {
+        blob := r.string()
+        at := ring.find(blob)
+        if !r.bad && at >= 0 {
+            old := ring.keys.at(at)
+            old.free()
+            _ = ring.keys.remove(at)
+            putByte(&out, AGENT_SUCCESS)
+            return out
+        }
+    } else if t == AGENT_REMOVE_ALL {
+        for k in ring.keys {
+            k.free()
+        }
+        ring.keys.clear()
+        putByte(&out, AGENT_SUCCESS)
+        return out
+    }
+    putByte(&out, AGENT_FAILURE)
+    return out
+}

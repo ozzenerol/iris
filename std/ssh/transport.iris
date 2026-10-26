@@ -111,7 +111,7 @@ struct Link {
     String ourInit
     String hostAlgs  // the host key algorithms a client asks for
     String serverKey // the server's key blob
-    Key hostKey      // a server's own key
+    Key *hostKey     // a server's own key, in server
 
     bool dead
 
@@ -122,7 +122,15 @@ struct Link {
     chan[bool] idle
     chan[bool] readerDone
     String user
+    String forceCommand // a certificate's, for every session
     Server server
+    // global requests: their replies in order, and how many are awaited
+    chan[(bool, String)] globals
+    i64 globalsAsked
+    // ssh -R: a client's remote listeners, or a server's listeners
+    List[Forwarding *] forwardings
+    // a client's agent socket, for ssh -A
+    String agentPath
 }
 
 Link *newLink(net.Conn conn, bool server) {
@@ -136,6 +144,7 @@ Link *newLink(net.Conn conn, bool server) {
     l.writerDone = chan[bool](1)
     l.idle = chan[bool](1)
     l.readerDone = chan[bool](1)
+    l.globals = chan[(bool, String)](4)
     l.rbuf = alloc(u8, READ_BUFFER)
     return l
 }
@@ -150,17 +159,27 @@ void Link.free() {
     self.writerDone.free()
     self.idle.free()
     self.readerDone.free()
+    for self.globals.len() > 0 {
+        _, body := <-self.globals
+        body.free()
+    }
+    self.globals.free()
+    for f in self.forwardings {
+        f.free()
+    }
+    self.forwardings.free()
+    self.agentPath.free()
     self.peerVersion.free()
     self.sessionId.free()
     self.why.free()
     self.ourInit.free()
     self.hostAlgs.free()
     self.serverKey.free()
-    self.hostKey.free()
     self.inKeys.wipe()
     self.outKeys.wipe()
     self.channels.free()
     self.user.free()
+    self.forceCommand.free()
     free(self.rbuf)
     crypto.wipe(self.plain.ptr[0:self.plain.len])
     self.plain.free()
@@ -456,7 +475,10 @@ void Link.startKex() {
     } else {
         putString(&m, "{KEX_ALGORITHMS},kex-strict-c-v00@openssh.com")
     }
-    if self.isServer || self.hostAlgs.len == 0 {
+    if self.isServer {
+        scoped String algs = self.serverHostAlgorithms()
+        putString(&m, algs)
+    } else if self.hostAlgs.len == 0 {
         putString(&m, "ssh-ed25519")
     } else {
         putString(&m, self.hostAlgs)
@@ -472,6 +494,20 @@ void Link.startKex() {
     putBool(&m, false)
     putU32(&m, 0)
     self.ourInit = m
+}
+
+// The host key algorithms of a server's key: its certificate's first, when
+// it has one.
+String Link.serverHostAlgorithms() {
+    kind := typeName(self.hostKey.kind)
+    String out
+    if self.hostKey.cert.len > 0 {
+        scoped String c = certAlgorithmsFor(kind)
+        out.append(c)
+        out.append(",")
+    }
+    out.append(algorithmsFor(kind))
+    return out
 }
 
 // The first name of the client's list that the server has too.
@@ -579,7 +615,8 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
     if kexAlg.len == 0 {
         return error(SshError.protocol, "no key exchange in common: the other side has {kexList}")
     }
-    str ourHosts = "ssh-ed25519" if self.isServer || self.hostAlgs.len == 0 else self.hostAlgs
+    scoped String serverAlgs = if self.isServer { self.serverHostAlgorithms() } else { "".copy() }
+    str ourHosts = serverAlgs if self.isServer else "ssh-ed25519" if self.hostAlgs.len == 0 else self.hostAlgs
     hostAlg := if self.isServer { choose(hostList, ourHosts) } else { choose(ourHosts, hostList) }
     if hostAlg.len == 0 {
         return error(SshError.protocol, "no host key type in common: the server has {hostList}")
@@ -657,12 +694,9 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
             crypto.wipe(k[0:32])
             serverValue = mine[0:32].copy()
         }
-        hostBlob = blobOf(self.hostKey.public[0:32])
+        hostBlob = self.hostKey.cert.copy() if isCertType(hostAlg) else self.hostKey.blob.copy()
         h = self.exchangeHash(peerInit, hostBlob, clientValue, serverValue, shared)
-        sig := crypto.ed25519Sign(self.hostKey.seed[0:32], h)
-        String sigBlob
-        putString(&sigBlob, "ssh-ed25519")
-        putString(&sigBlob, sig[0:64])
+        sigBlob := try self.hostKey.sign(h, plainOf(hostAlg))
         String reply
         putByte(&reply, MSG_KEX_ECDH_REPLY)
         putString(&reply, hostBlob)
@@ -711,7 +745,17 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
             crypto.wipe(k[0:32])
         }
         h = self.exchangeHash(peerInit, hostBlob, clientValue, serverValue, shared)
-        if !verifyHostSignature(hostAlg, hostBlob, h, sigBlob) {
+        bool good = false
+        if isCertType(hostAlg) {
+            cert := parseCertBlob(hostBlob) catch e {
+                return error(SshError.hostKey, "the server's certificate: {e.message}")
+            }
+            good = verifySignature(plainOf(hostAlg), cert.key, h, sigBlob)
+            cert.free()
+        } else {
+            good = verifySignature(hostAlg, hostBlob, h, sigBlob)
+        }
+        if !good {
             return error(SshError.hostKey, "the server's signature doesn't match its host key")
         }
         if self.firstKex {

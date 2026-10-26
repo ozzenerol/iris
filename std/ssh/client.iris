@@ -1,7 +1,7 @@
 // The client: dial, the server's key, logging in, and the channels a
 // client opens.
 
-import crypto, fs, net, os, process, str
+import crypto, fs, net, os, process, str, time
 
 const i64 MSG_USERAUTH_REQUEST = 50
 const i64 MSG_USERAUTH_FAILURE = 51
@@ -16,8 +16,13 @@ const i64 MSG_USERAUTH_INFO_RESPONSE = 61
 pub struct Config {
     pub str user
     pub str password
-    // an Ed25519 key, from loadKey or generateKey
+    // a key from loadKey or generateKey; with a certificate, that is
+    // shown first
     pub Key *key
+    // an agent's keys, tried after key
+    pub Agent *agent
+    // lets commands on the server use the agent, as ssh -A does
+    pub bool forwardAgent
     // the server's key, as a public key line ("ssh-ed25519 AAAA...",
     // "ecdsa-sha2-nistp256 AAAA..." or "ssh-rsa AAAA...") or a fingerprint
     // ("SHA256:..."), when it isn't looked up in knownHosts
@@ -58,6 +63,10 @@ pub !Client clientOn(net.Conn conn, str host, u16 port, Config config) {
     conn.setTimeout(config.timeout)
     l := newLink(conn, false)
     l.rekeyAfter = config.rekeyAfter
+    if config.forwardAgent {
+        sock := os.env("SSH_AUTH_SOCK") catch ""
+        l.agentPath = sock.copy()
+    }
     bool writing = false
     errdefer {
         if writing {
@@ -95,6 +104,22 @@ pub !Client clientOn(net.Conn conn, str host, u16 port, Config config) {
         }
     } else {
         l.hostAlgs = knownAlgorithms(known, name)
+        cas := knownCAs(known, name)
+        if cas.len > 0 {
+            // the authority's certificates first, as ssh does
+            String first
+            for kind in str.split(HOST_KEY_ALGORITHMS, ",") {
+                if !str.startsWith(kind, "rsa-sha2-256") {
+                    scoped String c = certAlgorithmsFor(typeOfAlgorithm(kind))
+                    first.append(c)
+                    first.append(",")
+                }
+            }
+            first.append(l.hostAlgs)
+            l.hostAlgs.free()
+            l.hostAlgs = first
+        }
+        cas.freeEach()
     }
     spawn writer(l)
     l.startKex()
@@ -138,6 +163,10 @@ void clientReader(Link *l) {
 }
 
 !void checkHost(Link *l, str host, u16 port, Config config, str path, str known) {
+    if isCertType(blobType(l.serverKey)) {
+        try checkHostCert(l, host, port, config, path, known)
+        return
+    }
     blob := l.serverKey
     scoped String found = fingerprintOfBlob(blob)
     if config.anyHostKey {
@@ -170,6 +199,41 @@ void clientReader(Link *l) {
     }
     scoped String line = knownLine(host, port, blob)
     return error(SshError.hostKey, "{host}'s {kind} key {found} isn't in {path}; once it is checked, add this line: {line}")
+}
+
+// A host certificate: for host, valid now, and signed by an authority that
+// known_hosts has for host (@cert-authority).
+!void checkHostCert(Link *l, str host, u16 port, Config config, str path, str known) {
+    if config.anyHostKey {
+        return
+    }
+    c := parseCertBlob(l.serverKey) catch e {
+        return error(SshError.hostKey, "{host}'s certificate: {e.message}")
+    }
+    defer c.free()
+    if !c.host {
+        return error(SshError.hostKey, "{host} shows a user's certificate, not a host's")
+    }
+    if !c.isFor(host) {
+        return error(SshError.hostKey, "{host}'s certificate is for other names")
+    }
+    if !c.validAt(time.now().unix()) {
+        return error(SshError.hostKey, "{host}'s certificate isn't valid now")
+    }
+    scoped String name = if port == 22 { host.copy() } else { format("[{host}]:{port}") }
+    if knownHost(known, name, c.key) == -1 {
+        return error(SshError.hostKey, "{host}'s key is revoked in {path}")
+    }
+    scoped List[String] cas = knownCAs(known, name)
+    for ca in cas {
+        if crypto.equal(ca, c.ca) {
+            cas.freeEach()
+            return
+        }
+    }
+    cas.freeEach()
+    scoped String caFp = fingerprintOfBlob(c.ca)
+    return error(SshError.hostKey, "{host}'s certificate is signed by {caFp}, which {path} doesn't have as an authority for it")
 }
 
 // The methods a USERAUTH_FAILURE lists.
@@ -207,6 +271,52 @@ String failureMethods(str p) {
     }
 }
 
+// Logs in with the key blob (a certificate's too), signing with key or
+// with the agent. An RSA key tries SHA-512, then SHA-256.
+!bool Link.tryKey(str user, str blob, Key *key, Agent *agent, String *methods) {
+    if !listHas(*methods, "publickey") {
+        return false
+    }
+    kind := blobType(blob)
+    cert := isCertType(kind)
+    plainKind := plainOf(kind)
+    if !hostKeyType(plainKind) {
+        return false
+    }
+    str algs = algorithmsFor(plainKind)
+    for plainAlg in str.split(algs, ",") {
+        scoped String alg = format("{plainAlg}{CERT_SUFFIX}") if cert else plainAlg.copy()
+        String signed
+        defer signed.free()
+        putString(&signed, self.sessionId)
+        scoped String start = authStart(user, "publickey")
+        signed.append(start)
+        putBool(&signed, true)
+        putString(&signed, alg)
+        putString(&signed, blob)
+        String sigBlob
+        defer sigBlob.free()
+        if key != null {
+            sigBlob = try key.sign(signed, plainAlg)
+        } else {
+            sigBlob = agent.sign(blob, signed, plainAlg) catch e {
+                return false
+            }
+        }
+        String m = signed[4 + self.sessionId.len:].copy()
+        putString(&m, sigBlob)
+        self.queue(m)
+        if try self.authReply(methods) {
+            self.user = user.copy()
+            return true
+        }
+        if !listHas(*methods, "publickey") {
+            return false
+        }
+    }
+    return false
+}
+
 String authStart(str user, str method) {
     String m
     putByte(&m, MSG_USERAUTH_REQUEST)
@@ -234,27 +344,35 @@ String authStart(str user, str method) {
     }
     String methods = "publickey,password,keyboard-interactive".copy()
     defer methods.free()
-    if config.key != null && listHas(methods, "publickey") {
-        scoped String blob = blobOf(config.key.public[0:32])
-        String signed
-        putString(&signed, self.sessionId)
-        scoped String start = authStart(config.user, "publickey")
-        signed.append(start)
-        putBool(&signed, true)
-        putString(&signed, "ssh-ed25519")
-        putString(&signed, blob)
-        sig := crypto.ed25519Sign(config.key.seed[0:32], signed)
-        String sigBlob
-        putString(&sigBlob, "ssh-ed25519")
-        putString(&sigBlob, sig[0:64])
-        String m = signed[4 + self.sessionId.len:].copy()
-        putString(&m, sigBlob)
-        signed.free()
-        sigBlob.free()
-        self.queue(m)
-        if try self.authReply(&methods) {
-            self.user = config.user.copy()
+    if config.key != null {
+        k := config.key
+        if k.cert.len > 0 {
+            if try self.tryKey(config.user, k.cert, k, null, &methods) {
+                return
+            }
+        }
+        if try self.tryKey(config.user, k.blob, k, null, &methods) {
             return
+        }
+    }
+    if config.agent != null && listHas(methods, "publickey") {
+        ids := config.agent.identities() catch e {
+            List[(String, String)] none
+            none
+        }
+        defer {
+            for one in ids {
+                b, c := one
+                b.free()
+                c.free()
+            }
+            ids.free()
+        }
+        for one in ids {
+            blob, _ := one
+            if try self.tryKey(config.user, blob, null, config.agent, &methods) {
+                return
+            }
         }
     }
     if config.password.len > 0 && listHas(methods, "password") {
@@ -311,30 +429,10 @@ String authStart(str user, str method) {
 
 // Opens a channel of a kind, with what follows the window in the request.
 !Channel *Client.open(str kind, str extra) {
-    l := self.link
-    if l.dead {
-        return error(SshError.closed, "the connection is closed: {l.why}")
-    }
-    c := l.newChannel()
-    String m
-    putByte(&m, MSG_CHANNEL_OPEN)
-    putString(&m, kind)
-    putU32(&m, c.local)
-    putU32(&m, WINDOW)
-    putU32(&m, PACKET_DATA)
-    m.append(extra)
-    l.queue(m)
-    ok := <-c.replies
-    if !ok {
-        String why = if c.why.len > 0 { format("the server refused the {kind} channel: {c.why}") } else {
-            format("the connection closed")
-        }
-        defer why.free()
-        code := SshError.refused if c.why.len > 0 else SshError.closed
-        c.released = true
-        c.closed = true
-        c.destroy()
-        return error(code, why)
+    c := try self.link.openChannel(kind, extra)
+    if kind == "session" && self.link.agentPath.len > 0 {
+        // ssh -A: the server may open channels back to the agent
+        c.request("auth-agent-req@openssh.com", "", false) catch e { }
     }
     return c
 }
@@ -459,6 +557,10 @@ pub void Client.close() {
     l.stopWriter()
     l.conn.interrupt()
     _ = <-l.readerDone
+    // the tasks joining channels to the agent end with them
+    for l.tasks > 0 {
+        _ = <-l.idle
+    }
     scoped List[i64] ids = l.channels.keys()
     for id in ids {
         c, found := l.channels.get(id)
