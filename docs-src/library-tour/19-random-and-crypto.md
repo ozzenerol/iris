@@ -236,7 +236,7 @@ db password: hunter2
 CryptoError.tampered
 ```
 
-`sealTo(&out, key, nonce, data)` adds the sealed data to the end of a String instead of making a new one, as `encrypt` does above after the nonce. A program that seals many packets keeps one String and clears it between them. `unsealTo` does the same for opening.
+`sealTo(&out, key, nonce, data)` adds the sealed data to the end of a String instead of making a new one, as `encrypt` does above after the nonce. A program that seals many packets keeps one String and clears it between them. `unsealTo` does the same for opening, and `aesSealTo` and `aesUnsealTo` do both for AES-GCM.
 
 `aesSeal` and `aesUnseal` do the same with AES-GCM, which many file formats and protocols use. An optional `extra` text, such as a record's id, goes along unencrypted but is checked too. The [library](../std/index.html#crypto) has them, and key agreement with X25519.
 

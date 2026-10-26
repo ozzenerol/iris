@@ -1,0 +1,71 @@
+import net, ssh
+
+// An SSH server and client in one program, over loopback: 100 logins with
+// an Ed25519 key, each running a command, then 512 MiB through one
+// channel. AES-256-GCM, as the Rust and Go versions are set to use.
+
+ssh.Key userKey
+
+bool checkKey(str user, str key) {
+    scoped String mine = userKey.fingerprint()
+    scoped String theirs = ssh.fingerprint(key) catch "".copy()
+    return mine == theirs
+}
+
+// "ok" for a command, or the number of bytes read for "count".
+!void handle(ssh.Session *s) {
+    if s.command != "count" {
+        try s.write("ok")
+        return
+    }
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    i64 total = 0
+    for {
+        n := try s.read(buf)
+        if n == 0 {
+            break
+        }
+        total += n
+    }
+    try s.write("{total}")
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}
+
+!void main() {
+    userKey = ssh.generateKey()
+    hostKey := ssh.generateKey()
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serveIt(ln, ssh.Server{hostKey: hostKey, publicKey: checkKey, handle: handle})
+    scoped String hostLine = hostKey.publicText()
+    config := ssh.Config{user: "bench", key: &userKey, hostKey: hostLine}
+
+    i64 logins = 0
+    for i in 0..100 {
+        c := try ssh.dial("127.0.0.1", ln.port, config)
+        scoped out := try c.run("hello")
+        if out.stdout == "ok" {
+            logins += 1
+        }
+        c.close()
+    }
+
+    c := try ssh.dial("127.0.0.1", ln.port, config)
+    defer c.close()
+    ch := try c.exec("count")
+    u8[] block = alloc(u8, 1MiB)
+    defer free(block)
+    for i in 0..block.len {
+        block[i] = u8(i * 7 & 255)
+    }
+    for i in 0..512 {
+        try ch.write(block)
+    }
+    ch.closeWrite()
+    scoped String counted = try ch.readAll()
+    ch.close()
+    print("logins {logins}, bytes {counted}")
+}

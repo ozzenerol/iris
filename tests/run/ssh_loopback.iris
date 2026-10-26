@@ -1,0 +1,122 @@
+// expect: run: "hello ada\n" "" 0
+// expect: input: "3" status 0
+// expect: stderr: "oops\n" status 7
+// expect: password: true, wrong password: SshError.auth
+// expect: wrong host key: SshError.hostKey
+// expect: shell: "tty yes\n"
+// expect: forward: "pong"
+// expect: big: 3000000 bytes back, same true
+// expect: refused forward: SshError.refused
+
+import crypto, net, ssh, str
+
+ssh.Key userKey
+
+// The text in quotes, with its line breaks as \n.
+String q(str s) {
+    scoped String lines = str.replace(s, "\n", "\\n")
+    return format("\"{lines}\"")
+}
+
+bool checkPassword(str user, str password) => user == "ada" && password == "secret"
+
+bool checkKey(str user, str key) {
+    scoped String mine = userKey.fingerprint()
+    scoped String theirs = ssh.fingerprint(key) catch "".copy()
+    return user == "ada" && theirs == mine
+}
+
+bool allowForward(str user, str host, u16 port) => host == "127.0.0.1"
+
+!void handle(ssh.Session *s) {
+    if s.kind == .shell {
+        try s.write("tty {if s.terminal { "yes" } else { "no" }}\n")
+        return
+    }
+    if s.command == "greet" {
+        try s.write("hello {s.user}\n")
+        return
+    }
+    if s.command == "fail" {
+        try s.writeStderr("oops\n")
+        s.status = 7
+        return
+    }
+    _ = try s.run(["sh", "-c", s.command])
+}
+
+void echoOnce(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    u8[64] buf
+    n := c.read(buf[0:64]) catch 0
+    if n == 4 && buf[0:4] == "ping" {
+        c.write("pong") catch e { }
+    }
+}
+
+!void main() {
+    userKey = ssh.generateKey("ada@test")
+    hostKey := ssh.generateKey()
+    ln := try net.listen(0, "127.0.0.1")
+    port := ln.port
+    spawn serveIt(ln, ssh.Server{hostKey: hostKey, password: checkPassword, publicKey: checkKey, handle: handle,
+        forward: allowForward})
+
+    scoped String hostLine = hostKey.publicText()
+    c := try ssh.dial("127.0.0.1", port, ssh.Config{user: "ada", key: &userKey, hostKey: hostLine})
+    defer c.close()
+    scoped out := try c.run("greet")
+    print("run: {q(out.stdout)} {q(out.stderr)} {out.status}")
+    scoped counted := try c.run("wc -l", "a\nb\nc\n")
+    print("input: {q(counted.stdout.trim())} status {counted.status}")
+    scoped failed := try c.run("fail")
+    print("stderr: {q(failed.stderr)} status {failed.status}")
+
+    try login(port, ssh.Config{user: "ada", password: "secret", anyHostKey: true})
+    login(port, ssh.Config{user: "ada", password: "wrong", anyHostKey: true}) catch e {
+        print("password: true, wrong password: {e.code}")
+    }
+    scoped other := ssh.generateKey()
+    scoped String otherLine = other.publicText()
+    login(port, ssh.Config{user: "ada", key: &userKey, hostKey: otherLine}) catch e {
+        print("wrong host key: {e.code}")
+    }
+
+    sh := try c.shell()
+    scoped String said = try sh.readAll()
+    sh.close()
+    print("shell: {q(said)}")
+
+    echo := try net.listen(0, "127.0.0.1")
+    defer echo.close()
+    spawn echoOnce(echo)
+    f := try c.forward("127.0.0.1", echo.port)
+    try f.write("ping")
+    f.closeWrite()
+    scoped String pong = try f.readAll()
+    f.close()
+    print("forward: {q(pong)}")
+
+    // enough data for new keys on both sides
+    small := try ssh.dial("127.0.0.1", port, ssh.Config{user: "ada", key: &userKey, hostKey: hostLine, rekeyAfter: 1MiB})
+    defer small.close()
+    scoped String big = "x".repeat(3000000)
+    scoped back := try small.run("cat", big)
+    print("big: {back.stdout.len} bytes back, same {crypto.equal(back.stdout, big)}")
+    _ = c.forward("example.com", 80) catch e {
+        print("refused forward: {e.code}")
+        return
+    }
+}
+
+!void login(u16 port, ssh.Config config) {
+    c := try ssh.dial("127.0.0.1", port, config)
+    c.close()
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}

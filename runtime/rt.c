@@ -8261,7 +8261,14 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
     int execP[2] = {-1, -1};
     if (!code && pipes) {
         for (int i = 0; i < 3 && !code; i++) {
-            if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv[i]) != 0) code = 2;
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv[i]) != 0) {
+                code = 2;
+            } else {
+                /* neither end may stay open in the child past exec: it would
+                   hold its own stdin open and never see the end of it */
+                fcntl(sv[i][0], F_SETFD, FD_CLOEXEC);
+                fcntl(sv[i][1], F_SETFD, FD_CLOEXEC);
+            }
         }
     }
     if (!code && pipe(execP) != 0) code = 2;
@@ -8278,7 +8285,13 @@ int iris_process_spawn(const Slice *argv, int64_t argc, const int *keep, int64_t
                 ioctl(terminal, TIOCSCTTY, 0);
                 for (int i = 0; i < 3; i++) dup2(terminal, i);
             } else if (pipes) {
-                for (int i = 0; i < 3; i++) dup2(sv[i][1], i);
+                for (int i = 0; i < 3; i++) {
+                    if (sv[i][1] == i) {
+                        fcntl(i, F_SETFD, 0);
+                    } else {
+                        dup2(sv[i][1], i);
+                    }
+                }
             }
             /* the kept descriptors go out of the way first, then to 3 + i */
             int base = 3 + (int)nkeep + 1;
@@ -12482,323 +12495,9 @@ void iris_hmac_sha512(const char *key, int64_t keyLen, const char *data, int64_t
     sha512End(&s, out);
 }
 
-/* Ed25519 signatures (RFC 8032), after TweetNaCl (public domain). A field
-   element is 16 limbs of 16 bits; a point is (X, Y, Z, T) in extended
-   coordinates. Every step takes the same time whatever the secret is. */
-typedef int64_t Fe[16];
-
-static const Fe fe0 = {0}, fe1 = {1};
-static const Fe edD = {0x78a3, 0x1359, 0x4dca, 0x75eb, 0xd8ab, 0x4141, 0x0a4d, 0x0070,
-                       0xe898, 0x7779, 0x4079, 0x8cc7, 0xfe73, 0x2b6f, 0x6cee, 0x5203};
-static const Fe edD2 = {0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0,
-                        0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406};
-static const Fe edX = {0xd51a, 0x8f25, 0x2d60, 0xc956, 0xa7b2, 0x9525, 0xc760, 0x692c,
-                       0xdc5c, 0xfdd6, 0xe231, 0xc0a4, 0x53fe, 0xcd6e, 0x36d3, 0x2169};
-static const Fe edY = {0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666,
-                       0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666};
-static const Fe edI = {0xa0b0, 0x4a0e, 0x1b27, 0xc4ee, 0xe478, 0xad2f, 0x1806, 0x2f43,
-                       0xd7a7, 0x3dfb, 0x0099, 0x2b4d, 0xdf0b, 0x4fc1, 0x2480, 0x2b83};
-/* the order of the group, little end first */
-static const int64_t edL[32] = {0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7,
-                                0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0, 0, 0x10};
-
-static void feCopy(Fe o, const Fe a) { memcpy(o, a, sizeof(Fe)); }
-
-static void feCarry(Fe o) {
-    for (int i = 0; i < 16; i++) {
-        o[i] += 1 << 16;
-        int64_t c = o[i] >> 16;
-        if (i < 15) {
-            o[i + 1] += c - 1;
-        } else {
-            o[0] += 38 * (c - 1);
-        }
-        o[i] -= c * 65536;
-    }
-}
-
-/* swaps p and q when b is 1, in the same time either way */
-static void feSwap(Fe p, Fe q, int b) {
-    int64_t c = ~(int64_t)(b - 1);
-    for (int i = 0; i < 16; i++) {
-        int64_t t = c & (p[i] ^ q[i]);
-        p[i] ^= t;
-        q[i] ^= t;
-    }
-}
-
-static void fePack(unsigned char *o, const Fe n) {
-    Fe m, t;
-    feCopy(t, n);
-    feCarry(t);
-    feCarry(t);
-    feCarry(t);
-    for (int j = 0; j < 2; j++) {
-        m[0] = t[0] - 0xffed;
-        for (int i = 1; i < 15; i++) {
-            m[i] = t[i] - 0xffff - ((m[i - 1] >> 16) & 1);
-            m[i - 1] &= 0xffff;
-        }
-        m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
-        int b = (int)((m[15] >> 16) & 1);
-        m[14] &= 0xffff;
-        feSwap(t, m, 1 - b);
-    }
-    for (int i = 0; i < 16; i++) {
-        o[2 * i] = (unsigned char)(t[i] & 0xff);
-        o[2 * i + 1] = (unsigned char)(t[i] >> 8);
-    }
-}
-
-static void feUnpack(Fe o, const unsigned char *n) {
-    for (int i = 0; i < 16; i++) o[i] = n[2 * i] + ((int64_t)n[2 * i + 1] << 8);
-    o[15] &= 0x7fff;
-}
-
-static int feDiffer(const Fe a, const Fe b) {
-    unsigned char c[32], d[32];
-    fePack(c, a);
-    fePack(d, b);
-    return !iris_const_equal((const char *)c, 32, (const char *)d, 32);
-}
-
-static int feParity(const Fe a) {
-    unsigned char d[32];
-    fePack(d, a);
-    return d[0] & 1;
-}
-
-static void feAdd(Fe o, const Fe a, const Fe b) {
-    for (int i = 0; i < 16; i++) o[i] = a[i] + b[i];
-}
-
-static void feSub(Fe o, const Fe a, const Fe b) {
-    for (int i = 0; i < 16; i++) o[i] = a[i] - b[i];
-}
-
-static void feMul(Fe o, const Fe a, const Fe b) {
-    int64_t t[31] = {0};
-    for (int i = 0; i < 16; i++) {
-        for (int j = 0; j < 16; j++) t[i + j] += a[i] * b[j];
-    }
-    for (int i = 0; i < 15; i++) t[i] += 38 * t[i + 16];
-    for (int i = 0; i < 16; i++) o[i] = t[i];
-    feCarry(o);
-    feCarry(o);
-}
-
-/* a to the power 2^255 - 21: 1/a */
-static void feInvert(Fe o, const Fe a) {
-    Fe c;
-    feCopy(c, a);
-    for (int i = 253; i >= 0; i--) {
-        feMul(c, c, c);
-        if (i != 2 && i != 4) feMul(c, c, a);
-    }
-    feCopy(o, c);
-}
-
-/* a to the power (p - 5) / 8, for square roots */
-static void fePow2523(Fe o, const Fe a) {
-    Fe c;
-    feCopy(c, a);
-    for (int i = 250; i >= 0; i--) {
-        feMul(c, c, c);
-        if (i != 1) feMul(c, c, a);
-    }
-    feCopy(o, c);
-}
-
-static void edAdd(Fe p[4], Fe q[4]) {
-    Fe a, b, c, d, t, e, f, g, h;
-    feSub(a, p[1], p[0]);
-    feSub(t, q[1], q[0]);
-    feMul(a, a, t);
-    feAdd(b, p[0], p[1]);
-    feAdd(t, q[0], q[1]);
-    feMul(b, b, t);
-    feMul(c, p[3], q[3]);
-    feMul(c, c, edD2);
-    feMul(d, p[2], q[2]);
-    feAdd(d, d, d);
-    feSub(e, b, a);
-    feSub(f, d, c);
-    feAdd(g, d, c);
-    feAdd(h, b, a);
-    feMul(p[0], e, f);
-    feMul(p[1], h, g);
-    feMul(p[2], g, f);
-    feMul(p[3], e, h);
-}
-
-static void edPack(unsigned char *r, Fe p[4]) {
-    Fe tx, ty, zi;
-    feInvert(zi, p[2]);
-    feMul(tx, p[0], zi);
-    feMul(ty, p[1], zi);
-    fePack(r, ty);
-    r[31] ^= (unsigned char)(feParity(tx) << 7);
-}
-
-/* p = s * q, one bit at a time with no branch on the bits */
-static void edScalarMult(Fe p[4], Fe q[4], const unsigned char *s) {
-    feCopy(p[0], fe0);
-    feCopy(p[1], fe1);
-    feCopy(p[2], fe1);
-    feCopy(p[3], fe0);
-    for (int i = 255; i >= 0; i--) {
-        int b = (s[i / 8] >> (i & 7)) & 1;
-        for (int k = 0; k < 4; k++) feSwap(p[k], q[k], b);
-        edAdd(q, p);
-        edAdd(p, p);
-        for (int k = 0; k < 4; k++) feSwap(p[k], q[k], b);
-    }
-}
-
-static void edScalarBase(Fe p[4], const unsigned char *s) {
-    Fe q[4];
-    feCopy(q[0], edX);
-    feCopy(q[1], edY);
-    feCopy(q[2], fe1);
-    feMul(q[3], edX, edY);
-    edScalarMult(p, q, s);
-}
-
-/* r = x mod L, for x of 64 limbs of a byte each */
-static void edModL(unsigned char *r, int64_t x[64]) {
-    int64_t carry;
-    for (int i = 63; i >= 32; i--) {
-        carry = 0;
-        int j;
-        for (j = i - 32; j < i - 12; j++) {
-            x[j] += carry - 16 * x[i] * edL[j - (i - 32)];
-            carry = (x[j] + 128) >> 8;
-            x[j] -= carry * 256;
-        }
-        x[j] += carry;
-        x[i] = 0;
-    }
-    carry = 0;
-    for (int j = 0; j < 32; j++) {
-        x[j] += carry - (x[31] >> 4) * edL[j];
-        carry = x[j] >> 8;
-        x[j] &= 255;
-    }
-    for (int j = 0; j < 32; j++) x[j] -= carry * edL[j];
-    for (int i = 0; i < 32; i++) {
-        x[i + 1] += x[i] >> 8;
-        r[i] = (unsigned char)(x[i] & 255);
-    }
-}
-
-static void edReduce(unsigned char *r) {
-    int64_t x[64];
-    for (int i = 0; i < 64; i++) x[i] = r[i];
-    memset(r, 0, 64);
-    edModL(r, x);
-}
-
-/* the secret scalar (clamped) and the prefix, from the 32-byte seed */
-static void edExpand(const unsigned char *seed, unsigned char d[64]) {
-    iris_sha512((const char *)seed, 32, d);
-    d[0] &= 248;
-    d[31] &= 127;
-    d[31] |= 64;
-}
-
-void iris_ed25519_public(const unsigned char *seed, unsigned char *pub) {
-    unsigned char d[64];
-    Fe p[4];
-    edExpand(seed, d);
-    edScalarBase(p, d);
-    edPack(pub, p);
-}
-
-void iris_ed25519_sign(const unsigned char *seed, const char *msg, int64_t len, unsigned char *sig) {
-    unsigned char d[64], r[64], h[64], pub[32];
-    Fe p[4];
-    edExpand(seed, d);
-    edScalarBase(p, d);
-    edPack(pub, p);
-    Sha512 s;
-    sha512Init(&s);
-    sha512Add(&s, d + 32, 32);
-    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
-    sha512End(&s, r);
-    edReduce(r);
-    edScalarBase(p, r);
-    edPack(sig, p);
-    sha512Init(&s);
-    sha512Add(&s, sig, 32);
-    sha512Add(&s, pub, 32);
-    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
-    sha512End(&s, h);
-    edReduce(h);
-    int64_t x[64] = {0};
-    for (int i = 0; i < 32; i++) x[i] = r[i];
-    for (int i = 0; i < 32; i++) {
-        for (int j = 0; j < 32; j++) x[i + j] += h[i] * (int64_t)d[j];
-    }
-    edModL(sig + 32, x);
-}
-
-/* -A from the public key, or -1 when it isn't a point on the curve */
-static int edUnpackNeg(Fe r[4], const unsigned char *p) {
-    Fe t, chk, num, den, den2, den4, den6;
-    feCopy(r[2], fe1);
-    feUnpack(r[1], p);
-    feMul(num, r[1], r[1]);
-    feMul(den, num, edD);
-    feSub(num, num, r[2]);
-    feAdd(den, r[2], den);
-    feMul(den2, den, den);
-    feMul(den4, den2, den2);
-    feMul(den6, den4, den2);
-    feMul(t, den6, num);
-    feMul(t, t, den);
-    fePow2523(t, t);
-    feMul(t, t, num);
-    feMul(t, t, den);
-    feMul(t, t, den);
-    feMul(r[0], t, den);
-    feMul(chk, r[0], r[0]);
-    feMul(chk, chk, den);
-    if (feDiffer(chk, num)) feMul(r[0], r[0], edI);
-    feMul(chk, r[0], r[0]);
-    feMul(chk, chk, den);
-    if (feDiffer(chk, num)) return -1;
-    if (feParity(r[0]) == (p[31] >> 7)) feSub(r[0], fe0, r[0]);
-    feMul(r[3], r[0], r[1]);
-    return 0;
-}
-
-int iris_ed25519_verify(const unsigned char *pub, const char *msg, int64_t len, const unsigned char *sig) {
-    /* S must be less than L, so a signature has one form */
-    for (int i = 31; i >= 0; i--) {
-        if (sig[32 + i] < edL[i]) break;
-        if (sig[32 + i] > edL[i] || i == 0) return 0;
-    }
-    Fe p[4], q[4];
-    if (edUnpackNeg(q, pub)) return 0;
-    unsigned char h[64], t[32];
-    Sha512 s;
-    sha512Init(&s);
-    sha512Add(&s, sig, 32);
-    sha512Add(&s, pub, 32);
-    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
-    sha512End(&s, h);
-    edReduce(h);
-    edScalarMult(p, q, h);
-    edScalarBase(q, sig + 32);
-    edAdd(p, q);
-    edPack(t, p);
-    return iris_const_equal((const char *)sig, 32, (const char *)t, 32);
-}
-
 /* X25519 key exchange (RFC 7748). Its field elements have five limbs of
-   51 bits, multiplied into 128-bit sums: many times faster than the 16
-   limbs of Ed25519 above. No branch or index depends on the secret. */
+   51 bits, multiplied into 128-bit sums. No branch or index depends on the
+   secret. */
 typedef unsigned __int128 X128;
 typedef uint64_t F51[5];
 #define M51 0x7ffffffffffffULL
@@ -12870,7 +12569,8 @@ static void f51Add(F51 r, const F51 a, const F51 b) {
     for (int i = 0; i < 5; i++) r[i] = a[i] + b[i];
 }
 
-/* a - b, with 4p added so no limb goes below zero (b's limbs stay under 2^53) */
+/* a - b, with 4p added so no limb goes below zero: b's limbs must be under
+   2^53, as what f51Mul, f51Sq and f51Carry give and sums of two of them are */
 static void f51Sub(F51 r, const F51 a, const F51 b) {
     r[0] = a[0] + 0x1fffffffffffb4ULL - b[0];
     for (int i = 1; i < 5; i++) r[i] = a[i] + 0x1ffffffffffffcULL - b[i];
@@ -12992,9 +12692,492 @@ int iris_x25519(const unsigned char *scalar, const unsigned char *point, unsigne
     return any != 0;
 }
 
+
+/* Ed25519 signatures (RFC 8032) on the 51-bit field of X25519 above. A
+   point is (X, Y, Z, T) in extended coordinates: x = X/Z, y = Y/Z and
+   xy = T/Z. Public keys and signatures multiply the base point with a
+   table of its multiples, read whole for each digit, so no branch or index
+   depends on the secret. Checking a signature works on public values only
+   and takes a path that branches on them. */
+typedef struct { F51 X, Y, Z, T; } EdPoint;
+/* a point to add: y + x, y - x and 2dxy, with z = 1 */
+typedef struct { F51 yp, ym, t2d; } EdNiels;
+/* the same with its Z, for a point that isn't affine */
+typedef struct { F51 yp, ym, Z, t2d; } EdCached;
+
+static const unsigned char edDBytes[32] = {
+    0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75, 0xab, 0xd8, 0x41, 0x41, 0x4d, 0x0a, 0x70, 0x00,
+    0x98, 0xe8, 0x79, 0x77, 0x79, 0x40, 0xc7, 0x8c, 0x73, 0xfe, 0x6f, 0x2b, 0xee, 0x6c, 0x03, 0x52};
+static const unsigned char edD2Bytes[32] = {
+    0x59, 0xf1, 0xb2, 0x26, 0x94, 0x9b, 0xd6, 0xeb, 0x56, 0xb1, 0x83, 0x82, 0x9a, 0x14, 0xe0, 0x00,
+    0x30, 0xd1, 0xf3, 0xee, 0xf2, 0x80, 0x8e, 0x19, 0xe7, 0xfc, 0xdf, 0x56, 0xdc, 0xd9, 0x06, 0x24};
+/* the square root of -1 */
+static const unsigned char edIBytes[32] = {
+    0xb0, 0xa0, 0x0e, 0x4a, 0x27, 0x1b, 0xee, 0xc4, 0x78, 0xe4, 0x2f, 0xad, 0x06, 0x18, 0x43, 0x2f,
+    0xa7, 0xd7, 0xfb, 0x3d, 0x99, 0x00, 0x4d, 0x2b, 0x0b, 0xdf, 0xc1, 0x4f, 0x80, 0x24, 0x83, 0x2b};
+static const unsigned char edBxBytes[32] = {
+    0x1a, 0xd5, 0x25, 0x8f, 0x60, 0x2d, 0x56, 0xc9, 0xb2, 0xa7, 0x25, 0x95, 0x60, 0xc7, 0x2c, 0x69,
+    0x5c, 0xdc, 0xd6, 0xfd, 0x31, 0xe2, 0xa4, 0xc0, 0xfe, 0x53, 0x6e, 0xcd, 0xd3, 0x36, 0x69, 0x21};
+static const unsigned char edByBytes[32] = {
+    0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+    0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66};
+/* the order of the group, little end first */
+static const int64_t edL[32] = {0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7,
+                                0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0, 0, 0x10};
+
+static F51 edD51, edD251, edI51;
+/* edTable[i][j] is (j + 1) * 256^i * B */
+static EdNiels edTable[32][8];
+static pthread_once_t edOnce = PTHREAD_ONCE_INIT;
+
+static const F51 f51Zero = {0}, f51One = {1};
+
+static void f51Neg(F51 r, const F51 a) { f51Sub(r, f51Zero, a); }
+
+/* r = a when mask is all ones, unchanged when it is zero */
+static void f51Cmov(F51 r, const F51 a, uint64_t mask) {
+    for (int i = 0; i < 5; i++) r[i] ^= mask & (r[i] ^ a[i]);
+}
+
+static int f51Parity(const F51 a) {
+    unsigned char b[32];
+    f51Pack(b, a);
+    return b[0] & 1;
+}
+
+static int f51Equal(const F51 a, const F51 b) {
+    unsigned char x[32], y[32];
+    f51Pack(x, a);
+    f51Pack(y, b);
+    return iris_const_equal((const char *)x, 32, (const char *)y, 32);
+}
+
+/* a^(2^252 - 3), that is a^((p - 5) / 8), for square roots */
+static void f51Pow22523(F51 r, const F51 z) {
+    F51 t0, t1, t2;
+    f51Sq(t0, z);
+    f51SqN(t1, t0, 2);
+    f51Mul(t1, z, t1);          /* z^9 */
+    f51Mul(t0, t0, t1);         /* z^11 */
+    f51Sq(t0, t0);
+    f51Mul(t0, t1, t0);         /* 2^5 - 1 */
+    f51SqN(t1, t0, 5);
+    f51Mul(t0, t1, t0);         /* 2^10 - 1 */
+    f51SqN(t1, t0, 10);
+    f51Mul(t1, t1, t0);         /* 2^20 - 1 */
+    f51SqN(t2, t1, 20);
+    f51Mul(t1, t2, t1);         /* 2^40 - 1 */
+    f51SqN(t1, t1, 10);
+    f51Mul(t0, t1, t0);         /* 2^50 - 1 */
+    f51SqN(t1, t0, 50);
+    f51Mul(t1, t1, t0);         /* 2^100 - 1 */
+    f51SqN(t2, t1, 100);
+    f51Mul(t1, t2, t1);         /* 2^200 - 1 */
+    f51SqN(t1, t1, 50);
+    f51Mul(t0, t1, t0);         /* 2^250 - 1 */
+    f51SqN(t0, t0, 2);
+    f51Mul(r, t0, z);           /* 2^252 - 3 */
+}
+
+static void edIdentity(EdPoint *p) {
+    memcpy(p->X, f51Zero, sizeof(F51));
+    memcpy(p->Y, f51One, sizeof(F51));
+    memcpy(p->Z, f51One, sizeof(F51));
+    memcpy(p->T, f51Zero, sizeof(F51));
+}
+
+/* 2p (dbl-2008-hwcd with a = -1) */
+static void edDouble(EdPoint *r, const EdPoint *p) {
+    F51 a, b, c, e, f, g, h, s;
+    f51Sq(a, p->X);
+    f51Sq(b, p->Y);
+    f51Sq(c, p->Z);
+    f51Add(c, c, c);
+    f51Add(e, p->X, p->Y);
+    f51Sq(e, e);
+    f51Add(s, a, b);
+    f51Sub(e, e, s);            /* 2xy */
+    f51Sub(g, b, a);
+    f51Sub(f, g, c);
+    f51Neg(h, s);
+    f51Mul(r->X, e, f);
+    f51Mul(r->Y, g, h);
+    f51Mul(r->T, e, h);
+    f51Mul(r->Z, f, g);
+}
+
+/* p + q, for q with its Z (add-2008-hwcd-3) */
+static void edAddCached(EdPoint *r, const EdPoint *p, const EdCached *q) {
+    F51 a, b, c, d, e, f, g, h;
+    f51Sub(a, p->Y, p->X);
+    f51Mul(a, a, q->ym);
+    f51Add(b, p->Y, p->X);
+    f51Mul(b, b, q->yp);
+    f51Mul(c, p->T, q->t2d);
+    f51Mul(d, p->Z, q->Z);
+    f51Add(d, d, d);
+    f51Sub(e, b, a);
+    f51Sub(f, d, c);
+    f51Add(g, d, c);
+    f51Add(h, b, a);
+    f51Mul(r->X, e, f);
+    f51Mul(r->Y, g, h);
+    f51Mul(r->T, e, h);
+    f51Mul(r->Z, f, g);
+}
+
+/* p - q */
+static void edSubCached(EdPoint *r, const EdPoint *p, const EdCached *q) {
+    EdCached n;
+    memcpy(n.yp, q->ym, sizeof(F51));
+    memcpy(n.ym, q->yp, sizeof(F51));
+    memcpy(n.Z, q->Z, sizeof(F51));
+    f51Neg(n.t2d, q->t2d);
+    edAddCached(r, p, &n);
+}
+
+/* p + q, for an affine q */
+static void edAddNiels(EdPoint *r, const EdPoint *p, const EdNiels *q) {
+    F51 a, b, c, d, e, f, g, h;
+    f51Sub(a, p->Y, p->X);
+    f51Mul(a, a, q->ym);
+    f51Add(b, p->Y, p->X);
+    f51Mul(b, b, q->yp);
+    f51Mul(c, p->T, q->t2d);
+    f51Add(d, p->Z, p->Z);
+    f51Sub(e, b, a);
+    f51Sub(f, d, c);
+    f51Add(g, d, c);
+    f51Add(h, b, a);
+    f51Mul(r->X, e, f);
+    f51Mul(r->Y, g, h);
+    f51Mul(r->T, e, h);
+    f51Mul(r->Z, f, g);
+}
+
+static void edToCached(EdCached *c, const EdPoint *p) {
+    f51Add(c->yp, p->Y, p->X);
+    f51Sub(c->ym, p->Y, p->X);
+    memcpy(c->Z, p->Z, sizeof(F51));
+    f51Mul(c->t2d, p->T, edD251);
+}
+
+static void edMakeTable(void) {
+    unsigned char b[32];
+    memcpy(b, edDBytes, 32);
+    f51Unpack(edD51, b);
+    memcpy(b, edD2Bytes, 32);
+    f51Unpack(edD251, b);
+    memcpy(b, edIBytes, 32);
+    f51Unpack(edI51, b);
+    EdPoint base;
+    f51Unpack(base.X, edBxBytes);
+    f51Unpack(base.Y, edByBytes);
+    memcpy(base.Z, f51One, sizeof(F51));
+    f51Mul(base.T, base.X, base.Y);
+    /* the 256 points in extended coordinates, then all made affine with
+       one inversion */
+    static EdPoint all[256];
+    EdPoint row = base;
+    for (int i = 0; i < 32; i++) {
+        EdCached step;
+        edToCached(&step, &row);
+        all[i * 8] = row;
+        for (int j = 1; j < 8; j++) edAddCached(&all[i * 8 + j], &all[i * 8 + j - 1], &step);
+        for (int k = 0; k < 8; k++) edDouble(&row, &row);
+    }
+    static F51 prefix[256];
+    memcpy(prefix[0], all[0].Z, sizeof(F51));
+    for (int i = 1; i < 256; i++) f51Mul(prefix[i], prefix[i - 1], all[i].Z);
+    F51 inv;
+    f51Invert(inv, prefix[255]);
+    for (int i = 255; i >= 0; i--) {
+        F51 zi, x, y, xy;
+        if (i > 0) {
+            f51Mul(zi, inv, prefix[i - 1]);
+            f51Mul(inv, inv, all[i].Z);
+        } else {
+            memcpy(zi, inv, sizeof(F51));
+        }
+        f51Mul(x, all[i].X, zi);
+        f51Mul(y, all[i].Y, zi);
+        f51Mul(xy, x, y);
+        EdNiels *n = &edTable[i / 8][i % 8];
+        f51Add(n->yp, y, x);
+        f51Sub(n->ym, y, x);
+        f51Mul(n->t2d, xy, edD251);
+    }
+}
+
+static void edReady(void) { pthread_once(&edOnce, edMakeTable); }
+
+/* b * 256^pos * B for a digit b from -8 to 8, reading every entry */
+static void edSelect(EdNiels *t, int pos, signed char b) {
+    uint64_t neg = (uint64_t)(unsigned char)b >> 7;
+    unsigned char babs = (unsigned char)(b - ((-neg & (uint64_t)b) << 1));
+    memcpy(t->yp, f51One, sizeof(F51));
+    memcpy(t->ym, f51One, sizeof(F51));
+    memcpy(t->t2d, f51Zero, sizeof(F51));
+    for (int j = 0; j < 8; j++) {
+        uint64_t eq = (uint64_t)(babs ^ (unsigned char)(j + 1));
+        uint64_t mask = 0 - ((eq - 1) >> 63);
+        f51Cmov(t->yp, edTable[pos][j].yp, mask);
+        f51Cmov(t->ym, edTable[pos][j].ym, mask);
+        f51Cmov(t->t2d, edTable[pos][j].t2d, mask);
+    }
+    /* a negative digit: y + x and y - x change places, and 2dxy its sign */
+    uint64_t m = 0 - neg;
+    F51 yp, nt;
+    memcpy(yp, t->yp, sizeof(F51));
+    f51Cmov(t->yp, t->ym, m);
+    f51Cmov(t->ym, yp, m);
+    f51Neg(nt, t->t2d);
+    f51Cmov(t->t2d, nt, m);
+}
+
+/* the digits of a, from -8 to 7 in base 16, low first; a below 2^255 */
+static void edDigits(signed char e[64], const unsigned char *a) {
+    for (int i = 0; i < 32; i++) {
+        e[2 * i] = (signed char)(a[i] & 15);
+        e[2 * i + 1] = (signed char)(a[i] >> 4);
+    }
+    signed char carry = 0;
+    for (int i = 0; i < 63; i++) {
+        e[i] = (signed char)(e[i] + carry);
+        carry = (signed char)((e[i] + 8) >> 4);
+        e[i] = (signed char)(e[i] - carry * 16);
+    }
+    e[63] = (signed char)(e[63] + carry);
+}
+
+/* a * B */
+static void edMulBase(EdPoint *h, const unsigned char *a) {
+    edReady();
+    signed char e[64];
+    edDigits(e, a);
+    edIdentity(h);
+    EdNiels t;
+    for (int i = 1; i < 64; i += 2) {
+        edSelect(&t, i / 2, e[i]);
+        edAddNiels(h, h, &t);
+    }
+    for (int k = 0; k < 4; k++) edDouble(h, h);
+    for (int i = 0; i < 64; i += 2) {
+        edSelect(&t, i / 2, e[i]);
+        edAddNiels(h, h, &t);
+    }
+    iris_wipe(e, sizeof e);
+}
+
+/* a * p, for public a and p: it branches on the digits */
+static void edMulPublic(EdPoint *r, const EdPoint *p, const unsigned char *a) {
+    EdCached table[8];
+    EdPoint m = *p, two;
+    edToCached(&table[0], p);
+    edDouble(&two, p);
+    for (int j = 1; j < 8; j++) {
+        EdPoint next;
+        if (j == 1) {
+            next = two;
+        } else {
+            edAddCached(&next, &m, &table[0]);
+        }
+        m = next;
+        edToCached(&table[j], &m);
+    }
+    signed char e[64];
+    edDigits(e, a);
+    edIdentity(r);
+    for (int i = 63; i >= 0; i--) {
+        if (i != 63) {
+            for (int k = 0; k < 4; k++) edDouble(r, r);
+        }
+        if (e[i] > 0) {
+            edAddCached(r, r, &table[e[i] - 1]);
+        } else if (e[i] < 0) {
+            edSubCached(r, r, &table[-e[i] - 1]);
+        }
+    }
+}
+
+static void edPack(unsigned char *out, const EdPoint *p) {
+    F51 zi, x, y;
+    f51Invert(zi, p->Z);
+    f51Mul(x, p->X, zi);
+    f51Mul(y, p->Y, zi);
+    f51Pack(out, y);
+    out[31] ^= (unsigned char)(f51Parity(x) << 7);
+}
+
+/* -A from a public key, or -1 when it isn't a point of the curve in its
+   one encoding */
+static int edUnpackNeg(EdPoint *r, const unsigned char *s) {
+    edReady();
+    F51 u, v, v3, x, vxx, t;
+    f51Unpack(r->Y, s);
+    unsigned char back[32];
+    f51Pack(back, r->Y);
+    back[31] |= s[31] & 0x80;
+    if (memcmp(back, s, 32) != 0) return -1;
+    memcpy(r->Z, f51One, sizeof(F51));
+    F51 yy;
+    f51Sq(yy, r->Y);
+    f51Mul(v, yy, edD51);
+    f51Sub(u, yy, f51One);      /* y^2 - 1 */
+    f51Add(v, v, f51One);       /* dy^2 + 1 */
+    f51Sq(v3, v);
+    f51Mul(v3, v3, v);          /* v^3 */
+    f51Sq(x, v3);
+    f51Mul(x, x, v);
+    f51Mul(x, x, u);            /* uv^7 */
+    f51Pow22523(x, x);
+    f51Mul(x, x, v3);
+    f51Mul(x, x, u);            /* uv^3 (uv^7)^((p-5)/8) */
+    f51Sq(vxx, x);
+    f51Mul(vxx, vxx, v);
+    if (!f51Equal(vxx, u)) {
+        /* -u as 1 - y^2: f51Sub takes away only values under 2^53 a limb */
+        f51Sub(t, f51One, yy);
+        if (!f51Equal(vxx, t)) return -1;
+        f51Mul(x, x, edI51);
+    }
+    int sign = s[31] >> 7;
+    if (sign && f51Equal(x, f51Zero)) return -1;
+    if (f51Parity(x) == sign) {
+        f51Neg(x, x);
+        /* back under 2^52 a limb, as f51Sub needs of what it takes away */
+        f51Carry(x, x[0], x[1], x[2], x[3], x[4]);
+    }
+    memcpy(r->X, x, sizeof(F51));
+    f51Mul(r->T, r->X, r->Y);
+    return 0;
+}
+
+/* r = x mod L, for x of 64 limbs of a byte each */
+static void edModL(unsigned char *r, int64_t x[64]) {
+    int64_t carry;
+    for (int i = 63; i >= 32; i--) {
+        carry = 0;
+        int j;
+        for (j = i - 32; j < i - 12; j++) {
+            x[j] += carry - 16 * x[i] * edL[j - (i - 32)];
+            carry = (x[j] + 128) >> 8;
+            x[j] -= carry * 256;
+        }
+        x[j] += carry;
+        x[i] = 0;
+    }
+    carry = 0;
+    for (int j = 0; j < 32; j++) {
+        x[j] += carry - (x[31] >> 4) * edL[j];
+        carry = x[j] >> 8;
+        x[j] &= 255;
+    }
+    for (int j = 0; j < 32; j++) x[j] -= carry * edL[j];
+    for (int i = 0; i < 32; i++) {
+        x[i + 1] += x[i] >> 8;
+        r[i] = (unsigned char)(x[i] & 255);
+    }
+}
+
+static void edReduce(unsigned char *r) {
+    int64_t x[64];
+    for (int i = 0; i < 64; i++) x[i] = r[i];
+    memset(r, 0, 64);
+    edModL(r, x);
+}
+
+/* the secret scalar (clamped) and the prefix, from the 32-byte seed */
+static void edExpand(const unsigned char *seed, unsigned char d[64]) {
+    iris_sha512((const char *)seed, 32, d);
+    d[0] &= 248;
+    d[31] &= 127;
+    d[31] |= 64;
+}
+
+void iris_ed25519_public(const unsigned char *seed, unsigned char *pub) {
+    unsigned char d[64];
+    EdPoint p;
+    edExpand(seed, d);
+    edMulBase(&p, d);
+    edPack(pub, &p);
+    iris_wipe(d, sizeof d);
+}
+
+void iris_ed25519_sign(const unsigned char *seed, const char *msg, int64_t len, unsigned char *sig) {
+    unsigned char d[64], r[64], h[64], pub[32];
+    EdPoint p;
+    edExpand(seed, d);
+    edMulBase(&p, d);
+    edPack(pub, &p);
+    Sha512 s;
+    sha512Init(&s);
+    sha512Add(&s, d + 32, 32);
+    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
+    sha512End(&s, r);
+    edReduce(r);
+    edMulBase(&p, r);
+    edPack(sig, &p);
+    sha512Init(&s);
+    sha512Add(&s, sig, 32);
+    sha512Add(&s, pub, 32);
+    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
+    sha512End(&s, h);
+    edReduce(h);
+    int64_t x[64] = {0};
+    for (int i = 0; i < 32; i++) x[i] = r[i];
+    for (int i = 0; i < 32; i++) {
+        for (int j = 0; j < 32; j++) x[i + j] += h[i] * (int64_t)d[j];
+    }
+    edModL(sig + 32, x);
+    iris_wipe(d, sizeof d);
+    iris_wipe(r, sizeof r);
+    iris_wipe(x, sizeof x);
+}
+
+/* The X25519 public key, from the Ed25519 base point's table: the
+   Montgomery u of the Edwards point (x, y) is (1 + y) / (1 - y). */
 void iris_x25519_public(const unsigned char *scalar, unsigned char *out) {
-    static const unsigned char base[32] = {9};
-    iris_x25519(scalar, base, out);
+    unsigned char z[32];
+    memcpy(z, scalar, 32);
+    z[31] = (unsigned char)((z[31] & 127) | 64);
+    z[0] &= 248;
+    EdPoint p;
+    edMulBase(&p, z);
+    F51 num, den;
+    f51Add(num, p.Z, p.Y);
+    f51Sub(den, p.Z, p.Y);
+    f51Invert(den, den);
+    f51Mul(num, num, den);
+    f51Pack(out, num);
+    iris_wipe(z, sizeof z);
+}
+
+int iris_ed25519_verify(const unsigned char *pub, const char *msg, int64_t len, const unsigned char *sig) {
+    /* S must be less than L, so a signature has one form */
+    for (int i = 31; i >= 0; i--) {
+        if (sig[32 + i] < edL[i]) break;
+        if (sig[32 + i] > edL[i] || i == 0) return 0;
+    }
+    EdPoint a, p, q;
+    if (edUnpackNeg(&a, pub)) return 0;
+    unsigned char h[64], t[32];
+    Sha512 s;
+    sha512Init(&s);
+    sha512Add(&s, sig, 32);
+    sha512Add(&s, pub, 32);
+    sha512Add(&s, (const unsigned char *)msg, (size_t)len);
+    sha512End(&s, h);
+    edReduce(h);
+    /* R = sB - hA */
+    edMulPublic(&p, &a, h);
+    edMulBase(&q, sig + 32);
+    EdCached c;
+    edToCached(&c, &q);
+    edAddCached(&p, &p, &c);
+    edPack(t, &p);
+    return iris_const_equal((const char *)sig, 32, (const char *)t, 32);
 }
 
 /* ChaCha20 (RFC 8439, 2.3): one 64-byte block of key stream. */
@@ -13296,6 +13479,76 @@ int iris_chacha_open(const unsigned char *key, const unsigned char *nonce, const
     unsigned char *pt = aeadRoom(out, (int64_t)n, &sealed, &aad);
     chachaXor(key, 1, nonce, sealed, pt, n);
     out->len += (int64_t)n;
+    return 1;
+}
+
+/* chacha20-poly1305@openssh.com, SSH's packets: a 64-byte key whose
+   first half encrypts the payload and makes the Poly1305 key, and whose
+   second half encrypts the 4-byte length. The nonce is the packet's
+   sequence number, and the tag covers the encrypted length and payload. */
+static void sshChachaNonce(int64_t seq, unsigned char nonce[12]) {
+    memset(nonce, 0, 4);
+    for (int i = 0; i < 8; i++) nonce[4 + i] = (unsigned char)((uint64_t)seq >> (56 - 8 * i));
+}
+
+static void sshChachaTag(const unsigned char *key, const unsigned char nonce[12], const unsigned char *m, size_t n,
+                         unsigned char tag[16]) {
+    unsigned char block[64];
+    chachaBlock(key, 0, nonce, block);
+    Poly1305 p;
+    polyInit(&p, block);
+    while (n >= 16) {
+        polyBlock(&p, m, 1ULL << 40);
+        m += 16;
+        n -= 16;
+    }
+    if (n) {
+        unsigned char last[16] = {0};
+        memcpy(last, m, n);
+        last[n] = 1;
+        polyBlock(&p, last, 0);
+    }
+    polyFinish(&p, tag);
+    iris_wipe(block, sizeof block);
+}
+
+/* Adds the packet for plain (padding length, payload, padding) to out:
+   its encrypted length and text, and the tag. */
+void iris_ssh_chacha_seal(const unsigned char *key, int64_t seq, const unsigned char *plain, int64_t len,
+                          IrisString *out) {
+    unsigned char nonce[12];
+    sshChachaNonce(seq, nonce);
+    const unsigned char *none = NULL;
+    unsigned char *o = aeadRoom(out, 4 + len + 16, &plain, &none);
+    unsigned char size[4] = {(unsigned char)(len >> 24), (unsigned char)(len >> 16), (unsigned char)(len >> 8),
+                             (unsigned char)len};
+    chachaXor(key + 32, 0, nonce, size, o, 4);
+    chachaXor(key, 1, nonce, plain, o + 4, (size_t)len);
+    sshChachaTag(key, nonce, o, 4 + (size_t)len, o + 4 + len);
+    out->len += 4 + len + 16;
+}
+
+/* The length of the packet whose first 4 bytes are enc. */
+int64_t iris_ssh_chacha_length(const unsigned char *key, int64_t seq, const unsigned char *enc) {
+    unsigned char nonce[12], size[4];
+    sshChachaNonce(seq, nonce);
+    chachaXor(key + 32, 0, nonce, enc, size, 4);
+    return (int64_t)size[0] << 24 | (int64_t)size[1] << 16 | (int64_t)size[2] << 8 | (int64_t)size[3];
+}
+
+/* Checks the tag of a packet of 4 + len + 16 bytes and adds its decrypted
+   text to out: 1, or 0 when the tag doesn't match and out gets nothing. */
+int iris_ssh_chacha_open(const unsigned char *key, int64_t seq, const unsigned char *packet, int64_t len,
+                         IrisString *out) {
+    unsigned char nonce[12], tag[16];
+    sshChachaNonce(seq, nonce);
+    sshChachaTag(key, nonce, packet, 4 + (size_t)len, tag);
+    if (!iris_const_equal((const char *)tag, 16, (const char *)packet + 4 + len, 16)) return 0;
+    const unsigned char *none = NULL;
+    const unsigned char *text = packet + 4;
+    unsigned char *pt = aeadRoom(out, len, &text, &none);
+    chachaXor(key, 1, nonce, text, pt, (size_t)len);
+    out->len += len;
     return 1;
 }
 

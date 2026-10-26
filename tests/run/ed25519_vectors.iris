@@ -1,0 +1,66 @@
+// expect: RFC 8032 test 1: true true true
+// expect: RFC 8032 test 2: true true true
+// expect: 200 random keys: 200 verified, 0 tampered ones taken
+// expect: S past the group order: false
+
+import crypto, hex, random
+
+!void vector(str name, str seedHex, str msgHex, str publicHex, str sigHex) {
+    scoped String seed = try hex.decode(seedHex)
+    scoped String msg = try hex.decode(msgHex)
+    pk := crypto.ed25519Public(seed)
+    sig := crypto.ed25519Sign(seed, msg)
+    scoped String p = hex.encode(pk[0:32])
+    scoped String s = hex.encode(sig[0:64])
+    print("{name}: {p == publicHex} {s == sigHex} {crypto.ed25519Verify(pk[0:32], msg, sig[0:64])}")
+}
+
+!void main() {
+    try vector("RFC 8032 test 1", "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "",
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
+    try vector("RFC 8032 test 2", "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", "72",
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00")
+
+    i64 good = 0
+    i64 taken = 0
+    for i in 0..200 {
+        u8[32] seed
+        random.bytes(seed[0:32])
+        u8[33] msg
+        random.bytes(msg[0:33])
+        pk := crypto.ed25519Public(seed[0:32])
+        sig := crypto.ed25519Sign(seed[0:32], msg[0:33])
+        if crypto.ed25519Verify(pk[0:32], msg[0:33], sig[0:64]) {
+            good += 1
+        }
+        // one bit changed in the message, the signature or the key
+        u8[33] m2 = msg
+        m2[i % 33] ^= 1
+        u8[64] s2 = sig
+        s2[i % 64] ^= 4
+        u8[32] p2 = pk
+        p2[i % 32] ^= 16
+        if crypto.ed25519Verify(pk[0:32], m2[0:33], sig[0:64]) || crypto.ed25519Verify(pk[0:32], msg[0:33], s2[0:64]) ||
+            crypto.ed25519Verify(p2[0:32], msg[0:33], sig[0:64]) {
+                taken += 1
+            }
+    }
+    print("200 random keys: {good} verified, {taken} tampered ones taken")
+
+    // S + L verifies the same equation, but a signature has one form
+    scoped String seed = try hex.decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    pk := crypto.ed25519Public(seed)
+    sig := crypto.ed25519Sign(seed, "")
+    u8[32] l = [0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10]
+    u8[64] big = sig
+    i64 carry = 0
+    for i in 0..32 {
+        v := i64(big[32 + i]) + i64(l[i]) + carry
+        big[32 + i] = u8(v & 255)
+        carry = v >> 8
+    }
+    print("S past the group order: {crypto.ed25519Verify(pk[0:32], "", big[0:64])}")
+}

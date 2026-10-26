@@ -1,0 +1,570 @@
+// SSH: running commands on other machines, and serving logins, shells and
+// commands. dial connects to a server; serve answers clients, ssh among
+// them. Connections use curve25519-sha256 key exchange, Ed25519 host and
+// user keys and AES-GCM.
+//
+//     key := try ssh.loadKey("/home/ada/.ssh/id_ed25519")
+//     c := try ssh.dial("db1.example.com", 22, ssh.Config{user: "ada", key: key})
+//     defer c.close()
+//     scoped out := try c.run("uptime")
+//     print(out.stdout)
+//
+// The server's key is looked up in ~/.ssh/known_hosts, as ssh does,
+// unless Config.hostKey names it.
+
+import base64, crypto, fs, net, os, random, str
+
+// What can go wrong: connect (the server can't be reached), hostKey (its
+// key isn't the one known for it), auth (the login is refused), protocol
+// (the other side broke the protocol), closed (the connection or channel
+// is gone), refused (the other side won't open a channel or run a
+// request), key (a key file that can't be read).
+pub enum SshError { connect, hostKey, auth, protocol, closed, refused, key }
+
+// ------------------------------------------------------------ encoding
+
+void putByte(String *out, i64 v) {
+    u8[1] b = [u8(v & 0xff)]
+    out.append(b[0:1])
+}
+
+void putU32(String *out, i64 v) {
+    u8[4] b = [u8(v >> 24 & 0xff), u8(v >> 16 & 0xff), u8(v >> 8 & 0xff), u8(v & 0xff)]
+    out.append(b[0:4])
+}
+
+void putString(String *out, str s) {
+    putU32(out, s.len)
+    out.append(s)
+}
+
+void putBool(String *out, bool v) => putByte(out, if v { 1 } else { 0 })
+
+// An unsigned big-endian number as an mpint: no leading zeros, and a zero
+// byte in front when the top bit is set.
+void putMpint(String *out, str n) {
+    i64 at = 0
+    for at < n.len && n[at] == 0 {
+        at += 1
+    }
+    if at < n.len && n[at] & 0x80 != 0 {
+        putU32(out, n.len - at + 1)
+        putByte(out, 0)
+    } else {
+        putU32(out, n.len - at)
+    }
+    out.append(n[at:])
+}
+
+i64 getU32(str m, i64 i) => i64(m[i]) << 24 | i64(m[i + 1]) << 16 | i64(m[i + 2]) << 8 | i64(m[i + 3])
+
+// Reads the fields of a message one after another. A field past the end
+// gives zero or "" and sets bad.
+struct Reader {
+    str data
+    i64 at
+    bool bad
+}
+
+i64 Reader.byte() {
+    if self.at >= self.data.len {
+        self.bad = true
+        return 0
+    }
+    self.at += 1
+    return i64(self.data[self.at - 1])
+}
+
+bool Reader.flag() => self.byte() != 0
+
+i64 Reader.u32() {
+    if self.at + 4 > self.data.len {
+        self.bad = true
+        self.at = self.data.len
+        return 0
+    }
+    self.at += 4
+    return getU32(self.data, self.at - 4)
+}
+
+str Reader.string() {
+    n := self.u32()
+    if self.bad || n > self.data.len - self.at {
+        self.bad = true
+        self.at = self.data.len
+        return ""
+    }
+    self.at += n
+    return self.data[self.at - n:self.at]
+}
+
+// Whether the comma-separated list has name.
+bool listHas(str list, str name) {
+    str rest = list
+    for rest.len > 0 {
+        one, after, _ := str.cut(rest, ",")
+        if one == name {
+            return true
+        }
+        rest = after
+    }
+    return false
+}
+
+// ------------------------------------------------------------ keys
+
+// An Ed25519 key: the secret seed, the public half, and a comment such as
+// ada@laptop. generateKey makes one and loadKey reads one that ssh-keygen
+// wrote. A host key is one too.
+pub struct Key {
+    u8[32] seed
+    pub u8[32] public
+    pub String comment
+}
+
+// A new Ed25519 key from the system's random source.
+pub Key generateKey(str comment = "") {
+    Key k
+    random.bytes(k.seed[0:32])
+    k.public = crypto.ed25519Public(k.seed[0:32])
+    k.comment = comment.copy()
+    return k
+}
+
+// The key with the secret seed of 32 bytes.
+pub Key keyFromSeed(str seed, str comment = "") {
+    Key k
+    if seed.len != 32 {
+        panic("an Ed25519 seed is 32 bytes, not {seed.len}")
+    }
+    for i in 0..32 {
+        k.seed[i] = seed[i]
+    }
+    k.public = crypto.ed25519Public(seed)
+    k.comment = comment.copy()
+    return k
+}
+
+// Wipes the secret seed and frees the comment.
+pub void Key.free() {
+    crypto.wipe(self.seed[0:32])
+    self.comment.free()
+}
+
+// The public key as SSH sends it: its type and its 32 bytes.
+String blobOf(str public) {
+    String b
+    putString(&b, "ssh-ed25519")
+    putString(&b, public)
+    return b
+}
+
+// The 32 bytes of an ssh-ed25519 key blob, "" when it is another kind.
+str blobKey(str blob) {
+    r := Reader{data: blob}
+    kind := r.string()
+    k := r.string()
+    if r.bad || kind != "ssh-ed25519" || k.len != 32 || r.at != blob.len {
+        return ""
+    }
+    return k
+}
+
+String fingerprintOfBlob(str blob) {
+    h := crypto.sha256(blob)
+    scoped String b = base64.encode(h[0:32])
+    bare := str.trimSuffix(str.trimSuffix(b, "="), "=")
+    return format("SHA256:{bare}")
+}
+
+String publicTextOf(str blob, str comment) {
+    scoped String b = base64.encode(blob)
+    if comment.len > 0 {
+        return format("ssh-ed25519 {b} {comment}")
+    }
+    return format("ssh-ed25519 {b}")
+}
+
+// The public key as one line of an authorized_keys file:
+// "ssh-ed25519 AAAAC3Nza... ada@laptop".
+pub String Key.publicText() {
+    scoped String blob = blobOf(self.public[0:32])
+    return publicTextOf(blob, self.comment)
+}
+
+// The key's fingerprint as ssh-keygen -l shows it: "SHA256:" and the
+// Base64 of the public key's hash.
+pub String Key.fingerprint() {
+    scoped String blob = blobOf(self.public[0:32])
+    return fingerprintOfBlob(blob)
+}
+
+// The 32 bytes of a public key line, "ssh-ed25519 AAAA... comment".
+// SshError.key when it isn't an Ed25519 key.
+pub !u8[32] parsePublicKey(str line) {
+    fields := str.fields(line)
+    defer fields.free()
+    // an authorized_keys line can start with options
+    for i in 0..fields.len {
+        if fields.at(i) == "ssh-ed25519" && i + 1 < fields.len {
+            blob := base64.decode(fields.at(i + 1)) catch e {
+                return error(SshError.key, "the key in '{line}' isn't Base64")
+            }
+            defer blob.free()
+            k := blobKey(blob)
+            if k.len != 32 {
+                return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
+            }
+            u8[32] out
+            for j in 0..32 {
+                out[j] = k[j]
+            }
+            return out
+        }
+    }
+    return error(SshError.key, "'{line}' isn't an ssh-ed25519 key")
+}
+
+// The fingerprint of a public key line, "SHA256:...".
+pub !String fingerprint(str publicLine) {
+    k := try parsePublicKey(publicLine)
+    scoped String blob = blobOf(k[0:32])
+    return fingerprintOfBlob(blob)
+}
+
+const str PRIVATE_BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----"
+const str PRIVATE_END = "-----END OPENSSH PRIVATE KEY-----"
+const str KEY_MAGIC = "openssh-key-v1\x00"
+
+// The key in OpenSSH's private key format, as ssh-keygen writes it, for a
+// file only its owner can read.
+pub String Key.privateText() {
+    scoped String blob = blobOf(self.public[0:32])
+    String secret
+    defer {
+        crypto.wipe(secret.ptr[0:secret.len])
+        secret.free()
+    }
+    u8[4] check
+    random.bytes(check[0:4])
+    secret.append(check[0:4])
+    secret.append(check[0:4])
+    putString(&secret, "ssh-ed25519")
+    putString(&secret, self.public[0:32])
+    putU32(&secret, 64)
+    secret.append(self.seed[0:32])
+    secret.append(self.public[0:32])
+    putString(&secret, self.comment)
+    i64 pad = 1
+    for secret.len % 8 != 0 {
+        putByte(&secret, pad)
+        pad += 1
+    }
+    String all = KEY_MAGIC.copy()
+    defer {
+        crypto.wipe(all.ptr[0:all.len])
+        all.free()
+    }
+    putString(&all, "none")
+    putString(&all, "none")
+    putString(&all, "")
+    putU32(&all, 1)
+    putString(&all, blob)
+    putString(&all, secret)
+    String b64 = base64.encode(all)
+    defer {
+        crypto.wipe(b64.ptr[0:b64.len])
+        b64.free()
+    }
+    String out = PRIVATE_BEGIN.copy()
+    out.append("\n")
+    i64 at = 0
+    for at < b64.len {
+        end := if at + 70 < b64.len { at + 70 } else { b64.len }
+        out.append(b64[at:end])
+        out.append("\n")
+        at = end
+    }
+    out.append(PRIVATE_END)
+    out.append("\n")
+    return out
+}
+
+// The key in an OpenSSH private key, as ssh-keygen -t ed25519 writes it.
+// SshError.key when it is another kind of key, or has a passphrase.
+pub !Key parseKey(str text) {
+    begin := str.find(text, PRIVATE_BEGIN)
+    end := str.find(text, PRIVATE_END)
+    if begin < 0 || end < begin {
+        return error(SshError.key, "not an OpenSSH private key: no {PRIVATE_BEGIN} line")
+    }
+    String b64
+    defer {
+        crypto.wipe(b64.ptr[0:b64.len])
+        b64.free()
+    }
+    for c in text[begin + PRIVATE_BEGIN.len:end] {
+        if c != '\n' && c != '\r' && c != ' ' && c != '\t' {
+            u8[1] one = [c]
+            b64.append(one[0:1])
+        }
+    }
+    all := base64.decode(b64) catch e {
+        return error(SshError.key, "the private key isn't Base64")
+    }
+    defer {
+        crypto.wipe(all.ptr[0:all.len])
+        all.free()
+    }
+    if !str.startsWith(all, KEY_MAGIC) {
+        return error(SshError.key, "not an OpenSSH private key")
+    }
+    r := Reader{data: all, at: KEY_MAGIC.len}
+    cipher := r.string()
+    _ = r.string()
+    _ = r.string()
+    count := r.u32()
+    _ = r.string()
+    secret := r.string()
+    if r.bad {
+        return error(SshError.key, "the private key is cut short")
+    }
+    if cipher != "none" {
+        return error(SshError.key, "the private key has a passphrase: ssh-keygen -p -N '' takes it off")
+    }
+    if count != 1 {
+        return error(SshError.key, "the file holds {count} keys, not one")
+    }
+    s := Reader{data: secret}
+    a := s.u32()
+    b := s.u32()
+    kind := s.string()
+    if kind != "ssh-ed25519" {
+        return error(SshError.key, "a {kind} key: only ssh-ed25519 keys are read")
+    }
+    public := s.string()
+    both := s.string()
+    comment := s.string()
+    if s.bad || a != b || public.len != 32 || both.len != 64 {
+        return error(SshError.key, "the private key is broken")
+    }
+    k := keyFromSeed(both[0:32], comment)
+    if !crypto.equal(k.public[0:32], public) {
+        k.free()
+        return error(SshError.key, "the private key doesn't match its public key")
+    }
+    return k
+}
+
+// The key in the private key file at path.
+pub !Key loadKey(str path) {
+    text := fs.readAll(path) catch e {
+        return error(SshError.key, "{path}: {e.message}")
+    }
+    defer {
+        crypto.wipe(text.ptr[0:text.len])
+        text.free()
+    }
+    k := parseKey(text) catch e {
+        return error(SshError.key, "{path}: {e.message}")
+    }
+    return k
+}
+
+// Whether key, a public key line, is one of the lines of the
+// authorized_keys file at path. A missing file has none.
+pub bool authorizedKey(str path, str key) {
+    want := parsePublicKey(key) catch e {
+        return false
+    }
+    text := fs.readAll(path) catch e {
+        return false
+    }
+    defer text.free()
+    for line in str.lines(text) {
+        l := str.trim(line)
+        if l.len == 0 || l[0] == '#' {
+            continue
+        }
+        k := parsePublicKey(l) catch e {
+            continue
+        }
+        if crypto.equal(k[0:32], want[0:32]) {
+            return true
+        }
+    }
+    return false
+}
+
+// ------------------------------------------------------------ known hosts
+
+// Whether one pattern of a known_hosts line matches name: the name itself,
+// a hashed |1|salt|hash, or a pattern with * and ?.
+bool hostMatches(str pattern, str name) {
+    if str.startsWith(pattern, "|1|") {
+        salt64, hash64, _ := str.cut(pattern[3:], "|")
+        salt := base64.decode(salt64) catch e {
+            return false
+        }
+        defer salt.free()
+        hash := base64.decode(hash64) catch e {
+            return false
+        }
+        defer hash.free()
+        mac := crypto.hmacSha1(salt, name)
+        return crypto.equal(mac[0:20], hash)
+    }
+    return glob(pattern, name)
+}
+
+bool glob(str p, str s) {
+    if p.len == 0 {
+        return s.len == 0
+    }
+    if p[0] == '*' {
+        for i in 0..s.len + 1 {
+            if glob(p[1:], s[i:]) {
+                return true
+            }
+        }
+        return false
+    }
+    if s.len == 0 {
+        return false
+    }
+    if p[0] == '?' || str.toLower(i32(p[0])) == str.toLower(i32(s[0])) {
+        return glob(p[1:], s[1:])
+    }
+    return false
+}
+
+// What known_hosts says about name's key: 1 when the key is there, -1
+// when the host is there with another Ed25519 key or the key is revoked,
+// 0 when it has no Ed25519 key for the host.
+i64 knownHost(str text, str name, str key) {
+    i64 result = 0
+    for line in str.lines(text) {
+        l := str.trim(line)
+        if l.len == 0 || l[0] == '#' {
+            continue
+        }
+        fields := str.fields(l)
+        defer fields.free()
+        i64 at = 0
+        bool revoked = false
+        if fields.len > 0 && fields.at(0)[0] == '@' {
+            if fields.at(0) == "@revoked" {
+                revoked = true
+            } else {
+                continue // a certificate authority
+            }
+            at = 1
+        }
+        if fields.len < at + 3 || fields.at(at + 1) != "ssh-ed25519" {
+            continue
+        }
+        bool hit = false
+        bool negated = false
+        for pattern in str.split(fields.at(at), ",") {
+            if pattern.len > 0 && pattern[0] == '!' {
+                if hostMatches(pattern[1:], name) {
+                    negated = true
+                }
+            } else if hostMatches(pattern, name) {
+                hit = true
+            }
+        }
+        if !revoked && (!hit || negated) {
+            continue
+        }
+        blob := base64.decode(fields.at(at + 2)) catch e {
+            continue
+        }
+        defer blob.free()
+        k := blobKey(blob)
+        if k.len != 32 {
+            continue
+        }
+        same := crypto.equal(k, key)
+        if revoked {
+            if same {
+                return -1
+            }
+            continue
+        }
+        if same {
+            result = 1
+        } else if result == 0 {
+            result = -1
+        }
+    }
+    return result
+}
+
+// The line for a host and its key in a known_hosts file: host is the name
+// dial got, with :port after it when the port isn't 22.
+String knownLine(str host, u16 port, str key) {
+    scoped String blob = blobOf(key)
+    scoped String text = publicTextOf(blob, "")
+    if port == 22 {
+        return format("{host} {text}")
+    }
+    return format("[{host}]:{port} {text}")
+}
+
+// ------------------------------------------------------------ tests
+
+test "keys round trip through OpenSSH's format" {
+    scoped k := generateKey("ada@laptop")
+    scoped String text = k.privateText()
+    expect(str.startsWith(text, PRIVATE_BEGIN))
+    scoped back := try parseKey(text)
+    expect(crypto.equal(back.public[0:32], k.public[0:32]) && back.comment == "ada@laptop")
+    scoped String line = k.publicText()
+    expect(str.startsWith(line, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI") && str.endsWith(line, " ada@laptop"))
+    p := try parsePublicKey(line)
+    expect(crypto.equal(p[0:32], k.public[0:32]))
+    scoped String f1 = k.fingerprint()
+    scoped String f2 = try fingerprint(line)
+    expect(f1 == f2 && str.startsWith(f1, "SHA256:") && f1.len == 50)
+}
+
+test "a key that ssh-keygen wrote" {
+    // ssh-keygen -t ed25519 -N '' -C test
+    text := """
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+        QyNTUxOQAAACDV2eiIlybe2x7K5TBbiRn12cVdulTHDILrMgb5yFiENwAAAIjM3KNtzNyj
+        bQAAAAtzc2gtZWQyNTUxOQAAACDV2eiIlybe2x7K5TBbiRn12cVdulTHDILrMgb5yFiENw
+        AAAEC/dnciUCBEttajpG3+xmd4xDBILFCbDlfCY4EH6jGq8tXZ6IiXJt7bHsrlMFuJGfXZ
+        xV26VMcMgusyBvnIWIQ3AAAABHRlc3QB
+        -----END OPENSSH PRIVATE KEY-----
+        """
+    scoped k := try parseKey(text)
+    expect(k.comment == "test")
+    scoped String f = k.fingerprint()
+    expect(f == "SHA256:nBiUKUbsAQfweWNc9yqA+X+Kkw+T4znzXXcJ5OVGzrE")
+}
+
+test "known_hosts lines" {
+    scoped k := generateKey()
+    scoped other := generateKey()
+    scoped String plain = knownLine("db1.example.com", 22, k.public[0:32])
+    scoped String ported = knownLine("db1.example.com", 2222, k.public[0:32])
+    expect(knownHost(plain, "db1.example.com", k.public[0:32]) == 1)
+    expect(knownHost(plain, "DB1.example.com", k.public[0:32]) == 1)
+    expect(knownHost(plain, "db1.example.com", other.public[0:32]) == -1)
+    expect(knownHost(plain, "db2.example.com", k.public[0:32]) == 0)
+    expect(knownHost(ported, "[db1.example.com]:2222", k.public[0:32]) == 1)
+    scoped String text = str.replace(plain, "db1.example.com", "*.example.com,!db3.example.com")
+    expect(knownHost(text, "db9.example.com", k.public[0:32]) == 1)
+    expect(knownHost(text, "db3.example.com", k.public[0:32]) == 0)
+    // hashed: |1|salt|HMAC-SHA1(salt, name)
+    u8[20] salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    mac := crypto.hmacSha1(salt[0:20], "db1.example.com")
+    scoped String s64 = base64.encode(salt[0:20])
+    scoped String m64 = base64.encode(mac[0:20])
+    scoped String hashed = str.replace(plain, "db1.example.com", "|1|{s64}|{m64}")
+    expect(knownHost(hashed, "db1.example.com", k.public[0:32]) == 1)
+    expect(knownHost(hashed, "db2.example.com", k.public[0:32]) == 0)
+}

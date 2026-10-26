@@ -225,6 +225,21 @@ pub !String aesUnseal(str key, str nonce, str sealed, str extra = "") {
     return out
 }
 
+// aesSeal, adding to the end of out instead of making a new String.
+pub void aesSealTo(String *out, str key, str nonce, str data, str extra = "") {
+    aesCheck("aesSealTo", key, nonce)
+    rawAesSeal(key.ptr, key.len, nonce.ptr, data.ptr, data.len, extra.ptr, extra.len, out)
+}
+
+// aesUnseal, adding the data to the end of out. out is left as it was when
+// the data doesn't open.
+pub !void aesUnsealTo(String *out, str key, str nonce, str sealed, str extra = "") {
+    aesCheck("aesUnsealTo", key, nonce)
+    if rawAesOpen(key.ptr, key.len, nonce.ptr, sealed.ptr, sealed.len, extra.ptr, extra.len, out) == 0 {
+        return error(CryptoError.tampered, "the sealed data was changed, or the key doesn't fit")
+    }
+}
+
 void aesCheck(str name, str key, str nonce) {
     if (key.len != 16 && key.len != 24 && key.len != 32) || nonce.len != 12 {
         panic("{name} takes a 16, 24 or 32-byte key and a 12-byte nonce, not {key.len} and {nonce.len}")

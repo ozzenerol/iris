@@ -1,0 +1,16 @@
+// expect: wc read 3 lines, status 0
+
+import process, str
+
+// Closing a child's stdin ends its input: the child doesn't hold its own
+// end of the pipe open.
+!void main() {
+    c := try process.startWith(["wc", "-l"], process.Options{pipes: true})
+    try c.stdin.write("a\nb\nc\n")
+    c.stdin.close()
+    scoped String out = try c.stdout.readAll()
+    status := c.wait()
+    c.stdout.close()
+    c.stderr.close()
+    print("wc read {str.trim(out)} lines, status {status}")
+}

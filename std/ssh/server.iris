@@ -1,0 +1,499 @@
+// The server: logins, sessions with their terminals and commands, and
+// forwarded connections.
+
+import crypto, net, process, pty, signal, str
+
+// What a server does. hostKey is its own key, which clients keep in their
+// known_hosts. password and publicKey check a login, and are null for a
+// way of logging in the server doesn't take; publicKey gets the key as a
+// public key line, which authorizedKey can look up. handle runs each shell,
+// command or subsystem a client asks for. forward, when set, says whether
+// a user may connect through the server to host:port (ssh -L).
+pub struct Server {
+    pub Key hostKey
+    pub bool(str, str) password
+    pub bool(str, str) publicKey
+    pub !void(Session *) handle
+    pub bool(str, str, u16) forward
+    // how long a client has to log in
+    pub Duration loginTimeout = 2m
+}
+
+// What a session asks for.
+pub enum SessionKind { shell, exec, subsystem }
+
+// A session a client opened: a shell, a command or a subsystem, and the
+// terminal it asked for. The handler reads and writes it, or runs a program
+// on it with run. When the handler returns, the client gets status as the
+// exit status and the session ends.
+pub struct Session {
+    pub str user
+    pub SessionKind kind
+    // the command for exec, the name for subsystem
+    pub String command
+    // with a terminal (ssh's -t, or a login shell): its type and size
+    pub bool terminal
+    pub String term
+    pub i64 rows
+    pub i64 cols
+    // NAME=value entries the client sent (ssh's SendEnv)
+    pub List[String] env
+    pub i64 status
+    Channel *channel
+    bool started
+    pty.Pty *pty
+    process.Child *child
+}
+
+void Session.free() {
+    self.command.free()
+    self.term.free()
+    self.env.freeEach()
+    free(self[0:1])
+}
+
+// Reads what the client sends, as Channel.read does.
+pub !i64 Session.read(u8[] buf) => try self.channel.read(buf)
+
+// Writes to the client.
+pub !void Session.write(str data) => try self.channel.write(data)
+
+// Writes to the client's standard error.
+pub !void Session.writeStderr(str data) => try self.channel.writeStderr(data)
+
+// Says that nothing more will be written.
+pub void Session.closeWrite() => self.channel.closeWrite()
+
+// Whether the client closed the session.
+pub bool Session.closed() => self.channel.closed
+
+// ------------------------------------------------------------ serving
+
+// Listens on port and serves each connection in a task of its own.
+pub !void serve(u16 port, Server server, str host = "") {
+    ln := net.listen(port, host) catch e {
+        return error(SshError.connect, "listening on port {port}: {e.message}")
+    }
+    defer ln.close()
+    try serveOn(ln, server)
+}
+
+// Serves each connection the listener accepts, in a task of its own.
+pub !void serveOn(net.Listener ln, Server server) {
+    for {
+        c := ln.accept() catch e {
+            if e.code == net.NetError.closed {
+                return
+            }
+            continue
+        }
+        spawn serveTask(c, server)
+    }
+}
+
+void serveTask(net.Conn c, Server server) {
+    serveConn(c, server) catch e { }
+}
+
+// Serves one connection until it ends, and closes it.
+pub !void serveConn(net.Conn conn, Server server) {
+    conn.setTimeout(server.loginTimeout)
+    l := newLink(conn, true)
+    l.server = server
+    l.hostKey = keyFromSeed(server.hostKey.seed[0:32])
+    bool writing = false
+    defer {
+        if writing {
+            // the sessions end first: they use the link
+            for l.tasks > 0 {
+                _ = <-l.idle
+            }
+            l.stopWriter()
+        }
+        l.free()
+    }
+    try l.exchangeVersions()
+    writing = true
+    spawn writer(l)
+    l.startKex()
+    l.queue(l.ourInit.copy(), Job.kexinit)
+    scoped String init = try l.kexPacket(MSG_KEXINIT)
+    try l.kex(init)
+    try l.serveLogin()
+    l.conn.setTimeout(0s)
+    l.readLoop()
+}
+
+String failure(Server *s) {
+    String m
+    putByte(&m, MSG_USERAUTH_FAILURE)
+    String methods
+    if s.publicKey != null {
+        methods.append("publickey")
+    }
+    if s.password != null {
+        if methods.len > 0 {
+            methods.append(",")
+        }
+        methods.append("password")
+    }
+    putString(&m, methods)
+    putBool(&m, false)
+    methods.free()
+    return m
+}
+
+!void Link.serveLogin() {
+    scoped String req = try self.next()
+    r := Reader{data: req, at: 1}
+    if i64(req[0]) != MSG_SERVICE_REQUEST || r.string() != "ssh-userauth" {
+        self.disconnect(7, "ssh-userauth first")
+        return error(SshError.protocol, "the client asked for something other than a login")
+    }
+    String ok
+    putByte(&ok, MSG_SERVICE_ACCEPT)
+    putString(&ok, "ssh-userauth")
+    self.queue(ok)
+    for i in 0..20 {
+        scoped String p = try self.next()
+        if i64(p[0]) != MSG_USERAUTH_REQUEST {
+            return error(SshError.protocol, "message {p[0]} during login")
+        }
+        a := Reader{data: p, at: 1}
+        user := a.string()
+        service := a.string()
+        method := a.string()
+        bool good = false
+        if a.bad || service != "ssh-connection" {
+            // nothing else is served
+        } else if method == "password" && self.server.password != null {
+            _ = a.flag()
+            password := a.string()
+            good = !a.bad && self.server.password(user, password)
+        } else if method == "publickey" && self.server.publicKey != null {
+            signed := a.flag()
+            alg := a.string()
+            blob := a.string()
+            k := blobKey(blob)
+            if !a.bad && alg == "ssh-ed25519" && k.len == 32 {
+                scoped String text = publicTextOf(blob, "")
+                if !signed {
+                    // the client asks whether this key would do
+                    if self.server.publicKey(user, text) {
+                        String m
+                        putByte(&m, MSG_USERAUTH_PK_OK)
+                        putString(&m, alg)
+                        putString(&m, blob)
+                        self.queue(m)
+                        continue
+                    }
+                } else {
+                    sigAt := a.at
+                    sigBlob := a.string()
+                    sr := Reader{data: sigBlob}
+                    kind := sr.string()
+                    sig := sr.string()
+                    String data
+                    putString(&data, self.sessionId)
+                    data.append(p[0:sigAt])
+                    good = !a.bad && !sr.bad && kind == "ssh-ed25519" && crypto.ed25519Verify(k, data, sig) &&
+                        self.server.publicKey(user, text)
+                    data.free()
+                }
+            }
+        }
+        if good {
+            self.user = user.copy()
+            String m
+            putByte(&m, MSG_USERAUTH_SUCCESS)
+            self.queue(m)
+            return
+        }
+        self.queue(failure(&self.server))
+    }
+    self.disconnect(14, "too many login attempts")
+    return error(SshError.auth, "too many login attempts")
+}
+
+// ------------------------------------------------------------ sessions
+
+// A request on a session channel: whether it was taken.
+bool Link.sessionRequest(Channel *c, str name, Reader *r) {
+    s := c.session
+    if name == "pty-req" {
+        term := r.string()
+        cols := r.u32()
+        rows := r.u32()
+        if r.bad || s.started {
+            return false
+        }
+        s.terminal = true
+        s.term.free()
+        s.term = term.copy()
+        s.cols = cols
+        s.rows = rows
+        return true
+    }
+    if name == "env" {
+        n := r.string()
+        v := r.string()
+        if r.bad || s.env.len >= 64 {
+            return false
+        }
+        s.env.push(format("{n}={v}"))
+        return true
+    }
+    if name == "window-change" {
+        cols := r.u32()
+        rows := r.u32()
+        if r.bad {
+            return false
+        }
+        s.cols = cols
+        s.rows = rows
+        if s.pty != null {
+            s.pty.resize(rows, cols) catch e { }
+        }
+        return true
+    }
+    if name == "signal" {
+        sig := r.string()
+        str[7] names = ["INT", "TERM", "HUP", "KILL", "QUIT", "USR1", "USR2"]
+        signal.Signal[7] signals = [.interrupt, .terminate, .hangup, .kill, .quit, .user1, .user2]
+        if s.child != null {
+            for i, n in names {
+                if n == sig {
+                    signal.sendGroup(s.child.pid, signals[i]) catch e { }
+                }
+            }
+        }
+        return true
+    }
+    if name == "shell" || name == "exec" || name == "subsystem" {
+        if s.started || self.server.handle == null {
+            return false
+        }
+        if name == "exec" || name == "subsystem" {
+            what := r.string()
+            if r.bad {
+                return false
+            }
+            s.command = what.copy()
+        }
+        s.kind = SessionKind.shell if name == "shell" else SessionKind.exec if name == "exec" else SessionKind.subsystem
+        s.started = true
+        self.tasks += 1
+        spawn sessionTask(self, c)
+        return true
+    }
+    return false
+}
+
+// Runs the handler, then sends the exit status and closes the session.
+void sessionTask(Link *l, Channel *c) {
+    s := c.session
+    // the request's reply goes out first
+    sleep(0ns)
+    l.server.handle(s) catch e {
+        if s.status == 0 {
+            s.status = 255
+        }
+    }
+    if !c.closed && !l.dead {
+        c.closeWrite()
+        String b
+        putU32(&b, s.status)
+        c.request("exit-status", b, false) catch e { }
+        b.free()
+    }
+    c.close()
+    l.taskDone()
+}
+
+// What a running program and the tasks copying for it share.
+struct Run {
+    Session *s
+    pty.Pty term
+    process.Child child
+    bool done
+    chan[bool] finished
+}
+
+// Runs a program for the session, as sshd does: on a terminal when the
+// client asked for one, with its standard streams joined to the session
+// otherwise. TERM is set from the terminal, and the client's LANG and LC_
+// variables are passed on. The program's exit status is the session's
+// status, and is returned. When the client goes away, the program and
+// what it started get a hangup.
+pub !i32 Session.run(str[] argv, process.Options options = process.Options{}) {
+    Run[] mem = alloc(Run, 1)
+    Run *run = &mem[0]
+    run.s = self
+    run.finished = chan[bool](2)
+    defer {
+        run.finished.free()
+        free(mem)
+    }
+    List[str] env
+    defer env.free()
+    for e in options.env {
+        env.push(e)
+    }
+    scoped String term = format("TERM={self.term}")
+    if self.terminal {
+        env.push(term)
+    }
+    for e in self.env {
+        if str.startsWith(e, "LANG=") || str.startsWith(e, "LC_") {
+            env.push(e)
+        }
+    }
+    process.Options o = options
+    o.env = env.items()
+    if self.terminal {
+        run.term = pty.open(if self.rows > 0 { self.rows } else { 24 }, if self.cols > 0 { self.cols } else { 80 }) catch e {
+            return error(SshError.refused, "a terminal for {argv[0]}: {e.message}")
+        }
+        o.terminal = run.term.terminalFd()
+        o.pipes = false
+    } else {
+        o.pipes = true
+        o.terminal = -1
+        // a group of its own, so all it starts can be stopped with it
+        o.newSession = true
+    }
+    run.child = process.startWith(argv, o) catch e {
+        if self.terminal {
+            run.term.close()
+        }
+        return error(SshError.refused, e.message)
+    }
+    self.child = &run.child
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    if self.terminal {
+        run.term.closeTerminal()
+        self.pty = &run.term
+        spawn inputToTerminal(run)
+        for {
+            n := run.term.read(buf) catch e {
+                break
+            }
+            if n == 0 {
+                break
+            }
+            self.channel.write(buf[0:n]) catch e {
+                break
+            }
+        }
+    } else {
+        spawn inputToStdin(run)
+        spawn stderrToClient(run)
+        for {
+            n := run.child.stdout.read(buf) catch e {
+                break
+            }
+            if n == 0 {
+                break
+            }
+            self.channel.write(buf[0:n]) catch e {
+                break
+            }
+        }
+        _ = <-run.finished // stderr
+    }
+    status := run.child.wait()
+    self.child = null
+    run.done = true
+    poke(self.channel.readable)
+    _ = <-run.finished // the input
+    self.pty = null
+    if self.terminal {
+        run.term.close()
+    } else {
+        run.child.closePipes()
+    }
+    self.status = i64(status)
+    return status
+}
+
+// What the client types goes to the terminal. When the client leaves, the
+// program is stopped.
+void inputToTerminal(Run *run) {
+    c := run.s.channel
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    for !run.done {
+        n := c.readOr(buf, false, &run.done)
+        if n == 0 {
+            break
+        }
+        run.term.write(buf[0:n]) catch e {
+            break
+        }
+    }
+    stopWhenGone(run)
+    run.finished <- true
+}
+
+void inputToStdin(Run *run) {
+    c := run.s.channel
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    for !run.done {
+        n := c.readOr(buf, false, &run.done)
+        if n == 0 {
+            break
+        }
+        run.child.stdin.write(buf[0:n]) catch e {
+            break
+        }
+    }
+    if !run.done {
+        // the end of the input
+        run.child.stdin.close()
+        run.child.stdin = net.Conn{}
+    }
+    stopWhenGone(run)
+    run.finished <- true
+}
+
+// The client closed the session while the program runs: its process
+// group gets a hangup, as when a terminal goes away, and is killed if it
+// is still there a second later.
+void stopWhenGone(Run *run) {
+    c := run.s.channel
+    for !run.done && !c.closed {
+        _ = <-c.readable
+    }
+    if run.done {
+        return
+    }
+    signal.sendGroup(run.child.pid, .hangup) catch e { }
+    for i in 0..20 {
+        if run.done {
+            return
+        }
+        sleep(50ms)
+    }
+    if !run.done {
+        signal.sendGroup(run.child.pid, .kill) catch e { }
+    }
+}
+
+void stderrToClient(Run *run) {
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    for {
+        n := run.child.stderr.read(buf) catch e {
+            break
+        }
+        if n == 0 {
+            break
+        }
+        run.s.channel.writeStderr(buf[0:n]) catch e {
+            break
+        }
+    }
+    run.finished <- true
+}

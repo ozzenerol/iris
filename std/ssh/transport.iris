@@ -1,0 +1,766 @@
+// The transport (RFC 4253): the version lines, packets, key exchange and
+// the keys that encrypt each direction. One writer task sends every packet,
+// so key exchange can hold back the others while it runs; the reader is
+// whichever task reads packets, the dial or accept that sets things up and
+// then the connection's reader task.
+
+import crypto, net, random, str
+
+const i64 MSG_DISCONNECT = 1
+const i64 MSG_IGNORE = 2
+const i64 MSG_UNIMPLEMENTED = 3
+const i64 MSG_DEBUG = 4
+const i64 MSG_SERVICE_REQUEST = 5
+const i64 MSG_SERVICE_ACCEPT = 6
+const i64 MSG_EXT_INFO = 7
+const i64 MSG_KEXINIT = 20
+const i64 MSG_NEWKEYS = 21
+const i64 MSG_KEX_ECDH_INIT = 30
+const i64 MSG_KEX_ECDH_REPLY = 31
+
+const str VERSION = "SSH-2.0-iris"
+const str KEX_ALGORITHMS = "curve25519-sha256,curve25519-sha256@libssh.org"
+const str CIPHERS = "aes256-gcm@openssh.com,aes128-gcm@openssh.com,chacha20-poly1305@openssh.com"
+const i64 MAX_PACKET = 256KiB
+// what one read from the connection may take: several packets
+const i64 READ_BUFFER = 1MiB
+
+@extern("iris_mem_move")
+void memMove(u8 *dst, u8 *src, i64 n)
+
+@extern("iris_ssh_chacha_seal")
+void rawChachaSeal(u8 *key, i64 seq, u8 *plain, i64 len, String *out)
+
+@extern("iris_ssh_chacha_length")
+i64 rawChachaLength(u8 *key, i64 seq, u8 *enc)
+
+@extern("iris_ssh_chacha_open")
+i32 rawChachaOpen(u8 *key, i64 seq, u8 *packet, i64 len, String *out)
+
+u8[32] ZEROS
+
+// The keys of one direction: AES-GCM with a 16 or 32-byte key and an IV,
+// or chacha20-poly1305@openssh.com with a 64-byte key.
+struct Keys {
+    bool on
+    bool chacha
+    u8[64] key
+    i64 keyLen
+    u8[12] iv
+}
+
+// GCM's nonce: 4 fixed bytes and a 64-bit count, one up per packet.
+void Keys.next() {
+    i64 i = 11
+    for i >= 4 {
+        self.iv[i] = self.iv[i] + 1 if self.iv[i] != 255 else 0
+        if self.iv[i] != 0 {
+            return
+        }
+        i -= 1
+    }
+}
+
+void Keys.wipe() => crypto.wipe(self.key[0:64])
+
+// What the writer is asked to do.
+enum Job { packet, kexinit, kex, newkeys, stop }
+
+struct Out {
+    Job job
+    String data
+    Keys keys
+    // data is the plaintext of the whole packet, padded for AES-GCM:
+    // channel data comes this way, so the writer only seals it
+    bool framed
+}
+
+// One SSH connection, client or server.
+struct Link {
+    net.Conn conn
+    bool isServer
+    String peerVersion
+    String sessionId
+    String why // why it ended, once dead
+
+    // reading, by the task that reads
+    Keys inKeys
+    u32 inSeq
+    u8[] rbuf
+    i64 rStart
+    i64 rEnd
+    String plain // the last packet, decrypted
+
+    // writing, by the writer task alone
+    chan[Out] out
+    chan[bool] writerDone
+    Keys outKeys
+    u32 outSeq
+    String wbuf // the packet being sent
+    String wplain
+    bool holding // a key exchange is on: only its packets go
+    List[Out] held
+    i64 sentSinceKex
+    i64 rekeyAfter
+
+    // key exchange, shared by the two
+    bool kexStarted
+    bool firstKex
+    bool strict
+    String ourInit
+    String serverKey // the server's key blob
+    Key hostKey      // a server's own key
+
+    bool dead
+
+    // the connection protocol: see channel.iris
+    Map[i64, Channel *] channels
+    i64 nextChannel
+    i64 tasks
+    chan[bool] idle
+    chan[bool] readerDone
+    String user
+    Server server
+}
+
+Link *newLink(net.Conn conn, bool server) {
+    Link[] mem = alloc(Link, 1)
+    Link *l = &mem[0]
+    l.conn = conn
+    l.isServer = server
+    l.firstKex = true
+    l.rekeyAfter = 1GiB
+    l.out = chan[Out](64)
+    l.writerDone = chan[bool](1)
+    l.idle = chan[bool](1)
+    l.readerDone = chan[bool](1)
+    l.rbuf = alloc(u8, READ_BUFFER)
+    return l
+}
+
+void Link.free() {
+    self.conn.close()
+    for o in self.held {
+        o.data.free()
+    }
+    self.held.free()
+    self.out.free()
+    self.writerDone.free()
+    self.idle.free()
+    self.readerDone.free()
+    self.peerVersion.free()
+    self.sessionId.free()
+    self.why.free()
+    self.ourInit.free()
+    self.serverKey.free()
+    self.hostKey.free()
+    self.inKeys.wipe()
+    self.outKeys.wipe()
+    self.channels.free()
+    self.user.free()
+    free(self.rbuf)
+    crypto.wipe(self.plain.ptr[0:self.plain.len])
+    self.plain.free()
+    self.wbuf.free()
+    self.wplain.free()
+    free(self[0:1])
+}
+
+// Marks the link dead with a reason, the first one given.
+void Link.fail(str why) {
+    if !self.dead {
+        self.dead = true
+        self.why = why.copy()
+    }
+}
+
+// ------------------------------------------------------------ packets
+
+// The padding a packet of n bytes of payload gets once the keys are on:
+// 1 + n + padding is a multiple of AES's 16-byte block, and at least 4.
+i64 gcmPadding(i64 n) {
+    k := 16 - (1 + n) % 16
+    return k + 16 if k < 4 else k
+}
+
+// Sends one packet, encrypted once the keys are on.
+!void Link.sendNow(str payload) {
+    if !self.outKeys.on {
+        u8[32] pad
+        random.bytes(pad[0:32])
+        n := 8 - (5 + payload.len) % 8
+        padLen := n + 8 if n < 4 else n
+        self.wbuf.clear()
+        putU32(&self.wbuf, 1 + payload.len + padLen)
+        putByte(&self.wbuf, padLen)
+        self.wbuf.append(payload)
+        self.wbuf.append(pad[0:padLen])
+        self.outSeq += 1
+        self.sentSinceKex += self.wbuf.len
+        try self.conn.write(self.wbuf)
+        return
+    }
+    padLen := gcmPadding(payload.len)
+    self.wplain.clear()
+    putByte(&self.wplain, padLen)
+    self.wplain.append(payload)
+    self.wplain.append(ZEROS[0:padLen])
+    try self.sealAndSend(self.wplain)
+}
+
+// Encrypts and sends a packet's plaintext: padding length, payload and
+// padding.
+!void Link.sealAndSend(str plain) {
+    size := plain.len
+    self.wbuf.clear()
+    self.wbuf.reserve(4 + size + 16)
+    if self.outKeys.chacha {
+        rawChachaSeal(&self.outKeys.key[0], i64(self.outSeq), plain.ptr, size, &self.wbuf)
+    } else {
+        u8[4] head = [u8(size >> 24 & 255), u8(size >> 16 & 255), u8(size >> 8 & 255), u8(size & 255)]
+        self.wbuf.append(head[0:4])
+        crypto.aesSealTo(&self.wbuf, self.outKeys.key[0:self.outKeys.keyLen], self.outKeys.iv[0:12], plain, head[0:4])
+        self.outKeys.next()
+    }
+    self.outSeq += 1
+    self.sentSinceKex += self.wbuf.len
+    try self.conn.write(self.wbuf)
+}
+
+// Makes sure n bytes from rStart are in the read buffer.
+!void Link.fill(i64 n) {
+    if self.rStart + n > self.rbuf.len {
+        left := self.rEnd - self.rStart
+        if left > 0 {
+            memMove(&self.rbuf[0], &self.rbuf[self.rStart], left)
+        }
+        self.rStart = 0
+        self.rEnd = left
+    }
+    for self.rEnd - self.rStart < n {
+        got := self.conn.read(self.rbuf[self.rEnd:]) catch e {
+            return error(SshError.closed, "the connection closed")
+        }
+        if got == 0 {
+            return error(SshError.closed, "the connection closed")
+        }
+        self.rEnd += got
+    }
+}
+
+// The next packet's payload, decrypted and checked: a view that is valid
+// until the next packet is read.
+!str Link.readView() {
+    try self.fill(4)
+    size := if self.inKeys.chacha {
+        rawChachaLength(&self.inKeys.key[0], i64(self.inSeq), &self.rbuf[self.rStart])
+    } else {
+        getU32(self.rbuf[self.rStart:self.rStart + 4], 0)
+    }
+    if size > MAX_PACKET || size < 5 {
+        return error(SshError.protocol, "a packet of {size} bytes")
+    }
+    block := 8 if self.inKeys.chacha else 16
+    if self.inKeys.on && size % block != 0 {
+        return error(SshError.protocol, "a packet of {size} bytes, not a multiple of {block}")
+    }
+    total := 4 + size + (16 if self.inKeys.on else 0)
+    try self.fill(total)
+    head := self.rbuf[self.rStart:self.rStart + 4]
+    body := self.rbuf[self.rStart + 4:self.rStart + total]
+    self.rStart += total
+    if self.rStart == self.rEnd {
+        self.rStart = 0
+        self.rEnd = 0
+    }
+    self.plain.clear()
+    if self.inKeys.chacha {
+        if rawChachaOpen(&self.inKeys.key[0], i64(self.inSeq), head.ptr, size, &self.plain) == 0 {
+            return error(SshError.protocol, "a packet that was changed on the way, or sent with other keys")
+        }
+    } else if self.inKeys.on {
+        crypto.aesUnsealTo(&self.plain, self.inKeys.key[0:self.inKeys.keyLen], self.inKeys.iv[0:12], body, head) catch e {
+            return error(SshError.protocol, "a packet that was changed on the way, or sent with other keys")
+        }
+        self.inKeys.next()
+    } else {
+        self.plain.append(body)
+    }
+    self.inSeq += 1
+    padLen := i64(self.plain[0])
+    if padLen + 1 >= size {
+        return error(SshError.protocol, "a packet with no payload, or padding longer than the packet")
+    }
+    return self.plain[1:size - padLen]
+}
+
+// The next packet's payload as a String of its own.
+!String Link.readPacket() {
+    p := try self.readView()
+    return p.copy()
+}
+
+// Hands a packet to the writer. It owns data from then on.
+void Link.queue(String data, Job job = Job.packet) {
+    if self.dead {
+        data.free()
+        return
+    }
+    self.out <- Out{job: job, data: data}
+}
+
+// Hands the writer a packet's padded plaintext.
+void Link.queueFramed(String data) {
+    if self.dead {
+        data.free()
+        return
+    }
+    self.out <- Out{job: Job.packet, data: data, framed: true}
+}
+
+// The writer task: sends what it is given, in order, and holds back the
+// connection's own packets while a key exchange is on.
+void writer(Link *l) {
+    bool broken = false
+    for {
+        o := <-l.out
+        if o.job == .stop {
+            break
+        }
+        if o.job == .packet && (l.holding || broken) {
+            if broken {
+                o.data.free()
+            } else {
+                l.held.push(o)
+            }
+            continue
+        }
+        if o.job == .packet && !l.kexStarted && !l.firstKex && l.sentSinceKex >= l.rekeyAfter {
+            // time for new keys: ours go first, then this waits for them
+            l.startKex()
+            l.holding = true
+            l.held.push(o)
+            l.write(&broken, l.ourInit)
+            continue
+        }
+        if o.job == .kexinit {
+            l.holding = true
+        }
+        if o.job == .newkeys {
+            scoped String nk
+            putByte(&nk, MSG_NEWKEYS)
+            l.write(&broken, nk)
+            l.outKeys.wipe()
+            l.outKeys = o.keys
+            if l.strict {
+                l.outSeq = 0
+            }
+            l.sentSinceKex = 0
+            l.holding = false
+            for h in l.held {
+                if h.framed {
+                    l.sealFramed(&broken, h.data)
+                } else {
+                    l.write(&broken, h.data)
+                }
+                h.data.free()
+            }
+            l.held.clear()
+            continue
+        }
+        if o.framed && l.outKeys.on {
+            l.sealFramed(&broken, o.data)
+        } else if o.framed {
+            // channel data before the first keys can't happen; it goes as is
+            l.write(&broken, o.data[1:o.data.len - i64(o.data[0])])
+        } else {
+            l.write(&broken, o.data)
+        }
+        o.data.free()
+    }
+    for l.out.len() > 0 {
+        o := <-l.out
+        o.data.free()
+    }
+    l.writerDone <- true
+}
+
+void Link.write(bool *broken, str payload) {
+    if *broken {
+        return
+    }
+    self.sendNow(payload) catch e {
+        *broken = true
+        self.fail("writing: {e.message}")
+        // the reader wakes and ends
+        self.conn.interrupt()
+    }
+}
+
+void Link.sealFramed(bool *broken, str plain) {
+    if *broken {
+        return
+    }
+    self.sealAndSend(plain) catch e {
+        *broken = true
+        self.fail("writing: {e.message}")
+        self.conn.interrupt()
+    }
+}
+
+// Stops the writer once it sent what it has.
+void Link.stopWriter() {
+    self.out <- Out{job: Job.stop}
+    _ = <-self.writerDone
+}
+
+// ------------------------------------------------------------ the version line
+
+!void Link.exchangeVersions() {
+    self.conn.write("{VERSION}\r\n") catch e {
+        return error(SshError.connect, "sending the version: {e.message}")
+    }
+    for i in 0..50 {
+        line := self.conn.readLine(255) catch e {
+            return error(SshError.connect, "the other side closed the connection before it said which SSH it speaks")
+        }
+        if str.startsWith(line, "SSH-2.0-") || str.startsWith(line, "SSH-1.99-") {
+            self.peerVersion = line
+            return
+        }
+        bool old = str.startsWith(line, "SSH-")
+        line.free()
+        if old || self.isServer {
+            return error(SshError.protocol, "the other side doesn't speak SSH 2")
+        }
+    }
+    return error(SshError.protocol, "no SSH version line came")
+}
+
+// ------------------------------------------------------------ key exchange
+
+// Our KEXINIT, kept for the exchange hash.
+void Link.startKex() {
+    self.kexStarted = true
+    self.ourInit.free()
+    String m
+    putByte(&m, MSG_KEXINIT)
+    u8[16] cookie
+    random.bytes(cookie[0:16])
+    m.append(cookie[0:16])
+    if self.isServer {
+        putString(&m, "{KEX_ALGORITHMS},kex-strict-s-v00@openssh.com")
+    } else {
+        putString(&m, "{KEX_ALGORITHMS},kex-strict-c-v00@openssh.com")
+    }
+    putString(&m, "ssh-ed25519")
+    putString(&m, CIPHERS)
+    putString(&m, CIPHERS)
+    putString(&m, "hmac-sha2-256")
+    putString(&m, "hmac-sha2-256")
+    putString(&m, "none")
+    putString(&m, "none")
+    putString(&m, "")
+    putString(&m, "")
+    putBool(&m, false)
+    putU32(&m, 0)
+    self.ourInit = m
+}
+
+// The first name of the client's list that the server has too.
+str choose(str client, str server) {
+    str rest = client
+    for rest.len > 0 {
+        one, after, _ := str.cut(rest, ",")
+        if listHas(server, one) {
+            return one
+        }
+        rest = after
+    }
+    return ""
+}
+
+// HASH(K || H || letter || session id), and more blocks for longer keys.
+void derive(u8[] into, str k, str h, u8 letter, str sessionId) {
+    String input
+    defer {
+        crypto.wipe(input.ptr[0:input.len])
+        input.free()
+    }
+    input.append(k)
+    input.append(h)
+    u8[1] l = [letter]
+    input.append(l[0:1])
+    input.append(sessionId)
+    d := crypto.sha256(input)
+    i64 have = 0
+    String made
+    defer {
+        crypto.wipe(made.ptr[0:made.len])
+        made.free()
+    }
+    made.append(d[0:32])
+    for made.len < into.len {
+        input.clear()
+        input.append(k)
+        input.append(h)
+        input.append(made)
+        more := crypto.sha256(input)
+        made.append(more[0:32])
+    }
+    for i in 0..into.len {
+        into[i] = made[i]
+    }
+    _ = have
+}
+
+Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher) {
+    Keys out = Keys{on: true, chacha: cipher == "chacha20-poly1305@openssh.com"}
+    out.keyLen = if out.chacha { 64 } else if cipher == "aes256-gcm@openssh.com" { 32 } else { 16 }
+    if !out.chacha {
+        derive(out.iv[0:12], k, h, ivLetter, sessionId)
+    }
+    derive(out.key[0:out.keyLen], k, h, keyLetter, sessionId)
+    return out
+}
+
+// The next packet of a key exchange: IGNORE and DEBUG are passed over,
+// except in the first exchange of a strict one, where nothing else may
+// come.
+!String Link.kexPacket(i64 want) {
+    for {
+        p := try self.readPacket()
+        t := i64(p[0])
+        if t == want {
+            return p
+        }
+        p.free()
+        if (t == MSG_IGNORE || t == MSG_DEBUG) && !(self.strict && self.firstKex) {
+            continue
+        }
+        if t == MSG_DISCONNECT {
+            return error(SshError.closed, "the other side ended the connection during key exchange")
+        }
+        return error(SshError.protocol, "message {t} during key exchange, where {want} should come")
+    }
+}
+
+// Runs a key exchange, from the peer's KEXINIT on: ours goes out first if
+// it hasn't, then the curve25519 exchange, then NEWKEYS both ways.
+!void Link.kex(str peerInit) {
+    if !self.kexStarted {
+        self.startKex()
+        self.queue(self.ourInit.copy(), Job.kexinit)
+    }
+    r := Reader{data: peerInit, at: 17}
+    kexList := r.string()
+    hostList := r.string()
+    cipherCs := r.string()
+    cipherSc := r.string()
+    _ = r.string()
+    _ = r.string()
+    compCs := r.string()
+    compSc := r.string()
+    _ = r.string()
+    _ = r.string()
+    follows := r.flag()
+    if r.bad {
+        return error(SshError.protocol, "a KEXINIT that is cut short")
+    }
+    str ourKex = KEX_ALGORITHMS
+    kexAlg := if self.isServer { choose(kexList, ourKex) } else { choose(ourKex, kexList) }
+    if kexAlg.len == 0 {
+        return error(SshError.protocol, "no key exchange in common: the other side has {kexList}")
+    }
+    if !listHas(hostList, "ssh-ed25519") {
+        return error(SshError.protocol, "the server has no ssh-ed25519 host key: it has {hostList}")
+    }
+    csAlg := if self.isServer { choose(cipherCs, CIPHERS) } else { choose(CIPHERS, cipherCs) }
+    scAlg := if self.isServer { choose(cipherSc, CIPHERS) } else { choose(CIPHERS, cipherSc) }
+    if csAlg.len == 0 || scAlg.len == 0 {
+        return error(SshError.protocol, "no cipher in common: the other side has {cipherCs}")
+    }
+    if !listHas(compCs, "none") || !listHas(compSc, "none") {
+        return error(SshError.protocol, "the other side wants compression")
+    }
+    if self.firstKex {
+        self.strict = listHas(kexList, if self.isServer { "kex-strict-c-v00@openssh.com" } else { "kex-strict-s-v00@openssh.com" })
+        if self.strict && self.inSeq != 1 {
+            return error(SshError.protocol, "strict key exchange, but the KEXINIT wasn't the first packet")
+        }
+    }
+    if follows {
+        // a guessed packet: ours are the only choices, so a wrong guess is
+        // one whose first choices differ
+        first, _, _ := str.cut(kexList, ",")
+        hfirst, _, _ := str.cut(hostList, ",")
+        if first != kexAlg || hfirst != "ssh-ed25519" {
+            scoped String skip = try self.readPacket()
+        }
+    }
+
+    u8[32] secret
+    random.bytes(secret[0:32])
+    defer crypto.wipe(secret[0:32])
+    mine := crypto.x25519Public(secret[0:32])
+    String h
+    defer h.free()
+    String hostBlob
+    defer hostBlob.free()
+    String shared
+    defer {
+        crypto.wipe(shared.ptr[0:shared.len])
+        shared.free()
+    }
+    String theirs
+    defer theirs.free()
+
+    if self.isServer {
+        scoped String init = try self.kexPacket(MSG_KEX_ECDH_INIT)
+        ir := Reader{data: init, at: 1}
+        theirs = ir.string().copy()
+        k := crypto.x25519(secret[0:32], theirs) catch e {
+            return error(SshError.protocol, "the client's key exchange value: {e.message}")
+        }
+        putMpint(&shared, k[0:32])
+        crypto.wipe(k[0:32])
+        hostBlob = blobOf(self.hostKey.public[0:32])
+        h = self.exchangeHash(peerInit, hostBlob, theirs, mine[0:32], shared)
+        sig := crypto.ed25519Sign(self.hostKey.seed[0:32], h)
+        String sigBlob
+        putString(&sigBlob, "ssh-ed25519")
+        putString(&sigBlob, sig[0:64])
+        String reply
+        putByte(&reply, MSG_KEX_ECDH_REPLY)
+        putString(&reply, hostBlob)
+        putString(&reply, mine[0:32])
+        putString(&reply, sigBlob)
+        sigBlob.free()
+        self.queue(reply, Job.kex)
+    } else {
+        String init
+        putByte(&init, MSG_KEX_ECDH_INIT)
+        putString(&init, mine[0:32])
+        self.queue(init, Job.kex)
+        scoped String reply = try self.kexPacket(MSG_KEX_ECDH_REPLY)
+        rr := Reader{data: reply, at: 1}
+        hostBlob = rr.string().copy()
+        theirs = rr.string().copy()
+        sigBlob := rr.string()
+        if rr.bad {
+            return error(SshError.protocol, "a key exchange reply that is cut short")
+        }
+        hostKey := blobKey(hostBlob)
+        if hostKey.len != 32 {
+            return error(SshError.protocol, "the server's host key isn't an ssh-ed25519 key")
+        }
+        k := crypto.x25519(secret[0:32], theirs) catch e {
+            return error(SshError.protocol, "the server's key exchange value: {e.message}")
+        }
+        putMpint(&shared, k[0:32])
+        crypto.wipe(k[0:32])
+        h = self.exchangeHash(peerInit, hostBlob, mine[0:32], theirs, shared)
+        sr := Reader{data: sigBlob}
+        kind := sr.string()
+        sig := sr.string()
+        if sr.bad || kind != "ssh-ed25519" || !crypto.ed25519Verify(hostKey, h, sig) {
+            return error(SshError.hostKey, "the server's signature doesn't match its host key")
+        }
+        if self.firstKex {
+            self.serverKey = hostBlob.copy()
+        } else if !crypto.equal(self.serverKey, hostBlob) {
+            return error(SshError.hostKey, "the server's host key changed while connected")
+        }
+    }
+    if self.firstKex {
+        self.sessionId = h.copy()
+    }
+    cs := keysFor(shared, h, self.sessionId, 'A', 'C', csAlg)
+    sc := keysFor(shared, h, self.sessionId, 'B', 'D', scAlg)
+    outKeys := sc if self.isServer else cs
+    inKeys := cs if self.isServer else sc
+    self.out <- Out{job: Job.newkeys, keys: outKeys}
+    scoped String nk = try self.kexPacket(MSG_NEWKEYS)
+    self.inKeys.wipe()
+    self.inKeys = inKeys
+    if self.strict {
+        self.inSeq = 0
+    }
+    self.kexStarted = false
+    self.firstKex = false
+}
+
+String Link.exchangeHash(str peerInit, str hostBlob, str clientValue, str serverValue, str shared) {
+    String input
+    defer input.free()
+    if self.isServer {
+        putString(&input, self.peerVersion)
+        putString(&input, VERSION)
+        putString(&input, peerInit)
+        putString(&input, self.ourInit)
+    } else {
+        putString(&input, VERSION)
+        putString(&input, self.peerVersion)
+        putString(&input, self.ourInit)
+        putString(&input, peerInit)
+    }
+    putString(&input, hostBlob)
+    putString(&input, clientValue)
+    putString(&input, serverValue)
+    input.append(shared)
+    d := crypto.sha256(input)
+    return d[0:32].copy()
+}
+
+// The first key exchange, right after the version lines. The writer task
+// starts here.
+!void Link.handshake() {
+    try self.exchangeVersions()
+    spawn writer(self)
+    self.startKex()
+    self.queue(self.ourInit.copy(), Job.kexinit)
+    scoped String init = try self.kexPacket(MSG_KEXINIT)
+    try self.kex(init)
+}
+
+// The next message that isn't the transport's own: IGNORE, DEBUG and
+// UNIMPLEMENTED are passed over, and a KEXINIT runs a key exchange. A view
+// valid until the next read.
+!str Link.nextView() {
+    for {
+        p := try self.readView()
+        t := i64(p[0])
+        if t == MSG_IGNORE || t == MSG_DEBUG || t == MSG_UNIMPLEMENTED {
+            continue
+        }
+        if t == MSG_KEXINIT {
+            scoped String init = p.copy()
+            try self.kex(init)
+            continue
+        }
+        if t == MSG_DISCONNECT {
+            r := Reader{data: p, at: 1}
+            _ = r.u32()
+            why := r.string()
+            self.fail("the other side ended the connection: {why}")
+            return error(SshError.closed, "the other side ended the connection")
+        }
+        return p
+    }
+}
+
+// nextView, as a String of its own.
+!String Link.next() {
+    p := try self.nextView()
+    return p.copy()
+}
+
+// Sends DISCONNECT with a reason.
+void Link.disconnect(i64 code, str why) {
+    String m
+    putByte(&m, MSG_DISCONNECT)
+    putU32(&m, code)
+    putString(&m, why)
+    putString(&m, "")
+    self.queue(m)
+}

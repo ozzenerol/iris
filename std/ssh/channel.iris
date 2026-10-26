@@ -1,0 +1,644 @@
+// The connection protocol (RFC 4254): channels over one connection, each
+// with its own flow of data both ways, and the requests that run commands
+// and shells on them. The reader task takes every message after login and
+// hands it to its channel.
+
+import crypto, net, process, pty, str
+
+const i64 MSG_GLOBAL_REQUEST = 80
+const i64 MSG_REQUEST_SUCCESS = 81
+const i64 MSG_REQUEST_FAILURE = 82
+const i64 MSG_CHANNEL_OPEN = 90
+const i64 MSG_CHANNEL_OPEN_CONFIRMATION = 91
+const i64 MSG_CHANNEL_OPEN_FAILURE = 92
+const i64 MSG_CHANNEL_WINDOW_ADJUST = 93
+const i64 MSG_CHANNEL_DATA = 94
+const i64 MSG_CHANNEL_EXTENDED_DATA = 95
+const i64 MSG_CHANNEL_EOF = 96
+const i64 MSG_CHANNEL_CLOSE = 97
+const i64 MSG_CHANNEL_REQUEST = 98
+const i64 MSG_CHANNEL_SUCCESS = 99
+const i64 MSG_CHANNEL_FAILURE = 100
+
+// How much the other side may send before we take it, and the most in one
+// packet.
+const i64 WINDOW = 2MiB
+const i64 PACKET_DATA = 32KiB
+// how much stderr that isn't read is kept
+const i64 STDERR_KEPT = 4MiB
+
+// One channel of a connection: a command or shell and its output, or a
+// forwarded TCP connection. read and write move its data; a command's
+// errors come apart on readStderr. A Channel belongs to the thread of the
+// Client that opened it.
+pub struct Channel {
+    Link *link
+    i64 local
+    i64 remote
+    i64 window    // what we may still send
+    i64 maxPacket // the most data in one packet the other side takes
+    i64 unacked   // read since our last WINDOW_ADJUST
+    String data   // data that came and wasn't read yet
+    i64 dataAt
+    String errIn // the same for stderr
+    i64 errAt
+    bool eof    // the other side sent EOF
+    bool closed // the other side sent CLOSE, or the connection ended
+    bool sentEof
+    bool sentClose
+    bool released // the owner is done with it
+    bool opened   // the other side confirmed it
+    chan[bool] readable
+    chan[bool] writable
+    chan[bool] replies
+    String why
+    // the command's exit status, or 128 + its signal; -1 before it came
+    i64 status
+    // the session a server runs, null for others
+    Session *session
+}
+
+Channel *Link.newChannel() {
+    Channel[] mem = alloc(Channel, 1)
+    Channel *c = &mem[0]
+    c.link = self
+    c.local = self.nextChannel
+    self.nextChannel += 1
+    c.maxPacket = PACKET_DATA
+    c.readable = chan[bool](1)
+    c.writable = chan[bool](1)
+    c.replies = chan[bool](4)
+    c.status = -1
+    self.channels.set(c.local, c)
+    return c
+}
+
+void Channel.destroy() {
+    _ = self.link.channels.remove(self.local)
+    self.data.free()
+    self.errIn.free()
+    self.why.free()
+    self.readable.free()
+    self.writable.free()
+    self.replies.free()
+    if self.session != null {
+        self.session.free()
+    }
+    free(self[0:1])
+}
+
+void poke(chan[bool] c) {
+    _ = c.trySend(true)
+}
+
+void Channel.wake() {
+    poke(self.readable)
+    poke(self.writable)
+}
+
+// ------------------------------------------------------------ data
+
+// Takes up to buf.len bytes from text at *at; gives how many.
+i64 take(String *text, i64 *at, u8[] buf) {
+    n := text.len - *at
+    if n > buf.len {
+        n = buf.len
+    }
+    if n > 0 {
+        memMove(&buf[0], &text.ptr[0:text.len][*at], n)
+    }
+    *at += n
+    if *at == text.len {
+        text.clear()
+        *at = 0
+    }
+    return n
+}
+
+// Gives the other side room for what was read.
+void Channel.consumed(i64 n) {
+    self.unacked += n
+    if self.unacked >= WINDOW / 2 && !self.closed && !self.sentClose {
+        String m
+        putByte(&m, MSG_CHANNEL_WINDOW_ADJUST)
+        putU32(&m, self.remote)
+        putU32(&m, self.unacked)
+        self.unacked = 0
+        self.link.queue(m)
+    }
+}
+
+// Reads into buf, or with stop set, gives 0 as soon as *stop is true.
+i64 Channel.readOr(u8[] buf, bool stderr, bool *stop) {
+    for {
+        if stderr {
+            if self.errAt < self.errIn.len {
+                // its window came back when it arrived
+                return take(&self.errIn, &self.errAt, buf)
+            }
+        } else if self.dataAt < self.data.len {
+            n := take(&self.data, &self.dataAt, buf)
+            self.consumed(n)
+            return n
+        }
+        if self.eof || self.closed || (stop != null && *stop) {
+            return 0
+        }
+        _ = <-self.readable
+    }
+}
+
+// Reads what came on the channel into buf, waiting while nothing has: the
+// number of bytes, 0 once the other side sent all it will.
+pub !i64 Channel.read(u8[] buf) {
+    if buf.len == 0 {
+        return 0
+    }
+    return self.readOr(buf, false, null)
+}
+
+// Reads the command's standard error, as read does its output. Up to
+// 4 MiB of it is kept until it is read; more is dropped.
+pub !i64 Channel.readStderr(u8[] buf) {
+    if buf.len == 0 {
+        return 0
+    }
+    return self.readOr(buf, true, null)
+}
+
+// Everything the other side sends until it closes, as a new String.
+pub !String Channel.readAll() {
+    String out
+    for {
+        if self.dataAt < self.data.len {
+            n := self.data.len - self.dataAt
+            out.append(self.data[self.dataAt:self.data.len])
+            self.data.clear()
+            self.dataAt = 0
+            self.consumed(n)
+            continue
+        }
+        if self.eof || self.closed {
+            return out
+        }
+        _ = <-self.readable
+    }
+}
+
+!void Channel.send(str data, bool stderr) {
+    i64 at = 0
+    for at < data.len {
+        if self.closed || self.sentEof || self.link.dead {
+            return error(SshError.closed, "writing: the channel is closed")
+        }
+        if self.window == 0 {
+            _ = <-self.writable
+            continue
+        }
+        n := data.len - at
+        if n > self.window {
+            n = self.window
+        }
+        if n > self.maxPacket {
+            n = self.maxPacket
+        }
+        // the packet's whole plaintext, padded, so the writer only seals it
+        payload := n + (13 if stderr else 9)
+        padLen := gcmPadding(payload)
+        String m
+        m.reserve(1 + payload + padLen)
+        putByte(&m, padLen)
+        if stderr {
+            putByte(&m, MSG_CHANNEL_EXTENDED_DATA)
+            putU32(&m, self.remote)
+            putU32(&m, 1)
+        } else {
+            putByte(&m, MSG_CHANNEL_DATA)
+            putU32(&m, self.remote)
+        }
+        putString(&m, data[at:at + n])
+        m.append(ZEROS[0:padLen])
+        self.window -= n
+        at += n
+        self.link.queueFramed(m)
+    }
+}
+
+// Writes all of data, waiting while the other side has no room for it.
+pub !void Channel.write(str data) => try self.send(data, false)
+
+// Writes to the client's standard error, from a server's session.
+pub !void Channel.writeStderr(str data) => try self.send(data, true)
+
+// Says that nothing more will be written (EOF): a command reading its
+// input sees the end of it.
+pub void Channel.closeWrite() {
+    if self.sentEof || self.sentClose || self.closed {
+        return
+    }
+    self.sentEof = true
+    String m
+    putByte(&m, MSG_CHANNEL_EOF)
+    putU32(&m, self.remote)
+    self.link.queue(m)
+}
+
+void Channel.sendClose() {
+    if self.sentClose {
+        return
+    }
+    self.sentClose = true
+    if self.link.dead {
+        return
+    }
+    String m
+    putByte(&m, MSG_CHANNEL_CLOSE)
+    putU32(&m, self.remote)
+    self.link.queue(m)
+}
+
+// Sends a request on the channel; with want, waits for the answer.
+!void Channel.request(str name, str body, bool want) {
+    if self.closed || self.link.dead {
+        return error(SshError.closed, "{name}: the channel is closed")
+    }
+    String m
+    putByte(&m, MSG_CHANNEL_REQUEST)
+    putU32(&m, self.remote)
+    putString(&m, name)
+    putBool(&m, want)
+    m.append(body)
+    self.link.queue(m)
+    if !want {
+        return
+    }
+    ok := <-self.replies
+    if !ok {
+        if self.closed || self.link.dead {
+            return error(SshError.closed, "{name}: the connection closed")
+        }
+        return error(SshError.refused, "the server refused the {name} request")
+    }
+}
+
+// Waits until the other side closes the channel, as a command does when it
+// ends, and gives its exit status: 128 + the signal's number when a signal
+// ended it, -1 when no status came.
+pub i64 Channel.wait() {
+    for !self.closed {
+        _ = <-self.readable
+    }
+    return self.status
+}
+
+// Tells the command that the terminal has another size, for a shell.
+pub !void Channel.resize(i64 rows, i64 cols) {
+    String b
+    defer b.free()
+    putU32(&b, cols)
+    putU32(&b, rows)
+    putU32(&b, 0)
+    putU32(&b, 0)
+    try self.request("window-change", b, false)
+}
+
+// Sends the command a signal by name, such as "TERM" or "INT".
+pub !void Channel.signal(str name) {
+    String b
+    defer b.free()
+    putString(&b, name)
+    try self.request("signal", b, false)
+}
+
+// Closes the channel and frees it. A command still running gets the end
+// of its input and is left to the server.
+pub void Channel.close() {
+    if self.released {
+        return
+    }
+    self.closeWrite()
+    self.sendClose()
+    self.released = true
+    if self.closed {
+        self.destroy()
+    }
+}
+
+// Copies between the channel and conn both ways, until both are done, as
+// a forwarded port does. conn isn't closed.
+pub void Channel.pipe(net.Conn *conn) {
+    done := chan[bool](1)
+    defer done.free()
+    spawn channelToConn(self, conn, done)
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    for {
+        n := conn.read(buf) catch e {
+            break
+        }
+        if n == 0 {
+            break
+        }
+        self.write(buf[0:n]) catch e {
+            break
+        }
+    }
+    self.closeWrite()
+    _ = <-done
+}
+
+void channelToConn(Channel *c, net.Conn *conn, chan[bool] done) {
+    u8[] buf = alloc(u8, PACKET_DATA)
+    defer free(buf)
+    for {
+        n := c.readOr(buf, false, null)
+        if n == 0 {
+            break
+        }
+        conn.write(buf[0:n]) catch e {
+            break
+        }
+    }
+    if c.closed {
+        // the connection is gone: the other direction ends too
+        conn.interrupt()
+    } else {
+        // the end goes on; what comes back still does
+        conn.closeWrite() catch e { }
+    }
+    done <- true
+}
+
+// ------------------------------------------------------------ the reader
+
+// Exit signals by name, as 128 + their numbers.
+i64 signalStatus(str name) {
+    str[15] names = ["HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE",
+        "ALRM", "TERM"]
+    for i, n in names {
+        if n == name {
+            return 129 + i
+        }
+    }
+    return 255
+}
+
+Channel *Link.channelOf(Reader *r) {
+    id := r.u32()
+    c, found := self.channels.get(id)
+    if !found {
+        return null
+    }
+    return c
+}
+
+// The other side closed the channel: answer it, and free it when its owner
+// is done too.
+void Channel.peerClosed() {
+    self.closed = true
+    self.eof = true
+    self.sendClose()
+    _ = self.replies.trySend(false)
+    self.wake()
+    if self.released {
+        self.destroy()
+    }
+}
+
+// Takes messages until the connection ends.
+void Link.readLoop() {
+    for {
+        p := self.nextView() catch e {
+            self.fail(e.message)
+            break
+        }
+        self.dispatch(p) catch e {
+            self.fail(e.message)
+            self.disconnect(2, e.message)
+            break
+        }
+    }
+    self.dead = true
+    // every channel ends: owners see it closed and free theirs
+    scoped List[i64] ids = self.channels.keys()
+    for id in ids {
+        c, found := self.channels.get(id)
+        if found {
+            c.peerClosed()
+        }
+    }
+}
+
+!void Link.dispatch(str p) {
+    t := i64(p[0])
+    r := Reader{data: p, at: 1}
+    if t == MSG_GLOBAL_REQUEST {
+        _ = r.string()
+        if r.flag() {
+            String m
+            putByte(&m, MSG_REQUEST_FAILURE)
+            self.queue(m)
+        }
+        return
+    }
+    if t == MSG_REQUEST_SUCCESS || t == MSG_REQUEST_FAILURE || t == MSG_EXT_INFO || t == 53 {
+        return
+    }
+    if t == MSG_CHANNEL_OPEN {
+        try self.opened(&r)
+        return
+    }
+    c := self.channelOf(&r)
+    if r.bad {
+        return error(SshError.protocol, "message {t} is cut short")
+    }
+    if c == null {
+        if t == MSG_CHANNEL_REQUEST || t == MSG_CHANNEL_DATA || t == MSG_CHANNEL_EXTENDED_DATA || t == MSG_CHANNEL_EOF ||
+            t == MSG_CHANNEL_CLOSE || t == MSG_CHANNEL_WINDOW_ADJUST || t == MSG_CHANNEL_SUCCESS || t == MSG_CHANNEL_FAILURE ||
+            t == MSG_CHANNEL_OPEN_CONFIRMATION || t == MSG_CHANNEL_OPEN_FAILURE {
+                return error(SshError.protocol, "message {t} for a channel that isn't open")
+            }
+        String m
+        putByte(&m, MSG_UNIMPLEMENTED)
+        putU32(&m, i64(self.inSeq) - 1)
+        self.queue(m)
+        return
+    }
+    if t == MSG_CHANNEL_DATA || t == MSG_CHANNEL_EXTENDED_DATA {
+        bool stderr = false
+        if t == MSG_CHANNEL_EXTENDED_DATA {
+            stderr = r.u32() == 1
+        }
+        data := r.string()
+        if r.bad {
+            return error(SshError.protocol, "channel data that is cut short")
+        }
+        if c.eof || c.closed {
+            return
+        }
+        if c.data.len - c.dataAt > 2 * WINDOW {
+            return error(SshError.protocol, "the other side sent more than the channel's window")
+        }
+        if stderr {
+            // stderr gets its room back at once, so output that isn't read
+            // doesn't hold up the rest; what isn't read is kept up to a limit
+            if c.errIn.len - c.errAt + data.len <= STDERR_KEPT {
+                c.errIn.append(data)
+            }
+            c.unacked += data.len
+            c.consumed(0)
+        } else {
+            c.data.append(data)
+        }
+        poke(c.readable)
+    } else if t == MSG_CHANNEL_WINDOW_ADJUST {
+        n := r.u32()
+        c.window += n
+        if c.window > 0xffffffff {
+            c.window = 0xffffffff
+        }
+        poke(c.writable)
+    } else if t == MSG_CHANNEL_EOF {
+        c.eof = true
+        poke(c.readable)
+    } else if t == MSG_CHANNEL_CLOSE {
+        c.peerClosed()
+    } else if t == MSG_CHANNEL_OPEN_CONFIRMATION {
+        c.remote = r.u32()
+        c.window = r.u32()
+        c.maxPacket = r.u32()
+        if c.maxPacket > PACKET_DATA {
+            c.maxPacket = PACKET_DATA
+        }
+        if c.maxPacket < 1 {
+            c.maxPacket = 1
+        }
+        c.opened = true
+        c.replies <- true
+    } else if t == MSG_CHANNEL_OPEN_FAILURE {
+        _ = r.u32()
+        c.why = r.string().copy()
+        c.closed = true
+        c.replies <- false
+    } else if t == MSG_CHANNEL_SUCCESS || t == MSG_CHANNEL_FAILURE {
+        _ = c.replies.trySend(t == MSG_CHANNEL_SUCCESS)
+    } else if t == MSG_CHANNEL_REQUEST {
+        name := r.string()
+        want := r.flag()
+        ok := self.channelRequest(c, name, &r)
+        if want && !c.closed {
+            String m
+            putByte(&m, MSG_CHANNEL_SUCCESS if ok else MSG_CHANNEL_FAILURE)
+            putU32(&m, c.remote)
+            self.queue(m)
+        }
+    }
+}
+
+// A request the other side made on a channel: whether it was taken.
+bool Link.channelRequest(Channel *c, str name, Reader *r) {
+    if name == "exit-status" {
+        c.status = r.u32()
+        return true
+    }
+    if name == "exit-signal" {
+        c.status = signalStatus(r.string())
+        return true
+    }
+    if c.session != null {
+        return self.sessionRequest(c, name, r)
+    }
+    return false
+}
+
+// A CHANNEL_OPEN: a server takes sessions and forwarded connections; a
+// client takes none.
+!void Link.opened(Reader *r) {
+    kind := r.string()
+    sender := r.u32()
+    window := r.u32()
+    maxPacket := r.u32()
+    if r.bad {
+        return error(SshError.protocol, "a CHANNEL_OPEN that is cut short")
+    }
+    if !self.isServer {
+        self.refuseOpen(sender, 1, "this client opens no channels")
+        return
+    }
+    if kind == "session" {
+        c := self.newChannel()
+        c.remote = sender
+        c.window = window
+        c.maxPacket = maxPacket if maxPacket < PACKET_DATA else PACKET_DATA
+        c.opened = true
+        Session[] mem = alloc(Session, 1)
+        c.session = &mem[0]
+        c.session.channel = c
+        c.session.user = self.user[:]
+        self.confirm(c)
+        return
+    }
+    if kind == "direct-tcpip" {
+        host := r.string()
+        port := r.u32()
+        if r.bad || port > 65535 {
+            return error(SshError.protocol, "a direct-tcpip open that is cut short")
+        }
+        if self.server.forward == null || !self.server.forward(self.user, host, u16(port)) {
+            self.refuseOpen(sender, 1, "forwarding to {host}:{port} isn't allowed")
+            return
+        }
+        c := self.newChannel()
+        c.remote = sender
+        c.window = window
+        c.maxPacket = maxPacket if maxPacket < PACKET_DATA else PACKET_DATA
+        self.tasks += 1
+        spawn forwardTask(self, c, host.copy(), u16(port))
+        return
+    }
+    self.refuseOpen(sender, 3, "unknown channel type {kind}")
+}
+
+void Link.confirm(Channel *c) {
+    String m
+    putByte(&m, MSG_CHANNEL_OPEN_CONFIRMATION)
+    putU32(&m, c.remote)
+    putU32(&m, c.local)
+    putU32(&m, WINDOW)
+    putU32(&m, PACKET_DATA)
+    self.queue(m)
+}
+
+void Link.refuseOpen(i64 sender, i64 code, str why) {
+    String m
+    putByte(&m, MSG_CHANNEL_OPEN_FAILURE)
+    putU32(&m, sender)
+    putU32(&m, code)
+    putString(&m, why)
+    putString(&m, "")
+    self.queue(m)
+}
+
+// A task the server started has ended.
+void Link.taskDone() {
+    self.tasks -= 1
+    poke(self.idle)
+}
+
+// Connects a forwarded channel to host:port and copies between them.
+void forwardTask(Link *l, Channel *c, String host, u16 port) {
+    defer host.free()
+    defer l.taskDone()
+    conn := net.dial(host, port, 10s) catch e {
+        l.refuseOpen(c.remote, 2, e.message)
+        c.closed = true
+        c.released = true
+        c.destroy()
+        return
+    }
+    defer conn.close()
+    c.opened = true
+    l.confirm(c)
+    c.pipe(&conn)
+    c.close()
+}

@@ -1,0 +1,438 @@
+// The client: dial, the server's key, logging in, and the channels a
+// client opens.
+
+import crypto, fs, net, os, process, str
+
+const i64 MSG_USERAUTH_REQUEST = 50
+const i64 MSG_USERAUTH_FAILURE = 51
+const i64 MSG_USERAUTH_SUCCESS = 52
+const i64 MSG_USERAUTH_BANNER = 53
+const i64 MSG_USERAUTH_PK_OK = 60
+const i64 MSG_USERAUTH_INFO_REQUEST = 60
+const i64 MSG_USERAUTH_INFO_RESPONSE = 61
+
+// How dial logs in and checks the server. user is needed, with a key, a
+// password or both: the key is tried first.
+pub struct Config {
+    pub str user
+    pub str password
+    // an Ed25519 key, from loadKey or generateKey
+    pub Key *key
+    // the server's key, as a public key line ("ssh-ed25519 AAAA...") or a
+    // fingerprint ("SHA256:..."), when it isn't looked up in knownHosts
+    pub str hostKey
+    // the known_hosts file to look the server's key up in; "" is
+    // ~/.ssh/known_hosts
+    pub str knownHosts
+    // trust whatever key the server has: for tests, never across a network
+    pub bool anyHostKey
+    // how long connecting and logging in may take
+    pub Duration timeout = 30s
+    // new keys after this many bytes have gone out
+    pub i64 rekeyAfter = 1GiB
+}
+
+// A connection to an SSH server, logged in. Its tasks run on the thread
+// that dialed, and it is used from that thread only.
+pub struct Client {
+    Link *link
+    // the server's key as a public key line
+    pub String serverKey
+}
+
+// Connects to an SSH server, checks its key and logs in.
+pub !Client dial(str host, u16 port, Config config) {
+    if config.user.len == 0 {
+        return error(SshError.auth, "ssh.dial needs a user")
+    }
+    conn := net.dial(host, port, config.timeout) catch e {
+        return error(SshError.connect, "{host}:{port}: {e.message}")
+    }
+    return try clientOn(conn, host, port, config)
+}
+
+// Runs SSH over a connection that is already open, to host:port as the
+// key check knows it.
+pub !Client clientOn(net.Conn conn, str host, u16 port, Config config) {
+    conn.setTimeout(config.timeout)
+    l := newLink(conn, false)
+    l.rekeyAfter = config.rekeyAfter
+    bool writing = false
+    errdefer {
+        if writing {
+            l.stopWriter()
+        }
+        l.free()
+    }
+    l.exchangeVersions() catch e {
+        return error(e.code, "{host}:{port}: {e.message}")
+    }
+    writing = true
+    spawn writer(l)
+    l.startKex()
+    l.queue(l.ourInit.copy(), Job.kexinit)
+    init := l.kexPacket(MSG_KEXINIT) catch e {
+        return error(e.code, "{host}:{port}: {e.message}")
+    }
+    defer init.free()
+    l.kex(init) catch e {
+        return error(e.code, "{host}:{port}: {e.message}")
+    }
+    try checkHost(l, host, port, config)
+    try l.login(config)
+    l.conn.setTimeout(0s)
+    spawn clientReader(l)
+    key := blobKey(l.serverKey)
+    scoped String blob = blobOf(key)
+    return Client{link: l, serverKey: publicTextOf(blob, "")}
+}
+
+void clientReader(Link *l) {
+    l.readLoop()
+    l.readerDone <- true
+}
+
+!void checkHost(Link *l, str host, u16 port, Config config) {
+    key := blobKey(l.serverKey)
+    scoped String found = fingerprintOfBlob(l.serverKey)
+    if config.anyHostKey {
+        return
+    }
+    if config.hostKey.len > 0 {
+        if str.startsWith(config.hostKey, "SHA256:") {
+            if config.hostKey != found {
+                return error(SshError.hostKey, "{host}'s key is {found}, not {config.hostKey}")
+            }
+            return
+        }
+        want := parsePublicKey(config.hostKey) catch e {
+            return error(SshError.hostKey, "Config.hostKey: {e.message}")
+        }
+        if !crypto.equal(want[0:32], key) {
+            return error(SshError.hostKey, "{host}'s key is {found}, not the one in Config.hostKey")
+        }
+        return
+    }
+    String path
+    defer path.free()
+    if config.knownHosts.len > 0 {
+        path.append(config.knownHosts)
+    } else {
+        home := os.home() catch e {
+            return error(SshError.hostKey, "no known_hosts to check {host}'s key {found} in: the user has no home folder")
+        }
+        path.append(home)
+        path.append("/.ssh/known_hosts")
+        home.free()
+    }
+    text := fs.readAll(path) catch "".copy()
+    defer text.free()
+    scoped String name = if port == 22 { host.copy() } else { format("[{host}]:{port}") }
+    known := knownHost(text, name, key)
+    if known == 1 {
+        return
+    }
+    if known == -1 {
+        return error(SshError.hostKey, "{host}'s key {found} isn't the one {path} has for it: the server changed, or someone is in between")
+    }
+    scoped String line = knownLine(host, port, key)
+    return error(SshError.hostKey, "{host}'s key {found} isn't in {path}; once it is checked, add this line: {line}")
+}
+
+// The methods a USERAUTH_FAILURE lists.
+String failureMethods(str p) {
+    r := Reader{data: p, at: 1}
+    return r.string().copy()
+}
+
+// The answer to a login request: true for success, false for failure,
+// with the methods to try in *methods. Banners are passed over.
+!bool Link.authReply(String *methods, i64 other = 0, String *otherMsg = null) {
+    for {
+        p := try self.next()
+        t := i64(p[0])
+        if t == MSG_USERAUTH_BANNER {
+            p.free()
+            continue
+        }
+        if t == MSG_USERAUTH_SUCCESS {
+            p.free()
+            return true
+        }
+        if t == MSG_USERAUTH_FAILURE {
+            methods.free()
+            *methods = failureMethods(p)
+            p.free()
+            return false
+        }
+        if other != 0 && t == other {
+            *otherMsg = p
+            return false
+        }
+        p.free()
+        return error(SshError.protocol, "message {t} during login")
+    }
+}
+
+String authStart(str user, str method) {
+    String m
+    putByte(&m, MSG_USERAUTH_REQUEST)
+    putString(&m, user)
+    putString(&m, "ssh-connection")
+    putString(&m, method)
+    return m
+}
+
+!void Link.login(Config config) {
+    String req
+    putByte(&req, MSG_SERVICE_REQUEST)
+    putString(&req, "ssh-userauth")
+    self.queue(req)
+    for {
+        p := try self.next()
+        t := i64(p[0])
+        p.free()
+        if t == MSG_SERVICE_ACCEPT {
+            break
+        }
+        if t != MSG_EXT_INFO {
+            return error(SshError.protocol, "message {t} where the server should accept the login")
+        }
+    }
+    String methods = "publickey,password,keyboard-interactive".copy()
+    defer methods.free()
+    if config.key != null && listHas(methods, "publickey") {
+        scoped String blob = blobOf(config.key.public[0:32])
+        String signed
+        putString(&signed, self.sessionId)
+        scoped String start = authStart(config.user, "publickey")
+        signed.append(start)
+        putBool(&signed, true)
+        putString(&signed, "ssh-ed25519")
+        putString(&signed, blob)
+        sig := crypto.ed25519Sign(config.key.seed[0:32], signed)
+        String sigBlob
+        putString(&sigBlob, "ssh-ed25519")
+        putString(&sigBlob, sig[0:64])
+        String m = signed[4 + self.sessionId.len:].copy()
+        putString(&m, sigBlob)
+        signed.free()
+        sigBlob.free()
+        self.queue(m)
+        if try self.authReply(&methods) {
+            self.user = config.user.copy()
+            return
+        }
+    }
+    if config.password.len > 0 && listHas(methods, "password") {
+        m := authStart(config.user, "password")
+        putBool(&m, false)
+        putString(&m, config.password)
+        self.queue(m)
+        if try self.authReply(&methods) {
+            self.user = config.user.copy()
+            return
+        }
+    }
+    if config.password.len > 0 && listHas(methods, "keyboard-interactive") {
+        m := authStart(config.user, "keyboard-interactive")
+        putString(&m, "")
+        putString(&m, "")
+        self.queue(m)
+        for i in 0..5 {
+            String info
+            ok := try self.authReply(&methods, MSG_USERAUTH_INFO_REQUEST, &info)
+            if ok {
+                self.user = config.user.copy()
+                return
+            }
+            if info.len == 0 {
+                break
+            }
+            // each prompt is answered with the password
+            r := Reader{data: info, at: 1}
+            _ = r.string()
+            _ = r.string()
+            _ = r.string()
+            n := r.u32()
+            info.free()
+            if r.bad || n > 10 {
+                return error(SshError.protocol, "a keyboard-interactive request that is cut short")
+            }
+            String answer
+            putByte(&answer, MSG_USERAUTH_INFO_RESPONSE)
+            putU32(&answer, n)
+            for j in 0..n {
+                putString(&answer, config.password)
+            }
+            self.queue(answer)
+        }
+    }
+    if config.key == null && config.password.len == 0 {
+        return error(SshError.auth, "{config.user}: Config has no key and no password to log in with")
+    }
+    return error(SshError.auth, "{config.user}: the server refused the login; it takes {methods}")
+}
+
+// ------------------------------------------------------------ channels
+
+// Opens a channel of a kind, with what follows the window in the request.
+!Channel *Client.open(str kind, str extra) {
+    l := self.link
+    if l.dead {
+        return error(SshError.closed, "the connection is closed: {l.why}")
+    }
+    c := l.newChannel()
+    String m
+    putByte(&m, MSG_CHANNEL_OPEN)
+    putString(&m, kind)
+    putU32(&m, c.local)
+    putU32(&m, WINDOW)
+    putU32(&m, PACKET_DATA)
+    m.append(extra)
+    l.queue(m)
+    ok := <-c.replies
+    if !ok {
+        String why = if c.why.len > 0 { format("the server refused the {kind} channel: {c.why}") } else {
+            format("the connection closed")
+        }
+        defer why.free()
+        code := SshError.refused if c.why.len > 0 else SshError.closed
+        c.released = true
+        c.closed = true
+        c.destroy()
+        return error(code, why)
+    }
+    return c
+}
+
+// Starts command on the server. Its output comes on read and readStderr,
+// write gives it input, and wait gives its exit status. Close the Channel
+// when done.
+pub !Channel *Client.exec(str command) {
+    c := try self.open("session", "")
+    errdefer c.close()
+    String b
+    defer b.free()
+    putString(&b, command)
+    try c.request("exec", b, true)
+    return c
+}
+
+// Starts the user's shell on a terminal of rows lines and cols columns of
+// the kind term, as ssh does when it logs in.
+pub !Channel *Client.shell(str term = "xterm-256color", i64 rows = 24, i64 cols = 80) {
+    c := try self.open("session", "")
+    errdefer c.close()
+    String b
+    defer b.free()
+    putString(&b, term)
+    putU32(&b, cols)
+    putU32(&b, rows)
+    putU32(&b, 0)
+    putU32(&b, 0)
+    putString(&b, "\x00")
+    try c.request("pty-req", b, true)
+    try c.request("shell", "", true)
+    return c
+}
+
+// Starts a subsystem of the server, such as "sftp".
+pub !Channel *Client.subsystem(str name) {
+    c := try self.open("session", "")
+    errdefer c.close()
+    String b
+    defer b.free()
+    putString(&b, name)
+    try c.request("subsystem", b, true)
+    return c
+}
+
+// Runs command on the server, gives it input, and waits for it to end:
+// what it wrote and its exit status. A status other than 0 is no error.
+pub !process.Output Client.run(str command, str input = "") {
+    c := try self.exec(command)
+    defer c.close()
+    // the input goes from a task of its own, so output that comes back
+    // meanwhile is read and the windows don't fill both ways
+    fed := chan[bool](1)
+    defer fed.free()
+    spawn feed(c, input, fed)
+    defer _ = <-fed
+    process.Output out
+    for {
+        if c.dataAt < c.data.len {
+            out.stdout.append(c.data[c.dataAt:c.data.len])
+            c.consumed(c.data.len - c.dataAt)
+            c.data.clear()
+            c.dataAt = 0
+            continue
+        }
+        if c.errAt < c.errIn.len {
+            out.stderr.append(c.errIn[c.errAt:c.errIn.len])
+            c.errIn.clear()
+            c.errAt = 0
+            continue
+        }
+        if c.closed {
+            break
+        }
+        _ = <-c.readable
+    }
+    if c.status < 0 && c.link.dead {
+        out.free()
+        return error(SshError.closed, "{command}: the connection closed")
+    }
+    out.status = i32(c.status)
+    return out
+}
+
+void feed(Channel *c, str input, chan[bool] fed) {
+    if input.len > 0 {
+        c.write(input) catch e { }
+    }
+    c.closeWrite()
+    fed <- true
+}
+
+// Opens a connection from the server to host:port: what is written to the
+// Channel goes there, and what comes back can be read. The ssh -L of a
+// program. Channel.pipe joins it to a net.Conn.
+pub !Channel *Client.forward(str host, u16 port) {
+    String b
+    defer b.free()
+    putString(&b, host)
+    putU32(&b, i64(port))
+    putString(&b, "127.0.0.1")
+    putU32(&b, 0)
+    return try self.open("direct-tcpip", b)
+}
+
+// Whether the connection is still up.
+pub bool Client.alive() => !self.link.dead
+
+// Ends the connection, and with it the channels still open.
+pub void Client.close() {
+    l := self.link
+    if l == null {
+        return
+    }
+    self.link = null
+    if !l.dead {
+        l.disconnect(11, "closed")
+    }
+    // what the reader still sends is dropped
+    l.dead = true
+    l.stopWriter()
+    l.conn.interrupt()
+    _ = <-l.readerDone
+    scoped List[i64] ids = l.channels.keys()
+    for id in ids {
+        c, found := l.channels.get(id)
+        if found {
+            c.destroy()
+        }
+    }
+    l.free()
+    self.serverKey.free()
+}
