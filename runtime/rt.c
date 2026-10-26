@@ -13246,7 +13246,10 @@ typedef struct {
     uint64_t h1, h0;            /* GHASH's H, high and low 64 bits */
     /* with the CPU's carry-less multiply: H^(i+1) as low, high 64 bits
        and the two xored, so 8 blocks share one reduction */
-    uint64_t hp[8][2], hk[8][2];
+    uint64_t hp[16][2], hk[16][2];
+    int wide;                   /* x86_64 with VAES and VPCLMULQDQ: 2 blocks an instruction */
+    /* for 2 blocks a register: H^(16 - 2j) and H^(15 - 2j) side by side */
+    uint64_t hpw[8][4], hkw[8][4];
 } AesGcm;
 
 static int aesHw = -1;
@@ -13270,7 +13273,91 @@ static int aesHasHw(void) {
     return aesHw;
 }
 
+#ifdef AES_HW_TARGET
+/* S-box of each byte of w with the AES instructions: w in all 4 columns,
+   so ShiftRows changes nothing, and a zero round key */
+AES_HW_TARGET static void aesSubWordHw(uint8_t w[4]) {
+    uint32_t v;
+    memcpy(&v, w, 4);
+#if defined(__x86_64__)
+    __m128i x = _mm_aesenclast_si128(_mm_set1_epi32((int)v), _mm_setzero_si128());
+    v = (uint32_t)_mm_cvtsi128_si32(x);
+#else
+    uint8x16_t x = vaeseq_u8(vreinterpretq_u8_u32(vdupq_n_u32(v)), vdupq_n_u8(0));
+    v = vgetq_lane_u32(vreinterpretq_u32_u8(x), 0);
+#endif
+    memcpy(w, &v, 4);
+}
+#endif
+
+static void aesSubWord(uint8_t w[4]) {
+#ifdef AES_HW_TARGET
+    if (aesHasHw()) {
+        aesSubWordHw(w);
+        return;
+    }
+#endif
+    for (int j = 0; j < 4; j++) w[j] = aesSub(w[j]);
+}
+
+#if defined(__x86_64__)
+/* The key schedule with AESKEYGENASSIST, for 16 and 32-byte keys */
+AES_HW_TARGET static inline __m128i aesKeyStep(__m128i k, __m128i assist) {
+    k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
+    k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
+    k = _mm_xor_si128(k, _mm_slli_si128(k, 4));
+    return _mm_xor_si128(k, assist);
+}
+
+#define AES128_ROUND(i, rcon)                                                                      \
+    k = aesKeyStep(k, _mm_shuffle_epi32(_mm_aeskeygenassist_si128(k, rcon), 0xff));                \
+    _mm_storeu_si128((__m128i *)a->rk[i], k)
+
+#define AES256_ROUNDS(i, rcon)                                                                     \
+    k1 = aesKeyStep(k1, _mm_shuffle_epi32(_mm_aeskeygenassist_si128(k2, rcon), 0xff));             \
+    _mm_storeu_si128((__m128i *)a->rk[i], k1);                                                     \
+    k2 = aesKeyStep(k2, _mm_shuffle_epi32(_mm_aeskeygenassist_si128(k1, 0), 0xaa));                \
+    _mm_storeu_si128((__m128i *)a->rk[i + 1], k2)
+
+AES_HW_TARGET static void aesExpandHw(AesGcm *a, const uint8_t *key, int keyLen) {
+    if (keyLen == 16) {
+        a->rounds = 10;
+        __m128i k = _mm_loadu_si128((const __m128i *)key);
+        _mm_storeu_si128((__m128i *)a->rk[0], k);
+        AES128_ROUND(1, 0x01);
+        AES128_ROUND(2, 0x02);
+        AES128_ROUND(3, 0x04);
+        AES128_ROUND(4, 0x08);
+        AES128_ROUND(5, 0x10);
+        AES128_ROUND(6, 0x20);
+        AES128_ROUND(7, 0x40);
+        AES128_ROUND(8, 0x80);
+        AES128_ROUND(9, 0x1b);
+        AES128_ROUND(10, 0x36);
+        return;
+    }
+    a->rounds = 14;
+    __m128i k1 = _mm_loadu_si128((const __m128i *)key), k2 = _mm_loadu_si128((const __m128i *)(key + 16));
+    _mm_storeu_si128((__m128i *)a->rk[0], k1);
+    _mm_storeu_si128((__m128i *)a->rk[1], k2);
+    AES256_ROUNDS(2, 0x01);
+    AES256_ROUNDS(4, 0x02);
+    AES256_ROUNDS(6, 0x04);
+    AES256_ROUNDS(8, 0x08);
+    AES256_ROUNDS(10, 0x10);
+    AES256_ROUNDS(12, 0x20);
+    k1 = aesKeyStep(k1, _mm_shuffle_epi32(_mm_aeskeygenassist_si128(k2, 0x40), 0xff));
+    _mm_storeu_si128((__m128i *)a->rk[14], k1);
+}
+#endif
+
 static void aesExpand(AesGcm *a, const uint8_t *key, int keyLen) {
+#if defined(__x86_64__)
+    if (keyLen != 24 && aesHasHw()) {
+        aesExpandHw(a, key, keyLen);
+        return;
+    }
+#endif
     int nk = keyLen / 4;
     a->rounds = nk + 6;
     uint8_t w[60][4];
@@ -13281,13 +13368,15 @@ static void aesExpand(AesGcm *a, const uint8_t *key, int keyLen) {
         memcpy(t, w[i - 1], 4);
         if (i % nk == 0) {
             uint8_t first = t[0];
-            t[0] = aesSub(t[1]) ^ rcon;
-            t[1] = aesSub(t[2]);
-            t[2] = aesSub(t[3]);
-            t[3] = aesSub(first);
+            t[0] = t[1];
+            t[1] = t[2];
+            t[2] = t[3];
+            t[3] = first;
+            aesSubWord(t);
+            t[0] ^= rcon;
             rcon = (uint8_t)((rcon << 1) ^ ((rcon >> 7) * 0x1b));
         } else if (nk > 6 && i % nk == 4) {
-            for (int j = 0; j < 4; j++) t[j] = aesSub(t[j]);
+            aesSubWord(t);
         }
         for (int j = 0; j < 4; j++) w[i][j] = w[i - nk][j] ^ t[j];
     }
@@ -13555,6 +13644,8 @@ static void ghashPadded(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8
     }
 }
 
+static int gcmHasWide(void);
+
 static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
     aesExpand(a, key, keyLen);
     a->hw = aesHasHw();
@@ -13562,13 +13653,29 @@ static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
     aesBlock(a, zero, h);
     a->h1 = load64be(h);
     a->h0 = load64be(h + 8);
+    a->wide = a->hw && gcmHasWide();
     if (a->hw) {
         uint64_t p1 = a->h1, p0 = a->h0;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < (a->wide ? 16 : 8); i++) {
             if (i > 0) ghashMul(a, p1, p0, a->h1, a->h0, &p1, &p0);
             a->hp[i][0] = p0;
             a->hp[i][1] = p1;
             a->hk[i][0] = a->hk[i][1] = p0 ^ p1;
+        }
+        if (a->wide) {
+            /* H^i * x^-1, so the products need no shift: shifted left
+               once, with x^-1 = x^127 + x^6 + x + 1 for the bit that falls out */
+            for (int j = 0; j < 8; j++) {
+                for (int k = 0; k < 2; k++) {
+                    const uint64_t *h = a->hp[15 - 2 * j - k];
+                    uint64_t carry = h[1] >> 63;
+                    uint64_t lo = (h[0] << 1) ^ carry;
+                    uint64_t hi = ((h[1] << 1) | (h[0] >> 63)) ^ (carry ? 0xc200000000000000ULL : 0);
+                    a->hpw[j][2 * k] = lo;
+                    a->hpw[j][2 * k + 1] = hi;
+                    a->hkw[j][2 * k] = a->hkw[j][2 * k + 1] = lo ^ hi;
+                }
+            }
         }
     }
 }
@@ -13598,22 +13705,141 @@ static void aesCtrXor(const AesGcm *a, const uint8_t ctr[16], int gcm, const uin
     iris_wipe(ks, sizeof ks);
 }
 
-/* CTR from counter block 2 on, as GCM does */
-static void aesGcmCtr(const AesGcm *a, const uint8_t nonce[12], const uint8_t *in, uint8_t *out, size_t n) {
-    uint8_t ctr[16] = {0};
-    memcpy(ctr, nonce, 12);
-    ctr[15] = 2;
-    aesCtrXor(a, ctr, 1, in, out, n);
+#if defined(__x86_64__)
+/* 16 blocks at a time in 256-bit registers: the counters encrypted, then
+   the 16 blocks of ciphertext hashed with one reduction while they are
+   still in the cache. */
+#define GCM_WIDE_TARGET __attribute__((target("aes,pclmul,avx2,vaes,vpclmulqdq")))
+
+static int gcmWideSeen = -1;
+
+static int gcmHasWide(void) {
+    if (gcmWideSeen < 0) {
+        __builtin_cpu_init();
+        gcmWideSeen = !getenv("IRIS_AES_NARROW") && __builtin_cpu_supports("avx2") &&
+                      __builtin_cpu_supports("vaes") && __builtin_cpu_supports("vpclmulqdq");
+    }
+    return gcmWideSeen;
 }
 
-static void aesGcmTag(const AesGcm *a, const uint8_t nonce[12], const uint8_t *aad, size_t aadLen, const uint8_t *ct,
-                      size_t ctLen, uint8_t tag[16]) {
+/* 16 blocks into y: (y ^ b0) * H^16 ^ b1 * H^15 ^ ... ^ b15 * H, two blocks
+   a register, added up unreduced in lo, hi and mid one register at a
+   time (step j takes blocks 2j and 2j + 1, the first step sets them),
+   then reduced once. */
+typedef struct {
+    __m256i lo, hi, mid;
+} GhashSum;
+
+GCM_WIDE_TARGET static inline void ghashStep(const AesGcm *a, GhashSum *g, const uint8_t *p, int j, bool first,
+                                             __m128i y) {
+    const __m256i rev = _mm256_broadcastsi128_si256(_mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15));
+    __m256i x = _mm256_shuffle_epi8(_mm256_loadu_si256((const __m256i *)(p + 32 * j)), rev);
+    if (j == 0) x = _mm256_xor_si256(x, _mm256_zextsi128_si256(y));
+    __m256i h = _mm256_loadu_si256((const __m256i *)a->hpw[j]);
+    __m256i hk = _mm256_loadu_si256((const __m256i *)a->hkw[j]);
+    __m256i lo = _mm256_clmulepi64_epi128(x, h, 0x00), hi = _mm256_clmulepi64_epi128(x, h, 0x11);
+    __m256i mid = _mm256_clmulepi64_epi128(_mm256_xor_si256(x, _mm256_shuffle_epi32(x, 0x4e)), hk, 0x00);
+    if (first) {
+        g->lo = lo;
+        g->hi = hi;
+        g->mid = mid;
+    } else {
+        g->lo = _mm256_xor_si256(g->lo, lo);
+        g->hi = _mm256_xor_si256(g->hi, hi);
+        g->mid = _mm256_xor_si256(g->mid, mid);
+    }
+}
+
+/* The sum reduced: with H * x^-1 the 256-bit product needs no shift, and
+   two multiplies by x^127 + x^126 + x^121 + 1 fold the low half into the
+   high one. y1:y0 comes back as one register. */
+GCM_WIDE_TARGET static inline __m128i ghashSumReduce(const GhashSum *g) {
+    const __m128i poly = _mm_set_epi64x((long long)0xc200000000000000ULL, 1);
+    __m128i l = _mm_xor_si128(_mm256_castsi256_si128(g->lo), _mm256_extracti128_si256(g->lo, 1));
+    __m128i h = _mm_xor_si128(_mm256_castsi256_si128(g->hi), _mm256_extracti128_si256(g->hi, 1));
+    __m128i m = _mm_xor_si128(_mm256_castsi256_si128(g->mid), _mm256_extracti128_si256(g->mid, 1));
+    m = _mm_xor_si128(m, _mm_xor_si128(l, h));
+    m = _mm_xor_si128(m, _mm_xor_si128(_mm_shuffle_epi32(l, 0x4e), _mm_clmulepi64_si128(l, poly, 0x10)));
+    return _mm_xor_si128(h, _mm_xor_si128(_mm_shuffle_epi32(m, 0x4e), _mm_clmulepi64_si128(m, poly, 0x10)));
+}
+
+/* GCM's counter blocks from 2 on, 256 bytes at a time, xored into in,
+   with the ciphertext hashed into y. The hashing of 16 blocks is spread
+   over the AES rounds of the next 16, so the two kinds of instruction
+   overlap: the ones just read when opening, the ones just written, one
+   round of 256 bytes behind, when sealing. The bytes done. */
+GCM_WIDE_TARGET static size_t aesGcmWide(const AesGcm *a, const uint8_t nonce[12], int seal, const uint8_t *in,
+                                         uint8_t *out, size_t n, uint64_t *y1, uint64_t *y0) {
+    uint8_t nb[16] = {0};
+    memcpy(nb, nonce, 12);
+    const __m256i base = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)nb));
+    /* the counter is the last 4 bytes, big-endian: kept as a number in
+       each lane's top 32 bits and turned around when a block is made */
+    const __m256i turn = _mm256_broadcastsi128_si256(
+        _mm_set_epi8(12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1));
+    const __m256i two = _mm256_set_epi32(2, 0, 0, 0, 2, 0, 0, 0);
+    __m256i ctr = _mm256_set_epi32(3, 0, 0, 0, 2, 0, 0, 0);
+    __m256i rk[15];
+    for (int r = 0; r <= a->rounds; r++) rk[r] = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)a->rk[r]));
+    size_t done = 0;
+    __m128i y = _mm_set_epi64x((long long)*y1, (long long)*y0);
+    for (; n - done >= 256; done += 256) {
+        /* what is hashed while these 16 blocks are encrypted */
+        const uint8_t *g = seal ? (done > 0 ? out + done - 256 : NULL) : in + done;
+        GhashSum sum;
+        __m256i s[8];
+        for (int j = 0; j < 8; j++) {
+            s[j] = _mm256_xor_si256(_mm256_or_si256(base, _mm256_shuffle_epi8(ctr, turn)), rk[0]);
+            ctr = _mm256_add_epi32(ctr, two);
+        }
+        for (int r = 1; r < a->rounds; r++) {
+            for (int j = 0; j < 8; j++) s[j] = _mm256_aesenc_epi128(s[j], rk[r]);
+            if (g && r <= 8) ghashStep(a, &sum, g, r - 1, r == 1, y);
+        }
+        for (int j = 0; j < 8; j++) {
+            s[j] = _mm256_aesenclast_epi128(s[j], rk[a->rounds]);
+            __m256i d = _mm256_loadu_si256((const __m256i *)(in + done + 32 * j));
+            _mm256_storeu_si256((__m256i *)(out + done + 32 * j), _mm256_xor_si256(s[j], d));
+        }
+        if (g) y = ghashSumReduce(&sum);
+    }
+    if (seal && done > 0) {
+        GhashSum sum;
+        for (int j = 0; j < 8; j++) ghashStep(a, &sum, out + done - 256, j, j == 0, y);
+        y = ghashSumReduce(&sum);
+    }
+    *y0 = (uint64_t)_mm_cvtsi128_si64(y);
+    *y1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(y, y));
+    memset(rk, 0, sizeof rk);
+    return done;
+}
+#else
+static int gcmHasWide(void) { return 0; }
+#endif
+
+/* AES-GCM over n bytes of in into out, sealing when seal is set, else
+   opening, and the tag of aad and the ciphertext. */
+static void aesGcmRun(const AesGcm *a, const uint8_t nonce[12], int seal, const uint8_t *aad, size_t aadLen,
+                      const uint8_t *in, uint8_t *out, size_t n, uint8_t tag[16]) {
     uint64_t y1 = 0, y0 = 0;
     ghashPadded(a, &y1, &y0, aad, aadLen);
-    ghashPadded(a, &y1, &y0, ct, ctLen);
+    size_t done = 0;
+#ifdef GCM_WIDE_TARGET
+    if (a->wide) done = aesGcmWide(a, nonce, seal, in, out, n, &y1, &y0);
+#endif
+    if (!seal) ghashPadded(a, &y1, &y0, in + done, n - done);
+    uint8_t ctr[16];
+    memcpy(ctr, nonce, 12);
+    uint32_t next = (uint32_t)(2 + done / 16);
+    ctr[12] = (uint8_t)(next >> 24);
+    ctr[13] = (uint8_t)(next >> 16);
+    ctr[14] = (uint8_t)(next >> 8);
+    ctr[15] = (uint8_t)next;
+    aesCtrXor(a, ctr, 1, in + done, out + done, n - done);
+    if (seal) ghashPadded(a, &y1, &y0, out + done, n - done);
     uint8_t lens[16];
     store64be(lens, (uint64_t)aadLen * 8);
-    store64be(lens + 8, (uint64_t)ctLen * 8);
+    store64be(lens + 8, (uint64_t)n * 8);
     ghashBlock(a, &y1, &y0, lens);
     uint8_t j0[16], ek[16], s[16];
     memcpy(j0, nonce, 12);
@@ -13630,15 +13856,11 @@ void iris_aes_seal(const uint8_t *key, int64_t keyLen, const uint8_t *nonce, con
                    const uint8_t *aad, int64_t aadLen, IrisString *out) {
     AesGcm a;
     aesGcmInit(&a, key, (int)keyLen);
-    uint8_t *ct = malloc((size_t)len + 16);
-    if (!ct) {
-        outOfMemory();
-    }
-    aesGcmCtr(&a, nonce, data, ct, (size_t)len);
-    aesGcmTag(&a, nonce, aad, (size_t)aadLen, ct, (size_t)len, ct + len);
-    iris_string_append(out, (const char *)ct, len + 16);
-    free(ct);
-    memset(&a, 0, sizeof a);
+    iris_string_reserve(out, len + 16);
+    uint8_t *ct = (uint8_t *)out->ptr + out->len;
+    aesGcmRun(&a, nonce, 1, aad, (size_t)aadLen, data, ct, (size_t)len, ct + len);
+    out->len += len + 16;
+    iris_wipe(&a, sizeof a);
 }
 
 /* Opens what iris_aes_seal made: 1 and the data added to out, or 0 when
@@ -13652,19 +13874,16 @@ int iris_aes_open(const uint8_t *key, int64_t keyLen, const uint8_t *nonce, cons
     aesGcmInit(&a, key, (int)keyLen);
     size_t n = (size_t)len - 16;
     uint8_t tag[16];
-    aesGcmTag(&a, nonce, aad, (size_t)aadLen, sealed, n, tag);
+    iris_string_reserve(out, (int64_t)n);
+    uint8_t *pt = (uint8_t *)out->ptr + out->len;
+    aesGcmRun(&a, nonce, 0, aad, (size_t)aadLen, sealed, pt, n, tag);
+    iris_wipe(&a, sizeof a);
     if (!iris_const_equal((const char *)tag, 16, (const char *)sealed + n, 16)) {
-        memset(&a, 0, sizeof a);
+        /* nothing of a forged message is kept */
+        iris_wipe(pt, n);
         return 0;
     }
-    uint8_t *pt = malloc(n ? n : 1);
-    if (!pt) {
-        outOfMemory();
-    }
-    aesGcmCtr(&a, nonce, sealed, pt, n);
-    iris_string_append(out, (const char *)pt, (int64_t)n);
-    free(pt);
-    memset(&a, 0, sizeof a);
+    out->len += (int64_t)n;
     return 1;
 }
 
