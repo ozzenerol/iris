@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MySQL - Iris</title>
+<meta name="description" content="The mysql module talks to MySQL and MariaDB over the network, with nothing else to install. It has the same shape as the pg module of the PostgreSQL and Redis chapter: a pool that every task and thread can share, exec and query, rows read into @json structs with mysql.all and mysql.one, and transactions.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="29-mysql.html" class="on"><span class="num">29</span>MySQL</a></li><li><a href="31-s3.html"><span class="num">31</span>S3</a></li></ol></aside>
+  <article class="prose">
+<h1>MySQL</h1>
+<p class="lede">The <code>mysql</code> module talks to MySQL and MariaDB over the network, with nothing else to install. It has the same shape as the <code>pg</code> module of the <a href="18-postgres-and-redis.html">PostgreSQL and Redis</a> chapter: a pool that every task and thread can share, <code>exec</code> and <code>query</code>, rows read into <code>@json</code> structs with <code>mysql.all</code> and <code>mysql.one</code>, and transactions.</p>
+<p>The examples in this chapter need a server, so they read its address from an environment variable. A MySQL server for trying them runs with <code>docker run -p 3306:3306 -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=shop mysql:8.4</code>.</p>
+<h2 id="connecting"><a href="#connecting">Connecting</a></h2>
+<p><code>mysql.pool(address)</code> gives a <code>mysql.Pool</code>. It connects once to check the address and the login, then opens more connections as tasks need them, up to the number given after the address, or 10. <code>close</code> closes them all:</p>
+<pre class="code"><code><span class="k">import</span> mysql, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    address := os.<span class="f">env</span>(<span class="s">&quot;MYSQL_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mysql://root:secret@localhost:3306/shop?allowPublicKeyRetrieval=true&quot;</span>
+    db := <span class="k">try</span> mysql.<span class="f">pool</span>(address, <span class="n">20</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+
+    rows := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;SELECT VERSION()&quot;</span>)
+    <span class="k">defer</span> rows.<span class="f">close</span>()
+
+    _ = rows.<span class="f">next</span>()
+    <span class="f">print</span>(rows.<span class="f">text</span>(<span class="n">0</span>))
+}</code></pre>
+<pre class="out"><code>8.4.11</code></pre>
+<ul><li>The address is <code>mysql://user:password@host:port/database</code>.</li><li><code>?sslmode=require</code> makes the connection use TLS, and <code>?sslmode=verify-full&amp;ca=root.pem</code> also checks the server's certificate.</li><li>MySQL's own login, <code>caching_sha2_password</code>, sends the whole password the first time a user logs in after the server starts. Over TLS that is safe. Without TLS the password goes encrypted with the server's RSA key, and only when the address has <code>?allowPublicKeyRetrieval=true</code>, since a server in the middle could hand over a key of its own.</li><li><code>mysql_native_password</code>, the login of MariaDB and of older servers, works too.</li><li>A refused login fails with <code>MysqlError.auth</code>, and a server that can't be reached with <code>MysqlError.connect</code>.</li></ul>
+<h2 id="changing-data"><a href="#changing-data">Changing data</a></h2>
+<p><code>exec</code> runs one statement and gives how many rows it changed. The values go apart from the SQL, as <code>?</code>, and are <code>.int</code>, <code>.float</code>, <code>.text</code>, <code>.bool</code>, or <code>.none</code> for NULL. A statement with values is prepared the first time a connection runs it, and only the values go after that. <code>execScript</code> runs SQL with no values that may hold several statements, such as a schema:</p>
+<pre class="code"><code><span class="k">import</span> mysql, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mysql.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;MYSQL_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mysql://root:secret@localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+
+    <span class="k">try</span> db.<span class="f">execScript</span>(<span class="s">r&quot;&quot;&quot;
+        DROP TABLE IF EXISTS products;
+        CREATE TABLE products (
+            id int AUTO_INCREMENT PRIMARY KEY,
+            name varchar(100) UNIQUE NOT NULL,
+            price decimal(10, 2) NOT NULL,
+            stock int NOT NULL DEFAULT 0
+        );
+        &quot;&quot;&quot;</span>)
+
+    <span class="k">for</span> (name, price) <span class="k">in</span> [(<span class="s">&quot;green tea&quot;</span>, <span class="n">3.5</span>), (<span class="s">&quot;lemon cake&quot;</span>, <span class="n">4.25</span>), (<span class="s">&quot;coffee&quot;</span>, <span class="n">2.8</span>)] {
+        _ = <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price, stock) VALUES (?, ?, ?)&quot;</span>, [.<span class="f">text</span>(name), .<span class="f">float</span>(price), .<span class="f">int</span>(<span class="n">10</span>)])
+    }
+
+    n := <span class="k">try</span> db.<span class="f">exec</span>(<span class="s">&quot;UPDATE products SET stock = stock - 1 WHERE price &lt; ?&quot;</span>, [.<span class="f">float</span>(<span class="n">4.0</span>)])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> rows changed&quot;</span>)
+
+    added := <span class="k">try</span> db.<span class="f">query</span>(<span class="s">&quot;INSERT INTO products (name, price) VALUES (?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;scone&quot;</span>), .<span class="f">float</span>(<span class="n">3.1</span>)])
+    <span class="k">defer</span> added.<span class="f">close</span>()
+    <span class="f">print</span>(<span class="s">&quot;scone is </span><span class="e">{</span>added.lastId<span class="e">}</span><span class="s">&quot;</span>)
+
+    _ = db.<span class="f">exec</span>(<span class="s">&quot;INSERT INTO products (name, price) VALUES (?, ?)&quot;</span>, [.<span class="f">text</span>(<span class="s">&quot;coffee&quot;</span>), .<span class="f">float</span>(<span class="n">3.0</span>)]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="n">0</span>
+    }
+}</code></pre>
+<pre class="out"><code>2 rows changed
+scone is 4
+MysqlError.constraint: Duplicate entry &#x27;coffee&#x27; for key &#x27;products.name&#x27; (1062 23000)</code></pre>
+<p><code>query</code> gives <code>mysql.Rows</code>, whose <code>affected</code> says how many rows changed and whose <code>lastId</code> is the <code>AUTO_INCREMENT</code> id the last <code>INSERT</code> made. A statement that the server refuses fails with <code>MysqlError.failed</code>, or with <code>MysqlError.constraint</code> for a duplicate key, a foreign key, a <code>NOT NULL</code> or a <code>CHECK</code> that isn't met. The message has the server's text, then its error number and SQLSTATE in brackets.</p>
+<h2 id="reading-rows"><a href="#reading-rows">Reading rows</a></h2>
+<p><code>mysql.all[T](&amp;db, sql, values)</code> runs a query and reads every row into a <code>@json</code> struct, each field from the column of the same name. <code>mysql.one[T]</code> reads the first row, or fails with <code>MysqlError.noRows</code>. Both take a <code>Pool</code>, a <code>Conn</code> or a transaction:</p>
+<pre class="code"><code><span class="k">import</span> mysql, os
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    <span class="t">i64</span> id
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mysql.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;MYSQL_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mysql://root:secret@localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+
+    products := <span class="k">try</span> mysql.all[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM products WHERE stock &gt; ? ORDER BY price&quot;</span>, [.<span class="f">int</span>(<span class="n">0</span>)])
+    <span class="k">defer</span> {
+        <span class="k">for</span> p <span class="k">in</span> products {
+            p.<span class="f">free</span>()
+        }
+        products.<span class="f">free</span>()
+    }
+
+    <span class="k">for</span> p <span class="k">in</span> products {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.id<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>p.price<span class="e">}</span><span class="s">, </span><span class="e">{</span>p.stock<span class="e">}</span><span class="s"> left&quot;</span>)
+    }
+
+    _ = mysql.one[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM products WHERE id = ?&quot;</span>, [.<span class="f">int</span>(<span class="n">99</span>)]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Product</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>3 coffee: 2.8, 9 left
+1 green tea: 3.5, 9 left
+2 lemon cake: 4.25, 10 left
+MysqlError.noRows</code></pre>
+<p><code>Rows</code> can also be read one row at a time, as in the <code>pg</code> module: <code>next</code> moves to the next row, and <code>int</code>, <code>float</code>, <code>bool</code>, <code>text</code> and <code>isNull</code> read a column by its number, from 0. Dates come as <code>2026-10-17</code> and times as <code>2026-10-17 09:30:00</code>, and a <code>bool</code> column, which MySQL keeps as a number, reads as <code>true</code> for anything but 0.</p>
+<h2 id="transactions"><a href="#transactions">Transactions</a></h2>
+<p><code>db.begin()</code> takes a connection from the pool for a transaction. Its <code>query</code> and <code>exec</code> run inside it, and <code>commit</code> or <code>rollback</code> ends it and gives the connection back. With <code>scoped</code>, a transaction left without <code>commit</code> rolls back:</p>
+<pre class="code"><code><span class="k">import</span> mysql, os
+
+<span class="c">// Takes count of a product from the stock, and says whether there were enough.</span>
+!<span class="t">bool</span> <span class="f">order</span>(mysql.<span class="t">Pool</span> *db, <span class="t">str</span> product, <span class="t">i64</span> count) {
+    <span class="k">scoped</span> tx := <span class="k">try</span> db.<span class="f">begin</span>()
+
+    rows := <span class="k">try</span> tx.<span class="f">query</span>(<span class="s">&quot;SELECT stock FROM products WHERE name = ? FOR UPDATE&quot;</span>, [.<span class="f">text</span>(product)])
+    <span class="k">defer</span> rows.<span class="f">close</span>()
+    <span class="k">if</span> !rows.<span class="f">next</span>() || rows.<span class="f">int</span>(<span class="n">0</span>) &lt; count {
+        <span class="k">return</span> <span class="k">false</span>
+    }
+
+    _ = <span class="k">try</span> tx.<span class="f">exec</span>(<span class="s">&quot;UPDATE products SET stock = stock - ? WHERE name = ?&quot;</span>, [.<span class="f">int</span>(count), .<span class="f">text</span>(product)])
+    <span class="k">try</span> tx.<span class="f">commit</span>()
+    <span class="k">return</span> <span class="k">true</span>
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mysql.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;MYSQL_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mysql://root:secret@localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+
+    <span class="f">print</span>(<span class="s">&quot;4 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">4</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;50 coffees: </span><span class="e">{</span><span class="k">try</span> <span class="f">order</span>(&amp;db, <span class="s">&quot;coffee&quot;</span>, <span class="n">50</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>4 coffees: true
+50 coffees: false</code></pre>
+<p>A deadlock or a lock wait that took too long fails with <code>MysqlError.retry</code>. Run the transaction again.</p>
+    <nav class="pager"><a class="prev" href="22-ssh.html"><span>Previous</span>SSH</a><a class="next" href="31-s3.html"><span>Next</span>S3</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting">Connecting</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#transactions">Transactions</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

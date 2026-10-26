@@ -752,3 +752,21 @@ pub String ecdsaDer(str raw) {
     rawRawToDer(raw.ptr, raw.len, &out)
     return out
 }
+
+@extern("iris_pk_encrypt_oaep")
+i32 rawEncryptOaep(u8 *key, u8 *data, i64 len, i32 hash, String *out)
+
+// data encrypted with an RSA key, with OAEP padding over hash (sha1, as
+// MySQL uses it, or sha256). data must be shorter than the key's size in
+// bytes less 42 (sha1) or 66 (sha256).
+pub !String PublicKey.encrypt(str data, Hash hash = .sha1) {
+    if hash != .sha1 && hash != .sha256 {
+        return error(CryptoError.badKey, "OAEP here is over sha1 or sha256")
+    }
+    String out
+    if rawEncryptOaep(self.k, data.ptr, data.len, hashCode(hash), &out) == 0 {
+        out.free()
+        return error(CryptoError.badKey, keyMessage())
+    }
+    return out
+}

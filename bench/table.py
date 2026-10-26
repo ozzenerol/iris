@@ -56,6 +56,7 @@ LIB_ROWS = [
     ("wire", "100,000 binary messages read and written, 30 times", "by hand, `from_be_bytes`", "`encoding/binary`"),
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
     ("sigv4", "200000 S3 requests signed with AWS Signature Version 4, each with a 1 KiB body", "aws-sigv4", "`aws-sdk-go-v2` signer"),
+    ("mysql-query", "MySQL: 1000 inserts in a transaction, 20000 prepared selects by id, then the table read 100 times", "sqlx", "`go-sql-driver/mysql`"),
 ]
 
 

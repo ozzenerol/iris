@@ -1,0 +1,214 @@
+// expect: 3 inserted, last id 3
+// expect: 1 Ada 36 true
+// expect: 2 Bob 0 false
+// expect: 3 Zoë "the 'quoted' one" 7 false
+// expect: one: Bob
+// expect: MysqlError.noRows
+// expect: MysqlError.constraint, 1062: true
+// expect: MysqlError.failed, 1064: true
+// expect: after the error: 3 users
+// expect: 2 updated, 1 deleted
+// expect: rolled back: 2 users
+// expect: seen in the transaction: Cy
+// expect: committed: 3 users
+// expect: scoped and left: 3 users
+// expect: text:   -128|65535|-8388608|4294967295|-9223372036854775808|18446744073709551615|1.5|2.25|12.50|2026-10-17|2026-10-17 09:30:05.123456|2026-10-17 09:30:05|-26:03:04|2026|héllo|[NULL]
+// expect: binary: -128|65535|-8388608|4294967295|-9223372036854775808|18446744073709551615|1.5|2.25|12.50|2026-10-17|2026-10-17 09:30:05.123456|2026-10-17 09:30:05|-26:03:04|2026|héllo|[NULL]
+// expect: values: 7 -1.25 true NULL x'00ff'
+// expect: 17 MiB through both protocols: true true
+// expect: a script of 3 statements: 1 row in the first result
+// expect: 40 queries from 20 tasks, 4 connections at most: 40
+// expect: native login: 1
+// expect: TLS login: on
+// expect: wrong password: MysqlError.auth
+// expect: no TLS, no key: MysqlError.auth
+// expect: tlsonly without TLS: MysqlError.auth
+// expect: the key from the server: 1
+
+import mysql, os, str
+
+@json
+struct User {
+    i64 id
+    String name
+    i64 age
+    bool admin
+}
+
+void freeUsers(List[User] *users) {
+    for u in users {
+        u.name.free()
+    }
+    users.free()
+}
+
+void worker(mysql.Pool *db, chan[i64] done) {
+    i64 good = 0
+    for i in 0..2 {
+        scoped r := db.query("SELECT SLEEP(0.01), COUNT(*) FROM users WHERE id > ?", [.int(0)]) catch e {
+            continue
+        }
+        if r.next() && r.int(1) >= 2 {
+            good += 1
+        }
+    }
+    done <- good
+}
+
+// Each column of the first row, joined with |.
+String joined(mysql.Rows *r) {
+    String out
+    _ = r.next()
+    for c in 0..r.columns() {
+        if c > 0 {
+            out.append("|")
+        }
+        out.append(if r.isNull(c) { "[NULL]" } else { r.text(c) })
+    }
+    return out
+}
+
+!void main() {
+    address := try os.env("IRIS_MYSQL_URL")
+    // the address without allowPublicKeyRetrieval=true
+    base, _, _ := str.cut(address, "?")
+    db := try mysql.pool(address, 4)
+    defer db.close()
+    try db.execScript("DROP TABLE IF EXISTS users; CREATE TABLE users (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100) UNIQUE NOT NULL, age int, admin bool NOT NULL DEFAULT false)")
+    a := try db.exec("INSERT INTO users (name, age, admin) VALUES (?, ?, ?)", [.text("Ada"), .int(36), .bool(true)])
+    b := try db.exec("INSERT INTO users (name, age) VALUES (?, ?)", [.text("Bob"), .none])
+    scoped last := try db.query("INSERT INTO users (name, age) VALUES (?, ?)", [.text("Zoë \"the 'quoted' one\""), .int(7)])
+    print("{a + b + last.affected} inserted, last id {last.lastId}")
+    users := try mysql.all[User](&db, "SELECT * FROM users ORDER BY id")
+    for u in users {
+        print("{u.id} {u.name} {u.age} {u.admin}")
+    }
+    freeUsers(&users)
+    one := try mysql.one[User](&db, "SELECT * FROM users WHERE name = ?", [.text("Bob")])
+    print("one: {one.name}")
+    one.name.free()
+    _ = mysql.one[User](&db, "SELECT * FROM users WHERE id = ?", [.int(99)]) catch e {
+        print("{e.code}")
+        User{}
+    }
+    _ = db.exec("INSERT INTO users (name) VALUES (?)", [.text("Ada")]) catch e {
+        print("{e.code}, 1062: {str.contains(e.message, "(1062 23000)")}")
+        0
+    }
+    _ = db.query("SELEC nonsense") catch e {
+        print("{e.code}, 1064: {str.contains(e.message, "1064")}")
+        mysql.Rows{}
+    }
+    scoped count := try db.query("SELECT COUNT(*) FROM users")
+    _ = count.next()
+    print("after the error: {count.int(0)} users")
+    up := try db.exec("UPDATE users SET age = age + 1 WHERE age IS NOT NULL")
+    gone := try db.exec("DELETE FROM users WHERE name = ?", [.text("Bob")])
+    print("{up} updated, {gone} deleted")
+
+    tx := try db.begin()
+    _ = try tx.exec("INSERT INTO users (name) VALUES ('Cy')")
+    try tx.rollback()
+    scoped n1 := try db.query("SELECT COUNT(*) FROM users")
+    _ = n1.next()
+    print("rolled back: {n1.int(0)} users")
+    tx2 := try db.begin()
+    _ = try tx2.exec("INSERT INTO users (name) VALUES ('Cy')")
+    inTx := try mysql.one[User](&tx2, "SELECT * FROM users WHERE name = ?", [.text("Cy")])
+    print("seen in the transaction: {inTx.name}")
+    inTx.name.free()
+    try tx2.commit()
+    scoped n2 := try db.query("SELECT COUNT(*) FROM users")
+    _ = n2.next()
+    print("committed: {n2.int(0)} users")
+    {
+        scoped tx3 := try db.begin()
+        _ = try tx3.exec("INSERT INTO users (name) VALUES ('Dee')")
+    }
+    scoped n3 := try db.query("SELECT COUNT(*) FROM users")
+    _ = n3.next()
+    print("scoped and left: {n3.int(0)} users")
+
+    try db.execScript(r"""
+        DROP TABLE IF EXISTS types;
+        CREATE TABLE types (id int PRIMARY KEY, t tinyint, s smallint unsigned, m mediumint, i int unsigned,
+            b bigint, u bigint unsigned, f float, d double, n decimal(10, 2), dt date, ts datetime(6),
+            ts0 timestamp, tm time, y year, v varchar(10), z text);
+        INSERT INTO types VALUES (1, -128, 65535, -8388608, 4294967295, -9223372036854775808,
+            18446744073709551615, 1.5, 2.25, 12.5, '2026-10-17', '2026-10-17 09:30:05.123456',
+            '2026-10-17 09:30:05', '-26:03:04', 2026, 'héllo', NULL);
+        """)
+    scoped tr := try db.query("SELECT t, s, m, i, b, u, f, d, n, dt, ts, ts0, tm, y, v, z FROM types")
+    scoped String textRow = joined(&tr)
+    print("text:   {textRow}")
+    scoped br := try db.query("SELECT t, s, m, i, b, u, f, d, n, dt, ts, ts0, tm, y, v, z FROM types WHERE id = ?", [.int(1)])
+    scoped String binRow = joined(&br)
+    print("binary: {binRow}")
+    scoped vr := try db.query("SELECT ?, ?, ?, ?, HEX(?)", [.int(7), .float(-1.25), .bool(true), .none, .text("\x00\xff")])
+    _ = vr.next()
+    scoped String hexed = str.lower(vr.text(4))
+    print("values: {vr.text(0)} {vr.text(1)} {vr.bool(2)} {if vr.isNull(3) { "NULL" } else { "?" }} x'{hexed}'")
+
+    String big
+    for big.len < 17MiB {
+        big.append("0123456789abcdef")
+    }
+    try db.execScript("DROP TABLE IF EXISTS blobs; CREATE TABLE blobs (id int PRIMARY KEY, data longblob)")
+    _ = try db.exec("INSERT INTO blobs VALUES (?, ?)", [.int(1), .text(big)])
+    scoped bt := try db.query("SELECT data FROM blobs")
+    _ = bt.next()
+    scoped bb := try db.query("SELECT data FROM blobs WHERE id = ?", [.int(1)])
+    _ = bb.next()
+    print("17 MiB through both protocols: {bt.text(0) == big} {bb.text(0) == big}")
+    big.free()
+
+    scoped sr := try db.query("SELECT 1; SELECT 2 UNION SELECT 3; DO 1")
+    print("a script of 3 statements: {sr.len} row in the first result")
+
+    done := chan[i64](20)
+    for i in 0..20 {
+        spawn worker(&db, done)
+    }
+    i64 good = 0
+    for i in 0..20 {
+        good += <-done
+    }
+    done.free()
+    print("40 queries from 20 tasks, 4 connections at most: {good}")
+
+    scoped String nativeUrl = str.replace(base, "iris:secret@", "native:nativepass@")
+    nc := try mysql.connect(nativeUrl)
+    scoped nr := try nc.query("SELECT 1")
+    _ = nr.next()
+    print("native login: {nr.int(0)}")
+    nc.close()
+    scoped String host = str.replace(base, "127.0.0.1", "localhost")
+    scoped String tlsBase = str.replace(host, "iris:secret@", "tlsonly:tlspass@")
+    scoped String tlsUrl = format("{tlsBase}?sslmode=verify-full&ca=tests/data/tls/ca.pem")
+    tc := try mysql.connect(tlsUrl)
+    scoped cipher := try tc.query("SHOW STATUS LIKE 'Ssl_cipher'")
+    _ = cipher.next()
+    print("TLS login: {if cipher.text(1).len > 0 { "on" } else { "off" }}")
+    tc.close()
+    scoped String wrong = str.replace(base, "iris:secret@", "iris:nope@")
+    _ = mysql.connect(wrong) catch e {
+        print("wrong password: {e.code}")
+        mysql.Conn{}
+    }
+    scoped String fresh = str.replace(base, "iris:secret@", "fresh:freshpass@")
+    _ = mysql.connect(fresh) catch e {
+        print("no TLS, no key: {e.code}")
+        mysql.Conn{}
+    }
+    scoped String tlsPlain = str.replace(base, "iris:secret@", "tlsonly:tlspass@")
+    _ = mysql.connect(tlsPlain) catch e {
+        print("tlsonly without TLS: {e.code}")
+        mysql.Conn{}
+    }
+    scoped String withKey = str.replace(address, "iris:secret@", "fresh:freshpass@")
+    kc := try mysql.connect(withKey)
+    scoped kr := try kc.query("SELECT 1")
+    _ = kr.next()
+    print("the key from the server: {kr.int(0)}")
+    kc.close()
+}

@@ -1,0 +1,45 @@
+import mysql, os
+
+@json
+struct Item {
+    i64 id
+    String name
+    String email
+    f64 score
+    i64 qty
+}
+
+// Against a MySQL server at $IRIS_BENCH_MYSQL: 1000 rows inserted in a
+// transaction, 20000 rows read one at a time by id with a prepared
+// statement, then the whole table read 100 times, all on one connection.
+!void main() {
+    address := os.env("IRIS_BENCH_MYSQL") catch "mysql://iris:secret@127.0.0.1:3306/iris_test?allowPublicKeyRetrieval=true"
+    db := try mysql.pool(address, 1)
+    defer db.close()
+    try db.execScript("DROP TABLE IF EXISTS items; CREATE TABLE items (id int PRIMARY KEY, name varchar(50) NOT NULL, email varchar(100) NOT NULL, score double NOT NULL, qty int NOT NULL)")
+    tx := try db.begin()
+    for i in 1..1001 {
+        scoped String name = format("item {i}")
+        scoped String email = format("buyer{i}@example.com")
+        _ = try tx.exec("INSERT INTO items (id, name, email, score, qty) VALUES (?, ?, ?, ?, ?)",
+            [.int(i), .text(name), .text(email), .float(f64(i) * 0.5), .int(i % 17)])
+    }
+    try tx.commit()
+    f64 score = 0.0
+    i64 chars = 0
+    for i in 0..20000 {
+        scoped Item it = try mysql.one[Item](&db, "SELECT id, name, email, score, qty FROM items WHERE id = ?", [.int(i * 7919 % 1000 + 1)])
+        score += it.score
+        chars += it.name.len + it.email.len + it.qty
+    }
+    i64 ids = 0
+    for i in 0..100 {
+        items := try mysql.all[Item](&db, "SELECT id, name, email, score, qty FROM items WHERE qty >= ?", [.int(0)])
+        for it in items {
+            ids += it.id
+            it.free()
+        }
+        items.free()
+    }
+    print("{score} {chars} {ids}")
+}

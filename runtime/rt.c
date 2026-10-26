@@ -17533,3 +17533,54 @@ static int shaHwBlocks(uint32_t h[8], const unsigned char *p, size_t blocks) {
     return 0;
 #endif
 }
+
+/* ---------------------------------------------------------------- RSA-OAEP (0.82)
+   RSA encryption with OAEP padding, for MySQL's caching_sha2_password over
+   a connection without TLS. hash: 0 SHA-1 (what MySQL uses), 1 SHA-256. */
+
+static struct {
+    int loaded;
+    void *(*ctxNew)(void *, void *);
+    void (*ctxFree)(void *);
+    int (*encryptInit)(void *);
+    int (*encrypt)(void *, unsigned char *, size_t *, const unsigned char *, size_t);
+    int (*setOaepMd)(void *, const void *);
+} oaep;
+
+static pthread_once_t oaepOnce = PTHREAD_ONCE_INIT;
+
+static void oaepLoad(void) {
+    if (!pkReady()) return;
+    void *c = ossl.cryptoLib;
+    *(void **)&oaep.ctxNew = dlsym(c, "EVP_PKEY_CTX_new");
+    *(void **)&oaep.ctxFree = dlsym(c, "EVP_PKEY_CTX_free");
+    *(void **)&oaep.encryptInit = dlsym(c, "EVP_PKEY_encrypt_init");
+    *(void **)&oaep.encrypt = dlsym(c, "EVP_PKEY_encrypt");
+    *(void **)&oaep.setOaepMd = dlsym(c, "EVP_PKEY_CTX_set_rsa_oaep_md");     /* OpenSSL 3 */
+    oaep.loaded = oaep.ctxNew && oaep.ctxFree && oaep.encryptInit && oaep.encrypt;
+}
+
+int iris_pk_encrypt_oaep(void *key, const char *data, int64_t len, int hash, IrisString *out) {
+    pthread_once(&oaepOnce, oaepLoad);
+    if (!oaep.loaded) {
+        tlsSay("RSA encryption needs OpenSSL's libcrypto");
+        return 0;
+    }
+    void *ctx = oaep.ctxNew(key, NULL);
+    int ok = ctx && oaep.encryptInit(ctx) == 1;
+    /* RSA_PKCS1_OAEP_PADDING */
+    ok = ok && (pk.setPadding ? pk.setPadding(ctx, 4) == 1 : pk.pkeyCtrl(ctx, 6, -1, 0x1001, 4, NULL) == 1);
+    if (ok && hash == 1) {
+        const void *md = pk.md[1]();
+        ok = oaep.setOaepMd ? oaep.setOaepMd(ctx, md) == 1 : pk.pkeyCtrl(ctx, 6, 0x300, 0x1009, 0, (void *)md) == 1;
+    }
+    size_t n = 0;
+    ok = ok && oaep.encrypt(ctx, NULL, &n, (const unsigned char *)data, (size_t)len) == 1;
+    unsigned char *buf = ok ? malloc(n ? n : 1) : NULL;
+    ok = ok && buf && oaep.encrypt(ctx, buf, &n, (const unsigned char *)data, (size_t)len) == 1;
+    if (ok) iris_string_append(out, (const char *)buf, (int64_t)n);
+    else tlsSayOpenssl("encrypting with RSA");
+    free(buf);
+    if (ctx) oaep.ctxFree(ctx);
+    return ok;
+}

@@ -1,0 +1,1265 @@
+// MySQL and MariaDB, spoken over the network by Iris itself: a connection
+// waits like any other network call, so the program's other tasks keep
+// running.
+//
+//     db := try mysql.pool("mysql://ada:secret@localhost/shop")
+//     defer db.close()
+//     try db.exec("INSERT INTO users (name, age) VALUES (?, ?)", [.text("Ada"), .int(36)])
+//     users := try mysql.all[User](&db, "SELECT * FROM users WHERE age > ?", [.int(30)])
+//
+// Statements with values are prepared once on each connection and sent
+// with the values apart from the SQL, so the values can't change what the
+// SQL means. Results are read with Rows.int, text and so on, or into @json
+// structs by column name with all and one.
+
+import crypto, net, str, time, url
+
+// What MySQL calls fail with: connect, auth, failed, constraint (a
+// duplicate key, a foreign key, a NULL or a CHECK that isn't met), retry (a
+// deadlock or a lock wait timeout: try again), noRows (one found nothing),
+// closed.
+pub enum MysqlError { connect, auth, failed, constraint, retry, noRows, closed }
+
+// A value for a ? in SQL: .int(36), .float(1.5), .text("ada") (any bytes),
+// .bool(true) or .none for NULL.
+pub enum Value { int(i64 v), float(f64 v), text(str v), bool(bool v), none }
+
+@extern("iris_pg_scan")
+i32 rawScan(u8 *table, u8 *out, str *names, str *values, u8 *nulls, i64 n)
+
+@extern("iris_pg_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_pg_message_len")
+i64 messageLen()
+
+@builtin
+void tableOf()
+
+// ------------------------------------------------------------ bytes
+
+void put8(String *out, i64 v) {
+    u8[1] b = [u8(v & 0xff)]
+    out.append(b[0:1])
+}
+
+void put16(String *out, i64 v) {
+    u8[2] b = [u8(v & 0xff), u8(v >> 8 & 0xff)]
+    out.append(b[0:2])
+}
+
+void put32(String *out, i64 v) {
+    u8[4] b = [u8(v & 0xff), u8(v >> 8 & 0xff), u8(v >> 16 & 0xff), u8(v >> 24 & 0xff)]
+    out.append(b[0:4])
+}
+
+void put64(String *out, i64 v) {
+    put32(out, v & 0xffffffff)
+    put32(out, v >> 32 & 0xffffffff)
+}
+
+// A length-encoded integer.
+void putLen(String *out, i64 v) {
+    if v < 251 {
+        put8(out, v)
+    } else if v < 0x10000 {
+        put8(out, 0xfc)
+        put16(out, v)
+    } else if v < 0x1000000 {
+        put8(out, 0xfd)
+        put16(out, v & 0xffff)
+        put8(out, v >> 16)
+    } else {
+        put8(out, 0xfe)
+        put64(out, v)
+    }
+}
+
+void putLenStr(String *out, str s) {
+    putLen(out, s.len)
+    out.append(s)
+}
+
+void putStr(String *out, str s) {
+    out.append(s)
+    out.append("\x00")
+}
+
+i64 get16(str m, i64 i) => if i + 2 <= m.len { i64(m[i]) | i64(m[i + 1]) << 8 } else { 0 }
+
+i64 get24(str m, i64 i) => if i + 3 <= m.len { i64(m[i]) | i64(m[i + 1]) << 8 | i64(m[i + 2]) << 16 } else { 0 }
+
+i64 get32(str m, i64 i) => if i + 4 <= m.len { i64(m[i]) | i64(m[i + 1]) << 8 | i64(m[i + 2]) << 16 | i64(m[i + 3]) << 24 } else { 0 }
+
+i64 get64(str m, i64 i) => if i + 8 <= m.len { get32(m, i) | get32(m, i + 4) << 32 } else { 0 }
+
+// A length-encoded integer at m[*at].
+i64 getLen(str m, i64 *at) {
+    if *at >= m.len {
+        return 0
+    }
+    b := m[*at]
+    *at += 1
+    if b < 0xfb {
+        return i64(b)
+    }
+    if b == 0xfc {
+        v := get16(m, *at)
+        *at += 2
+        return v
+    }
+    if b == 0xfd {
+        v := get24(m, *at)
+        *at += 3
+        return v
+    }
+    if b == 0xfe {
+        v := get64(m, *at)
+        *at += 8
+        return v
+    }
+    return 0 // 0xfb, NULL in a row
+}
+
+str getLenStr(str m, i64 *at) {
+    n := getLen(m, at)
+    start := *at
+    end := if start + n <= m.len { start + n } else { m.len }
+    *at = end
+    return m[start:end]
+}
+
+// A NUL-terminated string at m[*at].
+str getStr(str m, i64 *at) {
+    start := *at
+    for *at < m.len && m[*at] != 0 {
+        *at += 1
+    }
+    s := m[start:*at]
+    *at += 1
+    return s
+}
+
+// ------------------------------------------------------------ constants
+
+const i64 LONG_PASSWORD = 0x1
+const i64 LONG_FLAG = 0x4
+const i64 CONNECT_WITH_DB = 0x8
+const i64 PROTOCOL_41 = 0x200
+const i64 SSL = 0x800
+const i64 TRANSACTIONS = 0x2000
+const i64 SECURE_CONNECTION = 0x8000
+const i64 MULTI_STATEMENTS = 0x10000
+const i64 MULTI_RESULTS = 0x20000
+const i64 PS_MULTI_RESULTS = 0x40000
+const i64 PLUGIN_AUTH = 0x80000
+const i64 PLUGIN_AUTH_LENENC = 0x200000
+const i64 DEPRECATE_EOF = 0x1000000
+
+const i64 STATUS_IN_TRANS = 0x1
+const i64 STATUS_MORE_RESULTS = 0x8
+
+const i64 MAX_PACKET = 0xffffff
+
+// column types
+const i64 T_DECIMAL = 0
+const i64 T_TINY = 1
+const i64 T_SHORT = 2
+const i64 T_LONG = 3
+const i64 T_FLOAT = 4
+const i64 T_DOUBLE = 5
+const i64 T_NULL = 6
+const i64 T_TIMESTAMP = 7
+const i64 T_LONGLONG = 8
+const i64 T_INT24 = 9
+const i64 T_DATE = 10
+const i64 T_TIME = 11
+const i64 T_DATETIME = 12
+const i64 T_YEAR = 13
+const i64 T_VAR_STRING = 253
+
+const i64 UNSIGNED_FLAG = 0x20
+
+// ------------------------------------------------------------ connecting
+
+struct Stmt {
+    i64 id
+    i64 params
+}
+
+// One connection to a server. It is used by one task at a time; a Pool
+// shares connections between tasks and threads.
+pub struct Conn {
+    net.Conn conn
+    bool broken
+    bool tls
+    u8 seq
+    i64 caps
+    // the server's status flags after the last statement
+    i64 status
+    Map[str, Stmt] stmts
+    String packet
+}
+
+struct Settings {
+    String user
+    String password
+    String database
+    String host
+    u16 port
+    String sslmode
+    String ca
+    bool retrieveKey
+    Duration timeout
+}
+
+void Settings.free() {
+    self.user.free()
+    self.password.free()
+    self.database.free()
+    self.host.free()
+    self.sslmode.free()
+    self.ca.free()
+}
+
+// mysql://user:password@host:port/database?sslmode=require&ca=root.pem
+!Settings settingsOf(str address) {
+    u := url.parse(address) catch e {
+        return error(MysqlError.connect, "'{address}' isn't a mysql:// address")
+    }
+    if u.scheme != "mysql" && u.scheme != "mariadb" {
+        return error(MysqlError.connect, "'{address}' isn't a mysql:// address")
+    }
+    Settings s
+    errdefer s.free()
+    name, pass, _ := str.cut(u.user, ":")
+    s.user = try url.decode(name)
+    s.password = try url.decode(pass)
+    s.host = (if u.host.len > 0 { u.host } else { "localhost" }).copy()
+    s.port = u16(if u.port > 0 { u.port } else { 3306 })
+    dbname := if str.startsWith(u.path, "/") { u.path[1:] } else { u.path }
+    s.database = try url.decode(dbname)
+    s.sslmode = "disable".copy()
+    s.timeout = 10s
+    str rest = u.query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        scoped String v = try url.decode(value)
+        if key == "sslmode" {
+            if v != "disable" && v != "require" && v != "verify-full" {
+                return error(MysqlError.connect, "sslmode is disable, require or verify-full, not {v}")
+            }
+            s.sslmode.free()
+            s.sslmode = v.copy()
+        } else if key == "ca" {
+            s.ca.free()
+            s.ca = v.copy()
+        } else if key == "allowPublicKeyRetrieval" {
+            s.retrieveKey = v == "true"
+        } else if key == "connect_timeout" {
+            secs := str.parseInt(v) catch 10
+            s.timeout = Duration(secs) * 1s
+        }
+    }
+    if s.user.len == 0 {
+        return error(MysqlError.connect, "'{address}' has no user")
+    }
+    return s
+}
+
+// Reads a packet into self.packet, joining one sent in pieces of 16 MiB.
+!void Conn.read() {
+    self.packet.clear()
+    for {
+        scoped String head = self.conn.readExactly(4) catch e {
+            self.broken = true
+            return error(MysqlError.closed, "the server closed the connection: {e.message}")
+        }
+        n := get24(head, 0)
+        self.seq = head[3] + 1
+        if n > 0 {
+            scoped String body = self.conn.readExactly(n) catch e {
+                self.broken = true
+                return error(MysqlError.closed, "the server closed the connection: {e.message}")
+            }
+            self.packet.append(body)
+        }
+        if n < MAX_PACKET {
+            return
+        }
+    }
+}
+
+// Sends payload as one packet, or in pieces of 16 MiB.
+!void Conn.write(str payload) {
+    String out
+    defer out.free()
+    i64 at = 0
+    for {
+        n := if payload.len - at < MAX_PACKET { payload.len - at } else { MAX_PACKET }
+        put16(&out, n & 0xffff)
+        put8(&out, n >> 16)
+        put8(&out, i64(self.seq))
+        self.seq += 1
+        out.append(payload[at:at + n])
+        at += n
+        if n < MAX_PACKET {
+            break
+        }
+    }
+    self.conn.write(out) catch e {
+        self.broken = true
+        return error(MysqlError.closed, "writing to the server: {e.message}")
+    }
+}
+
+// Starts a command: the sequence starts again at 0.
+!void Conn.command(str payload) {
+    if self.broken {
+        return error(MysqlError.closed, "the connection is broken")
+    }
+    self.seq = 0
+    try self.write(payload)
+}
+
+MysqlError kindOf(i64 code) {
+    if code == 1062 || code == 1451 || code == 1452 || code == 1048 || code == 3819 || code == 1216 ||
+        code == 1217 || code == 1586 || code == 1557 {
+            return .constraint
+        }
+    if code == 1213 || code == 1205 {
+        return .retry
+    }
+    if code == 1045 || code == 1044 || code == 1698 || code == 1251 || code == 3159 {
+        return .auth
+    }
+    return .failed
+}
+
+str errState(str p) => if p.len >= 9 && p[3] == '#' { p[4:9] } else { "" }
+
+str errMessage(str p) => if p.len >= 9 && p[3] == '#' { p[9:] } else if p.len > 3 { p[3:] } else { "" }
+
+// The error an ERR packet describes: the message, and the error number and
+// SQLSTATE in brackets.
+Error serverError(str p) => error(kindOf(get16(p, 1)), "{errMessage(p)} ({get16(p, 1)} {errState(p)})")
+
+// Connects to the server at address and logs in.
+pub !Conn connect(str address) {
+    scoped s := try settingsOf(address)
+    c := net.dial(s.host, s.port, s.timeout) catch e {
+        return error(MysqlError.connect, "connecting to {s.host}:{s.port}: {e.message}")
+    }
+    Conn mc = Conn{conn: c}
+    errdefer mc.close()
+    mc.conn.setTimeout(s.timeout)
+    try mc.read()
+    if mc.packet.len > 0 && mc.packet[0] == 0xff {
+        return serverError(mc.packet)
+    }
+    if mc.packet.len < 33 || mc.packet[0] != 10 {
+        return error(MysqlError.connect, "the server doesn't speak the MySQL protocol 10")
+    }
+    // HandshakeV10
+    hs := mc.packet[0:]
+    i64 at = 1
+    _ = getStr(hs, &at) // the server's version
+    at += 4             // the connection's id
+    String nonce
+    defer nonce.free()
+    nonce.append(hs[at:at + 8])
+    at += 9
+    serverCaps := get16(hs, at)
+    at += 2
+    at += 3 // character set and status
+    serverCaps = serverCaps | get16(hs, at) << 16
+    at += 2
+    authLen := i64(hs[at])
+    at += 11
+    if serverCaps & SECURE_CONNECTION != 0 {
+        n := if authLen - 8 > 13 { authLen - 8 } else { 13 }
+        end := if at + n <= hs.len { at + n } else { hs.len }
+        part := hs[at:end]
+        at = end
+        nonce.append(if part.len > 0 && part[part.len - 1] == 0 { part[0:part.len - 1] } else { part })
+    }
+    scoped String plugin = (if serverCaps & PLUGIN_AUTH != 0 { getStr(hs, &at) } else { "mysql_native_password" }).copy()
+    want := LONG_PASSWORD | LONG_FLAG | PROTOCOL_41 | TRANSACTIONS | SECURE_CONNECTION | MULTI_STATEMENTS |
+        MULTI_RESULTS | PS_MULTI_RESULTS | PLUGIN_AUTH | PLUGIN_AUTH_LENENC | DEPRECATE_EOF
+    if s.database.len > 0 {
+        want = want | CONNECT_WITH_DB
+    }
+    if s.sslmode != "disable" {
+        if serverCaps & SSL == 0 {
+            return error(MysqlError.connect, "the server doesn't take TLS, and sslmode is {s.sslmode}")
+        }
+        want = want | SSL
+    }
+    mc.caps = want & serverCaps
+    if mc.caps & PROTOCOL_41 == 0 {
+        return error(MysqlError.connect, "the server is older than MySQL 4.1")
+    }
+    String head
+    defer head.free()
+    put32(&head, mc.caps)
+    put32(&head, 16777216)
+    put8(&head, 45) // utf8mb4_general_ci
+    for i in 0..23 {
+        put8(&head, 0)
+    }
+    if mc.caps & SSL != 0 {
+        // SSLRequest: the first 32 bytes of the reply, then TLS
+        try mc.write(head)
+        mc.conn.startTls(s.host, s.ca) catch e {
+            return error(MysqlError.connect, "{e.message}")
+        }
+        mc.tls = true
+    }
+    String hello
+    defer hello.free()
+    hello.append(head)
+    putStr(&hello, s.user)
+    scoped String scramble = try mc.scramble(plugin, s.password, nonce)
+    if mc.caps & PLUGIN_AUTH_LENENC != 0 {
+        putLenStr(&hello, scramble)
+    } else {
+        put8(&hello, scramble.len)
+        hello.append(scramble)
+    }
+    if mc.caps & CONNECT_WITH_DB != 0 {
+        putStr(&hello, s.database)
+    }
+    if mc.caps & PLUGIN_AUTH != 0 {
+        putStr(&hello, plugin)
+    }
+    try mc.write(hello)
+    try mc.login(&s, plugin, nonce)
+    // no time limit on reads from now: a query can take as long as it takes
+    mc.conn.setTimeout(0s)
+    return mc
+}
+
+// What a login plugin sends for the password and the server's nonce.
+!String Conn.scramble(str plugin, str password, str nonce) {
+    String out
+    if password.len == 0 {
+        return out
+    }
+    if plugin == "mysql_native_password" {
+        // SHA1(password) xor SHA1(nonce + SHA1(SHA1(password)))
+        a := crypto.sha1(password)
+        b := crypto.sha1(a[0:20])
+        scoped String salted
+        salted.append(nonce[0:if nonce.len > 20 { 20 } else { nonce.len }])
+        salted.append(b[0:20])
+        c := crypto.sha1(salted)
+        u8[20] x
+        for i in 0..20 {
+            x[i] = a[i] ^ c[i]
+        }
+        out.append(x[0:20])
+        return out
+    }
+    if plugin == "caching_sha2_password" {
+        // SHA256(password) xor SHA256(SHA256(SHA256(password)) + nonce)
+        a := crypto.sha256(password)
+        b := crypto.sha256(a[0:32])
+        scoped String salted
+        salted.append(b[0:32])
+        salted.append(nonce[0:if nonce.len > 20 { 20 } else { nonce.len }])
+        c := crypto.sha256(salted)
+        u8[32] x
+        for i in 0..32 {
+            x[i] = a[i] ^ c[i]
+        }
+        out.append(x[0:32])
+        return out
+    }
+    if plugin == "mysql_clear_password" {
+        if !self.tls {
+            return error(MysqlError.auth, "the server wants the password as it is, and the connection has no TLS")
+        }
+        out.append(password)
+        out.append("\x00")
+        return out
+    }
+    return error(MysqlError.auth, "the server wants a login this driver doesn't have ({plugin})")
+}
+
+// Reads the server's answers to the login until it says OK.
+!void Conn.login(Settings *s, str firstPlugin, str firstNonce) {
+    scoped String plugin = firstPlugin.copy()
+    scoped String nonce = firstNonce.copy()
+    for {
+        try self.read()
+        p := self.packet[0:]
+        if p.len == 0 {
+            return error(MysqlError.auth, "an empty answer to the login")
+        }
+        if p[0] == 0x00 {
+            self.ok(p)
+            return
+        }
+        if p[0] == 0xff {
+            e := serverError(p)
+            return error(MysqlError.auth, "{e.message}")
+        }
+        if p[0] == 0xfe {
+            // the server asks for another plugin, with a nonce of its own
+            i64 at = 1
+            name := getStr(p, &at)
+            rest := p[at:]
+            plugin.free()
+            plugin = name.copy()
+            nonce.free()
+            nonce = (if rest.len > 0 && rest[rest.len - 1] == 0 { rest[0:rest.len - 1] } else { rest }).copy()
+            scoped String answer = try self.scramble(plugin, s.password, nonce)
+            try self.write(answer)
+            continue
+        }
+        if p[0] == 0x01 && plugin == "caching_sha2_password" && p.len >= 2 {
+            if p[1] == 3 {
+                continue // the server had the password cached: an OK follows
+            }
+            if p[1] != 4 {
+                return error(MysqlError.auth, "caching_sha2_password sent {p[1]}")
+            }
+            // the whole password: as it is over TLS, else encrypted with
+            // the server's RSA key
+            u8[] pw = alloc(u8, s.password.len + 1)
+            defer free(pw)
+            for i in 0..s.password.len {
+                pw[i] = s.password[i]
+            }
+            if self.tls {
+                try self.write(pw)
+                continue
+            }
+            if !s.retrieveKey {
+                return error(MysqlError.auth,
+                    "the server needs the password, and the connection has no TLS: use sslmode=require, or allowPublicKeyRetrieval=true to send it encrypted with the server's key")
+            }
+            try self.write("\x02")
+            try self.read()
+            if self.packet.len < 2 || self.packet[0] != 0x01 {
+                return error(MysqlError.auth, "the server didn't send its public key")
+            }
+            key := crypto.loadPublicKey(self.packet[1:]) catch e {
+                return error(MysqlError.auth, "the server's public key: {e.message}")
+            }
+            defer key.free()
+            for i in 0..pw.len {
+                pw[i] = pw[i] ^ nonce[i % nonce.len]
+            }
+            scoped String sealed = key.encrypt(pw) catch e {
+                return error(MysqlError.auth, "{e.message}")
+            }
+            try self.write(sealed)
+            continue
+        }
+        return error(MysqlError.auth, "the server sent a login packet this driver doesn't know ({p[0]})")
+    }
+}
+
+// Reads an OK packet's status: how many rows changed and the id the last
+// INSERT made go to rows when it is given.
+void Conn.ok(str p, Rows *rows = null) {
+    i64 at = 1
+    affected := getLen(p, &at)
+    lastId := getLen(p, &at)
+    self.status = get16(p, at)
+    if rows != null {
+        rows.affected += affected
+        rows.lastId = lastId
+    }
+}
+
+// Logs out and closes the connection.
+pub void Conn.close() {
+    if !self.broken && self.conn.fd() > 0 {
+        self.command("\x01") catch e { } // COM_QUIT
+    }
+    self.conn.close()
+    for k, st in self.stmts {
+        _ = k
+        _ = st
+    }
+    self.stmts.free()
+    self.packet.free()
+}
+
+// ------------------------------------------------------------ rows
+
+// The rows of a query, all read in. free gives them back.
+pub struct Rows {
+    List[String] names
+    List[String] cells // row after row
+    List[bool] nulls
+    i64 ncols
+    i64 at
+    // how many rows the statement changed, for INSERT, UPDATE and DELETE
+    pub i64 affected
+    // the AUTO_INCREMENT id the last INSERT made
+    pub i64 lastId
+}
+
+// Gives the rows' memory back.
+pub void Rows.close() {
+    self.names.freeEach()
+    self.cells.freeEach()
+    self.nulls.free()
+}
+
+// close, for scoped.
+pub void Rows.free() => self.close()
+
+// How many rows there are.
+pub i64 Rows.len() => if self.ncols > 0 { self.cells.len / self.ncols } else { 0 }
+
+// How many columns each row has.
+pub i64 Rows.columns() => self.ncols
+
+// A column's name, from 0.
+pub str Rows.name(i64 col) => if col >= 0 && col < self.names.len { self.names.at(col) } else { "" }
+
+// Moves to the next row: false when there are no more. The first call
+// moves to the first row.
+pub bool Rows.next() {
+    if self.at >= self.len {
+        return false
+    }
+    self.at += 1
+    return true
+}
+
+i64 Rows.cell(i64 col) => (self.at - 1) * self.ncols + col
+
+// A column of the row as text: "" for NULL. Dates are 2026-10-17, times
+// 2026-10-17 09:30:00.
+pub str Rows.text(i64 col) {
+    if col < 0 || col >= self.ncols || self.at < 1 {
+        return ""
+    }
+    return self.cells.at(self.cell(col))
+}
+
+// Whether a column of the row is NULL.
+pub bool Rows.isNull(i64 col) => col < 0 || col >= self.ncols || self.at < 1 || self.nulls.at(self.cell(col))
+
+// A column as a number: 0 for NULL or text that isn't one.
+pub i64 Rows.int(i64 col) => str.parseInt(self.text(col)) catch 0
+
+// A column as a float: 0 for NULL or text that isn't one.
+pub f64 Rows.float(i64 col) => str.parseFloat(self.text(col)) catch 0.0
+
+// A column as a bool: true for anything but 0, "" and NULL.
+pub bool Rows.bool(i64 col) {
+    t := self.text(col)
+    return t.len > 0 && t != "0"
+}
+
+// Fills a @json struct from the row, each field from the column of the same
+// name. A NULL column leaves the field as it is.
+pub !void scan[T](Rows *rows, T *out) {
+    n := rows.ncols
+    str[] names = alloc(str, n)
+    defer free(names)
+    str[] values = alloc(str, n)
+    defer free(values)
+    u8[] nulls = alloc(u8, n)
+    defer free(nulls)
+    for c in 0..n {
+        names[c] = rows.names.at(c)
+        values[c] = rows.text(c)
+        nulls[c] = if rows.isNull(c) { 1 } else { 0 }
+    }
+    if rawScan(tableOf(out), out, names.ptr, values.ptr, nulls.ptr, n) != 0 {
+        return error(MysqlError.failed, "{messagePtr()[0:messageLen()]}")
+    }
+}
+
+// What all and one run a query on: a Pool, a Conn or a Tx.
+pub interface Querier {
+    !Rows query(str sql, Value[] args)
+}
+
+// Every row of a query as @json structs: mysql.all[User](&db, "SELECT ...
+// WHERE age > ?", [.int(18)]), on a Pool, a Conn or a Tx. The values'
+// Strings are the caller's to free.
+pub !List[T] all[T, D: Querier](D *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
+    List[T] out
+    for rows.next() {
+        T v
+        scan(&rows, &v) catch e {
+            out.free()
+            return e
+        }
+        out.push(v)
+    }
+    return out
+}
+
+// The first row of a query as a @json struct: mysql.one[User](&db, "SELECT
+// ... WHERE id = ?", [.int(7)]). No rows fails with MysqlError.noRows.
+pub !T one[T, D: Querier](D *db, str sql, Value[] args = []) {
+    rows := try db.query(sql, args)
+    defer rows.close()
+    if !rows.next() {
+        return error(MysqlError.noRows, "the query has no rows")
+    }
+    T v
+    try scan(&rows, &v)
+    return v
+}
+
+// ------------------------------------------------------------ queries
+
+// A column definition's name, type and flags.
+(str, i64, i64) column(str p) {
+    i64 at = 0
+    for i in 0..4 {
+        _ = getLenStr(p, &at) // catalog, schema, table, org_table
+    }
+    name := getLenStr(p, &at)
+    _ = getLenStr(p, &at) // org_name
+    _ = getLen(p, &at)    // the length of the fixed fields, 0x0c
+    at += 6               // character set, column length
+    kind := if at < p.len { i64(p[at]) } else { 0 }
+    flags := get16(p, at + 1)
+    return (name, kind, flags)
+}
+
+bool isEnd(str p) => p.len > 0 && p[0] == 0xfe && p.len < MAX_PACKET
+
+// Reads the result sets that answer a command into rows: the first one
+// with columns, while the later ones only add to affected. binary is set
+// for the rows of a prepared statement.
+!void Conn.results(Rows *rows, bool binary) {
+    bool failed = false
+    Error first = error(MysqlError.failed, "")
+    bool got = false
+    for {
+        try self.read()
+        p := self.packet[0:]
+        if p.len == 0 {
+            self.broken = true
+            return error(MysqlError.closed, "an empty packet")
+        }
+        if p[0] == 0x00 {
+            self.ok(p, rows)
+        } else if p[0] == 0xff {
+            if !failed {
+                first = serverError(p)
+                failed = true
+            }
+            // an error ends the command
+            return first
+        } else if p[0] == 0xfb {
+            self.broken = true
+            return error(MysqlError.failed, "the server asked for a local file, which this driver doesn't send")
+        } else {
+            i64 at = 0
+            n := getLen(p, &at)
+            keep := !got
+            got = true
+            List[i64] kinds
+            defer kinds.free()
+            List[i64] flags
+            defer flags.free()
+            for c in 0..n {
+                try self.read()
+                name, kind, flag := column(self.packet)
+                kinds.push(kind)
+                flags.push(flag)
+                if keep {
+                    rows.names.push(name.copy())
+                }
+            }
+            if keep {
+                rows.ncols = n
+            }
+            if self.caps & DEPRECATE_EOF == 0 {
+                try self.read() // EOF
+            }
+            for {
+                try self.read()
+                r := self.packet[0:]
+                if isEnd(r) {
+                    if self.caps & DEPRECATE_EOF != 0 {
+                        self.ok(r, rows)
+                    } else {
+                        self.status = get16(r, 3)
+                    }
+                    break
+                }
+                if r.len > 0 && r[0] == 0xff {
+                    return serverError(r)
+                }
+                if !keep {
+                    continue
+                }
+                if binary {
+                    readBinaryRow(rows, r, &kinds, &flags)
+                } else {
+                    i64 rat = 0
+                    for c in 0..n {
+                        if rat < r.len && r[rat] == 0xfb {
+                            rat += 1
+                            rows.cells.push("".copy())
+                            rows.nulls.push(true)
+                            continue
+                        }
+                        v := getLenStr(r, &rat)
+                        rows.cells.push(v.copy())
+                        rows.nulls.push(false)
+                    }
+                }
+            }
+        }
+        if self.status & STATUS_MORE_RESULTS == 0 {
+            return
+        }
+    }
+}
+
+void pad(String *out, i64 v, i64 width) {
+    if width >= 4 && v < 1000 {
+        out.append("0")
+    }
+    if width >= 3 && v < 100 {
+        out.append("0")
+    }
+    if v < 10 {
+        out.append("0")
+    }
+    scoped String d = format("{v}")
+    out.append(d)
+}
+
+// A binary DATE, DATETIME or TIMESTAMP as text.
+String dateText(str v) {
+    String out
+    if v.len == 0 {
+        out.append("0000-00-00")
+        return out
+    }
+    pad(&out, get16(v, 0), 4)
+    out.append("-")
+    pad(&out, i64(v[2]), 2)
+    out.append("-")
+    pad(&out, i64(v[3]), 2)
+    if v.len >= 7 {
+        out.append(" ")
+        pad(&out, i64(v[4]), 2)
+        out.append(":")
+        pad(&out, i64(v[5]), 2)
+        out.append(":")
+        pad(&out, i64(v[6]), 2)
+    }
+    if v.len >= 11 {
+        us := get32(v, 7)
+        out.append(".")
+        scoped String frac = format("{us + 1000000}")
+        out.append(frac[1:])
+    }
+    return out
+}
+
+// A binary TIME as text: [-]hhh:mm:ss[.ffffff].
+String timeText(str v) {
+    String out
+    if v.len < 8 {
+        out.append("00:00:00")
+        return out
+    }
+    if v[0] == 1 {
+        out.append("-")
+    }
+    pad(&out, get32(v, 1) * 24 + i64(v[5]), 2)
+    out.append(":")
+    pad(&out, i64(v[6]), 2)
+    out.append(":")
+    pad(&out, i64(v[7]), 2)
+    if v.len >= 12 {
+        us := get32(v, 8)
+        out.append(".")
+        scoped String frac = format("{us + 1000000}")
+        out.append(frac[1:])
+    }
+    return out
+}
+
+// A row of a prepared statement's result: a null bitmap, then each
+// column's value as its type stores it, turned into text.
+void readBinaryRow(Rows *rows, str r, List[i64] *kinds, List[i64] *flags) {
+    n := kinds.len
+    i64 at = 1 + (n + 9) / 8
+    for c in 0..n {
+        bit := c + 2
+        if 1 + bit / 8 < r.len && r[1 + bit / 8] & u8(1 << (bit % 8)) != 0 {
+            rows.cells.push("".copy())
+            rows.nulls.push(true)
+            continue
+        }
+        kind := kinds.at(c)
+        unsigned := flags.at(c) & UNSIGNED_FLAG != 0
+        String v
+        if kind == T_TINY {
+            b := i64(r[at])
+            v = format("{if unsigned || b < 128 { b } else { b - 256 }}")
+            at += 1
+        } else if kind == T_SHORT || kind == T_YEAR {
+            b := get16(r, at)
+            v = format("{if unsigned || b < 0x8000 { b } else { b - 0x10000 }}")
+            at += 2
+        } else if kind == T_LONG || kind == T_INT24 {
+            b := get32(r, at)
+            v = format("{if unsigned || b < 0x80000000 { b } else { b - 0x100000000 }}")
+            at += 4
+        } else if kind == T_LONGLONG {
+            b := get64(r, at)
+            if unsigned && b < 0 {
+                // above i64's range: as decimal text all the same
+                u8 *bp = &b
+                u64 *up = bp
+                v = format("{*up}")
+            } else {
+                v = format("{b}")
+            }
+            at += 8
+        } else if kind == T_FLOAT {
+            bits := u32(get32(r, at))
+            f := bitsToF32(bits)
+            v = format("{f}")
+            at += 4
+        } else if kind == T_DOUBLE {
+            bits := get64(r, at)
+            f := bitsToF64(bits)
+            v = format("{f}")
+            at += 8
+        } else if kind == T_DATE || kind == T_DATETIME || kind == T_TIMESTAMP {
+            len := i64(r[at])
+            v = dateText(r[at + 1:at + 1 + len])
+            at += 1 + len
+        } else if kind == T_TIME {
+            len := i64(r[at])
+            v = timeText(r[at + 1:at + 1 + len])
+            at += 1 + len
+        } else if kind == T_NULL {
+            v = "".copy()
+        } else {
+            v = getLenStr(r, &at).copy()
+        }
+        rows.cells.push(v)
+        rows.nulls.push(false)
+    }
+}
+
+f32 bitsToF32(u32 bits) {
+    u8 *p = &bits
+    f32 *f = p
+    return *f
+}
+
+f64 bitsToF64(i64 bits) {
+    u8 *p = &bits
+    f64 *f = p
+    return *f
+}
+
+// Runs one statement. With values for its ?s it is prepared once on the
+// connection and run with them; without, it is sent as text, and may hold
+// several statements.
+pub !Rows Conn.query(str sql, Value[] args = []) {
+    Rows rows
+    errdefer rows.close()
+    if args.len == 0 {
+        String q
+        defer q.free()
+        put8(&q, 0x03) // COM_QUERY
+        q.append(sql)
+        try self.command(q)
+        try self.results(&rows, false)
+        return rows
+    }
+    st := try self.prepare(sql)
+    if st.params != args.len {
+        return error(MysqlError.failed, "the statement has {st.params} ?s and {args.len} values were given")
+    }
+    String ex
+    defer ex.free()
+    put8(&ex, 0x17) // COM_STMT_EXECUTE
+    put32(&ex, st.id)
+    put8(&ex, 0) // no cursor
+    put32(&ex, 1)
+    u8[] nulls = alloc(u8, (args.len + 7) / 8)
+    defer free(nulls)
+    for i, a in args {
+        match a {
+            .none => nulls[i / 8] = nulls[i / 8] | u8(1 << (i % 8))
+            _ => {}
+        }
+    }
+    ex.append(nulls)
+    put8(&ex, 1) // the types follow
+    for a in args {
+        put16(&ex, match a {
+            .int(n) => T_LONGLONG
+            .float(f) => T_DOUBLE
+            .text(t) => T_VAR_STRING
+            .bool(b) => T_TINY
+            .none => T_NULL
+        })
+    }
+    for a in args {
+        match a {
+            .int(n) => put64(&ex, n)
+            .float(f) => put64(&ex, f64Bits(f))
+            .text(t) => putLenStr(&ex, t)
+            .bool(b) => put8(&ex, if b { 1 } else { 0 })
+            .none => {}
+        }
+    }
+    try self.command(ex)
+    try self.results(&rows, true)
+    return rows
+}
+
+i64 f64Bits(f64 f) {
+    u8 *p = &f
+    i64 *b = p
+    return *b
+}
+
+// The prepared statement for sql, prepared now when the connection hasn't
+// yet.
+!Stmt Conn.prepare(str sql) {
+    st, found := self.stmts.get(sql)
+    if found {
+        return st
+    }
+    if self.stmts.len >= 256 {
+        // too many kept: close them all
+        for k, old in self.stmts {
+            String close
+            put8(&close, 0x19) // COM_STMT_CLOSE, which has no answer
+            put32(&close, old.id)
+            self.command(close) catch e {
+                close.free()
+                return e
+            }
+            close.free()
+        }
+        self.stmts.clear()
+    }
+    String p
+    defer p.free()
+    put8(&p, 0x16) // COM_STMT_PREPARE
+    p.append(sql)
+    try self.command(p)
+    try self.read()
+    if self.packet.len > 0 && self.packet[0] == 0xff {
+        return serverError(self.packet)
+    }
+    if self.packet.len < 12 || self.packet[0] != 0 {
+        self.broken = true
+        return error(MysqlError.closed, "the server's answer to a prepare isn't one")
+    }
+    Stmt s = Stmt{id: get32(self.packet, 1), params: get16(self.packet, 7)}
+    columns := get16(self.packet, 5)
+    // the definitions of the parameters and of the columns
+    for part in [s.params, columns] {
+        if part == 0 {
+            continue
+        }
+        for i in 0..part {
+            try self.read()
+        }
+        if self.caps & DEPRECATE_EOF == 0 {
+            try self.read()
+        }
+    }
+    self.stmts.set(sql, s)
+    return s
+}
+
+// Runs a statement: how many rows it changed.
+pub !i64 Conn.exec(str sql, Value[] args = []) {
+    scoped Rows r = try self.query(sql, args)
+    return r.affected
+}
+
+// Runs SQL with no values, which may hold several statements: a schema.
+pub !void Conn.execScript(str sql) {
+    scoped Rows r = try self.query(sql)
+}
+
+// Whether the connection is in a transaction.
+bool Conn.inTransaction() => self.status & STATUS_IN_TRANS != 0
+
+// ------------------------------------------------------------ the pool
+
+struct PoolState {
+    String address
+    i64 max
+    Mutex lock
+    List[Conn] idle
+    i64 open
+}
+
+// Connections to a server, shared by tasks and threads: each call takes
+// one, and gives it back when it is done.
+pub struct Pool {
+    PoolState *s
+}
+
+// A pool for the server at address, with at most max connections open.
+// It connects once to check the address and the login.
+pub !Pool pool(str address, i64 max = 10) {
+    first := try connect(address)
+    PoolState[] mem = alloc(PoolState, 1)
+    s := &mem[0]
+    s.address = address.copy()
+    s.max = if max > 0 { max } else { 10 }
+    s.idle.push(first)
+    s.open = 1
+    return Pool{s: s}
+}
+
+// A connection from the pool: an idle one, a new one, or the next one given
+// back when max are open.
+!Conn Pool.take() {
+    start := time.clock()
+    for {
+        self.s.lock.lock()
+        if self.s.idle.len > 0 {
+            c := self.s.idle.pop()
+            self.s.lock.unlock()
+            return c
+        }
+        if self.s.open < self.s.max {
+            self.s.open += 1
+            self.s.lock.unlock()
+            c := connect(self.s.address) catch e {
+                self.s.lock.lock()
+                self.s.open -= 1
+                self.s.lock.unlock()
+                return e
+            }
+            return c
+        }
+        self.s.lock.unlock()
+        if time.clock() - start > 30s {
+            return error(MysqlError.connect, "no connection came free in 30s")
+        }
+        sleep(1ms)
+    }
+}
+
+void Pool.give(Conn c) {
+    if c.broken || c.inTransaction() {
+        // a broken one, or one left in a transaction: closed, not kept
+        c.close()
+        self.s.lock.lock()
+        self.s.open -= 1
+        self.s.lock.unlock()
+        return
+    }
+    self.s.lock.lock()
+    self.s.idle.push(c)
+    self.s.lock.unlock()
+}
+
+// Runs a statement on a connection from the pool, with values for its ?s.
+pub !Rows Pool.query(str sql, Value[] args = []) {
+    c := try self.take()
+    r := c.query(sql, args) catch e {
+        self.give(c)
+        return e
+    }
+    self.give(c)
+    return r
+}
+
+// Runs a statement: how many rows it changed.
+pub !i64 Pool.exec(str sql, Value[] args = []) {
+    scoped Rows r = try self.query(sql, args)
+    return r.affected
+}
+
+// Runs SQL with no values, which may hold several statements.
+pub !void Pool.execScript(str sql) {
+    scoped Rows r = try self.query(sql)
+}
+
+// Closes every connection. Calls that are running keep theirs until they
+// end.
+pub void Pool.close() {
+    self.s.lock.lock()
+    for c in self.s.idle {
+        c.close()
+    }
+    self.s.idle.free()
+    self.s.lock.unlock()
+    self.s.address.free()
+    free(self.s[0:1])
+    self.s = null
+}
+
+// ------------------------------------------------------------ transactions
+
+// A transaction: its statements run on one connection, and take effect
+// together at commit.
+pub struct Tx {
+    Pool *pool
+    Conn conn
+    bool done
+}
+
+// Starts a transaction. Call commit or rollback at the end; a Tx that is
+// freed without either rolls back.
+pub !Tx Pool.begin() {
+    c := try self.take()
+    _ = c.exec("START TRANSACTION") catch e {
+        self.give(c)
+        return e
+    }
+    return Tx{pool: self, conn: c}
+}
+
+// Runs a statement in the transaction.
+pub !Rows Tx.query(str sql, Value[] args = []) => try self.conn.query(sql, args)
+
+// Runs a statement in the transaction: how many rows it changed.
+pub !i64 Tx.exec(str sql, Value[] args = []) => try self.conn.exec(sql, args)
+
+// Makes the transaction's changes last, and gives the connection back.
+pub !void Tx.commit() {
+    self.done = true
+    _ = self.conn.exec("COMMIT") catch e {
+        self.pool.give(self.conn)
+        return e
+    }
+    self.pool.give(self.conn)
+}
+
+// Drops the transaction's changes, and gives the connection back.
+pub !void Tx.rollback() {
+    self.done = true
+    _ = self.conn.exec("ROLLBACK") catch e {
+        self.pool.give(self.conn)
+        return e
+    }
+    self.pool.give(self.conn)
+}
+
+// Rolls back, unless commit or rollback was called: for scoped.
+pub void Tx.free() {
+    if !self.done {
+        self.rollback() catch e { }
+    }
+}

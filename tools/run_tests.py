@@ -29,6 +29,7 @@
                            when there is no PostgreSQL
   tests/redis/NAME.iris    the same with tools/redis-server.sh (IRIS_REDIS_URL)
   tests/s3/NAME.iris       the same with tools/minio-server.sh (IRIS_S3_URL)
+  tests/mysql/NAME.iris    the same with tools/mysql-server.sh (IRIS_MYSQL_URL)
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -593,6 +594,7 @@ def main():
     total += service_tests(args.iris, args.only, failures, skipped, "pg", "pg-cluster.sh", "IRIS_PG")
     total += service_tests(args.iris, args.only, failures, skipped, "redis", "redis-server.sh", "IRIS_REDIS")
     total += service_tests(args.iris, args.only, failures, skipped, "s3", "minio-server.sh", "IRIS_S3")
+    total += service_tests(args.iris, args.only, failures, skipped, "mysql", "mysql-server.sh", "IRIS_MYSQL")
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         try:

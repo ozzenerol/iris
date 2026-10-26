@@ -60,7 +60,8 @@
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},
       {"name": "pg", "title": "PostgreSQL", "summary": "A PostgreSQL driver in Iris, with a pool and transactions."},
-      {"name": "redis", "title": "Redis", "summary": "A Redis and Valkey client, with pipelines and pub/sub."}
+      {"name": "redis", "title": "Redis", "summary": "A Redis and Valkey client, with pipelines and pub/sub."},
+      {"name": "mysql", "title": "MySQL", "summary": "A MySQL and MariaDB driver in Iris, with prepared statements, a pool and transactions."}
     ]}
   ]
 }
