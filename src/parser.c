@@ -1715,7 +1715,17 @@ static void parseAttrs(Parser *p, NodeList *attrs) {
         if (at(p, P_LPAREN)) {
             next(p);
             while (!at(p, P_RPAREN)) {
-                push(p, &a->list, parseExpr(p));
+                if (at(p, T_IDENT) && peekAt(p, 1)->kind == P_COLON) {
+                    /* a named setting: @wire(len: u16) */
+                    Token *key = next(p);
+                    next(p);
+                    Node *arg = node(p, N_NAMED_ARG, key);
+                    arg->name = tokText(p, key);
+                    arg->a = parseExpr(p);
+                    push(p, &a->list, arg);
+                } else {
+                    push(p, &a->list, parseExpr(p));
+                }
                 if (!accept(p, P_COMMA)) {
                     break;
                 }

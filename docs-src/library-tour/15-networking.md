@@ -364,6 +364,30 @@ void route(net.Conn client) {
 }
 ```
 
+## Binary messages
+
+Many protocols send binary messages: a header of fixed fields, then text or lists with their length in front. `wire.read` reads one into a `@wire` struct, and `wire.write` sends one. [Binary messages](21-binary-messages.html) has the whole story.
+
+```iris
+@wire
+struct Header {
+    u8 version
+    u8 kind
+    u16 flags
+    u32 length
+}
+
+void handle(net.Conn conn) {
+    defer conn.close()
+    for {
+        h := wire.read(Header, conn) catch e {
+            return
+        }
+        // h.kind says what follows
+    }
+}
+```
+
 ## TLS
 
 `net.dialTls` connects and starts TLS. The server's certificate must be valid for the host and signed by a certificate the system trusts, or by one in a `ca` file. When a server asks the client for a certificate, the client gives its own with `cert` and `key`.

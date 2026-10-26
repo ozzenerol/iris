@@ -1,10 +1,11 @@
 # Attributes
 
-An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct that reads it from environment variables, from command-line flags or from JSON. Others change how a function is compiled. This chapter covers each one except `@json` and `@flags`, which have their own chapters: [JSON](../library-tour/01-json.html) and [Command-line flags](../library-tour/05-flags.html).
+An attribute starts with `@` and goes on the line before a declaration. Some make the compiler write code for a struct that reads it from environment variables, from command-line flags, from JSON or from binary messages. Others change how a function is compiled. This chapter covers each one except `@json`, `@wire` and `@flags`, which have their own chapters: [JSON](../library-tour/01-json.html), [Binary messages](../library-tour/21-binary-messages.html) and [Command-line flags](../library-tour/05-flags.html).
 
 | Attribute | On | What it does |
 |---|---|---|
 | `@json` | a struct | turns it into JSON and back, with the `json` module |
+| `@wire` | a struct or an enum | reads it from binary messages and writes it, with the `wire` module |
 | `@env` | a struct | fills it from environment variables, with the `env` module |
 | `@flags` | a struct | fills it from the program's arguments, with the `flags` module |
 | `@inline` | a function | always puts its code where it is called |

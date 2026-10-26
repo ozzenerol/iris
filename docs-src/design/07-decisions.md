@@ -69,6 +69,9 @@ These are suggestions. They are used in the examples on these pages until they a
 | `@json` works from a table the compiler writes for each type. The runtime encodes, decodes and frees from it. | One small piece of C serves every type, and the program stays small. |
 | A JSON key is the field's name as written. A missing field keeps its default unless it is `@json(required)`. Unknown keys are skipped. | Matches what most APIs send, with one attribute for the strict case. |
 | A `@json` struct without a `free` method gets one. | Decoded values work with `scoped`. |
+| `@wire` describes the bytes on the wire and leaves the struct's memory layout alone. A field's length comes from a prefix or an earlier field, and one that can pass 65535 needs a `max`. | Fields stay addressable and aligned. A length from the network can't make a server allocate gigabytes. |
+| The compiler writes the code that reads and writes each `@wire` struct, where `@json` has a table. | Binary messages are read at the speed of hand-written code: one check per run of fixed fields, then loads and byte swaps. |
+| `wire.read` decodes straight from the connection's buffer, and starts again when the message turns out to be cut short. | The common case, a whole message in the buffer, is one pass. A short one says how many bytes it needs, so the retry waits for all of them. |
 | A `String` from a call, passed straight to a `str` parameter, is freed when the statement ends. | `res.json(json.encode(u))` needs no variable and doesn't leak. Same rule as text with values. |
 | `r"""..."""` is raw text over several lines. | JSON and other text with quotes and braces can be written as it is. |
 | Every build has DWARF debug information: lines, functions, variables and types. | Debuggers and AddressSanitizer reports show Iris code. It costs nothing at run time. |

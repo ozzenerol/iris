@@ -7682,6 +7682,125 @@ int iris_json_decode(const JsonType *t, const char *text, int64_t len, char *out
     return 0;
 }
 
+/* ---------------------------------------------------------------- wire
+
+   The compiler writes a decode, a size and an encode function for each
+   @wire struct (ir.c, wireFns) and a table of them. These functions run
+   them, and give the generated code its messages and memory. */
+
+typedef int (*WireDec)(const unsigned char **pos, const unsigned char *end, char *out);
+typedef int64_t (*WireSize)(const char *value);
+typedef void (*WireEnc)(unsigned char **pos, const char *value);
+
+typedef struct {
+    WireDec dec;
+    WireSize size;
+    WireEnc enc;
+    void (*release)(char *value);
+} WireFns;
+
+/* What went wrong, as the generated code says it. */
+enum {
+    WIRE_SHORT = 1, WIRE_MAX_BYTES, WIRE_MAX_ITEMS, WIRE_BOOL, WIRE_ENUM, WIRE_FLAGS, WIRE_NEGATIVE,
+    WIRE_LIMIT_BYTES, WIRE_LIMIT_ITEMS
+};
+
+static _Thread_local char wireMsg[256];
+static _Thread_local int64_t wireMsgLen;
+static _Thread_local uintptr_t wireNeedAt;     /* after a short message: where its bytes would end */
+
+const char *iris_wire_message_ptr(void) { return wireMsg; }
+int64_t iris_wire_message_len(void) { return wireMsgLen; }
+
+/* Keeps the message and gives the WireError: 1 short, 2 tooLong, 3 badValue.
+   A short message at `at` needs value * limit more bytes. */
+int iris_wire_fail(int what, const char *name, int64_t nameLen, int64_t value, int64_t limit, const unsigned char *at) {
+    char what_[160];
+    int code = 3;
+    unsigned long long u = (unsigned long long)value;
+    switch (what) {
+    case WIRE_SHORT: {
+        uint64_t n;
+        if (__builtin_mul_overflow((uint64_t)value, (uint64_t)limit, &n) ||
+            __builtin_add_overflow((uint64_t)(uintptr_t)at, n, &n)) {
+            n = UINTPTR_MAX;
+        }
+        wireNeedAt = (uintptr_t)n;
+        snprintf(what_, sizeof what_, "the bytes end in the middle of the message");
+        code = 1;
+        break;
+    }
+    case WIRE_MAX_BYTES: case WIRE_MAX_ITEMS: case WIRE_LIMIT_BYTES: case WIRE_LIMIT_ITEMS:
+        snprintf(what_, sizeof what_, "%llu %s, more than the %s of %lld", u,
+                 what == WIRE_MAX_BYTES || what == WIRE_LIMIT_BYTES ? "bytes" : "items",
+                 what <= WIRE_MAX_ITEMS ? "max" : "length's limit", (long long)limit);
+        code = 2;
+        break;
+    case WIRE_BOOL: snprintf(what_, sizeof what_, "%llu isn't a bool, which is 0 or 1", u); break;
+    case WIRE_ENUM: snprintf(what_, sizeof what_, "%lld isn't one of the enum's values", (long long)value); break;
+    case WIRE_FLAGS: snprintf(what_, sizeof what_, "%lld has bits that aren't values of the enum", (long long)value); break;
+    default: snprintf(what_, sizeof what_, "a length can't be %lld", (long long)value); break;
+    }
+    int n = nameLen ? snprintf(wireMsg, sizeof wireMsg, "%.*s: %s", (int)(nameLen > 60 ? 60 : nameLen), name, what_)
+                    : snprintf(wireMsg, sizeof wireMsg, "%s", what_);
+    wireMsgLen = n < 0 ? 0 : n >= (int)sizeof wireMsg ? (int64_t)sizeof wireMsg - 1 : n;
+    return code;
+}
+
+/* A String field: a copy of the n bytes at p. */
+void iris_wire_string(IrisString *s, const char *p, int64_t n) {
+    char *q = malloc((size_t)(n ? n : 1));
+    if (!q) outOfMemory();
+    memcpy(q, p, (size_t)n);
+    s->ptr = q;
+    s->len = n;
+    s->cap = n ? n : 1;
+}
+
+/* The memory of a slice field of n items, all zeros when zero is set:
+   items that are read in place, which a failure half way frees. */
+void *iris_wire_alloc(int64_t n, int64_t size, bool zero) {
+    if (n == 0) return NULL;
+    void *p = zero ? calloc((size_t)n, (size_t)size) : malloc((size_t)(n * size));
+    if (!p) outOfMemory();
+    return p;
+}
+
+/* Reads one message from the len bytes at p into out: 0 and its size in
+   *n, or the WireError. After a short one, *n is how many bytes it needs
+   at least. On an error what was filled in is freed. */
+int iris_wire_decode(const WireFns *t, const unsigned char *p, int64_t len, char *out, int64_t *n) {
+    const unsigned char *pos = p;
+    int code = t->dec(&pos, p + len, out);
+    if (code == 0) {
+        *n = pos - p;
+        return 0;
+    }
+    t->release(out);
+    *n = 0;
+    if (code == 1) {
+        uintptr_t need = wireNeedAt - (uintptr_t)p;
+        *n = need > (uintptr_t)INT64_MAX || wireNeedAt < (uintptr_t)p ? INT64_MAX : (int64_t)need;
+    }
+    return code;
+}
+
+void iris_wire_free(const WireFns *t, char *value) {
+    t->release(value);
+}
+
+/* Appends the bytes of the value at p to out: 0, or 2 (tooLong) when a
+   String or slice doesn't fit its length or max. */
+int iris_wire_encode(const WireFns *t, const char *p, IrisString *out) {
+    int64_t n = t->size(p);
+    if (n < 0) return 2;
+    iris_string_reserve(out, n);
+    unsigned char *pos = (unsigned char *)out->ptr + out->len;
+    t->enc(&pos, p);
+    out->len += n;
+    return 0;
+}
+
 /* ---------------------------------------------------------------- tests
 
    iris test: main calls iris_test_start before each test (false: the

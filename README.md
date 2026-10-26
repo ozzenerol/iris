@@ -4,7 +4,7 @@
 
 Iris is a compiled language for servers, network tools and system programs. It has no garbage collector. The compiler is written in C and produces native code through LLVM.
 
-The standard library covers HTTP/1.1 and HTTP/2 servers and clients, TLS with certificate checking, TCP and UDP, Unix sockets, TUN devices and the kernel's routes, SQLite, PostgreSQL and Redis, JSON, YAML, TOML and XML, regular expressions, compression, cryptography with ECDSA and RSA, and the system side of a server: signals, pseudo-terminals, dropping privileges and a seccomp sandbox. The docs in `docs/` have a Language Tour, a Library Tour and the library reference.
+The standard library covers HTTP/1.1 and HTTP/2 servers and clients, TLS with certificate checking, TCP and UDP, Unix sockets, TUN devices and the kernel's routes, SQLite, PostgreSQL and Redis, JSON, YAML, TOML and XML, binary protocol messages read into structs, regular expressions, compression, cryptography with ECDSA and RSA, and the system side of a server: signals, pseudo-terminals, dropping privileges and a seccomp sandbox. The docs in `docs/` have a Language Tour, a Library Tour and the library reference.
 
 ## Speed
 
@@ -52,7 +52,7 @@ The servers do less work than the rates show, since the load generator limits th
 | tcp-proxy | **15,965** | 16,108 | 16,908 | 19,480 |
 | tcp-proxy-bulk | **18,849** | 19,151 | 120,226 | 22,635 |
 
-`bench/` also has 23 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
+`bench/` also has 27 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
 
 | Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
 |---|---|--:|--:|--:|---|---|
@@ -82,8 +82,9 @@ The servers do less work than the rates show, since the load generator limits th
 | rsa | 500 RSA-2048 signatures, each checked 20 times | **0.385** | 0.386 | 0.623 | ring | `crypto/rsa` |
 | x509-parse | a certificate parsed 200000 times | **0.238** | 0.386 | 1.120 | x509-parser | `crypto/x509` |
 | yaml-parse | a 6.7 MB YAML list, 3 times | **0.458** | 1.246 | 2.544 | serde_yaml | `gopkg.in/yaml.v3` |
+| wire | 100,000 binary messages read and written, 30 times | **0.119** | 0.123 | 0.196 | by hand, `from_be_bytes` | `encoding/binary` |
 
-In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
+In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. In wire, Rust and Go read and write the messages by hand, the usual way to write a binary protocol in each. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
 
 ## Building and installing
 

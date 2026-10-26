@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Binary messages - Iris</title>
+<meta name="description" content="The wire module reads binary messages into a struct marked @wire and writes them back. Many TCP and UDP protocols send messages like this: a header of fixed fields, then text or lists with their length in front. The compiler works out the layout of each struct when it builds the program, so reading a message is one pass over its bytes, with no lookups at run time.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.78.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html" class="on"><span class="num">21</span>Binary messages</a></li></ol></aside>
+  <article class="prose">
+<h1>Binary messages</h1>
+<p class="lede">The <code>wire</code> module reads binary messages into a struct marked <code>@wire</code> and writes them back. Many TCP and UDP protocols send messages like this: a header of fixed fields, then text or lists with their length in front. The compiler works out the layout of each struct when it builds the program, so reading a message is one pass over its bytes, with no lookups at run time.</p>
+<h2 id="a-first-message"><a href="#a-first-message">A first message</a></h2>
+<p>The fields of a <code>@wire</code> struct go on the wire in the order they are written, one after another, with no padding between them. An integer takes as many bytes as its type: one for <code>u8</code>, two for <code>u16</code>, four for <code>u32</code>. The high byte comes first, the order network protocols use.</p>
+<pre class="code run"><code><span class="k">import</span> hex, wire
+
+<span class="c">// The header that starts every message of a small protocol.</span>
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Header</span> {
+    <span class="t">u8</span> version
+    <span class="t">u8</span> kind
+    <span class="t">u16</span> flags
+    <span class="t">u32</span> length
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    h := <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Header</span>, <span class="s">&quot;</span><span class="e">\x01</span><span class="e">\x02</span><span class="e">\x00</span><span class="e">\x05</span><span class="e">\x00</span><span class="e">\x00</span><span class="e">\x01</span><span class="e">\x00</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;version </span><span class="e">{</span>h.version<span class="e">}</span><span class="s">, kind </span><span class="e">{</span>h.kind<span class="e">}</span><span class="s">, flags </span><span class="e">{</span>h.flags<span class="e">}</span><span class="s">, length </span><span class="e">{</span>h.length<span class="e">}</span><span class="s">&quot;</span>)
+
+    reply := <span class="t">Header</span>{version: <span class="n">1</span>, kind: <span class="n">3</span>, flags: <span class="n">0</span>, length: <span class="n">12</span>}
+    <span class="k">scoped</span> <span class="t">String</span> bytes = <span class="k">try</span> wire.<span class="f">encode</span>(reply)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes.len<span class="e">}</span><span class="s"> bytes: </span><span class="e">{</span>hex.<span class="f">encode</span>(bytes)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>version 1, kind 2, flags 5, length 256
+8 bytes: 010300000000000c</code></pre>
+<p><code>Header</code> takes 1 + 1 + 2 + 4 = 8 bytes on the wire. <code>wire.decode(T, bytes)</code> reads a <code>T</code> from the bytes of exactly one message and returns a <code>!T</code>. <code>wire.encode(v)</code> gives the bytes of a value as a new <code>String</code>, which the caller frees.</p>
+<p>In memory a <code>@wire</code> struct is an ordinary struct. Its fields keep their usual alignment, and integers are in the machine's own byte order. Only the bytes on the wire follow the rules of this chapter.</p>
+<h2 id="reading-from-a-connection"><a href="#reading-from-a-connection">Reading from a connection</a></h2>
+<p><code>wire.read(T, conn)</code> reads one message from a <code>net.Conn</code> and <code>wire.write(conn, v)</code> writes one. A server reads messages in a loop until the client closes the connection:</p>
+<pre class="code run"><code><span class="k">import</span> net, wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Request</span> {
+    <span class="t">u32</span> id
+    <span class="t">u16</span> a
+    <span class="t">u16</span> b
+}
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Reply</span> {
+    <span class="t">u32</span> id
+    <span class="t">u32</span> sum
+}
+
+<span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Conn</span> conn) {
+    <span class="k">defer</span> conn.<span class="f">close</span>()
+    <span class="k">for</span> {
+        req := wire.<span class="f">read</span>(<span class="t">Request</span>, conn) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        wire.<span class="f">write</span>(conn, <span class="t">Reply</span>{id: req.id, sum: <span class="t">u32</span>(req.a) + <span class="t">u32</span>(req.b)}) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+    }
+}
+
+<span class="t">void</span> <span class="f">acceptOne</span>(net.<span class="t">Listener</span> *ln) {
+    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    <span class="f">serve</span>(conn)
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">acceptOne</span>(&amp;ln)
+
+    conn := <span class="k">try</span> net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port)
+    <span class="k">defer</span> conn.<span class="f">close</span>()
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
+        <span class="k">try</span> wire.<span class="f">write</span>(conn, <span class="t">Request</span>{id: <span class="t">u32</span>(i), a: <span class="t">u16</span>(i * <span class="n">100</span>), b: <span class="n">7</span>})
+        r := <span class="k">try</span> wire.<span class="f">read</span>(<span class="t">Reply</span>, conn)
+        <span class="f">print</span>(<span class="s">&quot;reply </span><span class="e">{</span>r.id<span class="e">}</span><span class="s">: </span><span class="e">{</span>r.sum<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>reply 1: 107
+reply 2: 207
+reply 3: 307</code></pre>
+<p>TCP delivers a stream of bytes with no marks between messages. One read from the socket can bring half a message, or two and a bit. <code>wire.read</code> takes care of that. It reads until a whole message is there, takes exactly its bytes, and leaves whatever follows for the next read. It works with the connection's buffer, so <code>readLine</code>, <code>readExactly</code> and <code>buffered</code> can be mixed with it on the same connection.</p>
+<p>When the other side closes before the first byte of a message, <code>wire.read</code> fails with <code>NetError.closed</code>. That is the normal end of a connection. Closing in the middle of a message is <code>WireError.short</code>. The connection's <code>setTimeout</code> limits each wait, as for any other read.</p>
+<h2 id="byte-order"><a href="#byte-order">Byte order</a></h2>
+<p><code>@wire(le)</code> on the struct puts the low byte first in all its fields, the order of most file formats and of protocols that come from x86 machines. A field can choose its own order with <code>@wire(be)</code> or <code>@wire(le)</code>:</p>
+<pre class="code run"><code><span class="k">import</span> hex, wire
+
+<span class="a">@wire</span>(le)
+<span class="k">struct</span> <span class="t">Sample</span> {
+    <span class="t">u16</span> channel
+    <span class="t">i32</span> value
+    <span class="t">f32</span> gain
+    <span class="a">@wire</span>(be) <span class="t">u16</span> port
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    s := <span class="t">Sample</span>{channel: <span class="n">1</span>, value: -<span class="n">2</span>, gain: <span class="n">1.5</span>, port: <span class="n">8080</span>}
+    <span class="k">scoped</span> <span class="t">String</span> bytes = <span class="k">try</span> wire.<span class="f">encode</span>(s)
+    <span class="f">print</span>(hex.<span class="f">encode</span>(bytes))
+
+    back := <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Sample</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.channel<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.value<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.gain<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.port<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>0100feffffff0000c03f1f90
+1 -2 1.5 8080</code></pre>
+<p>Floats are sent as their IEEE 754 bits, in the same byte order as integers. The types <code>u16be</code>, <code>u32be</code> and the rest aren't used in a <code>@wire</code> struct: write <code>u16</code>, and let the struct or <code>@wire(be)</code> say the order.</p>
+<h2 id="what-each-type-takes"><a href="#what-each-type-takes">What each type takes</a></h2>
+<div class="table"><table><thead><tr><th>Type</th><th>On the wire</th></tr></thead><tbody><tr><td><code>u8</code>, <code>i8</code></td><td>1 byte</td></tr><tr><td><code>u16</code>, <code>i16</code></td><td>2 bytes</td></tr><tr><td><code>u32</code>, <code>i32</code>, <code>f32</code></td><td>4 bytes</td></tr><tr><td><code>u64</code>, <code>i64</code>, <code>f64</code></td><td>8 bytes</td></tr><tr><td><code>bool</code></td><td>1 byte, 0 or 1</td></tr><tr><td>an enum with <code>@wire(u8)</code>, <code>@wire(u16)</code> or <code>@wire(u32)</code></td><td>1, 2 or 4 bytes</td></tr><tr><td><code>T[n]</code></td><td>n values of <code>T</code>, one after another</td></tr><tr><td>a <code>@wire</code> struct, as a field or embedded</td><td>its fields, in line</td></tr><tr><td>bitfields that share an integer</td><td>that integer</td></tr><tr><td><code>String</code>, <code>T[]</code></td><td>a length, then the bytes or items</td></tr></tbody></table></div>
+<p>Structs inside structs add no bytes of their own. A field that is a <code>@wire</code> struct is its fields, in its own byte order. An array of four <code>u8</code> is four bytes, the usual way to hold an IPv4 address.</p>
+<p>Bitfields work as they do in any struct: fields next to each other share one integer while their bits fit, and the first takes the highest bits, the order protocol diagrams use. On the wire that integer is written like any other.</p>
+<pre class="code run"><code><span class="k">import</span> wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Ipv4Start</span> {
+    <span class="t">u8</span> version: <span class="n">4</span>
+    <span class="t">u8</span> ihl: <span class="n">4</span>
+    <span class="t">u8</span> tos
+    <span class="t">u16</span> length
+    <span class="t">u16</span> id
+    <span class="t">u16</span> flags: <span class="n">3</span>
+    <span class="t">u16</span> fragment: <span class="n">13</span>
+    <span class="t">u8</span> ttl
+    <span class="t">u8</span> protocol
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    ip := <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Ipv4Start</span>, <span class="s">&quot;</span><span class="e">\x45</span><span class="e">\x00</span><span class="e">\x00</span><span class="e">\x3c</span><span class="e">\x1c</span><span class="e">\x46</span><span class="e">\x40</span><span class="e">\x00</span><span class="e">\x40</span><span class="e">\x06</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;IPv</span><span class="e">{</span>ip.version<span class="e">}</span><span class="s">, </span><span class="e">{</span>ip.ihl * <span class="n">4</span><span class="e">}</span><span class="s"> byte header, </span><span class="e">{</span>ip.length<span class="e">}</span><span class="s"> bytes, flags </span><span class="e">{</span>ip.flags<span class="e">}</span><span class="s">, ttl </span><span class="e">{</span>ip.ttl<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>IPv4, 20 byte header, 60 bytes, flags 2, ttl 64</code></pre>
+<p><code>Duration</code>, pointers, <code>str</code> and plain enums have no fixed form on the wire, and the compiler says so when a <code>@wire</code> struct holds one.</p>
+<h2 id="enums"><a href="#enums">Enums</a></h2>
+<p>An enum in a <code>@wire</code> struct needs <code>@wire(u8)</code>, <code>@wire(u16)</code> or <code>@wire(u32)</code> on its declaration, the integer its values are sent as. The compiler checks that each value fits. Reading a number that isn't one of the values fails with <code>WireError.badValue</code>, so a decoded enum always holds one of its values. A flag enum takes any mix of its flags.</p>
+<pre class="code run"><code><span class="k">import</span> wire
+
+<span class="a">@wire</span>(<span class="t">u8</span>)
+<span class="k">enum</span> <span class="t">Kind</span> { hello = <span class="n">1</span>, data = <span class="n">2</span>, bye = <span class="n">3</span> }
+
+<span class="a">@wire</span>(<span class="t">u8</span>)
+<span class="k">enum</span> <span class="t">Options</span> flags { compress, encrypt, ack }
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Frame</span> {
+    <span class="t">Kind</span> kind
+    <span class="t">Options</span> options
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    f := <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Frame</span>, <span class="s">&quot;</span><span class="e">\x02</span><span class="e">\x05</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f.kind<span class="e">}</span><span class="s">, compressed </span><span class="e">{</span>f.options.<span class="f">has</span>(<span class="t">Options</span>.compress)<span class="e">}</span><span class="s">, encrypted </span><span class="e">{</span>f.options.<span class="f">has</span>(<span class="t">Options</span>.encrypt)<span class="e">}</span><span class="s">&quot;</span>)
+
+    _ = wire.<span class="f">decode</span>(<span class="t">Frame</span>, <span class="s">&quot;</span><span class="e">\x09</span><span class="e">\x00</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        f
+    }
+}</code></pre>
+<pre class="out"><code>data, compressed true, encrypted false
+WireError.badValue: kind: 9 isn&#x27;t one of the enum&#x27;s values</code></pre>
+<p>A <code>bool</code> is the same: a byte other than 0 or 1 is <code>WireError.badValue</code>.</p>
+<h2 id="text-and-lists"><a href="#text-and-lists">Text and lists</a></h2>
+<p>A <code>String</code> or a slice has a length, and the bytes on the wire must say it. <code>@wire(len: u16)</code> puts the length in front, as a <code>u16</code>. <code>u8</code>, <code>u32</code> and <code>u64</code> work too. For a <code>String</code> the length counts bytes, for a slice it counts items.</p>
+<pre class="code run"><code><span class="k">import</span> hex, wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Login</span> {
+    <span class="t">u8</span> version
+    <span class="a">@wire</span>(len: <span class="t">u8</span>) <span class="t">String</span> user
+    <span class="a">@wire</span>(len: <span class="t">u16</span>) <span class="t">u16</span>[] ports
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">u16</span>[] ports = <span class="f">alloc</span>(<span class="t">u16</span>, <span class="n">2</span>)
+    ports[<span class="n">0</span>] = <span class="n">80</span>
+    ports[<span class="n">1</span>] = <span class="n">443</span>
+    <span class="k">scoped</span> <span class="t">Login</span> l = <span class="t">Login</span>{version: <span class="n">1</span>, user: <span class="s">&quot;ada&quot;</span>.<span class="f">copy</span>(), ports: ports}
+
+    <span class="k">scoped</span> <span class="t">String</span> bytes = <span class="k">try</span> wire.<span class="f">encode</span>(l)
+    <span class="f">print</span>(hex.<span class="f">encode</span>(bytes))
+
+    <span class="k">scoped</span> <span class="t">Login</span> back = <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Login</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.user<span class="e">}</span><span class="s"> wants </span><span class="e">{</span>back.ports.len<span class="e">}</span><span class="s"> ports, the last </span><span class="e">{</span>back.ports[<span class="n">1</span>]<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>01036164610002005001bb
+ada wants 2 ports, the last 443</code></pre>
+<p>Some protocols keep a list's length in an earlier field of the header, apart from the list. <code>@wire(len: count)</code> names that field. Reading takes the length from it. Encoding writes the slice's length into it, whatever the field holds, so the two can't disagree:</p>
+<pre class="code run"><code><span class="k">import</span> hex, wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Name</span> {
+    <span class="t">u16</span> id
+    <span class="a">@wire</span>(len: <span class="t">u8</span>) <span class="t">String</span> text
+}
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Names</span> {
+    <span class="t">u8</span> count
+    <span class="t">u8</span> flags
+    <span class="a">@wire</span>(len: count) <span class="t">Name</span>[] items
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">Name</span>[] items = <span class="f">alloc</span>(<span class="t">Name</span>, <span class="n">2</span>)
+    items[<span class="n">0</span>] = <span class="t">Name</span>{id: <span class="n">1</span>, text: <span class="s">&quot;eth0&quot;</span>.<span class="f">copy</span>()}
+    items[<span class="n">1</span>] = <span class="t">Name</span>{id: <span class="n">2</span>, text: <span class="s">&quot;wg0&quot;</span>.<span class="f">copy</span>()}
+    <span class="k">scoped</span> <span class="t">Names</span> n = <span class="t">Names</span>{flags: <span class="n">1</span>, items: items}
+
+    <span class="k">scoped</span> <span class="t">String</span> bytes = <span class="k">try</span> wire.<span class="f">encode</span>(n)
+    <span class="f">print</span>(hex.<span class="f">encode</span>(bytes))
+
+    <span class="k">scoped</span> <span class="t">Names</span> back = <span class="k">try</span> wire.<span class="f">decode</span>(<span class="t">Names</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.count<span class="e">}</span><span class="s"> names: </span><span class="e">{</span>back.items[<span class="n">0</span>].text<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.items[<span class="n">1</span>].text<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>020100010465746830000203776730
+2 names: eth0 wg0</code></pre>
+<p>A slice holds values of a fixed form or <code>@wire</code> structs. A slice of <code>String</code>s isn't allowed, since nothing would say each one's length. Put the <code>String</code> in a <code>@wire</code> struct, as <code>Name</code> does here, and use a slice of that.</p>
+<h2 id="limits"><a href="#limits">Limits</a></h2>
+<p>A length comes from the other side, so it can't be trusted. <code>@wire(max: n)</code> sets the most a field may hold, in bytes for a <code>String</code> and in items for a slice. A length above it fails with <code>WireError.tooLong</code> as soon as it is read, before any memory is taken for it.</p>
+<pre class="code run"><code><span class="k">import</span> wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Upload</span> {
+    <span class="a">@wire</span>(len: <span class="t">u32</span>, max: <span class="n">64KiB</span>) <span class="t">String</span> data
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    _ = wire.<span class="f">decode</span>(<span class="t">Upload</span>, <span class="s">&quot;</span><span class="e">\x10</span><span class="e">\x00</span><span class="e">\x00</span><span class="e">\x00</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Upload</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>WireError.tooLong: data: 268435456 bytes, more than the max of 65536</code></pre>
+<p>A <code>u8</code> or <code>u16</code> length can't say more than 255 or 65535, which is a limit already. A length that can pass 65535 needs a <code>max</code>, or the program doesn't compile. Without one, four bytes from a stranger could make a server wait for and allocate 4 GiB.</p>
+<p><code>wire.encode</code> and <code>wire.write</code> check the same limits, and fail with <code>WireError.tooLong</code> instead of sending a message the other side would refuse.</p>
+<h2 id="memory"><a href="#memory">Memory</a></h2>
+<p>A decoded message owns its <code>String</code>s and slices. A <code>@wire</code> struct without a <code>free</code> method gets one that frees them, so <code>scoped</code> works on it. A struct with only fixed fields owns nothing, and needs no <code>free</code>.</p>
+<p>When <code>wire.read</code> or <code>wire.decode</code> fails, it has already freed what it read.</p>
+<p>A message that fits in the connection's buffer, 16 KiB, is read straight from it. A bigger one is gathered in memory of its own as it comes in, up to the limits its fields set.</p>
+<h2 id="errors"><a href="#errors">Errors</a></h2>
+<p><code>wire.read</code>, <code>wire.decode</code>, <code>wire.encode</code> and <code>wire.write</code> fail with a <code>WireError</code>, or a <code>NetError</code> from the connection:</p>
+<div class="table"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody><tr><td><code>short</code></td><td>the bytes or the connection end in the middle of a message</td></tr><tr><td><code>tooLong</code></td><td>a <code>String</code> or slice is longer than its <code>max</code>, or than its length can say</td></tr><tr><td><code>badValue</code></td><td>a <code>bool</code> or enum holds a value it can't</td></tr><tr><td><code>extra</code></td><td><code>wire.decode</code> was given bytes left over after the message</td></tr></tbody></table></div>
+<p>The message names the field. After an error on a connection, the bytes that follow can't be trusted to start a new message, so a server closes the connection.</p>
+<pre class="code run"><code><span class="k">import</span> wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Hello</span> {
+    <span class="t">u8</span> version
+    <span class="t">bool</span> resume
+    <span class="a">@wire</span>(len: <span class="t">u8</span>) <span class="t">String</span> name
+}
+
+<span class="t">void</span> <span class="f">check</span>(<span class="t">str</span> bytes) {
+    h := wire.<span class="f">decode</span>(<span class="t">Hello</span>, bytes) <span class="k">catch</span> e <span class="k">match</span> e.code {
+        wire.<span class="t">WireError</span>.short =&gt; {
+            <span class="f">print</span>(<span class="s">&quot;too short: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            <span class="k">return</span>
+        }
+        _ =&gt; {
+            <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+            <span class="k">return</span>
+        }
+    }
+    <span class="f">print</span>(<span class="s">&quot;hello from </span><span class="e">{</span>h.name<span class="e">}</span><span class="s">&quot;</span>)
+    h.name.<span class="f">free</span>()
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="f">check</span>(<span class="s">&quot;</span><span class="e">\x01</span><span class="e">\x00</span><span class="e">\x03</span><span class="s">ada&quot;</span>)
+    <span class="f">check</span>(<span class="s">&quot;</span><span class="e">\x01</span><span class="e">\x00</span><span class="e">\x05</span><span class="s">ada&quot;</span>)
+    <span class="f">check</span>(<span class="s">&quot;</span><span class="e">\x01</span><span class="e">\x02</span><span class="e">\x03</span><span class="s">ada&quot;</span>)
+    <span class="f">check</span>(<span class="s">&quot;</span><span class="e">\x01</span><span class="e">\x00</span><span class="e">\x03</span><span class="s">ada!&quot;</span>)
+}</code></pre>
+<pre class="out"><code>hello from ada
+too short: the bytes end in the middle of the message
+WireError.badValue: resume: 2 isn&#x27;t a bool, which is 0 or 1
+WireError.extra: 1 byte is left after the message</code></pre>
+<h2 id="datagrams-and-files"><a href="#datagrams-and-files">Datagrams and files</a></h2>
+<p><code>wire.decode</code> reads from any bytes: a UDP datagram, a part of a file, or bytes another protocol carried. It wants the bytes of exactly one message, which is what a datagram is.</p>
+<pre class="code run"><code><span class="k">import</span> net, wire
+
+<span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Probe</span> {
+    <span class="t">u32</span> seq
+    <span class="t">u64</span> sentAt
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    server := <span class="k">try</span> net.<span class="f">listenUdp</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    client := <span class="k">try</span> net.<span class="f">dialUdp</span>(server.<span class="f">localAddr</span>())
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">3</span> {
+        <span class="k">scoped</span> <span class="t">String</span> bytes = <span class="k">try</span> wire.<span class="f">encode</span>(<span class="t">Probe</span>{seq: <span class="t">u32</span>(i), sentAt: <span class="t">u64</span>(<span class="n">1000</span> * i)})
+        <span class="k">try</span> client.<span class="f">send</span>(bytes)
+    }
+
+    <span class="t">u8</span>[<span class="n">1500</span>] buf
+    <span class="k">for</span> _ <span class="k">in</span> <span class="n">1</span>..<span class="n">3</span> {
+        n, from := <span class="k">try</span> server.<span class="f">readFrom</span>(buf[<span class="n">0</span>:])
+        p := wire.<span class="f">decode</span>(<span class="t">Probe</span>, buf[<span class="n">0</span>:n]) <span class="k">catch</span> e {
+            <span class="k">continue</span>
+        }
+        <span class="f">print</span>(<span class="s">&quot;probe </span><span class="e">{</span>p.seq<span class="e">}</span><span class="s">, sent at </span><span class="e">{</span>p.sentAt<span class="e">}</span><span class="s">, </span><span class="e">{</span>n<span class="e">}</span><span class="s"> bytes&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>probe 1, sent at 1000, 12 bytes
+probe 2, sent at 2000, 12 bytes</code></pre>
+<h2 id="how-it-works"><a href="#how-it-works">How it works</a></h2>
+<p>For each <code>@wire</code> struct a program reads or writes, the compiler writes the code that reads it, sizes it and writes it, from its fields. A run of fixed fields is checked once for its bytes, then each field is a load, a byte swap when the order needs one, and a store. Nothing is looked up at run time, and a struct of fixed fields knows its size before the first byte arrives.</p>
+<p>Mistakes in a <code>@wire</code> struct are compile errors: a type with no form on the wire, a <code>String</code> without a length, a length field that comes after its list, an enum value that doesn't fit its bytes, a length with no <code>max</code> that could ask for gigabytes.</p>
+    <nav class="pager"><a class="prev" href="20-math-and-big-numbers.html"><span>Previous</span>Math and big numbers</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-first-message">A first message</a></li><li><a href="#reading-from-a-connection">Reading from a connection</a></li><li><a href="#byte-order">Byte order</a></li><li><a href="#what-each-type-takes">What each type takes</a></li><li><a href="#enums">Enums</a></li><li><a href="#text-and-lists">Text and lists</a></li><li><a href="#limits">Limits</a></li><li><a href="#memory">Memory</a></li><li><a href="#errors">Errors</a></li><li><a href="#datagrams-and-files">Datagrams and files</a></li><li><a href="#how-it-works">How it works</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.78.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

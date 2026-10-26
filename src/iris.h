@@ -381,6 +381,7 @@ struct Type {
     void *scope;            /* instances: the checker's scope with the type parameters */
     bool bigEndian;         /* u16be, u32be, u64be, i16be...: an integer kept in network byte order */
     Type *plain;            /* ... and the integer it reads as */
+    int wire;               /* structs: 1 @wire (high byte first), 2 @wire(le); enums: bytes on the wire */
     /* structs, once laid out: size, alignment and the LLVM elements, padding included */
     bool laidOut;
     int64_t size, align;
@@ -421,7 +422,20 @@ enum {
     BI_ENV_LOAD,
     BI_FLAGS_PARSE,
     BI_ARENA_ALLOC,         /* arena.alloc(T, n): b is a pointer to the Arena */
+    BI_WIRE_READ, BI_WIRE_DECODE, BI_WIRE_ENCODE, BI_WIRE_WRITE,
 };
+
+/* What @wire(...) on a field of a @wire struct says. order: 0 the struct's,
+ * 1 high byte first, 2 low byte first. A String or slice takes its length
+ * from a prefix of lenBytes bytes, or from the earlier field lenField. */
+typedef struct {
+    int order;
+    int lenBytes;
+    int lenField;           /* the field's index in the struct, or -1 */
+    int64_t max;            /* 0: as many as the length can say */
+} WireOpts;
+void wireOpts(Node *structDecl, Node *field, WireOpts *o);
+bool isWireStruct(Type *t);
 
 /* Checks the program and fills in types. Returns false after errors. */
 bool checkProgram(Arena *a, Program *prog);

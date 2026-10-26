@@ -350,6 +350,8 @@ void main() {
 1 1 63 1
 ```
 
+A packed struct read through a pointer must match the bytes exactly, and can't hold text or lists whose length the message gives. For whole protocol messages, a `@wire` struct keeps its normal layout in memory and the compiler writes the code that reads and writes its bytes, lengths and limits included. [Binary messages](../library-tour/21-binary-messages.html) in the Library Tour covers it.
+
 `align(n)` starts the struct at a multiple of `n` bytes and rounds its size up to a multiple of `n`. Use it to keep per-thread counters on separate 64-byte cache lines so threads don't slow each other down. Variables, globals and `alloc` all respect it.
 
 ```iris run

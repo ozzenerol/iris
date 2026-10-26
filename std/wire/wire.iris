@@ -1,0 +1,133 @@
+// Binary messages for @wire structs. wire.read, wire.decode, wire.encode and
+// wire.write are built into the compiler, which writes the code that reads
+// and writes each struct they see.
+
+import net
+
+// What went wrong with a message: the bytes or the connection ended in the
+// middle of it (short), a String or slice is longer than its max or than
+// its length can say (tooLong), a bool or enum holds a value it can't
+// (badValue), or bytes are left after it (extra).
+pub enum WireError { short, tooLong, badValue, extra }
+
+// Reads one message of a type from a connection: wire.read(Header, conn).
+// NetError.closed when the connection closes before the first byte.
+@builtin
+pub void read()
+
+// Reads a value of a type from the bytes of exactly one message:
+// wire.decode(Header, bytes).
+@builtin
+pub void decode()
+
+// The bytes of a value, as a new String: wire.encode(reply).
+@builtin
+pub void encode()
+
+// Writes the bytes of a value to a connection: wire.write(conn, reply).
+@builtin
+pub void write()
+
+@extern("iris_wire_decode")
+i32 rawDecode(u8 *table, u8 *p, i64 len, u8 *out, i64 *n)
+
+@extern("iris_wire_free")
+void rawFree(u8 *table, u8 *value)
+
+@extern("iris_wire_encode")
+i32 rawEncode(u8 *table, u8 *value, String *out)
+
+@extern("iris_wire_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_wire_message_len")
+i64 messageLen()
+
+Error fail(i32 code) => match code {
+    1 => error(WireError.short, "{message()}")
+    2 => error(WireError.tooLong, "{message()}")
+    _ => error(WireError.badValue, "{message()}")
+}
+
+str message() => messagePtr()[0:messageLen()]
+
+// What wire.decode calls.
+pub !void decodeInto(u8 *table, str bytes, u8 *out) {
+    i64 n = 0
+    code := rawDecode(table, bytes.ptr, bytes.len, out, &n)
+    if code != 0 {
+        return fail(code)
+    }
+    if n < bytes.len {
+        rawFree(table, out)
+        left := bytes.len - n
+        return error(WireError.extra, "{left} byte{"s are" if left > 1 else " is"} left after the message")
+    }
+}
+
+// What wire.read calls. The message is read in the connection's buffer
+// when it fits there, and in a String of its own when it doesn't.
+pub !void readInto(u8 *table, net.Conn *c, u8 *out) {
+    for {
+        b := c.buffered()
+        i64 n = 0
+        code := rawDecode(table, b.ptr, b.len, out, &n)
+        if code == 0 {
+            c.skip(n)
+            return
+        }
+        if code != 1 {
+            return fail(code)
+        }
+        if n > c.bufferSize() {
+            try readLong(table, c, out)
+            return
+        }
+        more := try c.readMore()
+        if !more {
+            if b.len == 0 {
+                return error(net.NetError.closed, "reading a message: connection closed")
+            }
+            return error(WireError.short, "connection closed in the middle of a message")
+        }
+    }
+}
+
+// A message bigger than the connection's buffer.
+!void readLong(u8 *table, net.Conn *c, u8 *out) {
+    scoped String acc = c.buffered().copy()
+    c.skip(acc.len)
+    for {
+        i64 n = 0
+        code := rawDecode(table, acc.ptr, acc.len, out, &n)
+        if code == 0 {
+            return
+        }
+        if code != 1 {
+            return fail(code)
+        }
+        scoped String more = c.readExactly(n - acc.len) catch e {
+            if e.code == net.NetError.closed {
+                return error(WireError.short, "connection closed in the middle of a message")
+            }
+            return e
+        }
+        acc.append(more)
+    }
+}
+
+// What wire.encode calls.
+pub !void encodeFrom(u8 *table, u8 *value, String *out) {
+    code := rawEncode(table, value, out)
+    if code != 0 {
+        out.free()
+        return fail(code)
+    }
+}
+
+// What wire.write calls.
+pub !void writeFrom(u8 *table, net.Conn *c, u8 *value) {
+    scoped String out
+    try encodeFrom(table, value, &out)
+    try c.write(out)
+}

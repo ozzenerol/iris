@@ -79,6 +79,9 @@ typedef struct {
     Type **jsonTypes;       /* the types whose JSON tables are written, and their names */
     const char **jsonNames;
     int njson, capJson;
+    Type **wireTypes;       /* the same for @wire tables */
+    const char **wireNames;
+    int nwire, capWire;
 } IR;
 
 /* @unchecked turns the checks off in one function */
@@ -1484,6 +1487,856 @@ static const char *flagsTable(IR *ir, Type *t) {
     return table;
 }
 
+/* ---------------------------------------------------------------- @wire
+ *
+ * Each @wire struct a program reads or writes gets three functions, made
+ * here from its fields:
+ *   i32 @wire.dec.N(ptr pos, ptr end, ptr out)   reads one message at *pos
+ *   i64 @wire.size.N(ptr value)                  its size on the wire, -1 when too long
+ *   void @wire.enc.N(ptr pos, ptr value)         writes it at *pos
+ * dec checks the bytes are there once for each run of fixed fields, then
+ * loads, swaps and stores. A nested struct of fixed fields is written in
+ * line. What goes wrong is passed to iris_wire_fail, which keeps the
+ * message and gives the WireError code. The runtime calls the functions
+ * through a table, { ptr dec, ptr size, ptr enc, ptr free }. free also
+ * frees a message that failed half way, since dec fills in zeros. */
+
+/* The bytes t takes on the wire, -1 when lengths decide. */
+static int64_t wireSizeOf(Type *t) {
+    switch (t->kind) {
+    case TY_INT: case TY_FLOAT: return typeSizeOf(t);
+    case TY_BOOL: return 1;
+    case TY_ENUM: return t->wire;
+    case TY_ARRAY: {
+        int64_t e = wireSizeOf(t->elem);
+        return e < 0 ? -1 : e * t->count;
+    }
+    case TY_STRUCT: {
+        int64_t sum = 0;
+        Node *d = t->decl;
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            if (f->bitWidth && i > 0 && d->list.items[i - 1]->bitWidth && d->list.items[i - 1]->offset == f->offset) {
+                continue;
+            }
+            int64_t n = wireSizeOf(f->type);
+            if (n < 0) return -1;
+            sum += n;
+        }
+        return sum;
+    }
+    default: return -1;
+    }
+}
+
+/* One field as the wire sees it: bitfields that share an integer are one. */
+typedef struct {
+    Node *f;
+    Type *type;
+    int64_t off;
+    int order;              /* 1 high byte first, 2 low byte first */
+    WireOpts o;
+    int lenEntry;           /* the entry holding this one's length, or -1 */
+    int countOf;            /* the entry whose length this one holds, or -1 */
+} WireEntry;
+
+static int wireEntries(IR *ir, Type *t, WireEntry **out) {
+    Node *d = t->decl;
+    int n = d->list.len;
+    WireEntry *es = arenaAlloc(ir->arena, sizeof(WireEntry) * (size_t)(n + 1));
+    int *entry = arenaAlloc(ir->arena, sizeof(int) * (size_t)(n + 1));
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        Node *f = d->list.items[i];
+        if (f->bitWidth && i > 0 && d->list.items[i - 1]->bitWidth && d->list.items[i - 1]->offset == f->offset) {
+            entry[i] = m - 1;
+            continue;
+        }
+        entry[i] = m;
+        WireEntry *e = &es[m++];
+        e->f = f;
+        e->type = f->type;
+        e->off = f->offset;
+        wireOpts(d, f, &e->o);
+        e->order = e->o.order ? e->o.order : t->wire;
+        e->lenEntry = -1;
+        e->countOf = -1;
+    }
+    for (int k = 0; k < m; k++) {
+        if (es[k].o.lenField >= 0) {
+            es[k].lenEntry = entry[es[k].o.lenField];
+            es[entry[es[k].o.lenField]].countOf = k;
+        }
+    }
+    *out = es;
+    return m;
+}
+
+static bool wireSized(Type *t) { return t->kind == TY_STRING || t->kind == TY_SLICE; }
+
+/* The fewest bytes a value of t takes on the wire. */
+static int64_t wireMinSize(Type *t) {
+    int64_t n = wireSizeOf(t);
+    if (n >= 0 || t->kind != TY_STRUCT) return n < 0 ? 0 : n;
+    int64_t sum = 0;
+    Node *d = t->decl;
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (f->bitWidth && i > 0 && d->list.items[i - 1]->bitWidth && d->list.items[i - 1]->offset == f->offset) {
+            continue;
+        }
+        if (wireSized(f->type)) {
+            WireOpts o;
+            wireOpts(d, f, &o);
+            sum += o.lenBytes;
+        } else if (f->type->kind == TY_STRUCT) {
+            sum += wireMinSize(f->type);
+        } else {
+            sum += wireSizeOf(f->type);
+        }
+    }
+    return sum;
+}
+
+typedef struct {
+    IR *ir;
+    StrBuf b;               /* the code after the entry block's allocas */
+    StrBuf allocas;
+    int t, l;
+    const char *cur;        /* the label of the block being written */
+} WGen;
+
+/* Ends a function: its first line, the allocas, then the code. */
+static void wfinish(WGen *g, const char *head) {
+    sbPuts(&g->ir->extra, head);
+    sbPuts(&g->ir->extra, "entry:\n");
+    if (g->allocas.buf) sbPuts(&g->ir->extra, g->allocas.buf);
+    sbPuts(&g->ir->extra, g->b.buf);
+    sbPuts(&g->ir->extra, "}\n\n");
+    sbFree(&g->b);
+    sbFree(&g->allocas);
+}
+
+static const char *wtmp(WGen *g) { return fmt(g->ir, "%%w%d", ++g->t); }
+static const char *wlab(WGen *g) { return fmt(g->ir, "L%d", ++g->l); }
+
+static void win(WGen *g, const char *f, ...) {
+    va_list ap;
+    va_start(ap, f);
+    sbPuts(&g->b, "  ");
+    char buf[1024];
+    vsnprintf(buf, sizeof buf, f, ap);
+    sbPuts(&g->b, buf);
+    sbPutc(&g->b, '\n');
+    va_end(ap);
+}
+
+static void wblock(WGen *g, const char *l) {
+    sbPrintf(&g->b, "%s:\n", l);
+    g->cur = l;
+}
+
+static const char *wgep(WGen *g, const char *base, const char *off) {
+    if (strcmp(off, "0") == 0) return base;
+    const char *r = wtmp(g);
+    win(g, "%s = getelementptr inbounds i8, ptr %s, i64 %s", r, base, off);
+    return r;
+}
+
+static const char *wgepi(WGen *g, const char *base, int64_t off) {
+    return wgep(g, base, fmt(g->ir, "%lld", (long long)off));
+}
+
+/* An integer of n bytes from the wire at p, in the machine's order. */
+static const char *wload(WGen *g, int n, int order, const char *p) {
+    const char *v = wtmp(g);
+    win(g, "%s = load i%d, ptr %s, align 1", v, n * 8, p);
+    if (n > 1 && order != 2) {
+        const char *s = wtmp(g);
+        win(g, "%s = call i%d @llvm.bswap.i%d(i%d %s)", s, n * 8, n * 8, n * 8, v);
+        return s;
+    }
+    return v;
+}
+
+static void wstore(WGen *g, int n, int order, const char *v, const char *p) {
+    if (n > 1 && order != 2) {
+        const char *s = wtmp(g);
+        win(g, "%s = call i%d @llvm.bswap.i%d(i%d %s)", s, n * 8, n * 8, n * 8, v);
+        v = s;
+    }
+    win(g, "store i%d %s, ptr %s, align 1", n * 8, v, p);
+}
+
+/* Leaves the function through iris_wire_fail: what (rt.c, WireWhat), the
+ * field, a value and a limit for the message, and where it happened. */
+static void wfail(WGen *g, const char *cond, int what, Node *f, const char *value, const char *limit, const char *at,
+                  const char *ret) {
+    const char *bad = wlab(g), *ok = wlab(g);
+    win(g, "br i1 %s, label %%%s, label %%%s", cond, bad, ok);
+    wblock(g, bad);
+    const char *name = f && f->name ? f->name : "";
+    const char *c = wtmp(g);
+    win(g, "%s = call i32 @iris_wire_fail(i32 %d, ptr %s, i64 %zu, i64 %s, i64 %s, ptr %s)", c, what,
+        stringConst(g->ir, name, strlen(name)), strlen(name), value, limit, at ? at : "null");
+    if (strcmp(ret, "i32") == 0) {
+        win(g, "ret i32 %s", c);
+    } else {
+        win(g, "ret i64 -1");
+    }
+    wblock(g, ok);
+}
+
+/* A loop over i from 0 to n: writes the head and returns i; wloopEnd closes it. */
+typedef struct {
+    const char *head, *body, *done, *from, *i, *next, *mark;
+} WLoop;
+
+static WLoop wloop(WGen *g, const char *n) {
+    WLoop L;
+    L.from = g->cur;
+    L.head = wlab(g);
+    L.body = wlab(g);
+    L.done = wlab(g);
+    L.i = wtmp(g);
+    L.next = wtmp(g);
+    L.mark = fmt(g->ir, "@back%d@", ++g->l);
+    win(g, "br label %%%s", L.head);
+    wblock(g, L.head);
+    win(g, "%s = phi i64 [ 0, %%%s ], [ %s, %%%s ]", L.i, L.from, L.next, L.mark);
+    const char *c = wtmp(g);
+    win(g, "%s = icmp ult i64 %s, %s", c, L.i, n);
+    win(g, "br i1 %s, label %%%s, label %%%s", c, L.body, L.done);
+    wblock(g, L.body);
+    return L;
+}
+
+static void wloopEnd(WGen *g, WLoop *L) {
+    win(g, "%s = add i64 %s, 1", L->next, L->i);
+    win(g, "br label %%%s", L->head);
+    /* the back edge comes from the block the body ended in */
+    char *at = strstr(g->b.buf, L->mark);
+    size_t ml = strlen(L->mark), cl = strlen(g->cur);
+    StrBuf nb = {0};
+    sbPutn(&nb, g->b.buf, (size_t)(at - g->b.buf));
+    sbPutn(&nb, g->cur, cl);
+    sbPuts(&nb, at + ml);
+    sbFree(&g->b);
+    g->b = nb;
+    wblock(g, L->done);
+}
+
+static const char *wireFns(IR *ir, Type *t);
+
+/* The number in the names of t's functions: @wire.dec.N. */
+static int wireId(IR *ir, Type *t) {
+    wireFns(ir, t);
+    for (int i = 0; i < ir->nwire; i++) {
+        if (ir->wireTypes[i] == t) return i;
+    }
+    return 0;
+}
+
+/* Reads a value of a fixed form from the wire at w into memory at m. */
+static void wdecFixed(WGen *g, Type *t, int order, Node *f, const char *m, const char *w) {
+    switch (t->kind) {
+    case TY_INT: case TY_FLOAT: {
+        int n = (int)typeSizeOf(t);
+        win(g, "store i%d %s, ptr %s, align 1", n * 8, wload(g, n, order, w), m);
+        return;
+    }
+    case TY_BOOL: {
+        const char *v = wtmp(g), *c = wtmp(g), *x = wtmp(g);
+        win(g, "%s = load i8, ptr %s, align 1", v, w);
+        win(g, "%s = icmp ugt i8 %s, 1", c, v);
+        win(g, "%s = zext i8 %s to i64", x, v);
+        wfail(g, c, 4, f, x, "0", NULL, "i32");
+        win(g, "store i8 %s, ptr %s, align 1", v, m);
+        return;
+    }
+    case TY_ENUM: {
+        int n = t->wire;
+        const char *raw = wload(g, n, order, w);
+        bool neg = false, flags = t->isFlags;
+        int64_t all = 0;
+        NodeList *ms = &t->decl->list;
+        for (int i = 0; i < ms->len; i++) {
+            neg = neg || ms->items[i]->cval < 0;
+            all |= ms->items[i]->cval;
+        }
+        const char *v = raw;
+        if (n < 8) {
+            v = wtmp(g);
+            win(g, "%s = %s i%d %s to i64", v, neg ? "sext" : "zext", n * 8, raw);
+        }
+        const char *c = wtmp(g);
+        if (flags) {
+            const char *x = wtmp(g);
+            win(g, "%s = and i64 %s, %lld", x, v, (long long)~all);
+            win(g, "%s = icmp ne i64 %s, 0", c, x);
+            wfail(g, c, 6, f, v, "0", NULL, "i32");
+        } else {
+            const char *bad = wlab(g), *ok = wlab(g);
+            sbPrintf(&g->b, "  switch i64 %s, label %%%s [", v, bad);
+            for (int i = 0; i < ms->len; i++) {
+                bool dup = false;
+                for (int j = 0; j < i; j++) dup = dup || ms->items[j]->cval == ms->items[i]->cval;
+                if (!dup) sbPrintf(&g->b, " i64 %lld, label %%%s", (long long)ms->items[i]->cval, ok);
+            }
+            sbPuts(&g->b, " ]\n");
+            wblock(g, bad);
+            const char *r = wtmp(g);
+            const char *name = f && f->name ? f->name : "";
+            win(g, "%s = call i32 @iris_wire_fail(i32 5, ptr %s, i64 %zu, i64 %s, i64 0, ptr null)", r,
+                stringConst(g->ir, name, strlen(name)), strlen(name), v);
+            win(g, "ret i32 %s", r);
+            wblock(g, ok);
+            (void)c;
+        }
+        const char *tr = wtmp(g);
+        win(g, "%s = trunc i64 %s to i32", tr, v);
+        win(g, "store i32 %s, ptr %s, align 1", tr, m);
+        return;
+    }
+    case TY_ARRAY: {
+        Type *et = t->elem;
+        int64_t ews = wireSizeOf(et), es = typeSizeOf(et);
+        if (et->kind == TY_INT && es == 1) {
+            win(g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %lld, i1 false)", m, w, (long long)t->count);
+            return;
+        }
+        if (t->count <= 8) {
+            for (int64_t i = 0; i < t->count; i++) {
+                wdecFixed(g, et, order, f, wgepi(g, m, i * es), wgepi(g, w, i * ews));
+            }
+            return;
+        }
+        WLoop L = wloop(g, fmt(g->ir, "%lld", (long long)t->count));
+        const char *mo = wtmp(g), *wo = wtmp(g);
+        win(g, "%s = mul i64 %s, %lld", mo, L.i, (long long)es);
+        win(g, "%s = mul i64 %s, %lld", wo, L.i, (long long)ews);
+        wdecFixed(g, et, order, f, wgep(g, m, mo), wgep(g, w, wo));
+        wloopEnd(g, &L);
+        return;
+    }
+    case TY_STRUCT: {
+        WireEntry *es;
+        int n = wireEntries(g->ir, t, &es);
+        int64_t wo = 0;
+        for (int i = 0; i < n; i++) {
+            wdecFixed(g, es[i].type, es[i].order, es[i].f, wgepi(g, m, es[i].off), wgepi(g, w, wo));
+            wo += wireSizeOf(es[i].type);
+        }
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+/* Writes a value of a fixed form from memory at m to the wire at w. */
+static void wencFixed(WGen *g, Type *t, int order, const char *m, const char *w) {
+    switch (t->kind) {
+    case TY_INT: case TY_FLOAT: {
+        int n = (int)typeSizeOf(t);
+        const char *v = wtmp(g);
+        win(g, "%s = load i%d, ptr %s, align 1", v, n * 8, m);
+        wstore(g, n, order, v, w);
+        return;
+    }
+    case TY_BOOL: {
+        const char *v = wtmp(g), *c = wtmp(g), *x = wtmp(g);
+        win(g, "%s = load i8, ptr %s, align 1", v, m);
+        win(g, "%s = icmp ne i8 %s, 0", c, v);
+        win(g, "%s = zext i1 %s to i8", x, c);
+        win(g, "store i8 %s, ptr %s, align 1", x, w);
+        return;
+    }
+    case TY_ENUM: {
+        int n = t->wire;
+        const char *v = wtmp(g);
+        win(g, "%s = load i32, ptr %s, align 1", v, m);
+        if (n < 4) {
+            const char *tr = wtmp(g);
+            win(g, "%s = trunc i32 %s to i%d", tr, v, n * 8);
+            v = tr;
+        }
+        wstore(g, n, order, v, w);
+        return;
+    }
+    case TY_ARRAY: {
+        Type *et = t->elem;
+        int64_t ews = wireSizeOf(et), es = typeSizeOf(et);
+        if (et->kind == TY_INT && es == 1) {
+            win(g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %lld, i1 false)", w, m, (long long)t->count);
+            return;
+        }
+        if (t->count <= 8) {
+            for (int64_t i = 0; i < t->count; i++) {
+                wencFixed(g, et, order, wgepi(g, m, i * es), wgepi(g, w, i * ews));
+            }
+            return;
+        }
+        WLoop L = wloop(g, fmt(g->ir, "%lld", (long long)t->count));
+        const char *mo = wtmp(g), *wo = wtmp(g);
+        win(g, "%s = mul i64 %s, %lld", mo, L.i, (long long)es);
+        win(g, "%s = mul i64 %s, %lld", wo, L.i, (long long)ews);
+        wencFixed(g, et, order, wgep(g, m, mo), wgep(g, w, wo));
+        wloopEnd(g, &L);
+        return;
+    }
+    case TY_STRUCT: {
+        WireEntry *es;
+        int n = wireEntries(g->ir, t, &es);
+        int64_t wo = 0;
+        for (int i = 0; i < n; i++) {
+            wencFixed(g, es[i].type, es[i].order, wgepi(g, m, es[i].off), wgepi(g, w, wo));
+            wo += wireSizeOf(es[i].type);
+        }
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+/* The bytes left from p to end. */
+static const char *wleft(WGen *g, const char *p) {
+    const char *a = wtmp(g), *b = wtmp(g), *r = wtmp(g);
+    win(g, "%s = ptrtoint ptr %s to i64", a, p);
+    win(g, "%s = ptrtoint ptr %%end to i64", b);
+    win(g, "%s = sub i64 %s, %s", r, b, a);
+    return r;
+}
+
+/* Fails with short unless n bytes are there at p. */
+static void wneed(WGen *g, const char *p, const char *n, const char *per) {
+    const char *left = wleft(g, p), *c = wtmp(g);
+    if (strcmp(per, "1") == 0) {
+        win(g, "%s = icmp ult i64 %s, %s", c, left, n);
+    } else {
+        const char *most = wtmp(g);
+        win(g, "%s = udiv i64 %s, %s", most, left, per);
+        win(g, "%s = icmp ugt i64 %s, %s", c, n, most);
+    }
+    wfail(g, c, 1, NULL, n, per, p, "i32");
+}
+
+/* The length of a String or slice field, from its prefix or its count
+ * field, checked against its max. */
+static const char *wdecLength(WGen *g, WireEntry *es, WireEntry *e, const char *out) {
+    const char *n;
+    if (e->o.lenBytes) {
+        int lb = e->o.lenBytes;
+        const char *p = wtmp(g);
+        win(g, "%s = load ptr, ptr %%pos", p);
+        wneed(g, p, fmt(g->ir, "%d", lb), "1");
+        const char *raw = wload(g, lb, e->order, p);
+        n = raw;
+        if (lb < 8) {
+            n = wtmp(g);
+            win(g, "%s = zext i%d %s to i64", n, lb * 8, raw);
+        }
+        win(g, "store ptr %s, ptr %%pos", wgepi(g, p, lb));
+    } else {
+        WireEntry *c = &es[e->lenEntry];
+        int cs = (int)typeSizeOf(c->type);
+        const char *raw = wtmp(g);
+        win(g, "%s = load i%d, ptr %s, align 1", raw, cs * 8, wgepi(g, out, c->off));
+        n = raw;
+        if (cs < 8) {
+            n = wtmp(g);
+            win(g, "%s = %s i%d %s to i64", n, c->type->isSigned ? "sext" : "zext", cs * 8, raw);
+        }
+        if (c->type->isSigned) {
+            const char *neg = wtmp(g);
+            win(g, "%s = icmp slt i64 %s, 0", neg, n);
+            wfail(g, neg, 7, c->f, n, "0", NULL, "i32");
+        }
+    }
+    if (e->o.max) {
+        const char *over = wtmp(g);
+        win(g, "%s = icmp ugt i64 %s, %lld", over, n, (long long)e->o.max);
+        wfail(g, over, e->type->kind == TY_STRING ? 2 : 3, e->f, n, fmt(g->ir, "%lld", (long long)e->o.max), NULL, "i32");
+    }
+    return n;
+}
+
+static void wireDec(IR *ir, Type *t, const char *name) {
+    WGen g = {ir, {0}, {0}, 0, 0, "entry"};
+    WireEntry *es;
+    int n = wireEntries(ir, t, &es);
+    for (int i = 0; i < n;) {
+        WireEntry *e = &es[i];
+        if (wireSizeOf(e->type) >= 0) {
+            /* a run of fixed fields: one check that its bytes are there */
+            int j = i;
+            int64_t k = 0;
+            while (j < n && wireSizeOf(es[j].type) >= 0) k += wireSizeOf(es[j++].type);
+            const char *p = wtmp(&g);
+            win(&g, "%s = load ptr, ptr %%pos", p);
+            wneed(&g, p, fmt(ir, "%lld", (long long)k), "1");
+            int64_t wo = 0;
+            for (; i < j; i++) {
+                wdecFixed(&g, es[i].type, es[i].order, es[i].f, wgepi(&g, "%out", es[i].off), wgepi(&g, p, wo));
+                wo += wireSizeOf(es[i].type);
+            }
+            win(&g, "store ptr %s, ptr %%pos", wgepi(&g, p, k));
+            continue;
+        }
+        i++;
+        const char *m = wgepi(&g, "%out", e->off);
+        if (e->type->kind == TY_STRUCT) {
+            const char *c = wtmp(&g), *bad = wtmp(&g);
+            win(&g, "%s = call i32 @wire.dec.%d(ptr %%pos, ptr %%end, ptr %s)", c, wireId(ir, e->type), m);
+            win(&g, "%s = icmp ne i32 %s, 0", bad, c);
+            const char *fail = wlab(&g), *ok = wlab(&g);
+            win(&g, "br i1 %s, label %%%s, label %%%s", bad, fail, ok);
+            wblock(&g, fail);
+            win(&g, "ret i32 %s", c);
+            wblock(&g, ok);
+            continue;
+        }
+        const char *len = wdecLength(&g, es, e, "%out");
+        const char *p = wtmp(&g);
+        win(&g, "%s = load ptr, ptr %%pos", p);
+        if (e->type->kind == TY_STRING) {
+            wneed(&g, p, len, "1");
+            win(&g, "call void @iris_wire_string(ptr %s, ptr %s, i64 %s)", m, p, len);
+            win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
+            continue;
+        }
+        Type *et = e->type->elem;
+        int64_t ews = wireSizeOf(et), esz = typeSizeOf(et);
+        int64_t least = ews >= 0 ? ews : wireMinSize(et);
+        if (least > 0) wneed(&g, p, len, fmt(ir, "%lld", (long long)least));
+        const char *buf = wtmp(&g);
+        win(&g, "%s = call ptr @iris_wire_alloc(i64 %s, i64 %lld, i1 %s)", buf, len, (long long)esz, ews >= 0 ? "false" : "true");
+        win(&g, "store ptr %s, ptr %s", buf, m);
+        win(&g, "store i64 %s, ptr %s", len, wgepi(&g, m, 8));
+        if (et->kind == TY_INT && esz == 1) {
+            win(&g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)", buf, p, len);
+            win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
+            continue;
+        }
+        WLoop L = wloop(&g, len);
+        const char *mo = wtmp(&g);
+        win(&g, "%s = mul i64 %s, %lld", mo, L.i, (long long)esz);
+        const char *item = wgep(&g, buf, mo);
+        if (ews >= 0) {
+            const char *wo = wtmp(&g);
+            win(&g, "%s = mul i64 %s, %lld", wo, L.i, (long long)ews);
+            wdecFixed(&g, et, e->order, e->f, item, wgep(&g, p, wo));
+        } else {
+            const char *c = wtmp(&g), *bad = wtmp(&g);
+            win(&g, "%s = call i32 @wire.dec.%d(ptr %%pos, ptr %%end, ptr %s)", c, wireId(ir, et), item);
+            win(&g, "%s = icmp ne i32 %s, 0", bad, c);
+            const char *fail = wlab(&g), *ok = wlab(&g);
+            win(&g, "br i1 %s, label %%%s, label %%%s", bad, fail, ok);
+            wblock(&g, fail);
+            win(&g, "ret i32 %s", c);
+            wblock(&g, ok);
+        }
+        wloopEnd(&g, &L);
+        if (ews >= 0) {
+            const char *total = wtmp(&g);
+            win(&g, "%s = mul i64 %s, %lld", total, len, (long long)ews);
+            win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, total));
+        }
+    }
+    win(&g, "ret i32 0");
+    wfinish(&g, fmt(ir, "define internal i32 %s(ptr %%pos, ptr %%end, ptr %%out) nounwind {\n", name));
+}
+
+/* The most a length field of type t, or a prefix of n bytes, can say. */
+static int64_t wireCap(int bytes, bool sign) {
+    if (bytes >= 8) return INT64_MAX;
+    return (int64_t)((1ull << (8 * bytes - (sign ? 1 : 0))) - 1);
+}
+
+static void wireSize(IR *ir, Type *t, const char *name) {
+    WGen g = {ir, {0}, {0}, 0, 0, "entry"};
+    WireEntry *es;
+    int n = wireEntries(ir, t, &es);
+    int64_t fixed = 0;
+    const char *sum = "0";
+    for (int i = 0; i < n; i++) {
+        WireEntry *e = &es[i];
+        int64_t ws = wireSizeOf(e->type);
+        if (ws >= 0) {
+            fixed += ws;
+            continue;
+        }
+        const char *m = wgepi(&g, "%v", e->off);
+        const char *add;
+        if (e->type->kind == TY_STRUCT) {
+            add = wtmp(&g);
+            win(&g, "%s = call i64 @wire.size.%d(ptr %s)", add, wireId(ir, e->type), m);
+            const char *bad = wtmp(&g);
+            win(&g, "%s = icmp slt i64 %s, 0", bad, add);
+            const char *fail = wlab(&g), *ok = wlab(&g);
+            win(&g, "br i1 %s, label %%%s, label %%%s", bad, fail, ok);
+            wblock(&g, fail);
+            win(&g, "ret i64 -1");
+            wblock(&g, ok);
+        } else {
+            const char *len = wtmp(&g);
+            win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+            /* the length must fit what says it, and the max */
+            int64_t cap = e->o.lenBytes ? wireCap(e->o.lenBytes, false)
+                                        : wireCap((int)typeSizeOf(es[e->lenEntry].type), es[e->lenEntry].type->isSigned);
+            bool byMax = e->o.max && e->o.max <= cap;
+            int64_t limit = byMax ? e->o.max : cap;
+            const char *over = wtmp(&g);
+            win(&g, "%s = icmp ugt i64 %s, %lld", over, len, (long long)limit);
+            bool bytes = e->type->kind == TY_STRING;
+            wfail(&g, over, byMax ? (bytes ? 2 : 3) : (bytes ? 8 : 9), e->f, len, fmt(ir, "%lld", (long long)limit), NULL, "i64");
+            fixed += e->o.lenBytes;
+            Type *et = bytes ? NULL : e->type->elem;
+            int64_t ews = et ? wireSizeOf(et) : 1;
+            if (ews >= 0) {
+                add = len;
+                if (ews != 1) {
+                    add = wtmp(&g);
+                    win(&g, "%s = mul i64 %s, %lld", add, len, (long long)ews);
+                }
+            } else {
+                /* items whose sizes vary: each one's size */
+                const char *slot = wtmp(&g);
+                sbPrintf(&g.allocas, "  %s = alloca i64\n", slot);
+                win(&g, "store i64 0, ptr %s", slot);
+                const char *buf = wtmp(&g);
+                win(&g, "%s = load ptr, ptr %s", buf, m);
+                WLoop L = wloop(&g, len);
+                const char *mo = wtmp(&g), *one = wtmp(&g);
+                win(&g, "%s = mul i64 %s, %lld", mo, L.i, (long long)typeSizeOf(et));
+                win(&g, "%s = call i64 @wire.size.%d(ptr %s)", one, wireId(ir, et), wgep(&g, buf, mo));
+                const char *bad = wtmp(&g);
+                win(&g, "%s = icmp slt i64 %s, 0", bad, one);
+                const char *fail = wlab(&g), *ok = wlab(&g);
+                win(&g, "br i1 %s, label %%%s, label %%%s", bad, fail, ok);
+                wblock(&g, fail);
+                win(&g, "ret i64 -1");
+                wblock(&g, ok);
+                const char *old = wtmp(&g), *nw = wtmp(&g);
+                win(&g, "%s = load i64, ptr %s", old, slot);
+                win(&g, "%s = add i64 %s, %s", nw, old, one);
+                win(&g, "store i64 %s, ptr %s", nw, slot);
+                wloopEnd(&g, &L);
+                add = wtmp(&g);
+                win(&g, "%s = load i64, ptr %s", add, slot);
+            }
+        }
+        const char *ns = wtmp(&g);
+        win(&g, "%s = add i64 %s, %s", ns, sum, add);
+        sum = ns;
+    }
+    const char *r = wtmp(&g);
+    win(&g, "%s = add i64 %s, %lld", r, sum, (long long)fixed);
+    win(&g, "ret i64 %s", r);
+    wfinish(&g, fmt(ir, "define internal i64 %s(ptr %%v) nounwind {\n", name));
+}
+
+static void wireEnc(IR *ir, Type *t, const char *name) {
+    WGen g = {ir, {0}, {0}, 0, 0, "entry"};
+    WireEntry *es;
+    int n = wireEntries(ir, t, &es);
+    for (int i = 0; i < n;) {
+        WireEntry *e = &es[i];
+        if (wireSizeOf(e->type) >= 0) {
+            int j = i;
+            int64_t k = 0;
+            while (j < n && wireSizeOf(es[j].type) >= 0) k += wireSizeOf(es[j++].type);
+            const char *p = wtmp(&g);
+            win(&g, "%s = load ptr, ptr %%pos", p);
+            int64_t wo = 0;
+            for (; i < j; i++) {
+                const char *w = wgepi(&g, p, wo);
+                if (es[i].countOf >= 0) {
+                    /* the length of a later field, whatever this one holds */
+                    WireEntry *c = &es[es[i].countOf];
+                    int cs = (int)typeSizeOf(es[i].type);
+                    const char *len = wtmp(&g);
+                    win(&g, "%s = load i64, ptr %s", len, wgepi(&g, "%v", c->off + 8));
+                    const char *v = len;
+                    if (cs < 8) {
+                        v = wtmp(&g);
+                        win(&g, "%s = trunc i64 %s to i%d", v, len, cs * 8);
+                    }
+                    wstore(&g, cs, es[i].order, v, w);
+                } else {
+                    wencFixed(&g, es[i].type, es[i].order, wgepi(&g, "%v", es[i].off), w);
+                }
+                wo += wireSizeOf(es[i].type);
+            }
+            win(&g, "store ptr %s, ptr %%pos", wgepi(&g, p, k));
+            continue;
+        }
+        i++;
+        const char *m = wgepi(&g, "%v", e->off);
+        if (e->type->kind == TY_STRUCT) {
+            win(&g, "call void @wire.enc.%d(ptr %%pos, ptr %s)", wireId(ir, e->type), m);
+            continue;
+        }
+        const char *data = wtmp(&g), *len = wtmp(&g);
+        win(&g, "%s = load ptr, ptr %s", data, m);
+        win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+        const char *p = wtmp(&g);
+        win(&g, "%s = load ptr, ptr %%pos", p);
+        if (e->o.lenBytes) {
+            int lb = e->o.lenBytes;
+            const char *v = len;
+            if (lb < 8) {
+                v = wtmp(&g);
+                win(&g, "%s = trunc i64 %s to i%d", v, len, lb * 8);
+            }
+            wstore(&g, lb, e->order, v, p);
+            p = wgepi(&g, p, lb);
+        }
+        Type *et = e->type->kind == TY_STRING ? NULL : e->type->elem;
+        if (!et || (et->kind == TY_INT && typeSizeOf(et) == 1)) {
+            win(&g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)", p, data, len);
+            win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
+            continue;
+        }
+        int64_t ews = wireSizeOf(et), esz = typeSizeOf(et);
+        win(&g, "store ptr %s, ptr %%pos", p);
+        WLoop L = wloop(&g, len);
+        const char *mo = wtmp(&g);
+        win(&g, "%s = mul i64 %s, %lld", mo, L.i, (long long)esz);
+        const char *item = wgep(&g, data, mo);
+        if (ews >= 0) {
+            const char *wo = wtmp(&g);
+            win(&g, "%s = mul i64 %s, %lld", wo, L.i, (long long)ews);
+            wencFixed(&g, et, e->order, item, wgep(&g, p, wo));
+        } else {
+            win(&g, "call void @wire.enc.%d(ptr %%pos, ptr %s)", wireId(ir, et), item);
+        }
+        wloopEnd(&g, &L);
+        if (ews >= 0) {
+            const char *total = wtmp(&g);
+            win(&g, "%s = mul i64 %s, %lld", total, len, (long long)ews);
+            win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, total));
+        }
+    }
+    win(&g, "ret void");
+    wfinish(&g, fmt(ir, "define internal void %s(ptr %%pos, ptr %%v) nounwind {\n", name));
+}
+
+/* Frees the Strings and slices of a message and empties them. */
+static void wireFree(IR *ir, Type *t, const char *name) {
+    WGen g = {ir, {0}, {0}, 0, 0, "entry"};
+    WireEntry *es;
+    int n = wireEntries(ir, t, &es);
+    for (int i = 0; i < n; i++) {
+        WireEntry *e = &es[i];
+        if (wireSizeOf(e->type) >= 0) continue;
+        const char *m = wgepi(&g, "%v", e->off);
+        if (e->type->kind == TY_STRUCT) {
+            win(&g, "call void @wire.free.%d(ptr %s)", wireId(ir, e->type), m);
+        } else if (e->type->kind == TY_STRING) {
+            win(&g, "call void @iris_string_free(ptr %s)", m);
+        } else {
+            Type *et = e->type->elem;
+            const char *data = wtmp(&g);
+            win(&g, "%s = load ptr, ptr %s", data, m);
+            if (wireSizeOf(et) < 0) {
+                const char *len = wtmp(&g);
+                win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+                WLoop L = wloop(&g, len);
+                const char *mo = wtmp(&g);
+                win(&g, "%s = mul i64 %s, %lld", mo, L.i, (long long)typeSizeOf(et));
+                win(&g, "call void @wire.free.%d(ptr %s)", wireId(ir, et), wgep(&g, data, mo));
+                wloopEnd(&g, &L);
+            }
+            win(&g, "call void @iris_free(ptr %s)", data);
+            win(&g, "store ptr null, ptr %s", m);
+            win(&g, "store i64 0, ptr %s", wgepi(&g, m, 8));
+        }
+    }
+    win(&g, "ret void");
+    wfinish(&g, fmt(ir, "define internal void %s(ptr %%v) nounwind {\n", name));
+}
+
+/* The table of a @wire struct's functions, written the first time it is
+ * needed: "@wire.N". */
+static const char *wireFns(IR *ir, Type *t) {
+    for (int i = 0; i < ir->nwire; i++) {
+        if (ir->wireTypes[i] == t) return ir->wireNames[i];
+    }
+    if (ir->nwire == ir->capWire) {
+        int cap = ir->capWire ? ir->capWire * 2 : 16;
+        Type **ts = arenaAlloc(ir->arena, sizeof(Type *) * (size_t)cap);
+        const char **ns = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        if (ir->nwire) {
+            memcpy(ts, ir->wireTypes, sizeof(Type *) * (size_t)ir->nwire);
+            memcpy(ns, ir->wireNames, sizeof(char *) * (size_t)ir->nwire);
+        }
+        ir->wireTypes = ts;
+        ir->wireNames = ns;
+        ir->capWire = cap;
+    }
+    int id = ir->nwire;
+    const char *name = fmt(ir, "@wire.%d", id);
+    ir->wireTypes[id] = t;
+    ir->wireNames[id] = name;
+    ir->nwire++;
+    sbPrintf(&ir->head, "%s = private constant { ptr, ptr, ptr, ptr } { ptr @wire.dec.%d, ptr @wire.size.%d, ptr @wire.enc.%d, ptr @wire.free.%d }\n",
+             name, id, id, id, id);
+    wireDec(ir, t, fmt(ir, "@wire.dec.%d", id));
+    wireSize(ir, t, fmt(ir, "@wire.size.%d", id));
+    wireEnc(ir, t, fmt(ir, "@wire.enc.%d", id));
+    wireFree(ir, t, fmt(ir, "@wire.free.%d", id));
+    return name;
+}
+
+/* The address of the connection wire.read and wire.write were given. */
+static const char *connAddr(IR *ir, Node *conn) {
+    return conn->type->kind == TY_PTR ? emitExpr(ir, conn).s : emitAddr(ir, conn);
+}
+
+static Val emitWire(IR *ir, Node *e) {
+    Type *t = e->c->type;
+    const char *err = tmp(ir);
+    if (e->builtin == BI_WIRE_WRITE || e->builtin == BI_WIRE_ENCODE) {
+        bool wr = e->builtin == BI_WIRE_WRITE;
+        const char *conn = wr ? connAddr(ir, e->list.items[0]) : NULL;
+        Node *arg = e->list.items[wr ? 1 : 0];
+        Val v = emitExpr(ir, arg);
+        const char *vs = allocaFor(ir, t, "value");
+        ins(ir, "store %s %s, ptr %s", llType(ir, t), v.s, vs);
+        if (wr) {
+            ins(ir, "%s = call i64 %s(ptr %s, ptr %s, ptr %s)", err, e->ref->ir, wireFns(ir, t), conn, vs);
+            return val(err, e->type);
+        }
+        const char *out = allocaFor(ir, &tyString, "bytes");
+        ins(ir, "store %%String zeroinitializer, ptr %s", out);
+        ins(ir, "%s = call i64 %s(ptr %s, ptr %s, ptr %s)", err, e->ref->ir, wireFns(ir, t), vs, out);
+        t = &tyString;
+        Val r = load(ir, out, t);
+        const char *rt = llType(ir, e->type);
+        const char *r1 = tmp(ir), *r2 = tmp(ir);
+        ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), r.s);
+        ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+        return val(r2, e->type);
+    }
+    const char *slot = allocaFor(ir, t, "message");
+    ins(ir, "store %s zeroinitializer, ptr %s", llType(ir, t), slot);
+    if (e->builtin == BI_WIRE_READ) {
+        const char *conn = connAddr(ir, e->list.items[1]);
+        ins(ir, "%s = call i64 %s(ptr %s, ptr %s, ptr %s)", err, e->ref->ir, wireFns(ir, t), conn, slot);
+    } else {
+        Val bytes = emitExpr(ir, e->list.items[1]);
+        ins(ir, "%s = call i64 %s(ptr %s, { ptr, i64 } %s, ptr %s)", err, e->ref->ir, wireFns(ir, t), bytes.s, slot);
+    }
+    Val v = load(ir, slot, t);
+    const char *rt = llType(ir, e->type);
+    const char *r1 = tmp(ir), *r2 = tmp(ir);
+    ins(ir, "%s = insertvalue %s undef, %s %s, 0", r1, rt, llType(ir, t), v.s);
+    ins(ir, "%s = insertvalue %s %s, i64 %s, 1", r2, rt, r1, err);
+    return val(r2, e->type);
+}
+
 static Val emitJson(IR *ir, Node *e) {
     switch (e->builtin) {
     case BI_JSON_ENCODE: {
@@ -1500,7 +2353,11 @@ static Val emitJson(IR *ir, Node *e) {
         Node *recv = e->a->a;
         Type *t = recv->type->kind == TY_PTR ? recv->type->elem : recv->type;
         const char *addr = recv->type->kind == TY_PTR ? emitExpr(ir, recv).s : emitAddr(ir, recv);
-        ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, t), addr);
+        if (isWireStruct(t)) {
+            ins(ir, "call void @wire.free.%d(ptr %s)", wireId(ir, t), addr);
+        } else {
+            ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, t), addr);
+        }
         return val("", &tyVoid);
     }
     default: {
@@ -1799,6 +2656,8 @@ static Val emitBuiltin(IR *ir, Node *e) {
         return emitSync(ir, e);
     case BI_JSON_ENCODE: case BI_JSON_DECODE: case BI_JSON_FREE:
         return emitJson(ir, e);
+    case BI_WIRE_READ: case BI_WIRE_DECODE: case BI_WIRE_ENCODE: case BI_WIRE_WRITE:
+        return emitWire(ir, e);
     case BI_ENV_LOAD: {
         Type *t = e->c->type;
         const char *slot = allocaFor(ir, t, "settings");
@@ -2309,7 +3168,11 @@ static void runFrame(IR *ir, DeferFrame *f, bool isError) {
                 ins(ir, "call void @iris_chan_free(ptr %s, ptr %s, i32 %d, i32 %d, ptr %s)", l, ir->fileStr, d->line, d->col,
                     fnName(ir));
             } else if (!d->ref) {
-                ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, d->type), d->ir);
+                if (isWireStruct(d->type)) {
+                    ins(ir, "call void @wire.free.%d(ptr %s)", wireId(ir, d->type), d->ir);
+                } else {
+                    ins(ir, "call void @iris_json_free(ptr %s, ptr %s)", jsonType(ir, d->type), d->ir);
+                }
             } else {
                 ins(ir, "call void %s(ptr %s)", d->ref->ir, d->ir);
             }
@@ -4343,6 +5206,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_thread_detach(ptr)\n"
            "declare void @iris_json_encode(ptr, ptr, ptr)\n"
            "declare void @iris_json_free(ptr, ptr)\n"
+           "declare i32 @iris_wire_fail(i32, ptr, i64, i64, i64, ptr)\n"
+           "declare void @iris_wire_string(ptr, ptr, i64)\n"
+           "declare ptr @iris_wire_alloc(i64, i64, i1 zeroext)\n"
            "declare void @iris_expect_failed(ptr, i32, i32, ptr)\n"
            "declare i64 @iris_hash_u64(i64)\n"
            "declare i64 @iris_hash_bytes(ptr, i64)\n"

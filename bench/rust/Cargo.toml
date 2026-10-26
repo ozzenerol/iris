@@ -204,3 +204,7 @@ path = "../base64/main.rs"
 [[bin]]
 name = "hex"
 path = "../hex/main.rs"
+
+[[bin]]
+name = "wire"
+path = "../wire/main.rs"

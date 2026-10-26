@@ -1,0 +1,60 @@
+import wire
+
+@wire(u8)
+enum Kind { hello = 1, data = 2, bye = 3 }
+
+// A message of a small binary protocol: a fixed header, a name with its
+// length in front, and a list whose length is in the header.
+@wire
+struct Msg {
+    u8 version
+    Kind kind
+    u16 flags
+    u32 seq
+    @wire(len: u8) String user
+    u8 count
+    @wire(len: count) u16[] ports
+}
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+// 100,000 messages decoded and encoded again, 30 times.
+!void main() {
+    i64 seed = 1
+    String stream
+    defer stream.free()
+    List[i64] ends
+    defer ends.free()
+    for i in 0..100000 {
+        String user
+        for j in 0..(3 + next(&seed) % 10) {
+            user.append("abcdefghij"[j % 10:j % 10 + 1])
+        }
+        u16[] ports = alloc(u16, next(&seed) % 5)
+        for j in 0..ports.len {
+            ports[j] = u16(next(&seed) % 65536)
+        }
+        scoped Msg m = Msg{version: 1, kind: .data, flags: u16(i % 7), seq: u32(i), user: user, ports: ports}
+        scoped String b = try wire.encode(m)
+        stream.append(b)
+        ends.push(stream.len)
+    }
+    i64 total = 0
+    for round in 0..30 {
+        i64 start = 0
+        for end in ends {
+            scoped Msg m = try wire.decode(Msg, stream[start:end])
+            total += i64(m.seq) + m.user.len + i64(m.flags)
+            for p in m.ports {
+                total += i64(p)
+            }
+            scoped String b = try wire.encode(m)
+            total += b.len
+            start = end
+        }
+    }
+    print("{total}")
+}

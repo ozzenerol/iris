@@ -1,0 +1,64 @@
+// error: 29: wide holds the length of s, so it must be an integer field, not bool
+// error: 32: @wire on a struct takes nothing, or le for low byte first: @wire(le)
+// error: 38: @wire on a field needs @wire on the struct NotWireStruct too
+// error: 43: Big embeds NotWire, which needs @wire too
+// error: 44: x is a @wire struct, which uses its own byte order
+// error: 58: @foo isn't an attribute of an enum; an enum takes only @wire
+// error: 63: two is an array of Counted, whose size varies; use a slice with its length: @wire(len: u8) Counted[]
+// error: 49: NotWire needs @wire to be decoded
+// error: 50: wire.decode takes a type and the bytes: wire.decode(Header, bytes)
+// error: 52: NotWire needs @wire to be encoded
+// error: 54: wire.read takes a net.Conn, not i64
+// error: 55: wire.write takes the connection and a value: wire.write(conn, reply)
+import net
+import wire
+
+@wire
+struct Counted {
+    u8 count
+    @wire(len: u8) String s
+}
+
+struct NotWire {
+    u8 x
+}
+
+@wire
+struct Flags {
+    bool wide
+    @wire(len: wide) String s
+}
+
+@wire(big)
+struct BadOrder {
+    u8 x
+}
+
+struct NotWireStruct {
+    @wire(le) u16 x
+}
+
+@wire
+struct Big {
+    NotWire
+    @wire(le) Counted x
+    Flags f
+}
+
+void main() {
+    _ = wire.decode(NotWire, "")
+    _ = wire.decode(Counted)
+    n := NotWire{x: 1}
+    _ = wire.encode(n)
+    i64 x = 1
+    _ = wire.read(Counted, x)
+    _ = wire.write(Counted{})
+}
+
+@foo
+enum E { a }
+
+@wire
+struct Arr {
+    Counted[2] two
+}

@@ -1,0 +1,126 @@
+// expect: server: kind 0, 5 bytes, 3 items, last item2
+// expect: client: kind 1
+// expect: server: kind 1, 20005 bytes, 3 items, last item2
+// expect: client: kind 2
+// expect: server: kind 2, 40005 bytes, 3 items, last item2
+// expect: client: kind 3
+// expect: server: WireError.tooLong: body: 268435456 bytes, more than the max of 1048576
+// expect: ping 1
+// expect: ping 2
+// expect: pings: NetError.closed: reading a message: connection closed
+// expect: pings: WireError.short: connection closed in the middle of a message
+// expect: pings: WireError.short: connection closed in the middle of a message
+
+import net
+import wire
+
+@wire
+struct Item {
+    u16 id
+    @wire(len: u8) String name
+}
+
+@wire
+struct Msg {
+    u8 kind
+    @wire(len: u32, max: 1MiB) String body
+    @wire(len: u16) Item[] items
+}
+
+@wire
+struct Ping {
+    u32 seq
+}
+
+void serve(net.Listener *ln) {
+    conn := ln.accept() catch e {
+        return
+    }
+    for {
+        scoped Msg m = wire.read(Msg, conn) catch e {
+            print("server: {e.code}: {e.message}")
+            conn.close()
+            return
+        }
+        print("server: kind {m.kind}, {m.body.len} bytes, {m.items.len} items, last {m.items[m.items.len - 1].name}")
+        wire.write(&conn, Msg{kind: m.kind + 1}) catch e {
+            return
+        }
+    }
+}
+
+// Pings sent a byte at a time, then a connection that closes in the middle of one.
+void pings(net.Listener *ln) {
+    conn := ln.accept() catch e {
+        return
+    }
+    for {
+        p := wire.read(Ping, &conn) catch e {
+            print("pings: {e.code}: {e.message}")
+            break
+        }
+        print("ping {p.seq}")
+    }
+    conn.close()
+    conn2 := ln.accept() catch e {
+        return
+    }
+    _ = wire.read(Ping, conn2) catch e {
+        print("pings: {e.code}: {e.message}")
+        Ping{}
+    }
+    conn2.close()
+    // a message bigger than the buffer, cut off
+    conn3 := ln.accept() catch e {
+        return
+    }
+    scoped Msg m = wire.read(Msg, conn3) catch e {
+        print("pings: {e.code}: {e.message}")
+        Msg{}
+    }
+    conn3.close()
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&ln)
+    conn := try net.dial("127.0.0.1", ln.port)
+    for i in 0..3 {
+        // the last one is bigger than the connection's buffer
+        String body
+        for body.len < i * 20000 + 5 {
+            body.append("x")
+        }
+        Item[] items = alloc(Item, 3)
+        for k in 0..3 {
+            items[k] = Item{id: u16(k), name: format("item{k}")}
+        }
+        scoped Msg m = Msg{kind: u8(i), body: body, items: items}
+        try wire.write(conn, m)
+        scoped Msg r = try wire.read(Msg, conn)
+        print("client: kind {r.kind}")
+    }
+    // a length over the max
+    try conn.write("\x07\x10\x00\x00\x00")
+    sleep(50ms)
+    conn.close()
+
+    ln2 := try net.listen(0, "127.0.0.1")
+    spawn pings(&ln2)
+    c := try net.dial("127.0.0.1", ln2.port)
+    try c.write("\x00\x00")
+    sleep(10ms)
+    try c.write("\x00\x01\x00\x00\x00\x02")
+    sleep(10ms)
+    c.close()
+    c2 := try net.dial("127.0.0.1", ln2.port)
+    try c2.write("\x00\x00")
+    sleep(10ms)
+    c2.close()
+    c3 := try net.dial("127.0.0.1", ln2.port)
+    try c3.write("\x01\x00\x00\x75\x30")
+    try c3.write("0123456789")
+    sleep(10ms)
+    c3.close()
+    sleep(50ms)
+}

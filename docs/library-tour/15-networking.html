@@ -43,7 +43,7 @@ try {
 </header>
 <div class="doc">
   <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html" class="on"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html" class="on"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li></ol></aside>
   <article class="prose">
 <h1>Networking</h1>
 <p class="lede">The <code>net</code> module has TCP, UDP, TLS and Unix sockets. A call that waits for the network lets the other tasks on its thread run, so a server can hold many connections with one task each and no callbacks. This chapter starts with a server and a client and goes on to what a proxy needs: socket options, half-closing, copying between connections and looking at the first bytes.</p>
@@ -316,6 +316,25 @@ tls, and the reads still get its first 3 bytes</code></pre>
     <span class="k">defer</span> backend.<span class="f">close</span>()
     <span class="c">// copies both ways, as in the proxy above</span>
 }</code></pre>
+<h2 id="binary-messages"><a href="#binary-messages">Binary messages</a></h2>
+<p>Many protocols send binary messages: a header of fixed fields, then text or lists with their length in front. <code>wire.read</code> reads one into a <code>@wire</code> struct, and <code>wire.write</code> sends one. <a href="21-binary-messages.html">Binary messages</a> has the whole story.</p>
+<pre class="code"><code><span class="a">@wire</span>
+<span class="k">struct</span> <span class="t">Header</span> {
+    <span class="t">u8</span> version
+    <span class="t">u8</span> kind
+    <span class="t">u16</span> flags
+    <span class="t">u32</span> length
+}
+
+<span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> conn) {
+    <span class="k">defer</span> conn.<span class="f">close</span>()
+    <span class="k">for</span> {
+        h := wire.<span class="f">read</span>(<span class="t">Header</span>, conn) <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="c">// h.kind says what follows</span>
+    }
+}</code></pre>
 <h2 id="tls"><a href="#tls">TLS</a></h2>
 <p><code>net.dialTls</code> connects and starts TLS. The server's certificate must be valid for the host and signed by a certificate the system trusts, or by one in a <code>ca</code> file. When a server asks the client for a certificate, the client gives its own with <code>cert</code> and <code>key</code>.</p>
 <pre class="code"><code>c := <span class="k">try</span> net.<span class="f">dialTls</span>(<span class="s">&quot;example.com&quot;</span>, <span class="n">443</span>)
@@ -402,7 +421,7 @@ conn := <span class="k">try</span> ln.<span class="f">accept</span>()
     <nav class="pager"><a class="prev" href="14-http.html"><span>Previous</span>HTTP</a><a class="next" href="16-email.html"><span>Next</span>Sending email</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#timeouts-and-errors">Timeouts and errors</a></li><li><a href="#socket-options">Socket options</a></li><li><a href="#setting-up-a-socket">Setting up a socket</a></li><li><a href="#half-closing">Half-closing</a></li><li><a href="#copying-between-connections">Copying between connections</a></li><li><a href="#the-first-bytes">The first bytes</a></li><li><a href="#tls">TLS</a></li><li><a href="#unix-sockets-and-passing-sockets-on">Unix sockets and passing sockets on</a></li><li><a href="#udp-and-multicast">UDP and multicast</a></li><li><a href="#tun-devices-and-the-kernel-s-routes">TUN devices and the kernel&#x27;s routes</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#timeouts-and-errors">Timeouts and errors</a></li><li><a href="#socket-options">Socket options</a></li><li><a href="#setting-up-a-socket">Setting up a socket</a></li><li><a href="#half-closing">Half-closing</a></li><li><a href="#copying-between-connections">Copying between connections</a></li><li><a href="#the-first-bytes">The first bytes</a></li><li><a href="#binary-messages">Binary messages</a></li><li><a href="#tls">TLS</a></li><li><a href="#unix-sockets-and-passing-sockets-on">Unix sockets and passing sockets on</a></li><li><a href="#udp-and-multicast">UDP and multicast</a></li><li><a href="#tun-devices-and-the-kernel-s-routes">TUN devices and the kernel&#x27;s routes</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

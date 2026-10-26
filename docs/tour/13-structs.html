@@ -295,6 +295,7 @@ from 192.168.0.1, flags 2
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>f.syn<span class="e">}</span><span class="s"> </span><span class="e">{</span>f.ack<span class="e">}</span><span class="s"> </span><span class="e">{</span>f.window<span class="e">}</span><span class="s"> </span><span class="e">{</span><span class="f">sizeof</span>(<span class="t">Flags</span>)<span class="e">}</span><span class="s">&quot;</span>)
 }</code></pre>
 <pre class="out"><code>1 1 63 1</code></pre>
+<p>A packed struct read through a pointer must match the bytes exactly, and can't hold text or lists whose length the message gives. For whole protocol messages, a <code>@wire</code> struct keeps its normal layout in memory and the compiler writes the code that reads and writes its bytes, lengths and limits included. <a href="../library-tour/21-binary-messages.html">Binary messages</a> in the Library Tour covers it.</p>
 <p><code>align(n)</code> starts the struct at a multiple of <code>n</code> bytes and rounds its size up to a multiple of <code>n</code>. Use it to keep per-thread counters on separate 64-byte cache lines so threads don't slow each other down. Variables, globals and <code>alloc</code> all respect it.</p>
 <pre class="code run"><code><span class="k">struct</span> <span class="t">Counter</span> <span class="f">align</span>(<span class="n">64</span>) {
     <span class="t">i64</span> hits

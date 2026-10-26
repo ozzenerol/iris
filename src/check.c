@@ -669,8 +669,22 @@ static Type *enumType(Checker *c, Node *decl) {
         sbPrintf(&b, "%%\"E.%s.%s\"", decl->module ? decl->module : "main", decl->name);
         t->ir = sbFinish(&b, c->arena);
     }
-    if (decl->attrs.len) {
-        error(c, decl->attrs.items[0], "@%s isn't an attribute of an enum; an enum takes none", decl->attrs.items[0]->name);
+    for (int i = 0; i < decl->attrs.len; i++) {
+        Node *at = decl->attrs.items[i];
+        if (strcmp(at->name, "wire") != 0) {
+            error(c, at, "@%s isn't an attribute of an enum; an enum takes only @wire", at->name);
+            continue;
+        }
+        Node *a = at->list.len == 1 ? at->list.items[0] : NULL;
+        if (a && a->kind == N_IDENT) {
+            t->wire = strcmp(a->name, "u8") == 0 ? 1 : strcmp(a->name, "u16") == 0 ? 2 : strcmp(a->name, "u32") == 0 ? 4 : 0;
+        }
+        if (!t->wire) {
+            error(c, at, "@wire on an enum takes the integer it is sent as: @wire(u8), @wire(u16) or @wire(u32)");
+        } else if (t->hasData) {
+            error(c, at, "an enum whose values carry data can't be sent with @wire");
+            t->wire = 0;
+        }
     }
     if (t->isFlags && t->hasData) {
         error(c, decl, "a flag enum's values can't carry data");
@@ -754,6 +768,22 @@ static Type *enumType(Checker *c, Node *decl) {
         }
     }
     c->scope = saved;
+    if (t->wire && t->wire < 4) {
+        /* each value must fit the bytes it is sent in: unsigned, or signed when one is below 0 */
+        bool neg = false;
+        for (int i = 0; i < decl->list.len; i++) {
+            if (decl->list.items[i]->cval < 0) neg = true;
+        }
+        int64_t hi = neg ? (int64_t)(1ull << (8 * t->wire - 1)) - 1 : (int64_t)(1ull << (8 * t->wire)) - 1;
+        int64_t lo = neg ? -(int64_t)(1ull << (8 * t->wire - 1)) : 0;
+        for (int i = 0; i < decl->list.len; i++) {
+            Node *m = decl->list.items[i];
+            if (m->cval < lo || m->cval > hi) {
+                error(c, m, "%s.%s is %lld, which doesn't fit in the %d byte%s of @wire", decl->name, m->name,
+                      (long long)m->cval, t->wire, t->wire == 1 ? "" : "s");
+            }
+        }
+    }
     return t;
 }
 
@@ -1272,8 +1302,19 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
         }
         return;
     }
+    if (strcmp(at->name, "wire") == 0) {
+        /* its settings are checked with the field's type, once the struct is laid out */
+        bool onStruct = false;
+        for (int i = 0; i < d->attrs.len; i++) {
+            if (strcmp(d->attrs.items[i]->name, "wire") == 0) onStruct = true;
+        }
+        if (!onStruct) {
+            error(c, at, "@wire on a field needs @wire on the struct %s too", d->name);
+        }
+        return;
+    }
     if (strcmp(at->name, "json") != 0) {
-        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @env(...) or @flag(...)", at->name);
+        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @wire(...), @env(...) or @flag(...)", at->name);
         return;
     }
     if (!(d->flags & F_JSON)) {
@@ -1365,6 +1406,214 @@ static void checkJsonFields(Checker *c, Type *t, Node *d) {
             continue;
         }
         jsonType(c, f->type, f, d->name);
+    }
+    (void)t;
+}
+
+/* ---------------------------------------------------------------- @wire */
+
+bool isWireStruct(Type *t) {
+    return t && t->kind == TY_STRUCT && t->wire;
+}
+
+void wireOpts(Node *d, Node *f, WireOpts *o) {
+    o->order = 0;
+    o->lenBytes = 0;
+    o->lenField = -1;
+    o->max = 0;
+    for (int k = 0; k < f->attrs.len; k++) {
+        Node *at = f->attrs.items[k];
+        if (strcmp(at->name, "wire") != 0) continue;
+        for (int j = 0; j < at->list.len; j++) {
+            Node *a = at->list.items[j];
+            if (a->kind == N_IDENT) {
+                o->order = a->name[0] == 'l' ? 2 : 1;
+            } else if (a->kind == N_NAMED_ARG && strcmp(a->name, "max") == 0) {
+                o->max = (int64_t)a->ival;
+            } else if (a->kind == N_NAMED_ARG && a->a && a->a->kind == N_IDENT) {
+                const char *n = a->a->name;
+                o->lenBytes = strcmp(n, "u8") == 0 ? 1 : strcmp(n, "u16") == 0 ? 2 : strcmp(n, "u32") == 0 ? 4
+                            : strcmp(n, "u64") == 0 ? 8 : 0;
+                if (!o->lenBytes) {
+                    for (int i = 0; i < d->list.len; i++) {
+                        Node *g = d->list.items[i];
+                        if (g->name && strcmp(g->name, n) == 0) o->lenField = i;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Whether a @wire struct's size on the wire depends on lengths. */
+static bool wireVaries(Type *t) {
+    Node *d = t->decl;
+    for (int i = 0; i < d->list.len; i++) {
+        Type *ft = d->list.items[i]->type;
+        if (!ft) continue;
+        while (ft->kind == TY_ARRAY) ft = ft->elem;
+        if (ft->kind == TY_STRING || ft->kind == TY_SLICE) return true;
+        if (ft->kind == TY_STRUCT && ft != t && ft->state == 2 && wireVaries(ft)) return true;
+    }
+    return false;
+}
+
+/* Whether a value of type t has a fixed form @wire can send: integers,
+ * floats, bool, enums with @wire(u8...), @wire structs and arrays of them. */
+static bool wireFixed(Checker *c, Type *t, Node *at, const char *owner) {
+    switch (t->kind) {
+    case TY_INT:
+        if (t->bigEndian) {
+            error(c, at, "%s is %s; in a @wire struct write %s, and the struct or @wire(be) says the byte order",
+                  owner, t->name, t->plain->name);
+            return false;
+        }
+        if (t == &tyDuration) {
+            error(c, at, "%s is a Duration, which has no form on the wire; send a whole number of the unit you mean", owner);
+            return false;
+        }
+        return true;
+    case TY_FLOAT: case TY_BOOL: return true;
+    case TY_ENUM:
+        if (!t->wire) {
+            error(c, at, "%s is the enum %s, which needs @wire(u8), @wire(u16) or @wire(u32) to say how many bytes it takes",
+                  owner, t->name);
+            return false;
+        }
+        return true;
+    case TY_ARRAY:
+        if (t->elem->kind == TY_STRING || t->elem->kind == TY_SLICE) {
+            error(c, at, "%s is an array of %s; @wire sends Strings and slices only as fields, each with its length",
+                  owner, t->elem->name);
+            return false;
+        }
+        if (!wireFixed(c, t->elem, at, owner)) return false;
+        if (t->elem->kind == TY_STRUCT && wireVaries(t->elem)) {
+            error(c, at, "%s is an array of %s, whose size varies; use a slice with its length: @wire(len: u8) %s[]",
+                  owner, t->elem->name, t->elem->name);
+            return false;
+        }
+        return true;
+    case TY_STRUCT:
+        if (t->state != 1) resolveStruct(c, t);
+        if (!t->wire) {
+            error(c, at, "%s is %s, which needs @wire too", owner, t->name);
+            return false;
+        }
+        return true;
+    default:
+        error(c, at, "%s is %s, which @wire can't send", owner, t->name);
+        return false;
+    }
+}
+
+/* The fields of a @wire struct: types @wire can send, and settings that
+ * fit them. A String or slice needs a length, from a prefix or an earlier
+ * field, and a max when the length can pass 65535. */
+static void checkWireFields(Checker *c, Type *t, Node *d) {
+    bool *usedCount = arenaAlloc(c->arena, sizeof(bool) * (size_t)(d->list.len + 1));
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        Type *ft = f->type;
+        if (!ft || isErr(ft)) continue;
+        Node *at = NULL;
+        for (int k = 0; k < f->attrs.len; k++) {
+            if (strcmp(f->attrs.items[k]->name, "wire") == 0) at = f->attrs.items[k];
+        }
+        if (f->kind == N_EMBED) {
+            if (at) error(c, at, "an embedded struct uses its own @wire settings");
+            if (ft->kind == TY_STRUCT && ft->state != 1) resolveStruct(c, ft);
+            if (!isWireStruct(ft)) error(c, f, "%s embeds %s, which needs @wire too", d->name, ft->name);
+            continue;
+        }
+        /* the settings, one at a time */
+        bool hasLen = false, hasMax = false;
+        Node *lenArg = NULL;
+        for (int j = 0; at && j < at->list.len; j++) {
+            Node *a = at->list.items[j];
+            if (a->kind == N_IDENT && (strcmp(a->name, "le") == 0 || strcmp(a->name, "be") == 0)) {
+                if (ft->kind == TY_STRUCT) {
+                    error(c, a, "%s is a @wire struct, which uses its own byte order", f->name);
+                }
+                continue;
+            }
+            if (a->kind == N_NAMED_ARG && strcmp(a->name, "len") == 0 && a->a && a->a->kind == N_IDENT) {
+                hasLen = true;
+                lenArg = a;
+                continue;
+            }
+            if (a->kind == N_NAMED_ARG && strcmp(a->name, "max") == 0 && a->a) {
+                int64_t n;
+                bool isBool;
+                if (!evalConst(c, a->a, &n, &isBool) || isBool || n < 1) {
+                    error(c, a->a, "max takes a whole number above 0 known when compiling: max: 64KiB");
+                } else {
+                    a->ival = (uint64_t)n;
+                    hasMax = true;
+                }
+                continue;
+            }
+            error(c, a, "@wire on a field takes le, be, len: and max:, as in @wire(len: u16, max: 1024)");
+        }
+        WireOpts o;
+        wireOpts(d, f, &o);
+        bool sized = ft->kind == TY_STRING || ft->kind == TY_SLICE;
+        if (!sized) {
+            if (hasLen || hasMax) {
+                error(c, at, "len: and max: are for String and slice fields; %s is %s", f->name, ft->name);
+            }
+            wireFixed(c, ft, f, f->name);
+            continue;
+        }
+        if (isStr(ft)) {
+            error(c, f, "%s is %s, which can't own the bytes it is read into; use a String", f->name, ft->name);
+            continue;
+        }
+        if (ft->kind == TY_SLICE) {
+            if (ft->elem->kind == TY_STRING || ft->elem->kind == TY_SLICE) {
+                error(c, f, "%s is %s; @wire can't give each item its own length, so put the %s in a @wire struct and use a slice of that",
+                      f->name, ft->name, ft->elem->name);
+                continue;
+            }
+            if (!wireFixed(c, ft->elem, f, f->name)) continue;
+        }
+        const char *what = ft->kind == TY_STRING ? "bytes" : "items";
+        if (!hasLen) {
+            error(c, f, "%s is %s, so it needs its length: @wire(len: u16) for a prefix, or @wire(len: count) for an earlier field",
+                  f->name, ft->name);
+            continue;
+        }
+        int64_t cap;
+        if (o.lenBytes) {
+            cap = o.lenBytes == 8 ? INT64_MAX : (int64_t)((1ull << (8 * o.lenBytes)) - 1);
+        } else if (o.lenField < 0) {
+            error(c, lenArg->a, "len: takes u8, u16, u32, u64 or the name of an earlier field, not %s", lenArg->a->name);
+            continue;
+        } else {
+            Node *g = d->list.items[o.lenField];
+            Type *gt = g->type;
+            if (o.lenField >= i) {
+                error(c, lenArg->a, "%s comes after %s; the field with the length must come first", g->name, f->name);
+                continue;
+            }
+            if (!gt || gt->kind != TY_INT || g->bitWidth || g->kind == N_EMBED) {
+                error(c, lenArg->a, "%s holds the length of %s, so it must be an integer field, not %s", g->name,
+                      f->name, gt ? gt->name : "this");
+                continue;
+            }
+            if (usedCount[o.lenField]) {
+                error(c, lenArg->a, "%s already holds the length of another field; give each its own", g->name);
+                continue;
+            }
+            usedCount[o.lenField] = true;
+            cap = gt->bits >= 64 ? INT64_MAX : (int64_t)((1ull << (gt->bits - (gt->isSigned ? 1 : 0))) - 1);
+        }
+        if (hasMax && o.max > cap) {
+            error(c, at, "max is %lld, but the length can say at most %lld", (long long)o.max, (long long)cap);
+        } else if (!hasMax && cap > 65535) {
+            error(c, at, "the length of %s can pass 65535 %s, so say how many it may be: @wire(len: %s, max: 1MiB)",
+                  f->name, what, lenArg->a->name);
+        }
     }
     (void)t;
 }
@@ -1481,13 +1730,24 @@ static void resolveStruct(Checker *c, Type *t) {
             if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
                 error(c, at, "@flags on a struct takes nothing, or what the program does in quotes: @flags(\"copies files\")");
             }
+        } else if (strcmp(at->name, "wire") == 0) {
+            t->wire = 1;
+            bool ok = at->list.len <= 1;
+            if (at->list.len == 1) {
+                Node *a = at->list.items[0];
+                ok = a->kind == N_IDENT && (strcmp(a->name, "le") == 0 || strcmp(a->name, "be") == 0);
+                if (ok && a->name[0] == 'l') t->wire = 2;
+            }
+            if (!ok) {
+                error(c, at, "@wire on a struct takes nothing, or le for low byte first: @wire(le)");
+            }
         } else if (strcmp(at->name, "env") == 0) {
             d->flags |= F_ENV;
             if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
                 error(c, at, "@env on a struct takes nothing, or a prefix for the names in quotes: @env(\"APP\")");
             }
         } else {
-            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @env or @flags", at->name);
+            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @wire, @env or @flags", at->name);
         }
     }
     for (int i = 0; i < d->list.len; i++) {
@@ -1548,6 +1808,9 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     if (d->flags & F_JSON) {
         checkJsonFields(c, t, d);
+    }
+    if (t->wire) {
+        checkWireFields(c, t, d);
     }
     if (d->flags & F_CLI) {
         bool haveArgs = false;
@@ -4231,7 +4494,7 @@ static Type *checkMethodCall(Checker *c, Node *e) {
         if (base->kind == TY_ATOMIC || base->kind == TY_MUTEX || base->kind == TY_THREAD || base->kind == TY_CHAN) {
             return checkSyncMethod(c, e, t, name);
         }
-        bool generatedFree = isJsonStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & (F_ENV | F_CLI)));
+        bool generatedFree = isJsonStruct(base) || isWireStruct(base) || (base->kind == TY_STRUCT && base->decl && (base->decl->flags & (F_ENV | F_CLI)));
         if (generatedFree && strcmp(name, "free") == 0 && !findMethodIn(base, "free")) {
             /* the free @json gives a struct: its Strings and slices */
             if (t->kind != TY_PTR && !addressable(recv)) {
@@ -4713,6 +4976,102 @@ static bool jsonDecodable(Checker *c, Type *t, Node *at) {
     return true;
 }
 
+/* Whether t is net.Conn, which wire.read and wire.write take, or a pointer to one. */
+static bool isNetConn(Type *t) {
+    if (t->kind == TY_PTR) t = t->elem;
+    return t->kind == TY_STRUCT && t->decl && t->decl->name && strcmp(t->decl->name, "Conn") == 0 && t->decl->module &&
+           strcmp(t->decl->module, "net") == 0;
+}
+
+/* The connection given to wire.read or wire.write: a Conn variable or a pointer. */
+static bool checkConnArg(Checker *c, Node **slot, const char *call) {
+    Type *t = checkExpr(c, slot, NULL);
+    if (isErr(t)) return false;
+    if (!isNetConn(t)) {
+        error(c, *slot, "%s takes a net.Conn, not %s", call, t->name);
+        return false;
+    }
+    if (t->kind != TY_PTR && !addressable(*slot)) {
+        error(c, *slot, "%s reads and writes through the connection, so it must be a variable", call);
+        return false;
+    }
+    return true;
+}
+
+/* The type a wire call reads: a @wire struct. */
+static Type *wireTarget(Checker *c, Node *a, const char *call) {
+    Type *t = typeArgument(c, a);
+    if (isErr(t)) return t;
+    if (t->kind == TY_STRUCT) resolveStruct(c, t);
+    if (!isWireStruct(t)) {
+        error(c, a, "%s needs @wire to %s", t->name, call);
+        return &tyError;
+    }
+    return t;
+}
+
+/* wire.read(T, conn), wire.decode(T, bytes), wire.encode(v), wire.write(conn, v). */
+static Type *checkWireCall(Checker *c, Node *e, Node *d) {
+    const char *n = d->name;
+    Node *helper = NULL;
+    Type *t = NULL, *rt = NULL;
+    if (strcmp(n, "read") == 0 || strcmp(n, "decode") == 0) {
+        bool rd = n[0] == 'r';
+        if (e->list.len != 2) {
+            error(c, e, rd ? "wire.read takes a type and the connection: wire.read(Header, conn)"
+                           : "wire.decode takes a type and the bytes: wire.decode(Header, bytes)");
+            return setType(e, &tyError);
+        }
+        t = wireTarget(c, e->list.items[0], rd ? "be read from a connection" : "be decoded");
+        if (isErr(t)) return setType(e, &tyError);
+        if (rd) {
+            if (!checkConnArg(c, &e->list.items[1], "wire.read")) return setType(e, &tyError);
+        } else {
+            Node **bytes = &e->list.items[1];
+            if (!checkTempText(c, bytes, &tyStr)) {
+                Type *bt = checkExpr(c, bytes, &tyStr);
+                if (isErr(bt)) return setType(e, &tyError);
+                coerce(c, bytes, &tyStr, "the bytes");
+                markTempString(bytes, &tyStr);
+            }
+        }
+        helper = lookup(c, rd ? "wire.readInto" : "wire.decodeInto");
+        e->builtin = rd ? BI_WIRE_READ : BI_WIRE_DECODE;
+        rt = resultOf(t);
+    } else if (strcmp(n, "encode") == 0 || strcmp(n, "write") == 0) {
+        bool wr = n[0] == 'w';
+        if (e->list.len != (wr ? 2 : 1)) {
+            error(c, e, wr ? "wire.write takes the connection and a value: wire.write(conn, reply)"
+                           : "wire.encode takes one value: wire.encode(reply)");
+            return setType(e, &tyError);
+        }
+        if (wr && !checkConnArg(c, &e->list.items[0], "wire.write")) return setType(e, &tyError);
+        Node **v = &e->list.items[wr ? 1 : 0];
+        t = checkExpr(c, v, NULL);
+        if (isErr(t)) return setType(e, &tyError);
+        if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        if (!isWireStruct(t)) {
+            error(c, *v, "%s needs @wire to be %s", t->name, wr ? "written" : "encoded");
+            return setType(e, &tyError);
+        }
+        helper = lookup(c, wr ? "wire.writeFrom" : "wire.encodeFrom");
+        e->builtin = wr ? BI_WIRE_WRITE : BI_WIRE_ENCODE;
+        rt = resultOf(wr ? &tyVoid : &tyString);
+    } else {
+        error(c, e, "the wire module has no built-in %s", n);
+        return setType(e, &tyError);
+    }
+    if (!helper) {
+        error(c, e, "wire.%s needs the wire module's helpers", n);
+        return setType(e, &tyError);
+    }
+    e->ref = helper;
+    e->a->ref = d;
+    e->c = like(c, N_T_NAME, e);
+    e->c->type = t;
+    return setType(e, rt);
+}
+
 /* json.encode(v) and json.decode(T, text). */
 static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
     for (int i = 0; i < e->list.len; i++) {
@@ -4726,6 +5085,9 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         checkTextArg(c, e, "str.format");
         e->builtin = BI_FORMAT;
         return setType(e, &tyString);
+    }
+    if (d->module && strcmp(d->module, "wire") == 0) {
+        return checkWireCall(c, e, d);
     }
     if (strcmp(d->name, "encode") == 0) {
         if (e->list.len != 1) {
@@ -5607,7 +5969,7 @@ static void checkLocalVar(Checker *c, Node *s) {
     if ((s->flags & F_SCOPED) && !isErr(t)) {
         /* scoped needs a free method to call at the end of the block */
         Node *m = t->kind == TY_STRUCT ? findMethodIn(t, "free") : NULL;
-        if (t->kind == TY_STRING || t->kind == TY_CHAN || (!m && (isJsonStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & (F_ENV | F_CLI)))))) {
+        if (t->kind == TY_STRING || t->kind == TY_CHAN || (!m && (isJsonStruct(t) || isWireStruct(t) || (t->kind == TY_STRUCT && (t->decl->flags & (F_ENV | F_CLI)))))) {
             s->ref = NULL;              /* freed by the runtime */
         } else if (!m) {
             error(c, s, "scoped needs a type with a free method; %s has none", t->name);

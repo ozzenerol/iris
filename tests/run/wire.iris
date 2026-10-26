@@ -1,0 +1,203 @@
+// expect: 1 login 5 256
+// expect: 0102000500000100
+// expect: 02010304feffffff0000c03f000000000000d0bf
+// expect: 258 772 -2 1.5 -0.25
+// expect: 4 5 2 7 true
+// expect: 45400701
+// expect: 090001ffff012c00020a00000105fffe
+// expect: 9 300 -1 1 true false low
+// expect: 02040001036f6e6500020000030000000000000000deadbeef0100fdff026869
+// expect: 2 2 one [] 3735928559 -3 hi
+// expect: WireError.short: the bytes end in the middle of the message
+// expect: WireError.extra: 1 byte is left after the message
+// expect: WireError.badValue: kind: 9 isn't one of the enum's values
+// expect: WireError.badValue: last: 2 isn't a bool, which is 0 or 1
+// expect: WireError.badValue: perm: 8 has bits that aren't values of the enum
+// expect: WireError.badValue: s: 5 isn't one of the enum's values
+// expect: WireError.tooLong: nums: 9 items, more than the max of 8
+// expect: WireError.short: the bytes end in the middle of the message
+// expect: WireError.tooLong: nums: 9 items, more than the max of 8
+// expect: WireError.tooLong: name: 256 bytes, more than the length's limit of 255
+
+import hex
+import wire
+
+@wire(u8)
+enum Kind { ping = 1, login = 2, data = 3 }
+
+@wire(u16)
+enum Signed { low = -2, high = 7 }
+
+@wire(u8)
+enum Perm flags { read, write, exec }
+
+@wire
+struct Header {
+    u8 version
+    Kind kind
+    u16 flags
+    u32 length
+}
+
+@wire(le)
+struct Little {
+    u16 a
+    @wire(be) u16 b
+    i32 c
+    f32 d
+    f64 e
+}
+
+@wire
+struct Bits {
+    u8 version: 4
+    u8 ihl: 4
+    u16 flags: 3
+    u16 fragment: 13
+    bool last
+}
+
+@wire
+struct Point {
+    i16 x
+    i16 y
+}
+
+@wire
+struct Base {
+    u8 tag
+}
+
+@wire
+struct Shape {
+    Base
+    Point[2] corners
+    u8[4] addr
+    Perm perm
+    Signed s
+}
+
+@wire
+struct Named {
+    u16 id
+    @wire(len: u8) String name
+}
+
+@wire
+struct Batch {
+    u8 count
+    u8 skipped
+    @wire(len: count) Named[] items
+    @wire(len: u16, max: 8) u32[] nums
+    @wire(le, len: u16) i16[] small
+    @wire(len: u8) String note
+}
+
+void show(str bytes) {
+    print(hex.encode(bytes))
+}
+
+!void main() {
+    // decode a fixed header and encode it back
+    h := try wire.decode(Header, "\x01\x02\x00\x05\x00\x00\x01\x00")
+    print("{h.version} {h.kind} {h.flags} {h.length}")
+    scoped String hb = try wire.encode(h)
+    show(hb)
+
+    // low byte first, one field high byte first, floats
+    l := Little{a: 0x0102, b: 0x0304, c: -2, d: 1.5, e: -0.25}
+    scoped String lb = try wire.encode(l)
+    show(lb)
+    l2 := try wire.decode(Little, lb)
+    print("{l2.a} {l2.b} {l2.c} {l2.d} {l2.e}")
+
+    // bitfields: the first takes the highest bits
+    bits := try wire.decode(Bits, "\x45\x40\x07\x01")
+    print("{bits.version} {bits.ihl} {bits.flags} {bits.fragment} {bits.last}")
+    scoped String bb = try wire.encode(bits)
+    show(bb)
+
+    // embedded and nested structs, arrays, flag and signed enums
+    sh := Shape{Base: Base{tag: 9}, corners: [Point{x: 1, y: -1}, Point{x: 300, y: 2}], addr: [10, 0, 0, 1], perm: Perm.read | Perm.exec, s: Signed.low}
+    scoped String sb = try wire.encode(sh)
+    show(sb)
+    sh2 := try wire.decode(Shape, sb)
+    print("{sh2.tag} {sh2.corners[1].x} {sh2.corners[0].y} {sh2.addr[3]} {sh2.perm.has(Perm.exec)} {sh2.perm.has(Perm.write)} {sh2.s}")
+
+    // lengths from a prefix and from an earlier field, which encode fills in
+    Named[] items = alloc(Named, 2)
+    items[0] = Named{id: 1, name: "one".copy()}
+    items[1] = Named{id: 2, name: "".copy()}
+    u32[] nums = alloc(u32, 3)
+    nums[2] = 0xdeadbeef
+    i16[] small = alloc(i16, 1)
+    small[0] = -3
+    scoped Batch b = Batch{count: 99, skipped: 4, items: items, nums: nums, small: small, note: "hi".copy()}
+    scoped String bytes = try wire.encode(b)
+    show(bytes)
+    scoped Batch back = try wire.decode(Batch, bytes)
+    print("{back.count} {back.items.len} {back.items[0].name} [{back.items[1].name}] {back.nums[2]} {back.small[0]} {back.note}")
+
+    // what goes wrong
+    header("\x01\x02\x00") catch e {
+        print("{e.code}: {e.message}")
+    }
+    header("\x01\x02\x00\x05\x00\x00\x01\x00\xff") catch e {
+        print("{e.code}: {e.message}")
+    }
+    header("\x01\x09\x00\x05\x00\x00\x01\x00") catch e {
+        print("{e.code}: {e.message}")
+    }
+    bitsFrom("\x45\x40\x07\x02") catch e {
+        print("{e.code}: {e.message}")
+    }
+    shape("\x09\x00\x01\xff\xff\x01\x2c\x00\x02\x0a\x00\x00\x01\x08\xff\xfe") catch e {
+        print("{e.code}: {e.message}")
+    }
+    shape("\x09\x00\x01\xff\xff\x01\x2c\x00\x02\x0a\x00\x00\x01\x05\x00\x05") catch e {
+        print("{e.code}: {e.message}")
+    }
+    batch("\x00\x00\x00\x09") catch e {
+        print("{e.code}: {e.message}")
+    }
+    batch("\x01\x00\x00\x01\x05ab") catch e {
+        print("{e.code}: {e.message}")
+    }
+    u32[] many = alloc(u32, 9)
+    scoped Batch big = Batch{nums: many}
+    encodeBatch(&big) catch e {
+        print("{e.code}: {e.message}")
+    }
+    String long
+    for long.len < 256 {
+        long.append("x")
+    }
+    scoped Named n = Named{name: long}
+    encodeNamed(&n) catch e {
+        print("{e.code}: {e.message}")
+    }
+}
+
+!void header(str b) {
+    _ = try wire.decode(Header, b)
+}
+
+!void bitsFrom(str b) {
+    _ = try wire.decode(Bits, b)
+}
+
+!void shape(str b) {
+    _ = try wire.decode(Shape, b)
+}
+
+!void batch(str b) {
+    scoped Batch x = try wire.decode(Batch, b)
+}
+
+!void encodeBatch(Batch *b) {
+    scoped String s = try wire.encode(*b)
+}
+
+!void encodeNamed(Named *n) {
+    scoped String s = try wire.encode(*n)
+}

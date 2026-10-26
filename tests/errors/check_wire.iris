@@ -1,0 +1,62 @@
+// error: 26: Big.large is 300, which doesn't fit in the 1 byte of @wire
+// error: 28: @wire on an enum takes the integer it is sent as: @wire(u8), @wire(u16) or @wire(u32)
+// error: 31: an enum whose values carry data can't be sent with @wire
+// error: 40: p is the enum Plain, which needs @wire(u8), @wire(u16) or @wire(u32) to say how many bytes it takes
+// error: 41: be is u16be; in a @wire struct write u16, and the struct or @wire(be) says the byte order
+// error: 42: d is a Duration, which has no form on the wire; send a whole number of the unit you mean
+// error: 43: n is NotWire, which needs @wire too
+// error: 44: ptr is i64 *, which @wire can't send
+// error: 45: noLen is String, so it needs its length: @wire(len: u16) for a prefix, or @wire(len: count) for an earlier field
+// error: 46: len: and max: are for String and slice fields; notSized is u8
+// error: 47: the length of noMax can pass 65535 bytes, so say how many it may be: @wire(len: u32, max: 1MiB)
+// error: 48: max is 300, but the length can say at most 255
+// error: 49: later comes after early; the field with the length must come first
+// error: 51: names is String[]; @wire can't give each item its own length, so put the String in a @wire struct and use a slice of that
+// error: 52: view is str, which can't own the bytes it is read into; use a String
+// error: 55: count already holds the length of another field; give each its own
+// error: 56: len: takes u8, u16, u32, u64 or the name of an earlier field, not nothing
+// error: 57: @wire on a field takes le, be, len: and max:, as in @wire(len: u16, max: 1024)
+// error: 58: two is an array of String; @wire sends Strings and slices only as fields, each with its length
+import net
+import wire
+
+enum Plain { a, b }
+
+@wire(u8)
+enum Big { small = 1, large = 300 }
+
+@wire(u7)
+enum Odd { x }
+
+@wire(u8)
+enum Shape { circle(f64 r), square }
+
+struct NotWire {
+    u8 x
+}
+
+@wire
+struct Bad {
+    Plain p
+    u16be be
+    Duration d
+    NotWire n
+    i64 *ptr
+    String noLen
+    @wire(len: u8) u8 notSized
+    @wire(len: u32) String noMax
+    @wire(len: u8, max: 300) String overMax
+    @wire(len: later) String early
+    u8 later
+    @wire(len: u8) String[] names
+    @wire(len: u8) str view
+    u8 count
+    @wire(len: count) String a
+    @wire(len: count) String b
+    @wire(len: nothing) String c
+    @wire(tag: 1) u8 t
+    String[2] two
+}
+
+void main() {
+}

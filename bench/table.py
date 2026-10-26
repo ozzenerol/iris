@@ -53,6 +53,7 @@ LIB_ROWS = [
     ("rsa", "500 RSA-2048 signatures, each checked 20 times", "ring", "`crypto/rsa`"),
     ("x509-parse", "a certificate parsed 200000 times", "x509-parser", "`crypto/x509`"),
     ("yaml-parse", "a 6.7 MB YAML list, 3 times", "serde_yaml", "`gopkg.in/yaml.v3`"),
+    ("wire", "100,000 binary messages read and written, 30 times", "by hand, `from_be_bytes`", "`encoding/binary`"),
 ]
 
 
