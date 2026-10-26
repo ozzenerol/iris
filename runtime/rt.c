@@ -19203,3 +19203,80 @@ int iris_proto_decode(const JsonType *t, const char *data, int64_t len, char *ou
 void iris_proto_encode_to(const JsonType *t, const char *value, IrisString *out) {
     pbWrite(out, pbPlan(t), value);
 }
+
+/* ======================================================================
+ * metrics and tracing
+ *
+ * Floats that every thread adds to: a counter, a gauge, a histogram's sum.
+ * There is no atomic double, so the bits go through a compare-and-swap.
+ * Trace and span ids come from a thread's own xoshiro, seeded from the OS.
+ * ====================================================================== */
+
+static inline uint64_t metricBits(double v) { uint64_t u; memcpy(&u, &v, 8); return u; }
+static inline double metricFloat(uint64_t u) { double v; memcpy(&v, &u, 8); return v; }
+
+void iris_metric_add(double *p, double v) {
+    _Atomic uint64_t *a = (_Atomic uint64_t *)p;
+    uint64_t old = atomic_load_explicit(a, memory_order_relaxed);
+    while (!atomic_compare_exchange_weak_explicit(a, &old, metricBits(metricFloat(old) + v),
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+    }
+}
+
+void iris_metric_set(double *p, double v) {
+    atomic_store_explicit((_Atomic uint64_t *)p, metricBits(v), memory_order_relaxed);
+}
+
+double iris_metric_get(const double *p) {
+    return metricFloat(atomic_load_explicit((_Atomic uint64_t *)p, memory_order_relaxed));
+}
+
+void iris_metric_count(int64_t *p, int64_t n) {
+    atomic_fetch_add_explicit((_Atomic int64_t *)p, n, memory_order_relaxed);
+}
+
+int64_t iris_metric_load(const int64_t *p) {
+    return atomic_load_explicit((_Atomic int64_t *)p, memory_order_relaxed);
+}
+
+/* A histogram's observation: the first bucket whose bound is at least v,
+ * or the last slot (+Inf), then the sum. counts has n + 1 slots. */
+void iris_metric_observe(const double *bounds, int64_t n, int64_t *counts, double *sum, double v) {
+    int64_t i = 0;
+    while (i < n && v > bounds[i]) i++;
+    atomic_fetch_add_explicit((_Atomic int64_t *)&counts[i], 1, memory_order_relaxed);
+    iris_metric_add(sum, v);
+}
+
+static __thread uint64_t traceRng[4];
+
+static inline uint64_t traceRot(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+
+/* A random id that isn't 0, which W3C says is no id. */
+uint64_t iris_trace_random(void) {
+    uint64_t *s = traceRng;
+    if (!(s[0] | s[1] | s[2] | s[3])) {
+        iris_random_os((char *)s, sizeof traceRng);
+        if (!(s[0] | s[1] | s[2] | s[3])) s[0] = 1;
+    }
+    for (;;) {
+        uint64_t r = traceRot(s[1] * 5, 7) * 9, t = s[1] << 17;
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = traceRot(s[3], 45);
+        if (r) return r;
+    }
+}
+
+/* A metric family's table of series: a slot is read without a lock, and
+ * written once, after its hash, under the family's lock. */
+void *iris_metric_slot(void **p) {
+    return atomic_load_explicit((_Atomic(void *) *)p, memory_order_acquire);
+}
+
+void iris_metric_put_slot(void **p, void *v) {
+    atomic_store_explicit((_Atomic(void *) *)p, v, memory_order_release);
+}

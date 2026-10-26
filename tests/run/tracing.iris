@@ -1,0 +1,171 @@
+// expect: parse: true 4bf92f3577b34da6a3ce929d0e0e4736 00f067aa0ba902b7 true
+// expect: round trip: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+// expect: bad: false false false false
+// expect: child: true true false
+// expect: hello Ana
+// expect: spans: 4
+// expect: client GET 3 200 child of root: true
+// expect: server GET /hello 2 200 child of client: true
+// expect: work 1 child of server: true, user=Ana, items=3
+// expect: root 1 status 2 boom
+// expect: one trace: true
+// expect: dropped: 0
+
+import http, json, net, str, tracing
+
+@json
+struct AnyValue {
+    String stringValue
+    String intValue
+}
+
+@json
+struct KeyValue {
+    String key
+    AnyValue value
+}
+
+@json
+struct SpanStatus {
+    i64 code
+    String message
+}
+
+@json
+struct OtlpSpan {
+    String traceId
+    String spanId
+    String parentSpanId
+    String name
+    i64 kind
+    List[KeyValue] attributes
+    SpanStatus status
+}
+
+@json
+struct ScopeSpans {
+    List[OtlpSpan] spans
+}
+
+@json
+struct ResourceSpans {
+    List[ScopeSpans] scopeSpans
+}
+
+@json
+struct Export {
+    List[ResourceSpans] resourceSpans
+}
+
+chan[String] exports
+
+void collect(http.Request *req, http.Response *res) {
+    exports <- req.body.copy()
+    res.send("{{}}", "application/json")
+}
+
+void hello(http.Request *req, http.Response *res) {
+    span := tracing.spanOf(req)
+    work := span.child("work")
+    work.text("user", "Ana")
+    work.int("items", 3)
+    work.end()
+    res.send("hello Ana", "text/plain")
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+str attr(OtlpSpan *s, str key) {
+    for kv in s.attributes {
+        if kv.key == key {
+            return if kv.value.stringValue.len > 0 { kv.value.stringValue } else { kv.value.intValue }
+        }
+    }
+    return ""
+}
+
+!void main() {
+    p, ok := tracing.parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    scoped String tid = p.traceId()
+    scoped String tp = p.traceparent()
+    print("parse: {ok} {tid} {tp[36:52]} {p.sampled}")
+    print("round trip: {tp}")
+    _, b1 := tracing.parse("00-00000000000000000000000000000000-00f067aa0ba902b7-01")
+    _, b2 := tracing.parse("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01")
+    _, b3 := tracing.parse("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    _, b4 := tracing.parse("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01")
+    print("bad: {b1} {b2} {b3} {b4}")
+    c := tracing.startFrom(&p, "c")
+    print("child: {c.context.traceHigh == p.traceHigh && c.context.traceLow == p.traceLow} {c.parentId == p.spanId} {c.context.spanId == p.spanId}")
+    c.end()
+
+    exports = chan[String](16)
+    http.Router collector
+    collector.post("/v1/traces", collect)
+    cln := try net.listen(0, "127.0.0.1")
+    spawn serve(&collector, cln)
+    scoped String endpoint = format("http://127.0.0.1:{cln.port}")
+    tracing.setup("shop", endpoint, interval: 50ms)
+
+    http.Router app
+    app.get("/hello", hello)
+    tracing.track(&app)
+    aln := try net.listen(0, "127.0.0.1")
+    spawn serve(&app, aln)
+
+    root := tracing.start("root")
+    http.Client client
+    scoped String url = format("http://127.0.0.1:{aln.port}/hello")
+    scoped reply := try tracing.send(&client, &root, "GET", url)
+    print(reply.body)
+    root.fail("boom")
+    root.end()
+    tracing.shutdown()
+
+    List[Export] exs
+    defer exs.freeEach()
+    List[OtlpSpan *] all
+    defer all.free()
+    for all.len < 4 {
+        scoped String body = <-exports
+        exs.push(try json.decode(Export, body))
+        all.clear()
+        for e in exs.items() {
+            for rs in e.resourceSpans.items() {
+                for ss in rs.scopeSpans.items() {
+                    for i in 0..ss.spans.len {
+                        all.push(&ss.spans.items()[i])
+                    }
+                }
+            }
+        }
+    }
+    print("spans: {all.len}")
+    OtlpSpan *rootS = null
+    OtlpSpan *clientS = null
+    OtlpSpan *serverS = null
+    OtlpSpan *workS = null
+    for i in 0..all.len {
+        s := all.at(i)
+        if s.name == "root" {
+            rootS = s
+        } else if s.name == "GET" {
+            clientS = s
+        } else if s.name == "work" {
+            workS = s
+        } else {
+            serverS = s
+        }
+    }
+    print("client {clientS.name} {clientS.kind} {attr(clientS, "http.response.status_code")} child of root: {clientS.parentSpanId == rootS.spanId}")
+    print("server {serverS.name} {serverS.kind} {attr(serverS, "http.response.status_code")} child of client: {serverS.parentSpanId == clientS.spanId}")
+    print("work {workS.kind} child of server: {workS.parentSpanId == serverS.spanId}, user={attr(workS, "user")}, items={attr(workS, "items")}")
+    print("root {rootS.kind} status {rootS.status.code} {rootS.status.message}")
+    same := clientS.traceId == rootS.traceId && serverS.traceId == rootS.traceId && workS.traceId == rootS.traceId
+    print("one trace: {same}")
+    print("dropped: {tracing.dropped()}")
+    app.shutdown(1s)
+    collector.shutdown(1s)
+}

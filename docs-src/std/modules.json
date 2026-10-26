@@ -46,6 +46,8 @@
       {"name": "flags", "title": "Flags", "summary": "Command-line flags into a @flags struct, with --help made from it."},
       {"name": "signal", "title": "Signals", "summary": "Waiting for Ctrl-C and SIGTERM while the other tasks run."},
       {"name": "log", "title": "Logging", "summary": "Lines with the time and a level, as text or JSON."},
+      {"name": "metrics", "title": "Metrics", "summary": "Counters, gauges and histograms, served to Prometheus from a Router."},
+      {"name": "tracing", "title": "Tracing", "summary": "Spans with W3C traceparent across HTTP calls, sent to OpenTelemetry over OTLP/HTTP."},
       {"name": "term", "title": "Terminal", "summary": "Colors as markup, status lines, tables, a progress bar, and lines read with editing."}
     ]},
     {"title": "Network", "modules": [

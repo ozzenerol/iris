@@ -15,7 +15,7 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse", "wire", "ssh",
-       "protobuf", "msgpack", "cbor"]
+       "protobuf", "msgpack", "cbor", "metrics", "tracing"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
 NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk", "grpc"]

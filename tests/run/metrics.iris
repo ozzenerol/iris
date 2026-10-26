@@ -1,0 +1,96 @@
+// expect: # HELP jobs_total Jobs done.
+// expect: # TYPE jobs_total counter
+// expect: jobs_total 4002
+// expect: # HELP queue_length Items waiting.
+// expect: # TYPE queue_length gauge
+// expect: queue_length 2.5
+// expect: # HELP requests_total Requests, by method and "code".\nSecond line, a \\.
+// expect: # TYPE requests_total counter
+// expect: requests_total{method="GET",code="200"} 2
+// expect: requests_total{method="POST",code="500"} 1
+// expect: requests_total{method="a\"b\\c\nd",code="1"} 1
+// expect: # HELP latency_seconds How long it took.
+// expect: # TYPE latency_seconds histogram
+// expect: latency_seconds_bucket{le="0.1"} 1
+// expect: latency_seconds_bucket{le="1"} 3
+// expect: latency_seconds_bucket{le="10"} 5
+// expect: latency_seconds_bucket{le="+Inf"} 5
+// expect: latency_seconds_sum 19.55
+// expect: latency_seconds_count 5
+// expect: # HELP size_bytes Sizes.
+// expect: # TYPE size_bytes histogram
+// expect: size_bytes_bucket{kind="a",le="100"} 1
+// expect: size_bytes_bucket{kind="a",le="1000"} 1
+// expect: size_bytes_bucket{kind="a",le="+Inf"} 2
+// expect: size_bytes_sum{kind="a"} 5050
+// expect: size_bytes_count{kind="a"} 2
+// expect:
+// expect: same: true 4002 5
+// expect: http: 200 text/plain; version=0.0.4; charset=utf-8 true
+// expect: tracked: true true
+
+import http, metrics, net, str
+
+metrics.Counter jobs
+metrics.Gauge queue
+
+void work() {
+    for i in 0..1000 {
+        jobs.inc()
+    }
+}
+
+void serve(http.Router *r, net.Listener ln) {
+    r.serveOn(ln) catch e { }
+}
+
+!void main() {
+    jobs = metrics.counter("jobs_total", "Jobs done.")
+    queue = metrics.gauge("queue_length", "Items waiting.")
+    t1 := thread work()
+    t2 := thread work()
+    t3 := thread work()
+    t4 := thread work()
+    t1.join()
+    t2.join()
+    t3.join()
+    t4.join()
+    jobs.add(2)
+    queue.set(3)
+    queue.dec()
+    queue.add(0.5)
+
+    reqs := metrics.counterVec("requests_total", "Requests, by method and \"code\".\nSecond line, a \\.", ["method", "code"])
+    ok := reqs.with(["GET", "200"])
+    ok.inc()
+    reqs.with(["POST", "500"]).inc()
+    reqs.with(["GET", "200"]).inc()
+    reqs.with(["a\"b\\c\nd", "1"]).inc()
+
+    lat := metrics.histogram("latency_seconds", "How long it took.", buckets: [0.1, 1, 10])
+    for v in [0.05, 0.5, 1.0, 8.0, 10.0] {
+        lat.observe(v)
+    }
+    sizes := metrics.histogramVec("size_bytes", "Sizes.", ["kind"], buckets: [100, 1000])
+    sizes.with(["a"]).observe(50)
+    sizes.with(["a"]).observe(5000)
+
+    scoped String text = metrics.text()
+    print(text)
+
+    again := metrics.counter("jobs_total", "Jobs done.")
+    print("same: {again.value() == jobs.value()} {again.value()} {lat.count()}")
+
+    http.Router r
+    r.get("/metrics", metrics.handler)
+    metrics.track(&r)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&r, ln)
+    scoped String url = format("http://127.0.0.1:{ln.port}/metrics")
+    scoped reply := try http.get(url)
+    print("http: {reply.status} {reply.header("content-type")} {str.contains(reply.body, "jobs_total 4002")}")
+    scoped reply2 := try http.get(url)
+    scoped String after = metrics.text()
+    print("tracked: {str.contains(after, "http_requests_total{{method=\"GET\",code=\"200\"}} 2")} {str.contains(after, "http_request_duration_seconds_count{{method=\"GET\"}} 2")}")
+    r.shutdown(1s)
+}

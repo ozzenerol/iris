@@ -1,0 +1,27 @@
+import metrics
+
+// 10 million requests counted by method and status, with their time in a
+// histogram, then 2,000 series written out 200 times.
+void main() {
+    requests := metrics.counterVec("requests_total", "Requests.", ["method", "code"])
+    seconds := metrics.histogram("request_seconds", "Request time.")
+    total := metrics.counter("bytes_total", "Bytes.")
+    methods := ["GET", "POST", "PUT", "DELETE"]
+    codes := ["200", "201", "404", "500", "503"]
+    for i in 0..10000000 {
+        requests.with([methods[i % 4], codes[i % 5]]).inc()
+        seconds.observe(f64(i % 1000) / 1000.0)
+        total.add(f64(i % 1500))
+    }
+    paths := metrics.counterVec("path_hits_total", "Hits by path.", ["path"])
+    for i in 0..2000 {
+        scoped String p = format("/items/{i}")
+        paths.with([p]).add(f64(i))
+    }
+    i64 size = 0
+    for i in 0..200 {
+        scoped String text = metrics.text()
+        size += text.len
+    }
+    print("{requests.with(["GET", "200"]).value()} {seconds.count()} {total.value()} {size}")
+}

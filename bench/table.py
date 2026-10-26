@@ -59,6 +59,8 @@ LIB_ROWS = [
     ("protobuf", "100,000 orders read and written as protobuf, 20 times", "prost", "by hand, `protowire`"),
     ("msgpack", "100,000 orders read and written as MessagePack, 20 times", "rmp-serde", "vmihailenco/msgpack"),
     ("cbor", "100,000 orders read and written as CBOR, 20 times", "ciborium", "fxamacker/cbor"),
+    ("metrics", "10M requests counted with labels and a histogram, 2,000 series written 200 times", "prometheus", "client_golang"),
+    ("tracing", "1M spans with traceparent, written as OTLP JSON", "opentelemetry-proto + serde_json", "otlp + protojson"),
 ]
 
 
