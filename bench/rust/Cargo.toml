@@ -192,3 +192,15 @@ path = "../x509-parse/main.rs"
 [[bin]]
 name = "yaml-parse"
 path = "../yaml-parse/main.rs"
+
+[[bin]]
+name = "aes-gcm"
+path = "../aes-gcm/main.rs"
+
+[[bin]]
+name = "base64"
+path = "../base64/main.rs"
+
+[[bin]]
+name = "hex"
+path = "../hex/main.rs"

@@ -1,0 +1,58 @@
+// AES-GCM, CRC32C, base64 and hex over lengths around the sizes where they
+// switch to working on several blocks at once. The expected values come
+// from the one-block-at-a-time code.
+// expect: gcm 2100526098
+// expect: crc32c 2158516689
+// expect: text 4042898772
+import crypto, compress, base64, hex
+
+!void main() {
+    String data
+    defer data.free()
+    for i in 0..40000 {
+        u8[1] b = [u8((i * 131 + i / 251) & 255)]
+        data.append(b)
+    }
+    key := data[100:132]
+    nonce := data[200:212]
+    u32 gcm = 0
+    for n in [0, 1, 15, 16, 17, 127, 128, 129, 255, 256, 257, 1023, 1024, 1025, 4999] {
+        for extra in [0, 5, 128, 300] {
+            scoped String sealed = crypto.aesSeal(key, nonce, data[0:n], data[0:extra])
+            gcm = compress.crc32(sealed, gcm)
+            scoped String opened = crypto.aesUnseal(key, nonce, sealed, data[0:extra]) catch e {
+                print("aesUnseal failed for {n} {extra}")
+                return
+            }
+            if opened != data[0:n] {
+                print("aesUnseal gave other bytes for {n}")
+            }
+        }
+    }
+    print("gcm {gcm}")
+
+    u32 crc = 0
+    for n in 0..40000 {
+        if n < 2000 || n % 97 == 0 || (n > 12280 && n < 12300) || (n > 1530 && n < 1545) {
+            crc = crc ^ compress.crc32c(data[n % 7:n], u32(n))
+            crc = (crc << 1) | (crc >> 31)
+        }
+    }
+    print("crc32c {crc}")
+
+    u32 text = 0
+    for n in 0..100 {
+        d := data[n:n * 3]
+        scoped String b = base64.encode(d)
+        scoped String u = base64.encodeUrl(d)
+        scoped String h = hex.encode(d)
+        text = compress.crc32(b, compress.crc32(u, compress.crc32(h, text)))
+        scoped String b2 = try base64.decode(b)
+        scoped String u2 = try base64.decodeUrl(u)
+        scoped String h2 = try hex.decode(h)
+        if b2 != d || u2 != d || h2 != d {
+            print("round trip failed for {n}")
+        }
+    }
+    print("text {text}")
+}

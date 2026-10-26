@@ -13,7 +13,7 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
        "hashmap", "sort", "strings", "channels"]
 # the standard library against Go's and the best-known Rust crates
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
-       "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "chacha20", "crc32c", "base32", "ecdsa", "rsa",
+       "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}

@@ -13781,6 +13781,8 @@ static uint32_t crc32cTable[8][256];
 static pthread_once_t crc32cOnce = PTHREAD_ONCE_INIT;
 static int crc32cHw;
 
+static void crc32cShiftInit(void);
+
 static void crc32cInit(void) {
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
@@ -13793,6 +13795,7 @@ static void crc32cInit(void) {
             crc32cTable[t][i] = (c >> 8) ^ crc32cTable[0][c & 0xff];
         }
     }
+    crc32cShiftInit();
     if (getenv("IRIS_CRC_SOFT")) return;
 #if defined(__x86_64__)
     __builtin_cpu_init();
@@ -13804,26 +13807,75 @@ static void crc32cInit(void) {
 #endif
 }
 
-#if defined(__x86_64__)
-__attribute__((target("sse4.2"))) static uint32_t crc32cHwRun(uint32_t c, const uint8_t *p, size_t n) {
-    uint64_t c64 = c;
-    for (; n >= 8; p += 8, n -= 8) {
-        uint64_t v;
-        memcpy(&v, p, 8);
-        c64 = __builtin_ia32_crc32di(c64, v);
-    }
-    c = (uint32_t)c64;
-    for (; n > 0; p++, n--) c = __builtin_ia32_crc32qi(c, *p);
-    return c;
+/* Longer runs go as 3 blocks of one size side by side, as the crc32
+   instruction can start a new one each cycle but takes 3 to finish. The
+   CRC of the first block is then moved past the others: crc32cShift[s]
+   is what a CRC becomes after crc32cBlock[s] zero bytes, a byte of it
+   at a time. */
+static const size_t crc32cBlock[2] = {4096, 512};
+static uint32_t crc32cShift[2][4][256];
+
+static uint32_t crc32cMove(int s, uint32_t c) {
+    return crc32cShift[s][0][c & 0xff] ^ crc32cShift[s][1][(c >> 8) & 0xff] ^ crc32cShift[s][2][(c >> 16) & 0xff] ^
+           crc32cShift[s][3][c >> 24];
 }
+
+static void crc32cShiftInit(void) {
+    for (int s = 0; s < 2; s++) {
+        uint32_t bit[32];
+        for (int i = 0; i < 32; i++) {
+            uint32_t c = 1u << i;
+            for (size_t k = 0; k < crc32cBlock[s]; k++) c = (c >> 8) ^ crc32cTable[0][c & 0xff];
+            bit[i] = c;
+        }
+        for (int k = 0; k < 4; k++) {
+            for (int v = 0; v < 256; v++) {
+                uint32_t c = 0;
+                for (int i = 0; i < 8; i++) {
+                    if (v >> i & 1) c ^= bit[8 * k + i];
+                }
+                crc32cShift[s][k][v] = c;
+            }
+        }
+    }
+}
+
+#if defined(__x86_64__)
+#define CRC32C_TARGET __attribute__((target("sse4.2")))
+CRC32C_TARGET static inline uint32_t crc32cWord(uint32_t c, uint64_t v) {
+    return (uint32_t)__builtin_ia32_crc32di(c, v);
+}
+CRC32C_TARGET static inline uint32_t crc32cByte(uint32_t c, uint8_t v) { return __builtin_ia32_crc32qi(c, v); }
 #elif defined(__aarch64__)
-__attribute__((target("crc"))) static uint32_t crc32cHwRun(uint32_t c, const uint8_t *p, size_t n) {
+#define CRC32C_TARGET __attribute__((target("crc")))
+CRC32C_TARGET static inline uint32_t crc32cWord(uint32_t c, uint64_t v) { return __builtin_arm_crc32cd(c, v); }
+CRC32C_TARGET static inline uint32_t crc32cByte(uint32_t c, uint8_t v) { return __builtin_arm_crc32cb(c, v); }
+#endif
+
+#ifdef CRC32C_TARGET
+CRC32C_TARGET static uint32_t crc32cHwRun(uint32_t c, const uint8_t *p, size_t n) {
+    for (int s = 0; s < 2; s++) {
+        size_t b = crc32cBlock[s];
+        for (; n >= 3 * b; p += 3 * b, n -= 3 * b) {
+            uint32_t x = c, y = 0, z = 0;
+            for (size_t i = 0; i < b; i += 8) {
+                uint64_t u, v, w;
+                memcpy(&u, p + i, 8);
+                memcpy(&v, p + b + i, 8);
+                memcpy(&w, p + 2 * b + i, 8);
+                x = crc32cWord(x, u);
+                y = crc32cWord(y, v);
+                z = crc32cWord(z, w);
+            }
+            c = crc32cMove(s, crc32cMove(s, x) ^ y) ^ z;
+        }
+    }
     for (; n >= 8; p += 8, n -= 8) {
         uint64_t v;
         memcpy(&v, p, 8);
-        c = __builtin_arm_crc32cd(c, v);
+        c = crc32cWord(c, v);
     }
-    for (; n > 0; p++, n--) c = __builtin_arm_crc32cb(c, *p);
+    for (; n > 0; p++, n--) c = crc32cByte(c, *p);
     return c;
 }
 #endif
@@ -13832,7 +13884,7 @@ uint32_t iris_crc32c(uint32_t before, const uint8_t *p, int64_t len) {
     pthread_once(&crc32cOnce, crc32cInit);
     uint32_t c = ~before;
     size_t n = (size_t)len;
-#if defined(__x86_64__) || defined(__aarch64__)
+#ifdef CRC32C_TARGET
     if (crc32cHw) return ~crc32cHwRun(c, p, n);
 #endif
     for (; n >= 8; p += 8, n -= 8) {
