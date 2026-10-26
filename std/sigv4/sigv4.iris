@@ -1,0 +1,366 @@
+// AWS Signature Version 4: the signature that S3 and the other AWS APIs
+// (and MinIO, R2 and others that speak S3) ask for on each request.
+//
+//     signer := sigv4.Signer{accessKey: "AKIA...", secretKey: "...", region: "eu-west-1", service: "s3"}
+//     headers := try signer.sign("GET", "https://bucket.s3.eu-west-1.amazonaws.com/a.txt")
+//     defer headers.freeEach()
+//     scoped reply := try client.get("https://bucket.s3.eu-west-1.amazonaws.com/a.txt", headers.items())
+//
+// sign gives the header lines to send with the request. presign gives a URL
+// that works without them, for a limited time.
+
+import crypto, hex, str, time, url
+
+// What signing fails with: invalid for a URL that isn't http:// or
+// https://, or a header line that isn't Name: value.
+pub enum SignError { invalid }
+
+// The payload hash of a body that isn't signed: a presigned URL, or a body
+// sent as it is read.
+pub const str UNSIGNED = "UNSIGNED-PAYLOAD"
+
+// Who signs, and for which region and service. sessionToken is for
+// temporary credentials, and is sent as X-Amz-Security-Token.
+pub struct Signer {
+    pub str accessKey
+    pub str secretKey
+    pub str sessionToken
+    pub str region = "us-east-1"
+    pub str service = "s3"
+}
+
+struct Pair {
+    String k
+    String v
+}
+
+void freePairs(List[Pair] *ps) {
+    for p in ps {
+        p.k.free()
+        p.v.free()
+    }
+    ps.free()
+}
+
+bool pairLess(Pair a, Pair b) {
+    c := str.compare(a.k, b.k)
+    return c < 0 || c == 0 && str.compare(a.v, b.v) < 0
+}
+
+// The parts of the URL that are signed.
+struct Target {
+    str host
+    str path
+    str query
+}
+
+!Target targetOf(str address) {
+    rest := address
+    if str.startsWith(rest, "https://") {
+        rest = rest[8:]
+    } else if str.startsWith(rest, "http://") {
+        rest = rest[7:]
+    } else {
+        return error(SignError.invalid, "'{address}' isn't an http:// or https:// URL")
+    }
+    rest, _, _ = str.cut(rest, "#")
+    hostPath, query, _ := str.cut(rest, "?")
+    i64 slash = str.find(hostPath, "/")
+    if slash < 0 {
+        return Target{host: hostPath, path: "/", query: query}
+    }
+    return Target{host: hostPath[0:slash], path: hostPath[slash:], query: query}
+}
+
+// The path as AWS signs it: S3 signs it as it is sent, every other service
+// with each part encoded once more.
+void canonicalPath(String *out, str path, bool again) {
+    if path.len == 0 {
+        out.append("/")
+        return
+    }
+    if !again {
+        out.append(path)
+        return
+    }
+    str rest = path
+    first := true
+    for {
+        part, after, more := str.cut(rest, "/")
+        if !first {
+            out.append("/")
+        }
+        first = false
+        scoped String e = url.encode(part)
+        out.append(e)
+        if !more {
+            return
+        }
+        rest = after
+    }
+}
+
+// The query's names and values, decoded and encoded again so each is
+// encoded the one way AWS signs.
+!void queryPairs(List[Pair] *out, str query) {
+    str rest = query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        if pair.len == 0 {
+            continue
+        }
+        k, v, _ := str.cut(pair, "=")
+        scoped String dk = try url.decode(k)
+        scoped String dv = try url.decode(v)
+        out.push(Pair{k: url.encode(dk), v: url.encode(dv)})
+    }
+}
+
+void appendQuery(String *out, List[Pair] *ps) {
+    ps.sort(pairLess)
+    for i in 0..ps.len {
+        p := ps.at(i)
+        if i > 0 {
+            out.append("&")
+        }
+        out.append(p.k)
+        out.append("=")
+        out.append(p.v)
+    }
+}
+
+// A header value with its ends trimmed and each run of spaces made one.
+String tidy(str value) {
+    String out
+    v := str.trim(value)
+    bool space = false
+    for i in 0..v.len {
+        c := v[i]
+        if c == ' ' || c == '\t' {
+            space = true
+            continue
+        }
+        if space {
+            out.append(" ")
+            space = false
+        }
+        out.append(v[i:i + 1])
+    }
+    return out
+}
+
+// The signed headers: lower case names, sorted, with the values of a name
+// that comes more than once joined with commas.
+!void headerPairs(List[Pair] *out, str host, str[] headers, List[String] *extra) {
+    hasHost := false
+    for i in 0..headers.len + extra.len {
+        str h = if i < headers.len { headers[i] } else { extra.at(i - headers.len) }
+        name, value, ok := str.cut(h, ":")
+        if !ok || str.trim(name).len == 0 {
+            return error(SignError.invalid, "'{h}' isn't a header line Name: value")
+        }
+        p := Pair{k: str.lower(str.trim(name)), v: tidy(value)}
+        if p.k == "host" {
+            hasHost = true
+        }
+        out.push(p)
+    }
+    if !hasHost {
+        out.push(Pair{k: "host".copy(), v: host.copy()})
+    }
+    out.sort(pairLess)
+    i64 i = 1
+    for i < out.len {
+        a := out.at(i - 1)
+        b := out.at(i)
+        if a.k == b.k {
+            a.v.append(",")
+            a.v.append(b.v)
+            out.set(i - 1, a)
+            b.k.free()
+            b.v.free()
+            _ = out.remove(i)
+            continue
+        }
+        i += 1
+    }
+}
+
+void appendSignedNames(String *out, List[Pair] *hs) {
+    for i in 0..hs.len {
+        h := hs.at(i)
+        if i > 0 {
+            out.append(";")
+        }
+        out.append(h.k)
+    }
+}
+
+void appendHex(String *out, str bytes) {
+    scoped String h = hex.encode(bytes)
+    out.append(h)
+}
+
+// The signature of the canonical request creq, made at stamp
+// (20130524T000000Z), as hex.
+String Signer.signature(str stamp, str scope, str creq) {
+    String toSign
+    defer toSign.free()
+    toSign.append("AWS4-HMAC-SHA256\n")
+    toSign.append(stamp)
+    toSign.append("\n")
+    toSign.append(scope)
+    toSign.append("\n")
+    hash := crypto.sha256(creq)
+    appendHex(&toSign, hash[0:32])
+    scoped String secret = format("AWS4{self.secretKey}")
+    k1 := crypto.hmacSha256(secret, stamp[0:8])
+    k2 := crypto.hmacSha256(k1[0:32], self.region)
+    k3 := crypto.hmacSha256(k2[0:32], self.service)
+    k4 := crypto.hmacSha256(k3[0:32], "aws4_request")
+    sig := crypto.hmacSha256(k4[0:32], toSign)
+    return hex.encode(sig[0:32])
+}
+
+String stampOf(time.Time now) => (if now.ns == 0 { time.now() } else { now }).utc().format("YYYYMMDDThhmmssZ")
+
+// The header lines that sign a request with body: Authorization,
+// X-Amz-Date, X-Amz-Content-Sha256 for S3, and X-Amz-Security-Token with a
+// session token. headers are the request's own, as "Name: value"; each is
+// signed, so it must be sent as it is. The Host header comes from the URL
+// when headers has none. now is the time of the request, the clock's when
+// it is left out.
+pub !List[String] Signer.sign(str method, str address, str[] headers = [], str body = "", time.Time now = time.Time{}) {
+    hash := crypto.sha256(body)
+    scoped String h = hex.encode(hash[0:32])
+    return try self.signHash(method, address, headers, h, now)
+}
+
+// sign for a body given by its SHA-256 as hex, or UNSIGNED.
+pub !List[String] Signer.signHash(str method, str address, str[] headers, str payloadHash, time.Time now = time.Time{}) {
+    t := try targetOf(address)
+    scoped String stamp = stampOf(now)
+    List[String] added
+    errdefer added.freeEach()
+    added.push(format("X-Amz-Date: {stamp}"))
+    if self.service == "s3" {
+        added.push(format("X-Amz-Content-Sha256: {payloadHash}"))
+    }
+    if self.sessionToken.len > 0 {
+        added.push(format("X-Amz-Security-Token: {self.sessionToken}"))
+    }
+    List[Pair] hs
+    defer freePairs(&hs)
+    try headerPairs(&hs, t.host, headers, &added)
+    List[Pair] qs
+    defer freePairs(&qs)
+    try queryPairs(&qs, t.query)
+    String creq
+    defer creq.free()
+    creq.append(method)
+    creq.append("\n")
+    canonicalPath(&creq, t.path, self.service != "s3")
+    creq.append("\n")
+    appendQuery(&creq, &qs)
+    creq.append("\n")
+    for p in hs {
+        creq.append(p.k)
+        creq.append(":")
+        creq.append(p.v)
+        creq.append("\n")
+    }
+    creq.append("\n")
+    appendSignedNames(&creq, &hs)
+    creq.append("\n")
+    creq.append(payloadHash)
+    scoped String scope = format("{stamp[0:8]}/{self.region}/{self.service}/aws4_request")
+    scoped String sig = self.signature(stamp, scope, creq)
+    String auth = format("Authorization: AWS4-HMAC-SHA256 Credential={self.accessKey}/{scope}, SignedHeaders=")
+    appendSignedNames(&auth, &hs)
+    auth.append(", Signature=")
+    auth.append(sig)
+    added.push(auth)
+    return added
+}
+
+// The URL with a signature in its query, good for expires (at most 7
+// days) from now: anyone who has it can make that request, with no header
+// of their own. Only the Host header is signed, and the body isn't.
+pub !String Signer.presign(str method, str address, Duration expires = 15m, time.Time now = time.Time{}) {
+    t := try targetOf(address)
+    scoped String stamp = stampOf(now)
+    scoped String scope = format("{stamp[0:8]}/{self.region}/{self.service}/aws4_request")
+    List[Pair] qs
+    defer freePairs(&qs)
+    try queryPairs(&qs, t.query)
+    scoped String cred = format("{self.accessKey}/{scope}")
+    qs.push(Pair{k: "X-Amz-Algorithm".copy(), v: "AWS4-HMAC-SHA256".copy()})
+    qs.push(Pair{k: "X-Amz-Credential".copy(), v: url.encode(cred)})
+    qs.push(Pair{k: "X-Amz-Date".copy(), v: stamp.copy()})
+    qs.push(Pair{k: "X-Amz-Expires".copy(), v: format("{expires / 1s}")})
+    if self.sessionToken.len > 0 {
+        qs.push(Pair{k: "X-Amz-Security-Token".copy(), v: url.encode(self.sessionToken)})
+    }
+    qs.push(Pair{k: "X-Amz-SignedHeaders".copy(), v: "host".copy()})
+    scoped String query
+    appendQuery(&query, &qs)
+    String creq
+    defer creq.free()
+    creq.append(method)
+    creq.append("\n")
+    canonicalPath(&creq, t.path, self.service != "s3")
+    creq.append("\n")
+    creq.append(query)
+    creq.append("\nhost:")
+    creq.append(t.host)
+    creq.append("\n\nhost\n")
+    creq.append(UNSIGNED)
+    scoped String sig = self.signature(stamp, scope, creq)
+    base, _, _ := str.cut(address, "?")
+    return format("{base}?{query}&X-Amz-Signature={sig}")
+}
+
+// ------------------------------------------------------------ tests
+
+// The examples of the AWS documentation.
+Signer example() => Signer{accessKey: "AKIAIOSFODNN7EXAMPLE", secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}
+
+time.Time may24() => time.date(2013, 5, 24)
+
+test "an S3 GET with a Range" {
+    s := example()
+    hs := try s.sign("GET", "https://examplebucket.s3.amazonaws.com/test.txt", ["Range: bytes=0-9"], now: may24())
+    defer hs.freeEach()
+    expect(hs.len == 3)
+    expect(hs.at(0) == "X-Amz-Date: 20130524T000000Z")
+    expect(hs.at(1) == "X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    expect(hs.at(2) == "Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41", hs.at(2))
+}
+
+test "a presigned S3 URL" {
+    s := example()
+    scoped String u = try s.presign("GET", "https://examplebucket.s3.amazonaws.com/test.txt", 86400s, may24())
+    expect(str.endsWith(u, "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"), u)
+    expect(str.startsWith(u, "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&"), u)
+}
+
+test "another service (get-vanilla)" {
+    s := Signer{accessKey: "AKIDEXAMPLE", secretKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", service: "service"}
+    hs := try s.sign("GET", "https://example.amazonaws.com/", now: time.date(2015, 8, 30, 12, 36))
+    defer hs.freeEach()
+    expect(hs.len == 2)
+    expect(str.endsWith(hs.at(1), "SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"), hs.at(1))
+}
+
+test "bad input" {
+    s := example()
+    _ = s.sign("GET", "ftp://x/y") catch e {
+        expect(e.code == SignError.invalid)
+        List[String]{}
+    }
+    _ = s.sign("GET", "https://x/y", ["no colon"]) catch e {
+        expect(e.code == SignError.invalid)
+        List[String]{}
+    }
+}

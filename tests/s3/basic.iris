@@ -1,0 +1,118 @@
+// expect: bucket made, again: S3Error.conflict
+// expect: put and got: hello, s3 (10 bytes, text/plain)
+// expect: range: llo
+// expect: a missing key: S3Error.notFound, exists: false
+// expect: 5 objects, a/2.txt 3 bytes
+// expect: under a/: 3, grouped: a/ b/ top.txt
+// expect: pages of 2: 2 2 1
+// expect: a key with spaces and +: ok
+// expect: multipart: 11534336 bytes, 3 parts, same: true
+// expect: aborted: S3Error.notFound
+// expect: presigned GET: 200 hello, s3
+// expect: presigned PUT then get: from a link
+// expect: wrong secret: S3Error.denied
+// expect: not empty: S3Error.conflict
+// expect: removed: S3Error.notFound
+
+import http, os, s3, str
+
+!void main() {
+    c := s3.Client{endpoint: try os.env("IRIS_S3_URL"), accessKey: try os.env("IRIS_S3_KEY"), secretKey: try os.env("IRIS_S3_SECRET")}
+    defer c.close()
+    try c.createBucket("iris-test")
+    c.createBucket("iris-test") catch e {
+        print("bucket made, again: {e.code}")
+    }
+    try c.put("iris-test", "hello.txt", "hello, s3\n", "text/plain")
+    scoped String got = try c.get("iris-test", "hello.txt")
+    scoped info := try c.head("iris-test", "hello.txt")
+    print("put and got: {str.trim(got)} ({info.size} bytes, {info.contentType})")
+    scoped String part = try c.getRange("iris-test", "hello.txt", 2, 4)
+    print("range: {part}")
+    _ = c.get("iris-test", "nope.txt") catch e {
+        print("a missing key: {e.code}, exists: {try c.exists("iris-test", "nope.txt")}")
+        "".copy()
+    }
+    for k in ["a/1.txt", "a/2.txt", "a/b/3.txt", "b/4.txt", "top.txt"] {
+        try c.put("iris-test", k, k[0:3])
+    }
+    try c.delete("iris-test", "hello.txt")
+    scoped all := try c.list("iris-test")
+    print("{all.objects.len} objects, {all.objects.at(1).key} {all.objects.at(1).size} bytes")
+    scoped under := try c.list("iris-test", prefix: "a/")
+    scoped grouped := try c.list("iris-test", delimiter: "/")
+    print("under a/: {under.objects.len}, grouped: {grouped.prefixes.at(0)} {grouped.prefixes.at(1)} {grouped.objects.at(0).key}")
+    String after
+    String sizes
+    for {
+        scoped page := try c.list("iris-test", after: after, max: 2)
+        scoped String n = format("{if sizes.len > 0 { " " } else { "" }}{page.objects.len}")
+        sizes.append(n)
+        after.free()
+        after = page.next.copy()
+        if !page.truncated {
+            break
+        }
+    }
+    after.free()
+    print("pages of 2: {sizes}")
+    sizes.free()
+    try c.put("iris-test", "odd name/a b+c.txt", "x")
+    scoped String odd = try c.get("iris-test", "odd name/a b+c.txt")
+    print("a key with spaces and +: {if odd == "x" { "ok" } else { "wrong" }}")
+    try c.delete("iris-test", "odd name/a b+c.txt")
+
+    String big
+    for big.len < 11MiB {
+        scoped String line = format("line {big.len}\n")
+        big.append(line)
+    }
+    big.truncate(11MiB)
+    try c.putLarge("iris-test", "big.bin", big, partSize: 5MiB)
+    scoped String back = try c.get("iris-test", "big.bin")
+    scoped bi := try c.head("iris-test", "big.bin")
+    print("multipart: {back.len} bytes, {if str.endsWith(bi.etag, "-3") { 3 } else { 0 }} parts, same: {back == big}")
+    big.free()
+    try c.delete("iris-test", "big.bin")
+    {
+        scoped up := try c.startUpload("iris-test", "dropped.bin")
+        try up.part("only part")
+        try up.abort()
+        up.part("more") catch e {
+            print("aborted: {e.code}")
+        }
+    }
+
+    try c.put("iris-test", "hello.txt", "hello, s3")
+    scoped String link = try c.presign("GET", "iris-test", "hello.txt", 5m)
+    scoped r := try http.get(link)
+    print("presigned GET: {r.status} {r.body}")
+    scoped String putLink = try c.presign("PUT", "iris-test", "linked.txt", 5m)
+    scoped r2 := try http.send("PUT", putLink, "from a link")
+    scoped String linked = try c.get("iris-test", "linked.txt")
+    print("presigned PUT then get: {linked}")
+
+    wrong := s3.Client{endpoint: c.endpoint, accessKey: c.accessKey, secretKey: "nope"}
+    defer wrong.close()
+    _ = wrong.get("iris-test", "hello.txt") catch e {
+        print("wrong secret: {e.code}")
+        "".copy()
+    }
+    c.deleteBucket("iris-test") catch e {
+        print("not empty: {e.code}")
+    }
+    for {
+        scoped left := try c.list("iris-test")
+        for o in left.objects {
+            try c.delete("iris-test", o.key)
+        }
+        if !left.truncated {
+            break
+        }
+    }
+    try c.deleteBucket("iris-test")
+    _ = c.list("iris-test") catch e {
+        print("removed: {e.code}")
+        s3.Listing{}
+    }
+}

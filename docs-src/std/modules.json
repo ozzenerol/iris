@@ -59,12 +59,15 @@
       {"name": "grpc", "title": "gRPC", "summary": "gRPC clients and servers over HTTP/2 with @proto messages: unary calls, streams, metadata and deadlines."},
       {"name": "ssh", "title": "SSH", "summary": "An SSH client and server: commands, shells, forwarding both ways, SFTP and scp, keys of every kind, certificates and agents."},
       {"name": "mqtt", "title": "MQTT", "summary": "A client for MQTT 5 and 3.1.1 brokers, and a broker: messages published to topics reach the clients subscribed to them."},
-      {"name": "acme", "title": "ACME", "summary": "Certificates from Let's Encrypt and other ACME authorities, proved with a file on port 80 or a DNS record."}
+      {"name": "acme", "title": "ACME", "summary": "Certificates from Let's Encrypt and other ACME authorities, proved with a file on port 80 or a DNS record."},
+      {"name": "s3", "title": "S3", "summary": "Objects in Amazon S3, MinIO and other servers that speak its API: put, get, list, uploads in parts and presigned URLs."},
+      {"name": "sigv4", "title": "AWS signatures", "summary": "AWS Signature Version 4 for requests and presigned URLs, for S3 and the other AWS APIs."}
     ]},
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},
       {"name": "pg", "title": "PostgreSQL", "summary": "A PostgreSQL driver in Iris, with a pool and transactions."},
-      {"name": "redis", "title": "Redis", "summary": "A Redis and Valkey client, with pipelines and pub/sub."}
+      {"name": "redis", "title": "Redis", "summary": "A Redis and Valkey client, with pipelines and pub/sub."},
+      {"name": "mysql", "title": "MySQL", "summary": "A MySQL and MariaDB driver in Iris, with prepared statements, a pool and transactions."}
     ]}
   ]
 }

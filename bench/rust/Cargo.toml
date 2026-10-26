@@ -38,6 +38,9 @@ tonic = "0.14"
 tonic-prost = "0.14"
 http = "1"
 tower-service = "0.3"
+aws-sigv4 = "1"
+aws-credential-types = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "derive"] }
 
 [profile.release]
 opt-level = 3
@@ -246,3 +249,9 @@ path = "../cbor/main.rs"
 [[bin]]
 name = "grpc"
 path = "../grpc/main.rs"
+name = "sigv4"
+path = "../sigv4/main.rs"
+
+[[bin]]
+name = "mysql-query"
+path = "../mysql-query/main.rs"

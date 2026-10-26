@@ -1,0 +1,35 @@
+// expect: c736ad19797d277b4fd4923ee6d10af7c80a924b1466b4dce251e4e2fcfd136a
+// expect: a7ab02f821af6310539d029be60512f2f4de5f04b6051959067aa624e20a8ad4
+
+import crypto, hex
+
+// SHA-256 of every length from 0 to 1099 bytes, which crosses the block
+// and padding edges, and HMACs with keys shorter and longer than a block.
+void main() {
+    String d
+    defer d.free()
+    for i in 0..1100 {
+        u8[1] b = [u8((i * 7 + 3) & 255)]
+        d.append(b[0:1])
+    }
+    String all
+    defer all.free()
+    for n in 0..1100 {
+        h := crypto.sha256(d[0:n])
+        all.append(h[0:32])
+    }
+    sum := crypto.sha256(all)
+    scoped String a = hex.encode(sum[0:32])
+    print(a)
+    String macs
+    defer macs.free()
+    for n in 0..200 {
+        if n % 3 == 0 {
+            m := crypto.hmacSha256(d[0:n], d[n:n + 130])
+            macs.append(m[0:32])
+        }
+    }
+    msum := crypto.sha256(macs)
+    scoped String b = hex.encode(msum[0:32])
+    print(b)
+}

@@ -12236,8 +12236,20 @@ static void shaInit(Sha256 *s) {
     s->used = 0;
 }
 
+static int shaHwBlocks(uint32_t h[8], const unsigned char *p, size_t blocks);
+
 static void shaAdd(Sha256 *s, const unsigned char *p, size_t n) {
     s->len += n;
+    if (s->used == 0 && n >= 64) {
+        /* whole blocks straight from p, with the CPU's SHA instructions
+           when it has them */
+        size_t blocks = n / 64;
+        if (!shaHwBlocks(s->h, p, blocks)) {
+            for (size_t i = 0; i < blocks; i++) shaBlock(s, p + 64 * i);
+        }
+        p += 64 * blocks;
+        n -= 64 * blocks;
+    }
     while (n > 0) {
         size_t take = 64 - s->used < n ? 64 - s->used : n;
         memcpy(s->block + s->used, p, take);
@@ -12245,7 +12257,7 @@ static void shaAdd(Sha256 *s, const unsigned char *p, size_t n) {
         p += take;
         n -= take;
         if (s->used == 64) {
-            shaBlock(s, s->block);
+            if (!shaHwBlocks(s->h, s->block, 1)) shaBlock(s, s->block);
             s->used = 0;
         }
     }
@@ -12253,13 +12265,11 @@ static void shaAdd(Sha256 *s, const unsigned char *p, size_t n) {
 
 static void shaEnd(Sha256 *s, unsigned char out[32]) {
     uint64_t bits = s->len * 8;
-    unsigned char pad = 0x80;
-    shaAdd(s, &pad, 1);
-    unsigned char zero = 0;
-    while (s->used != 56) shaAdd(s, &zero, 1);
-    unsigned char lenBytes[8];
-    for (int i = 0; i < 8; i++) lenBytes[i] = (unsigned char)(bits >> (56 - 8 * i));
-    shaAdd(s, lenBytes, 8);
+    /* 0x80, zeros up to 56 bytes into a block, then the length in bits */
+    unsigned char pad[72] = {0x80};
+    size_t zeros = (s->used < 56 ? 56 - s->used : 120 - s->used) - 1;
+    for (int i = 0; i < 8; i++) pad[1 + zeros + i] = (unsigned char)(bits >> (56 - 8 * i));
+    shaAdd(s, pad, 1 + zeros + 8);
     for (int i = 0; i < 8; i++) {
         out[i * 4] = (unsigned char)(s->h[i] >> 24);
         out[i * 4 + 1] = (unsigned char)(s->h[i] >> 16);
@@ -19202,4 +19212,161 @@ int iris_proto_decode(const JsonType *t, const char *data, int64_t len, char *ou
 /* proto.encodeTo: the same, for a String that may hold bytes already. */
 void iris_proto_encode_to(const JsonType *t, const char *value, IrisString *out) {
     pbWrite(out, pbPlan(t), value);
+/* ---------------------------------------------------------------- SHA-256 instructions (0.82)
+   SHA-256 blocks with the CPU's own instructions: SHA-NI on x86_64, the
+   SHA2 extension on arm64. shaHwBlocks gives 0 when there are none, and
+   shaAdd then uses shaBlock. IRIS_SHA_SOFT=1 turns them off, for tests. */
+
+static int shaHw = -1;
+
+static int shaHasHw(void) {
+    if (shaHw < 0) {
+        int hw = 0;
+        if (!getenv("IRIS_SHA_SOFT")) {
+#if defined(__x86_64__)
+            unsigned a, b, c, d;
+            __asm__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
+            int sha = (b >> 29) & 1;
+            __asm__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+            hw = sha && ((c >> 19) & 1) && ((c >> 9) & 1);    /* SHA, SSE4.1, SSSE3 */
+#elif defined(__aarch64__) && defined(__APPLE__)
+            hw = 1;
+#elif defined(__aarch64__) && defined(__linux__)
+            hw = (getauxval(AT_HWCAP) & (1UL << 6)) != 0;         /* HWCAP_SHA2 */
+#endif
+        }
+        shaHw = hw;
+    }
+    return shaHw;
+}
+
+#if defined(__x86_64__)
+#include <immintrin.h>
+
+__attribute__((target("sha,sse4.1,ssse3"))) static void shaNiBlocks(uint32_t h[8], const unsigned char *p, size_t blocks) {
+    const __m128i swap = _mm_set_epi64x(0x0c0d0e0f08090a0bULL, 0x0405060700010203ULL);
+    __m128i tmp = _mm_loadu_si128((const __m128i *)&h[0]);
+    __m128i st1 = _mm_loadu_si128((const __m128i *)&h[4]);
+    tmp = _mm_shuffle_epi32(tmp, 0xB1);              /* CDAB */
+    st1 = _mm_shuffle_epi32(st1, 0x1B);              /* EFGH */
+    __m128i st0 = _mm_alignr_epi8(tmp, st1, 8);      /* ABEF */
+    st1 = _mm_blend_epi16(st1, tmp, 0xF0);           /* CDGH */
+    for (; blocks > 0; blocks--, p += 64) {
+        __m128i save0 = st0, save1 = st1;
+        __m128i w[4];
+        for (int g = 0; g < 16; g++) {
+            __m128i m;
+            if (g < 4) {
+                m = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16 * g)), swap);
+            } else {
+                /* W[t-16] + s0(W[t-15]) + W[t-7], then the s1 terms */
+                m = _mm_sha256msg1_epu32(w[g & 3], w[(g + 1) & 3]);
+                m = _mm_add_epi32(m, _mm_alignr_epi8(w[(g + 3) & 3], w[(g + 2) & 3], 4));
+                m = _mm_sha256msg2_epu32(m, w[(g + 3) & 3]);
+            }
+            w[g & 3] = m;
+            __m128i k = _mm_add_epi32(m, _mm_loadu_si128((const __m128i *)&shaK[4 * g]));
+            st1 = _mm_sha256rnds2_epu32(st1, st0, k);
+            st0 = _mm_sha256rnds2_epu32(st0, st1, _mm_shuffle_epi32(k, 0x0E));
+        }
+        st0 = _mm_add_epi32(st0, save0);
+        st1 = _mm_add_epi32(st1, save1);
+    }
+    tmp = _mm_shuffle_epi32(st0, 0x1B);              /* FEBA */
+    st1 = _mm_shuffle_epi32(st1, 0xB1);              /* DCHG */
+    st0 = _mm_blend_epi16(tmp, st1, 0xF0);           /* DCBA */
+    st1 = _mm_alignr_epi8(st1, tmp, 8);              /* HGFE */
+    _mm_storeu_si128((__m128i *)&h[0], st0);
+    _mm_storeu_si128((__m128i *)&h[4], st1);
+}
+#elif defined(__aarch64__)
+__attribute__((target("sha2"))) static void shaArmBlocks(uint32_t h[8], const unsigned char *p, size_t blocks) {
+    uint32x4_t st0 = vld1q_u32(&h[0]), st1 = vld1q_u32(&h[4]);
+    for (; blocks > 0; blocks--, p += 64) {
+        uint32x4_t save0 = st0, save1 = st1;
+        uint32x4_t w[4];
+        for (int g = 0; g < 16; g++) {
+            uint32x4_t m;
+            if (g < 4) {
+                m = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 16 * g)));
+            } else {
+                m = vsha256su1q_u32(vsha256su0q_u32(w[g & 3], w[(g + 1) & 3]), w[(g + 2) & 3], w[(g + 3) & 3]);
+            }
+            w[g & 3] = m;
+            uint32x4_t k = vaddq_u32(m, vld1q_u32(&shaK[4 * g]));
+            uint32x4_t prev = st0;
+            st0 = vsha256hq_u32(st0, st1, k);
+            st1 = vsha256h2q_u32(st1, prev, k);
+        }
+        st0 = vaddq_u32(st0, save0);
+        st1 = vaddq_u32(st1, save1);
+    }
+    vst1q_u32(&h[0], st0);
+    vst1q_u32(&h[4], st1);
+}
+#endif
+
+static int shaHwBlocks(uint32_t h[8], const unsigned char *p, size_t blocks) {
+    if (!shaHasHw()) return 0;
+#if defined(__x86_64__)
+    shaNiBlocks(h, p, blocks);
+    return 1;
+#elif defined(__aarch64__)
+    shaArmBlocks(h, p, blocks);
+    return 1;
+#else
+    (void)h; (void)p; (void)blocks;
+    return 0;
+#endif
+}
+
+/* ---------------------------------------------------------------- RSA-OAEP (0.82)
+   RSA encryption with OAEP padding, for MySQL's caching_sha2_password over
+   a connection without TLS. hash: 0 SHA-1 (what MySQL uses), 1 SHA-256. */
+
+static struct {
+    int loaded;
+    void *(*ctxNew)(void *, void *);
+    void (*ctxFree)(void *);
+    int (*encryptInit)(void *);
+    int (*encrypt)(void *, unsigned char *, size_t *, const unsigned char *, size_t);
+    int (*setOaepMd)(void *, const void *);
+} oaep;
+
+static pthread_once_t oaepOnce = PTHREAD_ONCE_INIT;
+
+static void oaepLoad(void) {
+    if (!pkReady()) return;
+    void *c = ossl.cryptoLib;
+    *(void **)&oaep.ctxNew = dlsym(c, "EVP_PKEY_CTX_new");
+    *(void **)&oaep.ctxFree = dlsym(c, "EVP_PKEY_CTX_free");
+    *(void **)&oaep.encryptInit = dlsym(c, "EVP_PKEY_encrypt_init");
+    *(void **)&oaep.encrypt = dlsym(c, "EVP_PKEY_encrypt");
+    *(void **)&oaep.setOaepMd = dlsym(c, "EVP_PKEY_CTX_set_rsa_oaep_md");     /* OpenSSL 3 */
+    oaep.loaded = oaep.ctxNew && oaep.ctxFree && oaep.encryptInit && oaep.encrypt;
+}
+
+int iris_pk_encrypt_oaep(void *key, const char *data, int64_t len, int hash, IrisString *out) {
+    pthread_once(&oaepOnce, oaepLoad);
+    if (!oaep.loaded) {
+        tlsSay("RSA encryption needs OpenSSL's libcrypto");
+        return 0;
+    }
+    void *ctx = oaep.ctxNew(key, NULL);
+    int ok = ctx && oaep.encryptInit(ctx) == 1;
+    /* RSA_PKCS1_OAEP_PADDING */
+    ok = ok && (pk.setPadding ? pk.setPadding(ctx, 4) == 1 : pk.pkeyCtrl(ctx, 6, -1, 0x1001, 4, NULL) == 1);
+    if (ok && hash == 1) {
+        const void *md = pk.md[1]();
+        ok = oaep.setOaepMd ? oaep.setOaepMd(ctx, md) == 1 : pk.pkeyCtrl(ctx, 6, 0x300, 0x1009, 0, (void *)md) == 1;
+    }
+    size_t n = 0;
+    ok = ok && oaep.encrypt(ctx, NULL, &n, (const unsigned char *)data, (size_t)len) == 1;
+    unsigned char *buf = ok ? malloc(n ? n : 1) : NULL;
+    ok = ok && buf && oaep.encrypt(ctx, buf, &n, (const unsigned char *)data, (size_t)len) == 1;
+    if (ok) iris_string_append(out, (const char *)buf, (int64_t)n);
+    else tlsSayOpenssl("encrypting with RSA");
+    free(buf);
+    if (ctx) oaep.ctxFree(ctx);
+    return ok;
 }

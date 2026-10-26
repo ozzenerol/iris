@@ -15,7 +15,10 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt",
-       "protobuf", "msgpack", "cbor"]
+       "protobuf", "msgpack", "cbor", "sigv4", "mysql-query"]
+# benchmarks that talk to a database server: the tools/ script that starts
+# one, the variable it sets, and the one the programs read
+DB = {"mysql-query": ("mysql-server.sh", "IRIS_MYSQL_URL", "IRIS_BENCH_MYSQL")}
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
 NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk", "grpc"]
@@ -161,6 +164,25 @@ def serve(binary, name):
         time.sleep(0.5)
 
 
+def start_db(name):
+    """Starts the database server a benchmark needs: the folder to stop it
+    with, or None."""
+    if name not in DB:
+        return None
+    script, var, env = DB[name]
+    out = subprocess.run([f"{HERE}/../tools/{script}", "start"], capture_output=True, text=True).stdout
+    found = dict(re.findall(r"(IRIS_\w+)='([^']*)'", out))
+    if var not in found:
+        sys.exit(f"{name}: tools/{script} couldn't start a server")
+    os.environ[env] = found[var]
+    return [v for k, v in found.items() if k.endswith("_DIR")][0]
+
+
+def stop_db(name, folder):
+    if folder:
+        subprocess.run([f"{HERE}/../tools/{DB[name][0]}", "stop", folder], capture_output=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--iris", default=shutil.which("iris") or "iris")
@@ -173,6 +195,7 @@ def main():
     build(names, a.iris)
     data = json.load(open(a.out)) if os.path.exists(a.out) else {"results": {}}
     for n in names:
+        folder = start_db(n)
         r = {}
         for lang in a.langs.split(","):
             b = f"{OUT}/{lang}-{SAME_AS.get(n, n)}"
@@ -190,6 +213,7 @@ def main():
         if (n in CPU or n in LIB) and "rust_out" in r and len({r["iris_out"], r["rust_out"]}) != 1:
             print(f"warning: {n}: iris and rust print different results", flush=True)
         data["results"][n] = r
+        stop_db(n, folder)
     cpu = re.search(r"model name\s*:\s*(.*)", open("/proc/cpuinfo").read())
     data["setup"] = {
         "machine": f"{platform.node()}, {cpu.group(1) if cpu else platform.machine()}, {os.cpu_count()} threads",

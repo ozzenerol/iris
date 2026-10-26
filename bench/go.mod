@@ -4,8 +4,10 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/aws/aws-sdk-go-v2 v1.47.4
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fxamacker/cbor/v2 v2.9.6
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/pkg/sftp v1.13.12
 	github.com/vmihailenco/msgpack/v5 v5.4.1
@@ -16,6 +18,8 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/aws/smithy-go v1.28.6 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/rs/xid v1.4.0 // indirect
