@@ -19212,6 +19212,8 @@ int iris_proto_decode(const JsonType *t, const char *data, int64_t len, char *ou
 /* proto.encodeTo: the same, for a String that may hold bytes already. */
 void iris_proto_encode_to(const JsonType *t, const char *value, IrisString *out) {
     pbWrite(out, pbPlan(t), value);
+}
+
 /* ---------------------------------------------------------------- SHA-256 instructions (0.82)
    SHA-256 blocks with the CPU's own instructions: SHA-NI on x86_64, the
    SHA2 extension on arm64. shaHwBlocks gives 0 when there are none, and

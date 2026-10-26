@@ -235,6 +235,8 @@ path = "../sftp/main.rs"
 [[bin]]
 name = "mqtt"
 path = "../mqtt/main.rs"
+
+[[bin]]
 name = "protobuf"
 path = "../protobuf/main.rs"
 
@@ -249,6 +251,8 @@ path = "../cbor/main.rs"
 [[bin]]
 name = "grpc"
 path = "../grpc/main.rs"
+
+[[bin]]
 name = "sigv4"
 path = "../sigv4/main.rs"
 
