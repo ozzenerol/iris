@@ -44,6 +44,8 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 prometheus = { version = "0.14", default-features = false }
 opentelemetry-proto = { version = "0.31", default-features = false, features = ["trace", "gen-tonic-messages", "with-serde"] }
 serde_json = "1"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 
 [profile.release]
 opt-level = 3
@@ -270,3 +272,7 @@ path = "../metrics/main.rs"
 [[bin]]
 name = "tracing"
 path = "../tracing/main.rs"
+
+[[bin]]
+name = "quic"
+path = "../quic/main.rs"

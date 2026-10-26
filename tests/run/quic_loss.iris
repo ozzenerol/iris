@@ -1,0 +1,72 @@
+// env: IRIS_QUIC_DROP=5
+// expect: connected
+// expect: 20 streams echoed
+// expect: big 400000 same
+
+// One datagram in twenty that each side gets is dropped on the way in: the
+// handshake, the streams and a larger transfer still get through.
+
+import net, quic
+
+void echo(quic.Stream s) {
+    defer s.close()
+    scoped String all = s.readAll() catch e {
+        return
+    }
+    s.write(all) catch e { }
+    s.closeWrite()
+}
+
+void handle(quic.Conn c) {
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        spawn echo(s)
+    }
+    c.close()
+}
+
+void serve(quic.Listener ln) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        spawn handle(c)
+    }
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    ln := try quic.listen(0, &config, quic.Config{alpn: "echo"}, "127.0.0.1")
+    spawn serve(ln)
+    c := try quic.dial("127.0.0.1", ln.port, quic.Config{alpn: "echo", ca: "tests/data/tls/ca.pem", serverName: "localhost"})
+    print("connected")
+    i64 ok = 0
+    for i in 0..20 {
+        t := try c.openStream()
+        try t.write("stream {i}")
+        t.closeWrite()
+        scoped String back = try t.readAll()
+        t.close()
+        scoped String want = format("stream {i}")
+        if back == want {
+            ok += 1
+        }
+    }
+    print("{ok} streams echoed")
+    b := try c.openStream()
+    u8[] mem = alloc(u8, 400000)
+    defer free(mem)
+    for i in 0..mem.len {
+        mem[i] = u8(i % 251)
+    }
+    str block = mem
+    try b.write(block)
+    b.closeWrite()
+    scoped String all = try b.readAll()
+    b.close()
+    print("big {all.len} {if all == block { "same" } else { "different" }}")
+    c.close()
+    ln.close()
+}

@@ -1,0 +1,311 @@
+// QUIC (RFC 9000, 9001, 9002): connections over UDP with TLS 1.3 built in,
+// each carrying many streams of bytes that don't hold each other up. A
+// client dials a server; a server listens on a UDP port and accepts the
+// connections clients start. Packets lost on the way are found and sent
+// again, and NewReno keeps the sender from flooding the path. TLS comes
+// from OpenSSL 3.5 or later.
+//
+// A connection and its streams belong to the thread that dialed or
+// accepted it. Its tasks run there, alongside the program's.
+
+import net, random, time
+
+// What QUIC calls fail with: closed once the connection or stream ended,
+// timeout when nothing came for too long, refused when the server turned
+// the connection down, tls when the handshake failed, protocol when the
+// peer broke the rules, reset when the peer reset a stream, stopped when it
+// stopped reading one, tooLarge for a stream longer than readAll's limit.
+pub enum QuicError { closed, timeout, refused, tls, protocol, reset, stopped, tooLarge }
+
+// The settings of a connection. A client sets alpn, and serverName when
+// the name to check the certificate against isn't the host it dials.
+pub struct Config {
+    // the application protocols to offer, as "h3" or "h3,hq-interop"; a
+    // server takes the first of the client's it has too
+    pub str alpn = "h3"
+    // the name the server's certificate must have; the host dialed when ""
+    pub str serverName
+    // a file of the certificates to trust instead of the system's
+    pub str ca
+    // a client's own certificate and key, as PEM files
+    pub str cert
+    pub str key
+    // a connection that hears nothing for this long ends
+    pub Duration idleTimeout = 30s
+    // how long dial waits for the handshake
+    pub Duration handshakeTimeout = 10s
+    // how many streams each way the peer may have open at once
+    pub i64 maxStreams = 100
+    pub i64 maxUniStreams = 100
+    // what the peer may send before we read it: on each stream, and on
+    // the connection in all
+    pub i64 streamWindow = 1MiB
+    pub i64 connWindow = 16MiB
+    // what a stream's writes may hold before they wait for the peer
+    pub i64 streamBuffer = 1MiB
+    // a server's limits: connections at once, and handshakes done that
+    // wait for accept
+    pub i64 maxConnections = 10000
+    pub i64 backlog = 256
+}
+
+// A connection, from dial or accept. close lets go of it.
+pub struct Conn {
+    Link *l
+}
+
+// A server: a UDP port and the connections that come to it.
+pub struct Listener {
+    Endpoint *ep
+    // the port it listens on, as listen(0) picked it
+    pub u16 port
+}
+
+!net.Addr resolve(str host, u16 port) {
+    a := net.ip(host, port) catch e {
+        scoped addrs := try net.lookup(host)
+        if addrs.len == 0 {
+            return error(net.NetError.notFound, "{host} has no address")
+        }
+        net.Addr found = addrs.at(0)
+        found.port = port
+        return found
+    }
+    return a
+}
+
+// Connects to a QUIC server and runs the handshake. The server's
+// certificate must be for host, or for config.serverName.
+pub !Conn dial(str host, u16 port, Config config = Config{}) {
+    addr := try resolve(host, port)
+    sock := try net.listenUdp(0, "")
+    ep := newEndpoint(sock, false, config)
+    if config.serverName.len == 0 {
+        ep.config.serverName = host
+    }
+    l := newLink(ep, ep.config, false, addr)
+    l.dcidLen = 8
+    random.bytes(l.dcid[0:8])
+    l.odcid = l.dcid
+    l.odcidLen = 8
+    sp := &l.sp[SP_INITIAL]
+    rawInitialKeys(&l.dcid[0], l.dcidLen, 0, &sp.rkey, &sp.wkey)
+    if !l.startTls() {
+        why := l.why.copy()
+        l.destroy()
+        rawClose(sock.fd())
+        ep.links.free()
+        ep.accepted.free()
+        free(ep[0:1])
+        defer why.free()
+        return error(QuicError.tls, why)
+    }
+    l.stepTls()
+    ep.only = l
+    ep.live = 1
+    spawn ep.run()
+    spawn l.drive()
+    deadline := time.clock() + ep.config.handshakeTimeout
+    bool late = false
+    for !l.tlsDone && !l.ended() {
+        left := deadline - time.clock()
+        if left <= 0s {
+            late = true
+            break
+        }
+        l.users += 1
+        select {
+            _ := <-l.ready => {}
+            after(left) => {}
+        }
+        l.users -= 1
+    }
+    if !l.tlsDone || l.ended() {
+        code := if late { QuicError.timeout } else { l.whyCode }
+        String why = if late {
+            format("dialing {host}: no handshake within {ep.config.handshakeTimeout}")
+        } else if l.why.len > 0 { l.why.copy() } else { "the handshake failed".copy() }
+        defer why.free()
+        l.released = true
+        if !l.ended() {
+            l.startClose(E_NO_ERROR, false, "")
+        }
+        l.poke()
+        return error(code, why)
+    }
+    return Conn{l: l}
+}
+
+// Listens for QUIC on a UDP port of host ("" for every address), with
+// the certificates of tls. Several listeners, one per thread, can share a
+// port: each client's datagrams go to one of them.
+pub !Listener listen(u16 port, net.TlsConfig *tls, Config config = Config{}, str host = "") {
+    sock := try net.listenUdp(port, host)
+    // the server offers what config.alpn names
+    alpn := wireAlpn(config.alpn)
+    defer alpn.free()
+    tls.offerProtocols(alpn) catch e {
+        rawClose(sock.fd())
+        return e
+    }
+    ep := newEndpoint(sock, true, config)
+    ep.tls = tls
+    spawn ep.run()
+    return Listener{ep: ep, port: sock.localAddr().port}
+}
+
+// Waits for the next connection whose handshake is done.
+pub !Conn Listener.accept() {
+    ep := self.ep
+    if ep.closed {
+        return error(QuicError.closed, "accepting: the listener is closed")
+    }
+    l := <-ep.accepted
+    if l == null {
+        return error(QuicError.closed, "accepting: the listener is closed")
+    }
+    return Conn{l: l}
+}
+
+// Wakes the task waiting in accept, which then fails, from any thread:
+// for a server that stops.
+pub void Listener.interrupt() {
+    _ = self.ep.accepted.trySend(null)
+}
+
+// Stops taking connections. Those open go on until they close.
+pub void Listener.close() {
+    ep := self.ep
+    if ep.closed {
+        return
+    }
+    ep.closed = true
+    for ep.accepted.len() > 0 {
+        l := <-ep.accepted
+        if l != null {
+            l.released = true
+            l.startClose(E_NO_ERROR, false, "")
+        }
+    }
+    // a task waiting in accept wakes
+    _ = ep.accepted.trySend(null)
+    if ep.live == 0 {
+        ep.stop()
+    }
+}
+
+// Opens a stream that goes both ways, waiting while the peer allows no
+// more.
+pub !Stream Conn.openStream() => try self.open(false)
+
+// Opens a stream that goes one way, to the peer.
+pub !Stream Conn.openUniStream() => try self.open(true)
+
+!Stream Conn.open(bool uni) {
+    l := self.l
+    for {
+        if l.ended() {
+            return error(l.endCode(), "opening a stream: {l.why}")
+        }
+        opened := if uni { l.openedUni } else { l.openedBidi }
+        limit := if uni { l.maxUniOut } else { l.maxBidiOut }
+        if opened < limit {
+            break
+        }
+        l.users += 1
+        _ = <-l.ready
+        l.users -= 1
+    }
+    i64 index = 0
+    if uni {
+        index = l.openedUni
+        l.openedUni += 1
+    } else {
+        index = l.openedBidi
+        l.openedBidi += 1
+    }
+    id := index << 2 | (if uni { 2 } else { 0 }) | (if l.server { 1 } else { 0 })
+    s := l.newStream(id)
+    return Stream{s: s, id: id}
+}
+
+// Waits for the next stream the peer opens, of either kind.
+pub !Stream Conn.acceptStream() {
+    l := self.l
+    for {
+        if l.incoming.len() == 0 && l.ended() {
+            return error(l.endCode(), "accepting a stream: {l.why}")
+        }
+        l.users += 1
+        s := <-l.incoming
+        l.users -= 1
+        if s != null {
+            s.accepted = true
+            return Stream{s: s, id: s.id}
+        }
+        if l.ended() {
+            // the wake-up for the end goes on to the next task that waits
+            _ = l.incoming.trySend(null)
+            return error(l.endCode(), "accepting a stream: {l.why}")
+        }
+    }
+    return Stream{}
+}
+
+// The protocol the two sides chose with ALPN, such as "h3".
+pub str Conn.protocol() => self.l.alpn
+
+// The peer's address.
+pub net.Addr Conn.remoteAddr() => self.l.peer
+
+// The name the client asked for in its handshake (SNI), on a server.
+pub str Conn.serverName() {
+    u8 *p
+    i64 n
+    rawTlsServerName(rawTlsSsl(self.l.tls), &p, &n)
+    return p[0:n]
+}
+
+// Whether the connection ended, and why when it did.
+pub bool Conn.closed() => self.l.ended()
+
+// Why the connection ended: the reason the peer or this side gave, or
+// what went wrong. "" while it is open.
+pub str Conn.why() => self.l.why
+
+// How long a round trip takes, as measured so far.
+pub Duration Conn.rtt() => self.l.srtt
+
+// Ends the connection with an error code of the application and a
+// reason, as close does, but keeps hold of it: its calls fail from now on,
+// and close still lets go of it. For a task that ends a connection other
+// tasks still use.
+pub void Conn.end(i64 code = 0, str reason = "") {
+    l := self.l
+    if l == null || l.released {
+        return
+    }
+    if !l.ended() {
+        l.startClose(code, true, reason)
+    }
+    l.wakeAll()
+    l.poke()
+}
+
+// Closes the connection with an error code of the application (0 for
+// none) and a reason, and lets go of it. Streams not closed yet are gone
+// with it. What was written and not yet sent is dropped: wait for the
+// peer's answer first.
+pub void Conn.close(i64 code = 0, str reason = "") {
+    l := self.l
+    if l == null || l.released {
+        return
+    }
+    if !l.ended() {
+        l.startClose(code, true, reason)
+    }
+    l.released = true
+    l.wakeAll()
+    l.poke()
+    self.l = null
+}

@@ -14,7 +14,7 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
 # the standard library against Go's and the best-known Rust crates
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
-       "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt",
+       "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt", "quic",
        "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "mysql-query"]
 # benchmarks that talk to a database server: the tools/ script that starts
 # one, the variable it sets, and the one the programs read

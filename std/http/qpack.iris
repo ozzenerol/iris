@@ -1,0 +1,142 @@
+// QPACK (RFC 9204), the header compression of HTTP/3, with the static
+// table only: our dynamic table holds nothing (its capacity is 0 in our
+// SETTINGS), and we never use the peer's. Huffman-coded strings are
+// decoded with HPACK's code.
+
+str[99] QPACK_NAMES = [":authority", ":path", "age", "content-disposition", "content-length", "cookie", "date",
+    "etag", "if-modified-since", "if-none-match", "last-modified", "link", "location", "referer", "set-cookie",
+    ":method", ":method", ":method", ":method", ":method", ":method", ":method", ":scheme", ":scheme", ":status",
+    ":status", ":status", ":status", ":status", "accept", "accept", "accept-encoding", "accept-ranges",
+    "access-control-allow-headers", "access-control-allow-headers", "access-control-allow-origin", "cache-control",
+    "cache-control", "cache-control", "cache-control", "cache-control", "cache-control", "content-encoding",
+    "content-encoding", "content-type", "content-type", "content-type", "content-type", "content-type",
+    "content-type", "content-type", "content-type", "content-type", "content-type", "content-type", "range",
+    "strict-transport-security", "strict-transport-security", "strict-transport-security", "vary", "vary",
+    "x-content-type-options", "x-xss-protection", ":status", ":status", ":status", ":status", ":status", ":status",
+    ":status", ":status", ":status", "accept-language", "access-control-allow-credentials",
+    "access-control-allow-credentials", "access-control-allow-headers", "access-control-allow-methods",
+    "access-control-allow-methods", "access-control-allow-methods", "access-control-expose-headers",
+    "access-control-request-headers", "access-control-request-method", "access-control-request-method", "alt-svc",
+    "authorization", "content-security-policy", "early-data", "expect-ct", "forwarded", "if-range", "origin",
+    "purpose", "server", "timing-allow-origin", "upgrade-insecure-requests", "user-agent", "x-forwarded-for",
+    "x-frame-options", "x-frame-options"]
+
+str[99] QPACK_VALUES = ["", "/", "0", "", "0", "", "", "", "", "", "", "", "", "", "", "CONNECT", "DELETE", "GET",
+    "HEAD", "OPTIONS", "POST", "PUT", "http", "https", "103", "200", "304", "404", "503", "*/*",
+    "application/dns-message", "gzip, deflate, br", "bytes", "cache-control", "content-type", "*", "max-age=0",
+    "max-age=2592000", "max-age=604800", "no-cache", "no-store", "public, max-age=31536000", "br", "gzip",
+    "application/dns-message", "application/javascript", "application/json", "application/x-www-form-urlencoded",
+    "image/gif", "image/jpeg", "image/png", "text/css", "text/html; charset=utf-8", "text/plain",
+    "text/plain;charset=utf-8", "bytes=0-", "max-age=31536000", "max-age=31536000; includesubdomains",
+    "max-age=31536000; includesubdomains; preload", "accept-encoding", "origin", "nosniff", "1; mode=block", "100",
+    "204", "206", "302", "400", "403", "421", "425", "500", "", "FALSE", "TRUE", "*", "get", "get, post, options",
+    "options", "content-length", "content-type", "get", "post", "clear", "",
+    "script-src 'none'; object-src 'none'; base-uri 'none'", "1", "", "", "", "", "prefetch", "", "*", "1", "", "",
+    "deny", "sameorigin"]
+
+// Decodes a field section into names and values: "" when it is fine,
+// else what is wrong with it. limit bounds the size of what it holds
+// (each field's name and value and 32 bytes, as RFC 9114 4.2.2 counts).
+str qpackDecode(str block, List[String] *names, List[String] *values, i64 limit) {
+    i64 at = 0
+    ric := readInt(block, &at, 8)
+    if ric != 0 {
+        return if ric < 0 { "a field section cut short" } else { "a field section that uses the dynamic table" }
+    }
+    if readInt(block, &at, 7) < 0 {
+        return "a field section cut short"
+    }
+    i64 size = 0
+    for at < block.len {
+        b := i64(block[at])
+        String name
+        String value
+        if b & 0x80 != 0 {
+            if b & 0x40 == 0 {
+                return "a field from the dynamic table"
+            }
+            idx := readInt(block, &at, 6)
+            if idx < 0 || idx >= 99 {
+                return "a static table index past its end"
+            }
+            name.append(QPACK_NAMES[idx])
+            value.append(QPACK_VALUES[idx])
+        } else if b & 0x40 != 0 {
+            if b & 0x10 == 0 {
+                return "a field name from the dynamic table"
+            }
+            idx := readInt(block, &at, 4)
+            if idx < 0 || idx >= 99 {
+                return "a static table index past its end"
+            }
+            name.append(QPACK_NAMES[idx])
+            if !readString(block, &at, &value) {
+                name.free()
+                value.free()
+                return "a field value that is broken"
+            }
+        } else if b & 0x20 != 0 {
+            huff := b & 0x08 != 0
+            n := readInt(block, &at, 3)
+            if n < 0 || at + n > block.len {
+                return "a field name cut short"
+            }
+            raw := block[at:at + n]
+            at += n
+            if huff {
+                if !huffDecode(raw, &name) {
+                    name.free()
+                    return "a field name that is broken"
+                }
+            } else {
+                name.append(raw)
+            }
+            if !readString(block, &at, &value) {
+                name.free()
+                value.free()
+                return "a field value that is broken"
+            }
+        } else {
+            return "a field from the dynamic table"
+        }
+        size += name.len + value.len + 32
+        if size > limit {
+            name.free()
+            value.free()
+            return "the headers are too large"
+        }
+        names.push(name)
+        values.push(value)
+    }
+    return ""
+}
+
+// The start of a field section that refers to no dynamic table.
+void qpackStart(String *out) {
+    u8[2] zero = [0, 0]
+    out.append(zero[:])
+}
+
+// Appends one field: from the static table when it is there whole, else
+// a literal with the table's name or its own.
+void qpackField(String *out, str name, str value) {
+    i64 byName = -1
+    for i in 0..99 {
+        if QPACK_NAMES[i] == name {
+            if QPACK_VALUES[i] == value {
+                writeInt(out, i, 6, 0xc0)
+                return
+            }
+            if byName < 0 {
+                byName = i
+            }
+        }
+    }
+    if byName >= 0 {
+        writeInt(out, byName, 4, 0x50)
+    } else {
+        writeInt(out, name.len, 3, 0x20)
+        out.append(name)
+    }
+    writeString(out, value)
+}

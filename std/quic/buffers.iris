@@ -1,0 +1,277 @@
+// The bytes of a stream, or of the handshake at one level: what was
+// written and isn't acknowledged yet, and what came and isn't read yet.
+
+// What is written, kept in a ring until the peer acknowledges it. Bytes
+// below base are acknowledged and gone; next is the first that was never
+// sent; lost holds ranges sent once and lost since.
+struct SendBuf {
+    u8[] ring
+    i64 base
+    i64 end
+    i64 next
+    Ranges acked
+    Ranges lost
+    bool fin     // closed for writing: end is the final size
+    bool finSent // the FIN went out, and isn't lost since
+    bool finAcked
+}
+
+void SendBuf.free() {
+    free(self.ring)
+    self.acked.free()
+    self.lost.free()
+}
+
+// How many bytes wait in the ring.
+i64 SendBuf.held() => self.end - self.base
+
+// Room for n more bytes: the ring doubles, as a power of 2.
+void SendBuf.grow(i64 n) {
+    need := self.end - self.base + n
+    if need <= self.ring.len {
+        return
+    }
+    i64 size = if self.ring.len == 0 { 4096 } else { self.ring.len }
+    for size < need {
+        size *= 2
+    }
+    u8[] bigger = alloc(u8, size)
+    held := self.end - self.base
+    if held > 0 {
+        self.copyOut(self.base, held, bigger.ptr, size)
+    }
+    free(self.ring)
+    self.ring = bigger
+}
+
+// Copies the bytes at off into dst. With wrap at the ring's size dst is a
+// ring of that size too.
+void SendBuf.copyOut(i64 off, i64 n, u8 *dst, i64 wrap) {
+    mask := self.ring.len - 1
+    i64 done = 0
+    for done < n {
+        at := (off + done) & mask
+        k := n - done
+        if k > self.ring.len - at {
+            k = self.ring.len - at
+        }
+        if wrap > 0 {
+            to := (off + done) & (wrap - 1)
+            if k > wrap - to {
+                k = wrap - to
+            }
+            memMove(dst + to, &self.ring[at], k)
+        } else {
+            memMove(dst + done, &self.ring[at], k)
+        }
+        done += k
+    }
+}
+
+void SendBuf.write(str data) {
+    if data.len == 0 {
+        return
+    }
+    self.grow(data.len)
+    mask := self.ring.len - 1
+    i64 done = 0
+    for done < data.len {
+        at := (self.end + done) & mask
+        k := data.len - done
+        if k > self.ring.len - at {
+            k = self.ring.len - at
+        }
+        memMove(&self.ring[at], data.ptr + done, k)
+        done += k
+    }
+    self.end += data.len
+}
+
+// Whether there is data (or a FIN) to send.
+bool SendBuf.pending() => !self.lost.empty() || self.next < self.end || (self.fin && !self.finSent)
+
+// The next bytes to send, at most max of them: lost ones first, then new
+// ones up to limit (flow control). Gives the offset and how many; the FIN
+// goes with them when they reach the end.
+(i64, i64, bool) SendBuf.take(i64 max, i64 limit) {
+    for !self.lost.empty() {
+        g := self.lost.r.at(0)
+        lo := if g.lo < self.base { self.base } else { g.lo }
+        if lo >= g.hi {
+            _ = self.lost.r.remove(0)
+            continue
+        }
+        // a part acknowledged after all is skipped
+        if self.acked.has(lo) {
+            i64 skip = lo
+            for skip < g.hi && self.acked.has(skip) {
+                skip += 1
+            }
+            self.lost.dropBelow(skip)
+            continue
+        }
+        i64 hi = g.hi
+        if hi - lo > max {
+            hi = lo + max
+        }
+        self.lost.dropBelow(hi)
+        fin := self.fin && hi == self.end && !self.finSent
+        if fin {
+            self.finSent = true
+        }
+        return (lo, hi - lo, fin)
+    }
+    i64 n = self.end - self.next
+    if self.next + n > limit {
+        n = limit - self.next
+    }
+    if n > max {
+        n = max
+    }
+    if n < 0 {
+        n = 0
+    }
+    off := self.next
+    self.next += n
+    fin := self.fin && self.next == self.end && !self.finSent
+    if fin {
+        self.finSent = true
+    }
+    return (off, n, fin)
+}
+
+// A packet that carried [off, off + n) was acknowledged.
+void SendBuf.ack(i64 off, i64 n, bool fin) {
+    if fin {
+        self.finAcked = true
+    }
+    if n == 0 || off + n <= self.base {
+        return
+    }
+    self.acked.add(off, off + n)
+    if self.acked.min() <= self.base {
+        top := self.acked.r.at(0).hi
+        self.acked.dropBelow(top)
+        self.base = top
+    }
+}
+
+// A packet that carried [off, off + n) was lost: they go again.
+void SendBuf.lose(i64 off, i64 n, bool fin) {
+    if fin && !self.finAcked {
+        self.finSent = false
+    }
+    if n > 0 && off + n > self.base {
+        self.lost.add(if off < self.base { self.base } else { off }, off + n)
+    }
+}
+
+// Everything, the FIN too, is acknowledged.
+bool SendBuf.allAcked() => self.fin && self.finAcked && self.base == self.end
+
+// A piece that came ahead of the bytes before it.
+struct Piece {
+    i64 off
+    String data
+}
+
+// What came, in order: data[at:] is ready to be read and ends at offset
+// got; pieces holds what came past a gap.
+struct RecvBuf {
+    String data
+    i64 at
+    i64 got
+    i64 read    // offset of data[at]
+    i64 highest // one past the largest offset that came
+    i64 finalSize = -1
+    List[Piece] pieces
+}
+
+void RecvBuf.free() {
+    self.data.free()
+    for p in self.pieces {
+        p.data.free()
+    }
+    self.pieces.free()
+}
+
+i64 RecvBuf.ready() => self.data.len - self.at
+
+// Adds bytes that came at off. Overlaps with what came already are dropped.
+void RecvBuf.add(i64 off, str bytes) {
+    end := off + bytes.len
+    if end > self.highest {
+        self.highest = end
+    }
+    if end <= self.got {
+        return
+    }
+    if off <= self.got {
+        self.append(bytes[self.got - off:])
+        self.drain()
+        return
+    }
+    // past a gap: kept in order of offset
+    i64 i = self.pieces.len
+    for i > 0 && self.pieces.at(i - 1).off > off {
+        i -= 1
+    }
+    if i > 0 {
+        prev := self.pieces.at(i - 1)
+        if prev.off + prev.data.len >= end {
+            return
+        }
+    }
+    self.pieces.insert(i, Piece{off: off, data: bytes.copy()})
+}
+
+void RecvBuf.append(str bytes) {
+    // the read part goes once it is most of the buffer
+    if self.at > 0 && self.at >= self.data.len / 2 {
+        rest := self.data.len - self.at
+        if rest > 0 {
+            memMove(self.data.ptr, self.data.ptr + self.at, rest)
+        }
+        self.data.truncate(rest)
+        self.at = 0
+    }
+    self.data.append(bytes)
+    self.got += bytes.len
+}
+
+// Moves the pieces that the gap no longer holds back into data.
+void RecvBuf.drain() {
+    for self.pieces.len > 0 {
+        p := self.pieces.at(0)
+        if p.off > self.got {
+            return
+        }
+        _ = self.pieces.remove(0)
+        end := p.off + p.data.len
+        if end > self.got {
+            self.append(p.data[self.got - p.off:])
+        }
+        p.data.free()
+    }
+}
+
+// Takes up to buf.len bytes that are ready.
+i64 RecvBuf.take(u8[] buf) {
+    n := self.data.len - self.at
+    if n > buf.len {
+        n = buf.len
+    }
+    if n > 0 {
+        memMove(buf.ptr, self.data.ptr + self.at, n)
+        self.at += n
+        self.read += n
+        if self.at == self.data.len {
+            self.data.truncate(0)
+            self.at = 0
+        }
+    }
+    return n
+}
+
+// Everything up to the final size was read.
+bool RecvBuf.finished() => self.finalSize >= 0 && self.read == self.finalSize

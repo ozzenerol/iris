@@ -19449,3 +19449,705 @@ void *iris_metric_slot(void **p) {
 void iris_metric_put_slot(void **p, void *v) {
     atomic_store_explicit((_Atomic(void *) *)p, v, memory_order_release);
 }
+
+/* ---- QUIC ----
+
+   What std/quic needs from C (RFC 9001): the TLS 1.3 handshake through
+   OpenSSL's QUIC callbacks (OpenSSL 3.5 and later), which hand over the
+   handshake bytes for each encryption level and the secrets, without
+   TLS records; the keys made from those secrets; and packet protection,
+   AEAD and header protection, in place on a packet's bytes. */
+
+/* A packet protection key of one level and direction. AES-GCM keeps its
+   round keys and GHASH tables ready; header protection has its own key,
+   which stays the same across key updates. */
+typedef struct {
+    int suite;                  /* 1 AES-128-GCM, 2 AES-256-GCM, 3 ChaCha20-Poly1305 */
+    int hashLen;                /* 32 for SHA-256, 48 for SHA-384 */
+    uint8_t secret[48];
+    uint8_t iv[12];
+    uint8_t chachaKey[32];
+    uint8_t hpKey[32];
+    AesGcm aead;
+    AesGcm hp;
+} QuicKey;
+
+static void quicHmac(int hashLen, const uint8_t *key, size_t keyLen, const uint8_t *data, size_t len, uint8_t *out) {
+    if (hashLen == 48) {
+        iris_hmac_sha384((const char *)key, (int64_t)keyLen, (const char *)data, (int64_t)len, out);
+    } else {
+        iris_hmac_sha256((const char *)key, (int64_t)keyLen, (const char *)data, (int64_t)len, out);
+    }
+}
+
+/* HKDF-Expand-Label (RFC 8446 7.1) with an empty context. */
+static void quicExpandLabel(int hashLen, const uint8_t *secret, const char *label, uint8_t *out, size_t outLen) {
+    uint8_t info[96];
+    size_t ll = strlen(label);
+    size_t n = 0;
+    info[n++] = (uint8_t)(outLen >> 8);
+    info[n++] = (uint8_t)outLen;
+    info[n++] = (uint8_t)(6 + ll);
+    memcpy(info + n, "tls13 ", 6);
+    n += 6;
+    memcpy(info + n, label, ll);
+    n += ll;
+    info[n++] = 0;
+    uint8_t t[64], msg[160];
+    size_t done = 0, tLen = 0;
+    for (uint8_t i = 1; done < outLen; i++) {
+        memcpy(msg, t, tLen);
+        memcpy(msg + tLen, info, n);
+        msg[tLen + n] = i;
+        quicHmac(hashLen, secret, (size_t)hashLen, msg, tLen + n + 1, t);
+        tLen = (size_t)hashLen;
+        size_t k = outLen - done < tLen ? outLen - done : tLen;
+        memcpy(out + done, t, k);
+        done += k;
+    }
+    iris_wipe(t, sizeof t);
+    iris_wipe(msg, sizeof msg);
+}
+
+/* The key, IV and header protection key of a traffic secret. hp, when not
+   NULL, is the key whose header protection is kept (a key update). */
+static QuicKey *quicKeyOf(int suite, const uint8_t *secret, int secretLen, const QuicKey *hp) {
+    QuicKey *k = calloc(1, sizeof *k);
+    if (!k) outOfMemory();
+    k->suite = suite;
+    k->hashLen = secretLen;
+    memcpy(k->secret, secret, (size_t)secretLen);
+    int keyLen = suite == 1 ? 16 : 32;
+    uint8_t key[32];
+    quicExpandLabel(secretLen, secret, "quic key", key, (size_t)keyLen);
+    quicExpandLabel(secretLen, secret, "quic iv", k->iv, 12);
+    if (suite == 3) {
+        memcpy(k->chachaKey, key, 32);
+    } else {
+        aesGcmInit(&k->aead, key, keyLen);
+    }
+    if (hp) {
+        memcpy(k->hpKey, hp->hpKey, 32);
+        k->hp = hp->hp;
+    } else {
+        quicExpandLabel(secretLen, secret, "quic hp", k->hpKey, (size_t)keyLen);
+        if (suite != 3) {
+            aesExpand(&k->hp, k->hpKey, keyLen);
+            k->hp.hw = aesHasHw();
+        }
+    }
+    iris_wipe(key, sizeof key);
+    return k;
+}
+
+void iris_quic_key_free(void *key) {
+    if (!key) return;
+    iris_wipe(key, sizeof(QuicKey));
+    free(key);
+}
+
+/* The Initial keys (RFC 9001 5.2), from the Destination Connection ID of
+   the client's first packet: the ones this side reads with and the ones it
+   writes with. */
+void iris_quic_initial_keys(const uint8_t *dcid, int64_t len, int isServer, void **readKey, void **writeKey) {
+    static const uint8_t salt[20] = {0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
+                                     0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a};
+    uint8_t initial[32], client[32], server[32];
+    quicHmac(32, salt, sizeof salt, dcid, (size_t)len, initial);
+    quicExpandLabel(32, initial, "client in", client, 32);
+    quicExpandLabel(32, initial, "server in", server, 32);
+    QuicKey *c = quicKeyOf(1, client, 32, NULL), *s = quicKeyOf(1, server, 32, NULL);
+    *readKey = isServer ? c : s;
+    *writeKey = isServer ? s : c;
+    iris_wipe(initial, sizeof initial);
+    iris_wipe(client, sizeof client);
+    iris_wipe(server, sizeof server);
+}
+
+/* The next 1-RTT key (RFC 9001 6): a new secret, the same header
+   protection. */
+void *iris_quic_key_next(void *key) {
+    QuicKey *k = key;
+    uint8_t next[48];
+    quicExpandLabel(k->hashLen, k->secret, "quic ku", next, (size_t)k->hashLen);
+    QuicKey *n = quicKeyOf(k->suite, next, k->hashLen, k);
+    iris_wipe(next, sizeof next);
+    return n;
+}
+
+/* A key made straight from a traffic secret, for tests: suite 1 AES-128-GCM,
+   2 AES-256-GCM, 3 ChaCha20-Poly1305. */
+void *iris_quic_key_of(int64_t suite, const uint8_t *secret, int64_t len) {
+    return quicKeyOf((int)suite, secret, (int)len, NULL);
+}
+
+/* The 5 bytes of header protection mask from a 16-byte sample. */
+static void quicMask(const QuicKey *k, const uint8_t *sample, uint8_t mask[5]) {
+    if (k->suite == 3) {
+        uint32_t counter = (uint32_t)sample[0] | (uint32_t)sample[1] << 8 | (uint32_t)sample[2] << 16 |
+                           (uint32_t)sample[3] << 24;
+        static const uint8_t zeros[5];
+        chachaXor(k->hpKey, counter, sample + 4, zeros, mask, 5);
+    } else {
+        uint8_t out[16];
+        aesBlock(&k->hp, sample, out);
+        memcpy(mask, out, 5);
+    }
+}
+
+static void quicNonce(const QuicKey *k, int64_t pn, uint8_t nonce[12]) {
+    memcpy(nonce, k->iv, 12);
+    for (int i = 0; i < 8; i++) nonce[11 - i] ^= (uint8_t)((uint64_t)pn >> (8 * i));
+}
+
+/* Protects a packet in place: pkt holds the header up to and with the
+   packet number (pnLen bytes at pnOff), then the payload up to end, and
+   16 bytes of room past end for the tag. Seals the payload with the header
+   as associated data, then masks the first byte's low bits and the packet
+   number. Gives the packet's new end. */
+int64_t iris_quic_seal(void *key, uint8_t *pkt, int64_t pnOff, int64_t pnLen, int64_t pn, int64_t end) {
+    QuicKey *k = key;
+    int64_t hdr = pnOff + pnLen;
+    uint8_t nonce[12];
+    quicNonce(k, pn, nonce);
+    uint8_t *payload = pkt + hdr;
+    size_t n = (size_t)(end - hdr);
+    if (k->suite == 3) {
+        chachaXor(k->chachaKey, 1, nonce, payload, payload, n);
+        aeadTag(k->chachaKey, nonce, pkt, (size_t)hdr, payload, n, payload + n);
+    } else {
+        aesGcmRun(&k->aead, nonce, 1, pkt, (size_t)hdr, payload, payload, n, payload + n);
+    }
+    uint8_t mask[5];
+    quicMask(k, pkt + pnOff + 4, mask);
+    pkt[0] ^= mask[0] & ((pkt[0] & 0x80) ? 0x0f : 0x1f);
+    for (int64_t i = 0; i < pnLen; i++) pkt[pnOff + i] ^= mask[1 + i];
+    return end + 16;
+}
+
+/* Takes the header protection off a packet of len bytes whose packet
+   number starts at pnOff, in place, and gives the full packet number,
+   decoded next to the largest one received so far (-1 for none); -1 when
+   the packet is too short to hold a sample. */
+int64_t iris_quic_unprotect(void *key, uint8_t *pkt, int64_t len, int64_t pnOff, int64_t largest) {
+    QuicKey *k = key;
+    if (pnOff + 4 + 16 > len) return -1;
+    uint8_t mask[5];
+    quicMask(k, pkt + pnOff + 4, mask);
+    pkt[0] ^= mask[0] & ((pkt[0] & 0x80) ? 0x0f : 0x1f);
+    int pnLen = (pkt[0] & 3) + 1;
+    uint64_t truncated = 0;
+    for (int i = 0; i < pnLen; i++) {
+        pkt[pnOff + i] ^= mask[1 + i];
+        truncated = truncated << 8 | pkt[pnOff + i];
+    }
+    /* RFC 9000 A.3 */
+    int64_t expected = largest + 1;
+    int64_t win = (int64_t)1 << (pnLen * 8), half = win / 2;
+    int64_t candidate = (expected & ~(win - 1)) | (int64_t)truncated;
+    if (candidate <= expected - half && candidate < ((int64_t)1 << 62) - win) return candidate + win;
+    if (candidate > expected + half && candidate >= win) return candidate - win;
+    return candidate;
+}
+
+/* Opens the payload of a packet whose header protection is off: the
+   header is pkt[0:hdr], the sealed payload and its tag run to end. The
+   plaintext replaces it in place; gives its length, or -1 when the packet
+   doesn't open with this key. */
+int64_t iris_quic_open(void *key, uint8_t *pkt, int64_t hdr, int64_t end, int64_t pn) {
+    QuicKey *k = key;
+    if (end - hdr < 16) return -1;
+    uint8_t nonce[12], tag[16];
+    quicNonce(k, pn, nonce);
+    uint8_t *payload = pkt + hdr;
+    size_t n = (size_t)(end - hdr - 16);
+    if (k->suite == 3) {
+        aeadTag(k->chachaKey, nonce, pkt, (size_t)hdr, payload, n, tag);
+        if (!iris_const_equal((const char *)tag, 16, (const char *)payload + n, 16)) return -1;
+        chachaXor(k->chachaKey, 1, nonce, payload, payload, n);
+        return (int64_t)n;
+    }
+    uint8_t keep[16];
+    memcpy(keep, payload + n, 16);
+    aesGcmRun(&k->aead, nonce, 0, pkt, (size_t)hdr, payload, payload, n, tag);
+    if (!iris_const_equal((const char *)tag, 16, (const char *)keep, 16)) {
+        iris_wipe(payload, n);
+        return -1;
+    }
+    return (int64_t)n;
+}
+
+/* A Retry's integrity tag (RFC 9001 5.8): AES-128-GCM over the pseudo
+   packet, the original Destination Connection ID in front of the Retry. */
+void iris_quic_retry_tag(const uint8_t *odcid, int64_t odcidLen, const uint8_t *retry, int64_t len, uint8_t *tag) {
+    static const uint8_t key[16] = {0xbe, 0x0c, 0x69, 0x0b, 0x9f, 0x66, 0x57, 0x5a,
+                                    0x1d, 0x76, 0x6b, 0x54, 0xe3, 0x68, 0xc8, 0x4e};
+    static const uint8_t nonce[12] = {0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb};
+    uint8_t *pseudo = malloc((size_t)(1 + odcidLen + len));
+    if (!pseudo) outOfMemory();
+    pseudo[0] = (uint8_t)odcidLen;
+    memcpy(pseudo + 1, odcid, (size_t)odcidLen);
+    memcpy(pseudo + 1 + odcidLen, retry, (size_t)len);
+    AesGcm a;
+    aesGcmInit(&a, key, 16);
+    aesGcmRun(&a, nonce, 1, pseudo, (size_t)(1 + odcidLen + len), NULL, NULL, 0, tag);
+    free(pseudo);
+}
+
+/* ---- QUIC: the TLS handshake
+
+   OpenSSL runs the handshake and calls back: with handshake bytes to send
+   at its write level, for the bytes it may read at its read level, with
+   each new secret, and with the peer's transport parameters. What it
+   sends is kept for each level until std/quic takes it; what the peer sent
+   is kept for each level until OpenSSL reads it. */
+
+typedef struct {
+    uint8_t *p;
+    size_t len, cap, at;
+} QuicBuf;
+
+static void quicBufAdd(QuicBuf *b, const uint8_t *p, size_t n) {
+    if (b->at > 0 && b->at == b->len) b->at = b->len = 0;
+    if (b->len + n > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 4096;
+        while (cap < b->len + n) cap *= 2;
+        uint8_t *q = realloc(b->p, cap);
+        if (!q) outOfMemory();
+        b->p = q;
+        b->cap = cap;
+    }
+    memcpy(b->p + b->len, p, n);
+    b->len += n;
+}
+
+typedef struct {
+    void *ssl;
+    TlsGen *gen;                /* a server's certificates, held for the handshake */
+    int server;
+    int readLevel, writeLevel;
+    QuicBuf in[4], out[4];
+    QuicKey *keys[4][2];        /* [level][0 read, 1 write], until taken */
+    uint8_t *params;
+    size_t paramsLen;
+    uint8_t *ours;              /* our transport parameters: OpenSSL keeps the pointer */
+    int alert;
+    int done;
+    int failed;
+} QuicTls;
+
+static struct {
+    int loaded;
+    int (*setCbs)(void *, const void *, void *);
+    int (*setParams)(void *, const unsigned char *, size_t);
+    int (*doHandshake)(void *);
+    const void *(*pendingCipher)(const void *);
+    const void *(*currentCipher)(const void *);
+    uint32_t (*cipherId)(const void *);
+    uint64_t (*clearOptions)(void *, uint64_t);
+    void (*connectState)(void *);
+    void (*acceptState)(void *);
+    int (*ctxUpRef)(void *);
+} qtls;
+
+static pthread_once_t qtlsOnce = PTHREAD_ONCE_INIT;
+
+static void qtlsLoad(void) {
+    if (!tlsReady()) return;
+    void *h = RTLD_DEFAULT;
+    *(void **)&qtls.setCbs = dlsym(h, "SSL_set_quic_tls_cbs");
+    *(void **)&qtls.setParams = dlsym(h, "SSL_set_quic_tls_transport_params");
+    *(void **)&qtls.doHandshake = dlsym(h, "SSL_do_handshake");
+    *(void **)&qtls.pendingCipher = dlsym(h, "SSL_get_pending_cipher");
+    *(void **)&qtls.currentCipher = dlsym(h, "SSL_get_current_cipher");
+    *(void **)&qtls.cipherId = dlsym(h, "SSL_CIPHER_get_id");
+    *(void **)&qtls.clearOptions = dlsym(h, "SSL_clear_options");
+    *(void **)&qtls.connectState = dlsym(h, "SSL_set_connect_state");
+    *(void **)&qtls.acceptState = dlsym(h, "SSL_set_accept_state");
+    *(void **)&qtls.ctxUpRef = dlsym(h, "SSL_CTX_up_ref");
+    qtls.loaded = qtls.setCbs && qtls.setParams && qtls.doHandshake && qtls.cipherId && qtls.clearOptions &&
+                  qtls.connectState && qtls.acceptState && qtls.ctxUpRef &&
+                  (qtls.pendingCipher || qtls.currentCipher);
+}
+
+static bool qtlsReady(void) {
+    pthread_once(&qtlsOnce, qtlsLoad);
+    if (ossl.loaded != 1) return false;     /* tlsReady said why */
+    if (!qtls.loaded) {
+        tlsSay("QUIC needs OpenSSL 3.5 or later, whose TLS has the QUIC callbacks: set IRIS_OPENSSL to its libssl");
+        return false;
+    }
+    return true;
+}
+
+static int qtlsSend(void *ssl, const unsigned char *buf, size_t len, size_t *consumed, void *arg) {
+    (void)ssl;
+    QuicTls *q = arg;
+    quicBufAdd(&q->out[q->writeLevel], buf, len);
+    *consumed = len;
+    return 1;
+}
+
+static int qtlsRecv(void *ssl, const unsigned char **buf, size_t *bytesRead, void *arg) {
+    (void)ssl;
+    QuicTls *q = arg;
+    QuicBuf *b = &q->in[q->readLevel];
+    *buf = b->p + b->at;
+    *bytesRead = b->len - b->at;
+    return 1;
+}
+
+static int qtlsRelease(void *ssl, size_t bytesRead, void *arg) {
+    (void)ssl;
+    QuicTls *q = arg;
+    QuicBuf *b = &q->in[q->readLevel];
+    if (bytesRead > b->len - b->at) return 0;
+    b->at += bytesRead;
+    return 1;
+}
+
+static int qtlsSecret(void *ssl, uint32_t level, int direction, const unsigned char *secret, size_t len,
+                      void *arg) {
+    QuicTls *q = arg;
+    if (level > 3 || (len != 32 && len != 48)) return 0;
+    const void *c = qtls.pendingCipher ? qtls.pendingCipher(ssl) : NULL;
+    if (!c && qtls.currentCipher) c = qtls.currentCipher(ssl);
+    uint32_t id = c ? qtls.cipherId(c) & 0xffff : (len == 48 ? 0x1302 : 0x1301);
+    int suite = id == 0x1301 ? 1 : id == 0x1302 ? 2 : id == 0x1303 ? 3 : 0;
+    if (!suite) return 0;
+    int dir = direction ? 1 : 0;
+    iris_quic_key_free(q->keys[level][dir]);
+    q->keys[level][dir] = quicKeyOf(suite, secret, (int)len, NULL);
+    if (dir == 0) {
+        q->readLevel = (int)level;
+    } else {
+        q->writeLevel = (int)level;
+    }
+    return 1;
+}
+
+static int qtlsParams(void *ssl, const unsigned char *params, size_t len, void *arg) {
+    (void)ssl;
+    QuicTls *q = arg;
+    free(q->params);
+    q->params = malloc(len ? len : 1);
+    if (!q->params) outOfMemory();
+    memcpy(q->params, params, len);
+    q->paramsLen = len;
+    return 1;
+}
+
+static int qtlsAlert(void *ssl, unsigned char code, void *arg) {
+    (void)ssl;
+    QuicTls *q = arg;
+    q->alert = code;
+    return 1;
+}
+
+typedef struct {
+    int id;
+    void (*fn)(void);
+} QuicDispatch;
+
+static const QuicDispatch qtlsCallbacks[] = {
+    {2001, (void (*)(void))qtlsSend},   {2002, (void (*)(void))qtlsRecv},  {2003, (void (*)(void))qtlsRelease},
+    {2004, (void (*)(void))qtlsSecret}, {2005, (void (*)(void))qtlsParams}, {2006, (void (*)(void))qtlsAlert},
+    {0, NULL}};
+
+void iris_quic_tls_free(void *handle) {
+    QuicTls *q = handle;
+    if (!q) return;
+    if (q->ssl) ossl.sslFree(q->ssl);
+    if (q->gen) genRelease(q->gen);
+    for (int i = 0; i < 4; i++) {
+        free(q->in[i].p);
+        free(q->out[i].p);
+        iris_quic_key_free(q->keys[i][0]);
+        iris_quic_key_free(q->keys[i][1]);
+    }
+    free(q->params);
+    free(q->ours);
+    free(q);
+}
+
+/* Sets up the QUIC side of an SSL that has its context: the callbacks,
+   TLS 1.3 only, no middlebox compatibility, and our transport parameters. */
+static QuicTls *qtlsStart(void *ssl, int server, const uint8_t *params, int64_t paramsLen) {
+    QuicTls *q = calloc(1, sizeof *q);
+    if (!q) outOfMemory();
+    q->ssl = ssl;
+    q->server = server;
+    ossl.sslCtrl(ssl, TLS_CTRL_MIN_VERSION, 0x0304, NULL);
+    qtls.clearOptions(ssl, 0x00100000);     /* SSL_OP_ENABLE_MIDDLEBOX_COMPAT */
+    q->ours = malloc(paramsLen > 0 ? (size_t)paramsLen : 1);
+    if (!q->ours) outOfMemory();
+    memcpy(q->ours, params, (size_t)paramsLen);
+    if (qtls.setCbs(ssl, qtlsCallbacks, q) != 1 || qtls.setParams(ssl, q->ours, (size_t)paramsLen) != 1) {
+        tlsSayOpenssl("starting TLS for QUIC");
+        iris_quic_tls_free(q);
+        return NULL;
+    }
+    return q;
+}
+
+/* Client contexts for the files a client named, kept while the files
+   don't change: a handshake then doesn't read and parse them again. The
+   caller gets a reference of its own. */
+typedef struct {
+    char *ca, *cert, *key;
+    struct timespec caTime, certTime, keyTime;
+    void *ctx;
+} QuicCtx;
+static QuicCtx quicCtxs[8];
+static int quicCtxNext, quicCtxLock;
+
+static struct timespec quicFileTime(const char *path) {
+    struct stat st;
+    struct timespec none = {0, 0};
+    if (!path || stat(path, &st) != 0) return none;
+#ifdef __APPLE__
+    return st.st_mtimespec;
+#else
+    return st.st_mtim;
+#endif
+}
+
+static bool quicSame(const char *a, const char *b) { return (!a && !b) || (a && b && strcmp(a, b) == 0); }
+
+static bool quicSameTime(struct timespec a, struct timespec b) { return a.tv_sec == b.tv_sec && a.tv_nsec == b.tv_nsec; }
+
+static char *quicDup(const char *s) {
+    if (!s) return NULL;
+    char *d = strdup(s);
+    if (!d) outOfMemory();
+    return d;
+}
+
+static void *quicClientCtx(const char *ca, const char *cert, const char *key) {
+    struct timespec caTime = quicFileTime(ca), certTime = quicFileTime(cert), keyTime = quicFileTime(key);
+    spinLock(&quicCtxLock);
+    for (int i = 0; i < 8; i++) {
+        QuicCtx *c = &quicCtxs[i];
+        if (c->ctx && quicSame(c->ca, ca) && quicSame(c->cert, cert) && quicSame(c->key, key) &&
+            quicSameTime(c->caTime, caTime) && quicSameTime(c->certTime, certTime) &&
+            quicSameTime(c->keyTime, keyTime)) {
+            void *ctx = c->ctx;
+            qtls.ctxUpRef(ctx);
+            spinUnlock(&quicCtxLock);
+            return ctx;
+        }
+    }
+    spinUnlock(&quicCtxLock);
+    void *ctx = newClientCtx(ca, cert, key);
+    if (!ctx) return NULL;
+    spinLock(&quicCtxLock);
+    QuicCtx *c = &quicCtxs[quicCtxNext];
+    quicCtxNext = (quicCtxNext + 1) % 8;
+    if (c->ctx) ossl.ctxFree(c->ctx);
+    free(c->ca);
+    free(c->cert);
+    free(c->key);
+    *c = (QuicCtx){quicDup(ca), quicDup(cert), quicDup(key), caTime, certTime, keyTime, ctx};
+    qtls.ctxUpRef(ctx);
+    spinUnlock(&quicCtxLock);
+    return ctx;
+}
+
+/* A client's handshake with the server host (a name or an IP, which its
+   certificate must have), offering the protocols in alpn (each with its
+   length in front) and our transport parameters. ca, when not empty, is a
+   file of the certificates to trust instead of the system's; cert and key a
+   certificate of our own. NULL with the message set on an error. */
+void *iris_quic_tls_client(const char *host, int64_t hostLen, const char *ca, int64_t caLen, const char *alpn,
+                           int64_t alpnLen, const char *cert, int64_t certLen, const char *key, int64_t keyLen,
+                           const uint8_t *params, int64_t paramsLen) {
+    if (!tlsReady() || !qtlsReady()) return NULL;
+    if (hostLen <= 0) {
+        tlsSay("a QUIC client needs the server's name or IP to check its certificate");
+        return NULL;
+    }
+    char *h = cpath(host, hostLen), *caPath = caLen > 0 ? cpath(ca, caLen) : NULL;
+    char *certPath = certLen > 0 ? cpath(cert, certLen) : NULL, *keyPath = keyLen > 0 ? cpath(key, keyLen) : NULL;
+    bool own = caPath || certPath;
+    void *ctx = own ? quicClientCtx(caPath, certPath, keyPath ? keyPath : certPath) : sharedClientCtx();
+    if (!ctx && !own) tlsSayOpenssl("starting TLS");
+    void *ssl = ctx ? ossl.sslNew(ctx) : NULL;
+    if (ctx && !ssl) tlsSayOpenssl("starting TLS");
+    if (own && ctx) ossl.ctxFree(ctx);
+    free(caPath);
+    free(certPath);
+    free(keyPath);
+    if (!ssl) {
+        free(h);
+        return NULL;
+    }
+    unsigned char ipBuf[16];
+    bool isIp = inet_pton(AF_INET, h, ipBuf) == 1 || inet_pton(AF_INET6, h, ipBuf) == 1;
+    if (!isIp) ossl.sslCtrl(ssl, TLS_CTRL_SNI, 0, h);
+    ossl.sslSet1Host(ssl, h);
+    free(h);
+    if (alpnLen > 0 && ossl.sslSetAlpnProtos) ossl.sslSetAlpnProtos(ssl, (const unsigned char *)alpn, (unsigned)alpnLen);
+    QuicTls *q = qtlsStart(ssl, 0, params, paramsLen);
+    if (!q) return NULL;
+    qtls.connectState(ssl);
+    return q;
+}
+
+/* A server's handshake with the certificates of a TlsConfig. */
+void *iris_quic_tls_server(void *server, const uint8_t *params, int64_t paramsLen) {
+    if (!tlsReady() || !qtlsReady()) return NULL;
+    TlsServer *s = server;
+    spinLock(&s->lock);
+    TlsGen *g = s->gen;
+    __atomic_add_fetch(&g->refs, 1, __ATOMIC_ACQ_REL);
+    spinUnlock(&s->lock);
+    void *ssl = ossl.sslNew(g->ctxs[0]);
+    if (!ssl) {
+        tlsSayOpenssl("starting TLS");
+        genRelease(g);
+        return NULL;
+    }
+    QuicTls *q = qtlsStart(ssl, 1, params, paramsLen);
+    if (!q) {
+        genRelease(g);
+        return NULL;
+    }
+    q->gen = g;
+    qtls.acceptState(ssl);
+    return q;
+}
+
+/* Handshake bytes the peer sent at level, in order. */
+void iris_quic_tls_feed(void *handle, int64_t level, const uint8_t *data, int64_t len) {
+    QuicTls *q = handle;
+    if (level >= 0 && level < 4 && len > 0) quicBufAdd(&q->in[level], data, (size_t)len);
+}
+
+/* Runs the handshake as far as it goes with what came: 1 when it is done,
+   0 when it waits for more, -1 when it failed (with the message, and the
+   TLS alert in iris_quic_tls_alert). */
+int iris_quic_tls_step(void *handle) {
+    QuicTls *q = handle;
+    if (q->failed) return -1;
+    if (q->done) return 1;
+    if (ossl.errClear) ossl.errClear();
+    int r = qtls.doHandshake(q->ssl);
+    if (r == 1) {
+        q->done = 1;
+        if (q->gen) {
+            genRelease(q->gen);         /* the SSL holds its contexts itself */
+            q->gen = NULL;
+        }
+        return 1;
+    }
+    int e = ossl.sslGetError(q->ssl, r);
+    if (e == TLS_WANT_READ || e == TLS_WANT_WRITE) return 0;
+    long v = ossl.sslVerifyResult(q->ssl);
+    if (v != 0) {
+        char what[400];
+        snprintf(what, sizeof what, "%s certificate can't be trusted: %s", q->server ? "the client's" : "its",
+                 ossl.verifyString(v));
+        tlsSay(what);
+        if (ossl.errClear) ossl.errClear();
+    } else {
+        tlsSayOpenssl("the TLS handshake failed");
+    }
+    if (!q->alert) q->alert = 40;           /* handshake_failure */
+    q->failed = 1;
+    return -1;
+}
+
+/* The TLS alert that ended the handshake, 0 for none. */
+int iris_quic_tls_alert(void *handle) { return ((QuicTls *)handle)->alert; }
+
+/* The handshake bytes to send at level, added to out. */
+void iris_quic_tls_take(void *handle, int64_t level, IrisString *out) {
+    QuicTls *q = handle;
+    QuicBuf *b = &q->out[level];
+    if (b->len > b->at) iris_string_append(out, (const char *)b->p + b->at, (int64_t)(b->len - b->at));
+    b->len = b->at = 0;
+}
+
+/* The key for level and direction (0 read, 1 write) once there is one,
+   handed over to the caller, else NULL. */
+void *iris_quic_tls_key(void *handle, int64_t level, int64_t dir) {
+    QuicTls *q = handle;
+    QuicKey *k = q->keys[level][dir];
+    q->keys[level][dir] = NULL;
+    return k;
+}
+
+/* The peer's transport parameters, once they came. */
+int iris_quic_tls_params(void *handle, const uint8_t **p, int64_t *n) {
+    QuicTls *q = handle;
+    *p = q->params;
+    *n = (int64_t)q->paramsLen;
+    return q->params != NULL;
+}
+
+void *iris_quic_tls_ssl(void *handle) { return ((QuicTls *)handle)->ssl; }
+
+/* ---- QUIC: the socket */
+
+/* Reads one datagram, or with GRO several of one size: the bytes, or -2
+   once the endpoint stopped the socket (iris_net_stop_listener), -3 on a
+   timeout, -code on an error. ip and port get the sender, segment the size
+   of each datagram (0 for one). */
+int64_t iris_quic_recv(int fd, uint8_t *buf, int64_t len, uint8_t *ip, int64_t *port, int64_t *segment,
+                       int64_t timeout) {
+    int64_t deadline = deadlineOf(timeout);
+    for (;;) {
+        if (fdStopped(fd)) return -2;
+        struct sockaddr_storage ss;
+        struct iovec v = {buf, (size_t)len};
+        union {
+            char space[64];
+            struct cmsghdr align;
+        } cm;
+        struct msghdr h;
+        memset(&h, 0, sizeof h);
+        h.msg_name = &ss;
+        h.msg_namelen = sizeof ss;
+        h.msg_iov = &v;
+        h.msg_iovlen = 1;
+        h.msg_control = cm.space;
+        h.msg_controllen = sizeof cm.space;
+        ssize_t n = recvmsg(fd, &h, MSG_DONTWAIT);
+        if (n >= 0) {
+            fromSockaddr(&ss, ip, port);
+            *segment = 0;
+#ifdef __linux__
+            for (struct cmsghdr *c = CMSG_FIRSTHDR(&h); c; c = CMSG_NXTHDR(&h, c)) {
+                if (c->cmsg_level == IPPROTO_UDP && c->cmsg_type == 104 /* UDP_GRO */) {
+                    int seg;
+                    memcpy(&seg, CMSG_DATA(c), sizeof seg);
+                    *segment = seg;
+                }
+            }
+#endif
+            return n;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (!waitFdUntil(fd, 0, deadline)) return fdStopped(fd) ? -2 : -3;
+            continue;
+        }
+        return -netCode(errno);
+    }
+}
+
+/* Asks for send and receive buffers of n bytes, as a fast sender needs;
+   the system may give less. */
+void iris_quic_buffers(int fd, int64_t n) {
+    int v = (int)n;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &v, sizeof v);
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &v, sizeof v);
+}
+
+/* The address family of a socket: AF_INET or AF_INET6. */
+int iris_quic_family(int fd) {
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof ss;
+    if (getsockname(fd, (struct sockaddr *)&ss, &len) != 0) return AF_INET6;
+    return ss.ss_family;
+}

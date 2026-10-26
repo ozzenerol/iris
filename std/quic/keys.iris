@@ -1,0 +1,111 @@
+// Packet protection (RFC 9001 5): the keys of each level, made in C from
+// the TLS secrets, and the calls that seal and open a packet in place.
+
+import hex
+
+@extern("iris_quic_initial_keys")
+void rawInitialKeys(u8 *dcid, i64 len, i32 server, u8 **readKey, u8 **writeKey)
+
+@extern("iris_quic_key_of")
+u8 *rawKeyOf(i64 suite, u8 *secret, i64 len)
+
+@extern("iris_quic_key_next")
+u8 *rawKeyNext(u8 *key)
+
+@extern("iris_quic_key_free")
+void rawKeyFree(u8 *key)
+
+@extern("iris_quic_seal")
+i64 rawSeal(u8 *key, u8 *pkt, i64 pnOff, i64 pnLen, i64 pn, i64 end)
+
+@extern("iris_quic_unprotect")
+i64 rawUnprotect(u8 *key, u8 *pkt, i64 len, i64 pnOff, i64 largest)
+
+@extern("iris_quic_open")
+i64 rawOpen(u8 *key, u8 *pkt, i64 hdr, i64 end, i64 pn)
+
+@extern("iris_quic_retry_tag")
+void rawRetryTag(u8 *odcid, i64 odcidLen, u8 *retry, i64 len, u8 *tag)
+
+test "initial keys and header protection (RFC 9001 A.2)" {
+    scoped String dcid = hex.decode("8394c8f03e515708") catch "".copy()
+    u8 *r
+    u8 *w
+    rawInitialKeys(dcid.ptr, dcid.len, 0, &r, &w)
+    scoped String head = hex.decode("c300000001088394c8f03e5157080000449e00000002") catch "".copy()
+    scoped String body = hex.decode("060040f1010000ed0303ebf8fa56f129") catch "".copy()
+    u8[] pkt = alloc(u8, 1300)
+    defer free(pkt)
+    for i in 0..head.len {
+        pkt[i] = head[i]
+    }
+    for i in 0..body.len {
+        pkt[head.len + i] = body[i]
+    }
+    end := rawSeal(w, pkt.ptr, 18, 4, 2, 1162)
+    scoped String got = hex.encode(pkt[0:38])
+    expect(got == "c000000001088394c8f03e5157080000449e7b9aec34d1b1c98dd7689fb8ec11d242b123dc9b", got)
+    expect(end == 1178)
+    u8 *sr
+    u8 *sw
+    rawInitialKeys(dcid.ptr, dcid.len, 1, &sr, &sw)
+    pn := rawUnprotect(sr, pkt.ptr, end, 18, -1)
+    expect(pn == 2)
+    n := rawOpen(sr, pkt.ptr, 22, end, pn)
+    expect(n == 1162 - 22)
+    expect(pkt[22] == 6 && pkt[23] == 0 && pkt[24] == 0x40)
+    // a changed byte doesn't open
+    pkt[21] = 3
+    end2 := rawSeal(w, pkt.ptr, 18, 4, 3, 1162)
+    pkt[40] = pkt[40] ^ 1
+    pn2 := rawUnprotect(sr, pkt.ptr, end2, 18, 2)
+    expect(pn2 == 3 && rawOpen(sr, pkt.ptr, 22, end2, pn2) == -1)
+    rawKeyFree(r)
+    rawKeyFree(w)
+    rawKeyFree(sr)
+    rawKeyFree(sw)
+}
+
+test "retry integrity tag (RFC 9001 A.4)" {
+    scoped String odcid = hex.decode("8394c8f03e515708") catch "".copy()
+    scoped String retry = hex.decode("ff000000010008f067a5502a4262b5746f6b656e") catch "".copy()
+    u8[16] tag
+    rawRetryTag(odcid.ptr, odcid.len, retry.ptr, retry.len, &tag[0])
+    scoped String t = hex.encode(tag[:])
+    expect(t == "04a265ba2eff4d829058fb3f0f2496ba", t)
+}
+
+test "ChaCha20-Poly1305 short header (RFC 9001 A.5)" {
+    scoped String secret = hex.decode("9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b") catch "".copy()
+    k := rawKeyOf(3, secret.ptr, secret.len)
+    defer rawKeyFree(k)
+    u8[64] pkt
+    pkt[0] = 0x42
+    pkt[1] = 0x00
+    pkt[2] = 0xbf
+    pkt[3] = 0xf4
+    pkt[4] = 0x01
+    end := rawSeal(k, &pkt[0], 1, 3, 654360564, 5)
+    scoped String got = hex.encode(pkt[0:end])
+    expect(got == "4cfe4189655e5cd55c41f69080575d7999c25a5bfb", got)
+    pn := rawUnprotect(k, &pkt[0], end, 1, 654360563)
+    expect(pn == 654360564)
+    expect(rawOpen(k, &pkt[0], 4, end, pn) == 1 && pkt[4] == 1)
+}
+
+test "key update keeps header protection (RFC 9001 6)" {
+    scoped String secret = hex.decode("9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b") catch "".copy()
+    k := rawKeyOf(3, secret.ptr, secret.len)
+    k2 := rawKeyNext(k)
+    defer rawKeyFree(k)
+    defer rawKeyFree(k2)
+    u8[64] pkt
+    pkt[0] = 0x46
+    pkt[3] = 7
+    pkt[4] = 0x01
+    end := rawSeal(k2, &pkt[0], 1, 3, 7, 5)
+    pn := rawUnprotect(k, &pkt[0], end, 1, 6)
+    expect(pn == 7 && pkt[0] == 0x46)
+    expect(rawOpen(k, &pkt[0], 4, end, pn) == -1)
+    expect(rawOpen(k2, &pkt[0], 4, end, pn) == 1)
+}

@@ -1,0 +1,446 @@
+// HTTP/3 for the Client. Its QUIC connections live on a thread of their
+// own, which takes the requests of every task and thread that shares the
+// Client, so none of them has to stay alive for a connection.
+
+import net, quic, str, time
+
+// What a request over HTTP/3 came to.
+struct H3Result {
+    Reply reply
+    bool ok
+    bool fallback // QUIC couldn't reach the host: the request can go over TCP
+    bool late     // it waited longer than the client's timeout
+    bool retry    // the server didn't take it (GOAWAY): it can go again
+    String why
+}
+
+// A request for the thread, which answers on done.
+struct H3Job {
+    str method
+    Dest *d
+    u16 port
+    str body
+    str contentType
+    str[] headers
+    bool raw
+    str ca
+    Duration timeout
+    Duration connect
+    chan[H3Result] done
+}
+
+// The connection to one host.
+struct H3Peer {
+    quic.Conn c
+    H3Conn h
+    bool dialing
+    bool dead     // it ended: requests go on a new one
+    bool orphan   // no longer in the map: the watch frees it
+    bool watching // its watch task runs
+    i64 active    // requests on it
+}
+
+struct H3Pool {
+    chan[H3Job *] jobs
+    Thread th
+    Map[str, H3Peer *] peers
+    i64 running
+}
+
+// The thread: a task per request, until a null job says to stop.
+void h3Main(H3Pool *p) {
+    for {
+        job := <-p.jobs
+        if job == null {
+            break
+        }
+        p.running += 1
+        spawn h3Run(p, job)
+    }
+    for p.running > 0 {
+        sleep(1ms)
+    }
+    scoped List[str] keys = p.peers.keys()
+    List[H3Peer *] all
+    defer all.free()
+    for k in keys {
+        peer, _ := p.peers.get(k)
+        all.push(peer)
+    }
+    p.peers.free()
+    for peer in all {
+        if peer.watching {
+            peer.c.end(H3_NO_ERROR)
+        }
+    }
+    for peer in all {
+        for peer.watching {
+            sleep(1ms)
+        }
+        free(peer[0:1])
+    }
+}
+
+void h3Run(H3Pool *p, H3Job *job) {
+    r := h3Send(p, job)
+    p.running -= 1
+    job.done <- r
+}
+
+H3Result h3Fail(str why, bool fallback = false, bool late = false) => H3Result{why: why.copy(), fallback: fallback,
+    late: late}
+
+// Reads the connection's streams from the server: its control stream and
+// QPACK's. When the connection ends, and its requests are done, it lets go
+// of it.
+void h3Watch(H3Peer *peer) {
+    c := peer.c
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        if s.isUni() {
+            spawn h3Uni(&peer.h, s)
+        } else {
+            peer.h.fail(H3_STREAM_CREATION_ERROR, "the server opened a request stream")
+            s.close()
+        }
+    }
+    peer.dead = true
+    c.end(H3_NO_ERROR)
+    for peer.h.tasks > 0 || peer.active > 0 {
+        sleep(1ms)
+    }
+    peer.h.control.close()
+    c.close()
+    peer.watching = false
+    if peer.orphan {
+        free(peer[0:1])
+    }
+}
+
+// The open connection to the job's host, or a new one.
+!H3Peer *h3Peer(H3Pool *p, H3Job *job, bool *fallback) {
+    scoped String key = format("{job.d.host}:{job.port}")
+    for {
+        peer, found := p.peers.get(key)
+        if !found {
+            break
+        }
+        if peer.dialing {
+            sleep(1ms)
+            continue
+        }
+        if !peer.dead && !peer.c.closed() && !peer.h.peerGone {
+            return peer
+        }
+        _ = p.peers.remove(key)
+        peer.orphan = true
+        if !peer.dead {
+            peer.c.end(H3_NO_ERROR)
+        }
+    }
+    H3Peer[] mem = alloc(H3Peer, 1)
+    H3Peer *peer = &mem[0]
+    peer.dialing = true
+    p.peers.set(key, peer)
+    config := quic.Config{alpn: "h3", ca: job.ca, serverName: job.d.host, handshakeTimeout: job.connect}
+    c := quic.dial(job.d.host, job.port, config) catch e {
+        _ = p.peers.remove(key)
+        free(mem)
+        *fallback = true
+        return e
+    }
+    peer.c = c
+    peer.h = H3Conn{c: c}
+    ctl := c.openUniStream() catch e {
+        c.close()
+        _ = p.peers.remove(key)
+        free(mem)
+        return e
+    }
+    peer.h.control = ctl
+    scoped String settings = h3Settings(64KiB)
+    ctl.write(settings) catch e { }
+    peer.watching = true
+    peer.dialing = false
+    spawn h3Watch(peer)
+    return peer
+}
+
+// The request's field section.
+void h3RequestBlock(String *block, H3Job *job) {
+    d := job.d
+    qpackStart(block)
+    qpackField(block, ":method", job.method)
+    qpackField(block, ":scheme", "https")
+    qpackField(block, ":authority", d.hostPort)
+    qpackField(block, ":path", d.path)
+    if !hasHeader(job.headers, "User-Agent") {
+        qpackField(block, "user-agent", "iris")
+    }
+    if !job.raw && !hasHeader(job.headers, "Accept-Encoding") {
+        qpackField(block, "accept-encoding", "gzip")
+    }
+    for h in job.headers {
+        name, value, _ := str.cut(h, ":")
+        scoped String lower = str.lower(str.trim(name))
+        if lower == "host" || lower == "connection" || lower == "keep-alive" || lower == "transfer-encoding" ||
+            lower == "upgrade" || lower == "proxy-connection" || lower == "content-length" {
+                continue
+            }
+        qpackField(block, lower, str.trim(value))
+    }
+    if job.body.len > 0 || job.method == "POST" || job.method == "PUT" || job.method == "PATCH" {
+        scoped String length = format("{job.body.len}")
+        qpackField(block, "content-length", length)
+        if job.contentType.len > 0 {
+            qpackField(block, "content-type", job.contentType)
+        }
+    }
+}
+
+H3Result h3Send(H3Pool *p, H3Job *job) {
+    bool fallback = false
+    peer := h3Peer(p, job, &fallback) catch e {
+        return h3Fail(e.message, fallback, e.code == quic.QuicError.timeout)
+    }
+    peer.active += 1
+    defer peer.active -= 1
+    s := peer.c.openStream() catch e {
+        return h3Fail(e.message)
+    }
+    defer s.close()
+    s.setTimeout(job.timeout)
+    scoped String block
+    h3RequestBlock(&block, job)
+    scoped String head
+    putH3Frame(&head, H3_HEADERS, block)
+    if job.body.len > 0 {
+        putVar(&head, H3_DATA)
+        putVar(&head, job.body.len)
+    }
+    s.write(head) catch e {
+        return h3Fail(e.message, late: e.code == quic.QuicError.timeout)
+    }
+    if job.body.len > 0 {
+        s.write(job.body) catch e {
+            return h3Fail(e.message, late: e.code == quic.QuicError.timeout)
+        }
+    }
+    s.closeWrite()
+    H3Reader r = H3Reader{s: s}
+    defer r.free()
+    H3Result out
+    out.reply.protocol = "HTTP/3"
+    bool gotHead = false
+    for {
+        i64 kind
+        i64 len
+        more := r.frame(&kind, &len) catch e {
+            out.reply.free()
+            if s.resetCode() == H3_REQUEST_REJECTED {
+                peer.h.peerGone = true
+                H3Result again = h3Fail(e.message)
+                again.retry = true
+                return again
+            }
+            return h3Fail(e.message, late: e.code == quic.QuicError.timeout)
+        }
+        if !more {
+            break
+        }
+        if kind == H3_HEADERS {
+            if len > H3_MAX_FRAME {
+                out.reply.free()
+                return h3Fail("the reply's headers are too large")
+            }
+            b := r.take(len) catch e {
+                out.reply.free()
+                return h3Fail(e.message)
+            }
+            List[String] names
+            List[String] values
+            why := qpackDecode(b, &names, &values, 1MiB)
+            if why.len > 0 {
+                freeFields(&names, &values)
+                out.reply.free()
+                peer.h.fail(H3_QPACK_DECOMPRESSION_FAILED, why)
+                return h3Fail(why)
+            }
+            if gotHead {
+                linesOf(&names, &values, &out.reply.trailerText)
+                freeFields(&names, &values)
+                continue
+            }
+            i32 status = 0
+            for i in 0..names.len {
+                if names.at(i) == ":status" {
+                    status = i32(str.parseInt(values.at(i)) catch 0)
+                }
+            }
+            if status < 100 || status > 999 {
+                freeFields(&names, &values)
+                out.reply.free()
+                return h3Fail("a reply without a valid :status")
+            }
+            if status < 200 {
+                freeFields(&names, &values)
+                continue // 1xx: the answer comes after it
+            }
+            out.reply.status = status
+            for i in 0..names.len {
+                n := names.at(i)
+                if n.len > 0 && n[0] == ':' {
+                    n.free()
+                    v := values.at(i)
+                    v.free()
+                    continue
+                }
+                out.reply.names.push(n)
+                out.reply.values.push(values.at(i))
+            }
+            names.free()
+            values.free()
+            gotHead = true
+        } else if kind == H3_DATA {
+            if !gotHead {
+                out.reply.free()
+                return h3Fail("DATA before the reply's HEADERS")
+            }
+            part := r.take(len) catch e {
+                out.reply.free()
+                return h3Fail(e.message, late: e.code == quic.QuicError.timeout)
+            }
+            out.reply.body.append(part)
+        } else if knownH3(kind) {
+            out.reply.free()
+            peer.h.fail(H3_FRAME_UNEXPECTED, "a frame that doesn't belong on a request stream")
+            return h3Fail("the server sent a frame that doesn't belong on a request stream")
+        } else {
+            r.skip(len) catch e {
+                out.reply.free()
+                return h3Fail(e.message)
+            }
+        }
+    }
+    if !gotHead {
+        out.reply.free()
+        return h3Fail("the server ended the stream without a reply")
+    }
+    if !job.raw {
+        out.reply.decode() catch e {
+            out.reply.free()
+            return h3Fail(e.message)
+        }
+    }
+    out.ok = true
+    return out
+}
+
+// The client's thread for HTTP/3, started by the first request.
+H3Pool *Client.h3Pool() {
+    self.lock.lock()
+    defer self.lock.unlock()
+    if self.pool == null {
+        H3Pool[] mem = alloc(H3Pool, 1)
+        p := &mem[0]
+        p.jobs = chan[H3Job *](256)
+        p.th = thread h3Main(p)
+        self.pool = p
+    }
+    return self.pool
+}
+
+// The port for HTTP/3 to d's host: the one its Alt-Svc named, or the
+// URL's; 0 once QUIC couldn't reach it.
+u16 Client.h3Port(Dest *d) {
+    self.lock.lock()
+    defer self.lock.unlock()
+    port, found := self.h3Ports.get(d.hostPort)
+    if !found {
+        return d.port
+    }
+    return u16(if port < 0 { 0 } else { port })
+}
+
+void Client.setH3Port(Dest *d, i64 port) {
+    self.lock.lock()
+    self.h3Ports.set(d.hostPort, port)
+    self.lock.unlock()
+}
+
+// Learns from a reply over TCP where the host answers HTTP/3: an Alt-Svc
+// of h3=":port", or "clear".
+void Client.learnAltSvc(Dest *d, Reply *r) {
+    v := r.header("Alt-Svc")
+    if v.len == 0 {
+        return
+    }
+    if str.trim(v) == "clear" {
+        self.setH3Port(d, 0 - 1)
+        return
+    }
+    _, rest, found := str.cut(v, "h3=\"")
+    if !found {
+        return
+    }
+    target, _, closed := str.cut(rest, "\"")
+    if !closed {
+        return
+    }
+    host, portText, _ := str.cut(target, ":")
+    if host.len > 0 && host != d.host {
+        return
+    }
+    port := str.parseInt(portText) catch 0
+    if port > 0 && port < 65536 {
+        self.setH3Port(d, port)
+    }
+}
+
+// A request over HTTP/3, which fails with fallback set when QUIC can't
+// reach the host.
+!Reply Client.sendH3(str method, Dest *d, u16 port, str body, str contentType, str[] headers, bool *fallback) {
+    p := self.h3Pool()
+    connect := if self.connectTimeout > 0s { self.connectTimeout } else { 5s }
+    H3Job job = H3Job{method: method, d: d, port: port, body: body, contentType: contentType, headers: headers,
+        raw: self.raw, ca: self.ca, timeout: self.wait(), connect: connect, done: chan[H3Result](1)}
+    defer job.done.free()
+    p.jobs <- &job
+    r := <-job.done
+    // a request the server didn't take goes again, on a new connection
+    for attempt in 0..2 {
+        if !r.retry {
+            break
+        }
+        r.why.free()
+        p.jobs <- &job
+        r = <-job.done
+    }
+    if r.ok {
+        return r.reply
+    }
+    *fallback = r.fallback
+    defer r.why.free()
+    if r.late {
+        return error(net.NetError.timeout, "{d.host}: {r.why}")
+    }
+    return error(net.NetError.closed, "{d.host}: {r.why}")
+}
+
+// Stops the client's HTTP/3 thread, which closes its connections.
+void Client.closeH3() {
+    self.lock.lock()
+    p := self.pool
+    self.pool = null
+    self.h3Ports.free()
+    self.lock.unlock()
+    if p == null {
+        return
+    }
+    p.jobs <- null
+    p.th.join()
+    p.jobs.free()
+    free(p[0:1])
+}

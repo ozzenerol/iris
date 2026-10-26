@@ -1,0 +1,118 @@
+// expect: HTTP/3 200 hello over HTTP/3 GET /
+// expect: HTTP/3 200 got 300000 bytes
+// expect: HTTP/3 200 part 0 part 1 part 2
+// expect: HTTP/3 200 streamed 200000 bytes, header ok
+// expect: HTTP/3 404 not found
+// expect: HTTP/3 200 header iris-test
+// expect: trailer done
+// expect: HTTP/2 200 alt-svc h3=":PORT"; ma=86400
+// expect: HTTP/3 200 hello over HTTP/3 GET /
+// expect: the server stopped
+
+import http, net, quic, str
+
+void hello(http.Request *req, http.Response *res) {
+    res.text("hello over {req.protocol} {req.method} {req.path}")
+}
+
+void echo(http.Request *req, http.Response *res) {
+    res.text("got {req.body.len} bytes")
+}
+
+!void parts(http.Request *req, http.Response *res) {
+    for i in 0..3 {
+        try res.write("part {i} ")
+    }
+}
+
+// a body read as it comes
+!void upload(http.Request *req, http.Response *res) {
+    u8[8192] buf
+    i64 total = 0
+    for {
+        n := try req.read(buf[:])
+        if n == 0 {
+            break
+        }
+        total += n
+    }
+    res.trailer("upload-status", "done")
+    res.text("streamed {total} bytes, header {req.header("X-Check")}")
+}
+
+void header(http.Request *req, http.Response *res) {
+    res.text("header {req.header("X-Test")}")
+}
+
+void serveH3(http.Router *r, quic.Listener ln) {
+    r.serveH3On(ln)
+    print("the server stopped")
+}
+
+void serveTcp(http.Router *r, net.Listener ln, net.TlsConfig *config) {
+    r.serveTlsOn(ln, config) catch e { }
+}
+
+!void main() {
+    http.Router r
+    defer r.free()
+    r.get("/", hello)
+    r.post("/echo", echo)
+    r.get("/parts", parts)
+    r.stream("/upload", upload)
+    r.get("/header", header)
+    tls := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    ln := try quic.listen(0, &tls, quic.Config{alpn: "h3"}, "127.0.0.1")
+    spawn serveH3(&r, ln)
+
+    http.Client c = http.Client{http3: true, ca: "tests/data/tls/ca.pem"}
+    defer c.close()
+    scoped String base = format("https://localhost:{ln.port}")
+    scoped String root = format("{base}/")
+    scoped http.Reply a = try c.get(root)
+    print("{a.protocol} {a.status} {a.body}")
+
+    scoped String big
+    for i in 0..30000 {
+        big.append("0123456789")
+    }
+    scoped String echoUrl = format("{base}/echo")
+    scoped http.Reply b = try c.post(echoUrl, "text/plain", big)
+    print("{b.protocol} {b.status} {b.body}")
+
+    scoped String partsUrl = format("{base}/parts")
+    scoped http.Reply p = try c.get(partsUrl)
+    print("{p.protocol} {p.status} {str.trim(p.body)}")
+
+    scoped String uploadUrl = format("{base}/upload")
+    scoped http.Reply u = try c.send("PUT", uploadUrl, big[0:200000], "application/octet-stream", ["X-Check: ok"])
+    print("{u.protocol} {u.status} {u.body}")
+
+    scoped String missing = format("{base}/nope")
+    scoped http.Reply m = try c.get(missing)
+    print("{m.protocol} {m.status} {str.trim(m.body)}")
+
+    scoped String headerUrl = format("{base}/header")
+    scoped http.Reply h = try c.get(headerUrl, ["X-Test: iris-test"])
+    print("{h.protocol} {h.status} {h.body}")
+    print("trailer {u.trailer("upload-status")}")
+
+    // over TCP the router says where HTTP/3 is, and the client moves there
+    r.advertiseH3(ln.port)
+    tcpTls := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    defer tcpTls.free()
+    tcpTls.offerHttp2()
+    tcp := try net.listen(0, "127.0.0.1")
+    spawn serveTcp(&r, tcp, &tcpTls)
+    http.Client moving = http.Client{http3: true, ca: "tests/data/tls/ca.pem", connectTimeout: 300ms}
+    defer moving.close()
+    scoped String tcpUrl = format("https://localhost:{tcp.port}/")
+    scoped http.Reply first = try moving.get(tcpUrl)
+    scoped String said = str.replace(first.header("Alt-Svc"), "{ln.port}", "PORT")
+    print("{first.protocol} {first.status} alt-svc {said}")
+    scoped http.Reply second = try moving.get(tcpUrl)
+    print("{second.protocol} {second.status} {second.body}")
+
+    r.shutdown(2s)
+    sleep(50ms)
+}

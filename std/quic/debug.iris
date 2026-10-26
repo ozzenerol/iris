@@ -1,0 +1,39 @@
+// Hooks for testing and debugging, off unless the environment asks:
+// IRIS_QUIC_TRACE=1 prints what each side sends and receives, and
+// IRIS_QUIC_DROP=n drops n percent of the datagrams that come, to try loss
+// recovery.
+
+import os, str
+
+i64 traceOn = -1
+i64 dropPercent = -1
+u64 dropState = 0x9e3779b97f4a7c15
+
+bool tracing() {
+    if traceOn < 0 {
+        v := os.env("IRIS_QUIC_TRACE") catch ""
+        traceOn = if v.len > 0 { 1 } else { 0 }
+    }
+    return traceOn == 1
+}
+
+void trace(str what) {
+    if tracing() {
+        print(what)
+    }
+}
+
+// Whether to drop the datagram that came: the same ones on every run.
+bool dropping() {
+    if dropPercent < 0 {
+        v := os.env("IRIS_QUIC_DROP") catch ""
+        dropPercent = str.parseInt(v) catch 0
+    }
+    if dropPercent == 0 {
+        return false
+    }
+    dropState = dropState ^ (dropState << 13)
+    dropState = dropState ^ (dropState >> 7)
+    dropState = dropState ^ (dropState << 17)
+    return i64(dropState % 100) < dropPercent
+}

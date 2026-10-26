@@ -1,0 +1,227 @@
+// The TLS 1.3 handshake for QUIC (RFC 9001 4), run by OpenSSL through the
+// runtime, and the transport parameters each side sends in it (RFC 9000
+// 18).
+
+@extern("iris_quic_tls_client")
+u8 *rawTlsClient(u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen, u8 *cert, i64 certLen, u8 *key,
+    i64 keyLen, u8 *params, i64 paramsLen)
+
+@extern("iris_quic_tls_server")
+u8 *rawTlsServer(u8 *ctx, u8 *params, i64 paramsLen)
+
+@extern("iris_quic_tls_feed")
+void rawTlsFeed(u8 *tls, i64 level, u8 *data, i64 len)
+
+@extern("iris_quic_tls_step")
+i32 rawTlsStep(u8 *tls)
+
+@extern("iris_quic_tls_alert")
+i32 rawTlsAlert(u8 *tls)
+
+@extern("iris_quic_tls_take")
+void rawTlsTake(u8 *tls, i64 level, String *out)
+
+@extern("iris_quic_tls_key")
+u8 *rawTlsKey(u8 *tls, i64 level, i64 dir)
+
+@extern("iris_quic_tls_params")
+i32 rawTlsParams(u8 *tls, u8 **p, i64 *n)
+
+@extern("iris_quic_tls_ssl")
+u8 *rawTlsSsl(u8 *tls)
+
+@extern("iris_quic_tls_free")
+void rawTlsFree(u8 *tls)
+
+@extern("iris_tls_alpn")
+void rawTlsAlpn(u8 *ssl, u8 **p, i64 *n)
+
+@extern("iris_tls_server_name")
+void rawTlsServerName(u8 *ssl, u8 **p, i64 *n)
+
+@extern("iris_tls_peer_subject")
+i32 rawTlsPeerSubject(u8 *ssl, String *out)
+
+@extern("iris_tls_message_ptr")
+u8 *tlsMessagePtr()
+
+@extern("iris_tls_message_len")
+i64 tlsMessageLen()
+
+str tlsMessage() => tlsMessagePtr()[0:tlsMessageLen()]
+
+// transport parameter ids
+const i64 TP_ORIGINAL_DCID = 0x00
+const i64 TP_IDLE_TIMEOUT = 0x01
+const i64 TP_RESET_TOKEN = 0x02
+const i64 TP_MAX_UDP_PAYLOAD = 0x03
+const i64 TP_MAX_DATA = 0x04
+const i64 TP_STREAM_DATA_BIDI_LOCAL = 0x05
+const i64 TP_STREAM_DATA_BIDI_REMOTE = 0x06
+const i64 TP_STREAM_DATA_UNI = 0x07
+const i64 TP_MAX_STREAMS_BIDI = 0x08
+const i64 TP_MAX_STREAMS_UNI = 0x09
+const i64 TP_ACK_DELAY_EXPONENT = 0x0a
+const i64 TP_MAX_ACK_DELAY = 0x0b
+const i64 TP_DISABLE_MIGRATION = 0x0c
+const i64 TP_PREFERRED_ADDRESS = 0x0d
+const i64 TP_CID_LIMIT = 0x0e
+const i64 TP_INITIAL_SCID = 0x0f
+const i64 TP_RETRY_SCID = 0x10
+
+// A side's transport parameters, with the defaults RFC 9000 gives those
+// that aren't sent.
+struct Params {
+    i64 idleTimeoutMs
+    i64 maxUdpPayload = 65527
+    i64 maxData
+    i64 streamDataBidiLocal
+    i64 streamDataBidiRemote
+    i64 streamDataUni
+    i64 maxStreamsBidi
+    i64 maxStreamsUni
+    i64 ackDelayExponent = 3
+    i64 maxAckDelayMs = 25
+    bool disableMigration
+    i64 cidLimit = 2
+    u8[20] originalDcid
+    i64 originalDcidLen = -1
+    u8[20] initialScid
+    i64 initialScidLen = -1
+    u8[20] retryScid
+    i64 retryScidLen = -1
+    u8[16] resetToken
+    bool hasResetToken
+}
+
+void putParam(Out *o, i64 id, i64 value) {
+    o.putVar(id)
+    o.putVar(varLen(value))
+    o.putVar(value)
+}
+
+void putParamBytes(Out *o, i64 id, str value) {
+    o.putVar(id)
+    o.putVar(value.len)
+    o.putBytes(value)
+}
+
+// Our parameters as they go in the handshake; the ids that only a server
+// sends are left out for a client.
+i64 encodeParams(Params *p, bool server, u8[] buf) {
+    Out o = Out{b: buf}
+    putParam(&o, TP_IDLE_TIMEOUT, p.idleTimeoutMs)
+    putParam(&o, TP_MAX_UDP_PAYLOAD, p.maxUdpPayload)
+    putParam(&o, TP_MAX_DATA, p.maxData)
+    putParam(&o, TP_STREAM_DATA_BIDI_LOCAL, p.streamDataBidiLocal)
+    putParam(&o, TP_STREAM_DATA_BIDI_REMOTE, p.streamDataBidiRemote)
+    putParam(&o, TP_STREAM_DATA_UNI, p.streamDataUni)
+    putParam(&o, TP_MAX_STREAMS_BIDI, p.maxStreamsBidi)
+    putParam(&o, TP_MAX_STREAMS_UNI, p.maxStreamsUni)
+    putParam(&o, TP_MAX_ACK_DELAY, p.maxAckDelayMs)
+    putParam(&o, TP_CID_LIMIT, p.cidLimit)
+    if p.disableMigration {
+        o.putVar(TP_DISABLE_MIGRATION)
+        o.putVar(0)
+    }
+    putParamBytes(&o, TP_INITIAL_SCID, p.initialScid[0:p.initialScidLen])
+    if server {
+        putParamBytes(&o, TP_ORIGINAL_DCID, p.originalDcid[0:p.originalDcidLen])
+        if p.retryScidLen >= 0 {
+            putParamBytes(&o, TP_RETRY_SCID, p.retryScid[0:p.retryScidLen])
+        }
+        if p.hasResetToken {
+            putParamBytes(&o, TP_RESET_TOKEN, p.resetToken[:])
+        }
+    }
+    return o.n
+}
+
+bool copyCid(u8[] to, i64 *len, str from) {
+    if from.len > 20 {
+        return false
+    }
+    for i, b in from {
+        to[i] = b
+    }
+    *len = from.len
+    return true
+}
+
+// The peer's parameters; "" when they are fine, else what is wrong with
+// them. A server's ids are refused from a client.
+str decodeParams(str data, bool fromServer, Params *p) {
+    In r = In{d: data}
+    scoped Ranges seen
+    for !r.done() {
+        id := r.getVar()
+        n := r.getVar()
+        value := r.getBytes(n)
+        if r.bad {
+            return "the transport parameters are cut short"
+        }
+        if id < 64 {
+            if seen.has(id) {
+                return "a transport parameter came twice"
+            }
+            seen.add(id, id + 1)
+        }
+        In v = In{d: value}
+        match id {
+            TP_IDLE_TIMEOUT => p.idleTimeoutMs = v.getVar()
+            TP_MAX_UDP_PAYLOAD => p.maxUdpPayload = v.getVar()
+            TP_MAX_DATA => p.maxData = v.getVar()
+            TP_STREAM_DATA_BIDI_LOCAL => p.streamDataBidiLocal = v.getVar()
+            TP_STREAM_DATA_BIDI_REMOTE => p.streamDataBidiRemote = v.getVar()
+            TP_STREAM_DATA_UNI => p.streamDataUni = v.getVar()
+            TP_MAX_STREAMS_BIDI => p.maxStreamsBidi = v.getVar()
+            TP_MAX_STREAMS_UNI => p.maxStreamsUni = v.getVar()
+            TP_ACK_DELAY_EXPONENT => p.ackDelayExponent = v.getVar()
+            TP_MAX_ACK_DELAY => p.maxAckDelayMs = v.getVar()
+            TP_DISABLE_MIGRATION => p.disableMigration = true
+            TP_CID_LIMIT => p.cidLimit = v.getVar()
+            TP_INITIAL_SCID => {
+                if !copyCid(p.initialScid[:], &p.initialScidLen, value) {
+                    return "a connection ID longer than 20 bytes"
+                }
+                v.at = value.len
+            }
+            TP_ORIGINAL_DCID, TP_RETRY_SCID, TP_RESET_TOKEN, TP_PREFERRED_ADDRESS => {
+                if !fromServer {
+                    return "a client sent a parameter only a server sends"
+                }
+                if id == TP_ORIGINAL_DCID && !copyCid(p.originalDcid[:], &p.originalDcidLen, value) {
+                    return "a connection ID longer than 20 bytes"
+                }
+                if id == TP_RETRY_SCID && !copyCid(p.retryScid[:], &p.retryScidLen, value) {
+                    return "a connection ID longer than 20 bytes"
+                }
+                if id == TP_RESET_TOKEN {
+                    if value.len != 16 {
+                        return "a stateless reset token that isn't 16 bytes"
+                    }
+                    for i, b in value {
+                        p.resetToken[i] = b
+                    }
+                    p.hasResetToken = true
+                }
+                v.at = value.len
+            }
+            _ => v.at = value.len
+        }
+        if v.bad || v.at != value.len {
+            return "a transport parameter with a value that doesn't fit it"
+        }
+    }
+    if p.maxUdpPayload < 1200 || p.ackDelayExponent > 20 || p.maxAckDelayMs >= 16384 || p.cidLimit < 2 ||
+        p.maxStreamsBidi > 1152921504606846976 || p.maxStreamsUni > 1152921504606846976 {
+            return "a transport parameter out of its range"
+        }
+    if p.initialScidLen < 0 {
+        return "no initial_source_connection_id"
+    }
+    if fromServer && p.originalDcidLen < 0 {
+        return "no original_destination_connection_id"
+    }
+    return ""
+}

@@ -1,11 +1,11 @@
-// HTTP/1.1 and HTTP/2: a server, where each connection gets a task and
+// HTTP/1.1, HTTP/2 and HTTP/3: a server, where each connection gets a task and
 // its requests are answered while the client keeps it open; a Router that
 // sends each request to the handler for its method and path; a client,
 // with a Client that keeps connections open; and WebSockets. https works on
 // both sides, with TLS from OpenSSL; over TLS, HTTP/2 is used when the
-// other side offers it.
+// other side offers it. HTTP/3 goes over QUIC, on a UDP port.
 
-import compress, json, net, str, time
+import compress, json, net, quic, str, time
 
 // What HTTP calls fail with: badUrl for an address that isn't http:// or
 // https://, badReply for a reply that isn't HTTP, tooBig for a body over the
@@ -23,7 +23,7 @@ pub struct Request {
     pub String method
     pub String path
     pub String body
-    // "HTTP/1.1" or "HTTP/2"
+    // "HTTP/1.1", "HTTP/2" or "HTTP/3"
     pub str protocol
     // who sent the request: the client's address and port, or the
     // proxy's when there is one in front
@@ -48,6 +48,7 @@ pub struct Request {
     bool expectContinue
     i64 maxLine
     BodyIn *piped
+    H3In *h3in // a body read as it comes on HTTP/3
     i64 bodyAt // where read is in body, when the body came whole
     Watch *watch
 
@@ -66,6 +67,7 @@ pub struct Response {
     // a body streamed with write: where it goes, and whether the head went
     net.Conn *conn
     StreamOut *h2
+    H3Out *h3
     bool streaming
     bool keepAlive
 }
@@ -80,6 +82,10 @@ pub struct Response {
 pub !void Response.write(str data) {
     if self.h2 != null {
         try self.writeH2(data)
+        return
+    }
+    if self.h3 != null {
+        try self.writeH3(data)
         return
     }
     if self.conn == null {
@@ -294,6 +300,9 @@ pub !i64 Request.read(u8[] buf) {
         n := try self.piped.read(buf, &self.trailerText)
         self.touch()
         return n
+    }
+    if self.h3in != null {
+        return try self.h3in.read(buf, &self.trailerText)
     }
     if self.bodyConn == null {
         n := copyInto(buf, self.body[self.bodyAt:])
@@ -1353,6 +1362,8 @@ pub struct Router {
     List[net.Listener] listeners
     Atomic[i64] drainEnd
     bool streaming // some route reads its body as it comes
+    String altSvc  // the Alt-Svc header of advertiseH3
+    List[quic.Listener] quics
 }
 
 // Stops the server: no new connections, and serve returns once the
@@ -1363,6 +1374,9 @@ pub void Router.shutdown(Duration wait = 10s) {
     self.lock.lock()
     for ln in self.listeners {
         ln.interrupt()
+    }
+    for q in self.quics {
+        q.interrupt()
     }
     self.lock.unlock()
     start := time.clock()
@@ -1556,6 +1570,9 @@ i64 score(Route *r, List[str] *parts) {
 }
 
 void Router.dispatch(Request *req, Response *res) {
+    if self.altSvc.len > 0 && req.protocol != "HTTP/3" {
+        res.header("Alt-Svc", self.altSvc)
+    }
     defer {
         for h in self.afters {
             h.done(req, res)
@@ -1661,13 +1678,21 @@ pub !void Router.serveOn(net.Listener ln, i64 threads = 1) {
     try serveTargetOn(ln, Target{router: self}, threads)
 }
 
-// Answers HTTPS requests on port with the router, as serveTls does.
-pub !void Router.serveTls(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0) {
-    config := try net.tlsConfig(certFile, keyFile)
-    defer config.free()
-    config.offerHttp2()
-    try serveTarget(port, Target{router: self, tls: &config}, host, threads)
-}
+// Answers HTTPS requests on port with the router, as serveTls does. With
+// http3, the same UDP port answers HTTP/3 too, and the answers over TCP
+// say so with Alt-Svc.
+pub !void Router.serveTls(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0,
+    bool http3 = false) {
+        config := try net.tlsConfig(certFile, keyFile)
+        defer config.free()
+        config.offerHttp2()
+        if http3 {
+            quicConfig := try net.tlsConfig(certFile, keyFile)
+            self.advertiseH3(port)
+            thread routerH3(self, port, host, tlsKept(quicConfig), threads)
+        }
+        try serveTarget(port, Target{router: self, tls: &config}, host, threads)
+    }
 
 // Answers HTTPS requests on a listener that is already open.
 pub !void Router.serveTlsOn(net.Listener ln, net.TlsConfig *config, i64 threads = 1) {
@@ -1688,6 +1713,8 @@ pub void Router.free() {
     self.befores.free()
     self.afters.free()
     self.listeners.free()
+    self.quics.free()
+    self.altSvc.free()
 }
 
 // ------------------------------------------------------------ the client
@@ -1696,7 +1723,7 @@ pub void Router.free() {
 pub struct Reply {
     pub i32 status
     pub String body
-    // "HTTP/1.1" or "HTTP/2"
+    // "HTTP/1.1", "HTTP/2" or "HTTP/3"
     pub str protocol
     List[String] names
     List[String] values
@@ -1907,9 +1934,14 @@ pub struct Client {
     // keep bodies as the server sends them: no Accept-Encoding of its
     // own, and a gzip body stays gzip, for a proxy that passes it on
     pub bool raw
+    // https requests go over HTTP/3 first, to the port the server's
+    // Alt-Svc named or the URL's own; a host QUIC can't reach gets TCP
+    pub bool http3
     Mutex lock
     Map[str, List[net.Conn]] idle
     Map[str, H2Conn *] h2
+    H3Pool *pool
+    Map[str, i64] h3Ports // Alt-Svc's port for each host, -1 when QUIC failed
 }
 
 Duration Client.wait() => if self.timeout == 0 { 30s } else if self.timeout < 0 { 0s } else { self.timeout }
@@ -1990,20 +2022,46 @@ H2Conn *Client.h2For(Dest *d) {
 pub !Reply Client.send(str method, str url, str body = "", str contentType = "", str[] headers = []) {
     try checkHeaders(headers)
     d := try destOf(url)
+    if d.secure && self.http3 {
+        port := self.h3Port(&d)
+        if port > 0 {
+            bool fallback = false
+            r := self.sendH3(method, &d, port, body, contentType, headers, &fallback) catch e {
+                if !fallback {
+                    return e
+                }
+                self.setH3Port(&d, 0 - 1)
+                Reply none
+                none
+            }
+            if r.status != 0 {
+                return r
+            }
+        }
+    }
+    r := try self.sendTcp(method, &d, body, contentType, headers)
+    if d.secure && self.http3 {
+        self.learnAltSvc(&d, &r)
+    }
+    return r
+}
+
+!Reply Client.sendTcp(str method, Dest *d, str body, str contentType, str[] headers) {
+    url := d.hostPort
     // a request the server didn't take (GOAWAY, REFUSED_STREAM) goes again,
     // on a new connection, up to twice: during a restart the next
     // connection can meet a server that is going away too
     for attempt in 0..3 {
-        H2Conn *h = self.h2For(&d)
+        H2Conn *h = self.h2For(d)
         net.Conn fresh
         bool dialed = false
-        if h == null && !self.hasIdle(&d) {
-            fresh = try self.dialFor(&d, &h)
+        if h == null && !self.hasIdle(d) {
+            fresh = try self.dialFor(d, &h)
             dialed = h == null
         }
         if h != null {
             bool retry
-            r := h.request(method, &d, body, contentType, self.wait(), &retry, headers, self.raw) catch e {
+            r := h.request(method, d, body, contentType, self.wait(), &retry, headers, self.raw) catch e {
                 if retry && attempt < 2 {
                     continue
                 }
@@ -2011,7 +2069,7 @@ pub !Reply Client.send(str method, str url, str body = "", str contentType = "",
             }
             return r
         }
-        return try self.sendH1(method, &d, body, contentType, fresh, dialed, headers)
+        return try self.sendH1(method, d, body, contentType, fresh, dialed, headers)
     }
     return error(net.NetError.closed, "{url}: the connection closed")
 }
@@ -2093,6 +2151,7 @@ pub void Client.close() {
         h.close()
     }
     open.free()
+    self.closeH3()
 }
 
 // Reads a reply. reusable says whether the connection can take another

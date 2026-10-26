@@ -1,0 +1,87 @@
+import net, os, quic, str
+
+// A QUIC server and client in one program, over loopback: 200
+// connections, each with a handshake and a request on a stream, then
+// 512 MiB through one stream. The certificate is the tests' ECDSA P-256
+// one, and both sides use TLS_AES_256_GCM_SHA384, as the Rust version does.
+
+// Counts what comes on a stream: "ok" for a 5-byte request, else the count.
+void serveStream(quic.Stream s) {
+    defer s.close()
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    i64 total = 0
+    for {
+        n := s.read(buf) catch 0
+        if n == 0 {
+            break
+        }
+        total += n
+    }
+    if total == 5 {
+        s.write("ok") catch e { }
+    } else {
+        s.write("{total}") catch e { }
+    }
+    s.closeWrite()
+}
+
+void serveConn(quic.Conn c) {
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        spawn serveStream(s)
+    }
+    c.close()
+}
+
+void acceptAll(quic.Listener ln) {
+    for {
+        c := ln.accept() catch e {
+            break
+        }
+        spawn serveConn(c)
+    }
+}
+
+!void main() {
+    dir, _, _ := str.cutLast(os.arg(0), "/")
+    scoped String certFile = format("{dir}/../../tests/data/tls/server.pem")
+    scoped String keyFile = format("{dir}/../../tests/data/tls/server.key")
+    scoped String caFile = format("{dir}/../../tests/data/tls/ca.pem")
+    tls := try net.tlsConfig(certFile, keyFile)
+    ln := try quic.listen(0, &tls, quic.Config{alpn: "bench"}, "127.0.0.1")
+    spawn acceptAll(ln)
+    config := quic.Config{alpn: "bench", ca: caFile, serverName: "localhost"}
+
+    i64 good = 0
+    for i in 0..200 {
+        c := try quic.dial("127.0.0.1", ln.port, config)
+        s := try c.openStream()
+        try s.write("hello")
+        s.closeWrite()
+        scoped String reply = try s.readAll()
+        if reply == "ok" {
+            good += 1
+        }
+        s.close()
+        c.close()
+    }
+
+    c := try quic.dial("127.0.0.1", ln.port, config)
+    s := try c.openStream()
+    u8[] block = alloc(u8, 1MiB)
+    defer free(block)
+    for i in 0..block.len {
+        block[i] = u8(i * 7 & 255)
+    }
+    for i in 0..512 {
+        try s.write(block)
+    }
+    s.closeWrite()
+    scoped String counted = try s.readAll()
+    s.close()
+    c.close()
+    print("connections {good}, bytes {counted}")
+}
