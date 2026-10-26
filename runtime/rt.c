@@ -17584,3 +17584,651 @@ int iris_pk_encrypt_oaep(void *key, const char *data, int64_t len, int hash, Iri
     if (ctx) oaep.ctxFree(ctx);
     return ok;
 }
+
+/* ---------------------------------------------------------------- bson (0.82)
+   BSON for @json structs, from the tables json uses: each field is an
+   element named as in JSON. A struct whose one field is "$oid" (u8[12]),
+   "$date" (i64), "$binary" (String) or "$numberDecimal" (u8[16]) is the
+   BSON type of that name, as std/bson's ObjectId, Date, Binary and
+   Decimal128 are. */
+
+static _Thread_local char bsonMsg[512];
+static _Thread_local int64_t bsonMsgLen;
+
+const char *iris_bson_message_ptr(void) { return bsonMsg; }
+int64_t iris_bson_message_len(void) { return bsonMsgLen; }
+
+enum { BS_PLAIN, BS_OID, BS_DATE, BS_BINARY, BS_DECIMAL };
+
+static int bsonSpecial(const JsonType *t) {
+    if (t->kind != J_STRUCT || t->count != 1) return BS_PLAIN;
+    const JsonField *f = t->items;
+    if (f->nameLen < 4 || f->name[0] != '$') return BS_PLAIN;
+    const JsonType *ft = f->type;
+    if (f->nameLen == 4 && !memcmp(f->name, "$oid", 4) && ft->kind == J_ARRAY && ft->count == 12) return BS_OID;
+    if (f->nameLen == 5 && !memcmp(f->name, "$date", 5) && ft->kind == J_INT && ft->size == 8) return BS_DATE;
+    if (f->nameLen == 7 && !memcmp(f->name, "$binary", 7) && ft->kind == J_STRING) return BS_BINARY;
+    if (f->nameLen == 14 && !memcmp(f->name, "$numberDecimal", 14) && ft->kind == J_ARRAY && ft->count == 16)
+        return BS_DECIMAL;
+    return BS_PLAIN;
+}
+
+static void bsonI32(IrisString *o, int32_t v) {
+    unsigned char b[4] = {(unsigned char)v, (unsigned char)(v >> 8), (unsigned char)(v >> 16), (unsigned char)(v >> 24)};
+    iris_string_append(o, (const char *)b, 4);
+}
+
+static void bsonI64(IrisString *o, int64_t v) {
+    unsigned char b[8];
+    for (int i = 0; i < 8; i++) b[i] = (unsigned char)((uint64_t)v >> (8 * i));
+    iris_string_append(o, (const char *)b, 8);
+}
+
+static int32_t bsonGet32(const unsigned char *p) {
+    return (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+}
+
+static int64_t bsonGet64(const unsigned char *p) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = v << 8 | p[i];
+    return (int64_t)v;
+}
+
+static void bsonKey(IrisString *o, int type, const char *k, int64_t n) {
+    char t = (char)type;
+    iris_string_append(o, &t, 1);
+    iris_string_append(o, k, n);
+    iris_string_append(o, "", 1);
+}
+
+static void bsonString(IrisString *o, const char *s, int64_t n) {
+    bsonI32(o, (int32_t)(n + 1));
+    iris_string_append(o, s, n);
+    iris_string_append(o, "", 1);
+}
+
+/* The 4 bytes of a document's length, written once its end is known. */
+static void bsonPatch(IrisString *o, int64_t start) {
+    int32_t n = (int32_t)(o->len - start);
+    for (int i = 0; i < 4; i++) o->ptr[start + i] = (char)(n >> (8 * i));
+}
+
+static void bsonElement(IrisString *o, const JsonType *t, const char *p, const char *k, int64_t kn);
+
+static void bsonStructBody(IrisString *o, const JsonType *t, const char *p) {
+    const JsonField *fs = t->items;
+    for (int64_t i = 0; i < t->count; i++) bsonElement(o, fs[i].type, p + fs[i].offset, fs[i].name, fs[i].nameLen);
+}
+
+static void bsonElement(IrisString *o, const JsonType *t, const char *p, const char *k, int64_t kn) {
+    switch (t->kind) {
+    case J_INT: case J_UINT: {
+        int64_t v = readInt(p, t->size, t->kind == J_INT);
+        if ((t->kind == J_INT && t->size <= 4) || (t->kind == J_UINT && t->size <= 2)) {
+            bsonKey(o, 0x10, k, kn);
+            bsonI32(o, (int32_t)v);
+        } else {
+            bsonKey(o, 0x12, k, kn);
+            bsonI64(o, v);
+        }
+        break;
+    }
+    case J_FLOAT: {
+        double v = t->size == 4 ? *(const float *)p : *(const double *)p;
+        int64_t bits;
+        memcpy(&bits, &v, 8);
+        bsonKey(o, 0x01, k, kn);
+        bsonI64(o, bits);
+        break;
+    }
+    case J_BOOL:
+        bsonKey(o, 0x08, k, kn);
+        iris_string_append(o, *(const uint8_t *)p ? "\x01" : "", 1);
+        break;
+    case J_STR: case J_STRING: {
+        const Slice *s = (const Slice *)p;
+        bsonKey(o, 0x02, k, kn);
+        bsonString(o, s->ptr, s->len);
+        break;
+    }
+    case J_ENUM: {
+        int64_t v = *(const int32_t *)p;
+        const JsonName *names = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (names[i].value == v) {
+                bsonKey(o, 0x02, k, kn);
+                bsonString(o, names[i].name, names[i].len);
+                return;
+            }
+        }
+        bsonKey(o, 0x10, k, kn);
+        bsonI32(o, (int32_t)v);
+        break;
+    }
+    case J_STRUCT: {
+        const JsonField *f = t->items;
+        switch (bsonSpecial(t)) {
+        case BS_OID:
+            bsonKey(o, 0x07, k, kn);
+            iris_string_append(o, p + f->offset, 12);
+            return;
+        case BS_DATE:
+            bsonKey(o, 0x09, k, kn);
+            bsonI64(o, *(const int64_t *)(p + f->offset));
+            return;
+        case BS_BINARY: {
+            const IrisString *s = (const IrisString *)(p + f->offset);
+            bsonKey(o, 0x05, k, kn);
+            bsonI32(o, (int32_t)s->len);
+            iris_string_append(o, "", 1);
+            iris_string_append(o, s->ptr, s->len);
+            return;
+        }
+        case BS_DECIMAL:
+            bsonKey(o, 0x13, k, kn);
+            iris_string_append(o, p + f->offset, 16);
+            return;
+        }
+        bsonKey(o, 0x03, k, kn);
+        int64_t start = o->len;
+        bsonI32(o, 0);
+        bsonStructBody(o, t, p);
+        iris_string_append(o, "", 1);
+        bsonPatch(o, start);
+        break;
+    }
+    case J_MAP: {
+        const JsonMapInfo *mi = t->items;
+        const JsonMap *m = (const JsonMap *)p;
+        bsonKey(o, 0x03, k, kn);
+        int64_t start = o->len;
+        bsonI32(o, 0);
+        for (int64_t i = 0; i < m->state.len; i++) {
+            if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+            const char *e = m->slots.ptr + i * mi->entrySize;
+            bsonElement(o, mi->val, e + mi->valOffset, ((const Slice *)e)->ptr, ((const Slice *)e)->len);
+        }
+        iris_string_append(o, "", 1);
+        bsonPatch(o, start);
+        break;
+    }
+    case J_SLICE: case J_ARRAY: case J_LIST: {
+        const JsonType *et = t->items;
+        const char *base = p;
+        int64_t n = t->count;
+        if (t->kind == J_SLICE) {
+            base = ((const Slice *)p)->ptr;
+            n = ((const Slice *)p)->len;
+        } else if (t->kind == J_LIST) {
+            base = ((const JsonList *)p)->buf.ptr;
+            n = ((const JsonList *)p)->len;
+        }
+        bsonKey(o, 0x04, k, kn);
+        int64_t start = o->len;
+        bsonI32(o, 0);
+        char digits[24];
+        for (int64_t i = 0; i < n; i++) {
+            char *d = u64Digits((uint64_t)i, digits + sizeof digits);
+            bsonElement(o, et, base + i * et->size, d, digits + sizeof digits - d);
+        }
+        iris_string_append(o, "", 1);
+        bsonPatch(o, start);
+        break;
+    }
+    }
+}
+
+static _Atomic uint32_t bsonCounter;
+static unsigned char bsonProcess[5];
+static pthread_once_t bsonOnce = PTHREAD_ONCE_INIT;
+
+static void bsonStart(void) {
+    uint32_t c;
+    iris_random_os((char *)bsonProcess, 5);
+    iris_random_os((char *)&c, 4);
+    bsonCounter = c;
+}
+
+/* A new ObjectId: the time in seconds, 5 random bytes of this process and
+   a counter, as MongoDB makes them. */
+void iris_bson_new_id(unsigned char *out) {
+    pthread_once(&bsonOnce, bsonStart);
+    uint32_t secs = (uint32_t)time(NULL);
+    uint32_t c = atomic_fetch_add(&bsonCounter, 1);
+    out[0] = (unsigned char)(secs >> 24);
+    out[1] = (unsigned char)(secs >> 16);
+    out[2] = (unsigned char)(secs >> 8);
+    out[3] = (unsigned char)secs;
+    memcpy(out + 4, bsonProcess, 5);
+    out[9] = (unsigned char)(c >> 16);
+    out[10] = (unsigned char)(c >> 8);
+    out[11] = (unsigned char)c;
+}
+
+/* The document of the struct at value appended to out. With fillId, an
+   ObjectId field _id that is all zeros gets a new id first, written into
+   the struct, and copied to id. */
+void iris_bson_encode(const JsonType *t, char *value, IrisString *out, int fillId, unsigned char *id) {
+    if (t->kind != J_STRUCT && t->kind != J_MAP) return;
+    if (fillId && t->kind == J_STRUCT) {
+        const JsonField *fs = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (fs[i].nameLen == 3 && !memcmp(fs[i].name, "_id", 3) && bsonSpecial(fs[i].type) == BS_OID) {
+                unsigned char *oid = (unsigned char *)value + fs[i].offset + ((const JsonField *)fs[i].type->items)->offset;
+                static const unsigned char zero[12];
+                if (!memcmp(oid, zero, 12)) iris_bson_new_id(oid);
+                memcpy(id, oid, 12);
+            }
+        }
+    }
+    if (out->cap - out->len < 128) {
+        const char *none = NULL;
+        stringGrow(out, &none, 128);
+    }
+    int64_t start = out->len;
+    bsonI32(out, 0);
+    if (t->kind == J_STRUCT) {
+        bsonStructBody(out, t, value);
+    } else {
+        /* a map's entries */
+        const JsonMapInfo *mi = t->items;
+        const JsonMap *m = (const JsonMap *)value;
+        for (int64_t i = 0; i < m->state.len; i++) {
+            if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+            const char *e = m->slots.ptr + i * mi->entrySize;
+            bsonElement(out, mi->val, e + mi->valOffset, ((const Slice *)e)->ptr, ((const Slice *)e)->len);
+        }
+    }
+    iris_string_append(out, "", 1);
+    bsonPatch(out, start);
+}
+
+/* The decoder. code: 1 invalid, 2 wrong type, 3 missing, 4 range. */
+typedef struct {
+    int code;
+    int depth;
+    char path[256];
+    size_t pathLen;
+} BsonIn;
+
+static bool bsonFail(BsonIn *in, int code, const char *what) {
+    if (!in->code) {
+        in->code = code;
+        bsonMsgLen = in->pathLen ? snprintf(bsonMsg, sizeof bsonMsg, "%s: %s", in->path, what)
+                                 : snprintf(bsonMsg, sizeof bsonMsg, "%s", what);
+        if (bsonMsgLen >= (int64_t)sizeof bsonMsg) bsonMsgLen = sizeof bsonMsg - 1;
+    }
+    return false;
+}
+
+static void bsonPathField(BsonIn *in, const char *name, int64_t n) {
+    if (in->pathLen && in->pathLen < sizeof in->path - 1) in->path[in->pathLen++] = '.';
+    size_t room = sizeof in->path - 1 - in->pathLen;
+    size_t take = (size_t)n < room ? (size_t)n : room;
+    memcpy(in->path + in->pathLen, name, take);
+    in->pathLen += take;
+    in->path[in->pathLen] = 0;
+}
+
+/* How many bytes the value of an element of type at p takes, or -1 when
+   it runs past end or isn't BSON. */
+static int64_t bsonSize(int type, const unsigned char *p, const unsigned char *end) {
+    int64_t room = end - p;
+    switch (type) {
+    case 0x01: case 0x09: case 0x11: case 0x12: return room >= 8 ? 8 : -1;
+    case 0x10: return room >= 4 ? 4 : -1;
+    case 0x08: return room >= 1 ? 1 : -1;
+    case 0x07: return room >= 12 ? 12 : -1;
+    case 0x13: return room >= 16 ? 16 : -1;
+    case 0x06: case 0x0A: case 0x7F: case 0xFF: return 0;
+    case 0x02: case 0x0D: case 0x0E: {
+        if (room < 4) return -1;
+        int64_t n = bsonGet32(p);
+        return n >= 1 && 4 + n <= room && p[3 + n] == 0 ? 4 + n : -1;
+    }
+    case 0x03: case 0x04: case 0x0F: {
+        if (room < 5) return -1;
+        int64_t n = bsonGet32(p);
+        return n >= 5 && n <= room && p[n - 1] == 0 ? n : -1;
+    }
+    case 0x05: {
+        if (room < 5) return -1;
+        int64_t n = bsonGet32(p);
+        return n >= 0 && 5 + n <= room ? 5 + n : -1;
+    }
+    case 0x0B: {
+        const unsigned char *q = memchr(p, 0, (size_t)room);
+        if (!q) return -1;
+        const unsigned char *r = memchr(q + 1, 0, (size_t)(end - q - 1));
+        return r ? r + 1 - p : -1;
+    }
+    case 0x0C: {
+        if (room < 4) return -1;
+        int64_t n = bsonGet32(p);
+        return n >= 1 && 4 + n + 12 <= room ? 4 + n + 12 : -1;
+    }
+    default: return -1;
+    }
+}
+
+static const char *bsonTypeName(int type) {
+    switch (type) {
+    case 0x01: return "a double";
+    case 0x02: return "a string";
+    case 0x03: return "a document";
+    case 0x04: return "an array";
+    case 0x05: return "binary data";
+    case 0x07: return "an ObjectId";
+    case 0x08: return "a bool";
+    case 0x09: return "a date";
+    case 0x0A: return "null";
+    case 0x10: return "an int32";
+    case 0x11: return "a timestamp";
+    case 0x12: return "an int64";
+    case 0x13: return "a decimal128";
+    default: return "a BSON type this can't read";
+    }
+}
+
+static bool bsonWrong(BsonIn *in, const char *want, int type) {
+    char msg[128];
+    snprintf(msg, sizeof msg, "expected %s, found %s", want, bsonTypeName(type));
+    return bsonFail(in, 2, msg);
+}
+
+static bool bsonValue(BsonIn *in, int type, const unsigned char *v, int64_t n, const JsonType *t, char *p);
+
+/* The elements of the document at d (n bytes, length and end byte
+   included) into the struct or map at p. */
+static bool bsonDoc(BsonIn *in, const unsigned char *d, int64_t n, const JsonType *t, char *p) {
+    if (++in->depth > 100) return bsonFail(in, 1, "documents nested more than 100 deep");
+    const unsigned char *at = d + 4, *end = d + n - 1;
+    bool ok = true;
+    const JsonField *fs = t->kind == J_STRUCT ? t->items : NULL;
+    const JsonMapInfo *mi = t->kind == J_MAP ? t->items : NULL;
+    unsigned char seenSmall[64];
+    unsigned char *seen = NULL;
+    if (fs) {
+        seen = t->count <= 64 ? seenSmall : calloc((size_t)t->count, 1);
+        if (!seen) outOfMemory();
+        if (seen == seenSmall) memset(seen, 0, sizeof seenSmall);
+    }
+    if (mi) jsonMapFree(t, p);
+    int64_t next = 0;
+    while (ok && at < end) {
+        int type = *at++;
+        const unsigned char *k = at;
+        const unsigned char *kz = memchr(at, 0, (size_t)(end - at));
+        if (!kz) {
+            ok = bsonFail(in, 1, "a key without its end");
+            break;
+        }
+        int64_t kn = kz - k;
+        at = kz + 1;
+        int64_t size = bsonSize(type, at, end);
+        if (size < 0) {
+            ok = bsonFail(in, 1, "an element that runs past its document, or of an unknown type");
+            break;
+        }
+        size_t saved = in->pathLen;
+        if (fs) {
+            int64_t f = -1;
+            for (int64_t j = 0; j < t->count; j++) {
+                int64_t i = next + j < t->count ? next + j : next + j - t->count;
+                if (fs[i].nameLen == kn && !memcmp(fs[i].name, k, (size_t)kn)) {
+                    f = i;
+                    next = i + 1;
+                    break;
+                }
+            }
+            if (f >= 0) {
+                bsonPathField(in, fs[f].name, fs[f].nameLen);
+                ok = bsonValue(in, type, at, size, fs[f].type, p + fs[f].offset);
+                seen[f] = 1;
+            }
+        } else {
+            JsonMap *m = (JsonMap *)p;
+            if ((m->len + m->removed + 1) * 4 > m->state.len * 3) jsonMapGrow(m, mi);
+            bool found;
+            unsigned char tag;
+            int64_t slot = jsonMapSlot(m, mi, (const char *)k, kn, &found, &tag);
+            char *e = m->slots.ptr + slot * mi->entrySize;
+            char *val = e + mi->valOffset;
+            if (found) {
+                jsonFree(mi->val, val);
+                memset(val, 0, (size_t)mi->val->size);
+            } else {
+                if (m->state.ptr[slot] == 1) m->removed--;
+                Slice *key = (Slice *)e;
+                key->ptr = malloc(kn ? (size_t)kn : 1);
+                if (!key->ptr) outOfMemory();
+                memcpy(key->ptr, k, (size_t)kn);
+                key->len = kn;
+                if (mi->keySize == 24) ((IrisString *)e)->cap = kn;
+                m->state.ptr[slot] = (char)tag;
+                m->len++;
+            }
+            if (mi->val->init) memcpy(val, mi->val->init, (size_t)mi->val->size);
+            bsonPathField(in, (const char *)k, kn);
+            ok = bsonValue(in, type, at, size, mi->val, val);
+        }
+        in->pathLen = saved;
+        in->path[saved] = 0;
+        at += size;
+    }
+    for (int64_t i = 0; ok && fs && i < t->count; i++) {
+        if (fs[i].required && !seen[i]) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "the required field \"%.*s\" is missing", (int)fs[i].nameLen, fs[i].name);
+            ok = bsonFail(in, 3, msg);
+        }
+    }
+    if (seen && seen != seenSmall) free(seen);
+    in->depth--;
+    return ok;
+}
+
+/* The elements of an array (a document keyed 0, 1, ...) into a list, a
+   slice or an array, in their order. */
+static bool bsonList(BsonIn *in, const unsigned char *d, int64_t n, const JsonType *t, char *p) {
+    if (++in->depth > 100) return bsonFail(in, 1, "documents nested more than 100 deep");
+    const JsonType *et = t->items;
+    bool slice = t->kind == J_SLICE || t->kind == J_LIST;
+    if (slice) jsonFree(t, p);
+    char *buf = slice ? NULL : p;
+    int64_t count = 0, cap = slice ? 0 : t->count;
+    const unsigned char *at = d + 4, *end = d + n - 1;
+    bool ok = true;
+    while (ok && at < end) {
+        int type = *at++;
+        const unsigned char *kz = memchr(at, 0, (size_t)(end - at));
+        if (!kz) {
+            ok = bsonFail(in, 1, "a key without its end");
+            break;
+        }
+        at = kz + 1;
+        int64_t size = bsonSize(type, at, end);
+        if (size < 0) {
+            ok = bsonFail(in, 1, "an element that runs past its array, or of an unknown type");
+            break;
+        }
+        if (count == cap) {
+            if (!slice) {
+                char msg[96];
+                snprintf(msg, sizeof msg, "more than %lld items", (long long)t->count);
+                ok = bsonFail(in, 2, msg);
+                break;
+            }
+            int64_t ncap = cap ? cap * 2 : 8;
+            char *nb = realloc(buf, (size_t)(ncap * et->size));
+            if (!nb) outOfMemory();
+            memset(nb + cap * et->size, 0, (size_t)((ncap - cap) * et->size));
+            buf = nb;
+            cap = ncap;
+        }
+        if (slice && et->init) memcpy(buf + count * et->size, et->init, (size_t)et->size);
+        ok = bsonValue(in, type, at, size, et, buf + count * et->size);
+        count++;
+        at += size;
+    }
+    if (t->kind == J_LIST) {
+        JsonList *l = (JsonList *)p;
+        l->buf.ptr = buf;
+        l->buf.len = cap;
+        l->len = count;
+    } else if (slice) {
+        Slice *s = (Slice *)p;
+        s->ptr = buf;
+        s->len = count;
+        if (!count) {
+            free(buf);
+            s->ptr = NULL;
+        }
+    }
+    in->depth--;
+    return ok;
+}
+
+static bool bsonSetInt(BsonIn *in, const JsonType *t, char *p, int64_t v, bool fromUnsigned) {
+    int bits = t->size * 8;
+    bool fits = t->kind == J_INT ? (!fromUnsigned || v >= 0) && (bits == 64 || (v >= -(1LL << (bits - 1)) && v < (1LL << (bits - 1))))
+                                 : (fromUnsigned || v >= 0) && (bits == 64 || (uint64_t)v < (1ULL << bits));
+    if (!fits) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "%lld doesn't fit in %c%d", (long long)v, t->kind == J_INT ? 'i' : 'u', bits);
+        return bsonFail(in, 4, msg);
+    }
+    writeInt(p, t->size, v);
+    return true;
+}
+
+static bool bsonValue(BsonIn *in, int type, const unsigned char *v, int64_t n, const JsonType *t, char *p) {
+    if (type == 0x0A || type == 0x06) return true;      /* null leaves the value as it is */
+    switch (t->kind) {
+    case J_INT: case J_UINT:
+        if (type == 0x10) return bsonSetInt(in, t, p, bsonGet32(v), false);
+        if (type == 0x12 || type == 0x09) return bsonSetInt(in, t, p, bsonGet64(v), false);
+        if (type == 0x11) return bsonSetInt(in, t, p, bsonGet64(v), true);
+        if (type == 0x01) {
+            double d;
+            int64_t bits = bsonGet64(v);
+            memcpy(&d, &bits, 8);
+            if (d != (double)(int64_t)d || d < -9.2e18 || d > 9.2e18) return bsonFail(in, 2, "expected a whole number, found a double with a fraction");
+            return bsonSetInt(in, t, p, (int64_t)d, false);
+        }
+        return bsonWrong(in, "a number", type);
+    case J_FLOAT: {
+        double d;
+        if (type == 0x01) {
+            int64_t bits = bsonGet64(v);
+            memcpy(&d, &bits, 8);
+        } else if (type == 0x10) {
+            d = bsonGet32(v);
+        } else if (type == 0x12) {
+            d = (double)bsonGet64(v);
+        } else {
+            return bsonWrong(in, "a number", type);
+        }
+        if (t->size == 4) *(float *)p = (float)d;
+        else *(double *)p = d;
+        return true;
+    }
+    case J_BOOL:
+        if (type != 0x08) return bsonWrong(in, "a bool", type);
+        *(uint8_t *)p = v[0] != 0;
+        return true;
+    case J_STR:
+        return bsonFail(in, 2, "a str field can't keep a value; make it a String");
+    case J_STRING: {
+        IrisString *s = (IrisString *)p;
+        if (type == 0x02 || type == 0x0D || type == 0x0E) {
+            s->len = 0;
+            iris_string_append(s, (const char *)v + 4, n - 5);
+            return true;
+        }
+        if (type == 0x05) {
+            s->len = 0;
+            iris_string_append(s, (const char *)v + 5, n - 5);
+            return true;
+        }
+        return bsonWrong(in, "a string", type);
+    }
+    case J_ENUM: {
+        if (type == 0x10) {
+            *(int32_t *)p = bsonGet32(v);
+            return true;
+        }
+        if (type != 0x02) return bsonWrong(in, "a string", type);
+        const JsonName *names = t->items;
+        const char *s = (const char *)v + 4;
+        int64_t len = n - 5;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (names[i].len == len && !memcmp(names[i].name, s, (size_t)len)) {
+                *(int32_t *)p = (int32_t)names[i].value;
+                return true;
+            }
+        }
+        char msg[160];
+        snprintf(msg, sizeof msg, "\"%.*s\" isn't one of the enum's values", (int)(len > 60 ? 60 : len), s);
+        return bsonFail(in, 2, msg);
+    }
+    case J_STRUCT: {
+        int special = bsonSpecial(t);
+        if (special != BS_PLAIN) {
+            const JsonField *f = t->items;
+            char *fp = p + f->offset;
+            if (special == BS_OID && type == 0x07) {
+                memcpy(fp, v, 12);
+                return true;
+            }
+            if (special == BS_DATE && (type == 0x09 || type == 0x12)) {
+                *(int64_t *)fp = bsonGet64(v);
+                return true;
+            }
+            if (special == BS_BINARY && (type == 0x05 || type == 0x02)) {
+                IrisString *s = (IrisString *)fp;
+                s->len = 0;
+                iris_string_append(s, (const char *)v + (type == 0x05 ? 5 : 4), n - 5);
+                return true;
+            }
+            if (special == BS_DECIMAL && type == 0x13) {
+                memcpy(fp, v, 16);
+                return true;
+            }
+            return bsonWrong(in, special == BS_OID ? "an ObjectId" : special == BS_DATE ? "a date"
+                                 : special == BS_BINARY ? "binary data" : "a decimal128", type);
+        }
+        if (type != 0x03) return bsonWrong(in, "a document", type);
+        return bsonDoc(in, v, n, t, p);
+    }
+    case J_MAP:
+        if (type != 0x03) return bsonWrong(in, "a document", type);
+        return bsonDoc(in, v, n, t, p);
+    case J_SLICE: case J_ARRAY: case J_LIST:
+        if (type != 0x04) return bsonWrong(in, "an array", type);
+        return bsonList(in, v, n, t, p);
+    default:
+        return bsonFail(in, 2, "this kind of value can't be read from BSON");
+    }
+}
+
+/* Fills the struct or map at out from the document data: 0, or the code
+   of the error, whose message iris_bson_message_ptr/len give. On an error
+   what was filled in is freed. */
+int iris_bson_decode(const JsonType *t, const char *data, int64_t len, char *out) {
+    BsonIn in = {0};
+    const unsigned char *d = (const unsigned char *)data;
+    bool ok;
+    if (t->kind != J_STRUCT && t->kind != J_MAP) {
+        ok = bsonFail(&in, 2, "a document is read into a @json struct or a Map");
+    } else if (len < 5 || bsonGet32(d) != len || d[len - 1] != 0) {
+        ok = bsonFail(&in, 1, "the bytes aren't one BSON document");
+    } else {
+        ok = bsonDoc(&in, d, len, t, out);
+    }
+    if (!ok) {
+        jsonFree(t, out);
+        return in.code ? in.code : 1;
+    }
+    return 0;
+}

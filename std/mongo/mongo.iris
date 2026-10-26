@@ -1,0 +1,846 @@
+// MongoDB, spoken over the network by Iris itself, with documents as @json
+// structs turned into BSON:
+//
+//     db := try mongo.connect("mongodb://ada:secret@localhost/shop")
+//     defer db.close()
+//     users := db.collection("users")
+//     _ = try mongo.insertOne(&users, &User{name: "Ada".copy(), age: 36})
+//     scoped q := try bson.fromJson(r"""{"age": {"$gt": 30}}""")
+//     found := try mongo.find[User](&users, &q)
+//
+// A Client keeps a pool of connections to one server, which every task and
+// thread can share.
+
+import base64, bson, crypto, net, random, str, time, url
+
+// What MongoDB calls fail with: connect, auth, failed (a command the server
+// refused), duplicate (a duplicate key, code 11000), notFound (findOne
+// found nothing), closed.
+pub enum MongoError { connect, auth, failed, duplicate, notFound, closed }
+
+// ------------------------------------------------------------ connections
+
+struct Settings {
+    String user
+    String password
+    String database
+    String authSource
+    String host
+    u16 port
+    bool tls
+    String ca
+    String appName
+    Duration timeout
+}
+
+void Settings.free() {
+    self.user.free()
+    self.password.free()
+    self.database.free()
+    self.authSource.free()
+    self.host.free()
+    self.ca.free()
+    self.appName.free()
+}
+
+// mongodb://user:password@host:port/database?authSource=admin&tls=true&tlsCAFile=ca.pem
+!Settings settingsOf(str address) {
+    u := url.parse(address) catch e {
+        return error(MongoError.connect, "'{address}' isn't a mongodb:// address")
+    }
+    if u.scheme != "mongodb" {
+        return error(MongoError.connect, "'{address}' isn't a mongodb:// address")
+    }
+    if str.contains(u.host, ",") {
+        return error(MongoError.connect, "'{address}' names more than one host; this driver talks to one server")
+    }
+    Settings s
+    errdefer s.free()
+    name, pass, _ := str.cut(u.user, ":")
+    s.user = try url.decode(name)
+    s.password = try url.decode(pass)
+    s.host = (if u.host.len > 0 { u.host } else { "localhost" }).copy()
+    s.port = u16(if u.port > 0 { u.port } else { 27017 })
+    dbname := if str.startsWith(u.path, "/") { u.path[1:] } else { u.path }
+    s.database = try url.decode(if dbname.len > 0 { dbname } else { "test" })
+    s.authSource = try url.decode(if dbname.len > 0 { dbname } else { "admin" })
+    s.timeout = 10s
+    str rest = u.query
+    for rest.len > 0 {
+        pair, after, _ := str.cut(rest, "&")
+        rest = after
+        key, value, _ := str.cut(pair, "=")
+        scoped String v = try url.decode(value)
+        if key == "authSource" {
+            s.authSource.free()
+            s.authSource = v.copy()
+        } else if key == "tls" || key == "ssl" {
+            s.tls = v == "true"
+        } else if key == "tlsCAFile" {
+            s.ca.free()
+            s.ca = v.copy()
+            s.tls = true
+        } else if key == "appName" {
+            s.appName.free()
+            s.appName = v.copy()
+        } else if key == "connectTimeoutMS" {
+            ms := str.parseInt(v) catch 10000
+            s.timeout = Duration(ms) * 1ms
+        } else if key == "authMechanism" && v != "SCRAM-SHA-256" {
+            return error(MongoError.auth, "authMechanism {v}: this driver logs in with SCRAM-SHA-256")
+        }
+    }
+    return s
+}
+
+// One connection to the server, used by one task at a time.
+struct Conn {
+    net.Conn conn
+    bool broken
+    i32 requestId
+    // the body of the last reply
+    String reply
+}
+
+void Conn.close() {
+    self.conn.close()
+    self.reply.free()
+}
+
+void putLe(String *out, i64 v, i64 n) {
+    u8[8] b
+    for i in 0..n {
+        b[i] = u8(v >> (8 * i) & 0xff)
+    }
+    out.append(b[0:n])
+}
+
+i64 le32(str b, i64 at) {
+    if at + 4 > b.len {
+        return 0
+    }
+    v := i64(b[at]) | i64(b[at + 1]) << 8 | i64(b[at + 2]) << 16 | i64(b[at + 3]) << 24
+    return if v >= 0x80000000 { v - 0x100000000 } else { v }
+}
+
+// Sends an OP_MSG with the command body and, with seqName, a sequence of
+// documents (seqDocs, one after another) under that name, then reads the
+// reply's body into self.reply.
+!void Conn.roundTrip(str body, str seqName = "", str seqDocs = "") {
+    if self.broken {
+        return error(MongoError.closed, "the connection is broken")
+    }
+    self.requestId += 1
+    String m
+    defer m.free()
+    size := 16 + 4 + 1 + body.len + (if seqName.len > 0 { 1 + 4 + seqName.len + 1 + seqDocs.len } else { 0 })
+    putLe(&m, size, 4)
+    putLe(&m, i64(self.requestId), 4)
+    putLe(&m, 0, 4)
+    putLe(&m, 2013, 4) // OP_MSG
+    putLe(&m, 0, 4)    // flags
+    m.append("\x00")   // a body section
+    m.append(body)
+    if seqName.len > 0 {
+        m.append("\x01") // a document sequence
+        putLe(&m, 4 + seqName.len + 1 + seqDocs.len, 4)
+        m.append(seqName)
+        m.append("\x00")
+        m.append(seqDocs)
+    }
+    self.conn.write(m) catch e {
+        self.broken = true
+        return error(MongoError.closed, "writing to the server: {e.message}")
+    }
+    scoped String head = self.conn.readExactly(16) catch e {
+        self.broken = true
+        return error(MongoError.closed, "the server closed the connection: {e.message}")
+    }
+    n := le32(head, 0) - 16
+    op := le32(head, 12)
+    if n < 5 || n > 64MiB || op != 2013 {
+        self.broken = true
+        return error(MongoError.closed, "a reply that isn't an OP_MSG")
+    }
+    scoped String rest = self.conn.readExactly(n) catch e {
+        self.broken = true
+        return error(MongoError.closed, "the server closed the connection: {e.message}")
+    }
+    flags := le32(rest, 0)
+    end := if flags & 1 != 0 { rest.len - 4 } else { rest.len }
+    // the body section; a reply has no other
+    if rest[4] != 0 {
+        self.broken = true
+        return error(MongoError.closed, "a reply without a body section")
+    }
+    size2 := le32(rest, 5)
+    if size2 < 5 || 5 + size2 > end {
+        self.broken = true
+        return error(MongoError.closed, "a reply whose document runs past it")
+    }
+    self.reply.clear()
+    self.reply.append(rest[5:5 + size2])
+}
+
+// The error the reply describes, if it has ok 0 or write errors.
+!void checkReply(str reply) {
+    r := bson.Raw{bytes: reply}
+    ok, _ := r.get("ok")
+    if ok.float() != 1.0 {
+        code, _ := r.get("code")
+        msg, _ := r.get("errmsg")
+        name, _ := r.get("codeName")
+        MongoError kind = if code.int() == 11000 { .duplicate } else if code.int() == 18 || code.int() == 13 { .auth } else { .failed }
+        return error(kind, "{msg.text()} ({code.int()} {name.text()})")
+    }
+    errs, found := r.get("writeErrors")
+    if found {
+        for we in errs.doc() {
+            d := we.doc()
+            code, _ := d.get("code")
+            msg, _ := d.get("errmsg")
+            MongoError kind = if code.int() == 11000 { .duplicate } else { .failed }
+            return error(kind, "{msg.text()} ({code.int()})")
+        }
+    }
+    wce, hasWce := r.get("writeConcernError")
+    if hasWce {
+        msg, _ := wce.doc().get("errmsg")
+        return error(MongoError.failed, "{msg.text()}")
+    }
+}
+
+// Runs a command: its reply in self.reply, or the error it gives.
+!void Conn.command(bson.Doc *cmd, str seqName = "", str seqDocs = "") {
+    try self.roundTrip(cmd.bytes, seqName, seqDocs)
+    try checkReply(self.reply)
+}
+
+// The name in SCRAM's n= and the like: = and , escaped.
+String saslName(str name) {
+    scoped String a = str.replace(name, "=", "=3D")
+    return str.replace(a, ",", "=2C")
+}
+
+!Conn dial(Settings *s) {
+    c := net.dial(s.host, s.port, s.timeout) catch e {
+        return error(MongoError.connect, "connecting to {s.host}:{s.port}: {e.message}")
+    }
+    Conn mc = Conn{conn: c}
+    errdefer mc.close()
+    mc.conn.setTimeout(s.timeout)
+    if s.tls {
+        mc.conn.startTls(s.host, s.ca) catch e {
+            return error(MongoError.connect, "{e.message}")
+        }
+    }
+    scoped hello := bson.doc()
+    hello.int("hello", 1)
+    scoped client := bson.doc()
+    scoped driver := bson.doc()
+    driver.text("name", "iris")
+    driver.text("version", "1")
+    client.doc("driver", &driver)
+    scoped osDoc := bson.doc()
+    osDoc.text("type", osType())
+    client.doc("os", &osDoc)
+    if s.appName.len > 0 {
+        scoped app := bson.doc()
+        app.text("name", s.appName)
+        client.doc("application", &app)
+    }
+    hello.doc("client", &client)
+    hello.text("$db", "admin")
+    mc.command(&hello) catch e {
+        return error(MongoError.connect, "the server's hello: {e.message}")
+    }
+    if s.user.len > 0 {
+        try mc.login(s)
+    }
+    mc.conn.setTimeout(0s)
+    return mc
+}
+
+str osType() {
+    when os == .macos {
+        return "Darwin"
+    }
+    return "Linux"
+}
+
+// SCRAM-SHA-256 (RFC 5802, 7677) with saslStart and saslContinue.
+!void Conn.login(Settings *s) {
+    u8[18] nonceBytes
+    random.bytes(nonceBytes[0:18])
+    scoped String nonce = base64.encode(nonceBytes[0:18])
+    scoped String user = saslName(s.user)
+    scoped String clientFirst = format("n={user},r={nonce}")
+    scoped String first = format("n,,{clientFirst}")
+    scoped start := bson.doc()
+    start.int("saslStart", 1)
+    start.text("mechanism", "SCRAM-SHA-256")
+    start.binary("payload", first)
+    start.int("autoAuthorize", 1)
+    scoped opts := bson.doc()
+    opts.bool("skipEmptyExchange", true)
+    start.doc("options", &opts)
+    start.text("$db", s.authSource)
+    self.command(&start) catch e {
+        return error(MongoError.auth, "logging in as {s.user}: {e.message}")
+    }
+    r := bson.Raw{bytes: self.reply}
+    convo, _ := r.get("conversationId")
+    payload, _ := r.get("payload")
+    scoped String serverFirst = payload.text().copy()
+    str sNonce = ""
+    str salt64 = ""
+    i64 iterations = 0
+    str rest = serverFirst
+    for rest.len > 0 {
+        part, after, _ := str.cut(rest, ",")
+        rest = after
+        if str.startsWith(part, "r=") {
+            sNonce = part[2:]
+        } else if str.startsWith(part, "s=") {
+            salt64 = part[2:]
+        } else if str.startsWith(part, "i=") {
+            iterations = str.parseInt(part[2:]) catch 0
+        }
+    }
+    if !str.startsWith(sNonce, nonce) || iterations < 4096 || iterations > 10000000 {
+        return error(MongoError.auth, "the server's SCRAM reply isn't valid")
+    }
+    scoped String salt = base64.decode(salt64) catch e {
+        return error(MongoError.auth, "the server's SCRAM salt isn't base64")
+    }
+    scoped String salted = crypto.pbkdf2Sha256(s.password, salt, iterations)
+    clientKey := crypto.hmacSha256(salted, "Client Key")
+    storedKey := crypto.sha256(clientKey[0:32])
+    scoped String without = format("c=biws,r={sNonce}")
+    scoped String authMessage = format("{clientFirst},{serverFirst},{without}")
+    signature := crypto.hmacSha256(storedKey[0:32], authMessage)
+    u8[32] proof
+    for i in 0..32 {
+        proof[i] = clientKey[i] ^ signature[i]
+    }
+    scoped String proof64 = base64.encode(proof[0:32])
+    scoped String final = format("{without},p={proof64}")
+    scoped next := bson.doc()
+    next.int("saslContinue", 1)
+    next.int("conversationId", convo.int())
+    next.binary("payload", final)
+    next.text("$db", s.authSource)
+    self.command(&next) catch e {
+        return error(MongoError.auth, "logging in as {s.user}: {e.message}")
+    }
+    r2 := bson.Raw{bytes: self.reply}
+    p2, _ := r2.get("payload")
+    serverKey := crypto.hmacSha256(salted, "Server Key")
+    want := crypto.hmacSha256(serverKey[0:32], authMessage)
+    scoped String want64 = base64.encode(want[0:32])
+    scoped String expected = format("v={want64}")
+    if !crypto.equal(p2.text(), expected) {
+        return error(MongoError.auth, "the server's SCRAM proof is wrong")
+    }
+    done, _ := r2.get("done")
+    for !done.bool() {
+        // a server without skipEmptyExchange wants one more, empty, step
+        scoped empty := bson.doc()
+        empty.int("saslContinue", 1)
+        empty.int("conversationId", convo.int())
+        empty.binary("payload", "")
+        empty.text("$db", s.authSource)
+        self.command(&empty) catch e {
+            return error(MongoError.auth, "logging in as {s.user}: {e.message}")
+        }
+        r3 := bson.Raw{bytes: self.reply}
+        done, _ = r3.get("done")
+    }
+}
+
+// ------------------------------------------------------------ the client
+
+struct PoolState {
+    Settings settings
+    i64 max
+    Mutex lock
+    List[Conn] idle
+    i64 open
+}
+
+// A MongoDB server, with a pool of connections that every task and thread
+// can share. close closes them.
+pub struct Client {
+    PoolState *s
+}
+
+// Connects to the server at address and logs in, keeping at most max
+// connections open. The address is mongodb://user:password@host:port/database;
+// ?authSource= names the database that holds the user (the address's
+// database, else admin), ?tls=true uses TLS and ?tlsCAFile=ca.pem trusts
+// that file's certificates.
+pub !Client connect(str address, i64 max = 10) {
+    settings := try settingsOf(address)
+    first := dial(&settings) catch e {
+        settings.free()
+        return e
+    }
+    PoolState[] mem = alloc(PoolState, 1)
+    s := &mem[0]
+    s.settings = settings
+    s.max = if max > 0 { max } else { 10 }
+    s.idle.push(first)
+    s.open = 1
+    return Client{s: s}
+}
+
+!Conn Client.take() {
+    start := time.clock()
+    for {
+        self.s.lock.lock()
+        if self.s.idle.len > 0 {
+            c := self.s.idle.pop()
+            self.s.lock.unlock()
+            return c
+        }
+        if self.s.open < self.s.max {
+            self.s.open += 1
+            self.s.lock.unlock()
+            c := dial(&self.s.settings) catch e {
+                self.s.lock.lock()
+                self.s.open -= 1
+                self.s.lock.unlock()
+                return e
+            }
+            return c
+        }
+        self.s.lock.unlock()
+        if time.clock() - start > 30s {
+            return error(MongoError.connect, "no connection came free in 30s")
+        }
+        sleep(1ms)
+    }
+}
+
+void Client.give(Conn c) {
+    if c.broken {
+        c.close()
+        self.s.lock.lock()
+        self.s.open -= 1
+        self.s.lock.unlock()
+        return
+    }
+    self.s.lock.lock()
+    self.s.idle.push(c)
+    self.s.lock.unlock()
+}
+
+// Closes every connection.
+pub void Client.close() {
+    self.s.lock.lock()
+    for c in self.s.idle {
+        c.close()
+    }
+    self.s.idle.free()
+    self.s.lock.unlock()
+    self.s.settings.free()
+    free(self.s[0:1])
+    self.s = null
+}
+
+// The database the address names ("test" when it names none).
+pub str Client.database() => self.s.settings.database
+
+// Runs a command on database db: the reply, which is the caller's to free.
+// The command's first field is its name: {"ping": 1}, {"listCollections": 1}.
+pub !bson.Doc Client.command(str db, bson.Doc *cmd) {
+    scoped full := bson.doc()
+    full.bytes.clear()
+    full.bytes.append(cmd.bytes)
+    full.text("$db", db)
+    c := try self.take()
+    c.command(&full) catch e {
+        self.give(c)
+        return e
+    }
+    bson.Doc out = bson.doc()
+    out.bytes.clear()
+    out.bytes.append(c.reply)
+    self.give(c)
+    return out
+}
+
+// A collection of the address's database.
+pub Collection Client.collection(str name) => Collection{c: self, db: self.s.settings.database, name: name}
+
+// A collection of another database.
+pub Collection Client.collectionIn(str db, str name) => Collection{c: self, db: db, name: name}
+
+// ------------------------------------------------------------ collections
+
+// A collection: the calls on its documents.
+pub struct Collection {
+    Client *c
+    pub str db
+    pub str name
+}
+
+// A command on the collection: {name: collection, ...fields, $db: db}.
+bson.Doc Collection.cmd(str name) {
+    d := bson.doc()
+    d.text(name, self.name)
+    return d
+}
+
+// Runs cmd on a connection from the pool, with an optional sequence of
+// documents, and gives the reply's copy to out.
+!void Collection.run(bson.Doc *cmd, String *out, str seqName = "", str seqDocs = "") {
+    cmd.text("$db", self.db)
+    c := try self.c.take()
+    c.command(cmd, seqName, seqDocs) catch e {
+        self.c.give(c)
+        return e
+    }
+    out.clear()
+    out.append(c.reply)
+    self.c.give(c)
+}
+
+i64 replyInt(str reply, str key) {
+    e, _ := bson.Raw{bytes: reply}.get(key)
+    return e.int()
+}
+
+// Inserts documents given as BSON, one after another in docs: how many.
+!i64 Collection.insertRaw(str docs) {
+    scoped cmd := self.cmd("insert")
+    cmd.bool("ordered", true)
+    scoped String reply
+    try self.run(&cmd, &reply, "documents", docs)
+    return replyInt(reply, "n")
+}
+
+// Inserts a @json struct. An ObjectId field _id that is zero gets a new id,
+// in doc too, and the id is given back.
+pub !bson.ObjectId insertOne[T](Collection *c, T *doc) {
+    scoped String b
+    id := bson.encodeNew(&b, doc)
+    _ = try c.insertRaw(b)
+    return id
+}
+
+// Inserts @json structs, in batches when they are many: how many went in.
+// Zero ObjectId _id fields get new ids, as with insertOne.
+pub !i64 insertMany[T](Collection *c, T[] docs) {
+    scoped String batch
+    i64 count = 0
+    i64 total = 0
+    for i in 0..docs.len {
+        _ = bson.encodeNew(&batch, &docs[i])
+        count += 1
+        if batch.len >= 8MiB || count >= 10000 || i == docs.len - 1 {
+            total += try c.insertRaw(batch)
+            batch.clear()
+            count = 0
+        }
+    }
+    return total
+}
+
+// Inserts a document built with bson.doc().
+pub !void Collection.insertDoc(bson.Doc *doc) {
+    _ = try self.insertRaw(doc.bytes)
+}
+
+// How updateOne and updateMany went: how many documents matched, how many
+// changed, and the id of a document an upsert made.
+pub struct UpdateResult {
+    pub i64 matched
+    pub i64 modified
+    pub bson.ObjectId upserted
+}
+
+!UpdateResult Collection.updateRaw(bson.Doc *filter, str update, bool isDoc, bool upsert, bool multi) {
+    scoped one := bson.doc()
+    if filter != null {
+        one.doc("q", filter)
+    } else {
+        scoped empty := bson.doc()
+        one.doc("q", &empty)
+    }
+    one.embed("u", update)
+    one.bool("upsert", upsert)
+    one.bool("multi", multi)
+    scoped cmd := self.cmd("update")
+    scoped String reply
+    try self.run(&cmd, &reply, "updates", one.bytes)
+    r := bson.Raw{bytes: reply}
+    UpdateResult out
+    n, _ := r.get("n")
+    m, _ := r.get("nModified")
+    out.matched = n.int()
+    out.modified = m.int()
+    ups, found := r.get("upserted")
+    if found {
+        for u in ups.doc() {
+            id, _ := u.doc().get("_id")
+            out.upserted = id.id()
+            out.matched -= 1
+        }
+    }
+    return out
+}
+
+// Changes the first document that matches filter with update, such as
+// {"$set": {"age": 37}}. With upsert, a document is made when none matches.
+pub !UpdateResult Collection.updateOne(bson.Doc *filter, bson.Doc *update, bool upsert = false) =>
+    try self.updateRaw(filter, update.bytes, true, upsert, false)
+
+// Changes every document that matches filter with update.
+pub !UpdateResult Collection.updateMany(bson.Doc *filter, bson.Doc *update, bool upsert = false) =>
+    try self.updateRaw(filter, update.bytes, true, upsert, true)
+
+// Puts doc in the place of the first document that matches filter.
+pub !UpdateResult replaceOne[T](Collection *c, bson.Doc *filter, T *doc, bool upsert = false) {
+    scoped String b
+    bson.encodeTo(&b, *doc)
+    return try c.updateRaw(filter, b, false, upsert, false)
+}
+
+!i64 Collection.deleteRaw(bson.Doc *filter, i64 limit) {
+    scoped one := bson.doc()
+    if filter != null {
+        one.doc("q", filter)
+    } else {
+        scoped empty := bson.doc()
+        one.doc("q", &empty)
+    }
+    one.int("limit", limit)
+    scoped cmd := self.cmd("delete")
+    scoped String reply
+    try self.run(&cmd, &reply, "deletes", one.bytes)
+    return replyInt(reply, "n")
+}
+
+// Removes the first document that matches filter: how many went, 0 or 1.
+pub !i64 Collection.deleteOne(bson.Doc *filter) => try self.deleteRaw(filter, 1)
+
+// Removes every document that matches filter (null for all of them): how
+// many went.
+pub !i64 Collection.deleteMany(bson.Doc *filter) => try self.deleteRaw(filter, 0)
+
+// How many documents match filter (null for all of them).
+pub !i64 Collection.count(bson.Doc *filter = null) {
+    scoped cmd := self.cmd("count")
+    if filter != null {
+        cmd.doc("query", filter)
+    }
+    scoped String reply
+    try self.run(&cmd, &reply)
+    return replyInt(reply, "n")
+}
+
+// Removes the collection and its documents. One that isn't there is no
+// error.
+pub !void Collection.drop() {
+    scoped cmd := self.cmd("drop")
+    scoped String reply
+    self.run(&cmd, &reply) catch e {
+        if str.contains(e.message, "(26 ") {
+            return // NamespaceNotFound
+        }
+        return e
+    }
+}
+
+// Makes an index on keys, such as {"email": 1}, unique when asked: its
+// name.
+pub !String Collection.createIndex(bson.Doc *keys, bool unique = false) {
+    String name
+    for e in keys.raw() {
+        if name.len > 0 {
+            name.append("_")
+        }
+        scoped String part = format("{e.key}_{e.int()}")
+        name.append(part)
+    }
+    scoped index := bson.doc()
+    index.doc("key", keys)
+    index.text("name", name)
+    if unique {
+        index.bool("unique", true)
+    }
+    scoped list := bson.array()
+    list.doc("", &index)
+    scoped cmd := self.cmd("createIndexes")
+    cmd.doc("indexes", &list)
+    scoped String reply
+    self.run(&cmd, &reply) catch e {
+        name.free()
+        return e
+    }
+    return name
+}
+
+// ------------------------------------------------------------ cursors
+
+// The documents a find or an aggregate gives, a batch at a time: next
+// moves to the next one, asking the server for more when a batch runs out.
+pub struct Cursor {
+    Collection coll
+    i64 id
+    String batch // the reply that holds the batch
+    i64 at       // where the next document is in the batch array
+    str items    // the batch array
+    str current
+    i64 batchSize
+}
+
+// Reads a reply's cursor: its id and its first or next batch.
+void Cursor.load(str key) {
+    r := bson.Raw{bytes: self.batch}
+    cur, _ := r.get("cursor")
+    id, _ := cur.doc().get("id")
+    self.id = id.int()
+    items, _ := cur.doc().get(key)
+    self.items = items.doc().bytes
+    self.at = 0
+}
+
+// Moves to the next document: false when there are no more.
+pub !bool Cursor.next() {
+    for {
+        raw := bson.Raw{bytes: self.items}
+        e, ok := raw.next(&self.at)
+        if ok {
+            self.current = e.doc().bytes
+            return true
+        }
+        if self.id == 0 {
+            return false
+        }
+        scoped more := bson.doc()
+        more.long("getMore", self.id)
+        more.text("collection", self.coll.name)
+        if self.batchSize > 0 {
+            more.int("batchSize", self.batchSize)
+        }
+        try self.coll.run(&more, &self.batch)
+        self.load("nextBatch")
+    }
+}
+
+// The document next moved to, as BSON: read it with bson.decode, or
+// in place with its Raw.
+pub bson.Raw Cursor.doc() => bson.Raw{bytes: self.current}
+
+// Frees the cursor, and tells the server to drop it when it has more.
+pub void Cursor.free() {
+    if self.id != 0 {
+        scoped kill := bson.doc()
+        kill.text("killCursors", self.coll.name)
+        scoped ids := bson.array()
+        ids.long("", self.id)
+        kill.doc("cursors", &ids)
+        scoped String reply
+        self.coll.run(&kill, &reply) catch e { }
+        self.id = 0
+    }
+    self.batch.free()
+}
+
+// The documents that match filter (null for all), in sort's order (such as
+// {"age": -1}), with only projection's fields when given, skipping skip
+// and giving at most limit (0 for no limit), batchSize at a time.
+pub !Cursor Collection.find(bson.Doc *filter = null, bson.Doc *sort = null, bson.Doc *projection = null,
+    i64 limit = 0, i64 skip = 0, i64 batchSize = 0) {
+        scoped cmd := self.cmd("find")
+        if filter != null {
+            cmd.doc("filter", filter)
+        }
+        if sort != null {
+            cmd.doc("sort", sort)
+        }
+        if projection != null {
+            cmd.doc("projection", projection)
+        }
+        if limit > 0 {
+            cmd.long("limit", limit)
+        }
+        if skip > 0 {
+            cmd.long("skip", skip)
+        }
+        if batchSize > 0 {
+            cmd.int("batchSize", batchSize)
+        }
+        Cursor cur = Cursor{coll: *self, batchSize: batchSize}
+        try self.run(&cmd, &cur.batch)
+        cur.load("firstBatch")
+        return cur
+    }
+
+// The documents an aggregation pipeline gives, such as
+// [{"$match": ...}, {"$group": ...}].
+pub !Cursor Collection.aggregate(bson.Doc *pipeline, i64 batchSize = 0) {
+    scoped cmd := self.cmd("aggregate")
+    cmd.doc("pipeline", pipeline)
+    scoped c := bson.doc()
+    if batchSize > 0 {
+        c.int("batchSize", batchSize)
+    }
+    cmd.doc("cursor", &c)
+    Cursor cur = Cursor{coll: *self, batchSize: batchSize}
+    try self.run(&cmd, &cur.batch)
+    cur.load("firstBatch")
+    return cur
+}
+
+// Every document that matches filter as @json structs, as find picks them.
+// The values' Strings are the caller's to free.
+pub !List[T] find[T](Collection *c, bson.Doc *filter = null, bson.Doc *sort = null, bson.Doc *projection = null,
+    i64 limit = 0, i64 skip = 0) {
+        scoped cur := try c.find(filter, sort, projection, limit, skip)
+        List[T] out
+        errdefer out.free()
+        for try cur.next() {
+            T v
+            try bson.decodeInto(cur.current, &v)
+            out.push(v)
+        }
+        return out
+    }
+
+// The first document that matches filter as a @json struct; none fails
+// with MongoError.notFound.
+pub !T findOne[T](Collection *c, bson.Doc *filter = null, bson.Doc *sort = null) {
+    scoped cur := try c.find(filter, sort, limit: 1)
+    if !try cur.next() {
+        return error(MongoError.notFound, "no document in {c.name} matches")
+    }
+    T v
+    try bson.decodeInto(cur.current, &v)
+    return v
+}
+
+test "the settings in an address" {
+    scoped s := try settingsOf("mongodb://ada%40x:p%3Ass@db.example:27018/shop?authSource=admin&tls=true&appName=app")
+    expect(s.user == "ada@x" && s.password == "p:ss", s.user)
+    expect(s.host == "db.example" && s.port == 27018)
+    expect(s.database == "shop" && s.authSource == "admin")
+    expect(s.tls && s.appName == "app")
+    scoped d := try settingsOf("mongodb://localhost")
+    expect(d.database == "test" && d.authSource == "admin" && d.port == 27017 && !d.tls)
+    _ = settingsOf("mongodb://a,b/x") catch e {
+        expect(e.code == MongoError.connect)
+        Settings{}
+    }
+    _ = settingsOf("http://x") catch e {
+        expect(e.code == MongoError.connect)
+        Settings{}
+    }
+}
+
+test "SCRAM names" {
+    scoped String n = saslName("a=b,c")
+    expect(n == "a=3Db=2Cc", n)
+}

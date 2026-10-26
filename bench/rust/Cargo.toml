@@ -31,6 +31,9 @@ rand = "0.10"
 aws-sigv4 = "1"
 aws-credential-types = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "derive"] }
+bson = "2"
+mongodb = "3"
+futures = "0.3"
 
 [profile.release]
 opt-level = 3
@@ -225,3 +228,11 @@ path = "../sigv4/main.rs"
 [[bin]]
 name = "mysql-query"
 path = "../mysql-query/main.rs"
+
+[[bin]]
+name = "bson"
+path = "../bson/main.rs"
+
+[[bin]]
+name = "mongo-query"
+path = "../mongo-query/main.rs"

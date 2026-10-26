@@ -1,0 +1,201 @@
+// expect: 21 bytes: 1500000002686f6d6500060000006d617273210000 
+// expect: back: mars!
+// expect: 7 Ada [admin ops] 1.5 true blue 3 2026-10-17T09:30:00Z tea
+// expect: id kept: true, zero: false, hex 24
+// expect: tags of 2, missing count left at 9, extra field skipped
+// expect: BsonError.wrongType: age: expected a number, found a string
+// expect: BsonError.range: small: 300 doesn't fit in i8
+// expect: BsonError.missing: the required field "name" is missing
+// expect: BsonError.invalid: the bytes aren't one BSON document
+// expect: built: {name: Ada, age: 36, big: 5000000000, score: 2.5, ok: true, tags: [a, b], nested.x: 1}
+// expect: json: {"age": {"$gt": 30, "$lt": 40}, "id": 0102030405060708090a0b0c, "when": 1792972800000, "n": -12345678901, "list": [1, 2.5, x]}
+// expect: decimals: 12.50 -0.001 1E+3 0 1234567890123456789012345678901234 1.0E-40
+// expect: decimal bits: 303c00000000000000000000000004e2
+
+import bson, hex, str, time
+
+@json
+struct Hello {
+    String home
+}
+
+enum Color { red, blue }
+
+@json
+struct Person {
+    @json("_id") bson.ObjectId id
+    i64 n
+    String name
+    List[String] roles
+    f64 score
+    bool active
+    Color color
+    i32 small
+    bson.Date born
+    Map[str, String] drinks
+}
+
+@json
+struct Partial {
+    List[String] roles
+    i64 count = 9
+}
+
+@json
+struct Strict {
+    @json(required) String name
+}
+
+@json
+struct Bad {
+    i64 age
+}
+
+@json
+struct Tiny {
+    i8 small
+}
+
+void main() {
+    scoped Hello hello = Hello{home: "mars!".copy()}
+    scoped String hb = bson.encode(hello)
+    scoped String hx = hex.encode(hb)
+    print("{hb.len} bytes: {hx} ")
+    scoped Hello h = bson.decode[Hello](hb) catch e {
+        print("{e.message}")
+        Hello{}
+    }
+    print("back: {h.home}")
+
+    Person p = Person{n: 7, name: "Ada".copy(), score: 1.5, active: true, color: .blue, small: 3,
+        born: bson.date(time.date(2026, 10, 17, 9, 30))}
+    p.roles.push("admin".copy())
+    p.roles.push("ops".copy())
+    p.drinks.set("morning", "tea".copy())
+    scoped String pb
+    id := bson.encodeNew(&pb, &p)
+    scoped Person q = bson.decode[Person](pb) catch e {
+        print("{e.message}")
+        Person{}
+    }
+    drink, _ := q.drinks.get("morning")
+    print("{q.n} {q.name} [{q.roles.at(0)} {q.roles.at(1)}] {q.score} {q.active} {q.color} {q.small} {q.born.time()} {drink}")
+    scoped String idHex = q.id.hex()
+    scoped String pHex = p.id.hex()
+    scoped String retHex = id.hex()
+    print("id kept: {idHex == pHex && retHex == pHex}, zero: {q.id.isZero()}, hex {idHex.len}")
+    p.name.free()
+    p.roles.freeEach()
+    for k, v in p.drinks {
+        _ = k
+        v.free()
+    }
+    p.drinks.free()
+
+    scoped Partial part = bson.decode[Partial](pb) catch e {
+        print("{e.message}")
+        Partial{}
+    }
+    print("tags of {part.roles.len}, missing count left at {part.count}, extra field skipped")
+
+    scoped bson.Doc wrong = bson.doc()
+    wrong.text("age", "old")
+    _ = bson.decode[Bad](wrong.bytes) catch e {
+        print("{e.code}: {e.message}")
+        Bad{}
+    }
+    scoped bson.Doc big = bson.doc()
+    big.int("small", 300)
+    _ = bson.decode[Tiny](big.bytes) catch e {
+        print("{e.code}: {e.message}")
+        Tiny{}
+    }
+    scoped bson.Doc empty = bson.doc()
+    _ = bson.decode[Strict](empty.bytes) catch e {
+        print("{e.code}: {e.message}")
+        Strict{}
+    }
+    _ = bson.decode[Strict]("\x05\x00\x00\x00") catch e {
+        print("{e.code}: {e.message}")
+        Strict{}
+    }
+
+    scoped d := bson.doc()
+    d.text("name", "Ada")
+    d.int("age", 36)
+    d.int("big", 5000000000)
+    d.float("score", 2.5)
+    d.bool("ok", true)
+    scoped tags := bson.array()
+    tags.text("", "a")
+    tags.text("", "b")
+    d.doc("tags", &tags)
+    scoped nested := bson.doc()
+    nested.int("x", 1)
+    d.doc("nested", &nested)
+    r := d.raw()
+    name, _ := r.get("name")
+    age, _ := r.get("age")
+    bigN, _ := r.get("big")
+    score, _ := r.get("score")
+    ok, _ := r.get("ok")
+    ts, _ := r.get("tags")
+    String tagText
+    for t in ts.doc() {
+        if tagText.len > 0 {
+            tagText.append(", ")
+        }
+        tagText.append(t.text())
+    }
+    ne, _ := r.get("nested")
+    x, _ := ne.doc().get("x")
+    print("built: {{name: {name.text()}, age: {age.int()}, big: {bigN.int()}, score: {score.float()}, ok: {ok.bool()}, tags: [{tagText}], nested.x: {x.int()}}}")
+    tagText.free()
+
+    scoped j := bson.fromJson(r"""{"age": {"$gt": 30, "$lt": 40}, "id": {"$oid": "0102030405060708090a0b0c"},
+        "when": {"$date": "2026-10-26T00:00:00Z"}, "n": {"$numberLong": "-12345678901"}, "list": [1, 2.5, "x"]}""") catch e {
+            print("{e.message}")
+            bson.doc()
+        }
+    jr := j.raw()
+    ja, _ := jr.get("age")
+    gt, _ := ja.doc().get("$gt")
+    lt, _ := ja.doc().get("$lt")
+    jid, _ := jr.get("id")
+    at, _ := jr.get("when")
+    jn, _ := jr.get("n")
+    jl, _ := jr.get("list")
+    String items
+    for it in jl.doc() {
+        if items.len > 0 {
+            items.append(", ")
+        }
+        scoped String one = if it.kind == 0x02 { it.text().copy() } else if it.kind == 0x01 { format("{it.float()}") } else { format("{it.int()}") }
+        items.append(one)
+    }
+    scoped String jidHex = jid.id().hex()
+    print("json: {{\"age\": {{\"$gt\": {gt.int()}, \"$lt\": {lt.int()}}}, \"id\": {jidHex}, \"when\": {at.int()}, \"n\": {jn.int()}, \"list\": [{items}]}}")
+    items.free()
+
+    String all
+    for t in ["12.50", "-0.001", "1E+3", "0", "1234567890123456789012345678901234", "1.0E-40"] {
+        dec := bson.decimal(t) catch e {
+            print("{e.message}")
+            bson.Decimal128{}
+        }
+        scoped String back = dec.text()
+        if all.len > 0 {
+            all.append(" ")
+        }
+        all.append(back)
+    }
+    print("decimals: {all}")
+    all.free()
+    dd := bson.decimal("1250E-2") catch bson.Decimal128{}
+    u8[16] be
+    for i in 0..16 {
+        be[i] = dd.bits[15 - i]
+    }
+    scoped String bits = hex.encode(be[0:16])
+    print("decimal bits: {bits}")
+}

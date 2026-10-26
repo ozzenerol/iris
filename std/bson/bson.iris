@@ -1,0 +1,917 @@
+// BSON, the binary documents of MongoDB: @json structs turned into BSON
+// and back, documents built a field at a time, and documents read in place.
+//
+//     @json
+//     struct User {
+//         @json("_id") bson.ObjectId id
+//         String name
+//         i64 age
+//     }
+//
+//     scoped String bytes = bson.encode(User{id: bson.newId(), name: "Ada".copy(), age: 36})
+//     scoped User back = try bson.decode[User](bytes)
+//
+// A field is an element named as json names it. i8 to i32 are int32, i64
+// and u32 up are int64, f32 and f64 are doubles, and lists, slices and
+// arrays are BSON arrays. ObjectId, Date, Binary and Decimal128 are the
+// BSON types of the same names.
+
+import hex, random, str, time
+
+// What decode and fromJson fail with: invalid (bytes that aren't a BSON
+// document, or text that isn't JSON), wrongType (an element of another
+// type than its field), missing (a required field isn't there), range (a
+// number that doesn't fit its field).
+pub enum BsonError { invalid, wrongType, missing, range }
+
+@extern("iris_bson_encode")
+void rawEncode(u8 *table, u8 *value, String *out, i32 fillId, u8 *id)
+
+@extern("iris_bson_decode")
+i32 rawDecode(u8 *table, u8 *data, i64 len, u8 *out)
+
+@extern("iris_bson_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_bson_message_len")
+i64 messageLen()
+
+@extern("iris_bson_new_id")
+void rawNewId(u8 *out)
+
+@builtin
+void tableOf()
+
+// ------------------------------------------------------------ types
+
+// A MongoDB ObjectId: 12 bytes, the time it was made in seconds, then bytes
+// that keep ids made at the same time apart.
+@json
+pub struct ObjectId {
+    @json("$oid") pub u8[12] bytes
+}
+
+// A new ObjectId.
+pub ObjectId newId() {
+    ObjectId id
+    rawNewId(&id.bytes[0])
+    return id
+}
+
+// The id as 24 hex digits, as MongoDB shows it.
+pub String ObjectId.hex() => hex.encode(self.bytes[0:12])
+
+// Whether the id is all zeros, as one that was never set is.
+pub bool ObjectId.isZero() {
+    for b in self.bytes {
+        if b != 0 {
+            return false
+        }
+    }
+    return true
+}
+
+// When the id was made, to the second.
+pub time.Time ObjectId.time() {
+    b := self.bytes
+    return time.unix(i64(b[0]) << 24 | i64(b[1]) << 16 | i64(b[2]) << 8 | i64(b[3]))
+}
+
+// An ObjectId from its 24 hex digits.
+pub !ObjectId parseId(str text) {
+    if text.len != 24 {
+        return error(BsonError.invalid, "'{text}' isn't an ObjectId of 24 hex digits")
+    }
+    scoped String b = hex.decode(text) catch e {
+        return error(BsonError.invalid, "'{text}' isn't an ObjectId of 24 hex digits")
+    }
+    ObjectId id
+    for i in 0..12 {
+        id.bytes[i] = b[i]
+    }
+    return id
+}
+
+// A date and time, in milliseconds since 1970 in UTC, as MongoDB keeps it.
+@json
+pub struct Date {
+    @json("$date") pub i64 ms
+}
+
+// The Date of a time.Time, to the millisecond.
+pub Date date(time.Time t) => Date{ms: t.unixMs()}
+
+// The time of a Date.
+pub time.Time Date.time() => time.Time{ns: self.ms * 1000000}
+
+// Bytes kept as BSON binary data (subtype 0), where a String field would be
+// a BSON string, which must be UTF-8.
+@json
+pub struct Binary {
+    @json("$binary") pub String data
+}
+
+// Frees the bytes.
+pub void Binary.free() => self.data.free()
+
+// A decimal floating point number of up to 34 digits (IEEE 754-2008
+// decimal128), for money and other amounts that a double would round.
+@json
+pub struct Decimal128 {
+    @json("$numberDecimal") pub u8[16] bits
+}
+
+// ------------------------------------------------------------ structs
+
+// The document of a @json struct, or of a Map with str or String keys.
+pub String encode[T](T value) {
+    String out
+    rawEncode(tableOf(&value), &value, &out, 0, null)
+    return out
+}
+
+// encode, appending to out.
+pub void encodeTo[T](String *out, T value) => rawEncode(tableOf(&value), &value, out, 0, null)
+
+// encodeTo for a document to insert: an ObjectId field _id that is zero
+// gets a new id first, in the struct too. The id is given back, zero when
+// there is no such field.
+pub ObjectId encodeNew[T](String *out, T *value) {
+    ObjectId id
+    rawEncode(tableOf(value), value, out, 1, &id.bytes[0])
+    return id
+}
+
+// A @json struct (or a Map) from a document. Elements the struct has no
+// field for are skipped, and a field with no element keeps its default.
+pub !T decode[T](str data) {
+    T v
+    try decodeInto(data, &v)
+    return v
+}
+
+// decode into a value that already has its defaults.
+pub !void decodeInto[T](str data, T *out) {
+    code := rawDecode(tableOf(out), data.ptr, data.len, out)
+    if code != 0 {
+        BsonError kind = match code {
+            2 => .wrongType
+            3 => .missing
+            4 => .range
+            _ => .invalid
+        }
+        return error(kind, "{messagePtr()[0:messageLen()]}")
+    }
+}
+
+// ------------------------------------------------------------ building
+
+// A document built a field at a time, in the order of the calls:
+//
+//     scoped q := bson.doc()
+//     q.text("name", "Ada")
+//     scoped age := bson.doc()
+//     age.int("$gt", 30)
+//     q.doc("age", &age)
+pub struct Doc {
+    // the document, valid after each call
+    pub String bytes
+    i64 count
+    bool array
+}
+
+// A new, empty document.
+pub Doc doc() {
+    Doc d
+    d.bytes.append("\x05\x00\x00\x00\x00")
+    return d
+}
+
+// A new, empty array, whose items are added with the same calls; their
+// keys are ignored, and the items numbered 0, 1, ... instead.
+pub Doc array() {
+    Doc d = doc()
+    d.array = true
+    return d
+}
+
+// Frees the bytes.
+pub void Doc.free() => self.bytes.free()
+
+// How many fields the document has.
+pub i64 Doc.len() => self.count
+
+// The document to read, as Raw.
+pub Raw Doc.raw() => Raw{bytes: self.bytes}
+
+void putLe(String *out, i64 v, i64 n) {
+    u8[8] b
+    for i in 0..n {
+        b[i] = u8(v >> (8 * i) & 0xff)
+    }
+    out.append(b[0:n])
+}
+
+// Starts an element: the end byte goes, the type and the key come.
+void Doc.start(u8 kind, str key) {
+    self.bytes.truncate(self.bytes.len - 1)
+    u8[1] k = [kind]
+    self.bytes.append(k[0:1])
+    if self.array {
+        scoped String n = format("{self.count}")
+        self.bytes.append(n)
+    } else {
+        self.bytes.append(key)
+    }
+    self.bytes.append("\x00")
+}
+
+// Ends an element: the end byte again, and the length.
+void Doc.end() {
+    self.bytes.append("\x00")
+    self.count += 1
+    u8[] b = self.bytes.ptr[0:4]
+    n := self.bytes.len
+    for i in 0..4 {
+        b[i] = u8(n >> (8 * i) & 0xff)
+    }
+}
+
+// Adds a number: int32 when it fits, else int64.
+pub void Doc.int(str key, i64 v) {
+    if v >= -2147483648 && v <= 2147483647 {
+        self.start(0x10, key)
+        putLe(&self.bytes, v, 4)
+    } else {
+        self.start(0x12, key)
+        putLe(&self.bytes, v, 8)
+    }
+    self.end()
+}
+
+// Adds a number as int64 whatever its size.
+pub void Doc.long(str key, i64 v) {
+    self.start(0x12, key)
+    putLe(&self.bytes, v, 8)
+    self.end()
+}
+
+// Adds a double.
+pub void Doc.float(str key, f64 v) {
+    u8 *p = &v
+    i64 *bits = p
+    self.start(0x01, key)
+    putLe(&self.bytes, *bits, 8)
+    self.end()
+}
+
+// Adds a string.
+pub void Doc.text(str key, str v) {
+    self.start(0x02, key)
+    putLe(&self.bytes, v.len + 1, 4)
+    self.bytes.append(v)
+    self.bytes.append("\x00")
+    self.end()
+}
+
+// Adds a bool.
+pub void Doc.bool(str key, bool v) {
+    self.start(0x08, key)
+    self.bytes.append(if v { "\x01" } else { "\x00" })
+    self.end()
+}
+
+// Adds a null.
+pub void Doc.none(str key) {
+    self.start(0x0a, key)
+    self.end()
+}
+
+// Adds an ObjectId.
+pub void Doc.id(str key, ObjectId v) {
+    self.start(0x07, key)
+    self.bytes.append(v.bytes[0:12])
+    self.end()
+}
+
+// Adds a date.
+pub void Doc.date(str key, Date v) {
+    self.start(0x09, key)
+    putLe(&self.bytes, v.ms, 8)
+    self.end()
+}
+
+// Adds binary data.
+pub void Doc.binary(str key, str v) {
+    self.start(0x05, key)
+    putLe(&self.bytes, v.len, 4)
+    self.bytes.append("\x00")
+    self.bytes.append(v)
+    self.end()
+}
+
+// Adds a decimal128.
+pub void Doc.decimal(str key, Decimal128 v) {
+    self.start(0x13, key)
+    self.bytes.append(v.bits[0:16])
+    self.end()
+}
+
+// Adds a document, or an array made with array().
+pub void Doc.doc(str key, Doc *v) {
+    self.start(if v.array { 0x04 } else { 0x03 }, key)
+    self.bytes.append(v.bytes)
+    self.end()
+}
+
+// Adds a document given as BSON bytes, such as encode makes.
+pub void Doc.embed(str key, str bytes) {
+    self.start(0x03, key)
+    self.bytes.append(bytes)
+    self.end()
+}
+
+// Adds a @json struct as a document.
+pub void put[T](Doc *d, str key, T value) {
+    d.start(0x03, key)
+    rawEncode(tableOf(&value), &value, &d.bytes, 0, null)
+    d.end()
+}
+
+// ------------------------------------------------------------ reading
+
+// A document read in place: its elements by key, or one after another
+// with for e in raw.
+pub struct Raw {
+    pub str bytes
+}
+
+// An element of a document: its key, its BSON type and its value's bytes.
+pub struct Element {
+    pub str key
+    pub u8 kind
+    str data
+}
+
+i64 le(str b, i64 at, i64 n) {
+    if at + n > b.len {
+        return 0
+    }
+    i64 v = 0
+    for i in 0..n {
+        v = v | i64(b[at + i]) << (8 * i)
+    }
+    if n == 4 && v >= 0x80000000 {
+        v -= 0x100000000
+    }
+    return v
+}
+
+// A regular expression's two NUL-terminated strings.
+i64 regexSize(str b, i64 at) {
+    i64 i = at
+    i64 zeros = 0
+    for i < b.len && zeros < 2 {
+        if b[i] == 0 {
+            zeros += 1
+        }
+        i += 1
+    }
+    return if zeros == 2 { i - at } else { -1 }
+}
+
+// How many bytes the value of an element of kind takes at b[at], -1 when
+// it isn't BSON.
+i64 sizeOf(u8 kind, str b, i64 at) {
+    room := b.len - at
+    i64 n = match kind {
+        0x01, 0x09, 0x11, 0x12 => 8
+        0x10 => 4
+        0x08 => 1
+        0x07 => 12
+        0x13 => 16
+        0x06, 0x0a, 0x7f, 0xff => 0
+        0x02, 0x0d, 0x0e => 4 + le(b, at, 4)
+        0x03, 0x04, 0x0f => le(b, at, 4)
+        0x05 => 5 + le(b, at, 4)
+        0x0b => regexSize(b, at)
+        0x0c => 4 + le(b, at, 4) + 12
+        _ => -1
+    }
+    return if n < 0 || n > room { -1 } else { n }
+}
+
+// for e in raw: the next element.
+pub (Element, bool) Raw.next(i64 *at) {
+    b := self.bytes
+    if *at == 0 {
+        *at = 4
+    }
+    if *at >= b.len - 1 {
+        return (Element{}, false)
+    }
+    kind := b[*at]
+    start := *at + 1
+    i64 i = start
+    for i < b.len && b[i] != 0 {
+        i += 1
+    }
+    if i >= b.len {
+        return (Element{}, false)
+    }
+    n := sizeOf(kind, b, i + 1)
+    if n < 0 {
+        return (Element{}, false)
+    }
+    *at = i + 1 + n
+    return (Element{key: b[start:i], kind: kind, data: b[i + 1:i + 1 + n]}, true)
+}
+
+// The element called key, and whether there is one.
+pub (Element, bool) Raw.get(str key) {
+    for e in self {
+        if e.key == key {
+            return (e, true)
+        }
+    }
+    return (Element{}, false)
+}
+
+// Whether the bytes are one whole document.
+pub bool Raw.valid() => self.bytes.len >= 5 && le(self.bytes, 0, 4) == self.bytes.len && self.bytes[self.bytes.len - 1] == 0
+
+// The value as a number: an int32, an int64, a date's milliseconds or a
+// double cut to a whole number; 0 for other types.
+pub i64 Element.int() => match self.kind {
+    0x10 => le(self.data, 0, 4)
+    0x12, 0x09, 0x11 => le(self.data, 0, 8)
+    0x01 => i64(self.float())
+    0x08 => if self.data[0] != 0 { 1 } else { 0 }
+    _ => 0
+}
+
+// The value as a float: a double, or a number of another type.
+pub f64 Element.float() {
+    if self.kind == 0x01 {
+        bits := le(self.data, 0, 8)
+        u8 *p = &bits
+        f64 *f = p
+        return *f
+    }
+    if self.kind == 0x10 || self.kind == 0x12 {
+        return f64(self.int())
+    }
+    return 0.0
+}
+
+// The value as text: a string's, or binary data's bytes; "" for other
+// types.
+pub str Element.text() {
+    if self.kind == 0x02 || self.kind == 0x0d || self.kind == 0x0e {
+        return self.data[4:self.data.len - 1]
+    }
+    if self.kind == 0x05 {
+        return self.data[5:]
+    }
+    return ""
+}
+
+// The value as a bool: a bool's, or a number that isn't 0.
+pub bool Element.bool() => if self.kind == 0x08 { self.data[0] != 0 } else { self.int() != 0 }
+
+// The value as a document, for a document or an array; an empty one for
+// other types.
+pub Raw Element.doc() => if self.kind == 0x03 || self.kind == 0x04 { Raw{bytes: self.data} } else { Raw{bytes: "\x05\x00\x00\x00\x00"} }
+
+// The value as an ObjectId; zero for other types.
+pub ObjectId Element.id() {
+    ObjectId id
+    if self.kind == 0x07 {
+        for i in 0..12 {
+            id.bytes[i] = self.data[i]
+        }
+    }
+    return id
+}
+
+// Whether the value is null.
+pub bool Element.isNull() => self.kind == 0x0a || self.kind == 0x06
+
+// The value's bytes as BSON keeps them.
+pub str Element.bytes() => self.data
+
+// ------------------------------------------------------------ JSON
+
+struct JsonIn {
+    str t
+    i64 at
+}
+
+void JsonIn.ws() {
+    for self.at < self.t.len && (self.t[self.at] == ' ' || self.t[self.at] == '\n' || self.t[self.at] == '\t' ||
+            self.t[self.at] == '\r') {
+                self.at += 1
+            }
+}
+
+Error JsonIn.fail(str what) => error(BsonError.invalid, "{what} at byte {self.at} of the JSON")
+
+!String JsonIn.string() {
+    if self.at >= self.t.len || self.t[self.at] != '"' {
+        return self.fail("expected a string")
+    }
+    self.at += 1
+    String out
+    errdefer out.free()
+    for {
+        if self.at >= self.t.len {
+            return self.fail("a string without its end")
+        }
+        c := self.t[self.at]
+        self.at += 1
+        if c == '"' {
+            return out
+        }
+        if c != '\\' {
+            out.append(self.t[self.at - 1:self.at])
+            continue
+        }
+        if self.at >= self.t.len {
+            return self.fail("a string without its end")
+        }
+        e := self.t[self.at]
+        self.at += 1
+        if e == 'u' {
+            if self.at + 4 > self.t.len {
+                return self.fail("a \\u without 4 hex digits")
+            }
+            r := str.parseIntBase(self.t[self.at:self.at + 4], 16) catch err {
+                return self.fail("a \\u without 4 hex digits")
+            }
+            self.at += 4
+            str.appendRune(&out, i32(r))
+            continue
+        }
+        out.append(match e {
+            'n' => "\n"
+            't' => "\t"
+            'r' => "\r"
+            'b' => "\x08"
+            'f' => "\x0c"
+            '/' => "/"
+            '\\' => "\\"
+            '"' => "\""
+            _ => "?"
+        })
+    }
+}
+
+// One JSON value as an element of d. The extended JSON of MongoDB is read
+// for {"$oid": "..."}, {"$date": "2026-10-17T09:30:00Z"} or {"$date": ms}
+// and {"$numberLong": "..."}.
+!void JsonIn.value(Doc *d, str key) {
+    self.ws()
+    if self.at >= self.t.len {
+        return self.fail("expected a value")
+    }
+    c := self.t[self.at]
+    if c == '"' {
+        scoped String s = try self.string()
+        d.text(key, s)
+        return
+    }
+    if c == '{' {
+        scoped Doc sub = doc()
+        try self.object(&sub)
+        // extended JSON's types
+        r := sub.raw()
+        if sub.count == 1 {
+            e, _ := r.get("$oid")
+            if e.kind == 0x02 {
+                d.id(key, try parseId(e.text()))
+                return
+            }
+            dt, _ := r.get("$date")
+            if dt.kind == 0x02 {
+                t := time.parse(dt.text()) catch err {
+                    return self.fail("a $date that isn't ISO 8601")
+                }
+                d.date(key, date(t))
+                return
+            }
+            if dt.kind == 0x10 || dt.kind == 0x12 {
+                d.date(key, Date{ms: dt.int()})
+                return
+            }
+            n, _ := r.get("$numberLong")
+            if n.kind == 0x02 {
+                d.long(key, str.parseInt(n.text()) catch 0)
+                return
+            }
+        }
+        d.doc(key, &sub)
+        return
+    }
+    if c == '[' {
+        scoped Doc a = array()
+        try self.items(&a)
+        d.doc(key, &a)
+        return
+    }
+    rest := self.t[self.at:]
+    if str.startsWith(rest, "true") {
+        self.at += 4
+        d.bool(key, true)
+        return
+    }
+    if str.startsWith(rest, "false") {
+        self.at += 5
+        d.bool(key, false)
+        return
+    }
+    if str.startsWith(rest, "null") {
+        self.at += 4
+        d.none(key)
+        return
+    }
+    start := self.at
+    bool whole = true
+    for self.at < self.t.len {
+        ch := self.t[self.at]
+        if ch == '.' || ch == 'e' || ch == 'E' {
+            whole = false
+        } else if !(ch == '-' || ch == '+' || (ch >= '0' && ch <= '9')) {
+            break
+        }
+        self.at += 1
+    }
+    num := self.t[start:self.at]
+    if num.len == 0 {
+        return self.fail("expected a value")
+    }
+    if whole {
+        n := str.parseInt(num) catch e {
+            return self.fail("a number that doesn't fit in i64")
+        }
+        d.int(key, n)
+    } else {
+        f := str.parseFloat(num) catch e {
+            return self.fail("a number that isn't one")
+        }
+        d.float(key, f)
+    }
+}
+
+// An array's items, from its '[' to its ']'.
+!void JsonIn.items(Doc *a) {
+    self.at += 1
+    self.ws()
+    if self.at < self.t.len && self.t[self.at] == ']' {
+        self.at += 1
+        return
+    }
+    for {
+        try self.value(a, "")
+        self.ws()
+        if self.at < self.t.len && self.t[self.at] == ',' {
+            self.at += 1
+            continue
+        }
+        if self.at < self.t.len && self.t[self.at] == ']' {
+            self.at += 1
+            return
+        }
+        return self.fail("expected ',' or ']'")
+    }
+}
+
+!void JsonIn.object(Doc *d) {
+    self.ws()
+    if self.at >= self.t.len || self.t[self.at] != '{' {
+        return self.fail("expected an object")
+    }
+    self.at += 1
+    self.ws()
+    if self.at < self.t.len && self.t[self.at] == '}' {
+        self.at += 1
+        return
+    }
+    for {
+        self.ws()
+        scoped String key = try self.string()
+        self.ws()
+        if self.at >= self.t.len || self.t[self.at] != ':' {
+            return self.fail("expected ':' after the key")
+        }
+        self.at += 1
+        try self.value(d, key)
+        self.ws()
+        if self.at < self.t.len && self.t[self.at] == ',' {
+            self.at += 1
+            continue
+        }
+        if self.at < self.t.len && self.t[self.at] == '}' {
+            self.at += 1
+            return
+        }
+        return self.fail("expected ',' or '}}'")
+    }
+}
+
+// A document from JSON text, for filters and updates written as MongoDB
+// shows them: fromJson(r"""{"age": {"$gt": 30}}"""). Whole numbers are
+// int32 when they fit, else int64; others are doubles. {"$oid": "..."},
+// {"$date": ...} and {"$numberLong": "..."} are those types. Text that is
+// an array, such as an aggregation pipeline, gives an array.
+pub !Doc fromJson(str text) {
+    rd := JsonIn{t: text}
+    rd.ws()
+    bool isArray = rd.at < text.len && text[rd.at] == '['
+    Doc d = if isArray { array() } else { doc() }
+    errdefer d.free()
+    if isArray {
+        try rd.items(&d)
+    } else {
+        try rd.object(&d)
+    }
+    rd.ws()
+    if rd.at < text.len {
+        return rd.fail("more text after the value")
+    }
+    return d
+}
+
+// ------------------------------------------------------------ decimal128
+
+// A 113-bit coefficient, as four 32-bit limbs, the lowest first.
+struct U128 {
+    u64[4] l
+}
+
+// a * 10 + d
+U128 mul10(U128 a, u64 d) {
+    U128 out
+    u64 carry = d
+    for i in 0..4 {
+        v := a.l[i] * 10 + carry
+        out.l[i] = v & 0xffffffff
+        carry = v >> 32
+    }
+    return out
+}
+
+// a / 10 and a % 10
+(U128, u64) div10(U128 a) {
+    U128 q
+    u64 r = 0
+    for k in 0..4 {
+        i := 3 - k
+        v := r << 32 | a.l[i]
+        q.l[i] = v / 10
+        r = v % 10
+    }
+    return (q, r)
+}
+
+bool U128.isZero() => self.l[0] == 0 && self.l[1] == 0 && self.l[2] == 0 && self.l[3] == 0
+
+// A decimal from text: 12.50, -0.001, 1E+3. It fails for more than 34
+// digits, or an exponent out of decimal128's range.
+pub !Decimal128 decimal(str text) {
+    s := str.trim(text)
+    bool neg = false
+    i64 at = 0
+    if at < s.len && (s[at] == '-' || s[at] == '+') {
+        neg = s[at] == '-'
+        at += 1
+    }
+    U128 c
+    i64 digits = 0
+    i64 exp = 0
+    bool seenDot = false
+    bool any = false
+    for at < s.len {
+        ch := s[at]
+        if ch == '.' && !seenDot {
+            seenDot = true
+        } else if ch >= '0' && ch <= '9' {
+            any = true
+            if digits > 0 || ch != '0' {
+                digits += 1
+            }
+            if digits > 34 {
+                return error(BsonError.range, "'{text}' has more than 34 digits")
+            }
+            c = mul10(c, u64(ch - '0'))
+            if seenDot {
+                exp -= 1
+            }
+        } else {
+            break
+        }
+        at += 1
+    }
+    if !any {
+        return error(BsonError.invalid, "'{text}' isn't a decimal number")
+    }
+    if at < s.len && (s[at] == 'e' || s[at] == 'E') {
+        e := str.parseInt(s[at + 1:]) catch e {
+            return error(BsonError.invalid, "'{text}' isn't a decimal number")
+        }
+        exp += e
+        at = s.len
+    }
+    if at != s.len {
+        return error(BsonError.invalid, "'{text}' isn't a decimal number")
+    }
+    if exp < -6176 || exp > 6111 {
+        return error(BsonError.range, "'{text}' has an exponent out of decimal128's range")
+    }
+    biased := u64(exp + 6176)
+    // the high 64 bits: the sign, the exponent, then the top 49 bits of c
+    top := c.l[3] | biased << 17 | (if neg { u64(1) << 31 } else { u64(0) })
+    Decimal128 d
+    for k in 0..4 {
+        limb := if k == 3 { top } else { c.l[k] }
+        for b in 0..4 {
+            d.bits[4 * k + b] = u8(limb >> u64(8 * b) & 0xff)
+        }
+    }
+    return d
+}
+
+// The number as text, as MongoDB writes it: 12.50, -0.001, 1.0E+40.
+pub String Decimal128.text() {
+    U128 raw
+    for k in 0..4 {
+        for b in 0..4 {
+            raw.l[k] = raw.l[k] | u64(self.bits[4 * k + b]) << u64(8 * b)
+        }
+    }
+    hi := raw.l[3] << 32 | raw.l[2]
+    neg := hi >> 63 == 1
+    String out
+    if neg {
+        out.append("-")
+    }
+    i64 exp = 0
+    U128 c
+    if hi >> 61 & 3 == 3 {
+        // infinity, NaN, or a coefficient too large to be canonical: 0
+        if hi >> 58 & 0x1f == 0x1e {
+            out.append("Infinity")
+            return out
+        }
+        if hi >> 58 & 0x1f == 0x1f {
+            out.clear()
+            out.append("NaN")
+            return out
+        }
+        exp = i64(hi >> 47 & 0x3fff) - 6176
+    } else {
+        exp = i64(hi >> 49 & 0x3fff) - 6176
+        c = raw
+        c.l[3] = c.l[3] & 0x1ffff
+    }
+    // the digits, last first
+    String rev
+    defer rev.free()
+    for {
+        q, r := div10(c)
+        u8[1] ch = [u8(r) + '0']
+        rev.append(ch[0:1])
+        c = q
+        if c.isZero() {
+            break
+        }
+    }
+    scoped String digits = str.reverse(rev)
+    adjusted := exp + digits.len - 1
+    if exp <= 0 && adjusted >= -6 {
+        if exp == 0 {
+            out.append(digits)
+            return out
+        }
+        point := digits.len + exp
+        if point > 0 {
+            out.append(digits[0:point])
+            out.append(".")
+            out.append(digits[point:])
+        } else {
+            out.append("0.")
+            for i in 0..-point {
+                out.append("0")
+            }
+            out.append(digits)
+        }
+        return out
+    }
+    out.append(digits[0:1])
+    if digits.len > 1 {
+        out.append(".")
+        out.append(digits[1:])
+    }
+    scoped String e = format("E{if adjusted >= 0 { "+" } else { "" }}{adjusted}")
+    out.append(e)
+    return out
+}

@@ -57,6 +57,8 @@ LIB_ROWS = [
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
     ("sigv4", "200000 S3 requests signed with AWS Signature Version 4, each with a 1 KiB body", "aws-sigv4", "`aws-sdk-go-v2` signer"),
     ("mysql-query", "MySQL: 1000 inserts in a transaction, 20000 prepared selects by id, then the table read 100 times", "sqlx", "`go-sql-driver/mysql`"),
+    ("bson", "500000 orders encoded to BSON and decoded back", "bson", "`mongo-driver` bson"),
+    ("mongo-query", "MongoDB: 1000 inserts, 20000 finds by an indexed field, then the collection read 100 times", "mongodb", "`mongo-driver`"),
 ]
 
 
