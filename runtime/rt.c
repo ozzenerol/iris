@@ -13961,6 +13961,168 @@ int64_t iris_base32_decode(const uint8_t *t, int64_t len, int hex, IrisString *o
     return r == 1 || r == 3 || r == 6 ? -2 : 0;
 }
 
+static const char base64Alphabets[2][65] = {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+};
+static uint8_t base64Tables[2][256];    /* 0-63, 0xfe to skip, 0xff wrong */
+/* two characters for each 12 bits, so 2 lookups make 4 */
+static uint16_t base64Pairs[2][4096];
+static pthread_once_t base64Once = PTHREAD_ONCE_INIT;
+
+static void base64Init(void) {
+    for (int u = 0; u < 2; u++) {
+        const char *al = base64Alphabets[u];
+        memset(base64Tables[u], 0xff, 256);
+        for (int k = 0; k < 64; k++) base64Tables[u][(uint8_t)al[k]] = (uint8_t)k;
+        base64Tables[u]['\n'] = base64Tables[u]['\r'] = 0xfe;
+        for (int k = 0; k < 4096; k++) base64Pairs[u][k] = (uint16_t)((uint8_t)al[k >> 6] | (uint8_t)al[k & 63] << 8);
+    }
+}
+
+/* Base64 (RFC 4648): 3 bytes to 4 characters, of the URL-safe alphabet
+   when url is set, with = to a multiple of 4 when pad is. Added to out. */
+void iris_base64_encode(const uint8_t *p, int64_t len, int url, int pad, IrisString *out) {
+    if (len == 0) return;
+    pthread_once(&base64Once, base64Init);
+    const uint16_t *pairs = base64Pairs[url ? 1 : 0];
+    const char *alphabet = base64Alphabets[url ? 1 : 0];
+    iris_string_reserve(out, (len + 2) / 3 * 4);
+    char *o = out->ptr + out->len;
+    int64_t i = 0;
+    /* 6 bytes to 8 characters, read as 8 while 8 are there */
+    for (; i + 8 <= len; i += 6, o += 8) {
+        uint64_t v;
+        memcpy(&v, p + i, 8);
+        v = __builtin_bswap64(v) >> 16;
+        uint64_t chars = (uint64_t)pairs[v >> 36] | (uint64_t)pairs[(v >> 24) & 4095] << 16 |
+                         (uint64_t)pairs[(v >> 12) & 4095] << 32 | (uint64_t)pairs[v & 4095] << 48;
+        memcpy(o, &chars, 8);
+    }
+    for (; i + 3 <= len; i += 3, o += 4) {
+        uint32_t v = (uint32_t)p[i] << 16 | (uint32_t)p[i + 1] << 8 | p[i + 2];
+        uint32_t chars = (uint32_t)pairs[v >> 12] | (uint32_t)pairs[v & 4095] << 16;
+        memcpy(o, &chars, 4);
+    }
+    int64_t rest = len - i;
+    if (rest > 0) {
+        uint32_t v = (uint32_t)p[i] << 16 | (rest == 2 ? (uint32_t)p[i + 1] << 8 : 0);
+        *o++ = alphabet[v >> 18];
+        *o++ = alphabet[(v >> 12) & 63];
+        if (rest == 2) {
+            *o++ = alphabet[(v >> 6) & 63];
+        } else if (pad) {
+            *o++ = '=';
+        }
+        if (pad) *o++ = '=';
+    }
+    out->len = o - out->ptr;
+}
+
+/* Base64 text to bytes, added to out; line breaks are skipped. 0, or what
+   is wrong: -1 for a = followed by more text, -2 for text that ends
+   inside a byte, i + 1 for a bad character at i. */
+int64_t iris_base64_decode(const uint8_t *t, int64_t len, int url, IrisString *out) {
+    pthread_once(&base64Once, base64Init);
+    const uint8_t *table = base64Tables[url ? 1 : 0];
+    int64_t end = len;
+    const uint8_t *eq = len > 0 ? memchr(t, '=', (size_t)len) : NULL;
+    if (eq) {
+        end = eq - t;
+        for (int64_t k = end; k < len; k++) {
+            if (t[k] != '=') return -1;
+        }
+    }
+    /* room for every byte: 3 for each 4 characters, and the rest */
+    iris_string_reserve(out, end / 4 * 3 + 3);
+    uint8_t *o = (uint8_t *)out->ptr + out->len;
+    int64_t n = 0, i = 0;
+    /* 8 characters at a time while none is skipped or wrong */
+    for (; i + 8 <= end; i += 8) {
+        uint64_t v = 0;
+        uint8_t bad = 0;
+        for (int k = 0; k < 8; k++) {
+            uint8_t d = table[t[i + k]];
+            bad |= d;
+            v = v << 6 | (d & 63);
+        }
+        if (bad & 0xc0) break;
+        o[0] = (uint8_t)(v >> 40);
+        o[1] = (uint8_t)(v >> 32);
+        o[2] = (uint8_t)(v >> 24);
+        o[3] = (uint8_t)(v >> 16);
+        o[4] = (uint8_t)(v >> 8);
+        o[5] = (uint8_t)v;
+        o += 6;
+        n += 8;
+    }
+    uint32_t acc = 0;
+    int bits = 0;
+    for (; i < end; i++) {
+        uint8_t d = table[t[i]];
+        if (d == 0xfe) continue;
+        if (d == 0xff) {
+            out->len = o - (uint8_t *)out->ptr;
+            return i + 1;
+        }
+        acc = (acc << 6 | d) & 0xffffff;
+        bits += 6;
+        n++;
+        if (bits >= 8) {
+            bits -= 8;
+            *o++ = (uint8_t)(acc >> bits);
+        }
+    }
+    out->len = o - (uint8_t *)out->ptr;
+    return n % 4 == 1 ? -2 : 0;
+}
+
+static uint16_t hexPairs[256];
+static uint8_t hexValues[256];          /* 0-15, 0xff wrong */
+static pthread_once_t hexOnce = PTHREAD_ONCE_INIT;
+
+static void hexInit(void) {
+    const char *digits = "0123456789abcdef";
+    for (int k = 0; k < 256; k++) hexPairs[k] = (uint16_t)((uint8_t)digits[k >> 4] | (uint8_t)digits[k & 15] << 8);
+    memset(hexValues, 0xff, 256);
+    for (int k = 0; k < 16; k++) hexValues[(uint8_t)digits[k]] = (uint8_t)k;
+    for (int k = 10; k < 16; k++) hexValues['A' + k - 10] = (uint8_t)k;
+}
+
+/* Each byte as two hex digits, 0-9 and a-f, added to out. */
+void iris_hex_encode(const uint8_t *p, int64_t len, IrisString *out) {
+    if (len == 0) return;
+    pthread_once(&hexOnce, hexInit);
+    iris_string_reserve(out, len * 2);
+    char *o = out->ptr + out->len;
+    int64_t i = 0;
+    for (; i + 4 <= len; i += 4, o += 8) {
+        uint64_t chars = (uint64_t)hexPairs[p[i]] | (uint64_t)hexPairs[p[i + 1]] << 16 |
+                         (uint64_t)hexPairs[p[i + 2]] << 32 | (uint64_t)hexPairs[p[i + 3]] << 48;
+        memcpy(o, &chars, 8);
+    }
+    for (; i < len; i++, o += 2) memcpy(o, &hexPairs[p[i]], 2);
+    out->len = o - out->ptr;
+}
+
+/* Hex digits in pairs, in either case, to bytes added to out. 0, or i + 1
+   for a pair at i that isn't hex. The length is even. */
+int64_t iris_hex_decode(const uint8_t *t, int64_t len, IrisString *out) {
+    pthread_once(&hexOnce, hexInit);
+    iris_string_reserve(out, len / 2);
+    uint8_t *o = (uint8_t *)out->ptr + out->len;
+    for (int64_t i = 0; i + 2 <= len; i += 2) {
+        uint8_t hi = hexValues[t[i]], lo = hexValues[t[i + 1]];
+        if ((hi | lo) == 0xff) {
+            out->len = o - (uint8_t *)out->ptr;
+            return i + 1;
+        }
+        *o++ = (uint8_t)(hi << 4 | lo);
+    }
+    out->len = o - (uint8_t *)out->ptr;
+    return 0;
+}
+
 /* xoshiro256** (Blackman and Vigna): fast, not for secrets. The thread's
    own generator is seeded from the system on first use. */
 static uint64_t rotl64(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }

@@ -1,0 +1,26 @@
+import hex
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// A 64 KiB block to hex and back, 2000 times.
+!void main() {
+    i64 seed = 1
+    String chunk
+    defer chunk.free()
+    for chunk.len < 65536 {
+        chunk.append(WORDS[next(&seed) % 10])
+    }
+    chunk.truncate(65536)
+    i64 total = 0
+    for i in 0..2000 {
+        scoped String text = hex.encode(chunk)
+        scoped String back = try hex.decode(text)
+        total += text.len + i64(back[i % back.len])
+    }
+    print("{total}")
+}
