@@ -1,0 +1,53 @@
+// expect: 06082a8648ce3d040302020100020200800201ff020300800102017f
+// expect: 1.2.840.10045.4.3.2 0 128 -1 32769 127
+// expect: long: 300 bytes, inner 3 values
+// expect: bad oid: DerError.invalid
+
+import der, hex
+
+!void main() {
+    String o
+    defer o.free()
+    try der.putOid(&o, "1.2.840.10045.4.3.2")
+    der.putInt(&o, 0)
+    der.putInt(&o, 128)
+    der.putInt(&o, -1)
+    u8[2] n = [0x80, 0x01]
+    der.putUnsigned(&o, n[0:2])
+    der.putInt(&o, 127)
+    scoped String h = hex.encode(o)
+    print(h)
+    r := der.reader(o)
+    scoped String oid = try (try r.next()).oid()
+    a := try (try r.next()).int()
+    b := try (try r.next()).int()
+    c := try (try r.next()).int()
+    d := try (try r.next()).int()
+    e := try (try r.next()).int()
+    print("{oid} {a} {b} {c} {d} {e}")
+
+    String seq
+    defer seq.free()
+    String inner
+    defer inner.free()
+    scoped String big = "a".repeat(300)
+    der.put(&inner, der.OCTET_STRING, big)
+    der.put(&inner, der.NULL, "")
+    der.put(&inner, der.UTF8_STRING, "hi")
+    der.put(&seq, der.SEQUENCE, inner)
+    sr := der.reader(seq)
+    v := try sr.expect(der.SEQUENCE)
+    ir := v.inner()
+    first := try ir.next()
+    i64 count = 1
+    for ir.more() {
+        _ = try ir.next()
+        count += 1
+    }
+    print("long: {first.contents.len} bytes, inner {count} values")
+    String junk
+    defer junk.free()
+    der.putOid(&junk, "1.x") catch err {
+        print("bad oid: {err.code}")
+    }
+}

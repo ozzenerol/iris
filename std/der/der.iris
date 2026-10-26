@@ -260,3 +260,108 @@ pub str tagName(i64 tag) => match tag {
     0x31 => "SET"
     _ => if tag & 0xc0 == 0x80 { "a context-specific value" } else { "another tag" }
 }
+
+// ------------------------------------------------------------ writing
+
+// Adds a value: its tag, its length and contents, as Reader.next reads
+// it back. Values inside a SEQUENCE or SET are written to a String of
+// their own first, which then becomes the contents.
+pub void put(String *out, i64 tag, str contents) {
+    u8[6] head
+    head[0] = u8(tag)
+    i64 n = 1
+    if contents.len < 128 {
+        head[1] = u8(contents.len)
+        n = 2
+    } else {
+        i64 bytes = 1
+        for contents.len >> (8 * bytes) > 0 {
+            bytes += 1
+        }
+        head[1] = u8(0x80 | bytes)
+        for i in 0..bytes {
+            head[2 + i] = u8(contents.len >> (8 * (bytes - 1 - i)) & 0xff)
+        }
+        n = 2 + bytes
+    }
+    out.append(head[0:n])
+    out.append(contents)
+}
+
+// Adds an INTEGER from a big-endian unsigned number, as Value.unsigned
+// gives it.
+pub void putUnsigned(String *out, str n) {
+    i64 at = 0
+    for at + 1 < n.len && n[at] == 0 {
+        at += 1
+    }
+    String c
+    if n.len == 0 || n[at] & 0x80 != 0 {
+        u8[1] zero
+        c.append(zero[0:1])
+    }
+    c.append(n[at:n.len])
+    put(out, INTEGER, c)
+    c.free()
+}
+
+// Adds an INTEGER.
+pub void putInt(String *out, i64 v) {
+    u8[9] b
+    i64 n = 0
+    // the shortest two's complement that holds v
+    for i in 0..8 {
+        b[i] = u8(v >> (8 * (7 - i)) & 0xff)
+    }
+    i64 at = 0
+    for at < 7 && ((b[at] == 0 && b[at + 1] & 0x80 == 0) || (b[at] == 0xff && b[at + 1] & 0x80 != 0)) {
+        at += 1
+    }
+    put(out, INTEGER, b[at:8])
+}
+
+// Adds an OBJECT IDENTIFIER written with dots, such as "2.5.4.3".
+pub !void putOid(String *out, str dotted) {
+    List[i64] parts
+    defer parts.free()
+    i64 v = 0
+    bool digits = false
+    for i in 0..dotted.len + 1 {
+        if i == dotted.len || dotted[i] == '.' {
+            if !digits {
+                return error(DerError.invalid, "'{dotted}' isn't an object identifier")
+            }
+            parts.push(v)
+            v = 0
+            digits = false
+            continue
+        }
+        c := dotted[i]
+        if c < '0' || c > '9' {
+            return error(DerError.invalid, "'{dotted}' isn't an object identifier")
+        }
+        v = v * 10 + i64(c - '0')
+        digits = true
+    }
+    if parts.len < 2 || parts.at(0) > 2 {
+        return error(DerError.invalid, "'{dotted}' isn't an object identifier")
+    }
+    String c
+    defer c.free()
+    for i in 1..parts.len {
+        n := parts.at(0) * 40 + parts.at(1) if i == 1 else parts.at(i)
+        // base 128, high bit set on all but the last
+        u8[10] b
+        i64 k = 10
+        for {
+            k -= 1
+            b[k] = u8(n & 127 | (0 if k == 9 else 128))
+            n = n >> 7
+            if n == 0 {
+                break
+            }
+        }
+        c.append(b[k:10])
+    }
+    put(out, OID, c)
+}

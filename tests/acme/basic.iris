@@ -1,0 +1,84 @@
+// expect: registered: true, again the same: true
+// expect: http-01: 2 certificates, 2 names, ecP256
+// expect: dns-01: *.wild.example.com wild.example.com, ecP384
+// expect: present and cleanup: 1 1
+// expect: rsa: rsa
+// expect: blocked: AcmeError.refused
+
+import acme, crypto, http, os, str, x509
+
+String dnsApi
+i64 presented
+i64 cleaned
+
+!void setTxt(str name, str value) {
+    scoped String url = format("{dnsApi}/set-txt")
+    scoped String body = format("{{\"host\":\"{name}.\",\"value\":\"{value}\"}}")
+    scoped r := try http.post(url, "application/json", body)
+    presented += 1
+}
+
+void clearTxt(str name, str value) {
+    scoped String url = format("{dnsApi}/clear-txt")
+    scoped String body = format("{{\"host\":\"{name}.\"}}")
+    scoped r := http.post(url, "application/json", body) catch http.Reply{}
+    cleaned += 1
+}
+
+// The names of the first certificate in chain, and the kind of its key.
+!String describe(acme.Issued *issued) {
+    certs := try x509.parsePem(issued.chain)
+    defer certs.freeEach()
+    key := try crypto.loadPrivateKey(issued.key)
+    defer key.free()
+    c := certs.at(0)
+    String out
+    for n in c.dnsNames {
+        out.append(n)
+        out.append(" ")
+    }
+    scoped String names = out
+    return format("{names.trim()}, {key.kind()}")
+}
+
+!void main() {
+    url := try os.env("IRIS_ACME_URL")
+    ca := try os.env("IRIS_ACME_CA")
+    portText := try os.env("IRIS_ACME_HTTP_PORT")
+    port := u16(try str.parseInt(portText))
+    dnsApi.append(try os.env("IRIS_ACME_DNS_API"))
+    defer dnsApi.free()
+
+    key := try crypto.generateKey(.ecP256)
+    scoped String saved = key.pem()
+    a := try acme.register(url, key, "ada@example.com", ca)
+    defer a.close()
+    b := try acme.register(url, try crypto.loadPrivateKey(saved), "", ca)
+    defer b.close()
+    print("registered: {a.url.len > 0}, again the same: {a.url == b.url}")
+
+    scoped one := try a.obtain(["one.example.com", "two.example.com"], acme.ObtainOptions{httpPort: port})
+    certs := try x509.parsePem(one.chain)
+    k1 := try crypto.loadPrivateKey(one.key)
+    print("http-01: {certs.len} certificates, {certs.at(0).dnsNames.len} names, {k1.kind()}")
+    k1.free()
+    certs.freeEach()
+
+    scoped wild := try a.obtain(["*.wild.example.com", "wild.example.com"], acme.ObtainOptions{proof: .dns,
+        present: setTxt, cleanup: clearTxt, keyType: .ecP384})
+    scoped String w = try describe(&wild)
+    print("dns-01: {w}")
+    // the wildcard and the plain name share one TXT name, and one of the
+    // two authorizations may already be valid
+    print("present and cleanup: {presented if presented < 2 else 1} {cleaned if cleaned < 2 else 1}")
+
+    scoped rsa := try b.obtain(["rsa.example.com"], acme.ObtainOptions{httpPort: port, keyType: .rsa})
+    rk := try crypto.loadPrivateKey(rsa.key)
+    print("rsa: {rk.kind()}")
+    rk.free()
+
+    _ = a.obtain(["blocked-domain.example"], acme.ObtainOptions{httpPort: port}) catch e {
+        print("blocked: {e.code}")
+        acme.Issued{}
+    }
+}

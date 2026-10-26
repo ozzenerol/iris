@@ -1886,7 +1886,7 @@ pub !Reply send(str method, str url, str body = "", str contentType = "", str[] 
     scoped String req = requestText(method, &d, body, contentType, false, headers)
     try c.write(req)
     bool reusable
-    return try readReply(&c, &reusable)
+    return try readReply(&c, &reusable, head: method == "HEAD")
 }
 
 // A client that keeps connections to each host open between requests, and
@@ -2047,7 +2047,7 @@ bool Client.hasIdle(Dest *d) {
                 return e
             }
             bool reusable
-            r := readReply(&c, &reusable, !self.raw) catch e {
+            r := readReply(&c, &reusable, !self.raw, method == "HEAD") catch e {
                 c.close()
                 if reused && e.code == net.NetError.closed {
                     continue
@@ -2097,8 +2097,8 @@ pub void Client.close() {
 
 // Reads a reply. reusable says whether the connection can take another
 // request: the reply's end was known and the server didn't close it.
-!Reply readReply(net.Conn *c, bool *reusable, bool decode = true) {
-    r := try readRawReply(c, reusable)
+!Reply readReply(net.Conn *c, bool *reusable, bool decode = true, bool head = false) {
+    r := try readRawReply(c, reusable, head)
     if !decode {
         return r
     }
@@ -2109,7 +2109,9 @@ pub void Client.close() {
     return r
 }
 
-!Reply readRawReply(net.Conn *c, bool *reusable) {
+// head is set for the reply to a HEAD request, which has no body whatever
+// its Content-Length says.
+!Reply readRawReply(net.Conn *c, bool *reusable, bool head = false) {
     *reusable = false
     Reply r
     r.protocol = "HTTP/1.1"
@@ -2133,6 +2135,10 @@ pub void Client.close() {
             r.names.push(str.trim(name).copy())
             r.values.push(str.trim(value).copy())
         }
+    }
+    if head || r.status == 204 || r.status == 304 {
+        *reusable = !sameName(r.header("Connection"), "close")
+        return r
     }
     if sameName(r.header("Transfer-Encoding"), "chunked") {
         for {

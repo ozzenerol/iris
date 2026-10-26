@@ -1,0 +1,622 @@
+// ACME (RFC 8555): certificates from Let's Encrypt and other certificate
+// authorities that issue them to whoever shows they control a domain. An
+// Account registers once, then obtain proves control of the domains,
+// with a file on port 80 (http-01) or a DNS record (dns-01), and gives
+// the certificate and its key.
+
+import base64, crypto, der, http, json, net, str, time
+
+// What went wrong: the authority unreachable, a refusal with its reason,
+// an answer that isn't ACME, or no answer in time.
+pub enum AcmeError { connect, refused, invalid, timeout }
+
+// Let's Encrypt's directory, and its staging one for trying things out:
+// its certificates aren't trusted, and its limits are higher.
+pub const str LETS_ENCRYPT = "https://acme-v02.api.letsencrypt.org/directory"
+pub const str LETS_ENCRYPT_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+@json
+struct Directory {
+    String newNonce
+    String newAccount
+    String newOrder
+}
+
+@json
+struct Problem {
+    @json("type") String kind
+    String detail
+}
+
+@json
+struct Identifier {
+    @json("type") String kind
+    String value
+}
+
+@json
+struct Order {
+    String status
+    String[] authorizations
+    @json("finalize") String finalizeUrl
+    String certificate
+    Problem error
+}
+
+@json
+struct Challenge {
+    @json("type") String kind
+    String url
+    String token
+    String status
+    Problem error
+}
+
+@json
+struct Authorization {
+    Identifier identifier
+    String status
+    Challenge[] challenges
+    bool wildcard
+}
+
+// An account with a certificate authority.
+pub struct Account {
+    http.Client *http
+    Directory dir
+    crypto.PrivateKey key
+    // the JWK of the key, and its thumbprint for key authorizations
+    String jwk
+    String thumbprint
+    String nonce
+    // the account's URL, which the authority knows it by
+    pub String url
+}
+
+// How to prove control of a domain.
+pub enum Proof { http, dns }
+
+// How obtain proves control and what key the certificate gets.
+pub struct ObtainOptions {
+    pub Proof proof = .http
+    // for http: the port obtain answers the authority on while it checks,
+    // 80 as the authority asks there; 0 when present answers instead
+    pub u16 httpPort = 80
+    // called before the authority checks: for http with a path such as
+    // /.well-known/acme-challenge/x and the text it should give, for dns
+    // with a TXT record's name and value to set
+    pub !void(str, str) present
+    // called afterwards with the same two, to take them away
+    pub void(str, str) cleanup
+    // the certificate's key: ecP256, ecP384 or rsa
+    pub crypto.KeyType keyType = .ecP256
+    // how long the authority may take
+    pub Duration timeout = 3m
+}
+
+// A certificate: the chain in PEM, the certificate first, as servers
+// load it, and its private key in PEM.
+pub struct Issued {
+    pub String chain
+    pub String key
+}
+
+// Frees the chain and the key.
+pub void Issued.free() {
+    self.chain.free()
+    self.key.free()
+}
+
+// ------------------------------------------------------------ requests
+
+// The public key's JWK, with its members in the order its thumbprint
+// needs.
+!String jwkOf(crypto.PrivateKey *key) {
+    if key.kind() != .ecP256 {
+        return error(AcmeError.invalid, "an account key is ECDSA on P-256")
+    }
+    pk := key.publicKey()
+    defer pk.free()
+    scoped String spki = pk.der()
+    r := der.reader(spki)
+    outer := r.expect(der.SEQUENCE) catch e {
+        return error(AcmeError.invalid, "the account key is broken")
+    }
+    ir := outer.inner()
+    _ = ir.expect(der.SEQUENCE) catch e {
+        return error(AcmeError.invalid, "the account key is broken")
+    }
+    bits := ir.expect(der.BIT_STRING) catch e {
+        return error(AcmeError.invalid, "the account key is broken")
+    }
+    point := bits.bits() catch e {
+        return error(AcmeError.invalid, "the account key is broken")
+    }
+    if point.len != 65 || point[0] != 4 {
+        return error(AcmeError.invalid, "the account key is broken")
+    }
+    scoped String x = base64.encodeUrl(point[1:33])
+    scoped String y = base64.encodeUrl(point[33:65])
+    return format("{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}")
+}
+
+// payload signed for url, as the authority takes it: with the key's JWK
+// before the account has a URL, with the URL after.
+!String Account.jws(str url, str payload) {
+    scoped String q = json.quote(url)
+    scoped String nonce = json.quote(self.nonce)
+    String protected
+    if self.url.len > 0 {
+        scoped String kid = json.quote(self.url)
+        protected = format("{{\"alg\":\"ES256\",\"kid\":{kid},\"nonce\":{nonce},\"url\":{q}}}")
+    } else {
+        protected = format("{{\"alg\":\"ES256\",\"jwk\":{self.jwk},\"nonce\":{nonce},\"url\":{q}}}")
+    }
+    scoped String p64 = base64.encodeUrl(protected)
+    protected.free()
+    scoped String b64 = base64.encodeUrl(payload)
+    scoped String signing = format("{p64}.{b64}")
+    scoped String sigDer = self.key.sign(signing) catch e {
+        return error(AcmeError.invalid, "signing: {e.message}")
+    }
+    scoped String raw = crypto.ecdsaRaw(sigDer, 32) catch e {
+        return error(AcmeError.invalid, "signing: {e.message}")
+    }
+    scoped String s64 = base64.encodeUrl(raw)
+    return format("{{\"protected\":\"{p64}\",\"payload\":\"{b64}\",\"signature\":\"{s64}\"}}")
+}
+
+!void Account.freshNonce() {
+    reply := self.http.send("HEAD", self.dir.newNonce) catch e {
+        return error(AcmeError.connect, "{self.dir.newNonce}: {e.message}")
+    }
+    defer reply.free()
+    self.takeNonce(&reply)
+    if self.nonce.len == 0 {
+        return error(AcmeError.invalid, "{self.dir.newNonce} gave no nonce")
+    }
+}
+
+void Account.takeNonce(http.Reply *reply) {
+    n := reply.header("Replay-Nonce")
+    if n.len > 0 {
+        self.nonce.free()
+        self.nonce = n.copy()
+    }
+}
+
+// The authority's problem in a reply, for an error.
+String problemOf(http.Reply *reply, str what) {
+    p := json.decode(Problem, reply.body) catch e {
+        return format("{what}: status {reply.status}")
+    }
+    defer p.free()
+    return format("{what}: {p.detail} ({p.kind})")
+}
+
+// payload signed and posted to url; "" asks for what is at url
+// (POST-as-GET). A reply with an error status fails with the problem.
+!http.Reply Account.post(str url, str payload, str what) {
+    for attempt in 0..3 {
+        if self.nonce.len == 0 {
+            try self.freshNonce()
+        }
+        scoped String body = try self.jws(url, payload)
+        self.nonce.clear()
+        reply := self.http.send("POST", url, body, "application/jose+json") catch e {
+            return error(AcmeError.connect, "{what}: {e.message}")
+        }
+        self.takeNonce(&reply)
+        if reply.status < 400 {
+            return reply
+        }
+        // a nonce that went stale is tried again with a new one
+        if reply.status == 400 && str.contains(reply.body, "badNonce") && attempt < 2 {
+            reply.free()
+            continue
+        }
+        scoped String why = problemOf(&reply, what)
+        reply.free()
+        return error(AcmeError.refused, why)
+    }
+    return error(AcmeError.refused, "{what}: the nonce was refused again and again")
+}
+
+// ------------------------------------------------------------ accounts
+
+// Registers key with the authority whose directory is at directory, or
+// finds the account it already has, and agrees to the authority's terms
+// of service. email is where the authority writes about the account. ca
+// names a file of the certificates to trust for the authority's HTTPS,
+// for a test authority such as Pebble.
+pub !Account register(str directory, crypto.PrivateKey key, str email = "", str ca = "") {
+    Account a
+    http.Client[] client = alloc(http.Client, 1)
+    client[0] = http.Client{ca: ca, noHttp2: true}
+    a.http = &client[0]
+    a.key = key
+    errdefer {
+        a.http.close()
+        free(a.http[0:1])
+        a.dir.free()
+        a.jwk.free()
+        a.thumbprint.free()
+        a.nonce.free()
+        a.url.free()
+    }
+    reply := a.http.get(directory) catch e {
+        return error(AcmeError.connect, "{directory}: {e.message}")
+    }
+    defer reply.free()
+    if reply.status != 200 {
+        return error(AcmeError.connect, "{directory}: status {reply.status}")
+    }
+    a.dir = json.decode(Directory, reply.body) catch e {
+        return error(AcmeError.invalid, "{directory} isn't an ACME directory: {e.message}")
+    }
+    a.jwk = try jwkOf(&a.key)
+    digest := crypto.sha256(a.jwk)
+    a.thumbprint = base64.encodeUrl(digest[0:32])
+    String payload
+    defer payload.free()
+    payload.append("{{\"termsOfServiceAgreed\":true")
+    if email.len > 0 {
+        scoped String contact = format("mailto:{email}")
+        scoped String q = json.quote(contact)
+        payload.append(",\"contact\":[")
+        payload.append(q)
+        payload.append("]")
+    }
+    payload.append("}}")
+    created := try a.post(a.dir.newAccount, payload, "register")
+    defer created.free()
+    location := created.header("Location")
+    if location.len == 0 {
+        return error(AcmeError.invalid, "register: the authority gave no account URL")
+    }
+    a.url = location.copy()
+    return a
+}
+
+// Closes the connections to the authority and frees the account.
+pub void Account.close() {
+    self.http.close()
+    free(self.http[0:1])
+    self.dir.free()
+    self.jwk.free()
+    self.thumbprint.free()
+    self.nonce.free()
+    self.url.free()
+}
+
+// ------------------------------------------------------------ obtaining
+
+// What the authority's http-01 check asks for, and the answer, while
+// obtain waits.
+struct Answers {
+    List[(String, String)] items
+    net.Listener ln
+    bool done
+    chan[bool] stopped
+}
+
+void answerTask(Answers *a) {
+    for !a.done {
+        c := a.ln.accept() catch e {
+            if e.code == net.NetError.closed {
+                break
+            }
+            continue
+        }
+        spawn answerOne(a, c)
+    }
+    a.stopped <- true
+}
+
+// One request of the authority: the key authorization for a token.
+void answerOne(Answers *a, net.Conn c) {
+    defer c.close()
+    c.setTimeout(10s)
+    line := c.readLine(8KiB) catch e {
+        return
+    }
+    defer line.free()
+    // the rest of the head
+    for {
+        h := c.readLine(8KiB) catch e {
+            return
+        }
+        empty := h.len == 0
+        h.free()
+        if empty {
+            break
+        }
+    }
+    parts := str.fields(line)
+    defer parts.free()
+    if parts.len >= 2 && parts.at(0) == "GET" {
+        for item in a.items {
+            path, answer := item
+            if parts.at(1) == path {
+                c.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {answer.len}\r\nConnection: close\r\n\r\n{answer}") catch e { }
+                return
+            }
+        }
+    }
+    c.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch e { }
+}
+
+// A certificate signing request for domains, signed with key.
+!String csrOf(str[] domains, crypto.PrivateKey *key) {
+    String info
+    defer info.free()
+    String body
+    defer body.free()
+    der.putInt(&body, 0)
+    // the subject: the first domain as the common name
+    String cn
+    try der.putOid(&cn, "2.5.4.3")
+    der.put(&cn, der.UTF8_STRING, domains[0])
+    String rdn
+    der.put(&rdn, der.SEQUENCE, cn)
+    cn.free()
+    String set
+    der.put(&set, der.SET, rdn)
+    rdn.free()
+    der.put(&body, der.SEQUENCE, set)
+    set.free()
+    pk := key.publicKey()
+    scoped String spki = pk.der()
+    pk.free()
+    body.append(spki)
+    // the domains as subject alternative names, in an extension request
+    String names
+    for d in domains {
+        der.put(&names, der.context(2, false), d)
+    }
+    String san
+    der.put(&san, der.SEQUENCE, names)
+    names.free()
+    String ext
+    try der.putOid(&ext, "2.5.29.17")
+    der.put(&ext, der.OCTET_STRING, san)
+    san.free()
+    String exts
+    der.put(&exts, der.SEQUENCE, ext)
+    ext.free()
+    String extsSeq
+    der.put(&extsSeq, der.SEQUENCE, exts)
+    exts.free()
+    String values
+    der.put(&values, der.SET, extsSeq)
+    extsSeq.free()
+    String attr
+    try der.putOid(&attr, "1.2.840.113549.1.9.14")
+    attr.append(values)
+    values.free()
+    String attrSeq
+    der.put(&attrSeq, der.SEQUENCE, attr)
+    attr.free()
+    der.put(&body, der.context(0), attrSeq)
+    attrSeq.free()
+    der.put(&info, der.SEQUENCE, body)
+
+    kind := key.kind()
+    crypto.Hash hash = .sha384 if kind == .ecP384 else .sha256
+    str oid = "1.2.840.10045.4.3.3" if kind == .ecP384 else "1.2.840.10045.4.3.2" if kind == .ecP256 else "1.2.840.113549.1.1.11"
+    scoped String sig = key.sign(info, hash) catch e {
+        return error(AcmeError.invalid, "signing the request: {e.message}")
+    }
+    String alg
+    defer alg.free()
+    try der.putOid(&alg, oid)
+    if kind == .rsa {
+        der.put(&alg, der.NULL, "")
+    }
+    String all
+    defer all.free()
+    all.append(info)
+    der.put(&all, der.SEQUENCE, alg)
+    String bits
+    u8[1] zero
+    bits.append(zero[0:1])
+    bits.append(sig)
+    der.put(&all, der.BIT_STRING, bits)
+    bits.free()
+    String out
+    der.put(&out, der.SEQUENCE, all)
+    return out
+}
+
+// Asks for what is at url, decoded as a T.
+!Order Account.order(str url) {
+    reply := try self.post(url, "", "order")
+    defer reply.free()
+    return json.decode(Order, reply.body) catch e {
+        return error(AcmeError.invalid, "order: {e.message}")
+    }
+}
+
+!Authorization Account.authorization(str url) {
+    reply := try self.post(url, "", "authorization")
+    defer reply.free()
+    return json.decode(Authorization, reply.body) catch e {
+        return error(AcmeError.invalid, "authorization: {e.message}")
+    }
+}
+
+// The time to wait before asking again: Retry-After, 1 to 10 seconds.
+Duration retryAfter(http.Reply *reply) {
+    n := str.parseInt(reply.header("Retry-After")) catch 1
+    return n * 1s if n >= 1 && n <= 10 else 1s
+}
+
+// Proves control of each of domains, then has the authority issue a
+// certificate for them: the first is its common name, all of them its
+// names. "*.example.com" asks for a wildcard, which only dns proves.
+pub !Issued Account.obtain(str[] domains, ObtainOptions o = ObtainOptions{}) {
+    if domains.len == 0 {
+        return error(AcmeError.invalid, "obtain: no domains")
+    }
+    if o.proof == .dns && o.present == null {
+        return error(AcmeError.invalid, "obtain: proving with dns needs present to set the TXT records")
+    }
+    deadline := time.clock() + o.timeout
+    String ids
+    defer ids.free()
+    for i, d in domains {
+        scoped String q = json.quote(d)
+        ids.append("," if i > 0 else "")
+        ids.append("{{\"type\":\"dns\",\"value\":")
+        ids.append(q)
+        ids.append("}}")
+    }
+    scoped String newOrder = format("{{\"identifiers\":[{ids}]}}")
+    created := try self.post(self.dir.newOrder, newOrder, "new order")
+    orderUrl := created.header("Location").copy()
+    defer orderUrl.free()
+    order := json.decode(Order, created.body) catch e {
+        created.free()
+        return error(AcmeError.invalid, "new order: {e.message}")
+    }
+    created.free()
+    defer order.free()
+
+    // the http-01 answers, served while the authority checks
+    Answers[] amem = alloc(Answers, 1)
+    answers := &amem[0]
+    answers.stopped = chan[bool](1)
+    bool listening = false
+    defer {
+        if listening {
+            answers.done = true
+            answers.ln.interrupt()
+            _ = <-answers.stopped
+            answers.ln.close()
+        }
+        for item in answers.items {
+            p, v := item
+            if o.cleanup != null {
+                o.cleanup(p, v)
+            }
+            p.free()
+            v.free()
+        }
+        answers.items.free()
+        answers.stopped.free()
+        free(amem)
+    }
+    if o.proof == .http && o.httpPort > 0 {
+        answers.ln = net.listen(o.httpPort) catch e {
+            return error(AcmeError.connect, "obtain: listening on port {o.httpPort} for the authority: {e.message}")
+        }
+        listening = true
+        spawn answerTask(answers)
+    }
+
+    // each authorization: its challenge answered
+    List[String] pending
+    defer pending.freeEach()
+    for url in order.authorizations {
+        authz := try self.authorization(url)
+        defer authz.free()
+        if authz.status == "valid" {
+            continue
+        }
+        str want = "dns-01" if o.proof == .dns else "http-01"
+        i64 at = -1
+        for i, c in authz.challenges {
+            if c.kind == want {
+                at = i
+            }
+        }
+        if at < 0 {
+            return error(AcmeError.refused, "obtain {authz.identifier.value}: the authority offers no {want} challenge")
+        }
+        c := &authz.challenges[at]
+        scoped String keyAuth = format("{c.token}.{self.thumbprint}")
+        if o.proof == .http {
+            path := format("/.well-known/acme-challenge/{c.token}")
+            answers.items.push((path, keyAuth.copy()))
+            if o.present != null {
+                try o.present(path, keyAuth)
+            }
+        } else {
+            digest := crypto.sha256(keyAuth)
+            value := base64.encodeUrl(digest[0:32])
+            str bare = authz.identifier.value
+            name := format("_acme-challenge.{bare}")
+            answers.items.push((name, value))
+            try o.present(name, value)
+        }
+        scoped started := try self.post(c.url, "{{}}", "challenge")
+        pending.push(url.copy())
+    }
+    for url in pending {
+        for {
+            authz := try self.authorization(url)
+            status := authz.status.copy()
+            String detail
+            for c in authz.challenges {
+                if c.error.detail.len > 0 {
+                    detail.append(c.error.detail)
+                }
+            }
+            name := authz.identifier.value.copy()
+            authz.free()
+            if status == "valid" {
+                status.free()
+                name.free()
+                detail.free()
+                break
+            }
+            if status != "pending" && status != "processing" {
+                scoped String msg = format("obtain {name}: the authority found the proof {status}: {detail}")
+                status.free()
+                name.free()
+                detail.free()
+                return error(AcmeError.refused, msg)
+            }
+            status.free()
+            name.free()
+            detail.free()
+            if time.clock() > deadline {
+                return error(AcmeError.timeout, "obtain: the authority didn't check the proof in {o.timeout}")
+            }
+            sleep(500ms)
+        }
+    }
+
+    // the certificate's key and request
+    key := crypto.generateKey(o.keyType, 2048) catch e {
+        return error(AcmeError.invalid, "obtain: making the key: {e.message}")
+    }
+    defer key.free()
+    scoped String csr = try csrOf(domains, &key)
+    scoped String csr64 = base64.encodeUrl(csr)
+    scoped String finalize = format("{{\"csr\":\"{csr64}\"}}")
+    scoped done := try self.post(order.finalizeUrl, finalize, "finalize")
+    for {
+        cur := try self.order(orderUrl)
+        if cur.status == "valid" {
+            reply := self.post(cur.certificate, "", "certificate") catch e {
+                cur.free()
+                return e
+            }
+            cur.free()
+            chain := reply.body.copy()
+            reply.free()
+            return Issued{chain: chain, key: key.pem()}
+        }
+        if cur.status == "invalid" {
+            scoped String msg = format("obtain: the authority refused the order: {cur.error.detail}")
+            cur.free()
+            return error(AcmeError.refused, msg)
+        }
+        cur.free()
+        if time.clock() > deadline {
+            return error(AcmeError.timeout, "obtain: the authority didn't issue the certificate in {o.timeout}")
+        }
+        sleep(500ms)
+    }
+}
