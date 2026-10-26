@@ -27,7 +27,11 @@ func main() {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	server := mqtt.New(&mqtt.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	// mochi drops QoS 0 messages for a subscriber whose queue is full;
+	// room for all of them keeps the count the same as the others'
+	caps := mqtt.NewDefaultServerCapabilities()
+	caps.MaximumClientWritesPending = fast + sure
+	server := mqtt.New(&mqtt.Options{Capabilities: caps, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	server.AddHook(new(auth.AllowHook), nil)
 	if err := server.AddListener(listeners.NewTCP(listeners.Config{ID: "t", Address: addr})); err != nil {
 		panic(err)

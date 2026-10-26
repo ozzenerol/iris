@@ -58,6 +58,7 @@ LIB_ROWS = [
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
     ("sftp", "1000 small files written, read and removed over SFTP, then 256 MiB up and down", "russh-sftp", "`pkg/sftp`"),
     ("mqtt", "220000 MQTT messages through a broker, 20000 of them at QoS 1", "rumqttd, rumqttc", "mochi-mqtt, Paho"),
+    ("quic", "200 QUIC connections with a request each, then 512 MiB through a stream", "quinn", "quic-go"),
     ("protobuf", "100,000 orders read and written as protobuf, 20 times", "prost", "by hand, `protowire`"),
     ("msgpack", "100,000 orders read and written as MessagePack, 20 times", "rmp-serde", "vmihailenco/msgpack"),
     ("cbor", "100,000 orders read and written as CBOR, 20 times", "ciborium", "fxamacker/cbor"),

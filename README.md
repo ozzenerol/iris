@@ -8,7 +8,7 @@ The standard library covers HTTP/1.1 and HTTP/2 servers and clients, TLS with ce
 
 ## Speed
 
-`bench/` has 18 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers.
+`bench/` has 19 programs written the same way in Iris, Rust and Go: number crunching, memory, collections, text, channels and network servers.
 
 - Machine: AMD Ryzen 7 5700X, Linux. Iris 0.79.0 with clang 19, Rust 1.99, Go 1.27.
 - Times are the median of 5 runs, in seconds.
@@ -35,6 +35,7 @@ The standard library covers HTTP/1.1 and HTTP/2 servers and clients, TLS with ce
 | http-json | HTTP/1.1 JSON in and out, wrk (req/s) | 400k | **410k** | 345k | 143k | 7 / 10 / 20 |
 | tcp-echo | TCP echo, 100 connections (msg/s) | **384k** | 382k | 363k | 293k | 4 / 3 / 5 |
 | http2 | HTTP/2 hello, h2load (req/s) | **2,226k** | 2,187k | 736k | 148k | 9 / 14 / 44 |
+| grpc | gRPC unary hello, h2load (req/s) | **1,068k** | 1,024k | 412k | 326k | 12 / 25 / 41 |
 | tcp-proxy | TCP proxy, 64-byte messages, 100 connections (msg/s) | **190k** | 190k | 186k | 157k | 4 / 4 / 6 |
 | tcp-proxy-bulk | TCP proxy, 256 KiB messages, 16 connections (MiB/s each way) | **8,741** | 8,738 | 2,095 | 8,317 | 3 / 3 / 5 |
 
@@ -49,10 +50,11 @@ The servers do less work than the rates show, since the load generator limits th
 | http-json | 7,442 | **7,344** | 11,478 | 27,100 |
 | tcp-echo | 7,982 | **7,978** | 8,284 | 9,556 |
 | http2 | **1,347** | 1,375 | 5,410 | 26,306 |
+| grpc | **2,767** | 2,893 | 9,563 | 11,974 |
 | tcp-proxy | **16,054** | 16,108 | 16,835 | 19,473 |
 | tcp-proxy-bulk | 19,141 | **18,565** | 119,310 | 22,577 |
 
-`bench/` also has 28 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
+`bench/` also has 40 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
 
 | Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
 |---|---|--:|--:|--:|---|---|
@@ -78,14 +80,26 @@ The servers do less work than the rates show, since the load generator limits th
 | base32 | 64 KiB to base32 and back, 2000 times | **0.169** | 0.171 | 0.446 | data-encoding | `encoding/base32` |
 | base64 | 64 KiB to base64 and back, 2000 times | **0.123** | 0.131 | 0.189 | data-encoding | `encoding/base64` |
 | hex | 64 KiB to hex and back, 2000 times | **0.116** | 0.147 | 0.227 | data-encoding | `encoding/hex` |
-| ecdsa | 4000 P-256 signatures, each checked | 0.277 | **0.223** | 0.329 | ring | `crypto/ecdsa` |
+| ecdsa | 4000 P-256 signatures, each checked | 0.277 | **0.222** | 0.326 | ring | `crypto/ecdsa` |
 | rsa | 500 RSA-2048 signatures, each checked 20 times | **0.385** | 0.386 | 0.623 | ring | `crypto/rsa` |
 | x509-parse | a certificate parsed 200000 times | **0.240** | 0.384 | 1.116 | x509-parser | `crypto/x509` |
 | yaml-parse | a 6.7 MB YAML list, 3 times | **0.458** | 1.244 | 2.458 | serde_yaml | `gopkg.in/yaml.v3` |
 | wire | 100,000 binary messages read and written, 30 times | **0.119** | 0.120 | 0.194 | by hand, `from_be_bytes` | `encoding/binary` |
-| ssh | 100 SSH logins with a command each, then 512 MiB through a channel | **0.348** | 0.460 | 0.834 | russh | `x/crypto/ssh` |
+| ssh | 100 SSH logins with a command each, then 512 MiB through a channel | **0.343** | 0.459 | 0.832 | russh | `x/crypto/ssh` |
+| sftp | 1000 small files written, read and removed over SFTP, then 256 MiB up and down | 2.002 | **1.646** | 1.934 | russh-sftp | `pkg/sftp` |
+| mqtt | 220000 MQTT messages through a broker, 20000 of them at QoS 1 | **0.665** | 2.359 | 4.204 | rumqttd, rumqttc | mochi-mqtt, Paho |
+| quic | 200 QUIC connections with a request each, then 512 MiB through a stream | **0.652** | 1.076 | 1.433 | quinn | quic-go |
+| protobuf | 100,000 orders read and written as protobuf, 20 times | **0.485** | 0.526 | 0.922 | prost | by hand, `protowire` |
+| msgpack | 100,000 orders read and written as MessagePack, 20 times | **0.998** | 1.295 | 4.372 | rmp-serde | vmihailenco/msgpack |
+| cbor | 100,000 orders read and written as CBOR, 20 times | **1.017** | 2.555 | 3.577 | ciborium | fxamacker/cbor |
+| sigv4 | 200000 S3 requests signed with AWS Signature Version 4, each with a 1 KiB body | **0.518** | 0.833 | 0.901 | aws-sigv4 | `aws-sdk-go-v2` signer |
+| mysql-query | MySQL: 1000 inserts in a transaction, 20000 prepared selects by id, then the table read 100 times | **0.616** | 1.425 | 0.667 | sqlx | `go-sql-driver/mysql` |
+| metrics | 10M requests counted with labels and a histogram, 2,000 series written 200 times | **0.240** | 0.327 | 0.946 | prometheus | client_golang |
+| tracing | 1M spans with traceparent, written as OTLP JSON | **0.461** | 0.931 | 5.956 | opentelemetry-proto + serde_json | otlp + protojson |
+| bson | 500000 orders encoded to BSON and decoded back | **0.160** | 0.569 | 1.299 | bson | `mongo-driver` bson |
+| mongo-query | MongoDB: 1000 inserts, 20000 finds by an indexed field, then the collection read 100 times | **0.883** | 1.159 | 1.251 | mongodb | `mongo-driver` |
 
-In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. In wire, Rust and Go read and write the messages by hand, the usual way to write a binary protocol in each. In ssh, a server and a client run in one program, all three with mlkem768x25519-sha256, Ed25519 keys and AES-256-GCM; russh is set to TCP_NODELAY, as Iris and Go are. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
+In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. In wire, Rust and Go read and write the messages by hand, the usual way to write a binary protocol in each. In ssh, a server and a client run in one program, all three with mlkem768x25519-sha256, Ed25519 keys and AES-256-GCM; russh is set to TCP_NODELAY, as Iris and Go are. Iris signs and checks ECDSA and RSA with the system's OpenSSL. In sftp and mqtt, the server or broker and the client run in one program; mochi-mqtt is given room to queue every message, since it drops QoS 0 messages for a subscriber that falls behind. In quic, Iris and Rust use TLS_AES_256_GCM_SHA384 and quic-go picks AES-128-GCM itself. mysql-query and mongo-query ran on an Intel Core i7-12650H against MySQL 8.4 and MongoDB 8.0 in Docker on the same machine, where the server takes much of the time.
 
 ## Building and installing
 
