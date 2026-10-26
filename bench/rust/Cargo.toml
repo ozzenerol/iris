@@ -28,6 +28,8 @@ x509-parser = "0.18"
 serde_yaml = "0.9"
 russh = "0.65"
 rand = "0.10"
+aws-sigv4 = "1"
+aws-credential-types = "1"
 
 [profile.release]
 opt-level = 3
@@ -214,3 +216,7 @@ path = "../wire/main.rs"
 [[bin]]
 name = "ssh"
 path = "../ssh/main.rs"
+
+[[bin]]
+name = "sigv4"
+path = "../sigv4/main.rs"

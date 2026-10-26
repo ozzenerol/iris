@@ -1,0 +1,30 @@
+import sigv4, str, time
+
+// Signs 200000 S3 PUT requests, each with a 1 KiB body that is hashed, a
+// Content-Type and its own key, at a fixed time, and prints how many
+// signatures start with 0 and the last Authorization header.
+!void main() {
+    signer := sigv4.Signer{accessKey: "AKIAIOSFODNN7EXAMPLE", secretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", region: "eu-west-1"}
+    String body
+    defer body.free()
+    for body.len < 1024 {
+        body.append("0123456789abcdef")
+    }
+    now := time.date(2026, 10, 26)
+    i64 zeros = 0
+    String last
+    defer last.free()
+    for i in 0..200000 {
+        scoped String u = format("https://bench.s3.eu-west-1.amazonaws.com/photos/{i}.txt")
+        scoped List[String] hs = try signer.sign("PUT", u, ["Content-Type: text/plain"], body, now)
+        auth := hs.last()
+        if auth[auth.len - 64] == '0' {
+            zeros += 1
+        }
+        if i == 199999 {
+            last = auth.copy()
+        }
+        hs.freeEach()
+    }
+    print("{zeros} {last}")
+}

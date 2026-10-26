@@ -1,0 +1,459 @@
+// Amazon S3, and the servers that speak its API (MinIO, Ceph, R2 and
+// others), over HTTP with requests signed with AWS Signature Version 4.
+//
+//     c := s3.Client{accessKey: key, secretKey: secret, region: "eu-west-1"}
+//     defer c.close()
+//     try c.put("photos", "2026/cat.jpg", bytes, "image/jpeg")
+//     scoped String data = try c.get("photos", "2026/cat.jpg")
+//
+// With an endpoint, such as http://localhost:9000 for MinIO, buckets are
+// part of the path (http://localhost:9000/photos/2026/cat.jpg); without
+// one they are part of the host name, as AWS has them.
+
+import http, sigv4, str, time, url, xml
+
+// What the calls fail with: notFound (no such bucket, key or upload),
+// denied (the keys are wrong or not allowed to), conflict (a bucket that
+// exists, or one that isn't empty), invalid (a name or reply that isn't
+// right), failed (any other error the server sends).
+pub enum S3Error { notFound, denied, conflict, invalid, failed }
+
+// A connection to S3 or a server like it, which every task and thread can
+// share. close closes its connections.
+pub struct Client {
+    pub str accessKey
+    pub str secretKey
+    pub str sessionToken
+    pub str region = "us-east-1"
+    // the server, as http://host:port or https://host, or "" for AWS
+    pub str endpoint
+    // a file of the certificates to trust instead of the system's
+    pub str ca
+    http.Client web
+}
+
+// An object as list gives it.
+pub struct Object {
+    pub String key
+    pub i64 size
+    pub String etag
+    pub time.Time modified
+}
+
+void Object.free() {
+    self.key.free()
+    self.etag.free()
+}
+
+// What head tells about an object.
+pub struct Info {
+    pub i64 size
+    pub String etag
+    pub String contentType
+    pub time.Time modified
+}
+
+// Frees the Strings.
+pub void Info.free() {
+    self.etag.free()
+    self.contentType.free()
+}
+
+// A page of list: the objects in key order, and with a delimiter the
+// prefixes that group the rest ("photos/2026/"). When truncated is set,
+// next goes to list as after for the page that follows.
+pub struct Listing {
+    pub List[Object] objects
+    pub List[String] prefixes
+    pub bool truncated
+    pub String next
+}
+
+// Frees the objects and the Strings.
+pub void Listing.free() {
+    for o in self.objects {
+        o.free()
+    }
+    self.objects.free()
+    self.prefixes.freeEach()
+    self.next.free()
+}
+
+// Closes the connections the client keeps.
+pub void Client.close() => self.web.close()
+
+sigv4.Signer Client.signer() => sigv4.Signer{accessKey: self.accessKey, secretKey: self.secretKey,
+    sessionToken: self.sessionToken, region: self.region, service: "s3"}
+
+// A key encoded for a path: each part between slashes %XX encoded.
+void appendKey(String *out, str key) {
+    str rest = key
+    for {
+        part, after, more := str.cut(rest, "/")
+        scoped String e = url.encode(part)
+        out.append(e)
+        if !more {
+            return
+        }
+        out.append("/")
+        rest = after
+    }
+}
+
+// The URL of a bucket, or of a key in it, with query after a ?.
+!String Client.urlOf(str bucket, str key, str query) {
+    if bucket.len == 0 || str.contains(bucket, "/") {
+        return error(S3Error.invalid, "'{bucket}' isn't a bucket name")
+    }
+    String out
+    if self.endpoint.len > 0 {
+        out.append(str.trimSuffix(self.endpoint, "/"))
+        out.append("/")
+        out.append(bucket)
+    } else {
+        out.append("https://")
+        out.append(bucket)
+        out.append(".s3.")
+        out.append(self.region)
+        out.append(".amazonaws.com")
+    }
+    if key.len > 0 {
+        out.append("/")
+        appendKey(&out, key)
+    } else if self.endpoint.len == 0 {
+        out.append("/")
+    }
+    if query.len > 0 {
+        out.append("?")
+        out.append(query)
+    }
+    return out
+}
+
+// The error an S3 error reply describes: its Code and Message.
+!void replyError(http.Reply *r, str method, str address) {
+    S3Error kind = if r.status == 404 { .notFound } else if r.status == 403 { .denied } else if r.status == 409 {
+        .conflict
+    } else { .failed }
+    root := xml.parse(r.body) catch e {
+        return error(kind, "{method} {address}: the server answered {r.status}")
+    }
+    defer root.free()
+    code := root.child("Code")
+    message := root.child("Message")
+    str c = if code != null { code.text } else { "" }
+    str m = if message != null { message.text } else { "" }
+    if c == "NoSuchKey" || c == "NoSuchBucket" || c == "NoSuchUpload" {
+        kind = .notFound
+    } else if c == "AccessDenied" || c == "InvalidAccessKeyId" || c == "SignatureDoesNotMatch" {
+        kind = .denied
+    } else if c == "BucketAlreadyExists" || c == "BucketAlreadyOwnedByYou" || c == "BucketNotEmpty" {
+        kind = .conflict
+    }
+    return error(kind, "{method} {address}: {m} ({c})")
+}
+
+// Sends a signed request, and fails with the server's error unless the
+// status is 2xx.
+!http.Reply Client.request(str method, str address, str body, str contentType, str[] headers) {
+    List[str] all
+    defer all.free()
+    for h in headers {
+        all.push(h)
+    }
+    scoped String ct = format("Content-Type: {contentType}")
+    if contentType.len > 0 {
+        all.push(ct)
+    }
+    signer := self.signer()
+    List[String] signed = try signer.sign(method, address, all.items(), body)
+    defer signed.freeEach()
+    for h in signed {
+        all.push(h)
+    }
+    r := try self.web.send(method, address, body, "", all.items())
+    if r.status < 200 || r.status > 299 {
+        defer r.free()
+        try replyError(&r, method, address)
+    }
+    return r
+}
+
+// Makes a bucket.
+pub !void Client.createBucket(str bucket) {
+    scoped String u = try self.urlOf(bucket, "", "")
+    scoped String body
+    if self.region != "us-east-1" && self.endpoint.len == 0 {
+        body.append("<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>")
+        body.append(self.region)
+        body.append("</LocationConstraint></CreateBucketConfiguration>")
+    }
+    scoped r := try self.request("PUT", u, body, "", [])
+}
+
+// Removes a bucket, which must be empty.
+pub !void Client.deleteBucket(str bucket) {
+    scoped String u = try self.urlOf(bucket, "", "")
+    scoped r := try self.request("DELETE", u, "", "", [])
+}
+
+// Stores data as the object key, replacing what was there.
+pub !void Client.put(str bucket, str key, str data, str contentType = "application/octet-stream") {
+    scoped String u = try self.urlOf(bucket, key, "")
+    scoped r := try self.request("PUT", u, data, contentType, [])
+}
+
+// The object's bytes.
+pub !String Client.get(str bucket, str key) {
+    scoped String u = try self.urlOf(bucket, key, "")
+    r := try self.request("GET", u, "", "", [])
+    String body = r.body
+    String none
+    r.body = none
+    r.free()
+    return body
+}
+
+// The bytes of the object from from to to, both included.
+pub !String Client.getRange(str bucket, str key, i64 from, i64 to) {
+    scoped String u = try self.urlOf(bucket, key, "")
+    scoped String range = format("Range: bytes={from}-{to}")
+    r := try self.request("GET", u, "", "", [range])
+    String body = r.body
+    String none
+    r.body = none
+    r.free()
+    return body
+}
+
+String unquote(str etag) => str.trimSuffix(str.trimPrefix(etag, "\""), "\"").copy()
+
+// The object's size, ETag, type and time, without its bytes.
+pub !Info Client.head(str bucket, str key) {
+    scoped String u = try self.urlOf(bucket, key, "")
+    scoped r := try self.request("HEAD", u, "", "", [])
+    Info i
+    i.size = str.parseInt(r.header("Content-Length")) catch 0
+    i.etag = unquote(r.header("ETag"))
+    i.contentType = r.header("Content-Type").copy()
+    i.modified = httpTime(r.header("Last-Modified"))
+    return i
+}
+
+// Whether the object is there.
+pub !bool Client.exists(str bucket, str key) {
+    scoped Info i = self.head(bucket, key) catch e {
+        if e.code == S3Error.notFound {
+            return false
+        }
+        return e
+    }
+    return true
+}
+
+// Removes the object. Removing one that isn't there is no error.
+pub !void Client.delete(str bucket, str key) {
+    scoped String u = try self.urlOf(bucket, key, "")
+    scoped r := try self.request("DELETE", u, "", "", [])
+}
+
+str MONTHS = "JanFebMarAprMayJunJulAugSepOctNovDec"
+
+// "Wed, 21 Oct 2026 07:28:00 GMT", as HTTP writes times.
+time.Time httpTime(str text) {
+    parts := str.fields(text)
+    defer parts.free()
+    if parts.len < 5 {
+        return time.Time{}
+    }
+    day := str.parseInt(parts.at(1)) catch 0
+    i64 month = str.find(MONTHS, parts.at(2)) / 3 + 1
+    year := str.parseInt(parts.at(3)) catch 0
+    clock := parts.at(4)
+    if clock.len < 8 {
+        return time.Time{}
+    }
+    h := str.parseInt(clock[0:2]) catch 0
+    m := str.parseInt(clock[3:5]) catch 0
+    s := str.parseInt(clock[6:8]) catch 0
+    return time.date(year, month, day, h, m, s)
+}
+
+str textOf(xml.Element *e, str name) {
+    c := e.child(name)
+    return if c != null { c.text } else { "" }
+}
+
+// The objects whose keys start with prefix, a page of at most max (1000
+// at most) at a time, after the page whose next is after. With a
+// delimiter ("/"), keys with it after the prefix are grouped into
+// prefixes, as folders are.
+pub !Listing Client.list(str bucket, str prefix = "", str after = "", str delimiter = "", i64 max = 1000) {
+    scoped String q = format("list-type=2&max-keys={max}")
+    if prefix.len > 0 {
+        scoped String p = url.encode(prefix)
+        q.append("&prefix=")
+        q.append(p)
+    }
+    if after.len > 0 {
+        scoped String a = url.encode(after)
+        q.append("&continuation-token=")
+        q.append(a)
+    }
+    if delimiter.len > 0 {
+        scoped String d = url.encode(delimiter)
+        q.append("&delimiter=")
+        q.append(d)
+    }
+    scoped String u = try self.urlOf(bucket, "", q)
+    scoped r := try self.request("GET", u, "", "", [])
+    scoped root := xml.parse(r.body) catch e {
+        return error(S3Error.invalid, "listing {bucket}: the reply isn't XML: {e.message}")
+    }
+    Listing out
+    for c in root.children {
+        if c.name == "Contents" {
+            Object o
+            o.key = textOf(&c, "Key").copy()
+            o.size = str.parseInt(textOf(&c, "Size")) catch 0
+            o.etag = unquote(textOf(&c, "ETag"))
+            o.modified = time.parse(textOf(&c, "LastModified")) catch time.Time{}
+            out.objects.push(o)
+        } else if c.name == "CommonPrefixes" {
+            out.prefixes.push(textOf(&c, "Prefix").copy())
+        } else if c.name == "IsTruncated" {
+            out.truncated = c.text == "true"
+        } else if c.name == "NextContinuationToken" {
+            out.next.free()
+            out.next = c.text.copy()
+        }
+    }
+    return out
+}
+
+// A URL that makes the request method on the object without keys, for
+// expires (at most 7 days): a link to download it with GET, or one to
+// upload it with PUT.
+pub !String Client.presign(str method, str bucket, str key, Duration expires = 1h) {
+    scoped String u = try self.urlOf(bucket, key, "")
+    signer := self.signer()
+    return try signer.presign(method, u, expires)
+}
+
+// ------------------------------------------------------------ multipart
+
+// An upload in parts, for objects too big to send at once: each part but
+// the last is at least 5 MiB, and finish puts them together.
+pub struct Upload {
+    Client *c
+    String bucket
+    String key
+    // the id the server gave the upload
+    pub String id
+    List[String] etags
+    bool done
+}
+
+// Starts an upload in parts of the object key.
+pub !Upload Client.startUpload(str bucket, str key, str contentType = "application/octet-stream") {
+    scoped String u = try self.urlOf(bucket, key, "uploads")
+    scoped r := try self.request("POST", u, "", contentType, [])
+    scoped root := xml.parse(r.body) catch e {
+        return error(S3Error.invalid, "starting an upload: the reply isn't XML")
+    }
+    id := textOf(&root, "UploadId")
+    if id.len == 0 {
+        return error(S3Error.invalid, "starting an upload: the reply has no UploadId")
+    }
+    return Upload{c: self, bucket: bucket.copy(), key: key.copy(), id: id.copy()}
+}
+
+// Sends the next part.
+pub !void Upload.part(str data) {
+    scoped String id = url.encode(self.id)
+    scoped String q = format("partNumber={self.etags.len + 1}&uploadId={id}")
+    scoped String u = try self.c.urlOf(self.bucket, self.key, q)
+    scoped r := try self.c.request("PUT", u, data, "", [])
+    self.etags.push(r.header("ETag").copy())
+}
+
+// Puts the parts together into the object.
+pub !void Upload.finish() {
+    scoped String id = url.encode(self.id)
+    scoped String q = format("uploadId={id}")
+    scoped String u = try self.c.urlOf(self.bucket, self.key, q)
+    scoped String body
+    body.append("<CompleteMultipartUpload>")
+    for i in 0..self.etags.len {
+        scoped String part = format("<Part><PartNumber>{i + 1}</PartNumber><ETag>")
+        body.append(part)
+        scoped String tag = xml.escape(self.etags.at(i))
+        body.append(tag)
+        body.append("</ETag></Part>")
+    }
+    body.append("</CompleteMultipartUpload>")
+    scoped r := try self.c.request("POST", u, body, "application/xml", [])
+    // the server can answer 200 with an error in the body
+    if str.contains(r.body, "<Error>") {
+        try replyError(&r, "POST", u)
+    }
+    self.done = true
+}
+
+// Drops the parts sent so far.
+pub !void Upload.abort() {
+    scoped String id = url.encode(self.id)
+    scoped String q = format("uploadId={id}")
+    scoped String u = try self.c.urlOf(self.bucket, self.key, q)
+    self.done = true
+    scoped r := try self.c.request("DELETE", u, "", "", [])
+}
+
+// Frees the upload, and drops it on the server when finish wasn't called.
+pub void Upload.free() {
+    if !self.done {
+        self.abort() catch e { }
+    }
+    self.bucket.free()
+    self.key.free()
+    self.id.free()
+    self.etags.freeEach()
+}
+
+// Stores data as the object key in parts of partSize (5 MiB at least)
+// when it is bigger than one part, else at once.
+pub !void Client.putLarge(str bucket, str key, str data, str contentType = "application/octet-stream", i64 partSize = 16MiB) {
+    size := if partSize < 5MiB { 5MiB } else { partSize }
+    if data.len <= size {
+        try self.put(bucket, key, data, contentType)
+        return
+    }
+    scoped up := try self.startUpload(bucket, key, contentType)
+    i64 at = 0
+    for at < data.len {
+        end := if at + size < data.len { at + size } else { data.len }
+        try up.part(data[at:end])
+        at = end
+    }
+    try up.finish()
+}
+
+test "urls" {
+    c := Client{region: "eu-west-1"}
+    scoped String a = try c.urlOf("photos", "2026/a cat+dog.jpg", "")
+    expect(a == "https://photos.s3.eu-west-1.amazonaws.com/2026/a%20cat%2Bdog.jpg", a)
+    scoped String b = try c.urlOf("photos", "", "list-type=2")
+    expect(b == "https://photos.s3.eu-west-1.amazonaws.com/?list-type=2", b)
+    m := Client{endpoint: "http://127.0.0.1:9000/"}
+    scoped String d = try m.urlOf("photos", "x/y", "uploads")
+    expect(d == "http://127.0.0.1:9000/photos/x/y?uploads", d)
+    _ = c.urlOf("a/b", "", "") catch e {
+        expect(e.code == S3Error.invalid)
+        "".copy()
+    }
+}
+
+test "http times" {
+    t := httpTime("Wed, 21 Oct 2026 07:28:09 GMT")
+    expect(t.ns == time.date(2026, 10, 21, 7, 28, 9).ns)
+}

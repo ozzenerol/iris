@@ -1,0 +1,44 @@
+// expect: HEAD 200, length 100, body 0
+// expect: HEAD 200, length 100, body 0
+// expect: 204 with a length: 0
+
+import http, net, str
+
+// Answers each request with headers only, as a server does for HEAD.
+void serve(net.Listener ln) {
+    c := ln.accept() catch e {
+        return
+    }
+    defer c.close()
+    for i in 0..3 {
+        for {
+            scoped String line = c.readLine() catch e {
+                return
+            }
+            if line.len == 0 {
+                break
+            }
+        }
+        if i < 2 {
+            c.write("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n") catch e { return }
+        } else {
+            c.write("HTTP/1.1 204 No Content\r\nContent-Length: 5\r\n\r\n") catch e { return }
+        }
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    defer ln.close()
+    port := ln.port
+    spawn serve(ln)
+    http.Client client = http.Client{timeout: 2s}
+    defer client.close()
+    scoped String u = format("http://127.0.0.1:{port}/x")
+    for i in 0..2 {
+        scoped r := try client.send("HEAD", u)
+        print("HEAD {r.status}, length {r.header("Content-Length")}, body {r.body.len}")
+    }
+    scoped r := try client.get(u)
+    print("204 with a length: {r.body.len}")
+}

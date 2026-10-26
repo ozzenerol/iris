@@ -53,7 +53,9 @@
       {"name": "template", "title": "HTML templates", "summary": "Templates with values, if, for and include, escaped for HTML, filled from a struct or a Map."},
       {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."},
       {"name": "smtp", "title": "Mail", "summary": "Sending mail over SMTP, with STARTTLS or TLS and a login."},
-      {"name": "ssh", "title": "SSH", "summary": "An SSH client that runs commands and forwards ports, and a server for shells, commands and sftp, with Ed25519 keys and known_hosts."}
+      {"name": "ssh", "title": "SSH", "summary": "An SSH client that runs commands and forwards ports, and a server for shells, commands and sftp, with Ed25519 keys and known_hosts."},
+      {"name": "s3", "title": "S3", "summary": "Objects in Amazon S3, MinIO and other servers that speak its API: put, get, list, uploads in parts and presigned URLs."},
+      {"name": "sigv4", "title": "AWS signatures", "summary": "AWS Signature Version 4 for requests and presigned URLs, for S3 and the other AWS APIs."}
     ]},
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},
