@@ -7,6 +7,9 @@ void resetOne(net.Listener ln) {
     c := ln.accept() catch e {
         return
     }
+    // the reset waits for the client's byte, so it comes after dial is done
+    u8[1] one
+    _ = c.read(one[:]) catch e { 0 }
     c.setLinger(0s) catch e { }
     c.close()
 }
@@ -16,6 +19,7 @@ void resetOne(net.Listener ln) {
     spawn resetOne(ln)
     c := try net.dial("127.0.0.1", ln.port)
     defer c.close()
+    try c.write("x")
     u8[10] buf
     _ = c.read(buf[:]) catch e {
         print("closed: {e.code}, {e.message}")

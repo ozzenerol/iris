@@ -3967,18 +3967,33 @@ static void fdForget(int fd) {
     }
 }
 
+/* Makes the sleepers whose time has come ready. */
+static void wakeSleepers(void) {
+    int64_t now = nowNs();
+    while (sleepers && sleepers->wakeAt <= now) {
+        Task *t = sleepers;
+        sleepers = t->nextSleeper;
+        t->wakeAt = 0;
+        if (!t->sleepClaim || !__atomic_exchange_n(t->sleepClaim, 1, __ATOMIC_ACQ_REL)) {
+            makeReady(t);
+        }
+    }
+}
+
 /* Waits for the operating system or the next timer, and makes the tasks
- * whose wait is over ready. */
-static void pollEvents(void) {
+ * whose wait is over ready. With noWait it only looks at what is there,
+ * for a task that yields while others are ready. */
+static void pollEventsHow(bool noWait) {
     int64_t timeout = -1;
     if (sleepers) {
         int64_t d = sleepers->wakeAt - nowNs();
         timeout = d < 0 ? 0 : d;
     }
+    if (noWait) timeout = 0;
     /* another thread may still wake a task here: then wait for it */
     int threads = __atomic_load_n(&liveThreads, __ATOMIC_SEQ_CST);
     drainInbox();
-    if (readyHead) {
+    if (readyHead && !noWait) {
         return;
     }
     if (waitingIo == 0 && timeout < 0 && threads == 1) {
@@ -4037,16 +4052,10 @@ static void pollEvents(void) {
         struct timespec ts = {timeout / 1000000000LL, timeout % 1000000000LL};
         nanosleep(&ts, NULL);
     }
-    int64_t now = nowNs();
-    while (sleepers && sleepers->wakeAt <= now) {
-        Task *t = sleepers;
-        sleepers = t->nextSleeper;
-        t->wakeAt = 0;
-        if (!t->sleepClaim || !__atomic_exchange_n(t->sleepClaim, 1, __ATOMIC_ACQ_REL)) {
-            makeReady(t);
-        }
-    }
+    wakeSleepers();
 }
+
+static void pollEvents(void) { pollEventsHow(false); }
 
 /* Tells AddressSanitizer that this task now runs, after a switch. */
 static void arrived(void *fake) {
@@ -4179,9 +4188,15 @@ void iris_spawn(void (*fn)(void *), void *arg) {
     makeReady(t);
 }
 
+static _Thread_local unsigned yieldCount;
+
 /* lets the other ready tasks run */
 void iris_yield(void) {
     makeReady(current);
+    /* tasks that yield in a loop still let timers and I/O through, so
+       a task sleeping or waiting on a descriptor isn't starved */
+    if (sleepers) wakeSleepers();
+    if (++yieldCount % 64 == 0) pollEventsHow(true);
     schedule();
 }
 

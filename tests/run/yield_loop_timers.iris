@@ -1,0 +1,40 @@
+// expect: woke after the sleep
+// expect: read 2 bytes
+
+// A task that yields in a loop doesn't keep a sleeping task, or one
+// waiting to read, from waking.
+import net
+
+void sleeper(bool *done) {
+    sleep(1ms)
+    *done = true
+}
+
+void reader(net.Conn *c, i64 *got) {
+    u8[2] buf
+    *got = c.read(buf[:]) catch 0
+}
+
+!void main() {
+    bool done = false
+    spawn sleeper(&done)
+    for !done {
+        sleep(0s)
+    }
+    print("woke after the sleep")
+
+    ln := try net.listen(0, "127.0.0.1")
+    defer ln.close()
+    c := try net.dial("127.0.0.1", ln.port)
+    defer c.close()
+    s := try ln.accept()
+    defer s.close()
+    i64 got = -1
+    spawn reader(&c, &got)
+    sleep(0s)
+    try s.write("hi")
+    for got < 0 {
+        sleep(0s)
+    }
+    print("read {got} bytes")
+}
