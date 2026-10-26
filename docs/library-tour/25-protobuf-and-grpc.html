@@ -111,10 +111,117 @@ try {
 }</code></pre>
 <pre class="out"><code>ProtoError.range: number: 65536 doesn&#x27;t fit in u16
 ProtoError.wrongType: number: wire type 2 where a number was expected</code></pre>
+<h2 id="a-grpc-server-and-client"><a href="#a-grpc-server-and-client">A gRPC server and client</a></h2>
+<p>A gRPC method has a path, <code>/package.Service/Method</code>, and takes and returns <code>@proto</code> messages. <code>Server.unary</code> adds a method that gets one message and sends one back. The handler reads the request with <code>call.recv</code> and answers with <code>call.send</code>. On the other side, <code>Client.call</code> sends a request and fills in the reply:</p>
+<pre class="code run"><code><span class="k">import</span> grpc, net
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">HelloRequest</span> {
+    <span class="t">String</span> name
+}
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">HelloReply</span> {
+    <span class="t">String</span> message
+}
+
+!<span class="t">void</span> <span class="f">sayHello</span>(grpc.<span class="t">Call</span> *call) {
+    <span class="k">scoped</span> <span class="t">HelloRequest</span> req
+    _ = <span class="k">try</span> call.<span class="f">recv</span>(&amp;req)
+    <span class="k">if</span> req.name.len == <span class="n">0</span> {
+        <span class="k">return</span> <span class="f">error</span>(grpc.<span class="t">Code</span>.invalidArgument, <span class="s">&quot;a name is needed&quot;</span>)
+    }
+    <span class="k">scoped</span> reply := <span class="t">HelloReply</span>{message: <span class="f">format</span>(<span class="s">&quot;Hello </span><span class="e">{</span>req.name<span class="e">}</span><span class="s">&quot;</span>)}
+    <span class="k">try</span> call.<span class="f">send</span>(&amp;reply)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(grpc.<span class="t">Server</span> *s, net.<span class="t">Listener</span> ln) {
+    s.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    grpc.<span class="t">Server</span> s
+    s.<span class="f">unary</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, sayHello)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;s, ln)
+
+    <span class="k">scoped</span> grpc.<span class="t">Client</span> c
+    <span class="k">scoped</span> <span class="t">String</span> target = <span class="f">format</span>(<span class="s">&quot;127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">dial</span>(target)
+
+    <span class="k">scoped</span> req := <span class="t">HelloRequest</span>{name: <span class="s">&quot;Ana&quot;</span>.<span class="f">copy</span>()}
+    <span class="k">scoped</span> <span class="t">HelloReply</span> reply
+    <span class="k">try</span> c.<span class="f">call</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, &amp;req, &amp;reply)
+    <span class="f">print</span>(reply.message)
+
+    <span class="k">scoped</span> <span class="t">HelloRequest</span> empty
+    c.<span class="f">call</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, &amp;empty, &amp;reply) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    s.<span class="f">shutdown</span>(<span class="n">1s</span>)
+}</code></pre>
+<pre class="out"><code>Hello Ana
+Code.invalidArgument: a name is needed</code></pre>
+<p>An error a handler returns ends the call. Its code goes to the client when it is a <code>grpc.Code</code>, and <code>unknown</code> when it is another error. The client gets the same code and message back as its error. A path the server doesn't have fails with <code>Code.unimplemented</code>.</p>
+<p><code>Server.serve(port)</code> serves on every core and <code>Server.serveTls(port, certFile, keyFile)</code> over TLS. A client dials <code>&quot;host:port&quot;</code> for a plain connection and <code>&quot;https://host:port&quot;</code> for TLS. One client makes any number of calls at once, from any number of tasks, on one HTTP/2 connection.</p>
+<h2 id="streams"><a href="#streams">Streams</a></h2>
+<p><code>Server.stream</code> adds a method whose messages go each way as they are sent. The same handler does server streaming, client streaming and streams both ways. <code>call.recv</code> returns false when the client has sent its last message:</p>
+<pre class="code run"><code><span class="k">import</span> grpc, net
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">Number</span> {
+    <span class="t">i64</span> n
+}
+
+!<span class="t">void</span> <span class="f">running</span>(grpc.<span class="t">Call</span> *call) {
+    <span class="k">scoped</span> <span class="t">Number</span> next
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> <span class="k">try</span> call.<span class="f">recv</span>(&amp;next) {
+        total += next.n
+        <span class="k">scoped</span> out := <span class="t">Number</span>{n: total}
+        <span class="k">try</span> call.<span class="f">send</span>(&amp;out)
+    }
+}
+
+<span class="t">void</span> <span class="f">serve</span>(grpc.<span class="t">Server</span> *s, net.<span class="t">Listener</span> ln) {
+    s.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    grpc.<span class="t">Server</span> s
+    s.<span class="f">stream</span>(<span class="s">&quot;/sum.Adder/Running&quot;</span>, running)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;s, ln)
+
+    <span class="k">scoped</span> grpc.<span class="t">Client</span> c
+    <span class="k">scoped</span> <span class="t">String</span> target = <span class="f">format</span>(<span class="s">&quot;127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">dial</span>(target)
+
+    <span class="k">scoped</span> st := <span class="k">try</span> c.<span class="f">open</span>(<span class="s">&quot;/sum.Adder/Running&quot;</span>)
+    <span class="k">scoped</span> <span class="t">Number</span> out
+    <span class="k">for</span> n <span class="k">in</span> [<span class="n">5</span>, <span class="n">10</span>, <span class="n">20</span>] {
+        <span class="k">scoped</span> m := <span class="t">Number</span>{n: n}
+        <span class="k">try</span> st.<span class="f">send</span>(&amp;m)
+        _ = <span class="k">try</span> st.<span class="f">recv</span>(&amp;out)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>out.n<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    <span class="k">try</span> st.<span class="f">closeSend</span>()
+    more := <span class="k">try</span> st.<span class="f">recv</span>(&amp;out)
+    <span class="f">print</span>(<span class="s">&quot;more: </span><span class="e">{</span>more<span class="e">}</span><span class="s">&quot;</span>)
+    s.<span class="f">shutdown</span>(<span class="n">1s</span>)
+}</code></pre>
+<pre class="out"><code>5
+15
+35
+more: false</code></pre>
+<p><code>Client.open</code> starts a call and returns a <code>Stream</code>. <code>send</code> writes a message and <code>closeSend</code> says there are no more. <code>recv</code> reads the next reply and returns false at the end, or fails with the status when the server sent an error.</p>
+<h2 id="metadata-and-deadlines"><a href="#metadata-and-deadlines">Metadata and deadlines</a></h2>
+<p>Headers go with a call as metadata: <code>c.open(method, metadata: [&quot;authorization: Bearer abc&quot;])</code> or <code>c.call(method, &amp;req, &amp;reply, metadata: [...])</code>. The handler reads them with <code>call.metadata(&quot;authorization&quot;)</code>. <code>call.header</code> adds a header to the reply and <code>call.trailer</code> a trailer after it, and the client reads them with <code>Stream.header</code> and <code>Stream.trailer</code>.</p>
+<p><code>timeout: 2s</code> on <code>call</code> or <code>open</code> sends the client's deadline as <code>grpc-timeout</code>. The client stops waiting at the deadline and fails with <code>Code.deadlineExceeded</code>. A handler that works long checks <code>call.expired()</code> or <code>call.timeLeft()</code>.</p>
     <nav class="pager"><a class="prev" href="22-ssh.html"><span>Previous</span>SSH</a><a class="next" href="26-msgpack-and-cbor.html"><span>Next</span>MessagePack and CBOR</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#messages">Messages</a></li><li><a href="#field-types">Field types</a></li><li><a href="#errors">Errors</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#messages">Messages</a></li><li><a href="#field-types">Field types</a></li><li><a href="#errors">Errors</a></li><li><a href="#a-grpc-server-and-client">A gRPC server and client</a></li><li><a href="#streams">Streams</a></li><li><a href="#metadata-and-deadlines">Metadata and deadlines</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

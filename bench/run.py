@@ -18,7 +18,7 @@ LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "so
        "protobuf", "msgpack", "cbor"]
 # CPU programs that run threads get the server's cores rather than one
 THREADED = {"rwlock"}
-NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"]
+NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk", "grpc"]
 # a benchmark that runs another one's programs under a different load
 SAME_AS = {"tcp-proxy-bulk": "tcp-proxy"}
 # the cores this process may use (a container may get any of the host's):
@@ -100,6 +100,17 @@ def load(name):
         return float(re.search(r"Requests/sec:\s+([\d.]+)", out).group(1))
     if name == "http2":
         out = sh(pin + ["h2load", "-t4", "-c128", "-m16", "-D", str(LOAD_TIME), "http://127.0.0.1:9000/"])
+        if not re.search(r"(\d+) succeeded", out) or re.search(r" 0 succeeded", out):
+            raise RuntimeError("h2load: no request succeeded\n" + out)
+        return float(re.search(r"finished in [\d.]+s, ([\d.]+) req/s", out).group(1))
+    if name == "grpc":
+        # one HelloRequest{name: "world"} in a gRPC frame
+        frame = f"{OUT}/hello.grpc"
+        with open(frame, "wb") as f:
+            f.write(b"\x00\x00\x00\x00\x07\x0a\x05world")
+        out = sh(pin + ["h2load", "-t4", "-c128", "-m16", "-D", str(LOAD_TIME), "-d", frame,
+                        "-H", "content-type: application/grpc", "-H", "te: trailers",
+                        "http://127.0.0.1:9000/helloworld.Greeter/SayHello"])
         if not re.search(r"(\d+) succeeded", out) or re.search(r" 0 succeeded", out):
             raise RuntimeError("h2load: no request succeeded\n" + out)
         return float(re.search(r"finished in [\d.]+s, ([\d.]+) req/s", out).group(1))

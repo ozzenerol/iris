@@ -31,6 +31,10 @@ rand = "0.10"
 prost = "0.14"
 rmp-serde = "1"
 ciborium = "0.2"
+tonic = "0.14"
+tonic-prost = "0.14"
+http = "1"
+tower-service = "0.3"
 
 [profile.release]
 opt-level = 3
@@ -229,3 +233,7 @@ path = "../msgpack/main.rs"
 [[bin]]
 name = "cbor"
 path = "../cbor/main.rs"
+
+[[bin]]
+name = "grpc"
+path = "../grpc/main.rs"

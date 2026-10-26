@@ -178,8 +178,8 @@ pub struct Call {
     http.Request *req
     http.Response *res
     bool streams
-    bool started  // the reply's headers went
-    String out    // a unary call's reply, sent when the handler returns
+    bool started // the reply's headers went
+    String out   // a unary call's reply, sent when the handler returns
     u8[] buf
     Duration deadline
 }
