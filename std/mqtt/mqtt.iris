@@ -6,6 +6,8 @@
 
 import hex, net, random, time
 
+// What went wrong: the broker unreachable, a refusal, the connection gone,
+// a broken packet, or no answer in time.
 pub enum MqttError { connect, refused, closed, protocol, timeout }
 
 const i64 CONNECT = 1
@@ -267,6 +269,7 @@ pub struct Message {
     pub bool retain
 }
 
+// Frees the topic and the payload.
 pub void Message.free() {
     self.topic.free()
     self.payload.free()
@@ -497,20 +500,40 @@ void Shared.fail(str why) {
     self.conn.interrupt()
 }
 
-void writer(Shared *s) {
+// Takes what waits in out into one write, up to 64 KiB: false once an
+// empty packet asks to stop.
+bool gather(chan[String] out, String *batch) {
+    m := <-out
     for {
-        m := <-s.out
         if m.len == 0 {
             m.free()
-            break
+            return false
         }
-        s.conn.write(m) catch e {
-            m.free()
-            s.fail(e.message)
-            break
-        }
+        batch.append(m)
         m.free()
+        if out.len() == 0 || batch.len >= 64KiB {
+            return true
+        }
+        m = <-out
     }
+}
+
+void writer(Shared *s) {
+    String batch
+    for {
+        going := gather(s.out, &batch)
+        if batch.len > 0 {
+            s.conn.write(batch) catch e {
+                s.fail(e.message)
+                break
+            }
+            batch.clear()
+        }
+        if !going {
+            break
+        }
+    }
+    batch.free()
     s.done <- true
 }
 

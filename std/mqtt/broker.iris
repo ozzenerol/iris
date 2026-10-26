@@ -174,19 +174,21 @@ void Peer.fail() {
 }
 
 void peerWriter(Peer *p) {
+    String batch
     for {
-        m := <-p.out
-        if m.len == 0 {
-            m.free()
+        going := gather(p.out, &batch)
+        if batch.len > 0 {
+            p.conn.write(batch) catch e {
+                p.fail()
+                break
+            }
+            batch.clear()
+        }
+        if !going {
             break
         }
-        p.conn.write(m) catch e {
-            m.free()
-            p.fail()
-            break
-        }
-        m.free()
     }
+    batch.free()
     p.written <- true
 }
 

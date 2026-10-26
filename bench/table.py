@@ -56,6 +56,7 @@ LIB_ROWS = [
     ("wire", "100,000 binary messages read and written, 30 times", "by hand, `from_be_bytes`", "`encoding/binary`"),
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
     ("sftp", "1000 small files written, read and removed over SFTP, then 256 MiB up and down", "russh-sftp", "`pkg/sftp`"),
+    ("mqtt", "220000 MQTT messages through a broker, 20000 of them at QoS 1", "rumqttd, rumqttc", "mochi-mqtt, Paho"),
 ]
 
 

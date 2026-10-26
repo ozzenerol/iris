@@ -53,7 +53,8 @@
       {"name": "template", "title": "HTML templates", "summary": "Templates with values, if, for and include, escaped for HTML, filled from a struct or a Map."},
       {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."},
       {"name": "smtp", "title": "Mail", "summary": "Sending mail over SMTP, with STARTTLS or TLS and a login."},
-      {"name": "ssh", "title": "SSH", "summary": "An SSH client that runs commands and forwards ports, and a server for shells, commands and sftp, with Ed25519 keys and known_hosts."}
+      {"name": "ssh", "title": "SSH", "summary": "An SSH client and server: commands, shells, forwarding both ways, SFTP and scp, keys of every kind, certificates and agents."},
+      {"name": "mqtt", "title": "MQTT", "summary": "A client for MQTT 5 and 3.1.1 brokers, and a broker: messages published to topics reach the clients subscribed to them."}
     ]},
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},

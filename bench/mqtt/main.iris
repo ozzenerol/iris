@@ -1,0 +1,52 @@
+import mqtt, net
+
+// An MQTT broker, a publisher and a subscriber in one program, over
+// loopback: 200000 messages of 64 bytes at QoS 0, then 20000 at QoS 1,
+// each waited for by the publisher, all through the broker to the
+// subscriber. The broker runs on a thread of its own, as the Go and Rust
+// brokers run on other cores.
+
+const i64 FAST = 200000
+const i64 SURE = 20000
+
+void serveIt(net.Listener ln) {
+    mqtt.serveOn(ln, mqtt.Broker{queue: 1 << 20}) catch e { }
+}
+
+// Takes n messages and says how many bytes came.
+void take(mqtt.Client *sub, i64 n, chan[i64] done) {
+    i64 bytes = 0
+    for i in 0..n {
+        m := sub.next() catch e {
+            break
+        }
+        bytes += m.payload.len
+        m.free()
+    }
+    done <- bytes
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    _ = thread serveIt(ln)
+    sub := try mqtt.connect("127.0.0.1", ln.port, mqtt.Options{clientId: "sub", queue: 1 << 16})
+    defer sub.close()
+    pc := try mqtt.connect("127.0.0.1", ln.port, mqtt.Options{clientId: "pub"})
+    defer pc.close()
+    _ = try sub.subscribe("bench/#", 1)
+    u8[64] payload
+    for i in 0..64 {
+        payload[i] = u8('a' + i % 26)
+    }
+    done := chan[i64](1)
+    defer done.free()
+    spawn take(&sub, FAST + SURE, done)
+    for i in 0..FAST {
+        try pc.publish("bench/fast", payload[0:64])
+    }
+    for i in 0..SURE {
+        try pc.publish("bench/sure", payload[0:64], 1)
+    }
+    bytes := <-done
+    print("messages {FAST + SURE}, bytes {bytes}")
+}
