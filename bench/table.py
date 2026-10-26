@@ -65,6 +65,8 @@ LIB_ROWS = [
     ("mysql-query", "MySQL: 1000 inserts in a transaction, 20000 prepared selects by id, then the table read 100 times", "sqlx", "`go-sql-driver/mysql`"),
     ("metrics", "10M requests counted with labels and a histogram, 2,000 series written 200 times", "prometheus", "client_golang"),
     ("tracing", "1M spans with traceparent, written as OTLP JSON", "opentelemetry-proto + serde_json", "otlp + protojson"),
+    ("bson", "500000 orders encoded to BSON and decoded back", "bson", "`mongo-driver` bson"),
+    ("mongo-query", "MongoDB: 1000 inserts, 20000 finds by an indexed field, then the collection read 100 times", "mongodb", "`mongo-driver`"),
 ]
 
 

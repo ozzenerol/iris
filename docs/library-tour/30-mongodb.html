@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MongoDB - Iris</title>
+<meta name="description" content="The mongo module talks to MongoDB over the network, with nothing else to install. Documents are @json structs, turned into MongoDB&#x27;s binary format, BSON, by the bson module. A mongo.Client keeps a pool of connections that every task and thread can share.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="29-mysql.html"><span class="num">29</span>MySQL</a></li><li><a href="30-mongodb.html" class="on"><span class="num">30</span>MongoDB</a></li><li><a href="31-s3.html"><span class="num">31</span>S3</a></li></ol></aside>
+  <article class="prose">
+<h1>MongoDB</h1>
+<p class="lede">The <code>mongo</code> module talks to MongoDB over the network, with nothing else to install. Documents are <code>@json</code> structs, turned into MongoDB's binary format, BSON, by the <code>bson</code> module. A <code>mongo.Client</code> keeps a pool of connections that every task and thread can share.</p>
+<p>The examples in this chapter need a server, so they read its address from an environment variable. A MongoDB server for trying them runs with <code>docker run -p 27017:27017 -e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=secret mongo:8.0</code>.</p>
+<h2 id="connecting-and-inserting"><a href="#connecting-and-inserting">Connecting and inserting</a></h2>
+<p><code>mongo.connect(address)</code> connects, logs in and gives a <code>mongo.Client</code>, which opens more connections as tasks need them, up to the number given after the address, or 10. <code>collection(name)</code> gives a collection of the address's database. <code>mongo.insertOne</code> inserts a <code>@json</code> struct and <code>mongo.insertMany</code> a slice of them. A field <code>_id</code> of type <code>bson.ObjectId</code> that is still zero gets a new id, in the struct too:</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    bson.<span class="t">ObjectId</span> _id
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+    <span class="t">List</span>[<span class="t">String</span>] tags
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    address := os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@localhost/shop?authSource=admin&quot;</span>
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(address, <span class="n">20</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+
+    products := db.<span class="f">collection</span>(<span class="s">&quot;products&quot;</span>)
+    <span class="k">try</span> products.<span class="f">drop</span>()
+
+    <span class="t">Product</span> tea = <span class="t">Product</span>{name: <span class="s">&quot;green tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">3.5</span>, stock: <span class="n">10</span>}
+    tea.tags.<span class="f">push</span>(<span class="s">&quot;drinks&quot;</span>.<span class="f">copy</span>())
+    <span class="k">defer</span> tea.name.<span class="f">free</span>()
+    <span class="k">defer</span> tea.tags.<span class="f">freeEach</span>()
+    id := <span class="k">try</span> mongo.<span class="f">insertOne</span>(&amp;products, &amp;tea)
+    <span class="k">scoped</span> <span class="t">String</span> hex = id.<span class="f">hex</span>()
+    <span class="f">print</span>(<span class="s">&quot;tea is </span><span class="e">{</span>hex.len<span class="e">}</span><span class="s"> hex digits: </span><span class="e">{</span>tea._id.<span class="f">isZero</span>() == <span class="k">false</span><span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="t">Product</span>[<span class="n">2</span>] more = [
+        <span class="t">Product</span>{name: <span class="s">&quot;lemon cake&quot;</span>.<span class="f">copy</span>(), price: <span class="n">4.25</span>, stock: <span class="n">3</span>},
+        <span class="t">Product</span>{name: <span class="s">&quot;coffee&quot;</span>.<span class="f">copy</span>(), price: <span class="n">2.8</span>, stock: <span class="n">25</span>},
+    ]
+    n := <span class="k">try</span> mongo.<span class="f">insertMany</span>(&amp;products, more[<span class="n">0</span>:<span class="n">2</span>])
+    <span class="k">for</span> p <span class="k">in</span> more {
+        p.name.<span class="f">free</span>()
+    }
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>n<span class="e">}</span><span class="s"> more, </span><span class="e">{</span><span class="k">try</span> products.<span class="f">count</span>()<span class="e">}</span><span class="s"> in all&quot;</span>)
+}</code></pre>
+<pre class="out"><code>tea is 24 hex digits: true
+2 more, 3 in all</code></pre>
+<ul><li>The address is <code>mongodb://user:password@host:port/database</code>. <code>?authSource=admin</code> names the database that holds the user, which is the address's database unless given.</li><li><code>?tls=true</code> makes the connection use TLS, and <code>?tlsCAFile=root.pem</code> trusts that file's certificates.</li><li>The login is SCRAM-SHA-256, MongoDB's default.</li><li>A refused login fails with <code>MongoError.auth</code>, and a server that can't be reached with <code>MongoError.connect</code>.</li><li><code>drop</code> removes a collection. One that isn't there is no error.</li></ul>
+<h2 id="finding-documents"><a href="#finding-documents">Finding documents</a></h2>
+<p>A filter is a <code>bson.Doc</code>. <code>bson.fromJson</code> reads one from JSON text written the way MongoDB shows queries, and <code>bson.doc()</code> builds one with calls such as <code>text</code>, <code>int</code> and <code>doc</code>. <code>mongo.find[T]</code> gives every document that matches as a <code>List[T]</code>, with an optional sort, projection, limit and skip. <code>mongo.findOne[T]</code> gives the first, and fails with <code>MongoError.notFound</code> when there is none. Fields the struct doesn't have are skipped:</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@localhost/shop?authSource=admin&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    products := db.<span class="f">collection</span>(<span class="s">&quot;products&quot;</span>)
+
+    <span class="k">scoped</span> cheap := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;price&quot;: {&quot;$lt&quot;: 4}}&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> byPrice := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;price&quot;: 1}&quot;&quot;&quot;</span>)
+    found := <span class="k">try</span> mongo.find[<span class="t">Product</span>](&amp;products, &amp;cheap, sort: &amp;byPrice)
+    <span class="k">defer</span> found.<span class="f">free</span>()
+    <span class="k">for</span> p <span class="k">in</span> found {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>p.price<span class="e">}</span><span class="s">&quot;</span>)
+        p.name.<span class="f">free</span>()
+    }
+
+    <span class="k">scoped</span> q := bson.<span class="f">doc</span>()
+    q.<span class="f">text</span>(<span class="s">&quot;name&quot;</span>, <span class="s">&quot;lemon cake&quot;</span>)
+    cake := <span class="k">try</span> mongo.findOne[<span class="t">Product</span>](&amp;products, &amp;q)
+    <span class="k">defer</span> cake.name.<span class="f">free</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>cake.name<span class="e">}</span><span class="s">, </span><span class="e">{</span>cake.stock<span class="e">}</span><span class="s"> left&quot;</span>)
+}</code></pre>
+<pre class="out"><code>coffee: 2.8
+green tea: 3.5
+lemon cake, 3 left</code></pre>
+<h2 id="changing-and-removing"><a href="#changing-and-removing">Changing and removing</a></h2>
+<p><code>updateOne</code> and <code>updateMany</code> take a filter and an update, such as <code>{&quot;$set&quot;: ...}</code> or <code>{&quot;$inc&quot;: ...}</code>, and give how many documents matched and how many changed. With <code>upsert: true</code>, a document is made when none matches, and its id is in <code>upserted</code>. <code>deleteOne</code> and <code>deleteMany</code> give how many went. <code>createIndex</code> makes an index, and a unique one makes a second document with the same key fail with <code>MongoError.duplicate</code>:</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@localhost/shop?authSource=admin&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    products := db.<span class="f">collection</span>(<span class="s">&quot;products&quot;</span>)
+
+    <span class="k">scoped</span> coffee := bson.<span class="f">doc</span>()
+    coffee.<span class="f">text</span>(<span class="s">&quot;name&quot;</span>, <span class="s">&quot;coffee&quot;</span>)
+    <span class="k">scoped</span> sell := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;$inc&quot;: {&quot;stock&quot;: -4}}&quot;&quot;&quot;</span>)
+    r := <span class="k">try</span> products.<span class="f">updateOne</span>(&amp;coffee, &amp;sell)
+    <span class="f">print</span>(<span class="s">&quot;matched </span><span class="e">{</span>r.matched<span class="e">}</span><span class="s">, changed </span><span class="e">{</span>r.modified<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">scoped</span> all := bson.<span class="f">doc</span>()
+    <span class="k">scoped</span> sale := bson.<span class="f">doc</span>()
+    <span class="k">scoped</span> by := bson.<span class="f">doc</span>()
+    by.<span class="f">float</span>(<span class="s">&quot;price&quot;</span>, <span class="n">0.9</span>)
+    sale.<span class="f">doc</span>(<span class="s">&quot;$mul&quot;</span>, &amp;by)
+    r = <span class="k">try</span> products.<span class="f">updateMany</span>(&amp;all, &amp;sale)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>r.modified<span class="e">}</span><span class="s"> prices lowered&quot;</span>)
+
+    <span class="k">scoped</span> scone := bson.<span class="f">doc</span>()
+    scone.<span class="f">text</span>(<span class="s">&quot;name&quot;</span>, <span class="s">&quot;scone&quot;</span>)
+    <span class="k">scoped</span> add := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;$set&quot;: {&quot;price&quot;: 2.0, &quot;stock&quot;: 6}}&quot;&quot;&quot;</span>)
+    r = <span class="k">try</span> products.<span class="f">updateOne</span>(&amp;scone, &amp;add, upsert: <span class="k">true</span>)
+    <span class="f">print</span>(<span class="s">&quot;a new scone: </span><span class="e">{</span>!r.upserted.<span class="f">isZero</span>()<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">scoped</span> few := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;stock&quot;: {&quot;$lt&quot;: 5}}&quot;&quot;&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span><span class="k">try</span> products.<span class="f">deleteMany</span>(&amp;few)<span class="e">}</span><span class="s"> sold out or nearly&quot;</span>)
+
+    <span class="k">scoped</span> keys := bson.<span class="f">doc</span>()
+    keys.<span class="f">int</span>(<span class="s">&quot;name&quot;</span>, <span class="n">1</span>)
+    <span class="k">scoped</span> <span class="t">String</span> index = <span class="k">try</span> products.<span class="f">createIndex</span>(&amp;keys, unique: <span class="k">true</span>)
+    <span class="f">print</span>(<span class="s">&quot;index </span><span class="e">{</span>index<span class="e">}</span><span class="s">&quot;</span>)
+    products.<span class="f">insertDoc</span>(&amp;coffee) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>matched 1, changed 1
+3 prices lowered
+a new scone: true
+1 sold out or nearly
+index name_1
+MongoError.duplicate</code></pre>
+<p><code>mongo.replaceOne</code> puts a whole struct in the place of the document a filter matches.</p>
+<h2 id="cursors-and-aggregation"><a href="#cursors-and-aggregation">Cursors and aggregation</a></h2>
+<p><code>find</code> on a collection gives a <code>mongo.Cursor</code>, which reads the documents a batch at a time and asks the server for the next batch when one runs out. <code>cur.doc()</code> is the current document as a <code>bson.Raw</code>, whose fields <code>get</code> finds without decoding the rest. <code>aggregate</code> runs a pipeline and gives a cursor too. A cursor freed before its end tells the server to drop it:</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@localhost/shop?authSource=admin&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    products := db.<span class="f">collection</span>(<span class="s">&quot;products&quot;</span>)
+
+    <span class="k">scoped</span> cur := <span class="k">try</span> products.<span class="f">find</span>(batchSize: <span class="n">100</span>)
+    <span class="k">for</span> <span class="k">try</span> cur.<span class="f">next</span>() {
+        doc := cur.<span class="f">doc</span>()
+        name, _ := doc.<span class="f">get</span>(<span class="s">&quot;name&quot;</span>)
+        stock, _ := doc.<span class="f">get</span>(<span class="s">&quot;stock&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>name.<span class="f">text</span>()<span class="e">}</span><span class="s">: </span><span class="e">{</span>stock.<span class="f">int</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    }
+
+    <span class="k">scoped</span> pipeline := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;[
+        {&quot;$group&quot;: {&quot;_id&quot;: null, &quot;items&quot;: {&quot;$sum&quot;: &quot;$stock&quot;}, &quot;worth&quot;: {&quot;$sum&quot;: {&quot;$multiply&quot;: [&quot;$price&quot;, &quot;$stock&quot;]}}}}
+    ]&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> totals := <span class="k">try</span> products.<span class="f">aggregate</span>(&amp;pipeline)
+    <span class="k">for</span> <span class="k">try</span> totals.<span class="f">next</span>() {
+        items, _ := totals.<span class="f">doc</span>().<span class="f">get</span>(<span class="s">&quot;items&quot;</span>)
+        worth, _ := totals.<span class="f">doc</span>().<span class="f">get</span>(<span class="s">&quot;worth&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>items.<span class="f">int</span>()<span class="e">}</span><span class="s"> items worth </span><span class="e">{</span>worth.<span class="f">float</span>():.<span class="n">2</span><span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>green tea: 10
+coffee: 21
+scone: 6
+37 items worth 96.42</code></pre>
+<p><code>db.command(database, cmd)</code> runs any other command and gives its reply as a <code>bson.Doc</code>.</p>
+<h2 id="bson"><a href="#bson">BSON</a></h2>
+<p>The <code>bson</code> module works without a server. <code>bson.encode</code> turns a <code>@json</code> struct into BSON and <code>bson.decode[T]</code> turns it back. <code>bson.ObjectId</code>, <code>bson.Date</code>, <code>bson.Binary</code> and <code>bson.Decimal128</code> are fields of those BSON types. A <code>bson.Raw</code> reads a document in place, and <code>for e in raw</code> goes through its fields:</p>
+<pre class="code run"><code><span class="k">import</span> bson
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Point</span> {
+    <span class="t">String</span> label
+    <span class="t">i64</span> x
+    <span class="t">i64</span> y
+    bson.<span class="t">Date</span> seen
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    p := <span class="t">Point</span>{label: <span class="s">&quot;home&quot;</span>.<span class="f">copy</span>(), x: <span class="n">3</span>, y: -<span class="n">4</span>, seen: bson.<span class="t">Date</span>{ms: <span class="n">1792000000000</span>}}
+    <span class="k">defer</span> p.label.<span class="f">free</span>()
+    <span class="k">scoped</span> <span class="t">String</span> b = bson.<span class="f">encode</span>(p)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>b.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
+
+    back := <span class="k">try</span> bson.decode[<span class="t">Point</span>](b)
+    <span class="k">defer</span> back.label.<span class="f">free</span>()
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.label<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.x<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.y<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.seen.ms<span class="e">}</span><span class="s">&quot;</span>)
+
+    raw := bson.<span class="t">Raw</span>{bytes: b}
+    <span class="k">for</span> e <span class="k">in</span> raw {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.key<span class="e">}</span><span class="s">: type </span><span class="e">{</span>e.kind<span class="e">}</span><span class="s">&quot;</span>)
+    }
+
+    <span class="k">scoped</span> d := bson.<span class="f">doc</span>()
+    d.<span class="f">text</span>(<span class="s">&quot;name&quot;</span>, <span class="s">&quot;Ada&quot;</span>)
+    <span class="k">scoped</span> langs := bson.<span class="f">array</span>()
+    langs.<span class="f">text</span>(<span class="s">&quot;&quot;</span>, <span class="s">&quot;iris&quot;</span>)
+    langs.<span class="f">text</span>(<span class="s">&quot;&quot;</span>, <span class="s">&quot;go&quot;</span>)
+    d.<span class="f">doc</span>(<span class="s">&quot;langs&quot;</span>, &amp;langs)
+    d.<span class="f">id</span>(<span class="s">&quot;_id&quot;</span>, bson.<span class="f">newId</span>())
+    langList, _ := d.<span class="f">raw</span>().<span class="f">get</span>(<span class="s">&quot;langs&quot;</span>)
+    <span class="k">for</span> l <span class="k">in</span> langList.<span class="f">doc</span>() {
+        <span class="f">print</span>(<span class="s">&quot;lang </span><span class="e">{</span>l.key<span class="e">}</span><span class="s">: </span><span class="e">{</span>l.<span class="f">text</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<pre class="out"><code>57 bytes
+home 3 -4 1792000000000
+label: type 2
+x: type 18
+y: type 18
+seen: type 9
+lang 0: iris
+lang 1: go</code></pre>
+<p>Integers of 32 bits or fewer are BSON int32 and the rest int64. An array built with <code>bson.array()</code> numbers its items itself, so the key given to each call is ignored.</p>
+    <nav class="pager"><a class="prev" href="29-mysql.html"><span>Previous</span>MySQL</a><a class="next" href="31-s3.html"><span>Next</span>S3</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-and-inserting">Connecting and inserting</a></li><li><a href="#finding-documents">Finding documents</a></li><li><a href="#changing-and-removing">Changing and removing</a></li><li><a href="#cursors-and-aggregation">Cursors and aggregation</a></li><li><a href="#bson">BSON</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

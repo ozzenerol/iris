@@ -1,0 +1,46 @@
+import bson
+
+@json
+struct Order {
+    bson.ObjectId _id
+    String customer
+    String email
+    f64 total
+    i64 items
+    bool paid
+    List[String] tags
+    bson.Date created
+}
+
+// Encodes 500000 orders to BSON and decodes each one back, and prints sums
+// over what came back.
+!void main() {
+    Order o = Order{customer: "Ada Lovelace".copy(), email: "ada@example.com".copy(), paid: true}
+    defer o.customer.free()
+    defer o.email.free()
+    o.tags.push("express".copy())
+    o.tags.push("gift".copy())
+    o.tags.push("fragile".copy())
+    defer o.tags.freeEach()
+    for i in 0..12 {
+        o._id.bytes[i] = u8(i * 17)
+    }
+    String buf
+    defer buf.free()
+    f64 total = 0.0
+    i64 sum = 0
+    for i in 0..500000 {
+        o.total = f64(i) * 0.5
+        o.items = i % 17
+        o.created = bson.Date{ms: 1792000000000 + i}
+        buf.clear()
+        bson.encodeTo(&buf, o)
+        back := try bson.decode[Order](buf)
+        total += back.total
+        sum += back.items + back.customer.len + back.tags.len + i64(back._id.bytes[11]) + back.created.ms % 7 + buf.len
+        back.customer.free()
+        back.email.free()
+        back.tags.freeEach()
+    }
+    print("{total} {sum}")
+}

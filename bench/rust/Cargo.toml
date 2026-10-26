@@ -46,6 +46,9 @@ opentelemetry-proto = { version = "0.31", default-features = false, features = [
 serde_json = "1"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+bson = "2"
+mongodb = "3"
+futures = "0.3"
 
 [profile.release]
 opt-level = 3
@@ -276,3 +279,11 @@ path = "../tracing/main.rs"
 [[bin]]
 name = "quic"
 path = "../quic/main.rs"
+
+[[bin]]
+name = "bson"
+path = "../bson/main.rs"
+
+[[bin]]
+name = "mongo-query"
+path = "../mongo-query/main.rs"

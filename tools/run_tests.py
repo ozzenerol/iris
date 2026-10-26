@@ -31,6 +31,7 @@
   tests/acme/NAME.iris     the same with tools/pebble-server.sh (IRIS_ACME_URL)
   tests/s3/NAME.iris       the same with tools/minio-server.sh (IRIS_S3_URL)
   tests/mysql/NAME.iris    the same with tools/mysql-server.sh (IRIS_MYSQL_URL)
+  tests/mongo/NAME.iris    the same with tools/mongo-server.sh (IRIS_MONGO_URL)
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
@@ -597,6 +598,7 @@ def main():
     total += service_tests(args.iris, args.only, failures, skipped, "acme", "pebble-server.sh", "IRIS_ACME")
     total += service_tests(args.iris, args.only, failures, skipped, "s3", "minio-server.sh", "IRIS_S3")
     total += service_tests(args.iris, args.only, failures, skipped, "mysql", "mysql-server.sh", "IRIS_MYSQL")
+    total += service_tests(args.iris, args.only, failures, skipped, "mongo", "mongo-server.sh", "IRIS_MONGO")
     if not args.only or any(o in "lsp" for o in args.only):
         total += 1
         try:

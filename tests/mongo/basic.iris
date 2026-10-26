@@ -1,0 +1,237 @@
+// expect: 3 inserted, ids set: true
+// expect: Ada 36 admin [go iris]
+// expect: Bob 25 [x]
+// expect: Zoë 7 []
+// expect: findOne: Bob
+// expect: MongoError.notFound
+// expect: index: name_1
+// expect: MongoError.duplicate: true
+// expect: count over 30: 1
+// expect: updated 2 of 2
+// expect: Ada is now 37
+// expect: upserted: true
+// expect: deleted 1, then 2
+// expect: 2500 in batches: 2500, sum 3126250
+// expect: aggregate: even 1250, odd 1250
+// expect: cursor left early: true
+// expect: command: 1
+// expect: 40 finds from 20 tasks: 40
+// expect: TLS: Ada
+// expect: wrong password: MongoError.auth
+// expect: no server: MongoError.connect
+
+import bson, mongo, os, str
+
+@json
+struct User {
+    bson.ObjectId _id
+    String name
+    i64 age
+    bool admin
+    List[String] tags
+}
+
+void freeUsers(List[User] *users) {
+    for u in users {
+        u.name.free()
+        u.tags.freeEach()
+    }
+    users.free()
+}
+
+@json
+struct Item {
+    i64 n
+    bool even
+}
+
+void worker(mongo.Collection *users, chan[i64] done) {
+    i64 good = 0
+    for i in 0..2 {
+        scoped found := mongo.find[User](users) catch e {
+            continue
+        }
+        if found.len == 3 {
+            good += 1
+        }
+        for u in found {
+            u.name.free()
+            u.tags.freeEach()
+        }
+    }
+    done <- good
+}
+
+!void main() {
+    address := try os.env("IRIS_MONGO_URL")
+    db := try mongo.connect(address, 4)
+    defer db.close()
+    users := db.collection("users")
+    try users.drop()
+
+    User ada = User{name: "Ada".copy(), age: 36, admin: true}
+    ada.tags.push("go".copy())
+    ada.tags.push("iris".copy())
+    id := try mongo.insertOne(&users, &ada)
+    User[2] more
+    more[0] = User{name: "Bob".copy(), age: 25}
+    more[0].tags.push("x".copy())
+    more[1] = User{name: "Zoë".copy(), age: 7}
+    n := try mongo.insertMany(&users, more[0:2])
+    scoped String h1 = ada._id.hex()
+    scoped String h2 = id.hex()
+    print("{n + 1} inserted, ids set: {!id.isZero() && !more[1]._id.isZero() && h1 == h2}")
+    ada.name.free()
+    ada.tags.freeEach()
+    for i in 0..2 {
+        more[i].name.free()
+        more[i].tags.freeEach()
+    }
+
+    scoped byAge := try bson.fromJson(r"""{"age": -1}""")
+    found := try mongo.find[User](&users, sort: &byAge)
+    for u in found {
+        String tags
+        for t in u.tags {
+            if tags.len > 0 {
+                tags.append(" ")
+            }
+            tags.append(t)
+        }
+        defer tags.free()
+        print("{u.name} {u.age}{if u.admin { " admin" } else { "" }} [{tags}]")
+    }
+    freeUsers(&found)
+
+    scoped bob := bson.doc()
+    bob.text("name", "Bob")
+    one := try mongo.findOne[User](&users, &bob)
+    print("findOne: {one.name}")
+    one.name.free()
+    one.tags.freeEach()
+    scoped nobody := bson.doc()
+    nobody.text("name", "Nobody")
+    _ = mongo.findOne[User](&users, &nobody) catch e {
+        print("{e.code}")
+        User{}
+    }
+
+    scoped keys := bson.doc()
+    keys.int("name", 1)
+    scoped String index = try users.createIndex(&keys, unique: true)
+    print("index: {index}")
+    User dup = User{name: "Ada".copy()}
+    _ = mongo.insertOne(&users, &dup) catch e {
+        print("{e.code}: {str.contains(e.message, "E11000")}")
+        bson.ObjectId{}
+    }
+    dup.name.free()
+
+    scoped over := try bson.fromJson(r"""{"age": {"$gt": 30}}""")
+    print("count over 30: {try users.count(&over)}")
+    scoped grown := try bson.fromJson(r"""{"age": {"$gte": 20}}""")
+    scoped inc := try bson.fromJson(r"""{"$inc": {"age": 1}}""")
+    up := try users.updateMany(&grown, &inc)
+    print("updated {up.modified} of {up.matched}")
+    scoped adaQ := bson.doc()
+    adaQ.text("name", "Ada")
+    ada2 := try mongo.findOne[User](&users, &adaQ)
+    print("Ada is now {ada2.age}")
+    ada2.name.free()
+    ada2.tags.freeEach()
+    scoped cyQ := bson.doc()
+    cyQ.text("name", "Cy")
+    scoped setAge := try bson.fromJson(r"""{"$set": {"age": 50}}""")
+    ups := try users.updateOne(&cyQ, &setAge, upsert: true)
+    print("upserted: {!ups.upserted.isZero() && ups.matched == 0}")
+    d1 := try users.deleteOne(&cyQ)
+    scoped young := try bson.fromJson(r"""{"age": {"$lt": 30}}""")
+    d2 := try users.deleteMany(&young)
+    print("deleted {d1}, then {d2}")
+
+    items := db.collection("items")
+    try items.drop()
+    Item[] all = alloc(Item, 2500)
+    defer free(all)
+    for i in 0..2500 {
+        all[i] = Item{n: i + 1, even: (i + 1) % 2 == 0}
+    }
+    _ = try mongo.insertMany(&items, all)
+    scoped cur := try items.find(batchSize: 300)
+    i64 seen = 0
+    i64 sum = 0
+    for try cur.next() {
+        e, _ := cur.doc().get("n")
+        seen += 1
+        sum += e.int()
+    }
+    print("2500 in batches: {seen}, sum {sum}")
+    scoped pipeline := try bson.fromJson(r"""[{"$group": {"_id": "$even", "count": {"$sum": 1}}}, {"$sort": {"_id": -1}}]""")
+    scoped agg := try items.aggregate(&pipeline)
+    str[2] names = ["even", "odd"]
+    i64 k = 0
+    String line = "aggregate:".copy()
+    defer line.free()
+    for try agg.next() {
+        c, _ := agg.doc().get("count")
+        line.append(if k == 0 { " " } else { ", " })
+        line.append(names[k])
+        scoped String num = format(" {c.int()}")
+        line.append(num)
+        k += 1
+    }
+    print(line)
+    early := try items.find(batchSize: 10)
+    _ = try early.next()
+    early.free()
+    print("cursor left early: true")
+
+    scoped ping := bson.doc()
+    ping.int("ping", 1)
+    scoped reply := try db.command("admin", &ping)
+    ok, _ := reply.raw().get("ok")
+    print("command: {ok.int()}")
+
+    users2 := db.collection("users")
+    scoped chan[i64] done = chan[i64](20)
+    // put back the three users the workers expect
+    _ = try users2.deleteMany(null)
+    for i in 0..3 {
+        scoped w := bson.doc()
+        scoped String nm = format("W{i}")
+        w.text("name", nm)
+        try users2.insertDoc(&w)
+    }
+    for i in 0..20 {
+        spawn worker(&users2, done)
+    }
+    i64 total = 0
+    for i in 0..20 {
+        total += <-done
+    }
+    print("40 finds from 20 tasks: {total}")
+    _ = try users2.deleteMany(null)
+    User back = User{name: "Ada".copy()}
+    _ = try mongo.insertOne(&users2, &back)
+    back.name.free()
+
+    scoped String host = str.replace(address, "127.0.0.1", "localhost")
+    scoped String tlsUrl = format("{host}&tls=true&tlsCAFile=tests/data/tls/ca.pem")
+    tc := try mongo.connect(tlsUrl, 1)
+    tu := tc.collection("users")
+    first := try mongo.findOne[User](&tu)
+    print("TLS: {first.name}")
+    first.name.free()
+    first.tags.freeEach()
+    tc.close()
+
+    scoped String bad = str.replace(address, "iris:secret@", "iris:wrong@")
+    _ = mongo.connect(bad) catch e {
+        print("wrong password: {e.code}")
+        mongo.Client{}
+    }
+    _ = mongo.connect("mongodb://127.0.0.1:1/x?connectTimeoutMS=500") catch e {
+        print("no server: {e.code}")
+        mongo.Client{}
+    }
+}

@@ -1,0 +1,53 @@
+import bson, mongo, os
+
+@json
+struct Item {
+    i64 n
+    String name
+    String email
+    f64 score
+    i64 qty
+}
+
+// Against a MongoDB server at $IRIS_BENCH_MONGO: 1000 documents inserted one
+// at a time, 20000 documents found one at a time by n, then the whole
+// collection read 100 times, all on one connection.
+!void main() {
+    address := os.env("IRIS_BENCH_MONGO") catch "mongodb://iris:secret@127.0.0.1:27017/iris_test?authSource=admin"
+    db := try mongo.connect(address, 1)
+    defer db.close()
+    items := db.collection("items")
+    try items.drop()
+    scoped keys := bson.doc()
+    keys.int("n", 1)
+    scoped String index = try items.createIndex(&keys, unique: true)
+    for i in 1..1001 {
+        Item it = Item{n: i, name: format("item {i}"), email: format("buyer{i}@example.com"), score: f64(i) * 0.5, qty: i % 17}
+        _ = try mongo.insertOne(&items, &it)
+        it.name.free()
+        it.email.free()
+    }
+    f64 score = 0.0
+    i64 chars = 0
+    for i in 0..20000 {
+        scoped q := bson.doc()
+        q.long("n", i * 7919 % 1000 + 1)
+        it := try mongo.findOne[Item](&items, &q)
+        score += it.score
+        chars += it.name.len + it.email.len + it.qty
+        it.name.free()
+        it.email.free()
+    }
+    i64 ids = 0
+    scoped all := try bson.fromJson(r"""{"qty": {"$gte": 0}}""")
+    for i in 0..100 {
+        found := try mongo.find[Item](&items, &all)
+        for it in found {
+            ids += it.n
+            it.name.free()
+            it.email.free()
+        }
+        found.free()
+    }
+    print("{score} {chars} {ids}")
+}
