@@ -1332,7 +1332,7 @@ static void jsonFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n) {
         const char *name = stringConst(ir, key, keyLen);
         const char *ft = jsonType(ir, f->type);
         sbPrintf(out, "%s{ ptr, i64, i64, ptr, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 %d }", *n ? ", " : "",
-                 name, keyLen, (long long)off, ft, (f->flags & F_REQUIRED) ? 1 : 0);
+                 name, keyLen, (long long)off, ft, ((f->flags & F_REQUIRED) ? 1 : 0) | (t->proto ? protoInfo(f) << 8 : 0));
         (*n)++;
     }
 }
@@ -2428,7 +2428,8 @@ static Val emitJson(IR *ir, Node *e) {
         ins(ir, "store %s %s, ptr %s", llType(ir, arg->type), v.s, vs);
         const char *out = allocaFor(ir, &tyString, "json");
         ins(ir, "store %%String zeroinitializer, ptr %s", out);
-        ins(ir, "call void @iris_json_encode(ptr %s, ptr %s, ptr %s)", jsonType(ir, arg->type), vs, out);
+        static const char *encoders[] = {"json", "msgpack", "cbor", "proto"};
+        ins(ir, "call void @iris_%s_encode(ptr %s, ptr %s, ptr %s)", encoders[e->ival & 3], jsonType(ir, arg->type), vs, out);
         return load(ir, out, &tyString);
     }
     case BI_JSON_FREE: {
@@ -5287,6 +5288,9 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_thread_join(ptr)\n"
            "declare void @iris_thread_detach(ptr)\n"
            "declare void @iris_json_encode(ptr, ptr, ptr)\n"
+           "declare void @iris_msgpack_encode(ptr, ptr, ptr)\n"
+           "declare void @iris_cbor_encode(ptr, ptr, ptr)\n"
+           "declare void @iris_proto_encode(ptr, ptr, ptr)\n"
            "declare void @iris_json_free(ptr, ptr)\n"
            "declare i32 @iris_wire_fail(i32, ptr, i64, i64, i64, ptr)\n"
            "declare void @iris_wire_string(ptr, ptr, i64)\n"

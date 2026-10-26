@@ -1313,8 +1313,19 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
         }
         return;
     }
+    if (strcmp(at->name, "proto") == 0) {
+        /* its number and settings are checked with the other fields */
+        bool onStruct = false;
+        for (int i = 0; i < d->attrs.len; i++) {
+            if (strcmp(d->attrs.items[i]->name, "proto") == 0) onStruct = true;
+        }
+        if (!onStruct) {
+            error(c, at, "@proto on a field needs @proto on the struct %s too", d->name);
+        }
+        return;
+    }
     if (strcmp(at->name, "json") != 0) {
-        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @wire(...), @env(...) or @flag(...)", at->name);
+        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @wire(...), @proto(...), @env(...) or @flag(...)", at->name);
         return;
     }
     if (!(d->flags & F_JSON)) {
@@ -1618,6 +1629,107 @@ static void checkWireFields(Checker *c, Type *t, Node *d) {
     (void)t;
 }
 
+/* ---------------------------------------------------------------- @proto
+ *
+ * A @proto struct is a protobuf message. Each field has a number, its own
+ * from @proto(N) or the one after the field before it, and may say how an
+ * integer is sent: @proto(zigzag) for sint32/sint64, @proto(fixed) for
+ * fixed32/fixed64/sfixed. The number and the setting are kept in the
+ * field's cval: the number above 8 bits, 1 zigzag, 2 fixed. The JSON
+ * table of the struct carries them to the runtime (ir.c, jsonFields). */
+
+enum { PROTO_ZIGZAG = 1, PROTO_FIXED = 2 };
+
+int64_t protoInfo(Node *f) {
+    return f->cval;
+}
+
+/* Whether protobuf has a form for one value of t: a number, bool, a plain
+ * enum, text or bytes, or a @proto struct. */
+static bool protoScalar(Checker *c, Type *t, Node *at, const char *owner) {
+    switch (t->kind) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING:
+        return true;
+    case TY_ENUM:
+        return true;            /* @json said already whether it is plain */
+    case TY_SLICE:
+        if (isStr(t)) return true;
+        break;
+    case TY_STRUCT:
+        if (t->proto) return true;
+        if (!isJsonList(t) && !isJsonMap(t)) {
+            error(c, at, "%s holds a %s, which needs @proto too", owner, t->name);
+            return false;
+        }
+        break;
+    default:
+        break;
+    }
+    error(c, at, "%s is %s, which a protobuf field can't hold inside a list or a map", owner, t->name);
+    return false;
+}
+
+static void checkProtoFields(Checker *c, Node *d) {
+    int64_t next = 1;
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        Type *ft = f->type;
+        if (f->kind == N_EMBED) {
+            error(c, f, "a @proto struct can't embed %s; make it a field", f->name);
+            continue;
+        }
+        int64_t number = next, how = 0;
+        for (int k = 0; k < f->attrs.len; k++) {
+            Node *at = f->attrs.items[k];
+            if (strcmp(at->name, "proto") != 0) continue;
+            for (int j = 0; j < at->list.len; j++) {
+                Node *a = at->list.items[j];
+                if (a->kind == N_INT) {
+                    number = (int64_t)a->ival;
+                    if (number < 1 || number > 536870911 || (number >= 19000 && number <= 19999)) {
+                        error(c, a, "a protobuf field number is 1 to 536870911, and not 19000 to 19999, which protobuf keeps");
+                    }
+                } else if (a->kind == N_IDENT && (strcmp(a->name, "zigzag") == 0 || strcmp(a->name, "fixed") == 0)) {
+                    how = a->name[0] == 'z' ? PROTO_ZIGZAG : PROTO_FIXED;
+                } else {
+                    error(c, a, "@proto on a field takes its number, zigzag or fixed: @proto(4, zigzag)");
+                }
+            }
+        }
+        for (int j = 0; j < i; j++) {
+            Node *g = d->list.items[j];
+            if (g->kind != N_EMBED && (g->cval >> 8) == number) {
+                error(c, f, "%s and %s both have the number %lld", g->name, f->name, (long long)number);
+            }
+        }
+        f->cval = number << 8 | how;
+        next = number + 1;
+        if (!ft || isErr(ft)) continue;
+        Type *one = ft;
+        if (ft->kind == TY_ARRAY) {
+            error(c, f, "%s is an array, which protobuf has no form for; use a slice or a List", f->name);
+            continue;
+        }
+        if ((ft->kind == TY_SLICE && !isStr(ft)) || isJsonList(ft)) {
+            one = ft->kind == TY_SLICE ? ft->elem : ft->args[0];
+            if (!protoScalar(c, one, f, f->name)) continue;
+        } else if (isJsonMap(ft)) {
+            one = ft->args[1];
+            if (!protoScalar(c, one, f, f->name)) continue;
+        } else if (ft->kind == TY_STRUCT && !ft->proto) {
+            error(c, f, "%s is %s, which needs @proto too", f->name, ft->name);
+            continue;
+        }
+        if (how && (one->kind != TY_INT || one == &tyDuration)) {
+            error(c, f, "%s is %s; zigzag and fixed are for integers", f->name, one->name);
+        } else if (how == PROTO_ZIGZAG && !one->isSigned) {
+            error(c, f, "%s is %s; zigzag is for signed integers", f->name, one->name);
+        } else if (how == PROTO_FIXED && one->bits != 32 && one->bits != 64) {
+            error(c, f, "%s is %s; fixed is for 32 and 64 bit integers", f->name, one->name);
+        }
+    }
+}
+
 /* The structs a field holds by value, in arrays and tuples too, must be
  * complete first: a struct that holds itself that way is an error. */
 static void completeInside(Checker *c, Type *t) {
@@ -1746,8 +1858,15 @@ static void resolveStruct(Checker *c, Type *t) {
             if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
                 error(c, at, "@env on a struct takes nothing, or a prefix for the names in quotes: @env(\"APP\")");
             }
+        } else if (strcmp(at->name, "proto") == 0) {
+            /* a protobuf message, which JSON can read and write too */
+            d->flags |= F_JSON;
+            t->proto = true;
+            if (at->list.len) {
+                error(c, at, "@proto on a struct takes nothing; field numbers go on the fields: @proto(3)");
+            }
         } else {
-            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @wire, @env or @flags", at->name);
+            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @wire, @proto, @env or @flags", at->name);
         }
     }
     for (int i = 0; i < d->list.len; i++) {
@@ -1811,6 +1930,9 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     if (t->wire) {
         checkWireFields(c, t, d);
+    }
+    if (t->proto) {
+        checkProtoFields(c, d);
     }
     if (d->flags & F_CLI) {
         bool haveArgs = false;
@@ -5198,19 +5320,30 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
     if (d->module && strcmp(d->module, "wire") == 0) {
         return checkWireCall(c, e, d);
     }
+    /* msgpack, cbor and proto encode and decode from the JSON tables too;
+     * ival says which: 0 JSON, 1 MessagePack, 2 CBOR, 3 protobuf */
+    int format = !d->module ? 0 : strcmp(d->module, "msgpack") == 0 ? 1 : strcmp(d->module, "cbor") == 0 ? 2
+               : strcmp(d->module, "proto") == 0 ? 3 : 0;
+    const char *mod = format ? d->module : "json";
     if (strcmp(d->name, "encode") == 0) {
         if (e->list.len != 1) {
-            error(c, e, "json.encode takes one value");
+            error(c, e, "%s.encode takes one value", mod);
             return setType(e, &tyError);
         }
         Type *t = checkExpr(c, &e->list.items[0], NULL);
         if (isErr(t)) return setType(e, &tyError);
+        if (format == 3 && !(t->kind == TY_STRUCT && t->proto)) {
+            error(c, e->list.items[0], "%s needs @proto to be turned into protobuf", t->name);
+            return setType(e, &tyError);
+        }
         if (t->kind == TY_STRUCT && !isJsonStruct(t) && !isJsonList(t) && !isJsonMap(t)) {
-            error(c, e->list.items[0], "%s needs @json to be turned into JSON", t->name);
+            error(c, e->list.items[0], "%s needs @json to be turned into %s", t->name,
+                  format == 1 ? "MessagePack" : format == 2 ? "CBOR" : "JSON");
             return setType(e, &tyError);
         }
         if (!jsonType(c, t, e->list.items[0], "this value")) return setType(e, &tyError);
         e->builtin = BI_JSON_ENCODE;
+        e->ival = (uint64_t)format;
         return setType(e, &tyString);
     }
     if ((strcmp(d->name, "parse") == 0 || strcmp(d->name, "parseArgs") == 0) && d->module &&
@@ -5295,14 +5428,20 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
     }
     if (strcmp(d->name, "decode") == 0) {
         if (e->list.len != 2) {
-            error(c, e, "json.decode takes a type and the text: json.decode(User, text)");
+            error(c, e, format ? "%s.decode takes a type and the bytes: %s.decode(User, bytes)"
+                               : "json.decode takes a type and the text: json.decode(User, text)", mod, mod);
             return setType(e, &tyError);
         }
         Type *t = typeArgument(c, e->list.items[0]);
         if (isErr(t)) return setType(e, &tyError);
         if (t->kind == TY_STRUCT) resolveStruct(c, t);
+        if (format == 3 && !(t->kind == TY_STRUCT && t->proto)) {
+            error(c, e->list.items[0], "%s needs @proto to be read from protobuf", t->name);
+            return setType(e, &tyError);
+        }
         if (t->kind == TY_STRUCT && !isJsonStruct(t) && !isJsonList(t) && !isJsonMap(t)) {
-            error(c, e->list.items[0], "%s needs @json to be read from JSON", t->name);
+            error(c, e->list.items[0], "%s needs @json to be read from %s", t->name,
+                  format == 1 ? "MessagePack" : format == 2 ? "CBOR" : "JSON");
             return setType(e, &tyError);
         }
         if (!jsonType(c, t, e->list.items[0], "this value") || !jsonDecodable(c, t, e->list.items[0])) {
@@ -5313,9 +5452,10 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         if (isErr(tt)) return setType(e, &tyError);
         coerce(c, text, &tyStr, "the text");
         markTempString(text, &tyStr);
-        Node *into = lookup(c, "json.decodeInto");
+        Node *into = lookup(c, format == 1 ? "msgpack.decodeInto" : format == 2 ? "cbor.decodeInto"
+                             : format == 3 ? "proto.decodeInto" : "json.decodeInto");
         if (!into) {
-            error(c, e, "json.decode needs the json module's decodeInto");
+            error(c, e, "%s.decode needs the %s module's decodeInto", mod, mod);
             return setType(e, &tyError);
         }
         e->ref = into;
@@ -5327,7 +5467,7 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
             e->b = lit;
         }
         e->builtin = BI_JSON_DECODE;
-        e->ival = 0;
+        e->ival = (uint64_t)format;
         Type *rt = resultOf(t);
         e->c = like(c, N_T_NAME, e);
         e->c->type = t;

@@ -1,0 +1,206 @@
+// expect: 089601
+// expect: 120774657374696e67
+// expect: 1a03089601
+// expect: 2206038e029ea705
+// expect: 08feffffffffffffffff01
+// expect: 150 testing 150 [3, 270, 86942]
+// expect: unknown fields skipped: 150 7
+// expect: unpacked: 3 1 2 3
+// expect: zigzag 0 1 2 3 4294967294 4294967295 0 -1 1 -2 2147483647 -2147483648
+// expect: -2147483648 2147483647 -9223372036854775808 9223372036854775807
+// expect: fixed 0d01000000 11feffffffffffffff 1d00002040 2100000000000004c0
+// expect: 1 -2 2.5 -2.5
+// expect: map 2 1 2
+// expect: merged: 150 testing [3, 270, 86942, 1, 2]
+// expect: a: wire type 2 where a number was expected
+// expect: a: the data ends in the middle of a varint
+// expect: b: a field longer than the data left
+// expect: small: 300 doesn't fit in u8
+// expect: byte 1: a field of wire type 3 or 4 (groups), which this reader doesn't take
+// expect: empty: 0 bytes
+
+import proto, hex
+
+@proto
+struct Test1 {
+    i32 a
+}
+
+@proto
+struct Test2 {
+    @proto(2) String b
+}
+
+@proto
+struct Test3 {
+    @proto(3) Test1 c
+}
+
+@proto
+struct Test4 {
+    @proto(4) i32[] d
+}
+
+@proto
+struct All {
+    i32 a
+    String b
+    Test1 c
+    List[i32] d
+}
+
+@proto
+struct Zig {
+    @proto(zigzag) List[i64] v
+}
+
+@proto
+struct Limits {
+    @proto(zigzag) i32 a
+    @proto(zigzag) i32 b
+    @proto(zigzag) i64 c
+    @proto(zigzag) i64 d
+}
+
+@proto
+struct Fixed {
+    @proto(fixed) u32 a
+    @proto(fixed) i64 b
+    f32 c
+    f64 d
+}
+
+@proto
+struct Counts {
+    Map[String, i64] m
+}
+
+@proto
+struct Small {
+    @proto(1) u8 small
+}
+
+String bytes(str h) {
+    b := hex.decode(h) catch e {
+        panic("bad hex {h}")
+    }
+    return b
+}
+
+void show[T](T v) {
+    scoped String b = proto.encode(v)
+    print(hex.encode(b))
+}
+
+void fails[T](T *kind, str h) {
+    scoped String b = bytes(h)
+    v := proto.decode(T, b) catch e {
+        print(e.message)
+        return
+    }
+    v.free()
+    print("read {h}")
+}
+
+void main() {
+    show(Test1{a: 150})
+    show(Test2{b: "testing".copy()})
+    show(Test3{c: Test1{a: 150}})
+    show(Test4{d: [3, 270, 86942]})
+    show(Test1{a: -2})
+
+    scoped String b = bytes("089601120774657374696e671a030896012206038e029ea705")
+    scoped all := proto.decode(All, b) catch e {
+        panic(e.message)
+    }
+    print("{all.a} {all.b} {all.c.a} [{all.d.at(0)}, {all.d.at(1)}, {all.d.at(2)}]")
+
+    // fields 5 (varint), 6 (fixed64), 7 (bytes) and 8 (fixed32) aren't in Test1
+    scoped String u = bytes("28ff0131010203040506070832036162633d01020304089601")
+    scoped t1 := proto.decode(Test1, u) catch e {
+        panic(e.message)
+    }
+    print("unknown fields skipped: {t1.a} {u.len - 18}")
+
+    // a repeated number sent one field per value
+    scoped String up = bytes("2001200220032803")
+    scoped un := proto.decode(All, up) catch e {
+        panic(e.message)
+    }
+    print("unpacked: {un.d.len} {un.d.at(0)} {un.d.at(1)} {un.d.at(2)}")
+
+    z := Zig{}
+    defer z.free()
+    for n in [0, -1, 1, -2, 2147483647, -2147483648] {
+        z.v.push(n)
+    }
+    scoped String zb = proto.encode(z)
+    i64 at = 2
+    String s
+    defer s.free()
+    s.append("zigzag")
+    for at < zb.len {
+        u64 x = 0
+        u64 shift = 0
+        for {
+            c := zb[at]
+            at += 1
+            x = x | (u64(c & 127) << shift)
+            shift += 7
+            if c < 128 {
+                break
+            }
+        }
+        s.append(" {x}")
+    }
+    scoped zback := proto.decode(Zig, zb) catch e {
+        panic(e.message)
+    }
+    for i in 0..zback.v.len {
+        s.append(" {zback.v.at(i)}")
+    }
+    print(s)
+
+    lim := Limits{a: -2147483648, b: 2147483647, c: -9223372036854775807 - 1, d: 9223372036854775807}
+    scoped String lb = proto.encode(lim)
+    scoped lback := proto.decode(Limits, lb) catch e {
+        panic(e.message)
+    }
+    print("{lback.a} {lback.b} {lback.c} {lback.d}")
+
+    f := Fixed{a: 1, b: -2, c: 2.5, d: -2.5}
+    scoped String fb = proto.encode(f)
+    print("fixed {hex.encode(fb[0:5])} {hex.encode(fb[5:14])} {hex.encode(fb[14:19])} {hex.encode(fb[19:28])}")
+    scoped fback := proto.decode(Fixed, fb) catch e {
+        panic(e.message)
+    }
+    print("{fback.a} {fback.b} {fback.c} {fback.d}")
+
+    c := Counts{}
+    defer c.free()
+    c.m.set("one".copy(), 1)
+    c.m.set("two".copy(), 2)
+    scoped String cb = proto.encode(c)
+    scoped cback := proto.decode(Counts, cb) catch e {
+        panic(e.message)
+    }
+    print("map {cback.m.len} {cback.m.get("one".copy()).0} {cback.m.get("two".copy()).0}")
+
+    // decodeTo merges into what is there: lists grow
+    scoped String more = bytes("22020102")
+    proto.decodeTo(more, &all) catch e {
+        panic(e.message)
+    }
+    print("merged: {all.a} {all.b} [{all.d.at(0)}, {all.d.at(1)}, {all.d.at(2)}, {all.d.at(3)}, {all.d.at(4)}]")
+
+    t := Test1{}
+    fails(&t, "0a0161")
+    fails(&t, "0896")
+    t2 := Test2{}
+    fails(&t2, "1205616263")
+    sm := Small{}
+    fails(&sm, "08ac02")
+    fails(&t, "130c")
+    scoped String empty = proto.encode(All{})
+    print("empty: {empty.len} bytes")
+}

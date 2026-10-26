@@ -28,6 +28,9 @@ x509-parser = "0.18"
 serde_yaml = "0.9"
 russh = "0.65"
 rand = "0.10"
+prost = "0.14"
+rmp-serde = "1"
+ciborium = "0.2"
 
 [profile.release]
 opt-level = 3
@@ -214,3 +217,15 @@ path = "../wire/main.rs"
 [[bin]]
 name = "ssh"
 path = "../ssh/main.rs"
+
+[[bin]]
+name = "protobuf"
+path = "../protobuf/main.rs"
+
+[[bin]]
+name = "msgpack"
+path = "../msgpack/main.rs"
+
+[[bin]]
+name = "cbor"
+path = "../cbor/main.rs"

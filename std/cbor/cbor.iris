@@ -1,0 +1,290 @@
+// CBOR (RFC 8949), the Concise Binary Object Representation. cbor.encode
+// and cbor.decode turn @json structs into a map of their fields and back,
+// with the keys @json gives them. Value holds data of any shape. Reading
+// takes indefinite lengths and skips tags.
+
+// What reading fails with: syntax for bytes that aren't CBOR,
+// wrongType, missing and range when decode's type doesn't fit the data.
+pub enum CborError { syntax, wrongType, missing, range }
+
+// Turns a value into CBOR bytes: cbor.encode(user).
+@builtin
+pub void encode()
+
+// Reads a value of a type from CBOR bytes: cbor.decode(User, bytes).
+@builtin
+pub void decode()
+
+const i32 FORMAT = 2
+
+@extern("iris_cbor_decode")
+i32 rawDecode(u8 *table, u8 *data, i64 len, u8 *out)
+
+@extern("iris_json_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_json_message_len")
+i64 messageLen()
+
+CborError codeOf(i32 code) => if code == 2 { CborError.wrongType } else if code == 3 { CborError.missing } else if code == 4 { CborError.range } else { CborError.syntax }
+
+Error fail(i32 code) => error(codeOf(code), "{messagePtr()[0:messageLen()]}")
+
+// What cbor.decode calls.
+pub !void decodeInto(u8 *table, str data, u8 *out) {
+    code := rawDecode(table, data.ptr, data.len, out)
+    if code != 0 {
+        return fail(code)
+    }
+}
+
+// ------------------------------------------------------------ Value
+
+// The kinds of value. An integer above the largest i64 is unsigned.
+pub enum Kind { nil, boolean, integer, unsigned, float, text, bytes, array, map }
+
+// A value of any shape. text holds text and bytes; items holds an
+// array's values, or a map's values with their keys at the same place in
+// keys.
+pub struct Value {
+    pub Kind kind
+    pub bool boolean
+    pub i64 int
+    pub u64 uint
+    pub f64 float
+    pub String text
+    pub List[Value] items
+    pub List[Value] keys
+}
+
+// null.
+pub Value nil() => Value{kind: .nil}
+
+// true or false.
+pub Value boolean(bool b) => Value{kind: .boolean, boolean: b}
+
+// An integer.
+pub Value integer(i64 n) => Value{kind: .integer, int: n}
+
+// A floating point number.
+pub Value float(f64 f) => Value{kind: .float, float: f}
+
+// Text.
+pub Value text(str s) => Value{kind: .text, text: s.copy()}
+
+// Bytes.
+pub Value bytes(str b) => Value{kind: .bytes, text: b.copy()}
+
+// An empty array.
+pub Value array() => Value{kind: .array}
+
+// An empty map.
+pub Value map() => Value{kind: .map}
+
+// Gives the value's memory back, and that of the values it holds.
+pub void Value.free() {
+    self.text.free()
+    for i in 0..self.items.len {
+        self.items.items()[i].free()
+    }
+    self.items.free()
+    for i in 0..self.keys.len {
+        self.keys.items()[i].free()
+    }
+    self.keys.free()
+}
+
+// The value of a text key in a map, null when there is none.
+pub Value *Value.get(str key) {
+    for i in 0..self.keys.len {
+        k := &self.keys.items()[i]
+        if k.kind == .text && k.text == key {
+            return &self.items.items()[i]
+        }
+    }
+    return null
+}
+
+// The ith value of an array, or of a map in its order.
+pub Value *Value.at(i64 i) => &self.items.items()[i]
+
+// How many values an array or a map holds.
+pub i64 Value.len() => self.items.len
+
+// Adds a value to the end of an array.
+pub void Value.push(Value v) {
+    self.items.push(v)
+}
+
+// Sets a text key in a map, in place of its value when it has one.
+pub void Value.set(str key, Value v) {
+    for i in 0..self.keys.len {
+        k := &self.keys.items()[i]
+        if k.kind == .text && k.text == key {
+            self.items.items()[i].free()
+            self.items.set(i, v)
+            return
+        }
+    }
+    self.keys.push(text(key))
+    self.items.push(v)
+}
+
+// One item as the runtime reads and writes it.
+struct Token {
+    i32 kind
+    bool huge
+    u64 u
+    i64 i
+    f64 f
+    u8 *s
+    i64 n
+}
+
+const i32 T_NIL = 0
+const i32 T_BOOL = 1
+const i32 T_UINT = 2
+const i32 T_INT = 3
+const i32 T_FLOAT = 4
+const i32 T_STR = 5
+const i32 T_BIN = 6
+const i32 T_ARRAY = 7
+const i32 T_MAP = 8
+const i32 T_BREAK = 9
+
+@extern("iris_bin_token")
+i32 rawToken(i32 fmt, u8 *data, i64 len, i64 *at, Token *k)
+
+@extern("iris_bin_put")
+void rawPut(i32 fmt, String *out, Token *k)
+
+!Token next(str data, i64 *at) {
+    Token k
+    code := rawToken(FORMAT, data.ptr, data.len, at, &k)
+    if code != 0 {
+        return fail(code)
+    }
+    return k
+}
+
+!Value fromToken(str data, i64 *at, Token k, i64 depth) {
+    if depth > 512 {
+        return error(CborError.syntax, "the data is nested too deeply")
+    }
+    if k.kind == T_NIL {
+        return nil()
+    }
+    if k.kind == T_BOOL {
+        return boolean(k.u != 0)
+    }
+    if k.kind == T_UINT {
+        if k.i < 0 {
+            return Value{kind: .unsigned, uint: k.u}
+        }
+        return integer(k.i)
+    }
+    if k.kind == T_INT {
+        if k.huge {
+            return error(CborError.range, "a negative integer below the smallest i64")
+        }
+        return integer(k.i)
+    }
+    if k.kind == T_FLOAT {
+        return float(k.f)
+    }
+    if k.kind == T_STR || k.kind == T_BIN {
+        v := Value{kind: if k.kind == T_STR { Kind.text } else { Kind.bytes }}
+        v.text.append(k.s[0:k.n])
+        return v
+    }
+    if k.kind == T_BREAK {
+        return error(CborError.syntax, "a break outside an array or map")
+    }
+    v := Value{kind: if k.kind == T_ARRAY { Kind.array } else { Kind.map }}
+    i64 i = 0
+    for k.n < 0 || i < k.n {
+        e := next(data, at) catch err {
+            v.free()
+            return err
+        }
+        if k.n < 0 && e.kind == T_BREAK {
+            break
+        }
+        if k.kind == T_MAP {
+            key := fromToken(data, at, e, depth + 1) catch err {
+                v.free()
+                return err
+            }
+            v.keys.push(key)
+            e = next(data, at) catch err {
+                v.free()
+                return err
+            }
+        }
+        item := fromToken(data, at, e, depth + 1) catch err {
+            v.free()
+            return err
+        }
+        v.items.push(item)
+        i += 1
+    }
+    return v
+}
+
+// Reads one value from data, which must hold only it.
+pub !Value parse(str data) {
+    i64 at = 0
+    k := try next(data, &at)
+    v := try fromToken(data, &at, k, 0)
+    if at < data.len {
+        v.free()
+        return error(CborError.syntax, "byte {at}: more bytes after the value")
+    }
+    return v
+}
+
+void put(String *out, Value *v) {
+    Token k
+    match v.kind {
+        .nil => k.kind = T_NIL,
+        .boolean => {
+            k.kind = T_BOOL
+            k.u = if v.boolean { 1 } else { 0 }
+        },
+        .integer => {
+            k.kind = T_INT
+            k.i = v.int
+        },
+        .unsigned => {
+            k.kind = T_UINT
+            k.u = v.uint
+        },
+        .float => {
+            k.kind = T_FLOAT
+            k.f = v.float
+        },
+        .text, .bytes => {
+            k.kind = if v.kind == .text { T_STR } else { T_BIN }
+            k.s = v.text.ptr
+            k.n = v.text.len
+        },
+        .array, .map => {
+            k.kind = if v.kind == .array { T_ARRAY } else { T_MAP }
+            k.n = v.items.len
+        },
+    }
+    rawPut(FORMAT, out, &k)
+    for i in 0..v.items.len {
+        if v.kind == .map {
+            put(out, &v.keys.items()[i])
+        }
+        put(out, &v.items.items()[i])
+    }
+}
+
+// The value as CBOR bytes.
+pub String write(Value v) {
+    String out
+    put(&out, &v)
+    return out
+}

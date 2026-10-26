@@ -12,6 +12,9 @@
     ]},
     {"title": "Text and data", "modules": [
       {"name": "json", "title": "JSON", "summary": "Turning @json structs into JSON text and back."},
+      {"name": "msgpack", "title": "MessagePack", "summary": "@json structs as MessagePack and back, and a Value for data of any shape."},
+      {"name": "cbor", "title": "CBOR", "summary": "@json structs as CBOR (RFC 8949) and back, and a Value for data of any shape."},
+      {"name": "proto", "title": "Protocol Buffers", "summary": "@proto structs as protobuf messages and back."},
       {"name": "csv", "title": "CSV", "summary": "Reading and writing comma-separated values."},
       {"name": "toml", "title": "TOML", "summary": "TOML files into @json structs or a Value, and written back."},
       {"name": "yaml", "title": "YAML", "summary": "YAML as configuration files use it, read into values or @json structs, and written."},

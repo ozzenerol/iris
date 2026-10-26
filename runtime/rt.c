@@ -6708,9 +6708,9 @@ int64_t iris_hash_bytes(const char *p, int64_t n);
 
 static int64_t readInt(const char *p, int size, bool sign) {
     switch (size) {
-    case 1: return sign ? *(int8_t *)p : *(uint8_t *)p;
-    case 2: return sign ? *(int16_t *)p : *(uint16_t *)p;
-    case 4: return sign ? *(int32_t *)p : *(uint32_t *)p;
+    case 1: return sign ? (int64_t)*(int8_t *)p : (int64_t)*(uint8_t *)p;
+    case 2: return sign ? (int64_t)*(int16_t *)p : (int64_t)*(uint16_t *)p;
+    case 4: return sign ? (int64_t)*(int32_t *)p : (int64_t)*(uint32_t *)p;
     default: return *(int64_t *)p;
     }
 }
@@ -6898,13 +6898,25 @@ static void jsonMapFree(const JsonType *t, char *p);
 /* Frees the Strings and slices inside the value at p, and empties them. */
 static void jsonFree(const JsonType *t, char *p) {
     switch (t->kind) {
-    case J_STRING:
-        iris_string_free((IrisString *)p);
+    case J_STRING: {
+        IrisString *s = (IrisString *)p;
+        if (s->cap) free(s->ptr);
+        s->ptr = NULL;
+        s->len = s->cap = 0;
         break;
+    }
     case J_STRUCT: {
         const JsonField *fs = t->items;
         for (int64_t i = 0; i < t->count; i++) {
-            if (jsonOwns(fs[i].type)) jsonFree(fs[i].type, p + fs[i].offset);
+            int k = fs[i].type->kind;
+            if (k == J_STRING) {
+                IrisString *s = (IrisString *)(p + fs[i].offset);
+                if (s->cap) free(s->ptr);
+                s->ptr = NULL;
+                s->len = s->cap = 0;
+            } else if (k == J_STRUCT || k == J_SLICE || k == J_LIST || k == J_MAP || k == J_ARRAY) {
+                jsonFree(fs[i].type, p + fs[i].offset);
+            }
         }
         break;
     }
@@ -6932,7 +6944,7 @@ static void jsonFree(const JsonType *t, char *p) {
     case J_LIST: {
         const JsonType *et = t->items;
         JsonList *l = (JsonList *)p;
-        if (jsonOwns(et)) {
+        if (et->kind == J_STRING || et->kind == J_STRUCT ? l->len > 0 : jsonOwns(et)) {
             for (int64_t i = 0; i < l->len; i++) jsonFree(et, l->buf.ptr + i * et->size);
         }
         free(l->buf.ptr);
@@ -7339,7 +7351,7 @@ static bool jsonStruct(JsonIn *in, const JsonType *t, char *p) {
         in->depth--;
     }
     for (int64_t i = 0; ok && i < t->count; i++) {
-        if (fs[i].required && !seen[i]) {
+        if ((fs[i].required & 1) && !seen[i]) {
             char msg[160];
             snprintf(msg, sizeof msg, "the required field \"%.*s\" is missing", (int)fs[i].nameLen, fs[i].name);
             ok = jsonFail(in, 3, msg);
@@ -17414,4 +17426,1780 @@ int iris_zip_inflate(const char *in, int64_t n, int64_t size, IrisString *out) {
 /* Cuts a String back to len bytes. */
 void iris_zip_truncate(IrisString *s, int64_t len) {
     if (len >= 0 && len < s->len) s->len = len;
+}
+
+/* ---------------------------------------------------------------- msgpack, cbor and protobuf
+
+   msgpack.encode/decode, cbor.encode/decode and proto.encode/decode work
+   from the same tables as JSON (ir.c, jsonType). A field of a @proto
+   struct keeps its number and setting in JsonField.required: bit 0 is
+   @json(required), bits 8 and 9 zigzag and fixed, the number from bit 16.
+   Errors use JSON's codes and message (iris_json_message_ptr/len). */
+
+enum { BIN_MSGPACK = 1, BIN_CBOR = 2 };
+
+static bool binFail(JsonIn *in, int code, const char *what) {
+    if (in->code) return false;
+    in->code = code;
+    if (in->pathLen) {
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s: %s", in->path, what);
+    } else if (code == 1) {
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "byte %lld: %s", (long long)(in->p - in->s), what);
+    } else {
+        jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s", what);
+    }
+    if (jsonMsgLen >= (int64_t)sizeof jsonMsg) jsonMsgLen = sizeof jsonMsg - 1;
+    return false;
+}
+
+static inline char *binRoom(IrisString *o, int64_t n) {
+    if (__builtin_expect(o->len + n > o->cap, 0)) {
+        const char *none = NULL;
+        stringGrow(o, &none, n);
+    }
+    return o->ptr + o->len;
+}
+
+static inline void putBe(char *d, uint64_t v, int n) {
+    for (int i = n - 1; i >= 0; i--) {
+        d[i] = (char)v;
+        v >>= 8;
+    }
+}
+
+static inline uint64_t getBe(const char *s, int n) {
+    uint64_t v = 0;
+    for (int i = 0; i < n; i++) v = v << 8 | (unsigned char)s[i];
+    return v;
+}
+
+/* ------------------------------------------------ writing MessagePack and CBOR */
+
+static void mpUint(IrisString *o, uint64_t v) {
+    char *d = binRoom(o, 9);
+    if (v < 128) {
+        d[0] = (char)v;
+        o->len += 1;
+    } else if (v <= 0xff) {
+        d[0] = (char)0xcc;
+        d[1] = (char)v;
+        o->len += 2;
+    } else if (v <= 0xffff) {
+        d[0] = (char)0xcd;
+        putBe(d + 1, v, 2);
+        o->len += 3;
+    } else if (v <= 0xffffffffu) {
+        d[0] = (char)0xce;
+        putBe(d + 1, v, 4);
+        o->len += 5;
+    } else {
+        d[0] = (char)0xcf;
+        putBe(d + 1, v, 8);
+        o->len += 9;
+    }
+}
+
+static void mpInt(IrisString *o, int64_t v) {
+    if (v >= 0) {
+        mpUint(o, (uint64_t)v);
+        return;
+    }
+    char *d = binRoom(o, 9);
+    if (v >= -32) {
+        d[0] = (char)v;
+        o->len += 1;
+    } else if (v >= -128) {
+        d[0] = (char)0xd0;
+        d[1] = (char)v;
+        o->len += 2;
+    } else if (v >= -32768) {
+        d[0] = (char)0xd1;
+        putBe(d + 1, (uint64_t)v, 2);
+        o->len += 3;
+    } else if (v >= INT32_MIN) {
+        d[0] = (char)0xd2;
+        putBe(d + 1, (uint64_t)v, 4);
+        o->len += 5;
+    } else {
+        d[0] = (char)0xd3;
+        putBe(d + 1, (uint64_t)v, 8);
+        o->len += 9;
+    }
+}
+
+/* A header with a length: str, array or map (fix, 8 and 16 and 32 bits). */
+static void mpHead(IrisString *o, int fix, int fixMax, int b8, int b16, uint64_t n) {
+    char *d = binRoom(o, 5);
+    if (n < (uint64_t)fixMax) {
+        d[0] = (char)(fix | (int)n);
+        o->len += 1;
+    } else if (b8 && n <= 0xff) {
+        d[0] = (char)b8;
+        d[1] = (char)n;
+        o->len += 2;
+    } else if (n <= 0xffff) {
+        d[0] = (char)b16;
+        putBe(d + 1, n, 2);
+        o->len += 3;
+    } else {
+        d[0] = (char)(b16 + 1);
+        putBe(d + 1, n, 4);
+        o->len += 5;
+    }
+}
+
+/* CBOR's header: the major type and its argument in the fewest bytes. */
+static void cbHead(IrisString *o, int major, uint64_t v) {
+    char *d = binRoom(o, 9);
+    int m = major << 5;
+    if (v < 24) {
+        d[0] = (char)(m | (int)v);
+        o->len += 1;
+    } else if (v <= 0xff) {
+        d[0] = (char)(m | 24);
+        d[1] = (char)v;
+        o->len += 2;
+    } else if (v <= 0xffff) {
+        d[0] = (char)(m | 25);
+        putBe(d + 1, v, 2);
+        o->len += 3;
+    } else if (v <= 0xffffffffu) {
+        d[0] = (char)(m | 26);
+        putBe(d + 1, v, 4);
+        o->len += 5;
+    } else {
+        d[0] = (char)(m | 27);
+        putBe(d + 1, v, 8);
+        o->len += 9;
+    }
+}
+
+/* A float in CBOR's preferred form: the shortest of half, single and
+   double that keeps its value (RFC 8949, 4.1). */
+static void cbFloat(IrisString *o, double v) {
+    char *d = binRoom(o, 9);
+    if (v != v) {
+        d[0] = (char)0xf9;
+        d[1] = 0x7e;
+        d[2] = 0;
+        o->len += 3;
+        return;
+    }
+    float f = (float)v;
+    if ((double)f == v) {
+        uint32_t b;
+        memcpy(&b, &f, 4);
+        uint32_t sign = (b >> 16) & 0x8000, mant = b & 0x7fffff;
+        int e = (int)((b >> 23) & 0xff) - 127;
+        int h = -1;
+        if ((b & 0x7fffffff) == 0) h = (int)sign;
+        else if (e == 128) h = (int)(sign | 0x7c00);   /* infinity */
+        else if (e >= -14 && e <= 15 && !(mant & 0x1fff)) h = (int)(sign | (uint32_t)(e + 15) << 10 | mant >> 13);
+        else if (e >= -24 && e < -14) {
+            int shift = 13 + (-14 - e);
+            uint32_t full = 0x800000 | mant;
+            if (!(full & ((1u << shift) - 1))) h = (int)(sign | full >> shift);
+        }
+        if (h >= 0) {
+            d[0] = (char)0xf9;
+            putBe(d + 1, (uint64_t)h, 2);
+            o->len += 3;
+        } else {
+            d[0] = (char)0xfa;
+            putBe(d + 1, b, 4);
+            o->len += 5;
+        }
+        return;
+    }
+    uint64_t bits;
+    memcpy(&bits, &v, 8);
+    d[0] = (char)0xfb;
+    putBe(d + 1, bits, 8);
+    o->len += 9;
+}
+
+static void binText(IrisString *o, int fmt, const char *s, int64_t n) {
+    if (fmt == BIN_MSGPACK) {
+        mpHead(o, 0xa0, 32, 0xd9, 0xda, (uint64_t)n);
+    } else {
+        cbHead(o, 3, (uint64_t)n);
+    }
+    if (n > 0) {
+        char *d = binRoom(o, n);
+        if (n <= 16) {
+            for (int64_t i = 0; i < n; i++) d[i] = s[i];
+        } else {
+            memcpy(d, s, (size_t)n);
+        }
+        o->len += n;
+    }
+}
+
+static void binCount(IrisString *o, int fmt, bool map, uint64_t n) {
+    if (fmt == BIN_MSGPACK) {
+        if (map) mpHead(o, 0x80, 16, 0, 0xde, n);
+        else mpHead(o, 0x90, 16, 0, 0xdc, n);
+    } else {
+        cbHead(o, map ? 5 : 4, n);
+    }
+}
+
+static void binEncode(IrisString *o, int fmt, const JsonType *t, const char *p) {
+    switch (t->kind) {
+    case J_INT: case J_UINT: {
+        int64_t v = readInt(p, t->size, t->kind == J_INT);
+        bool isSigned = t->kind == J_INT || t->size < 8;
+        if (fmt == BIN_MSGPACK) {
+            if (isSigned) mpInt(o, v);
+            else mpUint(o, (uint64_t)v);
+        } else if (isSigned && v < 0) {
+            cbHead(o, 1, (uint64_t)(-1 - v));
+        } else {
+            cbHead(o, 0, (uint64_t)v);
+        }
+        break;
+    }
+    case J_FLOAT: {
+        if (fmt == BIN_CBOR) {
+            cbFloat(o, t->size == 4 ? (double)*(const float *)p : *(const double *)p);
+            break;
+        }
+        char *d = binRoom(o, 9);
+        if (t->size == 4) {
+            uint32_t bits;
+            memcpy(&bits, p, 4);
+            d[0] = (char)(fmt == BIN_MSGPACK ? 0xca : 0xfa);
+            putBe(d + 1, bits, 4);
+            o->len += 5;
+        } else {
+            uint64_t bits;
+            memcpy(&bits, p, 8);
+            d[0] = (char)(fmt == BIN_MSGPACK ? 0xcb : 0xfb);
+            putBe(d + 1, bits, 8);
+            o->len += 9;
+        }
+        break;
+    }
+    case J_BOOL: {
+        bool b = *(const uint8_t *)p;
+        *binRoom(o, 1) = (char)(fmt == BIN_MSGPACK ? (b ? 0xc3 : 0xc2) : (b ? 0xf5 : 0xf4));
+        o->len++;
+        break;
+    }
+    case J_STR: {
+        const Slice *s = (const Slice *)p;
+        binText(o, fmt, s->ptr, s->len);
+        break;
+    }
+    case J_STRING: {
+        const IrisString *s = (const IrisString *)p;
+        binText(o, fmt, s->ptr, s->len);
+        break;
+    }
+    case J_ENUM: {
+        int64_t v = *(const int32_t *)p;
+        const JsonName *names = t->items;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (names[i].value == v) {
+                binText(o, fmt, names[i].name, names[i].len);
+                return;
+            }
+        }
+        if (fmt == BIN_MSGPACK) mpInt(o, v);
+        else if (v < 0) cbHead(o, 1, (uint64_t)(-1 - v));
+        else cbHead(o, 0, (uint64_t)v);
+        break;
+    }
+    case J_STRUCT: {
+        const JsonField *fs = t->items;
+        binCount(o, fmt, true, (uint64_t)t->count);
+        for (int64_t i = 0; i < t->count; i++) {
+            binText(o, fmt, fs[i].name, fs[i].nameLen);
+            binEncode(o, fmt, fs[i].type, p + fs[i].offset);
+        }
+        break;
+    }
+    case J_MAP: {
+        const JsonMapInfo *mi = t->items;
+        const JsonMap *m = (const JsonMap *)p;
+        binCount(o, fmt, true, (uint64_t)m->len);
+        for (int64_t i = 0; i < m->state.len; i++) {
+            if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+            const char *e = m->slots.ptr + i * mi->entrySize;
+            binText(o, fmt, ((const Slice *)e)->ptr, ((const Slice *)e)->len);
+            binEncode(o, fmt, mi->val, e + mi->valOffset);
+        }
+        break;
+    }
+    case J_SLICE: case J_ARRAY: case J_LIST: {
+        const JsonType *et = t->items;
+        const char *base = p;
+        int64_t n = t->count;
+        if (t->kind == J_SLICE) {
+            base = ((const Slice *)p)->ptr;
+            n = ((const Slice *)p)->len;
+        } else if (t->kind == J_LIST) {
+            base = ((const JsonList *)p)->buf.ptr;
+            n = ((const JsonList *)p)->len;
+        }
+        binCount(o, fmt, false, (uint64_t)n);
+        for (int64_t i = 0; i < n; i++) binEncode(o, fmt, et, base + i * et->size);
+        break;
+    }
+    }
+}
+
+void iris_msgpack_encode(const JsonType *t, const char *value, IrisString *out) {
+    binRoom(out, 128);
+    binEncode(out, BIN_MSGPACK, t, value);
+}
+
+void iris_cbor_encode(const JsonType *t, const char *value, IrisString *out) {
+    binRoom(out, 128);
+    binEncode(out, BIN_CBOR, t, value);
+}
+
+/* ------------------------------------------------ reading MessagePack and CBOR
+
+   Both are read one item at a time into a BinTok; binValue fills a typed
+   value from the items, as jsonValue does from JSON text. */
+
+enum { BT_NIL, BT_BOOL, BT_UINT, BT_INT, BT_FLOAT, BT_STR, BT_BIN, BT_ARRAY, BT_MAP, BT_BREAK };
+
+typedef struct {
+    int kind;
+    bool huge;                  /* a CBOR negative integer below the smallest i64 */
+    uint64_t u;                 /* BT_UINT, BT_BOOL; BT_INT keeps its i64 here */
+    int64_t i;                  /* the same bits as an i64, for msgpack.Value and cbor.Value */
+    double f;
+    const char *s;              /* BT_STR, BT_BIN */
+    int64_t n;                  /* their length, or the items of BT_ARRAY and BT_MAP; -1 until a break */
+} BinTok;
+
+static _Thread_local IrisString binChunks;  /* CBOR text and bytes given in pieces, put together */
+
+static inline __attribute__((always_inline)) bool binNeed(JsonIn *in, int64_t n) {
+    if (in->end - in->p < n) return binFail(in, 1, "the data ends in the middle of a value");
+    return true;
+}
+
+static inline __attribute__((always_inline)) bool mpTok(JsonIn *in, BinTok *k) {
+    if (!binNeed(in, 1)) return false;
+    unsigned char b = (unsigned char)*in->p++;
+    if (b < 0x80) {
+        k->kind = BT_UINT;
+        k->u = b;
+        return true;
+    }
+    if (b >= 0xe0) {
+        k->kind = BT_INT;
+        k->u = (uint64_t)(int64_t)(int8_t)b;
+        return true;
+    }
+    if (b < 0x90) {
+        k->kind = BT_MAP;
+        k->n = b & 15;
+        return true;
+    }
+    if (b < 0xa0) {
+        k->kind = BT_ARRAY;
+        k->n = b & 15;
+        return true;
+    }
+    if (b < 0xc0) {
+        k->kind = BT_STR;
+        k->n = b & 31;
+        goto bytes;
+    }
+    int w;
+    switch (b) {
+    case 0xc0: k->kind = BT_NIL; return true;
+    case 0xc2: case 0xc3: k->kind = BT_BOOL; k->u = b & 1; return true;
+    case 0xc4: case 0xc5: case 0xc6:
+    case 0xd9: case 0xda: case 0xdb:
+        k->kind = b <= 0xc6 ? BT_BIN : BT_STR;
+        w = 1 << (b <= 0xc6 ? b - 0xc4 : b - 0xd9);
+        if (!binNeed(in, w)) return false;
+        k->n = (int64_t)getBe(in->p, w);
+        in->p += w;
+        goto bytes;
+    case 0xca: case 0xcb:
+        w = b == 0xca ? 4 : 8;
+        if (!binNeed(in, w)) return false;
+        k->kind = BT_FLOAT;
+        if (w == 4) {
+            uint32_t bits = (uint32_t)getBe(in->p, 4);
+            float f;
+            memcpy(&f, &bits, 4);
+            k->f = f;
+        } else {
+            uint64_t bits = getBe(in->p, 8);
+            memcpy(&k->f, &bits, 8);
+        }
+        in->p += w;
+        return true;
+    case 0xcc: case 0xcd: case 0xce: case 0xcf:
+        w = 1 << (b - 0xcc);
+        if (!binNeed(in, w)) return false;
+        k->kind = BT_UINT;
+        k->u = getBe(in->p, w);
+        in->p += w;
+        return true;
+    case 0xd0: case 0xd1: case 0xd2: case 0xd3: {
+        w = 1 << (b - 0xd0);
+        if (!binNeed(in, w)) return false;
+        uint64_t v = getBe(in->p, w);
+        int sh = 64 - 8 * w;
+        k->u = sh ? (uint64_t)((int64_t)(v << sh) >> sh) : v;
+        k->kind = (int64_t)k->u < 0 ? BT_INT : BT_UINT;
+        in->p += w;
+        return true;
+    }
+    case 0xdc: case 0xdd: case 0xde: case 0xdf:
+        w = b & 1 ? 4 : 2;
+        if (!binNeed(in, w)) return false;
+        k->kind = b < 0xde ? BT_ARRAY : BT_MAP;
+        k->n = (int64_t)getBe(in->p, w);
+        in->p += w;
+        return true;
+    case 0xd4: case 0xd5: case 0xd6: case 0xd7: case 0xd8:
+    case 0xc7: case 0xc8: case 0xc9: {
+        /* an extension: its bytes, with the type byte in front */
+        int64_t n;
+        if (b >= 0xd4) {
+            n = 1 << (b - 0xd4);
+        } else {
+            w = 1 << (b - 0xc7);
+            if (!binNeed(in, w)) return false;
+            n = (int64_t)getBe(in->p, w);
+            in->p += w;
+        }
+        k->kind = BT_BIN;
+        k->n = n + 1;
+        goto bytes;
+    }
+    default:
+        in->p--;
+        return binFail(in, 1, "0xc1 isn't a MessagePack value");
+    }
+bytes:
+    if (!binNeed(in, k->n)) return false;
+    k->s = in->p;
+    in->p += k->n;
+    return true;
+}
+
+static bool cbArg(JsonIn *in, int ai, uint64_t *v) {
+    if (ai < 24) {
+        *v = (uint64_t)ai;
+        return true;
+    }
+    if (ai > 27) return binFail(in, 1, "a CBOR item with a reserved length");
+    int w = 1 << (ai - 24);
+    if (!binNeed(in, w)) return false;
+    *v = getBe(in->p, w);
+    in->p += w;
+    return true;
+}
+
+static double halfFloat(uint16_t h) {
+    int e = (h >> 10) & 31, m = h & 1023;
+    double v = e == 0 ? ldexp(m, -24) : e == 31 ? (m ? NAN : INFINITY) : ldexp(m + 1024, e - 25);
+    return h & 0x8000 ? -v : v;
+}
+
+static bool cbTok(JsonIn *in, BinTok *k) {
+    for (;;) {
+        if (!binNeed(in, 1)) return false;
+        unsigned char b = (unsigned char)*in->p++;
+        int major = b >> 5, ai = b & 31;
+        uint64_t v = 0;
+        if (ai == 31) {
+            switch (major) {
+            case 2: case 3: {
+                /* text or bytes in pieces of the same major type, until a break */
+                int64_t at = in->p - in->s - 1;
+                binChunks.len = 0;
+                for (;;) {
+                    if (!binNeed(in, 1)) return false;
+                    unsigned char c = (unsigned char)*in->p;
+                    if (c == 0xff) {
+                        in->p++;
+                        break;
+                    }
+                    in->p++;
+                    if ((c >> 5) != major || (c & 31) == 31 || !cbArg(in, c & 31, &v)) {
+                        return in->code ? false : binFail(in, 1, "a piece of CBOR text or bytes of another type");
+                    }
+                    if (!binNeed(in, (int64_t)v)) return false;
+                    iris_string_append(&binChunks, in->p, (int64_t)v);
+                    in->p += v;
+                }
+                (void)at;
+                k->kind = major == 2 ? BT_BIN : BT_STR;
+                k->s = binChunks.ptr ? binChunks.ptr : "";
+                k->n = binChunks.len;
+                return true;
+            }
+            case 4: case 5:
+                k->kind = major == 4 ? BT_ARRAY : BT_MAP;
+                k->n = -1;
+                return true;
+            case 7:
+                k->kind = BT_BREAK;
+                return true;
+            default:
+                in->p--;
+                return binFail(in, 1, "an integer or tag with no length");
+            }
+        }
+        if (major != 7 && !cbArg(in, ai, &v)) return false;
+        switch (major) {
+        case 0:
+            k->kind = BT_UINT;
+            k->u = v;
+            return true;
+        case 1:
+            k->kind = BT_INT;
+            k->huge = v > (uint64_t)INT64_MAX;
+            k->u = (uint64_t)(-1 - (int64_t)v);
+            return true;
+        case 2: case 3:
+            if (!binNeed(in, (int64_t)v)) return false;
+            k->kind = major == 2 ? BT_BIN : BT_STR;
+            k->s = in->p;
+            k->n = (int64_t)v;
+            in->p += v;
+            return true;
+        case 4: case 5:
+            k->kind = major == 4 ? BT_ARRAY : BT_MAP;
+            if (v > (uint64_t)(in->end - in->p)) return binFail(in, 1, "more items than there are bytes left");
+            k->n = (int64_t)v;
+            return true;
+        case 6:
+            continue;           /* a tag: the value it marks is read as it is */
+        default:
+            switch (ai) {
+            case 20: case 21: k->kind = BT_BOOL; k->u = ai == 21; return true;
+            case 22: case 23: k->kind = BT_NIL; return true;
+            case 25: case 26: case 27: {
+                int w = 1 << (ai - 24);
+                if (!binNeed(in, w)) return false;
+                uint64_t bits = getBe(in->p, w);
+                in->p += w;
+                k->kind = BT_FLOAT;
+                if (w == 2) {
+                    k->f = halfFloat((uint16_t)bits);
+                } else if (w == 4) {
+                    uint32_t b32 = (uint32_t)bits;
+                    float f;
+                    memcpy(&f, &b32, 4);
+                    k->f = f;
+                } else {
+                    memcpy(&k->f, &bits, 8);
+                }
+                return true;
+            }
+            default:
+                if (ai < 24 || ai == 24) {
+                    /* a simple value without a meaning here */
+                    if (ai == 24 && !binNeed(in, 1)) return false;
+                    if (ai == 24) in->p++;
+                    k->kind = BT_NIL;
+                    return true;
+                }
+                in->p--;
+                return binFail(in, 1, "a CBOR simple value with a reserved length");
+            }
+        }
+    }
+}
+
+static inline __attribute__((always_inline)) bool binTok(JsonIn *in, int fmt, BinTok *k) {
+    k->huge = false;
+    if (fmt == BIN_MSGPACK) return mpTok(in, k);
+    /* CBOR's short items in line: small integers, short text, arrays and maps */
+    if (in->p < in->end) {
+        unsigned char b = (unsigned char)*in->p;
+        int major = b >> 5, ai = b & 31;
+        if (ai < 24 && major != 6 && major != 7) {
+            in->p++;
+            switch (major) {
+            case 0: k->kind = BT_UINT; k->u = (uint64_t)ai; return true;
+            case 1: k->kind = BT_INT; k->u = (uint64_t)(-1 - ai); return true;
+            case 4: case 5:
+                if (in->end - in->p < ai) {
+                    in->p--;
+                    break;
+                }
+                k->kind = major == 4 ? BT_ARRAY : BT_MAP;
+                k->n = ai;
+                return true;
+            default:
+                if (in->end - in->p < ai) {
+                    in->p--;
+                    break;
+                }
+                k->kind = major == 2 ? BT_BIN : BT_STR;
+                k->s = in->p;
+                k->n = ai;
+                in->p += ai;
+                return true;
+            }
+        }
+    }
+    return cbTok(in, k);
+}
+
+/* Whether a key's n bytes at a are those at b, without a call for short ones. */
+static inline bool binSame(const char *a, const char *b, int64_t n) {
+    if (n > 16) return !memcmp(a, b, (size_t)n);
+    for (int64_t i = 0; i < n; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+/* Whether the items of an array or map go on: n of them, or until a break. */
+static bool binMore(JsonIn *in, int fmt, int64_t n, int64_t i, bool *ok) {
+    if (n >= 0) return i < n;
+    if (fmt == BIN_CBOR && in->p < in->end && (unsigned char)*in->p == 0xff) {
+        in->p++;
+        return false;
+    }
+    if (in->p >= in->end) *ok = binFail(in, 1, "the data ends before the break of an array or map");
+    return in->p < in->end;
+}
+
+static bool binSkipTok(JsonIn *in, int fmt, BinTok *k) {
+    if (k->kind != BT_ARRAY && k->kind != BT_MAP) {
+        if (k->kind == BT_BREAK) return binFail(in, 1, "a break outside an array or map");
+        return true;
+    }
+    if (++in->depth > 512) return binFail(in, 1, "the data is nested too deeply");
+    int64_t n = k->n, per = k->kind == BT_MAP ? 2 : 1;
+    bool ok = true;
+    for (int64_t i = 0; ok && binMore(in, fmt, n, i, &ok); i++) {
+        for (int64_t j = 0; j < per; j++) {
+            BinTok e;
+            if (!binTok(in, fmt, &e) || !binSkipTok(in, fmt, &e)) return false;
+        }
+    }
+    in->depth--;
+    return ok;
+}
+
+static const char *binKindName(int kind) {
+    switch (kind) {
+    case BT_NIL: return "nil";
+    case BT_BOOL: return "a bool";
+    case BT_UINT: case BT_INT: return "an integer";
+    case BT_FLOAT: return "a float";
+    case BT_STR: return "text";
+    case BT_BIN: return "bytes";
+    case BT_ARRAY: return "an array";
+    case BT_MAP: return "a map";
+    default: return "a break";
+    }
+}
+
+static bool binExpected(JsonIn *in, const char *what, const BinTok *k) {
+    char msg[96];
+    snprintf(msg, sizeof msg, "expected %s, found %s", what, binKindName(k->kind));
+    return binFail(in, 2, msg);
+}
+
+static bool binValue(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k);
+
+static bool binList(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k) {
+    const JsonType *et = t->items;
+    bool slice = t->kind == J_SLICE || t->kind == J_LIST;
+    if (slice) jsonFree(t, p);
+    int64_t n = 0, cap = slice ? (k->n > 0 ? (k->n < 4096 ? k->n : 4096) : 0) : t->count;
+    char *buf = slice ? (cap ? calloc((size_t)cap, (size_t)et->size) : NULL) : p;
+    if (slice && cap && !buf) outOfMemory();
+    if (++in->depth > 512) return binFail(in, 1, "the data is nested too deeply");
+    bool ok = true;
+    for (int64_t i = 0; ok && binMore(in, fmt, k->n, i, &ok); i++) {
+        if (n == cap) {
+            if (!slice) {
+                char msg[96];
+                snprintf(msg, sizeof msg, "more than %lld items", (long long)t->count);
+                ok = binFail(in, 2, msg);
+                break;
+            }
+            int64_t ncap = cap ? cap * 2 : 8;
+            char *nb = realloc(buf, (size_t)(ncap * et->size));
+            if (!nb) outOfMemory();
+            memset(nb + cap * et->size, 0, (size_t)((ncap - cap) * et->size));
+            buf = nb;
+            cap = ncap;
+        }
+        size_t saved = in->pathLen;
+        pathIndex(in, n);
+        if (slice && et->init) memcpy(buf + n * et->size, et->init, (size_t)et->size);
+        BinTok e;
+        ok = binTok(in, fmt, &e) && binValue(in, fmt, et, buf + n * et->size, &e);
+        in->pathLen = saved;
+        in->path[saved] = 0;
+        n++;
+    }
+    in->depth--;
+    if (t->kind == J_LIST) {
+        JsonList *l = (JsonList *)p;
+        l->buf.ptr = buf;
+        l->buf.len = cap;
+        l->len = n;
+    } else if (slice) {
+        Slice *s = (Slice *)p;
+        s->ptr = buf;
+        s->len = n;
+        if (!n) {
+            free(buf);
+            s->ptr = NULL;
+        }
+    }
+    return ok;
+}
+
+static bool binStruct(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k) {
+    const JsonField *fs = t->items;
+    uint64_t seenBits = 0;
+    unsigned char *seen = t->count <= 64 ? NULL : calloc((size_t)t->count, 1);
+    if (t->count > 64 && !seen) outOfMemory();
+    if (++in->depth > 512) return binFail(in, 1, "the data is nested too deeply");
+    bool ok = true;
+    int64_t next = 0;
+    for (int64_t i = 0; ok && binMore(in, fmt, k->n, i, &ok); i++) {
+        BinTok key, v;
+        if (!binTok(in, fmt, &key)) {
+            ok = false;
+            break;
+        }
+        if (key.kind != BT_STR) {
+            /* a key that isn't text names no field */
+            ok = binSkipTok(in, fmt, &key) && binTok(in, fmt, &v) && binSkipTok(in, fmt, &v);
+            continue;
+        }
+        int64_t f = -1;
+        for (int64_t j = 0; j < t->count; j++) {
+            int64_t x = next + j < t->count ? next + j : next + j - t->count;
+            if (fs[x].nameLen == key.n && binSame(fs[x].name, key.s, key.n)) {
+                f = x;
+                next = x + 1;
+                break;
+            }
+        }
+        if (!binTok(in, fmt, &v)) {
+            ok = false;
+            break;
+        }
+        if (f < 0) {
+            ok = binSkipTok(in, fmt, &v);
+            continue;
+        }
+        size_t saved = in->pathLen;
+        pathField(in, fs[f].name, fs[f].nameLen);
+        ok = binValue(in, fmt, fs[f].type, p + fs[f].offset, &v);
+        in->pathLen = saved;
+        in->path[saved] = 0;
+        if (seen) seen[f] = 1;
+        else seenBits |= 1ull << f;
+    }
+    in->depth--;
+    for (int64_t i = 0; ok && i < t->count; i++) {
+        if ((fs[i].required & 1) && !(seen ? seen[i] : (seenBits >> i) & 1)) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "the required field \"%.*s\" is missing", (int)fs[i].nameLen, fs[i].name);
+            ok = binFail(in, 3, msg);
+        }
+    }
+    free(seen);
+    return ok;
+}
+
+static bool binMap(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k) {
+    const JsonMapInfo *mi = t->items;
+    JsonMap *m = (JsonMap *)p;
+    jsonMapFree(t, p);
+    if (++in->depth > 512) return binFail(in, 1, "the data is nested too deeply");
+    bool ok = true;
+    for (int64_t i = 0; ok && binMore(in, fmt, k->n, i, &ok); i++) {
+        BinTok key, v;
+        if (!binTok(in, fmt, &key)) {
+            ok = false;
+            break;
+        }
+        if (key.kind != BT_STR) {
+            ok = binExpected(in, "a text key", &key);
+            break;
+        }
+        if ((m->len + m->removed + 1) * 4 > m->state.len * 3) jsonMapGrow(m, mi);
+        bool found;
+        unsigned char tag;
+        int64_t at = jsonMapSlot(m, mi, key.s, key.n, &found, &tag);
+        char *e = m->slots.ptr + at * mi->entrySize;
+        char *val = e + mi->valOffset;
+        if (found) {
+            jsonFree(mi->val, val);
+            memset(val, 0, (size_t)mi->val->size);
+        } else {
+            if (m->state.ptr[at] == 1) m->removed--;
+            Slice *ks = (Slice *)e;
+            ks->ptr = malloc(key.n ? (size_t)key.n : 1);
+            if (!ks->ptr) outOfMemory();
+            memcpy(ks->ptr, key.s, (size_t)key.n);
+            ks->len = key.n;
+            if (mi->keySize == 24) ((IrisString *)e)->cap = key.n;
+            m->state.ptr[at] = (char)tag;
+            m->len++;
+        }
+        if (mi->val->init) memcpy(val, mi->val->init, (size_t)mi->val->size);
+        size_t saved = in->pathLen;
+        pathField(in, key.s, key.n);
+        ok = binTok(in, fmt, &v) && binValue(in, fmt, mi->val, val, &v);
+        in->pathLen = saved;
+        in->path[saved] = 0;
+    }
+    in->depth--;
+    return ok;
+}
+
+static bool binValue(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k) {
+    if (k->kind == BT_NIL) return true;   /* nil leaves the value as it is */
+    if (k->kind == BT_BREAK) return binFail(in, 1, "a break outside an array or map");
+    switch (t->kind) {
+    case J_INT: case J_UINT: {
+        if (k->kind != BT_UINT && k->kind != BT_INT) return binExpected(in, "an integer", k);
+        int bits = t->size * 8;
+        char msg[128];
+        if (k->kind == BT_INT) {
+            int64_t v = (int64_t)k->u;
+            if (k->huge || t->kind == J_UINT || (bits < 64 && v < -(1LL << (bits - 1)))) {
+                if (k->huge) snprintf(msg, sizeof msg, "a negative integer doesn't fit in i%d", bits);
+                else snprintf(msg, sizeof msg, "%lld doesn't fit in %c%d", (long long)v, t->kind == J_UINT ? 'u' : 'i', bits);
+                return binFail(in, 4, msg);
+            }
+            writeInt(p, t->size, v);
+        } else {
+            uint64_t v = k->u;
+            uint64_t max = t->kind == J_INT ? (bits == 64 ? (uint64_t)INT64_MAX : (1ULL << (bits - 1)) - 1)
+                                            : (bits == 64 ? UINT64_MAX : (1ULL << bits) - 1);
+            if (v > max) {
+                snprintf(msg, sizeof msg, "%llu doesn't fit in %c%d", (unsigned long long)v, t->kind == J_UINT ? 'u' : 'i', bits);
+                return binFail(in, 4, msg);
+            }
+            writeInt(p, t->size, (int64_t)v);
+        }
+        return true;
+    }
+    case J_FLOAT: {
+        double v = k->kind == BT_FLOAT ? k->f : k->kind == BT_UINT ? (double)k->u : k->kind == BT_INT ? (double)(int64_t)k->u : 0;
+        if (k->kind != BT_FLOAT && k->kind != BT_UINT && k->kind != BT_INT) return binExpected(in, "a number", k);
+        if (t->size == 4) *(float *)p = (float)v;
+        else *(double *)p = v;
+        return true;
+    }
+    case J_BOOL:
+        if (k->kind != BT_BOOL) return binExpected(in, "a bool", k);
+        *(uint8_t *)p = (uint8_t)k->u;
+        return true;
+    case J_STRING: {
+        if (k->kind != BT_STR && k->kind != BT_BIN) return binExpected(in, "text", k);
+        IrisString *s = (IrisString *)p;
+        iris_string_free(s);
+        s->ptr = malloc(k->n ? (size_t)k->n : 1);
+        if (!s->ptr) outOfMemory();
+        memcpy(s->ptr, k->s, (size_t)k->n);
+        s->len = s->cap = k->n;
+        if (!s->cap) s->cap = 1;
+        return true;
+    }
+    case J_ENUM: {
+        const JsonName *names = t->items;
+        if (k->kind == BT_UINT || k->kind == BT_INT) {
+            for (int64_t i = 0; i < t->count; i++) {
+                if (names[i].value == (int64_t)k->u) {
+                    *(int32_t *)p = (int32_t)names[i].value;
+                    return true;
+                }
+            }
+            char msg[96];
+            snprintf(msg, sizeof msg, "%lld isn't one of the enum's values", (long long)(int64_t)k->u);
+            return binFail(in, 2, msg);
+        }
+        if (k->kind != BT_STR) return binExpected(in, "text", k);
+        for (int64_t i = 0; i < t->count; i++) {
+            if (names[i].len == k->n && !memcmp(names[i].name, k->s, (size_t)k->n)) {
+                *(int32_t *)p = (int32_t)names[i].value;
+                return true;
+            }
+        }
+        char msg[160];
+        snprintf(msg, sizeof msg, "\"%.*s\" isn't one of the enum's values", (int)(k->n > 60 ? 60 : k->n), k->s);
+        return binFail(in, 2, msg);
+    }
+    case J_STRUCT:
+        if (k->kind != BT_MAP) return binExpected(in, "a map", k);
+        return binStruct(in, fmt, t, p, k);
+    case J_MAP:
+        if (k->kind != BT_MAP) return binExpected(in, "a map", k);
+        return binMap(in, fmt, t, p, k);
+    case J_SLICE: case J_ARRAY: case J_LIST:
+        if (k->kind != BT_ARRAY) return binExpected(in, "an array", k);
+        return binList(in, fmt, t, p, k);
+    default:
+        return binFail(in, 2, "this kind of value can't be read");
+    }
+}
+
+static int binDecode(int fmt, const JsonType *t, const char *data, int64_t len, char *out) {
+    JsonIn in = {.s = data, .p = data, .end = data + len};
+    BinTok k;
+    bool ok = binTok(&in, fmt, &k) && binValue(&in, fmt, t, out, &k);
+    if (ok && in.p < in.end) ok = binFail(&in, 1, "more bytes after the value");
+    if (!ok) {
+        jsonFree(t, out);
+        return in.code ? in.code : 1;
+    }
+    return 0;
+}
+
+int iris_msgpack_decode(const JsonType *t, const char *data, int64_t len, char *out) {
+    return binDecode(BIN_MSGPACK, t, data, len, out);
+}
+
+int iris_cbor_decode(const JsonType *t, const char *data, int64_t len, char *out) {
+    return binDecode(BIN_CBOR, t, data, len, out);
+}
+
+/* For msgpack.Value and cbor.Value: one item read at *at, 0 or the error's
+   code; and one item written, an array's or map's header without its items. */
+int iris_bin_token(int fmt, const char *data, int64_t len, int64_t *at, BinTok *k) {
+    JsonIn in = {.s = data, .p = data + *at, .end = data + len};
+    if (!binTok(&in, fmt, k)) return in.code ? in.code : 1;
+    k->i = (int64_t)k->u;
+    *at = in.p - data;
+    return 0;
+}
+
+void iris_bin_put(int fmt, IrisString *o, const BinTok *k) {
+    switch (k->kind) {
+    case BT_NIL:
+        *binRoom(o, 1) = (char)(fmt == BIN_MSGPACK ? 0xc0 : 0xf6);
+        o->len++;
+        break;
+    case BT_BOOL:
+        *binRoom(o, 1) = (char)(fmt == BIN_MSGPACK ? (k->u ? 0xc3 : 0xc2) : (k->u ? 0xf5 : 0xf4));
+        o->len++;
+        break;
+    case BT_UINT:
+        if (fmt == BIN_MSGPACK) mpUint(o, k->u);
+        else cbHead(o, 0, k->u);
+        break;
+    case BT_INT:
+        if (fmt == BIN_MSGPACK) mpInt(o, k->i);
+        else if (k->i < 0) cbHead(o, 1, (uint64_t)(-1 - k->i));
+        else cbHead(o, 0, (uint64_t)k->i);
+        break;
+    case BT_FLOAT: {
+        if (fmt == BIN_CBOR) {
+            cbFloat(o, k->f);
+            break;
+        }
+        char *d = binRoom(o, 9);
+        uint64_t bits;
+        memcpy(&bits, &k->f, 8);
+        d[0] = (char)(fmt == BIN_MSGPACK ? 0xcb : 0xfb);
+        putBe(d + 1, bits, 8);
+        o->len += 9;
+        break;
+    }
+    case BT_STR:
+        binText(o, fmt, k->s, k->n);
+        break;
+    case BT_BIN:
+        if (fmt == BIN_MSGPACK) {
+            char *d = binRoom(o, 5);
+            if (k->n <= 0xff) {
+                d[0] = (char)0xc4;
+                d[1] = (char)k->n;
+                o->len += 2;
+            } else if (k->n <= 0xffff) {
+                d[0] = (char)0xc5;
+                putBe(d + 1, (uint64_t)k->n, 2);
+                o->len += 3;
+            } else {
+                d[0] = (char)0xc6;
+                putBe(d + 1, (uint64_t)k->n, 4);
+                o->len += 5;
+            }
+        } else {
+            cbHead(o, 2, (uint64_t)k->n);
+        }
+        if (k->n > 0) {
+            memcpy(binRoom(o, k->n), k->s, (size_t)k->n);
+            o->len += k->n;
+        }
+        break;
+    case BT_ARRAY: case BT_MAP:
+        binCount(o, fmt, k->kind == BT_MAP, (uint64_t)k->n);
+        break;
+    }
+}
+
+/* ------------------------------------------------ protobuf
+
+   A @proto struct is a message. Fields at their zero value are left out
+   (proto3), except items of a list and a map's entries. A list of numbers
+   is packed; a list of text or messages is a field per item. A nested
+   message is written behind a one-byte length, moved along when it turns
+   out longer. Reading takes packed and unpacked lists and skips fields the
+   struct doesn't have.
+
+   Each struct's table is turned once into a plan (PbPlan): one step per
+   field with its tag already encoded, and the steps by field number for
+   reading. Plans are kept for the life of the program. */
+
+enum { PB_ZIGZAG = 1, PB_FIXED = 2 };
+
+/* What a step does with one value. */
+enum { PO_INT, PO_UINT, PO_ZIGZAG, PO_FIXED, PO_BOOL, PO_STRING, PO_MSG };
+/* and with the field: one value, a list of them, or a map to them */
+enum { PF_ONE, PF_LIST, PF_SLICE, PF_MAP };
+
+typedef struct PbPlan PbPlan;
+
+typedef struct {
+    uint8_t op, shape, size, wt;        /* size: of one value, in bytes */
+    uint8_t tagLen, packedTagLen;
+    uint8_t tag[5], packedTag[5];       /* the tag with wt, and with wire type 2 */
+    int32_t num;
+    int64_t offset, esize;              /* esize: of an item, or of a map's entry */
+    const JsonType *type;               /* the field's */
+    const JsonType *elem;               /* the item's or the map value's */
+    const PbPlan *sub;                  /* the plan of a message value */
+    const JsonMapInfo *map;
+} PbStep;
+
+struct PbPlan {
+    const JsonType *t;
+    _Atomic int64_t sizeHint;           /* the room the last encode needed, given at once to the next */
+    int n;
+    PbStep *steps;
+    int8_t byNum[64];                   /* the step of numbers below 64, -1 for none */
+};
+
+static int pbVarintPut(uint8_t *d, uint64_t v) {
+    int n = 0;
+    while (v >= 0x80) {
+        d[n++] = (uint8_t)(v | 0x80);
+        v >>= 7;
+    }
+    d[n++] = (uint8_t)v;
+    return n;
+}
+
+static inline int pbVarintLen(uint64_t v) {
+    return 1 + (63 - __builtin_clzll(v | 1)) / 7;
+}
+
+/* The plans made so far, found by their table. */
+#define PB_PLANS 4096
+static const JsonType *_Atomic pbKeys[PB_PLANS];
+static PbPlan *_Atomic pbVals[PB_PLANS];
+static pthread_mutex_t pbLock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline size_t pbSlot(const JsonType *t) {
+    return (size_t)(((uintptr_t)t >> 3) * 0x9E3779B97F4A7C15ull >> 52) & (PB_PLANS - 1);
+}
+
+static PbPlan *pbFind(const JsonType *t) {
+    for (size_t i = pbSlot(t), k = 0; k < PB_PLANS; i = (i + 1) & (PB_PLANS - 1), k++) {
+        const JsonType *key = atomic_load_explicit(&pbKeys[i], memory_order_acquire);
+        if (key == t) return atomic_load_explicit(&pbVals[i], memory_order_acquire);
+        if (!key) return NULL;
+    }
+    return NULL;
+}
+
+typedef struct {
+    const JsonType **types;
+    PbPlan **plans;
+    int n, cap;
+} PbBuild;
+
+static PbPlan *pbBuild(PbBuild *b, const JsonType *t);
+
+static void pbStepValue(PbBuild *b, PbStep *s, const JsonType *t, int how) {
+    s->size = (uint8_t)(t->kind == J_ENUM ? 4 : t->kind == J_BOOL ? 1 : t->size);
+    switch (t->kind) {
+    case J_INT:
+        s->op = how == PB_ZIGZAG ? PO_ZIGZAG : how == PB_FIXED ? PO_FIXED : PO_INT;
+        break;
+    case J_ENUM:
+        s->op = PO_INT;
+        break;
+    case J_UINT:
+        s->op = how == PB_FIXED ? PO_FIXED : PO_UINT;
+        break;
+    case J_FLOAT:
+        s->op = PO_FIXED;
+        break;
+    case J_BOOL:
+        s->op = PO_BOOL;
+        break;
+    case J_STRING: case J_STR:
+        s->op = PO_STRING;
+        break;
+    default:
+        s->op = PO_MSG;
+        s->sub = pbBuild(b, t);
+        break;
+    }
+    s->wt = s->op == PO_STRING || s->op == PO_MSG ? 2 : s->op == PO_FIXED ? (s->size == 4 ? 5 : 1) : 0;
+}
+
+static PbPlan *pbBuild(PbBuild *b, const JsonType *t) {
+    PbPlan *found = pbFind(t);
+    if (found) return found;
+    for (int i = 0; i < b->n; i++) {
+        if (b->types[i] == t) return b->plans[i];
+    }
+    PbPlan *pl = calloc(1, sizeof *pl);
+    if (!pl) outOfMemory();
+    if (b->n == b->cap) {
+        b->cap = b->cap ? b->cap * 2 : 8;
+        b->types = realloc(b->types, sizeof *b->types * (size_t)b->cap);
+        b->plans = realloc(b->plans, sizeof *b->plans * (size_t)b->cap);
+        if (!b->types || !b->plans) outOfMemory();
+    }
+    b->types[b->n] = t;
+    b->plans[b->n++] = pl;
+    pl->t = t;
+    pl->n = (int)t->count;
+    pl->steps = calloc((size_t)(t->count ? t->count : 1), sizeof *pl->steps);
+    if (!pl->steps) outOfMemory();
+    memset(pl->byNum, -1, sizeof pl->byNum);
+    const JsonField *fs = t->items;
+    for (int i = 0; i < pl->n; i++) {
+        PbStep *s = &pl->steps[i];
+        const JsonType *ft = fs[i].type;
+        int64_t info = fs[i].required >> 8;
+        int how = (int)(info & 3);
+        s->num = (int32_t)(info >> 8);
+        s->offset = fs[i].offset;
+        s->type = ft;
+        if (s->num < 64 && i < 127) pl->byNum[s->num] = (int8_t)i;
+        if (ft->kind == J_SLICE || ft->kind == J_LIST) {
+            s->shape = ft->kind == J_SLICE ? PF_SLICE : PF_LIST;
+            s->elem = ft->items;
+            s->esize = s->elem->size;
+            pbStepValue(b, s, s->elem, how);
+        } else if (ft->kind == J_MAP) {
+            s->shape = PF_MAP;
+            s->map = ft->items;
+            s->elem = s->map->val;
+            s->esize = s->map->entrySize;
+            pbStepValue(b, s, s->elem, how);
+        } else {
+            s->shape = PF_ONE;
+            pbStepValue(b, s, ft, how);
+        }
+        bool packed = s->shape != PF_ONE && s->shape != PF_MAP && s->op != PO_STRING && s->op != PO_MSG;
+        int wt = s->shape == PF_MAP || packed ? 2 : s->wt;
+        s->tagLen = (uint8_t)pbVarintPut(s->tag, (uint64_t)s->num << 3 | (uint64_t)wt);
+        s->packedTagLen = (uint8_t)pbVarintPut(s->packedTag, (uint64_t)s->num << 3 | 2);
+    }
+    return pl;
+}
+
+static const PbPlan *pbPlan(const JsonType *t) {
+    PbPlan *pl = pbFind(t);
+    if (__builtin_expect(pl != NULL, 1)) return pl;
+    pthread_mutex_lock(&pbLock);
+    PbBuild b = {0};
+    pl = pbBuild(&b, t);
+    /* every plan is whole before another thread can see one */
+    for (int i = 0; i < b.n; i++) {
+        size_t at = pbSlot(b.types[i]);
+        for (size_t k = 0; k < PB_PLANS; k++, at = (at + 1) & (PB_PLANS - 1)) {
+            if (!atomic_load_explicit(&pbKeys[at], memory_order_relaxed)) break;
+        }
+        atomic_store_explicit(&pbVals[at], b.plans[i], memory_order_release);
+        atomic_store_explicit(&pbKeys[at], b.types[i], memory_order_release);
+    }
+    free(b.types);
+    free(b.plans);
+    pthread_mutex_unlock(&pbLock);
+    return pl;
+}
+
+/* ---------------- writing */
+
+static void pbWrite(IrisString *o, const PbPlan *pl, const char *p);
+
+static inline uint64_t pbLoad(const PbStep *s, const char *p) {
+    switch (s->size) {
+    case 1: return s->op == PO_INT ? (uint64_t)(int64_t)*(const int8_t *)p : *(const uint8_t *)p;
+    case 2: return s->op == PO_INT ? (uint64_t)(int64_t)*(const int16_t *)p : *(const uint16_t *)p;
+    case 4: {
+        uint32_t v;
+        memcpy(&v, p, 4);
+        if (s->op == PO_INT) return (uint64_t)(int64_t)(int32_t)v;
+        if (s->op == PO_ZIGZAG) return (uint32_t)((v << 1) ^ (uint32_t)((int32_t)v >> 31));
+        return v;
+    }
+    default: {
+        uint64_t v;
+        memcpy(&v, p, 8);
+        if (s->op == PO_ZIGZAG) return (v << 1) ^ (uint64_t)((int64_t)v >> 63);
+        return v;
+    }
+    }
+}
+
+/* One number at d, as the step's wire type says; the bytes written. */
+static inline int pbPutNumber(uint8_t *d, const PbStep *s, uint64_t v) {
+    if (s->wt == 0) return pbVarintPut(d, v);
+    int w = s->wt == 5 ? 4 : 8;
+    for (int i = 0; i < w; i++) d[i] = (uint8_t)(v >> (8 * i));
+    return w;
+}
+
+/* Fills in the length of what was written after at, where one byte was
+   kept for it. */
+static void pbEndLength(IrisString *o, int64_t at) {
+    int64_t n = o->len - at - 1;
+    if (__builtin_expect(n < 128, 1)) {
+        o->ptr[at] = (char)n;
+        return;
+    }
+    int w = pbVarintLen((uint64_t)n);
+    binRoom(o, w - 1);
+    memmove(o->ptr + at + w, o->ptr + at + 1, (size_t)n);
+    o->len += w - 1;
+    pbVarintPut((uint8_t *)o->ptr + at, (uint64_t)n);
+}
+
+static inline void pbPutText(IrisString *o, const uint8_t *tag, int tagLen, const Slice *sv) {
+    uint8_t *d = (uint8_t *)binRoom(o, 16 + sv->len);
+    memcpy(d, tag, 5);
+    int n = tagLen;
+    n += pbVarintPut(d + n, (uint64_t)sv->len);
+    memcpy(d + n, sv->ptr, (size_t)sv->len);
+    o->len += n + sv->len;
+}
+
+static inline void pbPutMessage(IrisString *o, const uint8_t *tag, int tagLen, const PbPlan *sub, const char *p,
+                                bool keepEmpty) {
+    int64_t start = o->len;
+    uint8_t *d = (uint8_t *)binRoom(o, 8);
+    memcpy(d, tag, 5);
+    o->len += tagLen + 1;
+    int64_t at = o->len - 1;
+    pbWrite(o, sub, p);
+    if (!keepEmpty && o->len == at + 1) {
+        o->len = start;         /* a message with nothing set is left out */
+        return;
+    }
+    pbEndLength(o, at);
+}
+
+static void pbWrite(IrisString *o, const PbPlan *pl, const char *base) {
+    const PbStep *s = pl->steps, *end = s + pl->n;
+    for (; s < end; s++) {
+        const char *p = base + s->offset;
+        if (s->shape == PF_ONE) {
+            switch (s->op) {
+            case PO_STRING: {
+                const Slice *sv = (const Slice *)p;
+                if (sv->len) pbPutText(o, s->tag, s->tagLen, sv);
+                break;
+            }
+            case PO_MSG:
+                pbPutMessage(o, s->tag, s->tagLen, s->sub, p, false);
+                break;
+            default: {
+                uint64_t v = pbLoad(s, p);
+                if (!v) break;
+                uint8_t *d = (uint8_t *)binRoom(o, 16);
+                memcpy(d, s->tag, 5);
+                o->len += s->tagLen + pbPutNumber(d + s->tagLen, s, v);
+            }
+            }
+            continue;
+        }
+        if (s->shape == PF_MAP) {
+            const JsonMap *m = (const JsonMap *)p;
+            if (!m->len) continue;
+            uint8_t vtag[5] = {0};
+            int vtagLen = pbVarintPut(vtag, (uint64_t)(2 << 3 | s->wt));
+            static const uint8_t ktag[5] = {1 << 3 | 2};
+            for (int64_t i = 0; i < m->state.len; i++) {
+                if ((unsigned char)m->state.ptr[i] < 0x80) continue;
+                const char *e = m->slots.ptr + i * s->esize;
+                uint8_t *d = (uint8_t *)binRoom(o, 8);
+                memcpy(d, s->tag, 5);
+                o->len += s->tagLen + 1;
+                int64_t at = o->len - 1;
+                pbPutText(o, ktag, 1, (const Slice *)e);
+                const char *v = e + s->map->valOffset;
+                if (s->op == PO_STRING) {
+                    pbPutText(o, vtag, vtagLen, (const Slice *)v);
+                } else if (s->op == PO_MSG) {
+                    pbPutMessage(o, vtag, vtagLen, s->sub, v, true);
+                } else {
+                    d = (uint8_t *)binRoom(o, 16);
+                    memcpy(d, vtag, 5);
+                    o->len += vtagLen + pbPutNumber(d + vtagLen, s, pbLoad(s, v));
+                }
+                pbEndLength(o, at);
+            }
+            continue;
+        }
+        const char *items;
+        int64_t n;
+        if (s->shape == PF_SLICE) {
+            items = ((const Slice *)p)->ptr;
+            n = ((const Slice *)p)->len;
+        } else {
+            items = ((const JsonList *)p)->buf.ptr;
+            n = ((const JsonList *)p)->len;
+        }
+        if (!n) continue;
+        if (s->op == PO_STRING) {
+            for (int64_t i = 0; i < n; i++) pbPutText(o, s->tag, s->tagLen, (const Slice *)(items + i * s->esize));
+            continue;
+        }
+        if (s->op == PO_MSG) {
+            for (int64_t i = 0; i < n; i++) pbPutMessage(o, s->tag, s->tagLen, s->sub, items + i * s->esize, true);
+            continue;
+        }
+        /* packed: the tag, the length, the numbers */
+        int64_t most = n * (s->wt == 0 ? 10 : s->wt == 5 ? 4 : 8);
+        uint8_t *d = (uint8_t *)binRoom(o, 16 + most);
+        memcpy(d, s->tag, 5);
+        int64_t at = s->tagLen, lenAt = at;
+        int64_t body = s->wt == 5 ? n * 4 : s->wt == 1 ? n * 8 : -1;
+        if (body >= 0) {
+            at += pbVarintPut(d + at, (uint64_t)body);
+            for (int64_t i = 0; i < n; i++) at += pbPutNumber(d + at, s, pbLoad(s, items + i * s->esize));
+        } else {
+            at += 1;            /* a byte for the length, moved along when longer */
+            int64_t first = at;
+            for (int64_t i = 0; i < n; i++) at += pbVarintPut(d + at, pbLoad(s, items + i * s->esize));
+            int64_t len = at - first;
+            int w = pbVarintLen((uint64_t)len);
+            if (w > 1) {
+                memmove(d + first + w - 1, d + first, (size_t)len);
+                at += w - 1;
+            }
+            pbVarintPut(d + lenAt, (uint64_t)len);
+        }
+        o->len += at;
+    }
+}
+
+void iris_proto_encode(const JsonType *t, const char *value, IrisString *out) {
+    const PbPlan *pl = pbPlan(t);
+    int64_t hint = atomic_load_explicit(&((PbPlan *)pl)->sizeHint, memory_order_relaxed);
+    binRoom(out, hint > 64 ? (hint < 4096 ? hint : 4096) : 64);
+    pbWrite(out, pl, value);
+    if (out->len > hint) atomic_store_explicit(&((PbPlan *)pl)->sizeHint, out->len + out->len / 4, memory_order_relaxed);
+}
+
+/* ---------------- reading */
+
+typedef struct {
+    JsonIn in;
+    int nest;
+} PbIn;
+
+/* The message of an error; the path of fields to it is put in front as
+   the reader comes back out of them (pbPathOut). */
+static bool pbFail(PbIn *r, const uint8_t *at, int code, const char *what) {
+    if (r->in.code) return false;
+    r->in.code = code;
+    jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s", what);
+    if (jsonMsgLen >= (int64_t)sizeof jsonMsg) jsonMsgLen = sizeof jsonMsg - 1;
+    r->in.pathLen = 0;
+    r->in.p = (const char *)at;
+    return false;
+}
+
+static void pbPathOut(PbIn *r, const char *name, int64_t n) {
+    char *path = r->in.path;
+    size_t have = r->in.pathLen, add = (size_t)n + (have ? 1 : 0);
+    if (have + add >= sizeof r->in.path) return;
+    memmove(path + add, path, have + 1);
+    memcpy(path, name, (size_t)n);
+    if (have) path[n] = '.';
+    r->in.pathLen = have + add;
+}
+
+/* A varint at *pp, which moves past it; NULL when it is cut short or too long. */
+static inline const uint8_t *pbGetVarint(const uint8_t *p, const uint8_t *end, uint64_t *v) {
+    if (__builtin_expect(p < end && *p < 0x80, 1)) {
+        *v = *p;
+        return p + 1;
+    }
+    uint64_t x = 0;
+    for (int sh = 0; sh < 70; sh += 7) {
+        if (p >= end) return NULL;
+        uint8_t b = *p++;
+        x |= (uint64_t)(b & 0x7f) << sh;
+        if (b < 0x80) {
+            *v = x;
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static const uint8_t *pbBadVarint(PbIn *r, const uint8_t *p, const uint8_t *end) {
+    const uint8_t *q = p;
+    while (q < end && *q >= 0x80 && q - p < 10) q++;
+    pbFail(r, p, 1, q >= end ? "the data ends in the middle of a varint" : "a varint longer than 10 bytes");
+    return NULL;
+}
+
+static const uint8_t *pbSkip(PbIn *r, const uint8_t *p, const uint8_t *end, int wt) {
+    uint64_t n;
+    const uint8_t *q;
+    switch (wt) {
+    case 0:
+        q = pbGetVarint(p, end, &n);
+        return q ? q : pbBadVarint(r, p, end);
+    case 1: n = 8; break;
+    case 5: n = 4; break;
+    case 2:
+        q = pbGetVarint(p, end, &n);
+        if (!q) return pbBadVarint(r, p, end);
+        p = q;
+        break;
+    default:
+        pbFail(r, p, 1, "a field of wire type 3 or 4 (groups), which this reader doesn't take");
+        return NULL;
+    }
+    if (n > (uint64_t)(end - p)) {
+        pbFail(r, p, 1, "a field longer than the data left");
+        return NULL;
+    }
+    return p + n;
+}
+
+/* Stores a number into a value of the step's type. */
+static inline __attribute__((always_inline)) bool pbStore(PbIn *r, const uint8_t *at, const PbStep *s, uint64_t v, char *p) {
+    switch (s->op) {
+    case PO_ZIGZAG:
+        v = (v >> 1) ^ (uint64_t)-(int64_t)(v & 1);
+        break;
+    case PO_BOOL:
+        *(uint8_t *)p = v != 0;
+        return true;
+    case PO_INT:
+        if (__builtin_expect(s->size < 4, 0)) {
+            int64_t x = (int64_t)v;
+            int bits = s->size * 8;
+            if (x < -(1LL << (bits - 1)) || x >= (1LL << (bits - 1))) {
+                char msg[96];
+                snprintf(msg, sizeof msg, "%lld doesn't fit in i%d", (long long)x, bits);
+                return pbFail(r, at, 4, msg);
+            }
+        }
+        break;
+    case PO_UINT:
+        if (__builtin_expect(s->size < 4, 0) && v >= (1ULL << (s->size * 8))) {
+            char msg[96];
+            snprintf(msg, sizeof msg, "%llu doesn't fit in u%d", (unsigned long long)v, s->size * 8);
+            return pbFail(r, at, 4, msg);
+        }
+        break;
+    default:
+        break;
+    }
+    switch (s->size) {     /* an int32 keeps the low 32 bits, as protobuf says */
+    case 1: *(uint8_t *)p = (uint8_t)v; break;
+    case 2: {
+        uint16_t x = (uint16_t)v;
+        memcpy(p, &x, 2);
+        break;
+    }
+    case 4: {
+        uint32_t x = (uint32_t)v;
+        memcpy(p, &x, 4);
+        break;
+    }
+    default: memcpy(p, &v, 8); break;
+    }
+    return true;
+}
+
+/* One number with the step's wire type. */
+static inline const uint8_t *pbGetNumber(PbIn *r, const uint8_t *p, const uint8_t *end, const PbStep *s, uint64_t *v) {
+    if (s->wt == 0) {
+        const uint8_t *q = pbGetVarint(p, end, v);
+        return q ? q : pbBadVarint(r, p, end);
+    }
+    int w = s->wt == 5 ? 4 : 8;
+    if (end - p < w) {
+        pbFail(r, p, 1, "the data ends in the middle of a number");
+        return NULL;
+    }
+    if (w == 4) {
+        uint32_t x;
+        memcpy(&x, p, 4);
+        *v = x;
+    } else {
+        memcpy(v, p, 8);
+    }
+    return p + w;
+}
+
+static const uint8_t *pbRead(PbIn *r, const PbPlan *pl, char *base, const uint8_t *p, const uint8_t *end);
+
+/* A length and the bytes after it. */
+static inline const uint8_t *pbGetLength(PbIn *r, const uint8_t *p, const uint8_t *end, uint64_t *n) {
+    const uint8_t *q = pbGetVarint(p, end, n);
+    if (!q) return pbBadVarint(r, p, end);
+    if (*n > (uint64_t)(end - q)) {
+        pbFail(r, p, 1, "a field longer than the data left");
+        return NULL;
+    }
+    return q;
+}
+
+/* One value of the step's type, its wire type checked, into v. */
+static const uint8_t *pbGetValue(PbIn *r, const uint8_t *p, const uint8_t *end, int wt, const PbStep *s, char *v) {
+    if (wt != s->wt) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "wire type %d where %s was expected", wt,
+                 s->op == PO_STRING ? "text" : s->op == PO_MSG ? "a message" : "a number");
+        pbFail(r, p, 2, msg);
+        return NULL;
+    }
+    uint64_t n;
+    if (s->op == PO_STRING) {
+        const uint8_t *q = pbGetLength(r, p, end, &n);
+        if (!q) return NULL;
+        IrisString *str = (IrisString *)v;
+        if (str->cap) free(str->ptr);
+        str->ptr = malloc(n ? (size_t)n : 1);
+        if (!str->ptr) outOfMemory();
+        memcpy(str->ptr, q, (size_t)n);
+        str->len = (int64_t)n;
+        str->cap = n ? (int64_t)n : 1;
+        return q + n;
+    }
+    if (s->op == PO_MSG) {
+        const uint8_t *q = pbGetLength(r, p, end, &n);
+        if (!q) return NULL;
+        if (++r->nest > 100) {
+            pbFail(r, p, 1, "messages nested too deeply");
+            return NULL;
+        }
+        q = pbRead(r, s->sub, v, q, q + n);
+        r->nest--;
+        return q;
+    }
+    const uint8_t *q = pbGetNumber(r, p, end, s, &n);
+    if (!q || !pbStore(r, p, s, n, v)) return NULL;
+    return q;
+}
+
+/* Room for one more item at the end of a slice or List, set to the item's
+   default. A slice's room is its length rounded up to a power of two. */
+static inline __attribute__((always_inline)) char *pbPush(const PbStep *s, char *p, bool init) {
+    char **buf;
+    int64_t *len;
+    if (s->shape == PF_LIST) {
+        JsonList *l = (JsonList *)p;
+        buf = &l->buf.ptr;
+        len = &l->len;
+        if (__builtin_expect(*len == l->buf.len, 0)) {
+            int64_t cap = l->buf.len ? l->buf.len * 2 : 4;
+            char *nb = realloc(*buf, (size_t)(cap * s->esize));
+            if (!nb) outOfMemory();
+            *buf = nb;
+            l->buf.len = cap;
+        }
+    } else {
+        Slice *sl = (Slice *)p;
+        buf = &sl->ptr;
+        len = &sl->len;
+        if (*len == 0 || (*len >= 4 && !(*len & (*len - 1)))) {
+            int64_t cap = *len ? *len * 2 : 4;
+            char *nb = realloc(*buf, (size_t)(cap * s->esize));
+            if (!nb) outOfMemory();
+            *buf = nb;
+        }
+    }
+    char *item = *buf + *len * s->esize;
+    if (!init) {
+        /* a number, stored whole next */
+    } else if (s->elem->init) {
+        memcpy(item, s->elem->init, (size_t)s->esize);
+    } else {
+        memset(item, 0, (size_t)s->esize);
+    }
+    (*len)++;
+    return item;
+}
+
+static const uint8_t *pbGetEntry(PbIn *r, const PbStep *s, char *p, const uint8_t *q, const uint8_t *end) {
+    const JsonMapInfo *mi = s->map;
+    JsonMap *m = (JsonMap *)p;
+    const uint8_t *start = q, *key = (const uint8_t *)"";
+    uint64_t keyLen = 0, tag;
+    /* the key first, wherever it is */
+    while (q < end) {
+        const uint8_t *t = pbGetVarint(q, end, &tag);
+        if (!t) return pbBadVarint(r, q, end);
+        if (tag == (1 << 3 | 2)) {
+            q = pbGetLength(r, t, end, &keyLen);
+            if (!q) return NULL;
+            key = q;
+            q += keyLen;
+        } else if (!(q = pbSkip(r, t, end, (int)(tag & 7)))) {
+            return NULL;
+        }
+    }
+    if ((m->len + m->removed + 1) * 4 > m->state.len * 3) jsonMapGrow(m, mi);
+    bool found;
+    unsigned char tg;
+    int64_t at = jsonMapSlot(m, mi, (const char *)key, (int64_t)keyLen, &found, &tg);
+    char *e = m->slots.ptr + at * mi->entrySize;
+    char *val = e + mi->valOffset;
+    if (found) {
+        jsonFree(mi->val, val);
+    } else {
+        if (m->state.ptr[at] == 1) m->removed--;
+        Slice *ks = (Slice *)e;
+        ks->ptr = malloc(keyLen ? (size_t)keyLen : 1);
+        if (!ks->ptr) outOfMemory();
+        memcpy(ks->ptr, key, (size_t)keyLen);
+        ks->len = (int64_t)keyLen;
+        if (mi->keySize == 24) ((IrisString *)e)->cap = (int64_t)keyLen;
+        m->state.ptr[at] = (char)tg;
+        m->len++;
+    }
+    if (mi->val->init) memcpy(val, mi->val->init, (size_t)mi->val->size);
+    else memset(val, 0, (size_t)mi->val->size);
+    q = start;
+    while (q < end) {
+        const uint8_t *t = pbGetVarint(q, end, &tag);
+        if (!t) return pbBadVarint(r, q, end);
+        q = tag >> 3 == 2 ? pbGetValue(r, t, end, (int)(tag & 7), s, val) : pbSkip(r, t, end, (int)(tag & 7));
+        if (!q) return NULL;
+    }
+    return q;
+}
+
+static const uint8_t *pbField(PbIn *r, const PbStep *s, char *p, const uint8_t *q, const uint8_t *end, int wt) {
+    if (s->shape == PF_ONE) return pbGetValue(r, q, end, wt, s, p);
+    if (s->shape == PF_MAP) {
+        uint64_t n;
+        if (wt != 2) return pbGetValue(r, q, end, wt, &(PbStep){.op = PO_MSG, .wt = 2}, p);
+        const uint8_t *b = pbGetLength(r, q, end, &n);
+        if (!b) return NULL;
+        return pbGetEntry(r, s, p, b, b + n) ? b + n : NULL;
+    }
+    if (wt == 2 && s->wt != 2) {
+        /* packed numbers */
+        uint64_t n;
+        const uint8_t *b = pbGetLength(r, q, end, &n);
+        if (!b) return NULL;
+        const uint8_t *pend = b + n;
+        while (b < pend) {
+            uint64_t v;
+            const uint8_t *at = b;
+            b = pbGetNumber(r, b, pend, s, &v);
+            if (!b || !pbStore(r, at, s, v, pbPush(s, p, false))) return NULL;
+        }
+        return pend;
+    }
+    return pbGetValue(r, q, end, wt, s, pbPush(s, p, true));
+}
+
+static const uint8_t *pbRead(PbIn *r, const PbPlan *pl, char *base, const uint8_t *p, const uint8_t *end) {
+    while (p < end) {
+        uint64_t tag;
+        const uint8_t *q = pbGetVarint(p, end, &tag);
+        if (!q) return pbBadVarint(r, p, end);
+        uint64_t num = tag >> 3;
+        int wt = (int)(tag & 7);
+        int i = -1;
+        if (num < 64) {
+            i = pl->byNum[num];
+        } else {
+            for (int k = 0; k < pl->n; k++) {
+                if ((uint64_t)pl->steps[k].num == num) i = k;
+            }
+        }
+        if (i < 0) {
+            if (num == 0) {
+                pbFail(r, p, 1, "a field numbered 0");
+                return NULL;
+            }
+            if (!(p = pbSkip(r, q, end, wt))) return NULL;
+            continue;
+        }
+        const PbStep *s = &pl->steps[i];
+        char *v = base + s->offset;
+        if (s->shape == PF_ONE && wt == s->wt) {
+            /* the usual cases in line: text, and a varint of one byte */
+            if (s->op == PO_STRING && q < end && *q < 0x80 && *q <= end - q - 1) {
+                int64_t n = *q++;
+                IrisString *str = (IrisString *)v;
+                if (str->cap) free(str->ptr);
+                str->ptr = malloc(n ? (size_t)n : 1);
+                if (!str->ptr) outOfMemory();
+                memcpy(str->ptr, q, (size_t)n);
+                str->len = n;
+                str->cap = n ? n : 1;
+                p = q + n;
+                continue;
+            }
+            if (wt == 0 && q < end && *q < 0x80 && (s->op == PO_INT || s->op == PO_UINT || s->op == PO_BOOL) &&
+                (s->size >= 4 || s->op == PO_BOOL)) {
+                uint64_t x = *q;
+                if (s->op == PO_BOOL) *(uint8_t *)v = x != 0;
+                else if (s->size == 4) memcpy(v, &(uint32_t){(uint32_t)x}, 4);
+                else memcpy(v, &x, 8);
+                p = q + 1;
+                continue;
+            }
+        }
+        p = pbField(r, s, v, q, end, wt);
+        if (!p) {
+            const JsonField *f = &((const JsonField *)pl->t->items)[i];
+            pbPathOut(r, f->name, f->nameLen);
+            return NULL;
+        }
+    }
+    return p;
+}
+
+int iris_proto_decode(const JsonType *t, const char *data, int64_t len, char *out) {
+    PbIn r = {.in = {.s = data, .p = data, .end = data + len}};
+    const uint8_t *p = (const uint8_t *)data;
+    if (!pbRead(&r, pbPlan(t), out, p, p + len)) {
+        jsonFree(t, out);
+        char what[512];
+        snprintf(what, sizeof what, "%.*s", (int)jsonMsgLen, jsonMsg);
+        if (r.in.pathLen) {
+            jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "%s: %s", r.in.path, what);
+        } else {
+            jsonMsgLen = snprintf(jsonMsg, sizeof jsonMsg, "byte %lld: %s", (long long)(r.in.p - data), what);
+        }
+        if (jsonMsgLen >= (int64_t)sizeof jsonMsg) jsonMsgLen = sizeof jsonMsg - 1;
+        return r.in.code ? r.in.code : 1;
+    }
+    return 0;
+}
+
+/* proto.encodeTo: the same, for a String that may hold bytes already. */
+void iris_proto_encode_to(const JsonType *t, const char *value, IrisString *out) {
+    pbWrite(out, pbPlan(t), value);
 }

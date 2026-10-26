@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MessagePack and CBOR - Iris</title>
+<meta name="description" content="MessagePack and CBOR are binary forms of the values JSON has: numbers, text, bools, null, arrays and maps. A message takes fewer bytes than its JSON and is faster to read. The msgpack and cbor modules work the same way. Each reads and writes @json structs, and each has a Value for data of any shape.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="25-protobuf-and-grpc.html"><span class="num">25</span>Protocol Buffers and gRPC</a></li><li><a href="26-msgpack-and-cbor.html" class="on"><span class="num">26</span>MessagePack and CBOR</a></li></ol></aside>
+  <article class="prose">
+<h1>MessagePack and CBOR</h1>
+<p class="lede">MessagePack and CBOR are binary forms of the values JSON has: numbers, text, bools, null, arrays and maps. A message takes fewer bytes than its JSON and is faster to read. The <code>msgpack</code> and <code>cbor</code> modules work the same way. Each reads and writes <code>@json</code> structs, and each has a <code>Value</code> for data of any shape.</p>
+<h2 id="structs"><a href="#structs">Structs</a></h2>
+<p><code>msgpack.encode(v)</code> turns a <code>@json</code> struct into bytes, and <code>msgpack.decode(T, bytes)</code> reads it back. A struct becomes a map from its field names to their values, with the names <code>@json</code> gives them, as in <a href="01-json.html">JSON</a>. An enum is written as the name of its value, a <code>List</code> or slice as an array, and a <code>Map</code> with text keys as a map:</p>
+<pre class="code run"><code><span class="k">import</span> hex, msgpack
+
+<span class="k">enum</span> <span class="t">Level</span> { low, high }
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Reading</span> {
+    <span class="t">String</span> sensor
+    <span class="t">f64</span> value
+    <span class="t">Level</span> level
+    <span class="t">List</span>[<span class="t">i64</span>] samples
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    r := <span class="t">Reading</span>{sensor: <span class="s">&quot;t1&quot;</span>.<span class="f">copy</span>(), value: <span class="n">21.5</span>, level: .high}
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.samples.<span class="f">push</span>(<span class="n">3</span>)
+    r.samples.<span class="f">push</span>(-<span class="n">4</span>)
+
+    <span class="k">scoped</span> <span class="t">String</span> bytes = msgpack.<span class="f">encode</span>(r)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes.len<span class="e">}</span><span class="s"> bytes: </span><span class="e">{</span>hex.<span class="f">encode</span>(bytes[<span class="n">0</span>:<span class="n">10</span>])<span class="e">}</span><span class="s">...&quot;</span>)
+
+    <span class="k">scoped</span> back := <span class="k">try</span> msgpack.<span class="f">decode</span>(<span class="t">Reading</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.sensor<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.value<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.level<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.samples.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>48 bytes: 84a673656e736f72a274...
+t1 21.5 high -4</code></pre>
+<p>Integers take the fewest bytes that hold them. Reading takes an integer of any size, and fails with <code>range</code> when it doesn't fit the field. A field the bytes don't have keeps its default, and keys the struct doesn't have are skipped. A nil value leaves the field as it is.</p>
+<p><code>cbor.encode</code> and <code>cbor.decode</code> do the same in CBOR (RFC 8949). A float is written in the shortest of its three sizes that keeps its value, as the RFC prefers, so 1.5 takes three bytes. Reading also takes arrays, maps, text and bytes of indefinite length, and skips tags:</p>
+<pre class="code run"><code><span class="k">import</span> cbor, hex
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Point</span> {
+    <span class="t">i32</span> x
+    <span class="t">i32</span> y
+    <span class="t">f64</span> weight
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> <span class="t">String</span> bytes = cbor.<span class="f">encode</span>(<span class="t">Point</span>{x: <span class="n">1</span>, y: -<span class="n">2</span>, weight: <span class="n">1.5</span>})
+    <span class="f">print</span>(hex.<span class="f">encode</span>(bytes))
+
+    p := <span class="k">try</span> cbor.<span class="f">decode</span>(<span class="t">Point</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>p.x<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.y<span class="e">}</span><span class="s"> </span><span class="e">{</span>p.weight<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>a361780161792166776569676874f93e00
+1 -2 1.5</code></pre>
+<h2 id="any-data"><a href="#any-data">Any data</a></h2>
+<p><code>msgpack.parse(bytes)</code> reads any message into a <code>msgpack.Value</code>. Its <code>kind</code> says what it holds: <code>nil</code>, <code>boolean</code>, <code>integer</code>, <code>unsigned</code> (above the largest <code>i64</code>), <code>float</code>, <code>text</code>, <code>bytes</code>, <code>array</code> or <code>map</code>. The data is in <code>boolean</code>, <code>int</code>, <code>uint</code>, <code>float</code> or <code>text</code>. <code>get</code> gives the value of a text key in a map, or <code>null</code>. <code>at</code> gives the value at a place, and <code>len</code> the number of values:</p>
+<pre class="code run"><code><span class="k">import</span> msgpack
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> doc := msgpack.<span class="f">map</span>()
+    doc.<span class="f">set</span>(<span class="s">&quot;name&quot;</span>, msgpack.<span class="f">text</span>(<span class="s">&quot;edge&quot;</span>))
+    ports := msgpack.<span class="f">array</span>()
+    ports.<span class="f">push</span>(msgpack.<span class="f">integer</span>(<span class="n">80</span>))
+    ports.<span class="f">push</span>(msgpack.<span class="f">integer</span>(<span class="n">443</span>))
+    doc.<span class="f">set</span>(<span class="s">&quot;ports&quot;</span>, ports)
+
+    <span class="k">scoped</span> <span class="t">String</span> bytes = msgpack.<span class="f">write</span>(doc)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>bytes.len<span class="e">}</span><span class="s"> bytes&quot;</span>)
+
+    <span class="k">scoped</span> back := <span class="k">try</span> msgpack.<span class="f">parse</span>(bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.<span class="f">get</span>(<span class="s">&quot;name&quot;</span>).text<span class="e">}</span><span class="s">, </span><span class="e">{</span>back.<span class="f">get</span>(<span class="s">&quot;ports&quot;</span>).<span class="f">len</span>()<span class="e">}</span><span class="s"> ports, the last </span><span class="e">{</span>back.<span class="f">get</span>(<span class="s">&quot;ports&quot;</span>).<span class="f">at</span>(<span class="n">1</span>).int<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;no user: </span><span class="e">{</span>back.<span class="f">get</span>(<span class="s">&quot;user&quot;</span>) == <span class="k">null</span><span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>22 bytes
+edge, 2 ports, the last 443
+no user: true</code></pre>
+<p><code>msgpack.nil()</code>, <code>boolean(b)</code>, <code>integer(n)</code>, <code>float(f)</code>, <code>text(s)</code>, <code>bytes(b)</code>, <code>array()</code> and <code>map()</code> make values. <code>set</code> and <code>push</code> take the value they are given, and <code>free</code> gives back a value and everything in it. <code>cbor.Value</code> has the same functions.</p>
+<p>A map may have keys that aren't text. They are in the value's <code>keys</code>, at the same place as their values in <code>items</code>.</p>
+<h2 id="errors"><a href="#errors">Errors</a></h2>
+<p>Bytes that aren't a whole message fail with <code>syntax</code>, and the message gives the byte where reading stopped. Filling a struct can also fail with <code>wrongType</code>, <code>missing</code> (a field with <code>@json(required)</code>) and <code>range</code>, with the path of the field:</p>
+<pre class="code run"><code><span class="k">import</span> msgpack
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Port</span> {
+    <span class="t">u8</span> number
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> m := msgpack.<span class="f">map</span>()
+    m.<span class="f">set</span>(<span class="s">&quot;number&quot;</span>, msgpack.<span class="f">integer</span>(<span class="n">300</span>))
+    <span class="k">scoped</span> <span class="t">String</span> bytes = msgpack.<span class="f">write</span>(m)
+
+    p := msgpack.<span class="f">decode</span>(<span class="t">Port</span>, bytes) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Port</span>{}
+    }
+    p2 := msgpack.<span class="f">decode</span>(<span class="t">Port</span>, bytes[<span class="n">0</span>:<span class="n">3</span>]) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Port</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>MsgpackError.range: number: 300 doesn&#x27;t fit in u8
+MsgpackError.syntax: byte 2: the data ends in the middle of a value</code></pre>
+    <nav class="pager"><a class="prev" href="25-protobuf-and-grpc.html"><span>Previous</span>Protocol Buffers and gRPC</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#structs">Structs</a></li><li><a href="#any-data">Any data</a></li><li><a href="#errors">Errors</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+// Protocol Buffers for @proto structs. A @proto struct is a message: each
+// field has a number, from @proto(N) or the one after the field before
+// it. proto.encode and proto.decode are built into the compiler, which
+// writes a table for each struct they see.
+//
+// Fields map to protobuf types this way: i32 int32, i64 int64, u32
+// uint32, u64 uint64, @proto(zigzag) sint32 and sint64, @proto(fixed)
+// fixed32, fixed64, sfixed32 and sfixed64, f32 float, f64 double, bool,
+// enums, String string and bytes, a @proto struct a message, a slice or
+// List a repeated field (packed for numbers), and a Map with text keys a
+// map.
+
+// What reading fails with: syntax for bytes that aren't protobuf,
+// wrongType for a field sent with another wire type than its own, range
+// for a number too big for its field.
+pub enum ProtoError { syntax, wrongType, missing, range }
+
+// Turns a @proto struct into protobuf bytes: proto.encode(msg).
+@builtin
+pub void encode()
+
+// Reads a @proto struct from protobuf bytes: proto.decode(Point, bytes).
+@builtin
+pub void decode()
+
+@extern("iris_proto_decode")
+i32 rawDecode(u8 *table, u8 *data, i64 len, u8 *out)
+
+@extern("iris_proto_encode_to")
+void rawEncode(u8 *table, u8 *value, String *out)
+
+@extern("iris_json_message_ptr")
+u8 *messagePtr()
+
+@extern("iris_json_message_len")
+i64 messageLen()
+
+ProtoError codeOf(i32 code) => if code == 2 { ProtoError.wrongType } else if code == 3 { ProtoError.missing } else if code == 4 { ProtoError.range } else { ProtoError.syntax }
+
+// What proto.decode calls.
+pub !void decodeInto(u8 *table, str data, u8 *out) {
+    code := rawDecode(table, data.ptr, data.len, out)
+    if code != 0 {
+        return error(codeOf(code), "{messagePtr()[0:messageLen()]}")
+    }
+}
+
+@builtin
+void tableOf()
+
+// Adds the protobuf bytes of msg, a @proto struct, to the end of out.
+pub void encodeTo[T](String *out, T *msg) {
+    rawEncode(tableOf(msg), msg, out)
+}
+
+// Reads a @proto struct from data into msg, which keeps the fields data
+// doesn't have. Lists are added to and messages merged, as protobuf does.
+pub !void decodeTo[T](str data, T *msg) {
+    try decodeInto(tableOf(msg), data, msg)
+}

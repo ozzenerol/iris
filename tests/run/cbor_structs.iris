@@ -1,0 +1,50 @@
+// expect: a4617824617919 03e8656c6162656c6161646b696e64626f6e
+// expect: -5 1000 a on
+// expect: 3 -5
+// expect: kind: "maybe" isn't one of the enum's values
+// expect: x: expected an integer, found text
+
+import cbor, hex
+
+enum Kind { off, on }
+
+@json
+struct Point {
+    i32 x
+    i32 y
+    String label
+    Kind kind
+}
+
+void main() {
+    p := Point{x: -5, y: 1000, label: "a".copy(), kind: .on}
+    defer p.free()
+    scoped String b = cbor.encode(p)
+    s := hex.encode(b)
+    print("{s[0:14]} {s[14:]}")
+    scoped back := cbor.decode(Point, b) catch e {
+        panic(e.message)
+    }
+    print("{back.x} {back.y} {back.label} {back.kind}")
+    scoped list := cbor.decode(List[Point], "\x81\xa1\x61x\x24") catch e {
+        panic(e.message)
+    }
+    print("{list.len + 2} {list.at(0).x}")
+    scoped v := cbor.parse(b) catch e {
+        panic(e.message)
+    }
+    v.set("kind", cbor.text("maybe"))
+    scoped String w = cbor.write(v)
+    bad := cbor.decode(Point, w) catch e {
+        print(e.message)
+        Point{}
+    }
+    bad.free()
+    v.set("x", cbor.text("one"))
+    scoped String w2 = cbor.write(v)
+    bad2 := cbor.decode(Point, w2) catch e {
+        print(e.message)
+        Point{}
+    }
+    bad2.free()
+}

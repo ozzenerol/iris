@@ -55,6 +55,9 @@ LIB_ROWS = [
     ("yaml-parse", "a 6.7 MB YAML list, 3 times", "serde_yaml", "`gopkg.in/yaml.v3`"),
     ("wire", "100,000 binary messages read and written, 30 times", "by hand, `from_be_bytes`", "`encoding/binary`"),
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
+    ("protobuf", "100,000 orders read and written as protobuf, 20 times", "prost", "by hand, `protowire`"),
+    ("msgpack", "100,000 orders read and written as MessagePack, 20 times", "rmp-serde", "vmihailenco/msgpack"),
+    ("cbor", "100,000 orders read and written as CBOR, 20 times", "ciborium", "fxamacker/cbor"),
 ]
 
 
