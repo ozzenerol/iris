@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protocol Buffers and gRPC - Iris</title>
+<meta name="description" content="Protocol Buffers (protobuf) is a binary message format with a number for each field. gRPC sends protobuf messages over HTTP/2 to call a function on a server. The proto module reads and writes messages from structs, and the grpc module is a client and a server.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="25-protobuf-and-grpc.html" class="on"><span class="num">25</span>Protocol Buffers and gRPC</a></li><li><a href="26-msgpack-and-cbor.html"><span class="num">26</span>MessagePack and CBOR</a></li></ol></aside>
+  <article class="prose">
+<h1>Protocol Buffers and gRPC</h1>
+<p class="lede">Protocol Buffers (protobuf) is a binary message format with a number for each field. gRPC sends protobuf messages over HTTP/2 to call a function on a server. The <code>proto</code> module reads and writes messages from structs, and the <code>grpc</code> module is a client and a server.</p>
+<h2 id="messages"><a href="#messages">Messages</a></h2>
+<p>A struct marked <code>@proto</code> is a message. Each field has a number. A field takes the number after the field before it, starting at 1, or its own from <code>@proto(N)</code>. Numbers are what goes on the wire, so a field keeps its number when fields are added or moved:</p>
+<pre class="code run"><code><span class="k">import</span> hex, proto
+
+<span class="k">enum</span> <span class="t">Status</span> { active, blocked }
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">Item</span> {
+    <span class="t">String</span> name
+    <span class="t">i32</span> qty
+}
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">Order</span> {
+    <span class="t">i64</span> id
+    <span class="t">String</span> customer
+    <span class="t">List</span>[<span class="t">Item</span>] items
+    <span class="a">@proto</span>(<span class="n">8</span>) <span class="t">Status</span> status
+    <span class="a">@proto</span>(<span class="n">9</span>) <span class="t">List</span>[<span class="t">i32</span>] codes
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    o := <span class="t">Order</span>{id: <span class="n">150</span>, customer: <span class="s">&quot;Ana&quot;</span>.<span class="f">copy</span>(), status: .blocked}
+    <span class="k">defer</span> o.<span class="f">free</span>()
+    o.items.<span class="f">push</span>(<span class="t">Item</span>{name: <span class="s">&quot;cable&quot;</span>.<span class="f">copy</span>(), qty: <span class="n">2</span>})
+    o.codes.<span class="f">push</span>(<span class="n">3</span>)
+    o.codes.<span class="f">push</span>(<span class="n">270</span>)
+
+    <span class="k">scoped</span> <span class="t">String</span> bytes = proto.<span class="f">encode</span>(o)
+    <span class="f">print</span>(hex.<span class="f">encode</span>(bytes))
+
+    <span class="k">scoped</span> back := <span class="k">try</span> proto.<span class="f">decode</span>(<span class="t">Order</span>, bytes)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.id<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.customer<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.items.<span class="f">at</span>(<span class="n">0</span>).name<span class="e">}</span><span class="s"> x</span><span class="e">{</span>back.items.<span class="f">at</span>(<span class="n">0</span>).qty<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>back.codes.<span class="f">at</span>(<span class="n">1</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>0896011203416e611a090a056361626c65100240014a03038e02
+150 Ana cable x2 blocked 270</code></pre>
+<p>A field at its zero value (0, false, empty text, an empty list, a message with nothing set) isn't written, as proto3 does. Reading skips fields the struct doesn't have, so a newer sender can add fields an older reader doesn't know.</p>
+<h2 id="field-types"><a href="#field-types">Field types</a></h2>
+<p>Each Iris type has a protobuf type:</p>
+<div class="table"><table><thead><tr><th>Iris</th><th>protobuf</th></tr></thead><tbody><tr><td><code>i32</code>, <code>i64</code></td><td><code>int32</code>, <code>int64</code></td></tr><tr><td><code>u32</code>, <code>u64</code></td><td><code>uint32</code>, <code>uint64</code></td></tr><tr><td><code>@proto(zigzag) i32</code>, <code>i64</code></td><td><code>sint32</code>, <code>sint64</code></td></tr><tr><td><code>@proto(fixed) u32</code>, <code>u64</code>, <code>i32</code>, <code>i64</code></td><td><code>fixed32</code>, <code>fixed64</code>, <code>sfixed32</code>, <code>sfixed64</code></td></tr><tr><td><code>f32</code>, <code>f64</code></td><td><code>float</code>, <code>double</code></td></tr><tr><td><code>bool</code></td><td><code>bool</code></td></tr><tr><td>an enum</td><td>an enum, by its values' numbers</td></tr><tr><td><code>String</code></td><td><code>string</code> and <code>bytes</code></td></tr><tr><td>a <code>@proto</code> struct</td><td>a message</td></tr><tr><td>a slice or <code>List</code></td><td><code>repeated</code>, packed for numbers</td></tr><tr><td><code>Map[String, V]</code></td><td><code>map&lt;string, V&gt;</code></td></tr></tbody></table></div>
+<p>zigzag suits numbers that are often negative: -1 takes one byte instead of ten. A setting goes with a number in the same <code>@proto</code>: <code>@proto(4, zigzag)</code>. A repeated number is read packed or one field per value, whichever the sender used.</p>
+<p><code>proto.encodeTo(&amp;out, &amp;msg)</code> adds a message's bytes to a <code>String</code> that may hold others already. <code>proto.decodeTo(bytes, &amp;msg)</code> reads into a message that has values: lists grow and messages merge, as protobuf says for two parts of one message.</p>
+<p>A <code>@proto</code> struct is also a <code>@json</code> struct, so <code>json.encode</code> writes it as JSON with its field names.</p>
+<h2 id="errors"><a href="#errors">Errors</a></h2>
+<p>Bytes that aren't protobuf fail with <code>ProtoError.syntax</code>. A field sent with another wire type than the struct's fails with <code>wrongType</code>, and a number too big for an <code>i8</code>, <code>i16</code>, <code>u8</code> or <code>u16</code> field with <code>range</code>. The message names the field:</p>
+<pre class="code run"><code><span class="k">import</span> proto
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">Port</span> {
+    <span class="t">u16</span> number
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    p := proto.<span class="f">decode</span>(<span class="t">Port</span>, <span class="s">&quot;</span><span class="e">\x08</span><span class="e">\x80</span><span class="e">\x80</span><span class="e">\x04</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Port</span>{}
+    }
+    p2 := proto.<span class="f">decode</span>(<span class="t">Port</span>, <span class="s">&quot;</span><span class="e">\x0a</span><span class="e">\x01</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+        <span class="t">Port</span>{}
+    }
+}</code></pre>
+<pre class="out"><code>ProtoError.range: number: 65536 doesn&#x27;t fit in u16
+ProtoError.wrongType: number: wire type 2 where a number was expected</code></pre>
+<h2 id="a-grpc-server-and-client"><a href="#a-grpc-server-and-client">A gRPC server and client</a></h2>
+<p>A gRPC method has a path, <code>/package.Service/Method</code>, and takes and returns <code>@proto</code> messages. <code>Server.unary</code> adds a method that gets one message and sends one back. The handler reads the request with <code>call.recv</code> and answers with <code>call.send</code>. On the other side, <code>Client.call</code> sends a request and fills in the reply:</p>
+<pre class="code run"><code><span class="k">import</span> grpc, net
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">HelloRequest</span> {
+    <span class="t">String</span> name
+}
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">HelloReply</span> {
+    <span class="t">String</span> message
+}
+
+!<span class="t">void</span> <span class="f">sayHello</span>(grpc.<span class="t">Call</span> *call) {
+    <span class="k">scoped</span> <span class="t">HelloRequest</span> req
+    _ = <span class="k">try</span> call.<span class="f">recv</span>(&amp;req)
+    <span class="k">if</span> req.name.len == <span class="n">0</span> {
+        <span class="k">return</span> <span class="f">error</span>(grpc.<span class="t">Code</span>.invalidArgument, <span class="s">&quot;a name is needed&quot;</span>)
+    }
+    <span class="k">scoped</span> reply := <span class="t">HelloReply</span>{message: <span class="f">format</span>(<span class="s">&quot;Hello </span><span class="e">{</span>req.name<span class="e">}</span><span class="s">&quot;</span>)}
+    <span class="k">try</span> call.<span class="f">send</span>(&amp;reply)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(grpc.<span class="t">Server</span> *s, net.<span class="t">Listener</span> ln) {
+    s.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    grpc.<span class="t">Server</span> s
+    s.<span class="f">unary</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, sayHello)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;s, ln)
+
+    <span class="k">scoped</span> grpc.<span class="t">Client</span> c
+    <span class="k">scoped</span> <span class="t">String</span> target = <span class="f">format</span>(<span class="s">&quot;127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">dial</span>(target)
+
+    <span class="k">scoped</span> req := <span class="t">HelloRequest</span>{name: <span class="s">&quot;Ana&quot;</span>.<span class="f">copy</span>()}
+    <span class="k">scoped</span> <span class="t">HelloReply</span> reply
+    <span class="k">try</span> c.<span class="f">call</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, &amp;req, &amp;reply)
+    <span class="f">print</span>(reply.message)
+
+    <span class="k">scoped</span> <span class="t">HelloRequest</span> empty
+    c.<span class="f">call</span>(<span class="s">&quot;/helloworld.Greeter/SayHello&quot;</span>, &amp;empty, &amp;reply) <span class="k">catch</span> e {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.code<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.message<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    s.<span class="f">shutdown</span>(<span class="n">1s</span>)
+}</code></pre>
+<pre class="out"><code>Hello Ana
+Code.invalidArgument: a name is needed</code></pre>
+<p>An error a handler returns ends the call. Its code goes to the client when it is a <code>grpc.Code</code>, and <code>unknown</code> when it is another error. The client gets the same code and message back as its error. A path the server doesn't have fails with <code>Code.unimplemented</code>.</p>
+<p><code>Server.serve(port)</code> serves on every core and <code>Server.serveTls(port, certFile, keyFile)</code> over TLS. A client dials <code>&quot;host:port&quot;</code> for a plain connection and <code>&quot;https://host:port&quot;</code> for TLS. One client makes any number of calls at once, from any number of tasks, on one HTTP/2 connection.</p>
+<h2 id="streams"><a href="#streams">Streams</a></h2>
+<p><code>Server.stream</code> adds a method whose messages go each way as they are sent. The same handler does server streaming, client streaming and streams both ways. <code>call.recv</code> returns false when the client has sent its last message:</p>
+<pre class="code run"><code><span class="k">import</span> grpc, net
+
+<span class="a">@proto</span>
+<span class="k">struct</span> <span class="t">Number</span> {
+    <span class="t">i64</span> n
+}
+
+!<span class="t">void</span> <span class="f">running</span>(grpc.<span class="t">Call</span> *call) {
+    <span class="k">scoped</span> <span class="t">Number</span> next
+    <span class="t">i64</span> total = <span class="n">0</span>
+    <span class="k">for</span> <span class="k">try</span> call.<span class="f">recv</span>(&amp;next) {
+        total += next.n
+        <span class="k">scoped</span> out := <span class="t">Number</span>{n: total}
+        <span class="k">try</span> call.<span class="f">send</span>(&amp;out)
+    }
+}
+
+<span class="t">void</span> <span class="f">serve</span>(grpc.<span class="t">Server</span> *s, net.<span class="t">Listener</span> ln) {
+    s.<span class="f">serveOn</span>(ln) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    grpc.<span class="t">Server</span> s
+    s.<span class="f">stream</span>(<span class="s">&quot;/sum.Adder/Running&quot;</span>, running)
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;s, ln)
+
+    <span class="k">scoped</span> grpc.<span class="t">Client</span> c
+    <span class="k">scoped</span> <span class="t">String</span> target = <span class="f">format</span>(<span class="s">&quot;127.0.0.1:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">dial</span>(target)
+
+    <span class="k">scoped</span> st := <span class="k">try</span> c.<span class="f">open</span>(<span class="s">&quot;/sum.Adder/Running&quot;</span>)
+    <span class="k">scoped</span> <span class="t">Number</span> out
+    <span class="k">for</span> n <span class="k">in</span> [<span class="n">5</span>, <span class="n">10</span>, <span class="n">20</span>] {
+        <span class="k">scoped</span> m := <span class="t">Number</span>{n: n}
+        <span class="k">try</span> st.<span class="f">send</span>(&amp;m)
+        _ = <span class="k">try</span> st.<span class="f">recv</span>(&amp;out)
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>out.n<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    <span class="k">try</span> st.<span class="f">closeSend</span>()
+    more := <span class="k">try</span> st.<span class="f">recv</span>(&amp;out)
+    <span class="f">print</span>(<span class="s">&quot;more: </span><span class="e">{</span>more<span class="e">}</span><span class="s">&quot;</span>)
+    s.<span class="f">shutdown</span>(<span class="n">1s</span>)
+}</code></pre>
+<pre class="out"><code>5
+15
+35
+more: false</code></pre>
+<p><code>Client.open</code> starts a call and returns a <code>Stream</code>. <code>send</code> writes a message and <code>closeSend</code> says there are no more. <code>recv</code> reads the next reply and returns false at the end, or fails with the status when the server sent an error.</p>
+<h2 id="metadata-and-deadlines"><a href="#metadata-and-deadlines">Metadata and deadlines</a></h2>
+<p>Headers go with a call as metadata: <code>c.open(method, metadata: [&quot;authorization: Bearer abc&quot;])</code> or <code>c.call(method, &amp;req, &amp;reply, metadata: [...])</code>. The handler reads them with <code>call.metadata(&quot;authorization&quot;)</code>. <code>call.header</code> adds a header to the reply and <code>call.trailer</code> a trailer after it, and the client reads them with <code>Stream.header</code> and <code>Stream.trailer</code>.</p>
+<p><code>timeout: 2s</code> on <code>call</code> or <code>open</code> sends the client's deadline as <code>grpc-timeout</code>. The client stops waiting at the deadline and fails with <code>Code.deadlineExceeded</code>. A handler that works long checks <code>call.expired()</code> or <code>call.timeLeft()</code>.</p>
+    <nav class="pager"><a class="prev" href="22-ssh.html"><span>Previous</span>SSH</a><a class="next" href="26-msgpack-and-cbor.html"><span>Next</span>MessagePack and CBOR</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#messages">Messages</a></li><li><a href="#field-types">Field types</a></li><li><a href="#errors">Errors</a></li><li><a href="#a-grpc-server-and-client">A gRPC server and client</a></li><li><a href="#streams">Streams</a></li><li><a href="#metadata-and-deadlines">Metadata and deadlines</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

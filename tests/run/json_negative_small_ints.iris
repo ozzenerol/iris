@@ -1,0 +1,24 @@
+// expect: {"a":-3,"b":-300,"c":-70000,"m":{"k":-1}}
+// expect: -3 -300 -70000 -1
+
+import json
+
+@json
+struct Small {
+    i8 a
+    i16 b
+    i32 c
+    Map[String, i32] m
+}
+
+void main() {
+    s := Small{a: -3, b: -300, c: -70000}
+    defer s.free()
+    s.m.set("k".copy(), -1)
+    scoped String j = json.encode(s)
+    print(j)
+    scoped back := json.decode(Small, j) catch e {
+        panic(e.message)
+    }
+    print("{back.a} {back.b} {back.c} {back.m.get("k".copy()).0}")
+}

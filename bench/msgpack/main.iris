@@ -1,0 +1,66 @@
+import msgpack
+
+@json
+struct Item {
+    String name
+    i32 qty
+    f64 price
+}
+
+@json
+struct Order {
+    i64 id
+    String customer
+    List[Item] items
+    List[String] tags
+    List[i32] codes
+    bool paid
+}
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+// 100,000 orders decoded and encoded again, 20 times.
+!void main() {
+    i64 seed = 1
+    String stream
+    defer stream.free()
+    List[i64] ends
+    defer ends.free()
+    for i in 0..100000 {
+        scoped o := Order{id: i * 7919, paid: i % 3 == 0}
+        o.customer = format("customer {next(&seed) % 10000}")
+        for j in 0..(1 + next(&seed) % 4) {
+            o.items.push(Item{name: format("item {next(&seed) % 500}"), qty: i32(1 + next(&seed) % 9), price: f64(next(&seed) % 10000) / 100.0})
+        }
+        for j in 0..(next(&seed) % 3) {
+            o.tags.push(format("tag{j}"))
+        }
+        for j in 0..(next(&seed) % 6) {
+            o.codes.push(i32(next(&seed) % 100000))
+        }
+        scoped String e = msgpack.encode(o)
+        stream.append(e)
+        ends.push(stream.len)
+    }
+    i64 total = 0
+    for round in 0..20 {
+        i64 start = 0
+        for end in ends {
+            scoped o := try msgpack.decode(Order, stream[start:end])
+            total += o.id + o.customer.len + o.tags.len
+            for it in o.items {
+                total += i64(it.qty) + it.name.len + i64(it.price)
+            }
+            for c in o.codes {
+                total += i64(c)
+            }
+            scoped String b = msgpack.encode(o)
+            total += b.len
+            start = end
+        }
+    }
+    print("{total}")
+}

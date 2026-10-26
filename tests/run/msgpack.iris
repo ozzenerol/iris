@@ -1,0 +1,138 @@
+// expect: 87a2696407a8637573746f6d6572a3416e61a56974656d739183a46e616d65a56361626c65a371747902a57072696365cb4012000000000000a47461677390a5636f6c6f72a5677265656ea470616964c3a6636f756e747381a161d1fed4
+// expect: 7 Ana cable 2 4.5 0 green true -300
+// expect: 7 Ana 2 0 true
+// expect: same bytes: true
+// expect: 00 7f cc80 ccff cd0100 ceffffffff cf0000000100000000 ff e0 d0df d080 d1ff7f d18000 d2ffff7fff d38000000000000000
+// expect: -1 -32 -33 -128 -129 -32768 -32769 -9223372036854775808 18446744073709551615
+// expect: items[0].qty: expected an integer, found text
+// expect: the required field "id" is missing
+// expect: byte 6: the data ends in the middle of a value
+// expect: n: 300 doesn't fit in u8
+// expect: 93a3616263a3646566c403010203
+// expect: cb3ff8000000000000 ca3fc00000
+// expect: ok
+
+import msgpack, hex
+
+@json
+struct Item {
+    String name
+    i64 qty
+    f64 price
+}
+
+enum Color { red, green }
+
+@json
+struct Order {
+    i64 id
+    String customer
+    List[Item] items
+    String[] tags
+    Color color
+    bool paid
+    Map[String, i32] counts
+}
+
+@json
+struct Need {
+    @json(required) i64 id
+}
+
+@json
+struct Small {
+    u8 n
+}
+
+@json
+struct Floats {
+    f64 d
+    f32 f
+}
+
+void main() {
+    o := Order{id: 7, customer: "Ana".copy(), color: .green, paid: true}
+    defer o.free()
+    o.items.push(Item{name: "cable".copy(), qty: 2, price: 4.5})
+    o.counts.set("a".copy(), -300)
+    scoped String b = msgpack.encode(o)
+    print(hex.encode(b))
+    scoped back := msgpack.decode(Order, b) catch e {
+        panic(e.message)
+    }
+    print("{back.id} {back.customer} {back.items.at(0).name} {back.items.at(0).qty} {back.items.at(0).price} {back.tags.len} {back.color} {back.paid} {back.counts.get("a".copy()).0}")
+
+    scoped v := msgpack.parse(b) catch e {
+        panic(e.message)
+    }
+    print("{v.get("id").int} {v.get("customer").text} {v.get("items").at(0).get("qty").int} {v.get("tags").len()} {v.get("paid").boolean}")
+    scoped String w = msgpack.write(v)
+    print("same bytes: {w == b}")
+
+    // every integer form, written by Value and read back
+    String forms
+    defer forms.free()
+    String nums
+    defer nums.free()
+    for n in [0, 127, 128, 255, 256, 4294967295, 4294967296, -1, -32, -33, -128, -129, -32768, -32769, -9223372036854775807 - 1] {
+        scoped String e = msgpack.write(msgpack.integer(n))
+        if forms.len > 0 {
+            forms.append(" ")
+        }
+        forms.append(hex.encode(e))
+        scoped r := msgpack.parse(e) catch err {
+            panic(err.message)
+        }
+        if r.int != n {
+            print("{n} came back as {r.int}")
+        }
+        if n < 0 {
+            nums.append("{n} ")
+        }
+    }
+    scoped String maxU = hex.decode("cfffffffffffffffff") catch e { panic(e.message) }
+    scoped u := msgpack.parse(maxU) catch e { panic(e.message) }
+    nums.append("{u.uint}")
+    print(forms)
+    print(nums)
+
+    // errors: the wrong type, a missing field, bytes cut short, a number too big
+    scoped bad := msgpack.parse(b) catch e { panic(e.message) }
+    bad.get("items").at(0).set("qty", msgpack.text("two"))
+    scoped String badBytes = msgpack.write(bad)
+    o2 := msgpack.decode(Order, badBytes) catch e {
+        print(e.message)
+        Order{}
+    }
+    o2.free()
+    scoped empty := msgpack.map()
+    scoped String noId = msgpack.write(empty)
+    n := msgpack.decode(Need, noId) catch e {
+        print(e.message)
+        Need{}
+    }
+    o3 := msgpack.decode(Order, b[0:10]) catch e {
+        print(e.message)
+        Order{}
+    }
+    o3.free()
+    scoped big := msgpack.map()
+    big.set("n", msgpack.integer(300))
+    scoped String bigBytes = msgpack.write(big)
+    s := msgpack.decode(Small, bigBytes) catch e {
+        print(e.message)
+        Small{}
+    }
+
+    // text and bytes
+    scoped arr := msgpack.array()
+    arr.push(msgpack.text("abc"))
+    arr.push(msgpack.text("def"))
+    arr.push(msgpack.bytes([1, 2, 3]))
+    scoped String ab = msgpack.write(arr)
+    print(hex.encode(ab))
+
+    scoped String fb = msgpack.encode(Floats{d: 1.5, f: 1.5})
+    print("{hex.encode(fb[3:12])} {hex.encode(fb[14:19])}")
+    print("ok")
+}

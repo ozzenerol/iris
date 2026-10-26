@@ -1,0 +1,79 @@
+// expect: written back: 46 of 46
+// expect: half 1 -4
+// expect: indefinite 3 3 2
+// expect: chunks 5 5 streaming
+// expect: tag 1363896240 bytes 9
+// expect: map 2
+// expect: a negative integer below the smallest i64
+// expect: byte 4: more bytes after the value
+// expect: byte 1: more items than there are bytes left
+
+// The examples of RFC 8949, Appendix A.
+
+import cbor, hex
+
+String bytes(str h) {
+    b := hex.decode(h) catch e {
+        panic("bad hex {h}")
+    }
+    return b
+}
+
+str message(str h) {
+    scoped String b = bytes(h)
+    v := cbor.parse(b) catch e {
+        print("{e.message}")
+        return ""
+    }
+    v.free()
+    print("read {h}")
+    return ""
+}
+
+void main() {
+    i64 same = 0
+    i64 all = 0
+    for h in ["00", "01", "0a", "17", "1818", "1819", "1864", "1903e8", "1a000f4240", "1b000000e8d4a51000",
+            "1bffffffffffffffff", "20", "29", "3863", "3903e7", "f4", "f5", "f6", "60", "6161", "6449455446",
+            "62c3bc", "40", "4401020304", "80", "83010203", "8301820203820405", "a0", "a201020304",
+            "a26161016162820203", "826161a161626163", "fb3ff199999999999a", "fb7e37e43c8800759c", "f90000", "f98000", "f93c00", "f93e00", "f97bff",
+            "fa47c35000", "fa7f7fffff", "f90001", "f90400", "f9c400", "f97c00", "f97e00", "f9fc00"] {
+        all += 1
+        scoped String b = bytes(h)
+        scoped v := cbor.parse(b) catch e {
+            print("{h}: {e.message}")
+            continue
+        }
+        scoped String w = cbor.write(v)
+        if w == b {
+            same += 1
+        } else {
+            print("{h} came back as {hex.encode(w)}")
+        }
+    }
+    print("written back: {same} of {all}")
+    scoped String h1 = bytes("f93c00")
+    scoped String h2 = bytes("f9c400")
+    scoped v1 := cbor.parse(h1) catch e { panic(e.message) }
+    scoped v2 := cbor.parse(h2) catch e { panic(e.message) }
+    print("half {v1.float} {v2.float}")
+    scoped String a = bytes("9f018202039f0405ffff")
+    scoped v3 := cbor.parse(a) catch e { panic(e.message) }
+    print("indefinite {v3.len()} {v3.at(1).at(1).int} {v3.at(2).len()}")
+    scoped String c = bytes("5f42010243030405ff")
+    scoped v4 := cbor.parse(c) catch e { panic(e.message) }
+    scoped String t = bytes("7f657374726561646d696e67ff")
+    scoped v5 := cbor.parse(t) catch e { panic(e.message) }
+    print("chunks {v4.text.len} {v4.text[4]} {v5.text}")
+    scoped String g = bytes("c11a514b67b0")
+    scoped v6 := cbor.parse(g) catch e { panic(e.message) }
+    scoped String big = bytes("c249010000000000000000")
+    scoped v7 := cbor.parse(big) catch e { panic(e.message) }
+    print("tag {v6.int} bytes {v7.text.len}")
+    scoped String m = bytes("bf61610161629f0203ffff")
+    scoped v8 := cbor.parse(m) catch e { panic(e.message) }
+    print("map {v8.get("b").len()}")
+    message("3bffffffffffffffff")
+    message("83010203ff")
+    message("8301")
+}

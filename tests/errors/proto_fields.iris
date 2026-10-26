@@ -1,0 +1,51 @@
+// error: 24: a protobuf field number is 1 to 536870911, and not 19000 to 19999, which protobuf keeps
+// error: 25: @proto on a field takes its number, zigzag or fixed: @proto(4, zigzag)
+// error: 27: d is f64; zigzag and fixed are for integers
+// error: 28: e is u32; zigzag is for signed integers
+// error: 29: f is i16; fixed is for 32 and 64 bit integers
+// error: 30: g is an array, which protobuf has no form for; use a slice or a List
+// error: 31: h is Plain, which needs @proto too
+// error: 32: i holds a Plain, which needs @proto too
+// error: 33: c and j both have the number 3
+// error: 37: @proto on a field needs @proto on the struct NotProto too
+// error: 40: @proto on a struct takes nothing; field numbers go on the fields: @proto(3)
+// error: 47: Plain needs @proto to be turned into protobuf
+// error: 48: Plain needs @proto to be read from protobuf
+
+import proto
+
+@json
+struct Plain {
+    i32 x
+}
+
+@proto
+struct Bad {
+    @proto(19500) i32 a
+    @proto(packed) i32 b
+    @proto(3) i32 c
+    @proto(zigzag) f64 d
+    @proto(zigzag) u32 e
+    @proto(fixed) i16 f
+    i32[4] g
+    Plain h
+    List[Plain] i
+    @proto(3) i32 j
+}
+
+struct NotProto {
+    @proto(1) i32 x
+}
+
+@proto(3)
+struct Numbered {
+    i32 x
+}
+
+void main() {
+    p := Plain{}
+    s := proto.encode(p)
+    q := proto.decode(Plain, s) catch e {
+        return
+    }
+}

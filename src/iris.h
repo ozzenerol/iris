@@ -382,6 +382,7 @@ struct Type {
     bool bigEndian;         /* u16be, u32be, u64be, i16be...: an integer kept in network byte order */
     Type *plain;            /* ... and the integer it reads as */
     int wire;               /* structs: 1 @wire (high byte first), 2 @wire(le); enums: bytes on the wire */
+    bool proto;             /* structs: @proto, whose fields keep their numbers in cval (see protoInfo) */
     /* structs, once laid out: size, alignment and the LLVM elements, padding included */
     bool laidOut;
     int64_t size, align;
@@ -436,6 +437,7 @@ typedef struct {
 } WireOpts;
 void wireOpts(Node *structDecl, Node *field, WireOpts *o);
 bool isWireStruct(Type *t);
+int64_t protoInfo(Node *field);
 
 /* Checks the program and fills in types. Returns false after errors. */
 bool checkProgram(Arena *a, Program *prog);

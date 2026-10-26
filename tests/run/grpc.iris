@@ -1,0 +1,173 @@
+// expect: unary: Hello Ana (iris), header yes
+// expect: Code.notFound: no one is called nobody
+// expect: Code.invalidArgument: no name: 50% of requests have one
+// expect: server stream: Ana 0, Ana 1, Ana 2
+// expect: client stream: 1+2+3
+// expect: both ways: echo a, echo b, end false
+// expect: deadline: Code.deadlineExceeded
+// expect: unknown: Code.unimplemented
+// expect: trailer: done
+// expect: tls: Hello Bo
+
+import grpc, net
+
+@proto
+struct Text {
+    String text
+}
+
+!void sayHello(grpc.Call *call) {
+    scoped Text req
+    if !try call.recv(&req) {
+        return error(grpc.Code.invalidArgument, "no request")
+    }
+    if req.text == "nobody" {
+        return error(grpc.Code.notFound, "no one is called nobody")
+    }
+    if req.text.len == 0 {
+        return error(grpc.Code.invalidArgument, "no name: 50% of requests have one")
+    }
+    who := call.metadata("who")
+    call.header("x-greeter", "yes")
+    call.trailer("x-done", "done")
+    scoped out := Text{text: if who.len > 0 { format("Hello {req.text} ({who})") } else { format("Hello {req.text}") }}
+    try call.send(&out)
+}
+
+!void count(grpc.Call *call) {
+    scoped Text req
+    _ = try call.recv(&req)
+    for i in 0..3 {
+        scoped out := Text{text: format("{req.text} {i}")}
+        try call.send(&out)
+    }
+}
+
+!void sum(grpc.Call *call) {
+    scoped Text req
+    scoped String all
+    for try call.recv(&req) {
+        if all.len > 0 {
+            all.append("+")
+        }
+        all.append(req.text)
+    }
+    scoped out := Text{text: all.copy()}
+    try call.send(&out)
+}
+
+!void echo(grpc.Call *call) {
+    scoped Text req
+    for try call.recv(&req) {
+        scoped out := Text{text: format("echo {req.text}")}
+        try call.send(&out)
+    }
+}
+
+!void slow(grpc.Call *call) {
+    for i in 0..300 {
+        if call.expired() {
+            return error(grpc.Code.deadlineExceeded, "too slow")
+        }
+        sleep(10ms)
+    }
+}
+
+void serve(grpc.Server *s, net.Listener ln) {
+    s.serveOn(ln) catch e { }
+}
+
+void serveTls(grpc.Server *s, net.Listener ln, net.TlsConfig *config) {
+    s.serveTlsOn(ln, config) catch e { }
+}
+
+!void main() {
+    grpc.Server s
+    s.unary("/test.Greeter/SayHello", sayHello)
+    s.stream("/test.Greeter/Count", count)
+    s.stream("/test.Greeter/Sum", sum)
+    s.stream("/test.Greeter/Echo", echo)
+    s.unary("/test.Greeter/Slow", slow)
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serve(&s, ln)
+
+    scoped grpc.Client c
+    scoped String target = format("127.0.0.1:{ln.port}")
+    c.dial(target)
+    scoped req := Text{text: "Ana".copy()}
+    scoped Text out
+
+    // the header comes with a stream
+    scoped hs := try c.open("/test.Greeter/SayHello", metadata: ["who: iris"])
+    try hs.send(&req)
+    try hs.closeSend()
+    _ = try hs.recv(&out)
+    print("unary: {out.text}, header {hs.header("x-greeter")}")
+    _ = try hs.recv(&out)
+    trailer := hs.trailer("x-done").copy()
+    defer trailer.free()
+
+    scoped nobody := Text{text: "nobody".copy()}
+    c.call("/test.Greeter/SayHello", &nobody, &out) catch e {
+        print("{e.code}: {e.message}")
+    }
+    scoped Text empty
+    c.call("/test.Greeter/SayHello", &empty, &out) catch e {
+        print("{e.code}: {e.message}")
+    }
+
+    scoped s1 := try c.open("/test.Greeter/Count")
+    try s1.send(&req)
+    try s1.closeSend()
+    scoped String got
+    for try s1.recv(&out) {
+        if got.len > 0 {
+            got.append(", ")
+        }
+        got.append(out.text)
+    }
+    print("server stream: {got}")
+
+    scoped s2 := try c.open("/test.Greeter/Sum")
+    for w in ["1", "2", "3"] {
+        scoped m := Text{text: w.copy()}
+        try s2.send(&m)
+    }
+    try s2.closeSend()
+    _ = try s2.recv(&out)
+    print("client stream: {out.text}")
+
+    scoped s3 := try c.open("/test.Greeter/Echo")
+    scoped String both
+    for w in ["a", "b"] {
+        scoped m := Text{text: w.copy()}
+        try s3.send(&m)
+        _ = try s3.recv(&out)
+        both.append(out.text)
+        both.append(", ")
+    }
+    try s3.closeSend()
+    more := try s3.recv(&out)
+    print("both ways: {both}end {more}")
+
+    c.call("/test.Greeter/Slow", &req, &out, timeout: 200ms) catch e {
+        print("deadline: {e.code}")
+    }
+    c.call("/test.Greeter/Nope", &req, &out) catch e {
+        print("unknown: {e.code}")
+    }
+    print("trailer: {trailer}")
+
+    // over TLS
+    tln := try net.listen(0, "127.0.0.1")
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    spawn serveTls(&s, tln, &config)
+    scoped grpc.Client tc
+    tc.http.ca = "tests/data/tls/ca.pem"
+    scoped String turl = format("https://localhost:{tln.port}")
+    tc.dial(turl)
+    scoped bo := Text{text: "Bo".copy()}
+    try tc.call("/test.Greeter/SayHello", &bo, &out)
+    print("tls: {out.text}")
+    s.shutdown(1s)
+}

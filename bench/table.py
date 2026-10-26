@@ -20,10 +20,11 @@ ROWS = [
     ("http-json", "HTTP/1.1 JSON in and out, wrk"),
     ("tcp-echo", "TCP echo, 100 connections"),
     ("http2", "HTTP/2 hello, h2load"),
+    ("grpc", "gRPC unary hello, h2load"),
     ("tcp-proxy", "TCP proxy, 64-byte messages, 100 connections"),
     ("tcp-proxy-bulk", "TCP proxy, 256 KiB messages, 16 connections"),
 ]
-NET = {"http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk"}
+NET = {"http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk", "grpc"}
 UNITS = {"tcp-echo": "msg/s", "tcp-proxy": "msg/s", "tcp-proxy-bulk": "MiB/s each way"}
 # the standard library against Go's and the best-known Rust crates
 LIB_ROWS = [
@@ -57,6 +58,9 @@ LIB_ROWS = [
     ("ssh", "100 SSH logins with a command each, then 512 MiB through a channel", "russh", "`x/crypto/ssh`"),
     ("sftp", "1000 small files written, read and removed over SFTP, then 256 MiB up and down", "russh-sftp", "`pkg/sftp`"),
     ("mqtt", "220000 MQTT messages through a broker, 20000 of them at QoS 1", "rumqttd, rumqttc", "mochi-mqtt, Paho"),
+    ("protobuf", "100,000 orders read and written as protobuf, 20 times", "prost", "by hand, `protowire`"),
+    ("msgpack", "100,000 orders read and written as MessagePack, 20 times", "rmp-serde", "vmihailenco/msgpack"),
+    ("cbor", "100,000 orders read and written as CBOR, 20 times", "ciborium", "fxamacker/cbor"),
 ]
 
 
