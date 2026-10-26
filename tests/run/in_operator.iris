@@ -1,0 +1,96 @@
+// expect: true false true false
+// expect: true true false
+// expect: true false true
+// expect: true false true true
+// expect: true false
+// expect: true false true
+// expect: true false
+// expect: true true
+// expect: 1 calls
+// expect: 2.5 in range true, 1.5s true
+// expect: skip 80
+// expect: 3 left
+// expect: 6
+
+enum State { idle, open, closing, closed }
+
+struct Peer {
+    str host
+    u16 port
+}
+
+i64 calls
+
+i64 counted(i64 v) {
+    calls++
+    return v
+}
+
+str kind(u16 port) => "bad" if port not in 1..65536 else "ok"
+
+void main() {
+    u8 b = 200
+    zero := kind(0)
+    print("{b in 0..256} {b in 0..200} {200 in 1..201} {zero == kind(80)}")
+
+    method := "HEAD"
+    safe := method in ["GET", "HEAD"]
+    notPost := method not in ["POST"]
+    print("{safe} {notPost} {method in []}")
+
+    s := State.closing
+    print("{s in [.closing, .closed]} {s in [.idle]} {s not in [.idle, .open]}")
+
+    i64[] ports = [22, 80, 443]
+    u16[3] fixed = [53, 853, 5353]
+    u16 p = 853
+    word := "hello"
+    print("{80 in ports} {8080 in ports} {p in fixed} {'l' in word}")
+
+    Map[str, i64] hits
+    defer hits.free()
+    hits.set("10.0.0.1", 3)
+    one := "10.0.0.1" in hits
+    two := "10.0.0.2" in hits
+    print("{one} {two}")
+
+    Set[State] seen
+    defer seen.free()
+    _ = seen.add(.open)
+    print("{State.open in seen} {State.idle in seen} {State.idle not in seen}")
+
+    Peer a = .{host: "db", port: 5432}
+    same := a in [Peer{host: "db", port: 5432}]
+    other := a in [Peer{host: "db", port: 1}]
+    print("{same} {other}")
+
+    // not binds after in, and in before and
+    x := 5
+    print("{not x in 0..3 and x in 0..10} {x in 0..3 or x in [5, 6]}")
+
+    _ = counted(2) in [1, 2, 3]
+    print("{calls} calls")
+
+    f := 2.5
+    d := 1500ms
+    print("{f} in range {f in 1.0..3.0}, {d} {d in 1s..2s}")
+
+    for port in [22, 80, 443] {
+        continue if port not in [80]
+        print("skip {port}") if port in 80..81
+    }
+
+    List[i64] queue
+    defer queue.free()
+    k := 0
+    for k not in [3, 9] {
+        queue.push(k)
+        k++
+    }
+    print("{queue.len} left")
+    j := 3
+    for (j in [3, 4, 5]) {
+        j++
+    }
+    print("{j}")
+}

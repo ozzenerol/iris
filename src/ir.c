@@ -999,10 +999,92 @@ static Val emitLogical(IR *ir, Node *e) {
     return val(r, &tyBool);
 }
 
+/* x in a..b, x in [a, b] and x in xs, as an i1; not in gives the
+ * opposite. x is worked out once, first. */
+static Val emitIn(IR *ir, Node *e) {
+    Val x = emitExpr(ir, e->a);
+    Node *r = e->b;
+    const char *found;
+    if (r->kind == N_BINARY && r->op == P_DOTDOT) {
+        Val lo = emitExpr(ir, r->a);
+        Val hi = emitExpr(ir, r->b);
+        Val ge = emitCompare(ir, P_GE, x, lo);
+        Val lt = emitCompare(ir, P_LT, x, hi);
+        found = tmp(ir);
+        ins(ir, "%s = and i1 %s, %s", found, ge.s, lt.s);
+    } else if (r->kind == N_ARRAY_LIT) {
+        /* each value in turn, stopping at the first that is equal */
+        const char *slot = allocaFor(ir, &tyBool, "in");
+        ins(ir, "store i1 false, ptr %s", slot);
+        int end = newLabel(ir);
+        for (int i = 0; i < r->list.len; i++) {
+            Val v = emitExpr(ir, r->list.items[i]);
+            const char *eq = emitEq(ir, x, v);
+            ins(ir, "store i1 %s, ptr %s", eq, slot);
+            int next = newLabel(ir);
+            condBr(ir, eq, end, next);
+            placeLabel(ir, next);
+        }
+        br(ir, end);
+        placeLabel(ir, end);
+        found = tmp(ir);
+        ins(ir, "%s = load i1, ptr %s", found, slot);
+    } else {
+        /* the items of a slice or an array, one by one */
+        Type *ct = r->type;
+        const char *ptr, *len;
+        if (ct->kind == TY_ARRAY) {
+            ptr = arrayAddr(ir, r);
+            len = fmt(ir, "%lld", (long long)ct->count);
+        } else {
+            sliceParts(ir, emitExpr(ir, r), &ptr, &len);
+        }
+        const char *slot = allocaFor(ir, &tyBool, "in");
+        const char *iSlot = allocaFor(ir, &tyI64, "i");
+        ins(ir, "store i1 false, ptr %s", slot);
+        ins(ir, "store i64 0, ptr %s", iSlot);
+        int cond = newLabel(ir), body = newLabel(ir), step = newLabel(ir), end = newLabel(ir);
+        br(ir, cond);
+        placeLabel(ir, cond);
+        Val i = load(ir, iSlot, &tyI64);
+        const char *more = tmp(ir);
+        ins(ir, "%s = icmp ult i64 %s, %s", more, i.s, len);
+        condBr(ir, more, body, end);
+        placeLabel(ir, body);
+        const char *at = tmp(ir);
+        if (ct->kind == TY_ARRAY) {
+            ins(ir, "%s = getelementptr %s, ptr %s, i64 0, i64 %s", at, llType(ir, ct), ptr, i.s);
+        } else {
+            ins(ir, "%s = getelementptr %s, ptr %s, i64 %s", at, llType(ir, ct->elem), ptr, i.s);
+        }
+        Val v = load(ir, at, ct->elem);
+        const char *eq = emitEq(ir, x, v);
+        ins(ir, "store i1 %s, ptr %s", eq, slot);
+        condBr(ir, eq, end, step);
+        placeLabel(ir, step);
+        const char *nx = tmp(ir);
+        ins(ir, "%s = add nuw nsw i64 %s, 1", nx, i.s);
+        ins(ir, "store i64 %s, ptr %s", nx, iSlot);
+        br(ir, cond);
+        placeLabel(ir, end);
+        found = tmp(ir);
+        ins(ir, "%s = load i1, ptr %s", found, slot);
+    }
+    if (e->ival == 4) {
+        const char *n = tmp(ir);
+        ins(ir, "%s = xor i1 %s, true", n, found);
+        found = n;
+    }
+    return val(found, &tyBool);
+}
+
 static Val emitBinary(IR *ir, Node *e) {
     TokKind op = e->op;
     if (op == P_ANDAND || op == P_OROR) {
         return emitLogical(ir, e);
+    }
+    if (op == K_IN) {
+        return emitIn(ir, e);
     }
     if (op == P_LARROW) {
         /* ch <- v: the value goes through memory */
