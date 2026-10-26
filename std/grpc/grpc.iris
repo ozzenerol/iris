@@ -1,0 +1,616 @@
+// gRPC over HTTP/2, with protobuf messages from @proto structs: a Server
+// whose handlers answer unary calls and streams, and a Client that makes
+// them. A call fails with a Code and its message, which the other side
+// gets as grpc-status and grpc-message.
+
+import http, net, proto, str, time
+
+// The status of a call, with gRPC's numbers: ok is 0, unauthenticated 16.
+pub enum Code {
+    ok, cancelled, unknown, invalidArgument, deadlineExceeded, notFound, alreadyExists, permissionDenied,
+    resourceExhausted, failedPrecondition, aborted, outOfRange, unimplemented, internal, unavailable, dataLoss,
+    unauthenticated
+}
+
+// The largest message either side takes.
+pub const i64 MAX_MESSAGE = 4MiB
+
+// The number of a Code, or of another error: unknown.
+pub i64 numberOf(Error e) => match e.code {
+    Code.ok => 0
+    Code.cancelled => 1
+    Code.unknown => 2
+    Code.invalidArgument => 3
+    Code.deadlineExceeded => 4
+    Code.notFound => 5
+    Code.alreadyExists => 6
+    Code.permissionDenied => 7
+    Code.resourceExhausted => 8
+    Code.failedPrecondition => 9
+    Code.aborted => 10
+    Code.outOfRange => 11
+    Code.unimplemented => 12
+    Code.internal => 13
+    Code.unavailable => 14
+    Code.dataLoss => 15
+    Code.unauthenticated => 16
+    _ => 2
+}
+
+// The Code of a number; unknown for a number gRPC doesn't have.
+pub Code codeOf(i64 n) => match n {
+    0 => Code.ok
+    1 => Code.cancelled
+    3 => Code.invalidArgument
+    4 => Code.deadlineExceeded
+    5 => Code.notFound
+    6 => Code.alreadyExists
+    7 => Code.permissionDenied
+    8 => Code.resourceExhausted
+    9 => Code.failedPrecondition
+    10 => Code.aborted
+    11 => Code.outOfRange
+    12 => Code.unimplemented
+    13 => Code.internal
+    14 => Code.unavailable
+    15 => Code.dataLoss
+    16 => Code.unauthenticated
+    _ => Code.unknown
+}
+
+// ------------------------------------------------------------ helpers
+
+str HEX = "0123456789ABCDEF"
+
+// grpc-message's form: bytes outside printable ASCII, and %, as %XX.
+String percentEncode(str s) {
+    String out
+    for i in 0..s.len {
+        c := s[i]
+        if c >= 0x20 && c <= 0x7e && c != '%' {
+            out.append(s[i:i + 1])
+        } else {
+            out.append("%")
+            out.append(HEX[i64(c >> 4):i64(c >> 4) + 1])
+            out.append(HEX[i64(c & 15):i64(c & 15) + 1])
+        }
+    }
+    return out
+}
+
+i64 hexValue(u8 c) => if c >= '0' && c <= '9' { i64(c - '0') } else if c >= 'a' && c <= 'f' { i64(c - 'a') + 10 } else if c >= 'A' && c <= 'F' { i64(c - 'A') + 10 } else { -1 }
+
+String percentDecode(str s) {
+    String out
+    i64 i = 0
+    for i < s.len {
+        if s[i] == '%' && i + 2 < s.len + 0 && hexValue(s[i + 1]) >= 0 && hexValue(s[i + 2]) >= 0 {
+            out.append([u8(hexValue(s[i + 1]) * 16 + hexValue(s[i + 2]))])
+            i += 3
+            continue
+        }
+        out.append(s[i:i + 1])
+        i += 1
+    }
+    return out
+}
+
+// A timeout as grpc-timeout writes it: at most 8 digits and a unit.
+String timeoutText(Duration d) {
+    ns := d / 1ns
+    if ns < 100000000 {
+        return format("{ns}n")
+    }
+    us := ns / 1000
+    if us < 100000000 {
+        return format("{us}u")
+    }
+    ms := us / 1000
+    if ms < 100000000 {
+        return format("{ms}m")
+    }
+    return format("{ms / 1000}S")
+}
+
+// grpc-timeout's value as a Duration; 0 when there is none or it can't be read.
+Duration timeoutOf(str t) {
+    if t.len < 2 || t.len > 9 {
+        return 0s
+    }
+    n := str.parseInt(t[0:t.len - 1]) catch e {
+        return 0s
+    }
+    return match t[t.len - 1] {
+        'H' => n * 1h
+        'M' => n * 1m
+        'S' => n * 1s
+        'm' => n * 1ms
+        'u' => n * 1us
+        'n' => n * 1ns
+        _ => 0s
+    }
+}
+
+// The five bytes in front of a message: not compressed, and its length.
+void frameHead(String *out, i64 n) {
+    out.append([0, u8((n >> 24) & 255), u8((n >> 16) & 255), u8((n >> 8) & 255), u8(n & 255)])
+}
+
+// The length a frame's head gives, or an error.
+!i64 frameLength(u8[] head) {
+    if head[0] != 0 {
+        return error(Code.unimplemented, "a compressed message, which this side doesn't read")
+    }
+    n := i64(head[1]) << 24 | i64(head[2]) << 16 | i64(head[3]) << 8 | i64(head[4])
+    if n > MAX_MESSAGE {
+        return error(Code.resourceExhausted, "a message of {n} bytes, more than {MAX_MESSAGE}")
+    }
+    return n
+}
+
+// Room for n bytes in buf, which grows when it has less.
+void room(u8[] *buf, i64 n) {
+    if buf.len < n {
+        free(*buf)
+        *buf = alloc(u8, if n < 4KiB { 4KiB } else { n })
+    }
+}
+
+// ------------------------------------------------------------ server
+
+// What a server's handler is: it reads the messages of the call with recv
+// and answers with send. An error it returns ends the call with its Code,
+// or unknown for an error of another kind.
+pub type Handler = !void(Call *)
+
+struct Method {
+    Handler handler
+    bool streams
+}
+
+// The methods of every Server in the program, by their path:
+// "/package.Service/Method".
+Map[str, Method] methods
+List[String] methodNames
+
+// A call as the server's handler sees it.
+pub struct Call {
+    http.Request *req
+    http.Response *res
+    bool streams
+    bool started  // the reply's headers went
+    String out    // a unary call's reply, sent when the handler returns
+    u8[] buf
+    Duration deadline
+}
+
+// The value of a header (metadata) the client sent, "" when there is none.
+pub str Call.metadata(str name) => self.req.header(name)
+
+// The method's path: "/package.Service/Method".
+pub str Call.method() => self.req.path
+
+// Adds a header to the reply, before the first message is sent.
+pub void Call.header(str name, str value) {
+    self.res.header(name, value)
+}
+
+// Adds a trailer, sent after the messages with the status.
+pub void Call.trailer(str name, str value) {
+    self.res.trailer(name, value)
+}
+
+// Whether the client's deadline has passed; the call should stop then.
+pub bool Call.expired() => self.deadline > 0s && time.clock() > self.deadline
+
+// How long until the client's deadline, or -1s when it has none.
+pub Duration Call.timeLeft() => if self.deadline > 0s { self.deadline - time.clock() } else { -1s }
+
+// Reads up to n bytes into buf: how many came, fewer at the end.
+!i64 Call.fill(i64 n) {
+    i64 got = 0
+    for got < n {
+        k := try self.req.read(self.buf[got:n])
+        if k == 0 {
+            break
+        }
+        got += k
+    }
+    return got
+}
+
+// Reads the client's next message into msg, a @proto struct, in place of
+// what it held. false when the client has sent all its messages.
+pub !bool Call.recv[T](T *msg) {
+    room(&self.buf, 5)
+    head := self.fill(5) catch e {
+        return error(Code.cancelled, "reading the call: {e.message}")
+    }
+    if head == 0 {
+        return false
+    }
+    if head < 5 {
+        return error(Code.internal, "the client's message is cut short")
+    }
+    n := try frameLength(self.buf[0:5])
+    room(&self.buf, n)
+    got := self.fill(n) catch e {
+        return error(Code.cancelled, "reading the call: {e.message}")
+    }
+    if got < n {
+        return error(Code.internal, "the client's message is cut short")
+    }
+    msg.free()
+    T empty
+    *msg = empty
+    proto.decodeTo(self.buf[0:n], msg) catch e {
+        return error(Code.internal, "reading the client's message: {e.message}")
+    }
+    return true
+}
+
+// Sends msg, a @proto struct, as the next message of the reply. A unary
+// call's reply goes when the handler returns, a stream's at once.
+pub !void Call.send[T](T *msg) {
+    if self.expired() {
+        return error(Code.deadlineExceeded, "the client's deadline has passed")
+    }
+    scoped String m
+    proto.encodeTo(&m, msg)
+    frameHead(&self.out, m.len)
+    self.out.append(m)
+    if !self.streams {
+        return
+    }
+    if !self.started {
+        self.res.send("", "application/grpc")
+        self.started = true
+    }
+    self.res.write(self.out) catch e {
+        return error(Code.cancelled, "the client has gone: {e.message}")
+    }
+    self.out.truncate(0)
+}
+
+// What the Router calls for every gRPC method.
+!void serveCall(http.Request *req, http.Response *res) {
+    m, found := methods.get(req.path)
+    if !found {
+        res.status = 404
+        return
+    }
+    res.status = 200
+    Call c = Call{req: req, res: res, streams: m.streams}
+    defer {
+        c.out.free()
+        free(c.buf)
+    }
+    t := timeoutOf(req.header("grpc-timeout"))
+    if t > 0s {
+        c.deadline = req.received + t
+    }
+    i64 status = 0
+    String message
+    defer message.free()
+    if !str.startsWith(req.header("Content-Type"), "application/grpc") {
+        status = 3
+        message.append("the request's Content-Type isn't application/grpc")
+    } else {
+        m.handler(&c) catch e {
+            status = numberOf(e)
+            message.append(e.message)
+        }
+    }
+    if status == 0 && c.expired() {
+        status = 4
+        message.append("the client's deadline passed before the call ended")
+    }
+    if !c.started {
+        res.send(if status == 0 { c.out } else { "" }, "application/grpc")
+    }
+    res.trailer("grpc-status", "{status}")
+    if status != 0 && message.len > 0 {
+        scoped String q = percentEncode(message)
+        res.trailer("grpc-message", q)
+    }
+}
+
+// A gRPC server: its methods, and the HTTP/2 server they run on, which
+// takes HTTP/2 on plain connections and over TLS.
+pub struct Server {
+    pub http.Router router
+}
+
+void Server.add(str method, Handler h, bool streams) {
+    name := method.copy()
+    methodNames.push(name)
+    methods.set(name, Method{handler: h, streams: streams})
+    if streams {
+        self.router.stream("POST {method}", serveCall)
+    } else {
+        self.router.post(method, serveCall)
+    }
+}
+
+// Adds a unary method, one message each way, by its path:
+// "/package.Service/Method". The request is read whole before the
+// handler runs.
+pub void Server.unary(str method, Handler h) => self.add(method, h, false)
+
+// Adds a method that streams: the client's messages are read as they
+// come, and the reply's go out as they are sent. This is for server
+// streaming, client streaming and streams both ways.
+pub void Server.stream(str method, Handler h) => self.add(method, h, true)
+
+// Serves on a port of all addresses, or of host, on every core, or on
+// threads of them.
+pub !void Server.serve(u16 port, str host = "", i64 threads = 0) {
+    try self.router.serve(port, host, threads)
+}
+
+// Serves on a listener the program opened.
+pub !void Server.serveOn(net.Listener ln, i64 threads = 1) {
+    try self.router.serveOn(ln, threads)
+}
+
+// Serves over TLS, with the certificate and key in PEM files.
+pub !void Server.serveTls(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0) {
+    try self.router.serveTls(port, certFile, keyFile, host, threads)
+}
+
+// Serves over TLS on a listener the program opened.
+pub !void Server.serveTlsOn(net.Listener ln, net.TlsConfig *config, i64 threads = 1) {
+    try self.router.serveTlsOn(ln, config, threads)
+}
+
+// Stops serving: no new calls, and the calls under way get up to wait to end.
+pub void Server.shutdown(Duration wait = 10s) {
+    self.router.shutdown(wait)
+}
+
+// Gives the server's memory back.
+pub void Server.free() {
+    self.router.free()
+}
+
+// ------------------------------------------------------------ client
+
+// A connection to a gRPC server, for any number of calls at once, from
+// any number of tasks: grpc.Client c, then c.dial("host:port").
+pub struct Client {
+    // the HTTP/2 client the calls go on; its timeout limits each wait for
+    // the server
+    pub http.Client http
+    String base
+}
+
+// Points the client at a server: "host:port" or "http://host:port" for
+// HTTP/2 on a plain connection, "https://host:port" over TLS. No
+// connection is made until the first call.
+pub void Client.dial(str target) {
+    self.http.priorKnowledge = true
+    self.base.free()
+    if str.startsWith(target, "http://") || str.startsWith(target, "https://") {
+        self.base.append(target)
+        if str.endsWith(self.base, "/") {
+            self.base.truncate(self.base.len - 1)
+        }
+    } else {
+        self.base.append("http://")
+        self.base.append(target)
+    }
+}
+
+// Closes the client's connections and gives its memory back.
+pub void Client.free() {
+    self.http.close()
+    self.base.free()
+}
+
+// A call under way, whose messages go both ways: send and closeSend for
+// the client's, recv for the server's. free ends it.
+pub struct Stream {
+    http.Upload up
+    http.ReplyStream reply
+    bool replied
+    bool sendDone
+    bool done
+    u8[] buf
+    Duration deadline
+}
+
+// Starts a call to method, "/package.Service/Method". timeout goes to the
+// server as the call's deadline; metadata are headers, "name: value".
+pub !Stream Client.open(str method, Duration timeout = 0s, str[] metadata = []) {
+    List[str] headers
+    defer headers.free()
+    headers.push("TE: trailers")
+    scoped String th
+    if timeout > 0s {
+        scoped String t = timeoutText(timeout)
+        th.append("grpc-timeout: ")
+        th.append(t)
+        headers.push(th)
+    }
+    for m in metadata {
+        headers.push(m)
+    }
+    scoped String url = format("{self.base}{method}")
+    Stream s
+    s.up = self.http.begin("POST", url, "application/grpc", headers.items(), -1) catch e {
+        return error(Code.unavailable, "{e.message}")
+    }
+    if timeout > 0s {
+        s.deadline = time.clock() + timeout
+    }
+    return s
+}
+
+// Sends msg, a @proto struct, as the next of the client's messages.
+pub !void Stream.send[T](T *msg) {
+    scoped String frame
+    scoped String m
+    proto.encodeTo(&m, msg)
+    frameHead(&frame, m.len)
+    frame.append(m)
+    self.up.write(frame) catch e {
+        return error(Code.unavailable, "sending: {e.message}")
+    }
+}
+
+// Says the client has sent all its messages.
+pub !void Stream.closeSend() {
+    if self.sendDone {
+        return
+    }
+    self.sendDone = true
+    self.up.end() catch e {
+        return error(Code.unavailable, "{e.message}")
+    }
+}
+
+// The reply's headers, once they came.
+!void Stream.start() {
+    if self.replied {
+        return
+    }
+    self.replied = true
+    self.reply = self.up.reply() catch e {
+        self.done = true
+        if self.deadline > 0s && time.clock() > self.deadline {
+            return error(Code.deadlineExceeded, "the call's deadline passed: {e.message}")
+        }
+        return error(Code.unavailable, "{e.message}")
+    }
+    if self.reply.status != 200 {
+        self.done = true
+        st := self.reply.status
+        code := match st {
+            400 => Code.internal
+            401 => Code.unauthenticated
+            403 => Code.permissionDenied
+            404 => Code.unimplemented
+            429, 502, 503, 504 => Code.unavailable
+            _ => Code.unknown
+        }
+        return error(code, "the server answered with HTTP status {st}")
+    }
+}
+
+!i64 Stream.fill(i64 n) {
+    i64 got = 0
+    for got < n {
+        k := try self.reply.read(self.buf[got:n])
+        if k == 0 {
+            break
+        }
+        got += k
+    }
+    return got
+}
+
+// The call's status, once the server's messages have ended: an error
+// unless it is ok.
+!void Stream.status() {
+    s := self.reply.trailer("grpc-status")
+    if s.len == 0 {
+        // a reply of headers only
+        s = self.reply.header("grpc-status")
+    }
+    msg := if self.reply.trailer("grpc-status").len > 0 { self.reply.trailer("grpc-message") } else { self.reply.header("grpc-message") }
+    if s.len == 0 {
+        return error(Code.internal, "the server ended the call without a status")
+    }
+    n := str.parseInt(s) catch e {
+        return error(Code.internal, "the server's grpc-status isn't a number: {s}")
+    }
+    if n != 0 {
+        scoped String text = percentDecode(msg)
+        return error(codeOf(n), "{text}")
+    }
+}
+
+// Reads the server's next message into msg, a @proto struct, in place of
+// what it held. false once the server has sent all of them and the call
+// ended well; the status as an error when it didn't.
+pub !bool Stream.recv[T](T *msg) {
+    if self.done {
+        return false
+    }
+    try self.start()
+    room(&self.buf, 5)
+    head := self.fill(5) catch e {
+        self.done = true
+        if self.deadline > 0s && time.clock() > self.deadline {
+            return error(Code.deadlineExceeded, "the call's deadline passed: {e.message}")
+        }
+        return error(Code.unavailable, "reading the reply: {e.message}")
+    }
+    if head == 0 {
+        self.done = true
+        try self.status()
+        return false
+    }
+    if head < 5 {
+        self.done = true
+        return error(Code.internal, "the server's message is cut short")
+    }
+    n := try frameLength(self.buf[0:5])
+    room(&self.buf, n)
+    got := self.fill(n) catch e {
+        self.done = true
+        return error(Code.unavailable, "reading the reply: {e.message}")
+    }
+    if got < n {
+        self.done = true
+        return error(Code.internal, "the server's message is cut short")
+    }
+    msg.free()
+    T empty
+    *msg = empty
+    proto.decodeTo(self.buf[0:n], msg) catch e {
+        return error(Code.internal, "reading the server's message: {e.message}")
+    }
+    return true
+}
+
+// The value of a header of the server's reply, "" when it has none or
+// hasn't answered yet.
+pub str Stream.header(str name) => if self.replied { self.reply.header(name) } else { "" }
+
+// The value of a trailer of the server's reply, there once recv has
+// given false.
+pub str Stream.trailer(str name) => if self.replied { self.reply.trailer(name) } else { "" }
+
+// Ends the call, and cancels it when it is still going.
+pub void Stream.free() {
+    if !self.sendDone {
+        self.sendDone = true
+        self.up.end() catch e { }
+    }
+    if !self.replied {
+        self.replied = true
+        self.reply = self.up.reply() catch e {
+            free(self.buf)
+            return
+        }
+    }
+    self.reply.close()
+    free(self.buf)
+}
+
+// Calls a unary method: sends req and reads the one reply into res, both
+// @proto structs.
+pub !void Client.call[Req, Res](str method, Req *req, Res *res, Duration timeout = 0s, str[] metadata = []) {
+    scoped s := try self.open(method, timeout, metadata)
+    try s.send(req)
+    try s.closeSend()
+    if !try s.recv(res) {
+        return error(Code.internal, "the server sent no reply")
+    }
+    Res extra
+    defer extra.free()
+    if try s.recv(&extra) {
+        return error(Code.internal, "the server sent more than one reply to a unary call")
+    }
+}

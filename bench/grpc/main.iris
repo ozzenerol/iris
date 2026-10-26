@@ -1,0 +1,25 @@
+import grpc
+
+@proto
+struct HelloRequest {
+    String name
+}
+
+@proto
+struct HelloReply {
+    String message
+}
+
+!void sayHello(grpc.Call *call) {
+    scoped HelloRequest req
+    _ = try call.recv(&req)
+    scoped reply := HelloReply{message: format("Hello {req.name}")}
+    try call.send(&reply)
+}
+
+!void main() {
+    grpc.Server s
+    defer s.free()
+    s.unary("/helloworld.Greeter/SayHello", sayHello)
+    try s.serve(9000, "127.0.0.1")
+}

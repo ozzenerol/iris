@@ -22,6 +22,8 @@ pub struct Upload {
     StreamOut *sink
     chan[H2Result] done
     BodyIn *piped
+    bool ended   // end was called
+    bool replied // reply has the stream now
 }
 
 // A reply whose body is read as it comes: status and the headers are
@@ -185,6 +187,70 @@ pub void Upload.trailer(str name, str value) {
     self.trailers.append(": ")
     self.trailers.append(value)
     self.trailers.append("\r\n")
+}
+
+// Ends the body: what was written goes, then the trailers. Over HTTP/2
+// the reply can be read before the body ends, with reply, as gRPC's
+// streams in both directions do; over HTTP/1.1 reply comes after end.
+pub !void Upload.end() {
+    if self.ended {
+        return
+    }
+    if self.h2 == null {
+        self.ended = true
+        return
+    }
+    if self.left > 0 {
+        n := self.left
+        self.abandon()
+        return error(HttpError.badRequest, "{n} bytes of the body are missing")
+    }
+    self.ended = true
+    // the writer has the trailers and the sink now
+    self.h2.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink, trailers: self.trailers})
+    String none
+    self.trailers = none
+}
+
+// Waits for the reply's status and headers and gives the reply, whose
+// body is read as it comes. Over HTTP/2 the Upload still takes write
+// until end; over HTTP/1.1 it must have ended.
+pub !ReplyStream Upload.reply() {
+    if self.h2 == null {
+        if !self.ended {
+            return error(HttpError.badRequest, "over HTTP/1.1 the reply comes once the body has ended: call end first")
+        }
+        return try self.finish()
+    }
+    h := self.h2
+    self.replied = true
+    String url = self.url
+    String none
+    self.url = none
+    r := h.wait(self.stream, self.done, self.client.wait()) catch e {
+        url.free()
+        self.piped.release()
+        return e
+    }
+    if !r.ok {
+        defer r.why.free()
+        url.free()
+        // the reader dropped the stream with its body
+        self.piped.release()
+        self.piped.release()
+        return error(net.NetError.closed, "{r.why}")
+    }
+    ReplyStream out
+    out.status = r.reply.status
+    out.names = r.reply.names
+    out.values = r.reply.values
+    r.reply.body.free()
+    r.reply.trailerText.free()
+    out.h2 = h
+    out.stream = self.stream
+    out.piped = self.piped
+    out.url = url
+    return out
 }
 
 // Ends the body and waits for the reply's status and headers; the body
@@ -415,43 +481,18 @@ void Upload.abandon() {
         return
     }
     self.h2.cancel(self.stream)
-    // the writer frees the sink
-    self.h2.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink})
-    self.piped.release()
+    if !self.ended {
+        // the writer frees the sink
+        self.ended = true
+        self.h2.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink})
+    }
+    if !self.replied {
+        self.replied = true
+        self.piped.release()
+    }
 }
 
 !ReplyStream Upload.finishH2() {
-    if self.left > 0 {
-        n := self.left
-        self.abandon()
-        return error(HttpError.badRequest, "{n} bytes of the body are missing")
-    }
-    h := self.h2
-    // the writer has the trailers and the sink now
-    h.jobs.put(Out{job: .end, stream: self.stream, sink: self.sink, trailers: self.trailers})
-    String none
-    self.trailers = none
-    defer self.url.free()
-    r := h.wait(self.stream, self.done, self.client.wait()) catch e {
-        self.piped.release()
-        return e
-    }
-    if !r.ok {
-        defer r.why.free()
-        // the reader dropped the stream with its body
-        self.piped.release()
-        self.piped.release()
-        return error(net.NetError.closed, "{r.why}")
-    }
-    ReplyStream out
-    out.status = r.reply.status
-    out.names = r.reply.names
-    out.values = r.reply.values
-    r.reply.body.free()
-    r.reply.trailerText.free()
-    out.h2 = h
-    out.stream = self.stream
-    out.piped = self.piped
-    out.url = self.url.copy()
-    return out
+    try self.end()
+    return try self.reply()
 }
