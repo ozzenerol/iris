@@ -1,0 +1,51 @@
+// expect: upload: same true, mode 640
+// expect: download: same true, mode 640
+// expect: missing: SshError.refused
+
+import crypto, fs, net, ssh
+
+bool anyKey(str user, str key) => user == "ada"
+
+!void handle(ssh.Session *s) {
+    if s.kind == .exec {
+        _ = try s.run(["sh", "-c", s.command])
+        return
+    }
+    s.status = 1
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}
+
+!void main() {
+    dir := try fs.tempDir("scp")
+    defer fs.removeAll(dir) catch e { }
+    userKey := ssh.generateKey("ada")
+    hostKey := ssh.generateKey()
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serveIt(ln, ssh.Server{hostKey: hostKey, publicKey: anyKey, handle: handle})
+    scoped String hostLine = hostKey.publicText()
+    c := try ssh.dial("127.0.0.1", ln.port, ssh.Config{user: "ada", key: &userKey, hostKey: hostLine})
+    defer c.close()
+
+    scoped String data = "it's scp\n".repeat(200000)
+    scoped String a = format("{dir}/a b.txt")
+    scoped String b = format("{dir}/it's here")
+    scoped String back = format("{dir}/back")
+    try fs.writeAll(a, data)
+    try fs.chmod(a, 0o640)
+    try c.scpUpload(a, b)
+    scoped String up = try fs.readAll(b)
+    info := try fs.stat(b)
+    print("upload: same {crypto.equal(up, data)}, mode {info.mode:o}")
+    try c.scpDownload(b, back)
+    scoped String down = try fs.readAll(back)
+    info2 := try fs.stat(back)
+    print("download: same {crypto.equal(down, data)}, mode {info2.mode:o}")
+    scoped String nowhere = format("{dir}/nowhere")
+    scoped String local = format("{dir}/x")
+    c.scpDownload(nowhere, local) catch e {
+        print("missing: {e.code}")
+    }
+}

@@ -1,0 +1,147 @@
+// scp: copying one file to or from a server through the scp program
+// there, for servers without SFTP.
+
+import fs, str
+
+// path in single quotes for the server's shell.
+String shellQuote(str path) {
+    scoped String inner = str.replace(path, "'", "'\\''")
+    return format("'{inner}'")
+}
+
+// The text after the last /.
+str baseName(str path) {
+    i64 at = 0
+    for i in 0..path.len {
+        if path[i] == '/' {
+            at = i + 1
+        }
+    }
+    return path[at:path.len]
+}
+
+// One line from the channel, without its \n, read a byte at a time so
+// that nothing after it is taken.
+!String readLine(Channel *c, str what) {
+    String line
+    errdefer line.free()
+    u8[1] b
+    for line.len < 4KiB {
+        n := try c.read(b[0:1])
+        if n == 0 {
+            return error(SshError.closed, "{what}: scp on the server stopped")
+        }
+        if b[0] == '\n' {
+            return line
+        }
+        line.append(b[0:1])
+    }
+    return error(SshError.protocol, "{what}: scp sent a line too long")
+}
+
+// scp's answer: 0 is yes; 1 and 2 come with a message.
+!void scpAck(Channel *c, str what) {
+    u8[1] b
+    n := try c.read(b[0:1])
+    if n == 0 {
+        return error(SshError.closed, "{what}: scp on the server stopped")
+    }
+    if b[0] == 0 {
+        return
+    }
+    scoped String message = try readLine(c, what)
+    return error(SshError.refused, "{what}: {message}")
+}
+
+!void scpEnd(Channel *c, str what) {
+    c.closeWrite()
+    status := c.wait()
+    if status != 0 {
+        return error(SshError.refused, "{what}: scp on the server ended with status {status}")
+    }
+}
+
+// Copies the file local here to remote on the server with scp, keeping
+// its permission bits. remote may be a folder.
+pub !void Client.scpUpload(str local, str remote) {
+    f := try fs.open(local)
+    defer f.close()
+    info := try f.info()
+    scoped String quoted = shellQuote(remote)
+    scoped String command = format("scp -t {quoted}")
+    c := try self.exec(command)
+    defer c.close()
+    try scpAck(c, remote)
+    mode := info.mode & 0o777
+    scoped String digits = format("{mode:o}")
+    try c.write("C{"0000"[0:4 - digits.len]}{digits} {info.size} {baseName(local)}\n")
+    try scpAck(c, remote)
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    i64 sent = 0
+    for sent < info.size {
+        n := try f.read(buf)
+        if n == 0 {
+            return error(SshError.closed, "{local}: the file got shorter while it was sent")
+        }
+        n = n if sent + n <= info.size else info.size - sent
+        try c.write(buf[0:n])
+        sent += n
+    }
+    u8[1] zero
+    try c.write(zero[0:1])
+    try scpAck(c, remote)
+    try scpEnd(c, remote)
+}
+
+// Copies the file remote on the server to local here with scp, with its
+// permission bits.
+pub !void Client.scpDownload(str remote, str local) {
+    scoped String quoted = shellQuote(remote)
+    scoped String command = format("scp -f {quoted}")
+    c := try self.exec(command)
+    defer c.close()
+    u8[1] zero
+    try c.write(zero[0:1])
+    scoped String head = try readLine(c, remote)
+    if head.len > 0 && (head[0] == 1 || head[0] == 2) {
+        return error(SshError.refused, "{remote}: {head[1:head.len]}")
+    }
+    // C0644 size name
+    parts := str.fields(head)
+    defer parts.free()
+    if parts.len < 3 || head[0] != 'C' {
+        return error(SshError.protocol, "{remote}: scp sent '{head}', not a file")
+    }
+    i64 mode = 0
+    for d in parts.at(0)[1:parts.at(0).len] {
+        if d < '0' || d > '7' {
+            return error(SshError.protocol, "{remote}: scp sent the mode '{parts.at(0)}'")
+        }
+        mode = mode * 8 + i64(d - '0')
+    }
+    size := str.parseInt(parts.at(1)) catch e {
+        return error(SshError.protocol, "{remote}: scp sent the size '{parts.at(1)}'")
+    }
+    f := fs.create(local) catch e {
+        return error(e.code, e.message)
+    }
+    defer f.close()
+    try c.write(zero[0:1])
+    u8[] buf = alloc(u8, 64KiB)
+    defer free(buf)
+    i64 got = 0
+    for got < size {
+        want := size - got
+        n := try c.read(buf[0:want if want < buf.len else buf.len])
+        if n == 0 {
+            return error(SshError.closed, "{remote}: scp stopped after {got} of {size} bytes")
+        }
+        try f.write(buf[0:n])
+        got += n
+    }
+    try scpAck(c, remote)
+    try c.write(zero[0:1])
+    try fs.chmod(local, mode & 0o777)
+    try scpEnd(c, remote)
+}

@@ -1,0 +1,1420 @@
+// SFTP, version 3 as OpenSSH speaks it: files on an SSH server, over the
+// sftp subsystem. Client.sftp starts it on a client; serveSftp serves it
+// from a session.
+
+import fs, str, time
+
+const i64 FXP_INIT = 1
+const i64 FXP_VERSION = 2
+const i64 FXP_OPEN = 3
+const i64 FXP_CLOSE = 4
+const i64 FXP_READ = 5
+const i64 FXP_WRITE = 6
+const i64 FXP_LSTAT = 7
+const i64 FXP_FSTAT = 8
+const i64 FXP_SETSTAT = 9
+const i64 FXP_FSETSTAT = 10
+const i64 FXP_OPENDIR = 11
+const i64 FXP_READDIR = 12
+const i64 FXP_REMOVE = 13
+const i64 FXP_MKDIR = 14
+const i64 FXP_RMDIR = 15
+const i64 FXP_REALPATH = 16
+const i64 FXP_STAT = 17
+const i64 FXP_RENAME = 18
+const i64 FXP_READLINK = 19
+const i64 FXP_SYMLINK = 20
+const i64 FXP_STATUS = 101
+const i64 FXP_HANDLE = 102
+const i64 FXP_DATA = 103
+const i64 FXP_NAME = 104
+const i64 FXP_ATTRS = 105
+const i64 FXP_EXTENDED = 200
+const i64 FXP_EXTENDED_REPLY = 201
+
+const i64 FX_OK = 0
+const i64 FX_EOF = 1
+const i64 FX_NO_SUCH_FILE = 2
+const i64 FX_PERMISSION_DENIED = 3
+const i64 FX_FAILURE = 4
+const i64 FX_BAD_MESSAGE = 5
+const i64 FX_OP_UNSUPPORTED = 8
+
+const i64 ATTR_SIZE = 1
+const i64 ATTR_UIDGID = 2
+const i64 ATTR_PERMISSIONS = 4
+const i64 ATTR_ACMODTIME = 8
+const i64 ATTR_EXTENDED = 0x80000000
+
+const i64 OPEN_READ = 1
+const i64 OPEN_WRITE = 2
+const i64 OPEN_APPEND = 4
+const i64 OPEN_CREAT = 8
+const i64 OPEN_TRUNC = 0x10
+const i64 OPEN_EXCL = 0x20
+
+const i64 S_IFMT = 0o170000
+const i64 S_IFDIR = 0o040000
+const i64 S_IFREG = 0o100000
+const i64 S_IFLNK = 0o120000
+
+// the most a packet holds, as OpenSSH's sftp-server takes
+const i64 SFTP_MAX = 256KiB + 1KiB
+// what one read or write asks for, and how many go at once
+const i64 SFTP_CHUNK = 32KiB
+const i64 SFTP_AHEAD = 64
+
+// What went wrong on the server, from its status reply.
+pub enum SftpError { eof, notFound, permission, failure, badMessage, unsupported }
+
+Error statusError(i64 code, str message, str what) => match code {
+    1 => error(SftpError.eof, "{what}: no more to read")
+    2 => error(SftpError.notFound, "{what}: no such file")
+    3 => error(SftpError.permission, "{what}: permission denied")
+    5 => error(SftpError.badMessage, "{what}: the server didn't understand it: {message}")
+    8 => error(SftpError.unsupported, "{what}: the server doesn't do this")
+    _ => error(SftpError.failure, "{what}: {message}")
+}
+
+// ------------------------------------------------------------ attributes
+
+void putAttrs(String *out, fs.Info *info, i64 flags) {
+    putU32(out, flags)
+    if flags & ATTR_SIZE != 0 {
+        putU64(out, info.size)
+    }
+    if flags & ATTR_UIDGID != 0 {
+        putU32(out, info.uid)
+        putU32(out, info.gid)
+    }
+    if flags & ATTR_PERMISSIONS != 0 {
+        kind := S_IFDIR if info.isDir else S_IFLNK if info.isLink else S_IFREG
+        putU32(out, kind | info.mode & 0o7777)
+    }
+    if flags & ATTR_ACMODTIME != 0 {
+        putU32(out, info.accessed.unix())
+        putU32(out, info.modified.unix())
+    }
+}
+
+// The attributes in r, and which of them were there.
+(fs.Info, i64) readAttrs(Reader *r) {
+    fs.Info info
+    flags := r.u32()
+    if flags & ATTR_SIZE != 0 {
+        if r.at + 8 > r.data.len {
+            r.bad = true
+            return (info, 0)
+        }
+        info.size = getU64(r.data, r.at)
+        r.at += 8
+    }
+    if flags & ATTR_UIDGID != 0 {
+        info.uid = r.u32()
+        info.gid = r.u32()
+    }
+    if flags & ATTR_PERMISSIONS != 0 {
+        mode := r.u32()
+        info.mode = mode & 0o7777
+        info.isDir = mode & S_IFMT == S_IFDIR
+        info.isLink = mode & S_IFMT == S_IFLNK
+    }
+    if flags & ATTR_ACMODTIME != 0 {
+        info.accessed = time.unix(r.u32())
+        info.modified = time.unix(r.u32())
+    }
+    if flags & ATTR_EXTENDED != 0 {
+        n := r.u32()
+        for i in 0..n {
+            _ = r.string()
+            _ = r.string()
+            if r.bad {
+                break
+            }
+        }
+    }
+    return (info, flags)
+}
+
+// ------------------------------------------------------------ the client
+
+// An SFTP session on a client: its methods name files by their paths on
+// the server. Requests go one after another, except that download and
+// upload keep many reads or writes going at once.
+pub struct Sftp {
+    Channel *ch
+    i64 nextId
+    // what came and isn't a whole packet yet
+    String pending
+    i64 pendingAt
+    // replies that came before the one waited for
+    Map[i64, String] early
+    u8[] buf
+    bool posixRename
+    pub i64 version
+}
+
+// A name in a folder on the server and what stat tells about it.
+pub struct FileEntry {
+    pub String name
+    pub fs.Info info
+}
+
+// Starts SFTP on the server.
+pub !Sftp Client.sftp() {
+    c := try self.subsystem("sftp")
+    Sftp s = Sftp{ch: c, nextId: 1, buf: alloc(u8, 64KiB)}
+    errdefer s.close()
+    String m
+    putByte(&m, FXP_INIT)
+    putU32(&m, 3)
+    s.send(m) catch e {
+        m.free()
+        return error(e.code, e.message)
+    }
+    m.free()
+    scoped String p = try s.packet()
+    if p.len < 5 || i64(p[0]) != FXP_VERSION {
+        return error(SshError.protocol, "the server didn't start SFTP")
+    }
+    r := Reader{data: p, at: 1}
+    s.version = r.u32()
+    for r.at < p.len {
+        name := r.string()
+        data := r.string()
+        if r.bad {
+            break
+        }
+        if name == "posix-rename@openssh.com" && data == "1" {
+            s.posixRename = true
+        }
+    }
+    return s
+}
+
+// Ends the SFTP session.
+pub void Sftp.close() {
+    self.ch.close()
+    self.pending.free()
+    i64 at = 0
+    for {
+        k, v, ok := self.early.next(&at)
+        if !ok {
+            break
+        }
+        v.free()
+    }
+    self.early.free()
+    free(self.buf)
+}
+
+// Sends a packet's body with its length in front.
+!void Sftp.send(str body) {
+    String m
+    defer m.free()
+    m.reserve(4 + body.len)
+    putU32(&m, body.len)
+    m.append(body)
+    try self.ch.write(m)
+}
+
+// The next packet's body.
+!String Sftp.packet() {
+    for {
+        have := self.pending.len - self.pendingAt
+        if have >= 4 {
+            n := getU32(self.pending, self.pendingAt)
+            if n < 1 || n > SFTP_MAX {
+                return error(SshError.protocol, "an SFTP packet of {n} bytes")
+            }
+            if have >= 4 + n {
+                p := self.pending[self.pendingAt + 4:self.pendingAt + 4 + n].copy()
+                self.pendingAt += 4 + n
+                if self.pendingAt == self.pending.len {
+                    self.pending.clear()
+                    self.pendingAt = 0
+                }
+                return p
+            }
+        }
+        if self.pendingAt > 0 {
+            rest := self.pending[self.pendingAt:self.pending.len].copy()
+            self.pending.free()
+            self.pending = rest
+            self.pendingAt = 0
+        }
+        k := try self.ch.read(self.buf)
+        if k == 0 {
+            return error(SshError.closed, "the server ended SFTP")
+        }
+        self.pending.append(self.buf[0:k])
+    }
+}
+
+// Sends a request, giving its id.
+!i64 Sftp.ask(i64 kind, str args) {
+    id := self.nextId
+    self.nextId = (self.nextId + 1) & 0xffffffff
+    String m
+    defer m.free()
+    m.reserve(5 + args.len)
+    putByte(&m, kind)
+    putU32(&m, id)
+    m.append(args)
+    try self.send(m)
+    return id
+}
+
+// The reply to the request id.
+!String Sftp.reply(i64 id) {
+    early, ok := self.early.get(id)
+    if ok {
+        _ = self.early.remove(id)
+        return early
+    }
+    for {
+        p := try self.packet()
+        if p.len < 5 {
+            p.free()
+            return error(SshError.protocol, "an SFTP reply is cut short")
+        }
+        got := getU32(p, 1)
+        if got == id {
+            return p
+        }
+        old, had := self.early.get(got)
+        if had {
+            old.free()
+        }
+        self.early.set(got, p)
+    }
+}
+
+!String Sftp.call(i64 kind, str args) {
+    id := try self.ask(kind, args)
+    return try self.reply(id)
+}
+
+// A status reply that has to be OK.
+!void expectOk(str reply, str what) {
+    if i64(reply[0]) != FXP_STATUS {
+        return error(SshError.protocol, "{what}: the server's reply isn't a status")
+    }
+    r := Reader{data: reply, at: 5}
+    code := r.u32()
+    message := r.string()
+    if code != FX_OK {
+        return statusError(code, message, what)
+    }
+}
+
+// A reply that has to be of kind, or a status saying why not.
+!void expectKind(str reply, i64 kind, str what) {
+    if i64(reply[0]) == kind {
+        return
+    }
+    try expectOk(reply, what)
+    return error(SshError.protocol, "{what}: the server's reply is of the wrong kind")
+}
+
+!void Sftp.simple(i64 kind, str args, str what) {
+    scoped String reply = try self.call(kind, args)
+    try expectOk(reply, what)
+}
+
+!void Sftp.onPath(i64 kind, str path, str what) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    try self.simple(kind, b, "{what} {path}")
+}
+
+!fs.Info Sftp.statKind(i64 kind, str path) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    scoped String reply = try self.call(kind, b)
+    try expectKind(reply, FXP_ATTRS, path)
+    r := Reader{data: reply, at: 5}
+    info, flags := readAttrs(&r)
+    if r.bad {
+        return error(SshError.protocol, "{path}: the attributes are cut short")
+    }
+    return info
+}
+
+// What is at path: size, kind, permissions, owner and times. A symbolic
+// link is followed.
+pub !fs.Info Sftp.stat(str path) => try self.statKind(FXP_STAT, path)
+
+// What stat gives, about a symbolic link itself.
+pub !fs.Info Sftp.lstat(str path) => try self.statKind(FXP_LSTAT, path)
+
+// Whether something is at path.
+pub bool Sftp.exists(str path) {
+    _ = self.statKind(FXP_STAT, path) catch e {
+        return false
+    }
+    return true
+}
+
+// The single name of a NAME reply.
+!String oneName(str reply, str what) {
+    try expectKind(reply, FXP_NAME, what)
+    r := Reader{data: reply, at: 5}
+    n := r.u32()
+    name := r.string()
+    if r.bad || n < 1 {
+        return error(SshError.protocol, "{what}: the server's answer is cut short")
+    }
+    return name.copy()
+}
+
+// path as an absolute path on the server, with . and .. gone: realPath(".")
+// is the folder SFTP started in.
+pub !String Sftp.realPath(str path) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    scoped String reply = try self.call(FXP_REALPATH, b)
+    return try oneName(reply, path)
+}
+
+// What the symbolic link at path points to.
+pub !String Sftp.readLink(str path) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    scoped String reply = try self.call(FXP_READLINK, b)
+    return try oneName(reply, path)
+}
+
+// Makes a symbolic link at path that points to target.
+pub !void Sftp.symlink(str target, str path) {
+    // OpenSSH takes the target first, the other way round from the draft,
+    // and every server since follows it
+    String b
+    defer b.free()
+    putString(&b, target)
+    putString(&b, path)
+    try self.simple(FXP_SYMLINK, b, "symlink {path}")
+}
+
+// Makes a folder.
+pub !void Sftp.mkdir(str path, i64 mode = 0o755) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    fs.Info info = fs.Info{mode: mode}
+    putAttrs(&b, &info, ATTR_PERMISSIONS)
+    try self.simple(FXP_MKDIR, b, "mkdir {path}")
+}
+
+// Makes a folder and the folders above it that are missing.
+pub !void Sftp.mkdirAll(str path, i64 mode = 0o755) {
+    if path.len == 0 || self.exists(path) {
+        return
+    }
+    for i in 1..path.len {
+        if path[i] == '/' && path[i - 1] != '/' && !self.exists(path[0:i]) {
+            try self.mkdir(path[0:i], mode)
+        }
+    }
+    try self.mkdir(path, mode)
+}
+
+// Removes an empty folder.
+pub !void Sftp.rmdir(str path) => try self.onPath(FXP_RMDIR, path, "rmdir")
+
+// Removes a file.
+pub !void Sftp.remove(str path) => try self.onPath(FXP_REMOVE, path, "remove")
+
+// Renames from to to, replacing what is at to when the server allows that
+// (OpenSSH's posix-rename).
+pub !void Sftp.rename(str from, str to) {
+    String b
+    defer b.free()
+    if self.posixRename {
+        putString(&b, "posix-rename@openssh.com")
+    }
+    putString(&b, from)
+    putString(&b, to)
+    try self.simple(FXP_EXTENDED if self.posixRename else FXP_RENAME, b, "rename {from}")
+}
+
+// Sets the permission bits of path.
+pub !void Sftp.chmod(str path, i64 mode) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    fs.Info info = fs.Info{mode: mode}
+    putAttrs(&b, &info, ATTR_PERMISSIONS)
+    try self.simple(FXP_SETSTAT, b, "chmod {path}")
+}
+
+// Sets the times of path.
+pub !void Sftp.setTimes(str path, time.Time accessed, time.Time modified) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    fs.Info info = fs.Info{accessed: accessed, modified: modified}
+    putAttrs(&b, &info, ATTR_ACMODTIME)
+    try self.simple(FXP_SETSTAT, b, "setTimes {path}")
+}
+
+!String Sftp.openHandle(str path, i64 flags, i64 mode) {
+    String b
+    defer b.free()
+    putString(&b, path)
+    putU32(&b, flags)
+    fs.Info info = fs.Info{mode: mode}
+    putAttrs(&b, &info, ATTR_PERMISSIONS if flags & OPEN_CREAT != 0 else 0)
+    scoped String reply = try self.call(FXP_OPEN, b)
+    return try oneHandle(reply, path)
+}
+
+!String oneHandle(str reply, str what) {
+    try expectKind(reply, FXP_HANDLE, what)
+    r := Reader{data: reply, at: 5}
+    h := r.string()
+    if r.bad {
+        return error(SshError.protocol, "{what}: the handle is cut short")
+    }
+    return h.copy()
+}
+
+void Sftp.closeHandle(str handle) {
+    String b
+    defer b.free()
+    putString(&b, handle)
+    self.simple(FXP_CLOSE, b, "close") catch e { }
+}
+
+// The names in a folder, without . and .., each with what lstat tells.
+pub !List[FileEntry] Sftp.list(str path) {
+    String b
+    putString(&b, path)
+    reply := self.call(FXP_OPENDIR, b) catch e {
+        b.free()
+        return error(e.code, e.message)
+    }
+    b.free()
+    h := oneHandle(reply, path) catch e {
+        reply.free()
+        return error(e.code, e.message)
+    }
+    reply.free()
+    defer {
+        self.closeHandle(h)
+        h.free()
+    }
+    String hb
+    defer hb.free()
+    putString(&hb, h)
+    List[FileEntry] out
+    errdefer {
+        for e in out {
+            e.name.free()
+        }
+        out.free()
+    }
+    for {
+        scoped String names = try self.call(FXP_READDIR, hb)
+        if i64(names[0]) == FXP_STATUS {
+            r := Reader{data: names, at: 5}
+            if r.u32() == FX_EOF {
+                break
+            }
+        }
+        try expectKind(names, FXP_NAME, path)
+        r := Reader{data: names, at: 5}
+        n := r.u32()
+        for i in 0..n {
+            name := r.string()
+            _ = r.string() // the long name, for people
+            info, flags := readAttrs(&r)
+            if r.bad {
+                return error(SshError.protocol, "{path}: the names are cut short")
+            }
+            if name != "." && name != ".." {
+                out.push(FileEntry{name: name.copy(), info: info})
+            }
+        }
+    }
+    return out
+}
+
+// A file open on the server.
+pub struct RemoteFile {
+    Sftp *sftp
+    String handle
+    // where read and write go on
+    pub i64 offset
+}
+
+// Opens the file at path to read.
+pub !RemoteFile Sftp.open(str path) {
+    h := try self.openHandle(path, OPEN_READ, 0)
+    return RemoteFile{sftp: self, handle: h}
+}
+
+// Creates the file at path to write, or empties it.
+pub !RemoteFile Sftp.create(str path, i64 mode = 0o644) {
+    h := try self.openHandle(path, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC, mode)
+    return RemoteFile{sftp: self, handle: h}
+}
+
+// Opens the file at path to add to its end, creating it if needed.
+pub !RemoteFile Sftp.openAppend(str path, i64 mode = 0o644) {
+    h := try self.openHandle(path, OPEN_WRITE | OPEN_CREAT | OPEN_APPEND, mode)
+    return RemoteFile{sftp: self, handle: h}
+}
+
+pub void RemoteFile.close() {
+    self.sftp.closeHandle(self.handle)
+    self.handle.free()
+}
+
+!i64 Sftp.askRead(str handle, i64 offset, i64 n) {
+    String b
+    defer b.free()
+    putString(&b, handle)
+    putU64(&b, offset)
+    putU32(&b, n)
+    return try self.ask(FXP_READ, b)
+}
+
+// The data of a READ reply, "" at the end of the file.
+!str readData(str reply) {
+    if i64(reply[0]) == FXP_STATUS {
+        r := Reader{data: reply, at: 5}
+        code := r.u32()
+        if code == FX_EOF {
+            return ""
+        }
+        return statusError(code, r.string(), "read")
+    }
+    try expectKind(reply, FXP_DATA, "read")
+    r := Reader{data: reply, at: 5}
+    data := r.string()
+    if r.bad {
+        return error(SshError.protocol, "read: the data is cut short")
+    }
+    return data
+}
+
+// Reads at offset into buf: how many bytes, 0 at the end of the file.
+pub !i64 RemoteFile.readAt(u8[] buf, i64 offset) {
+    i64 got = 0
+    for got < buf.len {
+        n := buf.len - got
+        id := try self.sftp.askRead(self.handle, offset + got, n if n < SFTP_CHUNK * 8 else SFTP_CHUNK * 8)
+        scoped String reply = try self.sftp.reply(id)
+        data := try readData(reply)
+        if data.len == 0 {
+            break
+        }
+        memMove(&buf[got], data.ptr, data.len)
+        got += data.len
+    }
+    return got
+}
+
+// Reads into buf from offset, moving it on.
+pub !i64 RemoteFile.read(u8[] buf) {
+    n := try self.readAt(buf, self.offset)
+    self.offset += n
+    return n
+}
+
+// Writes data at offset.
+pub !void RemoteFile.writeAt(str data, i64 offset) {
+    i64 at = 0
+    for at < data.len || data.len == 0 {
+        n := data.len - at
+        n = n if n < SFTP_CHUNK else SFTP_CHUNK
+        String b
+        putString(&b, self.handle)
+        putU64(&b, offset + at)
+        putString(&b, data[at:at + n])
+        reply := self.sftp.call(FXP_WRITE, b) catch e {
+            b.free()
+            return error(e.code, e.message)
+        }
+        b.free()
+        expectOk(reply, "write") catch e {
+            reply.free()
+            return error(e.code, e.message)
+        }
+        reply.free()
+        at += n
+        if data.len == 0 {
+            break
+        }
+    }
+}
+
+// Writes data where offset is, moving it on.
+pub !void RemoteFile.write(str data) {
+    try self.writeAt(data, self.offset)
+    self.offset += data.len
+}
+
+// What stat tells about the open file.
+pub !fs.Info RemoteFile.info() {
+    String b
+    defer b.free()
+    putString(&b, self.handle)
+    scoped String reply = try self.sftp.call(FXP_FSTAT, b)
+    try expectKind(reply, FXP_ATTRS, "fstat")
+    r := Reader{data: reply, at: 5}
+    info, flags := readAttrs(&r)
+    return info
+}
+
+// Reads the file at handle with many reads going at once, writing each
+// piece to file, or to out when file is null.
+!void Sftp.fetch(str handle, fs.File *file, String *out) {
+    // the reads asked for, oldest first: (id, offset, length)
+    List[(i64, i64, i64)] going
+    defer going.free()
+    i64 next = 0
+    bool end = false
+    for !end && going.len < SFTP_AHEAD {
+        id := try self.askRead(handle, next, SFTP_CHUNK)
+        going.push((id, next, SFTP_CHUNK))
+        next += SFTP_CHUNK
+    }
+    for going.len > 0 {
+        id, offset, n := going.remove(0)
+        scoped String reply = self.reply(id) catch e {
+            // the others' replies would be left behind
+            for g in going {
+                gid, o, l := g
+                r2 := self.reply(gid) catch e2 { break }
+                r2.free()
+            }
+            return error(e.code, e.message)
+        }
+        data := readData(reply) catch e {
+            for g in going {
+                gid, o, l := g
+                r2 := self.reply(gid) catch e2 { break }
+                r2.free()
+            }
+            return error(e.code, e.message)
+        }
+        if data.len == 0 {
+            end = true
+            continue
+        }
+        if file != null {
+            try file.writeAt(data, offset)
+        } else {
+            if out.len == offset {
+                out.append(data)
+            } else {
+                // a short read made a gap that is filled in later
+                for out.len < offset + data.len {
+                    gap := offset + data.len - out.len
+                    out.append(ZEROS[0:gap if gap < ZEROS.len else ZEROS.len])
+                }
+                memMove(&out.ptr[0:out.len][offset], data.ptr, data.len)
+            }
+        }
+        if data.len < n {
+            // a short read: the rest of it again
+            rid := try self.askRead(handle, offset + data.len, n - data.len)
+            going.push((rid, offset + data.len, n - data.len))
+        } else if !end {
+            nid := try self.askRead(handle, next, SFTP_CHUNK)
+            going.push((nid, next, SFTP_CHUNK))
+            next += SFTP_CHUNK
+        }
+    }
+}
+
+// Writes data to handle from offset 0 with many writes going at once,
+// taking it from file when file isn't null.
+!void Sftp.store(str handle, fs.File *file, str data) {
+    List[i64] going
+    defer going.free()
+    u8[] chunk = alloc(u8, SFTP_CHUNK)
+    defer free(chunk)
+    i64 at = 0
+    bool end = false
+    for !end || going.len > 0 {
+        for !end && going.len < SFTP_AHEAD {
+            str piece = ""
+            if file != null {
+                n := try file.readAt(chunk, at)
+                piece = chunk[0:n]
+            } else {
+                n := data.len - at
+                piece = data[at:at + (n if n < SFTP_CHUNK else SFTP_CHUNK)]
+            }
+            if piece.len == 0 {
+                end = true
+                break
+            }
+            String b
+            putString(&b, handle)
+            putU64(&b, at)
+            putString(&b, piece)
+            id := self.ask(FXP_WRITE, b) catch e {
+                b.free()
+                return error(e.code, e.message)
+            }
+            b.free()
+            going.push(id)
+            at += piece.len
+        }
+        if going.len == 0 {
+            break
+        }
+        id := going.remove(0)
+        scoped String reply = try self.reply(id)
+        expectOk(reply, "write") catch e {
+            for g in going {
+                r2 := self.reply(g) catch e2 { break }
+                r2.free()
+            }
+            return error(e.code, e.message)
+        }
+    }
+}
+
+// The whole file at path.
+pub !String Sftp.readAll(str path) {
+    h := try self.openHandle(path, OPEN_READ, 0)
+    defer {
+        self.closeHandle(h)
+        h.free()
+    }
+    String out
+    errdefer out.free()
+    try self.fetch(h, null, &out)
+    return out
+}
+
+// Replaces the file at path with data, creating it if needed.
+pub !void Sftp.writeAll(str path, str data, i64 mode = 0o644) {
+    h := try self.openHandle(path, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC, mode)
+    defer {
+        self.closeHandle(h)
+        h.free()
+    }
+    try self.store(h, null, data)
+}
+
+// Copies the file remote on the server to local here.
+pub !void Sftp.download(str remote, str local) {
+    h := try self.openHandle(remote, OPEN_READ, 0)
+    defer {
+        self.closeHandle(h)
+        h.free()
+    }
+    f := fs.create(local) catch e {
+        return error(e.code, e.message)
+    }
+    defer f.close()
+    try self.fetch(h, &f, null)
+}
+
+// Copies the file local here to remote on the server, with local's
+// permission bits.
+pub !void Sftp.upload(str local, str remote) {
+    f := try fs.open(local)
+    defer f.close()
+    info := try f.info()
+    h := try self.openHandle(remote, OPEN_WRITE | OPEN_CREAT | OPEN_TRUNC, info.mode)
+    defer {
+        self.closeHandle(h)
+        h.free()
+    }
+    try self.store(h, &f, "")
+}
+
+// ------------------------------------------------------------ the server
+
+// A file or folder a client opened.
+struct SftpHandle {
+    bool used
+    bool dir
+    fs.File file
+    // the real path
+    String path
+    // a folder's names, and how many were sent
+    List[String] names
+    i64 at
+}
+
+struct SftpServer {
+    Sftp io
+    // root without its last /, "" for /
+    String prefix
+    List[SftpHandle] handles
+    u8[] data
+}
+
+// Serves SFTP on a session that asked for the sftp subsystem, with root as
+// the folder the client sees as /. Paths the client names stay inside
+// root; symbolic links that are there are followed, and the ones the
+// client makes point inside root. Files are read and written as the user
+// the server runs as. It returns when the client ends the session.
+pub !void serveSftp(Session *s, str root) {
+    SftpServer[] mem = alloc(SftpServer, 1)
+    v := &mem[0]
+    v.io = Sftp{ch: s.channel, buf: alloc(u8, 64KiB)}
+    v.data = alloc(u8, 256KiB)
+    str r = root
+    for r.len > 0 && r[r.len - 1] == '/' {
+        r = r[0:r.len - 1]
+    }
+    v.prefix.append(r)
+    defer {
+        for h in v.handles {
+            if h.used {
+                if !h.dir {
+                    h.file.close()
+                }
+                h.path.free()
+                h.names.freeEach()
+            }
+        }
+        v.handles.free()
+        v.prefix.free()
+        free(v.data)
+        v.io.pending.free()
+        free(v.io.buf)
+        free(mem)
+    }
+    for {
+        p := v.io.packet() catch e {
+            if e.code == SshError.closed {
+                return
+            }
+            return error(e.code, e.message)
+        }
+        String out
+        v.answer(p, &out)
+        p.free()
+        v.io.send(out) catch e {
+            out.free()
+            return
+        }
+        out.free()
+    }
+}
+
+// path as the client sees it: absolute, without . and .. ("/" at most).
+String virtualPath(str path) {
+    parts := str.split(path, "/")
+    defer parts.free()
+    List[str] kept
+    defer kept.free()
+    for p in parts {
+        if p.len == 0 || p == "." {
+            continue
+        }
+        if p == ".." {
+            if kept.len > 0 {
+                _ = kept.remove(kept.len - 1)
+            }
+            continue
+        }
+        kept.push(p)
+    }
+    String out
+    for p in kept {
+        out.append("/")
+        out.append(p)
+    }
+    if out.len == 0 {
+        out.append("/")
+    }
+    return out
+}
+
+// The path on this machine for a client's path.
+String SftpServer.real(str path) {
+    scoped String v = virtualPath(path)
+    if self.prefix.len == 0 {
+        return v.copy()
+    }
+    if v == "/" {
+        return self.prefix.copy()
+    }
+    return format("{self.prefix}{v}")
+}
+
+void putStatus(String *out, i64 id, i64 code, str message) {
+    putByte(out, FXP_STATUS)
+    putU32(out, id)
+    putU32(out, code)
+    putString(out, message)
+    putString(out, "en")
+}
+
+// A status for an error from fs, without the real path in it.
+void putFsError(String *out, i64 id, Error e) {
+    if e.code == fs.FsError.notFound {
+        putStatus(out, id, FX_NO_SUCH_FILE, "No such file")
+    } else if e.code == fs.FsError.permission {
+        putStatus(out, id, FX_PERMISSION_DENIED, "Permission denied")
+    } else if e.code == fs.FsError.end {
+        putStatus(out, id, FX_EOF, "End of file")
+    } else if e.code == fs.FsError.exists {
+        putStatus(out, id, FX_FAILURE, "Already exists")
+    } else if e.code == fs.FsError.isDir {
+        putStatus(out, id, FX_FAILURE, "Is a folder")
+    } else if e.code == fs.FsError.full {
+        putStatus(out, id, FX_FAILURE, "No space left")
+    } else {
+        putStatus(out, id, FX_FAILURE, "Failure")
+    }
+}
+
+const i64 ALL_ATTRS = ATTR_SIZE | ATTR_UIDGID | ATTR_PERMISSIONS | ATTR_ACMODTIME
+
+// The handle in a request, or null.
+SftpHandle *SftpServer.handle(Reader *r, bool dir) {
+    h := r.string()
+    if r.bad || h.len != 4 {
+        return null
+    }
+    i := getU32(h, 0)
+    if i >= self.handles.len {
+        return null
+    }
+    hs := self.handles.items()
+    if !hs[i].used || hs[i].dir != dir {
+        return null
+    }
+    return &hs[i]
+}
+
+// A free slot for a handle, put in the reply.
+SftpHandle *SftpServer.newHandle(String *out, i64 id) {
+    hs := self.handles.items()
+    i64 at = -1
+    for i in 0..hs.len {
+        if !hs[i].used {
+            at = i
+            break
+        }
+    }
+    if at < 0 {
+        self.handles.push(SftpHandle{})
+        at = self.handles.len - 1
+    }
+    putByte(out, FXP_HANDLE)
+    putU32(out, id)
+    putU32(out, 4)
+    putU32(out, at)
+    hs2 := self.handles.items()
+    hs2[at] = SftpHandle{used: true}
+    return &hs2[at]
+}
+
+// A line for a name as ls -l writes it.
+String longName(str name, fs.Info *info) {
+    String out
+    out.append("d" if info.isDir else "l" if info.isLink else "-")
+    str rwx = "rwxrwxrwx"
+    for i in 0..9 {
+        out.append(rwx[i:i + 1] if info.mode & (1 << (8 - i)) != 0 else "-")
+    }
+    scoped String stamp = info.modified.local().format("YYYY-MM-DD hh:mm")
+    scoped String rest = format(" {info.links} {info.uid} {info.gid} {info.size} {stamp} {name}")
+    out.append(rest)
+    return out
+}
+
+// A NAME reply with one name.
+void putOneName(String *out, i64 id, str name) {
+    putByte(out, FXP_NAME)
+    putU32(out, id)
+    putU32(out, 1)
+    putString(out, name)
+    putString(out, name)
+    putU32(out, 0)
+}
+
+void putInfo(String *out, i64 id, fs.Info *info) {
+    putByte(out, FXP_ATTRS)
+    putU32(out, id)
+    putAttrs(out, info, ALL_ATTRS)
+}
+
+// Sets what attrs has on path.
+!void setAttrs(str path, fs.Info *info, i64 flags) {
+    if flags & ATTR_SIZE != 0 {
+        f := try fs.openReadWrite(path, false)
+        defer f.close()
+        try f.truncate(info.size)
+    }
+    if flags & ATTR_PERMISSIONS != 0 {
+        try fs.chmod(path, info.mode)
+    }
+    if flags & ATTR_UIDGID != 0 {
+        try fs.chown(path, info.uid, info.gid)
+    }
+    if flags & ATTR_ACMODTIME != 0 {
+        try fs.setTimes(path, info.accessed, info.modified)
+    }
+}
+
+// What the client's symbolic link target becomes: inside root.
+String SftpServer.linkTarget(str target, str link) {
+    if self.prefix.len == 0 {
+        return target.copy()
+    }
+    if target.len > 0 && target[0] == '/' {
+        return self.real(target)
+    }
+    scoped String v = virtualPath(link)
+    i64 cut = 0
+    for i in 0..v.len {
+        if v[i] == '/' {
+            cut = i
+        }
+    }
+    scoped String joined = format("{v[0:cut]}/{target}")
+    return self.real(joined)
+}
+
+// The reply to the request p.
+void SftpServer.answer(str p, String *out) {
+    kind := i64(p[0])
+    if kind == FXP_INIT {
+        putByte(out, FXP_VERSION)
+        putU32(out, 3)
+        putString(out, "posix-rename@openssh.com")
+        putString(out, "1")
+        return
+    }
+    r := Reader{data: p, at: 1}
+    id := r.u32()
+    if r.bad {
+        putStatus(out, 0, FX_BAD_MESSAGE, "Bad message")
+        return
+    }
+    if kind == FXP_READ || kind == FXP_WRITE {
+        h := self.handle(&r, false)
+        if r.at + 8 > p.len {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        offset := getU64(p, r.at)
+        r.at += 8
+        if h == null {
+            putStatus(out, id, FX_FAILURE, "No such handle")
+            return
+        }
+        if kind == FXP_READ {
+            n := r.u32()
+            n = n if n < self.data.len else self.data.len
+            got := h.file.readAt(self.data[0:n], offset) catch e {
+                putFsError(out, id, e)
+                return
+            }
+            if got == 0 {
+                putStatus(out, id, FX_EOF, "End of file")
+                return
+            }
+            out.reserve(13 + got)
+            putByte(out, FXP_DATA)
+            putU32(out, id)
+            putString(out, self.data[0:got])
+            return
+        }
+        data := r.string()
+        if r.bad {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        h.file.writeAt(data, offset) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    if kind == FXP_CLOSE || kind == FXP_FSTAT || kind == FXP_FSETSTAT || kind == FXP_READDIR {
+        at := r.at
+        h := self.handle(&r, kind == FXP_READDIR)
+        if h == null && kind == FXP_CLOSE {
+            r.at = at
+            h = self.handle(&r, true)
+        }
+        if h == null {
+            putStatus(out, id, FX_FAILURE, "No such handle")
+            return
+        }
+        if kind == FXP_CLOSE {
+            if !h.dir {
+                h.file.close()
+            }
+            h.path.free()
+            h.names.freeEach()
+            *h = SftpHandle{}
+            putStatus(out, id, FX_OK, "Success")
+            return
+        }
+        if kind == FXP_FSTAT {
+            info := h.file.info() catch e {
+                putFsError(out, id, e)
+                return
+            }
+            putInfo(out, id, &info)
+            return
+        }
+        if kind == FXP_FSETSTAT {
+            info, flags := readAttrs(&r)
+            if r.bad {
+                putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+                return
+            }
+            if flags & ATTR_SIZE != 0 {
+                h.file.truncate(info.size) catch e {
+                    putFsError(out, id, e)
+                    return
+                }
+            }
+            setAttrs(h.path, &info, flags & ~ATTR_SIZE) catch e {
+                putFsError(out, id, e)
+                return
+            }
+            putStatus(out, id, FX_OK, "Success")
+            return
+        }
+        // READDIR: up to 100 names a reply
+        if h.at >= h.names.len {
+            putStatus(out, id, FX_EOF, "End of file")
+            return
+        }
+        n := h.names.len - h.at
+        n = n if n < 100 else 100
+        putByte(out, FXP_NAME)
+        putU32(out, id)
+        putU32(out, n)
+        for i in 0..n {
+            name := h.names.at(h.at + i)
+            scoped String full = format("{h.path}/{name}")
+            info := fs.lstat(full) catch e { fs.Info{} }
+            putString(out, name)
+            scoped String long = longName(name, &info)
+            putString(out, long)
+            putAttrs(out, &info, ALL_ATTRS)
+        }
+        h.at += n
+        return
+    }
+    if kind == FXP_EXTENDED {
+        name := r.string()
+        if name == "posix-rename@openssh.com" {
+            from := r.string()
+            to := r.string()
+            if r.bad {
+                putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+                return
+            }
+            scoped String a = self.real(from)
+            scoped String b = self.real(to)
+            fs.rename(a, b) catch e {
+                putFsError(out, id, e)
+                return
+            }
+            putStatus(out, id, FX_OK, "Success")
+            return
+        }
+        putStatus(out, id, FX_OP_UNSUPPORTED, "Unsupported")
+        return
+    }
+    // the rest name a path first
+    path := r.string()
+    if r.bad {
+        putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+        return
+    }
+    scoped String real = self.real(path)
+    if kind == FXP_REALPATH {
+        scoped String v = virtualPath(path)
+        putOneName(out, id, v)
+        return
+    }
+    if kind == FXP_STAT || kind == FXP_LSTAT {
+        info := fs.Info{}
+        if kind == FXP_STAT {
+            info = fs.stat(real) catch e {
+                putFsError(out, id, e)
+                return
+            }
+        } else {
+            info = fs.lstat(real) catch e {
+                putFsError(out, id, e)
+                return
+            }
+        }
+        putInfo(out, id, &info)
+        return
+    }
+    if kind == FXP_OPEN {
+        flags := r.u32()
+        attrs, has := readAttrs(&r)
+        if r.bad {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        existed := fs.exists(real)
+        if flags & OPEN_CREAT != 0 && flags & OPEN_EXCL != 0 && existed {
+            putStatus(out, id, FX_FAILURE, "Already exists")
+            return
+        }
+        if flags & OPEN_CREAT == 0 && !existed {
+            putStatus(out, id, FX_NO_SUCH_FILE, "No such file")
+            return
+        }
+        fs.File f
+        if flags & OPEN_WRITE == 0 {
+            f = fs.open(real) catch e {
+                putFsError(out, id, e)
+                return
+            }
+        } else if flags & OPEN_APPEND != 0 {
+            f = fs.openAppend(real) catch e {
+                putFsError(out, id, e)
+                return
+            }
+        } else if flags & OPEN_TRUNC != 0 && flags & OPEN_READ == 0 {
+            f = fs.create(real) catch e {
+                putFsError(out, id, e)
+                return
+            }
+        } else {
+            f = fs.openReadWrite(real, flags & OPEN_CREAT != 0) catch e {
+                putFsError(out, id, e)
+                return
+            }
+            if flags & OPEN_TRUNC != 0 {
+                f.truncate(0) catch e { }
+            }
+        }
+        if !existed && has & ATTR_PERMISSIONS != 0 {
+            fs.chmod(real, attrs.mode) catch e { }
+        }
+        h := self.newHandle(out, id)
+        h.file = f
+        h.path = real.copy()
+        return
+    }
+    if kind == FXP_OPENDIR {
+        d := fs.readDir(real) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        h := self.newHandle(out, id)
+        h.dir = true
+        h.path = real.copy()
+        for e in d.entries {
+            h.names.push(e.name.copy())
+        }
+        d.free()
+        return
+    }
+    if kind == FXP_SETSTAT {
+        info, flags := readAttrs(&r)
+        if r.bad {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        setAttrs(real, &info, flags) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    if kind == FXP_REMOVE || kind == FXP_RMDIR {
+        info := fs.lstat(real) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        if info.isDir != (kind == FXP_RMDIR) {
+            putStatus(out, id, FX_FAILURE, "Is a folder" if info.isDir else "Not a folder")
+            return
+        }
+        fs.remove(real) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    if kind == FXP_MKDIR {
+        attrs, has := readAttrs(&r)
+        fs.mkdir(real) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        // 0o777 is what sftp sends without -m: the umask decides, as with
+        // mkdir
+        if has & ATTR_PERMISSIONS != 0 && attrs.mode != 0o777 {
+            fs.chmod(real, attrs.mode) catch e { }
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    if kind == FXP_RENAME {
+        to := r.string()
+        if r.bad {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        scoped String b = self.real(to)
+        if fs.exists(b) {
+            putStatus(out, id, FX_FAILURE, "Already exists")
+            return
+        }
+        fs.rename(real, b) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    if kind == FXP_READLINK {
+        target := fs.readLink(real) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        defer target.free()
+        str shown = target
+        if self.prefix.len > 0 && str.startsWith(target, self.prefix) && (target.len == self.prefix.len || target[self.prefix.len] == '/') {
+            shown = target[self.prefix.len:target.len]
+            if shown.len == 0 {
+                shown = "/"
+            }
+        }
+        putOneName(out, id, shown)
+        return
+    }
+    if kind == FXP_SYMLINK {
+        // the target first, as OpenSSH sends it
+        link := r.string()
+        if r.bad {
+            putStatus(out, id, FX_BAD_MESSAGE, "Bad message")
+            return
+        }
+        scoped String where = self.real(link)
+        scoped String target = self.linkTarget(path, link)
+        fs.symlink(target, where) catch e {
+            putFsError(out, id, e)
+            return
+        }
+        putStatus(out, id, FX_OK, "Success")
+        return
+    }
+    putStatus(out, id, FX_OP_UNSUPPORTED, "Unsupported")
+}

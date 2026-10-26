@@ -1,0 +1,179 @@
+// expect: ecdsaP256: hello ada
+// expect: ecdsaP384: hello ada
+// expect: ecdsaP521: hello ada
+// expect: rsa: hello ada
+// expect: passphrase: same true, wrong: SshError.key
+// expect: user certificate: hello ada
+// expect: certificate for bob: SshError.auth
+// expect: forced: hello ada
+// expect: host certificate: hello ada
+// expect: agent: 2 keys, logged in: hello ada
+// expect: forwarded agent: 2
+// expect: remote forward: pong
+// expect: agent after removeAll: 0 keys
+
+import fs, net, os, ssh, str
+
+ssh.Key userKey
+
+bool checkKey(str user, str key) {
+    scoped String mine = userKey.fingerprint()
+    scoped String theirs = ssh.fingerprint(key) catch "".copy()
+    return user == "ada" && theirs == mine
+}
+
+bool anyRemote(str user, str host, u16 port) => host == "127.0.0.1"
+
+!void handle(ssh.Session *s) {
+    if s.command == "greet" {
+        try s.write("hello {s.user}\n")
+        return
+    }
+    if s.command == "agent" {
+        a := try ssh.agent(s.agentSocket)
+        defer a.close()
+        keys := try a.keys()
+        try s.write("{keys.len}\n")
+        keys.freeEach()
+        return
+    }
+    s.status = 1
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}
+
+void agentIt(net.Listener ln) {
+    ssh.serveAgent(ln) catch e { }
+}
+
+// A server with hostKey on a port of its own.
+!u16 start(ssh.Server s) {
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serveIt(ln, s)
+    return ln.port
+}
+
+!String greet(u16 port, ssh.Config config) {
+    c := try ssh.dial("127.0.0.1", port, config)
+    defer c.close()
+    out := try c.run("greet")
+    out.stderr.free()
+    return out.stdout
+}
+
+!void main() {
+    dir := try fs.tempDir("sshkeys")
+    defer fs.removeAll(dir) catch e { }
+
+    // every kind of key, as the host's and as the user's
+    ssh.KeyKind[4] kinds = [.ecdsaP256, .ecdsaP384, .ecdsaP521, .rsa]
+    str[4] names = ["ecdsaP256", "ecdsaP384", "ecdsaP521", "rsa"]
+    for i, kind in kinds {
+        hostKey := try ssh.generateKeyOf(kind, "", 2048)
+        userKey = try ssh.generateKeyOf(kind, "ada", 2048)
+        port := try start(ssh.Server{hostKey: hostKey, publicKey: checkKey, handle: handle})
+        scoped String line = hostKey.publicText()
+        scoped String said = try greet(port, ssh.Config{user: "ada", key: &userKey, hostKey: line})
+        print("{names[i]}: {said.trim()}")
+        userKey.free()
+    }
+
+    // a key file with a passphrase
+    userKey = ssh.generateKey("ada")
+    scoped String text = userKey.privateText("open sesame")
+    read := try ssh.parseKey(text, "open sesame")
+    scoped String f1 = read.fingerprint()
+    scoped String f2 = userKey.fingerprint()
+    read.free()
+    _ = ssh.parseKey(text, "wrong") catch e {
+        print("passphrase: same {f1 == f2}, wrong: {e.code}")
+        ssh.generateKey()
+    }
+
+    // user certificates from a certificate authority
+    ca := ssh.generateKey("ca")
+    scoped String caLine = ca.publicText()
+    hostKey := ssh.generateKey()
+    scoped String hostLine = hostKey.publicText()
+    port := try start(ssh.Server{hostKey: hostKey, userCAs: caLine, handle: handle})
+    certKey := ssh.generateKey("ada")
+    scoped String certPub = certKey.publicText()
+    scoped String cert = try ca.signCertificate(certPub, ssh.CertOptions{keyId: "ada's", principals: ["ada"]})
+    try certKey.setCertificate(cert)
+    scoped String said = try greet(port, ssh.Config{user: "ada", key: &certKey, hostKey: hostLine})
+    print("user certificate: {said.trim()}")
+    bobKey := ssh.generateKey("bob")
+    scoped String bobPub = bobKey.publicText()
+    scoped String bobCert = try ca.signCertificate(bobPub, ssh.CertOptions{keyId: "bob", principals: ["bob"]})
+    try bobKey.setCertificate(bobCert)
+    _ = greet(port, ssh.Config{user: "ada", key: &bobKey, hostKey: hostLine}) catch e {
+        print("certificate for bob: {e.code}")
+        "".copy()
+    }
+    forcedKey := ssh.generateKey("ada")
+    scoped String forcedPub = forcedKey.publicText()
+    scoped String forcedCert = try ca.signCertificate(forcedPub, ssh.CertOptions{keyId: "f", principals: ["ada"], forceCommand: "greet"})
+    try forcedKey.setCertificate(forcedCert)
+    fc := try ssh.dial("127.0.0.1", port, ssh.Config{user: "ada", key: &forcedKey, hostKey: hostLine})
+    scoped forced := try fc.run("rm -rf /")
+    fc.close()
+    print("forced: {forced.stdout.trim()}")
+
+    // a host certificate, trusted through @cert-authority
+    certHost := ssh.generateKey()
+    scoped String certHostPub = certHost.publicText()
+    scoped String hostCert = try ca.signCertificate(certHostPub, ssh.CertOptions{host: true, keyId: "h", principals: ["127.0.0.1"]})
+    try certHost.setCertificate(hostCert)
+    userKey.free()
+    userKey = ssh.generateKey("ada")
+    hport := try start(ssh.Server{hostKey: certHost, publicKey: checkKey, handle: handle})
+    scoped String known = format("{dir}/known_hosts")
+    try fs.writeAll(known, "@cert-authority [127.0.0.1]:{hport} {caLine}\n")
+    scoped String viaCa = try greet(hport, ssh.Config{user: "ada", key: &userKey, knownHosts: known})
+    print("host certificate: {viaCa.trim()}")
+
+    // an agent holding the key and the certificate
+    scoped String sock = format("{dir}/agent.sock")
+    aln := try net.listenUnix(sock)
+    spawn agentIt(aln)
+    a := try ssh.agent(sock)
+    defer a.close()
+    try a.add(&certKey)
+    keys := try a.keys()
+    n := keys.len
+    keys.freeEach()
+    scoped String viaAgent = try greet(port, ssh.Config{user: "ada", agent: &a, hostKey: hostLine})
+    print("agent: {n} keys, logged in: {viaAgent.trim()}")
+
+    // the agent forwarded to the server, and a port it listens on for us
+    try os.setenv("SSH_AUTH_SOCK", sock)
+    fport := try start(ssh.Server{hostKey: hostKey, publicKey: checkKey, handle: handle, agentForwarding: true,
+        remoteForward: anyRemote})
+    c := try ssh.dial("127.0.0.1", fport, ssh.Config{user: "ada", key: &userKey, hostKey: hostLine, forwardAgent: true})
+    defer c.close()
+    scoped there := try c.run("agent")
+    print("forwarded agent: {there.stdout.trim()}")
+    rl := try c.listen("127.0.0.1", 0)
+    conn := try net.dial("127.0.0.1", rl.port)
+    ch := try rl.accept()
+    try conn.write("ping")
+    u8[4] got
+    k := try ch.read(got[0:4])
+    if k == 4 && got[0:4] == "ping" {
+        try ch.write("pong")
+    }
+    ch.closeWrite()
+    scoped String reply = try conn.readAll()
+    print("remote forward: {reply}")
+    conn.close()
+    ch.close()
+    rl.close()
+
+    try a.removeAll()
+    left := try a.keys()
+    print("agent after removeAll: {left.len} keys")
+    left.freeEach()
+    aln.close()
+}

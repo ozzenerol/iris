@@ -1,0 +1,107 @@
+// expect: realPath: /
+// expect: writeAll and readAll: "hello sftp"
+// expect: stat: 10 bytes, dir false, mode 600
+// expect: list: a.txt b.txt docs/
+// expect: big: 1500000 bytes, same true
+// expect: download and upload: same true
+// expect: open: "hello" then " sftp", offset 10
+// expect: rename: old false, new true
+// expect: link: /b.txt "bbb"
+// expect: escape: /etc/passwd isn't there: SftpError.notFound
+// expect: rmdir full: SftpError.failure
+// expect: remove: gone true
+
+import crypto, fs, net, ssh, str
+
+String root
+
+bool anyKey(str user, str key) => user == "ada"
+
+!void handle(ssh.Session *s) {
+    if s.kind == .subsystem && s.command == "sftp" {
+        try ssh.serveSftp(s, root)
+        return
+    }
+    s.status = 1
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}
+
+!void main() {
+    root = try fs.tempDir("sftp")
+    defer fs.removeAll(root) catch e { }
+    userKey := ssh.generateKey("ada")
+    hostKey := ssh.generateKey()
+    ln := try net.listen(0, "127.0.0.1")
+    spawn serveIt(ln, ssh.Server{hostKey: hostKey, publicKey: anyKey, handle: handle})
+    scoped String hostLine = hostKey.publicText()
+    c := try ssh.dial("127.0.0.1", ln.port, ssh.Config{user: "ada", key: &userKey, hostKey: hostLine})
+    defer c.close()
+    s := try c.sftp()
+    defer s.close()
+
+    scoped String here = try s.realPath(".")
+    print("realPath: {here}")
+    try s.writeAll("a.txt", "hello sftp", 0o600)
+    scoped String back = try s.readAll("/a.txt")
+    print("writeAll and readAll: \"{back}\"")
+    info := try s.stat("a.txt")
+    print("stat: {info.size} bytes, dir {info.isDir}, mode {info.mode:o}")
+    try s.writeAll("b.txt", "bbb")
+    try s.mkdir("docs")
+    scoped names := try s.list("/")
+    String shown
+    defer shown.free()
+    for e in names {
+        shown.append(" ")
+        shown.append(e.name)
+        if e.info.isDir {
+            shown.append("/")
+        }
+        e.name.free()
+    }
+    print("list:{shown}")
+
+    scoped String big = "0123456789abcdef".repeat(93750)
+    try s.writeAll("docs/big", big)
+    scoped String got = try s.readAll("docs/big")
+    print("big: {got.len} bytes, same {crypto.equal(got, big)}")
+
+    scoped String local = format("{root}-local")
+    scoped String local2 = format("{root}-local2")
+    defer fs.remove(local) catch e { }
+    defer fs.remove(local2) catch e { }
+    try s.download("docs/big", local)
+    try s.upload(local, "docs/big2")
+    try s.download("docs/big2", local2)
+    scoped String twice = try fs.readAll(local2)
+    print("download and upload: same {crypto.equal(twice, big)}")
+
+    f := try s.open("a.txt")
+    u8[5] five
+    n1 := try f.read(five[0:5])
+    scoped String first = five[0:n1].copy()
+    u8[16] rest
+    n2 := try f.read(rest[0:16])
+    print("open: \"{first}\" then \"{rest[0:n2]}\", offset {f.offset}")
+    f.close()
+
+    try s.rename("a.txt", "c.txt")
+    print("rename: old {s.exists("a.txt")}, new {s.exists("c.txt")}")
+    try s.symlink("/b.txt", "docs/link")
+    scoped String target = try s.readLink("docs/link")
+    scoped String through = try s.readAll("docs/link")
+    print("link: {target} \"{through}\"")
+    escaped := s.readAll("../../../../etc/passwd") catch e {
+        print("escape: /etc/passwd isn't there: {e.code}")
+        "".copy()
+    }
+    escaped.free()
+    s.rmdir("docs") catch e {
+        print("rmdir full: {e.code}")
+    }
+    try s.remove("c.txt")
+    print("remove: gone {!s.exists("c.txt")}")
+}
