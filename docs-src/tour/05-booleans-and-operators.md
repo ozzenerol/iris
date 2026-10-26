@@ -137,6 +137,42 @@ true true true
 not found
 ```
 
+## in
+
+`x in ...` is true when x is among the values after `in`. `not in` is the opposite. It looks in a range, in a list of values written out, in a slice or an array, and in any value with a `has` method, such as a `Map`, a `Set` or a `List`:
+
+```iris run
+enum State { idle, open, closing, closed }
+
+void main() {
+    port := 8443
+    method := "HEAD"
+    s := State.closing
+    i64[] blocked = [23, 445]
+
+    Map[str, i64] hits
+    defer hits.free()
+    hits.set("10.0.0.7", 3)
+
+    print("{port in 1024..49152} {port not in blocked}")
+    print("{method in ["GET", "HEAD"]} {s in [.closing, .closed]}")
+    print("{"10.0.0.7" in hits} {"10.0.0.8" in hits}")
+}
+```
+
+```output
+true true
+true true
+true false
+```
+
+- A range goes from its start up to but excluding its end, as in `for`: `i in 0..n` is true for the same `i` that `for i in 0..n` goes over. Ranges take numbers, `Duration`s and text. Integers are compared as `i64`, so a `u8` can be tested against `0..256`.
+- A list of values is tried in order, and the values after the first equal one are not worked out. The values take their type from x, so `.closing` needs no enum name.
+- In a slice, an array or a `str`, `in` looks for one item with `==`. `'\n' in line` looks for a byte. For text inside text, use `str.contains`.
+- `key in m` is `m.has(key)`, for any struct whose `has` takes one value and gives a `bool`.
+- x is worked out once, before the values after `in`.
+- `for x in xs` always goes over xs. A loop that runs while x is in xs is written `for (x in xs)`; `for x not in xs` needs no parentheses.
+
 ## All the operators
 
 | Operators | Meaning |
@@ -145,6 +181,7 @@ not found
 | `& \| ^ ~` | bitwise and, or, xor, not |
 | `<< >>` | shifts |
 | `== != < <= > >=`, `is`, `is not` | comparison |
+| `in`, `not in` | membership (see [in](#in) above) |
 | `&& \|\| !`, `and or not` | logic on `bool` |
 | `-x` | negation |
 | `x++ x-- ++x --x` | increment and decrement (see [Variables](02-variables.html)) |
@@ -160,7 +197,7 @@ From tightest to loosest:
 1. `x++`, `x--`, then the prefix operators `-x`, `!x`, `~x`, `&x`, `*p`, `++x`, `--x`
 2. `* / % << >> &`
 3. `+ - | ^`
-4. `== != < <= > >=`, `is`, `is not`
+4. `== != < <= > >=`, `is`, `is not`, `in`, `not in`
 5. `not`
 6. `&&`, `and`
 7. `||`, `or`

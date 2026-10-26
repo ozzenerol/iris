@@ -1,0 +1,30 @@
+// error: 23: 'in' looks in a range, an array, a slice or a value with a has method, not Box
+// error: 24: 'in' looks in a range, an array, a slice or a value with a has method, not i64
+// error: 25: a range after 'in' needs a number, a Duration or text, not Box
+// error: 26: Msg values can't be compared with ==, so 'in' can't look for one
+// error: 27: 'in' looks for one byte in text; for text in text use str.contains
+// error: 28: 300 doesn't fit in u8
+// error: 29: undefinedName is not declared
+
+struct Box {
+    i64 n
+}
+
+enum Msg {
+    ping
+    data(str text)
+}
+
+void main() {
+    x := 5
+    b := Box{n: 1}
+    m := Msg.ping
+    u8 small = 3
+    _ = x in b
+    _ = x in 7
+    _ = b in Box{n: 1}..Box{n: 2}
+    _ = m in [Msg.ping]
+    _ = "a" in "abc"
+    _ = small in [1, 300]
+    _ = undefinedName in [1]
+}

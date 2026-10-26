@@ -2286,6 +2286,9 @@ static bool evalConst(Checker *c, Node *e, int64_t *out, bool *isBool) {
     case N_BINARY: {
         int64_t x, y;
         bool bx, by;
+        if (e->op == K_IN) {
+            return false;
+        }
         if (!evalConst(c, e->a, &x, &bx) || !evalConst(c, e->b, &y, &by)) {
             return false;
         }
@@ -2771,6 +2774,109 @@ static bool isComparable(Type *t) {
     default:
         return false;
     }
+}
+
+/* x in a..b, x in [a, b], x in xs, and x in a value with has(x), with
+ * not in for the opposite. The IR writer works out x once; a value with
+ * has becomes the call, under a ! for not in. */
+static Type *checkIn(Checker *c, Node **slot) {
+    Node *e = *slot;
+    const char *opName = e->ival == 4 ? "not in" : "in";
+    Node *r = e->b;
+    if (r->kind == N_BINARY && r->op == P_DOTDOT) {
+        /* a range: low up to high, without high, as in for */
+        Type *t = checkExpr(c, &e->a, NULL);
+        if (isErr(t)) {
+            checkExpr(c, &r->a, NULL);
+            checkExpr(c, &r->b, NULL);
+            return setType(e, &tyError);
+        }
+        if (isInt(t) && t != &tyDuration && t != &tyU64) {
+            t = &tyI64;                 /* compared as an i64, so u8 in 0..256 works */
+        }
+        if (!isInt(t) && t->kind != TY_FLOAT && !isStr(t)) {
+            error(c, e->a, "a range after '%s' needs a number, a Duration or text, not %s", opName, t->name);
+            checkExpr(c, &r->a, NULL);
+            checkExpr(c, &r->b, NULL);
+            return setType(e, &tyError);
+        }
+        coerce(c, &e->a, t, "the value");
+        checkExpr(c, &r->a, t);
+        coerce(c, &r->a, t, "the start of the range");
+        checkExpr(c, &r->b, t);
+        coerce(c, &r->b, t, "the end of the range");
+        r->type = t;
+        return setType(e, &tyBool);
+    }
+    if (r->kind == N_ARRAY_LIT) {
+        /* x in [a, b]: x == a or x == b, each value in turn */
+        Type *t = checkExpr(c, &e->a, NULL);
+        for (int i = 0; i < r->list.len; i++) {
+            checkExpr(c, &r->list.items[i], isErr(t) ? NULL : t);
+            if (!isErr(t)) coerce(c, &r->list.items[i], t, "the value");
+        }
+        if (isErr(t)) return setType(e, &tyError);
+        if (!isComparable(t)) {
+            error(c, e, "%s values can't be compared with ==, so '%s' can't look for one", t->name, opName);
+            return setType(e, &tyError);
+        }
+        r->type = t;
+        return setType(e, &tyBool);
+    }
+    Node *orig = cloneNode(c->arena, r);
+    Type *rt = checkExpr(c, &e->b, NULL);
+    if (isErr(rt)) {
+        checkExpr(c, &e->a, NULL);
+        return setType(e, &tyError);
+    }
+    if (rt->kind == TY_STRING) {
+        coerce(c, &e->b, &tyStr, "the text");
+        rt = &tyStr;
+    }
+    if (rt->kind == TY_SLICE || rt->kind == TY_ARRAY) {
+        Type *t = checkExpr(c, &e->a, rt->elem);
+        if (isStr(rt) && isStr(t)) {
+            error(c, e, "'%s' looks for one byte in text; for text in text use str.contains", opName);
+            return setType(e, &tyError);
+        }
+        if (isErr(t) || !coerce(c, &e->a, rt->elem, "the value")) return setType(e, &tyError);
+        if (!isComparable(rt->elem)) {
+            error(c, e, "%s values can't be compared with ==, so '%s' can't look for one", rt->elem->name, opName);
+            return setType(e, &tyError);
+        }
+        return setType(e, &tyBool);
+    }
+    Type *st = rt->kind == TY_PTR ? rt->elem : rt;
+    Node *path[8];
+    int depth;
+    Node *m = st->kind == TY_STRUCT ? findMethod(st, "has", path, &depth, 8) : NULL;
+    if (!m) {
+        error(c, e->b, "'%s' looks in a range, an array, a slice or a value with a has method, not %s", opName,
+              rt->name);
+        checkExpr(c, &e->a, NULL);
+        return setType(e, &tyError);
+    }
+    /* key in m is m.has(key), with the value worked out again from the source */
+    Node *fa = like(c, N_FIELD_ACCESS, e);
+    fa->a = orig;
+    fa->name = "has";
+    Node *call = like(c, N_CALL, e);
+    call->a = fa;
+    listPush(c->arena, &call->list, e->a);
+    Node *out = call;
+    if (e->ival == 4) {
+        out = like(c, N_UNARY, e);
+        out->op = P_BANG;
+        out->ival = 1;
+        out->a = call;
+    }
+    *slot = out;
+    Type *t = checkExpr(c, slot, NULL);
+    if (!isErr(t) && t != &tyBool) {
+        error(c, e, "'%s' needs %s.has to give a bool, not %s", opName, st->name, t->name);
+        return setType(*slot, &tyError);
+    }
+    return t;
 }
 
 static Type *checkBinary(Checker *c, Node *e, Type *expected) {
@@ -3569,6 +3675,9 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
         return setType(e, &tyThread);
     }
     case N_BINARY:
+        if (e->op == K_IN) {
+            return checkIn(c, slot);
+        }
         return checkBinary(c, e, expected);
     case N_CALL: {
         Type *t = checkCall(c, e, expected);

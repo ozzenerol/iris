@@ -16,6 +16,7 @@ The rules Iris follows and the reason for each, the ones still proposed, and the
 | `match` replaces `switch`. `if` and `match` give values. | No fall-through bugs, and no need for a separate `?:` operator. |
 | `and`, `or` and `not` can be written for `&&`, `\|\|` and `!`. `not` takes a whole comparison. | Conditions read as words. The symbols work too. |
 | `is` and `is not` are `==` and `!=`: they compare values, not identity. | `if c is .red` reads as a sentence. Identity is a pointer comparison, `&a == &b`, so `is` has no other job. |
+| `x in ...` and `x not in ...` look in a range, a list of values, a slice or an array, or call `has`. A range leaves out its end, as in `for`. | Tests like `port in 1..1024` and `method in ["GET", "HEAD"]` read as words, and `i in 0..n` means the same in a condition as in a loop. |
 | A short statement can end with `if cond`: `return if n < 0`. No `else`, and not after a declaration or `defer`. | Guards at the top of a function take one line instead of three. |
 | A last parameter `T... name` takes any number of arguments as a `T[]`. A slice is passed by name, `sum(xs: nums)`. | Typed, and no new idea: the function sees a slice, and the array for it is on the caller's stack. |
 | No garbage collector. | Predictable memory use and latency. |

@@ -1168,10 +1168,33 @@ static Node *parseBinary(Parser *p, int minPrec) {
     for (;;) {
         Token *t = peek(p);
         int prec = precedence(t->kind);
+        bool notIn = t->kind == K_NOT && peekAt(p, 1)->kind == K_IN;
+        if (t->kind == K_IN || notIn) {
+            prec = 5;
+        }
         if (prec == 0 || prec < minPrec) {
             return left;
         }
         next(p);
+        if (t->kind == K_IN || notIn) {
+            /* x in a..b, x in [a, b], x in xs, and x not in ...: the range
+             * after in binds tighter than and and or */
+            if (notIn) next(p);
+            Node *n = node(p, N_BINARY, t);
+            n->op = K_IN;
+            n->ival = notIn ? 4 : 3;        /* written as words, for messages */
+            n->a = left;
+            n->b = parseBinary(p, prec + 1);
+            if (at(p, P_DOTDOT)) {
+                Node *r = node(p, N_BINARY, next(p));
+                r->op = P_DOTDOT;
+                r->a = n->b;
+                r->b = parseBinary(p, prec + 1);
+                n->b = r;
+            }
+            left = n;
+            continue;
+        }
         Node *n = node(p, N_BINARY, t);
         n->op = t->kind == K_AND ? P_ANDAND : t->kind == K_OR ? P_OROR : t->kind;
         if (t->kind == K_IS) {
@@ -1387,11 +1410,13 @@ static Node *parseSelect(Parser *p) {
 /* Whether a for loop's head is names before in: i, x in, or with a tuple
  * taken apart, (a, b) in and i, (a, b) in. */
 static bool forInAhead(Parser *p) {
+    int depth = 0;
     for (int k = 0;; k++) {
         TokKind kind = peekAt(p, k)->kind;
         if (kind == K_IN) {
-            return k > 0;
+            return k > 0 && depth == 0;     /* for (x in xs) is a condition */
         }
+        depth += kind == P_LPAREN ? 1 : kind == P_RPAREN ? -1 : 0;
         if (kind != T_IDENT && kind != P_COMMA && kind != P_LPAREN && kind != P_RPAREN) {
             return false;
         }
