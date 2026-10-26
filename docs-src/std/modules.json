@@ -49,11 +49,12 @@
       {"name": "net", "title": "Networking", "summary": "TCP, UDP, TLS, addresses and looking up names."},
       {"name": "wire", "title": "Binary messages", "summary": "Binary protocol messages read into @wire structs and written from them, over a connection or from bytes."},
       {"name": "netlink", "title": "Interfaces and routes", "summary": "The kernel's interfaces, addresses and routes on Linux, read, changed and watched, as ip link, ip addr and ip route do."},
-      {"name": "http", "title": "HTTP", "summary": "HTTP/1.1 and HTTP/2: servers, a Router, clients and WebSockets."},
+      {"name": "http", "title": "HTTP", "summary": "HTTP/1.1, HTTP/2 and HTTP/3: servers, a Router, clients and WebSockets."},
       {"name": "template", "title": "HTML templates", "summary": "Templates with values, if, for and include, escaped for HTML, filled from a struct or a Map."},
       {"name": "dns", "title": "DNS messages", "summary": "Reading DNS queries and replies from bytes, and writing them."},
       {"name": "smtp", "title": "Mail", "summary": "Sending mail over SMTP, with STARTTLS or TLS and a login."},
-      {"name": "ssh", "title": "SSH", "summary": "An SSH client that runs commands and forwards ports, and a server for shells, commands and sftp, with Ed25519 keys and known_hosts."}
+      {"name": "ssh", "title": "SSH", "summary": "An SSH client that runs commands and forwards ports, and a server for shells, commands and sftp, with Ed25519 keys and known_hosts."},
+      {"name": "quic", "title": "QUIC", "summary": "QUIC connections over UDP with TLS 1.3, each with many streams, for a client and a server."}
     ]},
     {"title": "Databases", "modules": [
       {"name": "sqlite", "title": "SQLite", "summary": "SQLite databases, with rows read into @json structs."},

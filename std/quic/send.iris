@@ -1,0 +1,544 @@
+// Sending: datagrams built of a packet for each space that has something
+// to say, sealed once they are all written, and sent in batches of one
+// size (GSO on Linux).
+
+import time
+
+// the room a STREAM or CRYPTO frame's header may take
+const i64 FRAME_HEAD = 25
+// datagrams in one batch
+const i64 MAX_BATCH = 44
+
+// A packet written and not yet sealed.
+struct Plan {
+    i64 sp
+    i64 start
+    i64 pnOff
+    i64 pnLen
+    i64 lenOff // the long header's 2-byte length, -1 for a short header
+    i64 end
+    Sent sent
+}
+
+i64 pnLenFor(i64 pn, i64 largestAcked) {
+    unacked := pn - largestAcked
+    if unacked < 1 << 14 {
+        return 2
+    }
+    if unacked < 1 << 22 {
+        return 3
+    }
+    return 4
+}
+
+// Sends everything that may go now.
+void Link.flush() {
+    if self.phase == .closed || self.phase == .draining {
+        return
+    }
+    now := time.clock()
+    if self.sbuf.len == 0 {
+        self.sbuf = alloc(u8, MAX_BATCH * PROBE_DATAGRAM)
+    }
+    buf := self.sbuf
+    self.maybeProbeMtu(now)
+    for {
+        i64 used = 0
+        i64 seg = 0
+        i64 count = 0
+        bool last = false
+        for count < MAX_BATCH && !last {
+            size := if seg > 0 { seg } else { self.mtu }
+            n := self.buildDatagram(buf[used:used + size], now)
+            if n == 0 {
+                break
+            }
+            if seg == 0 {
+                seg = n
+            }
+            last = n < seg
+            used += n
+            count += 1
+        }
+        if count == 0 {
+            break
+        }
+        trace("{self.server} send {count} datagrams {used} bytes")
+        self.ep.send(buf[0:used], seg, count, self.peer)
+        self.bytesOut += used
+        self.lastSend = now
+        if count < MAX_BATCH && !last {
+            break
+        }
+    }
+    // a client's first Handshake packet ends the Initial space (RFC 9001
+    // 4.9.1): the server reads no more of it
+    if !self.server && !self.sp[SP_INITIAL].gone && self.sp[SP_HANDSHAKE].nextPn > 0 {
+        self.dropSpace(SP_INITIAL)
+    }
+    self.closeQueued = false
+}
+
+// A datagram of the packets that have something to send: its size, 0 for
+// none.
+i64 Link.buildDatagram(u8[] dg, Duration now) {
+    Plan[3] plans
+    i64 n = 0
+    i64 at = 0
+    bool initial = false
+    bool eliciting = false
+    for i in 0..3 {
+        sp := &self.sp[i]
+        if sp.gone || sp.wkey == null {
+            continue
+        }
+        if dg.len - at < 64 {
+            break
+        }
+        // closing: the close goes at every level the peer may read
+        if self.phase == .closing && !self.closeQueued {
+            continue
+        }
+        if self.phase == .closing && i == SP_INITIAL && self.sp[SP_HANDSHAKE].wkey != null && !self.server {
+            continue
+        }
+        Plan p = Plan{sp: i, start: at}
+        if !self.buildPacket(i, dg, now, &p) {
+            continue
+        }
+        if i == SP_INITIAL {
+            initial = true
+        }
+        if p.sent.eliciting {
+            eliciting = true
+        }
+        at = p.end + 16
+        plans[n] = p
+        n += 1
+    }
+    if n == 0 {
+        return 0
+    }
+    if self.phase == .closing {
+        // the close goes once in each space, then waits for the peer
+        self.closeQueued = false
+    }
+    // a datagram with an Initial is padded to 1200 bytes (RFC 9000 14.1)
+    if initial && (!self.server || eliciting) && at < MIN_DATAGRAM {
+        p := &plans[n - 1]
+        Out o = Out{b: dg, n: p.end}
+        o.padTo(p.end + MIN_DATAGRAM - at)
+        p.end = o.n
+        at = MIN_DATAGRAM
+    }
+    for k in 0..n {
+        p := &plans[k]
+        if p.lenOff >= 0 {
+            Out o = Out{b: dg, n: p.lenOff}
+            o.putVarIn(p.end + 16 - p.pnOff, 2)
+        }
+        sp := &self.sp[p.sp]
+        key := sp.wkey
+        _ = rawSeal(key, &dg[p.start], p.pnOff - p.start, p.pnLen, p.sent.pn, p.end - p.start)
+        p.sent.size = p.end + 16 - p.start
+        if k == n - 1 {
+            p.sent.size = at - p.start
+        }
+        self.record(p.sp, p.sent, now)
+    }
+    return at
+}
+
+void Link.record(i64 i, Sent s, Duration now) {
+    sp := &self.sp[i]
+    if s.eliciting {
+        sp.elicitingOut += 1
+        sp.lastEliciting = now
+        s.inFlight = true
+    }
+    if s.inFlight {
+        self.inFlight += s.size
+    }
+    if sp.sent.len == 0 {
+        sp.firstPn = s.pn
+    }
+    sp.sent.push(s)
+}
+
+// Writes a packet of space i into dg at p.start. False when there is
+// nothing to send in it.
+bool Link.buildPacket(i64 i, u8[] dg, Duration now, Plan *p) {
+    sp := &self.sp[i]
+    closing := self.phase == .closing
+    wantAck := sp.unacked > 0 && (sp.ackNow || (sp.ackBy != 0s && now >= sp.ackBy))
+    probe := sp.probes > 0
+    bool allowed = probe || self.inFlight + self.mtu <= self.cwnd
+    if self.server && !self.validated && self.bytesOut + p.start + self.mtu > 3 * self.bytesIn {
+        allowed = false
+    }
+    hasData := allowed && !closing && self.hasData(i)
+    if !closing && !wantAck && !hasData && !probe {
+        return false
+    }
+    if probe && !allowed {
+        // probes go even past the window, never past the amplification limit
+        if self.server && !self.validated && self.bytesOut + p.start + self.mtu > 3 * self.bytesIn {
+            return false
+        }
+    }
+    pn := sp.nextPn
+    pnLen := pnLenFor(pn, sp.largestAcked)
+    Out o = Out{b: dg[0:dg.len - 16], n: p.start}
+    if i == SP_APP {
+        o.put8(0x40 | self.keyPhase << 2 | (pnLen - 1))
+        o.putBytes(self.dcid[0:self.dcidLen])
+        p.lenOff = -1
+    } else {
+        kind := if i == SP_INITIAL { PT_INITIAL } else { PT_HANDSHAKE }
+        o.put8(0xc0 | kind << 4 | (pnLen - 1))
+        o.put32(VERSION_1)
+        o.put8(self.dcidLen)
+        o.putBytes(self.dcid[0:self.dcidLen])
+        o.put8(self.scidLen)
+        o.putBytes(self.scid[0:self.scidLen])
+        if i == SP_INITIAL {
+            if self.server {
+                o.putVar(0)
+            } else {
+                o.putVar(self.token.len)
+                o.putBytes(self.token)
+            }
+        }
+        p.lenOff = o.n
+        o.put16(0)
+    }
+    p.pnOff = o.n
+    p.pnLen = pnLen
+    for k in 0..pnLen {
+        o.put8(pn >> (8 * (pnLen - 1 - k)) & 255)
+    }
+    payload := o.n
+    Sent s = Sent{pn: pn, time: now, ackedUpTo: -1}
+    if closing {
+        self.closeFrame(i, &o)
+    } else {
+        if sp.unacked > 0 || (wantAck && !sp.got.empty()) {
+            self.writeAck(i, &o, now, &s)
+        }
+        if hasData || probe {
+            if i == SP_APP {
+                self.controlFrames(&o, &s)
+            }
+            self.cryptoFrames(i, &o, &s)
+            if i == SP_APP {
+                self.streamFrames(&o, &s)
+            }
+            if probe && !s.eliciting && o.room() > 0 {
+                o.put8(FR_PING)
+                s.eliciting = true
+            }
+        }
+    }
+    if o.n == payload {
+        return false
+    }
+    if probe && s.eliciting {
+        sp.probes -= 1
+    }
+    // the header protection sample needs 4 bytes past the packet number
+    if o.n - p.pnOff < 4 {
+        o.padTo(p.pnOff + 4)
+    }
+    p.end = o.n
+    trace("{self.server} packet sp {i} pn {pn} eliciting {s.eliciting} bytes {o.n - p.start}")
+    sp.nextPn += 1
+    p.sent = s
+    return true
+}
+
+bool Link.hasData(i64 i) {
+    sp := &self.sp[i]
+    if sp.crypto.pending() {
+        return true
+    }
+    if i != SP_APP {
+        return false
+    }
+    return self.ctl.len > 0 || self.sendQ.len > 0
+}
+
+void Link.closeFrame(i64 i, Out *o) {
+    reason := self.closeReason[:]
+    if reason.len > 200 {
+        reason = reason[0:200]
+    }
+    if self.closeApp && i == SP_APP {
+        o.put8(FR_CLOSE_APP)
+        o.putVar(self.closeCode)
+        o.putVar(reason.len)
+        o.putBytes(reason)
+        return
+    }
+    o.put8(FR_CLOSE)
+    // an application's close before 1-RTT becomes APPLICATION_ERROR,
+    // without its reason (RFC 9000 10.2.3)
+    o.putVar(if self.closeApp { 0x0c } else { self.closeCode })
+    o.putVar(0)
+    if self.closeApp {
+        o.putVar(0)
+    } else {
+        o.putVar(reason.len)
+        o.putBytes(reason)
+    }
+}
+
+// The ACK frame of what came in space i: the newest ranges first.
+void Link.writeAck(i64 i, Out *o, Duration now, Sent *s) {
+    sp := &self.sp[i]
+    if sp.got.empty() || o.room() < 32 {
+        return
+    }
+    ranges := sp.got.r
+    last := ranges.len - 1
+    largest := ranges.at(last).hi - 1
+    o.put8(FR_ACK)
+    o.putVar(largest)
+    i64 delay = 0
+    if i == SP_APP {
+        delay = i64(now - sp.largestGotAt) / 1000 >> self.ours.ackDelayExponent
+        if delay < 0 {
+            delay = 0
+        }
+    }
+    o.putVar(delay)
+    // as many ranges as fit
+    i64 count = 0
+    i64 room = o.room() - 2 * 8 - 8
+    i64 k = last - 1
+    for k >= 0 && room > 16 && count < 31 {
+        room -= 16
+        count += 1
+        k -= 1
+    }
+    o.putVar(count)
+    o.putVar(largest - ranges.at(last).lo)
+    lo := ranges.at(last).lo
+    for j in 0..count {
+        g := ranges.at(last - 1 - j)
+        o.putVar(lo - g.hi - 1)
+        o.putVar(g.hi - 1 - g.lo)
+        lo = g.lo
+    }
+    s.ackedUpTo = largest
+    sp.unacked = 0
+    sp.ackNow = false
+    sp.ackBy = 0s
+}
+
+void Link.cryptoFrames(i64 i, Out *o, Sent *s) {
+    sp := &self.sp[i]
+    for sp.crypto.pending() && o.room() > FRAME_HEAD + 1 {
+        off, n, _ := sp.crypto.take(o.room() - FRAME_HEAD, MAX_VARINT)
+        if n == 0 {
+            break
+        }
+        o.put8(FR_CRYPTO)
+        o.putVar(off)
+        o.putVar(n)
+        sp.crypto.copyOut(off, n, &o.b[o.n], 0)
+        o.n += n
+        s.add(Rec{kind: FR_CRYPTO, off: off, len: n})
+        s.eliciting = true
+    }
+}
+
+void Link.controlFrames(Out *o, Sent *s) {
+    i64 k = 0
+    for k < self.ctl.len && o.room() > 40 {
+        c := self.ctl.at(k)
+        k += 1
+        match c.kind {
+            FR_MAX_DATA => {
+                o.put8(FR_MAX_DATA)
+                o.putVar(self.maxDataIn)
+                self.maxDataQueued = false
+            }
+            FR_MAX_STREAM_DATA => {
+                st, ok := self.streams.get(c.a)
+                if !ok {
+                    continue
+                }
+                st.maxQueued = false
+                if st.rx.finalSize >= 0 || st.gotReset || st.stopSent {
+                    continue
+                }
+                o.put8(FR_MAX_STREAM_DATA)
+                o.putVar(st.id)
+                o.putVar(st.recvMax)
+            }
+            FR_MAX_STREAMS_BIDI => {
+                o.put8(FR_MAX_STREAMS_BIDI)
+                o.putVar(self.maxBidiIn)
+                self.maxStreamsBidiQueued = false
+            }
+            FR_MAX_STREAMS_UNI => {
+                o.put8(FR_MAX_STREAMS_UNI)
+                o.putVar(self.maxUniIn)
+                self.maxStreamsUniQueued = false
+            }
+            FR_RESET_STREAM => {
+                st, ok := self.streams.get(c.a)
+                if !ok {
+                    continue
+                }
+                st.resetQueued = false
+                o.put8(FR_RESET_STREAM)
+                o.putVar(st.id)
+                o.putVar(st.resetCode)
+                o.putVar(st.tx.next)
+            }
+            FR_STOP_SENDING => {
+                st, ok := self.streams.get(c.a)
+                if !ok {
+                    continue
+                }
+                st.stopQueued = false
+                o.put8(FR_STOP_SENDING)
+                o.putVar(st.id)
+                o.putVar(st.stopCode)
+            }
+            FR_HANDSHAKE_DONE => o.put8(FR_HANDSHAKE_DONE)
+            FR_RETIRE_CONNECTION_ID => {
+                o.put8(FR_RETIRE_CONNECTION_ID)
+                o.putVar(c.a)
+            }
+            FR_PATH_RESPONSE => {
+                o.put8(FR_PATH_RESPONSE)
+                for j in 0..8 {
+                    o.put8(c.a >> (56 - 8 * j) & 255)
+                }
+                s.eliciting = true
+                continue
+            }
+            _ => continue
+        }
+        s.add(Rec{kind: c.kind, id: c.a})
+        s.eliciting = true
+        if c.kind == FR_RESET_STREAM || c.kind == FR_STOP_SENDING {
+            st, ok := self.streams.get(c.a)
+            if ok {
+                self.maybeForget(st)
+            }
+        }
+    }
+    // what was sent leaves the list
+    if k > 0 {
+        for j in k..self.ctl.len {
+            self.ctl.set(j - k, self.ctl.at(j))
+        }
+        self.ctl.resize(self.ctl.len - k)
+    }
+}
+
+// Stream data, the streams taking turns.
+void Link.streamFrames(Out *o, Sent *s) {
+    i64 k = 0
+    for k < self.sendQ.len && o.room() > FRAME_HEAD + 1 {
+        st := self.sendQ.at(k)
+        if st.resetSent || !st.tx.pending() {
+            self.unqueue(k)
+            continue
+        }
+        credit := self.maxDataOut - self.sentData
+        limit := st.sendMax
+        if st.tx.next + credit < limit {
+            limit = st.tx.next + credit
+        }
+        before := st.tx.next
+        // the frame's head at its largest: type, id, offset and length
+        head := 1 + varLen(st.id) + varLen(st.tx.end) + if o.room() > 16383 { 4 } else { 2 }
+        if o.room() <= head {
+            break
+        }
+        off, n, fin := st.tx.take(o.room() - head, limit)
+        if n == 0 && !fin {
+            // held back by flow control: MAX_STREAM_DATA or MAX_DATA
+            // queues it again
+            self.unqueue(k)
+            continue
+        }
+        if st.tx.next > before {
+            self.sentData += st.tx.next - before
+        }
+        i64 kind = FR_STREAM | 0x02
+        if off > 0 {
+            kind = kind | 0x04
+        }
+        if fin {
+            kind = kind | 0x01
+        }
+        o.put8(kind)
+        o.putVar(st.id)
+        if off > 0 {
+            o.putVar(off)
+        }
+        o.putVar(n)
+        if n > 0 {
+            st.tx.copyOut(off, n, &o.b[o.n], 0)
+            o.n += n
+        }
+        s.add(Rec{kind: FR_STREAM, id: st.id, off: off, len: n, fin: fin})
+        s.eliciting = true
+        if !st.tx.pending() {
+            self.unqueue(k)
+            continue
+        }
+        k += 1
+    }
+    // the next packet starts with the stream after the last one served
+    if k > 0 && k < self.sendQ.len {
+        for j in 0..k {
+            self.sendQ.push(self.sendQ.remove(0))
+        }
+    }
+}
+
+void Link.unqueue(i64 k) {
+    st := self.sendQ.remove(k)
+    st.queued = false
+    self.maybeForget(st)
+}
+
+// Once the handshake is confirmed, one PING padded to 1452 bytes finds
+// out whether the path carries datagrams that large.
+void Link.maybeProbeMtu(Duration now) {
+    if self.mtuProbed || !self.confirmed || self.phase != .open || self.theirs.maxUdpPayload < PROBE_DATAGRAM {
+        return
+    }
+    if self.inFlight + PROBE_DATAGRAM > self.cwnd {
+        return
+    }
+    self.mtuProbed = true
+    sp := &self.sp[SP_APP]
+    if sp.wkey == null {
+        return
+    }
+    u8[] dg = self.sbuf[0:PROBE_DATAGRAM]
+    pn := sp.nextPn
+    pnLen := pnLenFor(pn, sp.largestAcked)
+    Out o = Out{b: dg}
+    o.put8(0x40 | self.keyPhase << 2 | (pnLen - 1))
+    o.putBytes(self.dcid[0:self.dcidLen])
+    pnOff := o.n
+    for k in 0..pnLen {
+        o.put8(pn >> (8 * (pnLen - 1 - k)) & 255)
+    }
+    o.put8(FR_PING)
+    o.padTo(PROBE_DATAGRAM - 16)
+    _ = rawSeal(sp.wkey, &dg[0], pnOff, pnLen, pn, o.n)
+    sp.nextPn += 1
+    self.record(SP_APP, Sent{pn: pn, time: now, size: PROBE_DATAGRAM, eliciting: true, probe: true, ackedUpTo: -1},
+        now)
+    self.ep.send(dg, 0, 1, self.peer)
+    self.bytesOut += PROBE_DATAGRAM
+}

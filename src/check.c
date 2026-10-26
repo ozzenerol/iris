@@ -6712,8 +6712,11 @@ static void checkSignature(Checker *c, Node *f, Type *recv) {
         Node *at = f->attrs.items[i];
         if (strcmp(at->name, "extern") == 0) {
             /* @extern("c_name"): a C function; the standard library only */
-            bool std = f->module && strcmp(f->module, "main") != 0 && f->src &&
-                       (strncmp(f->src->path, "std/", 4) == 0 || strncmp(f->src->path, "c-import:", 9) == 0);
+            /* iris test on a std file runs it as the program, and its
+               test blocks may call its C functions too */
+            bool std = f->module && (strcmp(f->module, "main") != 0 || gTesting) && f->src &&
+                       (strncmp(f->src->path, "std/", 4) == 0 || strncmp(f->src->path, "c-import:", 9) == 0 ||
+                        (gTesting && strstr(f->src->path, "/std/") != NULL));
             if (!std) {
                 error(c, at, "@extern is for the standard library; use import c to call C");
             } else if (at->list.len < 1 || at->list.len > 2 || at->list.items[0]->kind != N_STRING) {

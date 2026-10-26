@@ -1,0 +1,474 @@
+// Loss detection and congestion control (RFC 9002): ACKs, the RTT,
+// packets declared lost by number or by time, probe timeouts, and NewReno.
+
+import time
+
+const i64 PACKET_THRESHOLD = 3
+
+Duration maxDur(Duration a, Duration b) => if a > b { a } else { b }
+
+Duration minDur(Duration a, Duration b) => if a < b { a } else { b }
+
+Duration absDur(Duration a) => if a < 0s { 0s - a } else { a }
+
+// The probe timeout without backoff, and with the peer's ACK delay for
+// the application space.
+Duration Link.pto() {
+    return self.srtt + maxDur(self.rttvar * 4, 1ms)
+}
+
+Duration Link.ptoOf(i64 i) {
+    d := self.pto()
+    if i == SP_APP {
+        d += Duration(self.theirs.maxAckDelayMs) * 1ms
+    }
+    i64 k = self.ptoCount
+    if k > 16 {
+        k = 16
+    }
+    return d * (i64(1) << k)
+}
+
+void Link.rttSample(Duration latest, Duration ackDelay) {
+    self.latestRtt = latest
+    if !self.hasRtt {
+        self.hasRtt = true
+        self.minRtt = latest
+        self.srtt = latest
+        self.rttvar = latest / 2
+        return
+    }
+    if latest < self.minRtt {
+        self.minRtt = latest
+    }
+    delay := ackDelay
+    if self.confirmed {
+        delay = minDur(delay, Duration(self.theirs.maxAckDelayMs) * 1ms)
+    }
+    adjusted := latest
+    if latest >= self.minRtt + delay {
+        adjusted = latest - delay
+    }
+    self.rttvar = (self.rttvar * 3 + absDur(self.srtt - adjusted)) / 4
+    self.srtt = (self.srtt * 7 + adjusted) / 8
+}
+
+void Link.ackFrame(i64 i, i64 kind, In *r) {
+    largest := r.getVar()
+    delay := r.getVar()
+    count := r.getVar()
+    first := r.getVar()
+    if r.bad {
+        return
+    }
+    sp := &self.sp[i]
+    if largest >= sp.nextPn || first > largest {
+        self.fail(E_PROTOCOL_VIOLATION, "an ACK of a packet we never sent")
+        return
+    }
+    now := time.clock()
+    bool newly = false
+    bool elicitingNewly = false
+    bool largestNewly = false
+    Duration largestSent
+    hi := largest
+    lo := largest - first
+    for k in 0..count + 1 {
+        if k > 0 {
+            gap := r.getVar()
+            n := r.getVar()
+            if r.bad {
+                return
+            }
+            hi = lo - gap - 2
+            lo = hi - n
+            if lo < 0 {
+                self.fail(E_FRAME_ENCODING, "an ACK range below packet 0")
+                return
+            }
+        }
+        sp = &self.sp[i]
+        i64 a = if lo > sp.firstPn { lo } else { sp.firstPn }
+        i64 b = if hi < sp.nextPn - 1 { hi } else { sp.nextPn - 1 }
+        for pn in a..b + 1 {
+            idx := pn - sp.firstPn
+            s := sp.sent.at(idx)
+            if s.done {
+                continue
+            }
+            s.done = true
+            newly = true
+            if s.eliciting {
+                elicitingNewly = true
+            }
+            if pn == largest {
+                largestNewly = true
+                largestSent = s.time
+            }
+            self.onAcked(i, &s)
+            sp = &self.sp[i]
+            sp.sent.set(idx, s)
+            if sp.gone {
+                return
+            }
+        }
+    }
+    if kind == FR_ACK_ECN {
+        _ = r.getVar()
+        _ = r.getVar()
+        _ = r.getVar()
+    }
+    if !newly {
+        return
+    }
+    if largest > sp.largestAcked {
+        sp.largestAcked = largest
+    }
+    if largestNewly && elicitingNewly {
+        Duration ackDelay = 0s
+        if i == SP_APP {
+            ackDelay = Duration(delay << self.theirs.ackDelayExponent) * 1us
+        }
+        self.rttSample(now - largestSent, ackDelay)
+    }
+    // an ACK of a Handshake packet proves to a client that the server
+    // has its address
+    self.ptoCount = 0
+    self.detectLoss(i, now)
+    self.popDone(i)
+}
+
+void Link.popDone(i64 i) {
+    sp := &self.sp[i]
+    for sp.sent.len > 0 && sp.sent.first().done {
+        s := sp.sent.popFront()
+        s.more.free()
+        sp.firstPn += 1
+    }
+}
+
+void Link.onAcked(i64 i, Sent *s) {
+    sp := &self.sp[i]
+    if s.inFlight {
+        self.inFlight -= s.size
+        if !s.probe {
+            self.grow(s)
+        }
+    }
+    if s.eliciting {
+        sp.elicitingOut -= 1
+    }
+    if s.ackedUpTo >= 0 && s.ackedUpTo + 1 > sp.floor {
+        // the peer saw our ACK: what it told of needs no telling again
+        sp.floor = s.ackedUpTo + 1
+        sp.got.dropBelow(sp.floor)
+    }
+    if s.probe {
+        self.mtu = PROBE_DATAGRAM
+        if self.cwnd < 10 * self.mtu {
+            self.cwnd = 10 * self.mtu
+        }
+    }
+    for k in 0..s.nrec {
+        rec := s.rec(k)
+        match rec.kind {
+            FR_STREAM => {
+                st, ok := self.streams.get(rec.id)
+                if ok {
+                    before := st.tx.base
+                    st.tx.ack(rec.off, rec.len, rec.fin)
+                    if st.tx.base > before {
+                        poke(st.writable)
+                    }
+                    self.maybeForget(st)
+                }
+            }
+            FR_CRYPTO => sp.crypto.ack(rec.off, rec.len, false)
+            FR_RESET_STREAM => {
+                st, ok := self.streams.get(rec.id)
+                if ok {
+                    st.resetAcked = true
+                    self.maybeForget(st)
+                }
+            }
+            _ => {}
+        }
+    }
+    s.more.free()
+}
+
+// NewReno (RFC 9002 7): slow start, then a packet more a round trip.
+void Link.grow(Sent *s) {
+    if s.time <= self.recoveryStart {
+        return
+    }
+    if self.cwnd < self.ssthresh {
+        self.cwnd += s.size
+        return
+    }
+    self.acked += s.size
+    if self.acked >= self.cwnd {
+        self.acked -= self.cwnd
+        self.cwnd += self.mtu
+    }
+}
+
+void Link.congestion(Duration sentTime) {
+    if sentTime <= self.recoveryStart {
+        return
+    }
+    self.recoveryStart = time.clock()
+    self.ssthresh = self.cwnd / 2
+    if self.ssthresh < 2 * self.mtu {
+        self.ssthresh = 2 * self.mtu
+    }
+    self.cwnd = self.ssthresh
+    self.acked = 0
+}
+
+void Link.detectLoss(i64 i, Duration now) {
+    sp := &self.sp[i]
+    sp.lossTime = 0s
+    if sp.largestAcked < 0 {
+        return
+    }
+    delay := maxDur(self.latestRtt, self.srtt) * 9 / 8
+    if delay < 1ms {
+        delay = 1ms
+    }
+    lostBefore := now - delay
+    bool lost = false
+    Duration lastLost
+    for idx in 0..sp.sent.len {
+        s := sp.sent.at(idx)
+        if s.pn > sp.largestAcked {
+            break
+        }
+        if s.done {
+            continue
+        }
+        if s.time <= lostBefore || sp.largestAcked >= s.pn + PACKET_THRESHOLD {
+            s.done = true
+            self.onLost(i, &s)
+            sp = &self.sp[i]
+            sp.sent.set(idx, s)
+            if s.inFlight && !s.probe {
+                lost = true
+                if s.time > lastLost {
+                    lastLost = s.time
+                }
+            }
+        } else {
+            t := s.time + delay
+            if sp.lossTime == 0s || t < sp.lossTime {
+                sp.lossTime = t
+            }
+        }
+    }
+    if lost {
+        self.congestion(lastLost)
+    }
+    self.popDone(i)
+}
+
+void Link.onLost(i64 i, Sent *s) {
+    sp := &self.sp[i]
+    if s.inFlight {
+        self.inFlight -= s.size
+    }
+    if s.eliciting {
+        sp.elicitingOut -= 1
+    }
+    self.resend(i, s)
+    s.more.free()
+}
+
+// Sends what a packet carried again: it was lost, or a probe repeats it.
+void Link.resend(i64 i, Sent *s) {
+    sp := &self.sp[i]
+    for k in 0..s.nrec {
+        rec := s.rec(k)
+        match rec.kind {
+            FR_STREAM => {
+                st, ok := self.streams.get(rec.id)
+                if ok && !st.resetSent {
+                    st.tx.lose(rec.off, rec.len, rec.fin)
+                    self.wantSend(st)
+                }
+            }
+            FR_CRYPTO => {
+                sp.crypto.lose(rec.off, rec.len, false)
+                self.poke()
+            }
+            FR_MAX_DATA => {
+                if !self.maxDataQueued {
+                    self.maxDataQueued = true
+                    self.queueCtl(Ctl{kind: FR_MAX_DATA})
+                }
+            }
+            FR_MAX_STREAM_DATA => {
+                st, ok := self.streams.get(rec.id)
+                if ok && !st.maxQueued && st.rx.finalSize < 0 && !st.gotReset {
+                    st.maxQueued = true
+                    self.queueCtl(Ctl{kind: FR_MAX_STREAM_DATA, a: rec.id})
+                }
+            }
+            FR_MAX_STREAMS_BIDI => {
+                if !self.maxStreamsBidiQueued {
+                    self.maxStreamsBidiQueued = true
+                    self.queueCtl(Ctl{kind: FR_MAX_STREAMS_BIDI})
+                }
+            }
+            FR_MAX_STREAMS_UNI => {
+                if !self.maxStreamsUniQueued {
+                    self.maxStreamsUniQueued = true
+                    self.queueCtl(Ctl{kind: FR_MAX_STREAMS_UNI})
+                }
+            }
+            FR_RESET_STREAM => {
+                st, ok := self.streams.get(rec.id)
+                if ok && !st.resetAcked && !st.resetQueued {
+                    st.resetQueued = true
+                    self.queueCtl(Ctl{kind: FR_RESET_STREAM, a: rec.id})
+                }
+            }
+            FR_STOP_SENDING => {
+                st, ok := self.streams.get(rec.id)
+                if ok && !st.gotReset && !st.rx.finished() && !st.stopQueued {
+                    st.stopQueued = true
+                    self.queueCtl(Ctl{kind: FR_STOP_SENDING, a: rec.id})
+                }
+            }
+            FR_HANDSHAKE_DONE => self.queueCtl(Ctl{kind: FR_HANDSHAKE_DONE})
+            FR_RETIRE_CONNECTION_ID => self.queueCtl(Ctl{kind: FR_RETIRE_CONNECTION_ID, a: rec.id})
+            _ => {}
+        }
+    }
+}
+
+// Whether the peer has our address validated, as RFC 9002 A.6 asks: a
+// server's always is; a client's once the handshake is confirmed or a
+// Handshake packet was acknowledged.
+bool Link.peerValidated() => self.server || self.confirmed || self.sp[SP_HANDSHAKE].largestAcked >= 0
+
+// When the loss detection timer goes off, 0s for not at all; and the
+// space it is for.
+(Duration, i64) Link.lossTimer() {
+    Duration t = 0s
+    i64 which = -1
+    for i in 0..3 {
+        sp := &self.sp[i]
+        if !sp.gone && sp.lossTime != 0s && (t == 0s || sp.lossTime < t) {
+            t = sp.lossTime
+            which = i
+        }
+    }
+    if t != 0s {
+        return (t, which)
+    }
+    if self.server && !self.validated && self.bytesOut >= 3 * self.bytesIn {
+        return (0s, -1) // the amplification limit holds us back
+    }
+    bool any = false
+    for i in 0..3 {
+        if !self.sp[i].gone && self.sp[i].elicitingOut > 0 {
+            any = true
+        }
+    }
+    if !any {
+        if self.peerValidated() {
+            return (0s, -1)
+        }
+        // a client keeps the handshake going (RFC 9002 6.2.2.1)
+        i64 i = if self.sp[SP_HANDSHAKE].wkey != null { SP_HANDSHAKE } else { SP_INITIAL }
+        sp := &self.sp[i]
+        base := maxDur(self.sp[SP_INITIAL].lastEliciting, self.sp[SP_HANDSHAKE].lastEliciting)
+        return (base + self.ptoOf(i), i)
+    }
+    for i in 0..3 {
+        sp := &self.sp[i]
+        if sp.gone || sp.elicitingOut == 0 {
+            continue
+        }
+        if i == SP_APP && !self.confirmed {
+            continue
+        }
+        at := sp.lastEliciting + self.ptoOf(i)
+        if t == 0s || at < t {
+            t = at
+            which = i
+        }
+    }
+    return (t, which)
+}
+
+void Link.onLossTimer(Duration now, i64 i) {
+    sp := &self.sp[i]
+    if sp.lossTime != 0s {
+        self.detectLoss(i, now)
+        return
+    }
+    // a probe: up to two packets of what is oldest, or PINGs
+    self.ptoCount += 1
+    sp.probes = 2
+    i64 n = 0
+    for idx in 0..sp.sent.len {
+        if n == 2 {
+            break
+        }
+        s := sp.sent.at(idx)
+        if !s.done && s.eliciting {
+            self.resend(i, &s)
+            n += 1
+        }
+    }
+    self.poke()
+}
+
+// The next time something is due: a timer, an ACK, the idle timeout or
+// the end of closing.
+Duration Link.deadline() {
+    if self.phase == .closing || self.phase == .draining {
+        return self.closeEnd
+    }
+    t := self.idleEnd
+    lt, _ := self.lossTimer()
+    if lt != 0s && lt < t {
+        t = lt
+    }
+    sp := &self.sp[SP_APP]
+    if sp.unacked > 0 && sp.ackBy != 0s && sp.ackBy < t {
+        t = sp.ackBy
+    }
+    return t
+}
+
+void Link.timers(Duration now) {
+    if self.phase == .closing || self.phase == .draining {
+        if now >= self.closeEnd {
+            self.phase = .closed
+        }
+        return
+    }
+    if now >= self.idleEnd {
+        if self.why.len == 0 {
+            self.why = if self.phase == .handshake {
+                "the handshake timed out: no answer from the peer".copy()
+            } else {
+                "the connection timed out: nothing came for too long".copy()
+            }
+        }
+        self.whyCode = QuicError.timeout
+        self.phase = .closed
+        self.wakeAll()
+        return
+    }
+    lt, which := self.lossTimer()
+    if lt != 0s && now >= lt {
+        self.onLossTimer(now, which)
+    }
+    sp := &self.sp[SP_APP]
+    if sp.unacked > 0 && sp.ackBy != 0s && now >= sp.ackBy {
+        sp.ackNow = true
+    }
+}

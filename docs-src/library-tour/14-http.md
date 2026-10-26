@@ -143,7 +143,7 @@ void serve(http.Router *r, net.Listener ln) {
 | `req.cookie("session")` | a cookie the client sent |
 | `req.header("Authorization")` | a header, by its name in any case |
 | `req.headers()` | every header, as a `List[http.Header]` of `name` and `value` |
-| `req.protocol` | `"HTTP/1.1"` or `"HTTP/2"` |
+| `req.protocol` | `"HTTP/1.1"`, `"HTTP/2"` or `"HTTP/3"` |
 | `req.received` | when it came in, by `time.clock()` |
 | `req.remote` | who sent it, a `net.Addr`: `req.remote.ipText()` and `req.remote.port` |
 | `req.local` | the address it came to, which tells a handler serving several listeners which one |
@@ -745,5 +745,7 @@ grpc-status: 0
 ## HTTPS
 
 `r.serveTls(8443, "cert.pem", "key.pem")` serves HTTPS with a certificate and its key in PEM files. Clients that offer HTTP/2 get it and the others get HTTP/1.1. The client does HTTPS for `https://` addresses and checks the server's certificate against the ones the system trusts. A `Client`'s `ca` field names a file of certificates to trust instead, for a server with a self-made certificate. TLS comes from OpenSSL, loaded the first time a program uses it.
+
+`r.serveTls(8443, "cert.pem", "key.pem", http3: true)` serves HTTP/3 on UDP port 8443 too, and a `Client` with `http3` set asks for it. [QUIC and HTTP/3](24-quic-and-http3.html) has more.
 
 The library page for [http](../std/index.html#http) lists everything, including WebSockets.

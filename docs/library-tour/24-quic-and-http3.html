@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QUIC and HTTP/3 - Iris</title>
+<meta name="description" content="QUIC carries connections over UDP with TLS 1.3 built in. One connection holds many streams, and a packet lost on one stream doesn&#x27;t hold up the others. HTTP/3 is HTTP over QUIC. The quic module has a client and a server. The http module serves and asks for HTTP/3 with the same handlers, Router and Client as HTTP/1.1 and HTTP/2.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="24-quic-and-http3.html" class="on"><span class="num">24</span>QUIC and HTTP/3</a></li></ol></aside>
+  <article class="prose">
+<h1>QUIC and HTTP/3</h1>
+<p class="lede">QUIC carries connections over UDP with TLS 1.3 built in. One connection holds many streams, and a packet lost on one stream doesn't hold up the others. HTTP/3 is HTTP over QUIC. The <code>quic</code> module has a client and a server. The <code>http</code> module serves and asks for HTTP/3 with the same handlers, Router and Client as HTTP/1.1 and HTTP/2.</p>
+<h2 id="a-server-and-a-client"><a href="#a-server-and-a-client">A server and a client</a></h2>
+<p><code>quic.listen(port, tls, config, host)</code> opens a UDP port with the certificates of a <code>net.TlsConfig</code> and gives a <code>Listener</code>. Its <code>accept</code> waits for the next connection whose handshake is done. <code>quic.dial(host, port, config)</code> connects to a server and gives a <code>Conn</code>. <code>Config.alpn</code> names the application protocol each side speaks, and they must have one in common.</p>
+<p>On a connection, <code>openStream</code> opens a stream both ways, and <code>acceptStream</code> waits for one the peer opened. A <code>Stream</code> reads and writes bytes in order, as a TCP connection does. <code>closeWrite</code> ends what this side sends, so the other side reads to the end and gets 0. <code>close</code> lets go of the stream:</p>
+<pre class="code run"><code><span class="k">import</span> net, quic
+
+<span class="t">void</span> <span class="f">echo</span>(quic.<span class="t">Stream</span> s) {
+    <span class="k">defer</span> s.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> got = s.<span class="f">readAll</span>() <span class="k">catch</span> e {
+        <span class="k">return</span>
+    }
+    s.<span class="f">write</span>(<span class="s">&quot;you sent </span><span class="e">{</span>got.len<span class="e">}</span><span class="s"> bytes: </span><span class="e">{</span>got<span class="e">}</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
+    s.<span class="f">closeWrite</span>()
+}
+
+<span class="t">void</span> <span class="f">handle</span>(quic.<span class="t">Conn</span> c) {
+    <span class="k">for</span> {
+        s := c.<span class="f">acceptStream</span>() <span class="k">catch</span> e {
+            <span class="k">break</span>
+        }
+        <span class="k">spawn</span> <span class="f">echo</span>(s)
+    }
+    c.<span class="f">close</span>()
+}
+
+<span class="t">void</span> <span class="f">serve</span>(quic.<span class="t">Listener</span> ln) {
+    <span class="k">for</span> {
+        c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
+            <span class="k">return</span>
+        }
+        <span class="k">spawn</span> <span class="f">handle</span>(c)
+    }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    tls := <span class="k">try</span> net.<span class="f">tlsConfig</span>(<span class="s">&quot;tests/data/tls/server.pem&quot;</span>, <span class="s">&quot;tests/data/tls/server.key&quot;</span>)
+    ln := <span class="k">try</span> quic.<span class="f">listen</span>(<span class="n">0</span>, &amp;tls, quic.<span class="t">Config</span>{alpn: <span class="s">&quot;echo&quot;</span>}, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(ln)
+
+    config := quic.<span class="t">Config</span>{alpn: <span class="s">&quot;echo&quot;</span>, ca: <span class="s">&quot;tests/data/tls/ca.pem&quot;</span>, serverName: <span class="s">&quot;localhost&quot;</span>}
+    c := <span class="k">try</span> quic.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port, config)
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="f">print</span>(<span class="s">&quot;speaking </span><span class="e">{</span>c.<span class="f">protocol</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    <span class="k">for</span> word <span class="k">in</span> [<span class="s">&quot;one&quot;</span>, <span class="s">&quot;two&quot;</span>] {
+        s := <span class="k">try</span> c.<span class="f">openStream</span>()
+        <span class="k">try</span> s.<span class="f">write</span>(word)
+        s.<span class="f">closeWrite</span>()
+        <span class="k">scoped</span> <span class="t">String</span> reply = <span class="k">try</span> s.<span class="f">readAll</span>()
+        s.<span class="f">close</span>()
+        <span class="f">print</span>(reply)
+    }
+}</code></pre>
+<pre class="out"><code>speaking echo
+you sent 3 bytes: one
+you sent 3 bytes: two</code></pre>
+<p>The client checks the server's certificate against the ones the system trusts. <code>Config.ca</code> names a file of certificates to trust instead, and <code>Config.serverName</code> the name the certificate must have when it isn't the host dialed. Each connection and its streams belong to the thread that dialed or accepted it.</p>
+<h2 id="streams"><a href="#streams">Streams</a></h2>
+<p>Streams are cheap: a request and its answer often get one each. <code>openUniStream</code> opens one that only this side writes. <code>Stream.isUni()</code> tells which kind the peer opened. Each side may have <code>Config.maxStreams</code> streams open at once both ways, and <code>maxUniStreams</code> one way. <code>openStream</code> waits while the peer's limit is reached.</p>
+<p><code>write</code> waits while the peer's flow control holds the data back, or while <code>Config.streamBuffer</code> bytes wait to go. <code>reset(code)</code> abandons what this side sends, and the peer's reads fail with <code>QuicError.reset</code>. <code>stopReading(code)</code> asks the peer to stop sending, and its writes fail with <code>QuicError.stopped</code>. <code>setTimeout(d)</code> makes a read or a write that waits longer than <code>d</code> fail with <code>QuicError.timeout</code>.</p>
+<p>A connection that hears nothing for <code>Config.idleTimeout</code> ends. <code>close(code, reason)</code> ends it with an error code of the application, which the peer sees in <code>why()</code>. The errors are <code>QuicError</code> codes:</p>
+<ul><li><code>closed</code>: the connection or the stream ended.</li><li><code>timeout</code>: nothing came for too long, or the handshake took longer than <code>Config.handshakeTimeout</code>.</li><li><code>refused</code>: the server turned the connection down.</li><li><code>tls</code>: the handshake failed, as for a certificate that doesn't check.</li><li><code>protocol</code>: the peer broke the rules of QUIC.</li><li><code>reset</code> and <code>stopped</code>: the peer reset a stream, or stopped reading it.</li><li><code>tooLarge</code>: a stream had more than <code>readAll</code>'s limit.</li></ul>
+<p>Lost packets are found and sent again, and NewReno congestion control keeps the sender from flooding the path. On Linux, datagrams go out in batches and come in coalesced (GSO and GRO), which saves system calls on large transfers.</p>
+<h2 id="http-3"><a href="#http-3">HTTP/3</a></h2>
+<p><code>r.serveTls(8443, &quot;cert.pem&quot;, &quot;key.pem&quot;, http3: true)</code> serves HTTPS on TCP port 8443 and HTTP/3 on UDP port 8443, with the same routes. Answers over HTTP/1.1 and HTTP/2 carry an <code>Alt-Svc</code> header that tells clients where HTTP/3 is, and browsers move there. <code>r.serveH3(port, certFile, keyFile)</code> serves HTTP/3 alone. <code>r.advertiseH3(port)</code> adds the <code>Alt-Svc</code> header when HTTP/3 is served some other way. A handler sees <code>req.protocol</code> as <code>&quot;HTTP/3&quot;</code>.</p>
+<p>A <code>Client</code> with <code>http3</code> set sends <code>https://</code> requests over HTTP/3. It first tries the URL's port over UDP. A host that doesn't answer gets its requests over TCP, and an <code>Alt-Svc</code> in its answers moves later requests to the port it names:</p>
+<pre class="code run"><code><span class="k">import</span> http, quic, net
+
+<span class="t">void</span> <span class="f">hello</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
+    res.<span class="f">text</span>(<span class="s">&quot;hello over </span><span class="e">{</span>req.protocol<span class="e">}</span><span class="s">&quot;</span>)
+}
+
+<span class="t">void</span> <span class="f">serve</span>(http.<span class="t">Router</span> *r, quic.<span class="t">Listener</span> ln) =&gt; r.<span class="f">serveH3On</span>(ln)
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    http.<span class="t">Router</span> r
+    <span class="k">defer</span> r.<span class="f">free</span>()
+    r.<span class="f">get</span>(<span class="s">&quot;/&quot;</span>, hello)
+    tls := <span class="k">try</span> net.<span class="f">tlsConfig</span>(<span class="s">&quot;tests/data/tls/server.pem&quot;</span>, <span class="s">&quot;tests/data/tls/server.key&quot;</span>)
+    ln := <span class="k">try</span> quic.<span class="f">listen</span>(<span class="n">0</span>, &amp;tls, quic.<span class="t">Config</span>{alpn: <span class="s">&quot;h3&quot;</span>}, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serve</span>(&amp;r, ln)
+
+    http.<span class="t">Client</span> c = http.<span class="t">Client</span>{http3: <span class="k">true</span>, ca: <span class="s">&quot;tests/data/tls/ca.pem&quot;</span>}
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    <span class="k">scoped</span> <span class="t">String</span> url = <span class="f">format</span>(<span class="s">&quot;https://localhost:</span><span class="e">{</span>ln.port<span class="e">}</span><span class="s">/&quot;</span>)
+    <span class="k">scoped</span> http.<span class="t">Reply</span> reply = <span class="k">try</span> c.<span class="f">get</span>(url)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>reply.protocol<span class="e">}</span><span class="s"> </span><span class="e">{</span>reply.status<span class="e">}</span><span class="s"> </span><span class="e">{</span>reply.body<span class="e">}</span><span class="s">&quot;</span>)
+    r.<span class="f">shutdown</span>()
+}</code></pre>
+<pre class="out"><code>HTTP/3 200 hello over HTTP/3</code></pre>
+<p><code>serveH3On</code> serves a <code>quic.Listener</code> that is open already, which must offer <code>&quot;h3&quot;</code> and must have been opened on the thread that serves it. <code>r.shutdown</code> sends each HTTP/3 client a GOAWAY, answers the requests that came, then closes the connections.</p>
+<p>Streamed bodies work as on HTTP/2. <code>res.write</code> sends DATA frames as the handler goes, a <code>Router.stream</code> route reads the request body with <code>req.read</code> as it comes, and trailers go both ways. The client's <code>stream</code> and <code>begin</code> go over HTTP/1.1 or HTTP/2.</p>
+<p>Headers are compressed with QPACK's static table, which holds the common names and values, and Huffman codes. The dynamic table isn't used: each side's table has room for nothing.</p>
+<p>The library page for <a href="../std/index.html#quic">quic</a> lists everything.</p>
+    <nav class="pager"><a class="prev" href="22-ssh.html"><span>Previous</span>SSH</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#streams">Streams</a></li><li><a href="#http-3">HTTP/3</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

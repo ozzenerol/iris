@@ -1,0 +1,260 @@
+// Streams (RFC 9000 2, 3, 4): each carries bytes in order, one way or
+// both, with its own flow control inside the connection's.
+
+// One stream's state, which the connection keeps until both sides are
+// done with it and the program let go of it.
+struct Strm {
+    Link *l
+    i64 id
+    bool canSend // false on a stream the peer opened one way
+    bool canRecv // false on one we opened one way
+    SendBuf tx
+    i64 sendMax // what the peer lets us send
+    RecvBuf rx
+    i64 recvMax // what we let the peer send
+    i64 window
+    bool maxQueued // a MAX_STREAM_DATA is waiting to go
+    bool queued    // waiting in the connection's list of streams to send
+    // RESET_STREAM we sent, and whether it was acknowledged
+    bool resetSent
+    i64 resetCode
+    bool resetAcked
+    bool resetQueued
+    // the peer's RESET_STREAM and STOP_SENDING
+    bool gotReset
+    i64 gotResetCode
+    bool gotStop
+    i64 gotStopCode
+    // our STOP_SENDING
+    bool stopSent
+    i64 stopCode
+    bool stopQueued
+    bool released    // the program is done with it
+    bool accepted    // a peer's stream that acceptStream gave out
+    Duration timeout // how long a read or a write may wait, 0 for no limit
+    chan[bool] readable
+    chan[bool] writable
+}
+
+bool idIsUni(i64 id) => id & 2 != 0
+
+bool idIsServers(i64 id) => id & 1 != 0
+
+void Strm.wake() {
+    poke(self.readable)
+    poke(self.writable)
+}
+
+// Both ways are done: everything we sent was acknowledged or reset, and
+// everything that came was read, or reset, or we asked the peer to stop.
+bool Strm.finished() {
+    sendDone := !self.canSend || self.tx.allAcked() || (self.resetSent && self.resetAcked) ||
+        (self.gotStop && self.resetSent)
+    recvDone := !self.canRecv || self.rx.finished() || self.gotReset || self.stopSent
+    return sendDone && recvDone
+}
+
+// Waits for a poke on ch: false when the stream's timeout passed first.
+bool Strm.wait(chan[bool] ch) {
+    l := self.l
+    l.users += 1
+    defer l.users -= 1
+    if self.timeout <= 0s {
+        _ = <-ch
+        return true
+    }
+    select {
+        _ := <-ch => {}
+        after(self.timeout) => {
+            return false
+        }
+    }
+    return true
+}
+
+void Strm.destroy() {
+    self.tx.free()
+    self.rx.free()
+    self.readable.free()
+    self.writable.free()
+    free(self[0:1])
+}
+
+// A stream of a connection, which reads and writes bytes in order. It
+// belongs to the thread of its connection, and close lets go of it.
+pub struct Stream {
+    Strm *s
+    // the stream's number: bit 0 is set for one the server opened, bit 1
+    // for one that goes one way
+    pub i64 id
+}
+
+// Whether the stream goes one way only.
+pub bool Stream.isUni() => idIsUni(self.id)
+
+// Writes data to the stream. It waits while the peer's flow control or
+// the stream's buffer holds it back. Fails once the stream was reset, the
+// peer asked us to stop (QuicError.stopped), or the connection ended.
+pub !void Stream.write(str data) {
+    s := self.s
+    l := s.l
+    if !s.canSend {
+        return error(QuicError.closed, "writing: the peer's one-way stream {s.id} only reads")
+    }
+    if s.tx.fin {
+        return error(QuicError.closed, "writing: stream {s.id} was closed for writing")
+    }
+    i64 at = 0
+    for at < data.len {
+        if s.gotStop {
+            return error(QuicError.stopped, "writing: the peer stopped reading stream {s.id} (code {s.gotStopCode})")
+        }
+        if s.resetSent {
+            return error(QuicError.reset, "writing: stream {s.id} was reset")
+        }
+        if l.ended() {
+            return error(l.endCode(), "writing: {l.why}")
+        }
+        room := l.config.streamBuffer - s.tx.held()
+        if room <= 0 {
+            if !s.wait(s.writable) {
+                return error(QuicError.timeout, "writing: stream {s.id} waited {s.timeout}")
+            }
+            continue
+        }
+        n := data.len - at
+        if n > room {
+            n = room
+        }
+        s.tx.write(data[at:at + n])
+        at += n
+        l.wantSend(s)
+    }
+}
+
+// Makes a read or a write that waits longer than d fail with
+// QuicError.timeout; 0 waits as long as the connection is open.
+pub void Stream.setTimeout(Duration d) {
+    self.s.timeout = d
+}
+
+// Ends what we send: the peer reads to the end, then gets 0.
+pub void Stream.closeWrite() {
+    s := self.s
+    if !s.canSend || s.tx.fin || s.resetSent {
+        return
+    }
+    s.tx.fin = true
+    s.l.wantSend(s)
+}
+
+// Reads what came into buf, waiting while nothing has: how many bytes, 0
+// at the end. Fails when the peer reset the stream (QuicError.reset) or the
+// connection ended.
+pub !i64 Stream.read(u8[] buf) {
+    s := self.s
+    l := s.l
+    if !s.canRecv {
+        return error(QuicError.closed, "reading: stream {s.id} goes one way, from us")
+    }
+    if buf.len == 0 {
+        return 0
+    }
+    for {
+        if s.rx.ready() > 0 {
+            n := s.rx.take(buf)
+            l.consumed(s, n)
+            return n
+        }
+        if s.rx.finished() {
+            return 0
+        }
+        if s.gotReset {
+            return error(QuicError.reset, "reading: the peer reset stream {s.id} (code {s.gotResetCode})")
+        }
+        if s.stopSent {
+            return error(QuicError.closed, "reading: stream {s.id} stopped reading")
+        }
+        if l.ended() {
+            return error(l.endCode(), "reading: {l.why}")
+        }
+        if !s.wait(s.readable) {
+            return error(QuicError.timeout, "reading: nothing came on stream {s.id} for {s.timeout}")
+        }
+    }
+    return 0
+}
+
+// Reads to the end of the stream, up to limit bytes when it isn't 0
+// (QuicError.tooLarge past it).
+pub !String Stream.readAll(i64 limit = 0) {
+    String out
+    errdefer out.free()
+    u8[16384] buf
+    for {
+        n := try self.read(buf[:])
+        if n == 0 {
+            return out
+        }
+        if limit > 0 && out.len + n > limit {
+            return error(QuicError.tooLarge, "reading: stream {self.id} has more than {limit} bytes")
+        }
+        out.append(buf[0:n])
+    }
+    return out
+}
+
+// Abandons what we send with an error code of the application: the peer
+// gets an error when it reads.
+pub void Stream.reset(i64 code = 0) {
+    s := self.s
+    if !s.canSend || s.resetSent || s.tx.allAcked() {
+        return
+    }
+    s.resetSent = true
+    s.resetCode = code
+    s.l.queueCtl(Ctl{kind: FR_RESET_STREAM, a: s.id})
+    s.resetQueued = true
+    s.l.poke()
+}
+
+// Tells the peer we read no more, with an error code of the
+// application: its writes fail.
+pub void Stream.stopReading(i64 code = 0) {
+    s := self.s
+    if !s.canRecv || s.stopSent || s.rx.finished() || s.gotReset {
+        return
+    }
+    s.stopSent = true
+    s.stopCode = code
+    s.l.queueCtl(Ctl{kind: FR_STOP_SENDING, a: s.id})
+    s.stopQueued = true
+    s.l.poke()
+}
+
+// The error code of the peer's RESET_STREAM, -1 when it sent none.
+pub i64 Stream.resetCode() => if self.s.gotReset { self.s.gotResetCode } else { -1 }
+
+// Lets go of the stream. What was written still goes; the stream is
+// closed for writing, and what comes from now on is dropped.
+pub void Stream.close() {
+    s := self.s
+    if s == null || s.released {
+        return
+    }
+    s.released = true
+    if s.canSend && !s.tx.fin && !s.resetSent {
+        s.tx.fin = true
+        s.l.wantSend(s)
+    }
+    if s.canRecv && !s.rx.finished() && !s.gotReset && !s.stopSent {
+        s.stopSent = true
+        s.stopCode = 0
+        s.l.queueCtl(Ctl{kind: FR_STOP_SENDING, a: s.id})
+        s.stopQueued = true
+    }
+    l := s.l
+    l.maybeForget(s)
+    l.poke()
+    self.s = null
+}

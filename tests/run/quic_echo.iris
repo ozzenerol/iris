@@ -1,0 +1,97 @@
+// expect: connected with echo
+// expect: hello quic
+// expect: 3 streams echoed
+// expect: big 3000000
+
+import net, quic
+
+void echo(quic.Stream s) {
+    defer s.close()
+    u8[4096] buf
+    for {
+        n := s.read(buf[:]) catch e {
+            return
+        }
+        if n == 0 {
+            break
+        }
+        s.write(buf[0:n]) catch e {
+            return
+        }
+    }
+    s.closeWrite()
+}
+
+void handle(quic.Conn c) {
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        spawn echo(s)
+    }
+    c.close()
+}
+
+void serve(quic.Listener ln) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        spawn handle(c)
+    }
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    ln := try quic.listen(0, &config, quic.Config{alpn: "echo"}, "127.0.0.1")
+    spawn serve(ln)
+    c := try quic.dial("127.0.0.1", ln.port, quic.Config{alpn: "echo", ca: "tests/data/tls/ca.pem", serverName: "localhost"})
+    print("connected with {c.protocol()}")
+    s := try c.openStream()
+    try s.write("hello quic")
+    s.closeWrite()
+    scoped String got = try s.readAll()
+    s.close()
+    print(got)
+    i64 ok = 0
+    for i in 0..3 {
+        t := try c.openStream()
+        try t.write("stream {i}")
+        t.closeWrite()
+        scoped String back = try t.readAll()
+        t.close()
+        scoped String want = format("stream {i}")
+        if back == want {
+            ok += 1
+        }
+    }
+    print("{ok} streams echoed")
+    b := try c.openStream()
+    u8[] block = alloc(u8, 3000000)
+    defer free(block)
+    for i in 0..block.len {
+        block[i] = u8(i % 251)
+    }
+    spawn writeAll(b, block)
+    scoped String all = try b.readAll()
+    bool same = all.len == block.len
+    for i in 0..all.len {
+        if all[i] != block[i] {
+            same = false
+        }
+    }
+    b.close()
+    print("big {all.len}")
+    if !same {
+        print("but it differs")
+    }
+    c.close()
+    ln.close()
+}
+
+void writeAll(quic.Stream s, u8[] data) {
+    s.write(data) catch e {
+        print("write failed: {e.message}")
+    }
+    s.closeWrite()
+}

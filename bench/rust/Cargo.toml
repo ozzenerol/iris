@@ -28,6 +28,8 @@ x509-parser = "0.18"
 serde_yaml = "0.9"
 russh = "0.65"
 rand = "0.10"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 
 [profile.release]
 opt-level = 3
@@ -214,3 +216,7 @@ path = "../wire/main.rs"
 [[bin]]
 name = "ssh"
 path = "../ssh/main.rs"
+
+[[bin]]
+name = "quic"
+path = "../quic/main.rs"

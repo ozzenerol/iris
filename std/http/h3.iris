@@ -1,0 +1,849 @@
+// HTTP/3 (RFC 9114) over QUIC: each request on a stream of its own, its
+// headers and body as frames, the headers compressed with QPACK. The
+// server answers each request in a task, as on HTTP/1.1 and HTTP/2, with
+// the same handlers and Router.
+
+import net, quic, str, time
+
+// frame types
+const H3_DATA = 0x0
+const H3_HEADERS = 0x1
+const H3_CANCEL_PUSH = 0x3
+const H3_SETTINGS = 0x4
+const H3_PUSH_PROMISE = 0x5
+const H3_GOAWAY = 0x7
+const H3_MAX_PUSH_ID = 0xd
+
+// unidirectional stream types
+const H3_CONTROL = 0x0
+const H3_PUSH = 0x1
+const H3_QPACK_ENCODER = 0x2
+const H3_QPACK_DECODER = 0x3
+
+// settings
+const H3_SET_QPACK_CAPACITY = 0x1
+const H3_SET_MAX_FIELD_SECTION = 0x6
+const H3_SET_QPACK_BLOCKED = 0x7
+
+// error codes
+const H3_NO_ERROR = 0x100
+const H3_GENERAL_PROTOCOL_ERROR = 0x101
+const H3_INTERNAL_ERROR = 0x102
+const H3_STREAM_CREATION_ERROR = 0x103
+const H3_CLOSED_CRITICAL_STREAM = 0x104
+const H3_FRAME_UNEXPECTED = 0x105
+const H3_FRAME_ERROR = 0x106
+const H3_ID_ERROR = 0x108
+const H3_SETTINGS_ERROR = 0x109
+const H3_MISSING_SETTINGS = 0x10a
+const H3_REQUEST_REJECTED = 0x10b
+const H3_REQUEST_CANCELLED = 0x10c
+const H3_REQUEST_INCOMPLETE = 0x10d
+const H3_MESSAGE_ERROR = 0x10e
+const H3_QPACK_DECOMPRESSION_FAILED = 0x200
+
+// the largest frame other than DATA we take
+const H3_MAX_FRAME = 1MiB
+
+// ------------------------------------------------------------ frames
+
+void putVar(String *out, i64 v) {
+    if v < 64 {
+        put8(out, v)
+    } else if v < 16384 {
+        put8(out, v >> 8 | 0x40)
+        put8(out, v)
+    } else if v < 1073741824 {
+        put32(out, v | 0x80000000)
+    } else {
+        put32(out, v >> 32 | 0xc0000000)
+        put32(out, v & 0xffffffff)
+    }
+}
+
+void putH3Frame(String *out, i64 kind, str payload) {
+    putVar(out, kind)
+    putVar(out, payload.len)
+    out.append(payload)
+}
+
+// Frames as they come on a stream: a buffer over the stream's reads.
+struct H3Reader {
+    quic.Stream s
+    String buf
+    i64 at
+    bool eof
+}
+
+void H3Reader.free() => self.buf.free()
+
+// Makes n bytes ready in buf[at:]; false when the stream ends first.
+!bool H3Reader.fill(i64 n) {
+    for self.buf.len - self.at < n {
+        if self.eof {
+            return false
+        }
+        if self.at > 0 {
+            scoped String keep = self.buf[self.at:].copy()
+            self.buf.clear()
+            self.buf.append(keep)
+            self.at = 0
+        }
+        u8[16384] tmp
+        got := try self.s.read(tmp[:])
+        if got == 0 {
+            self.eof = true
+            return self.buf.len - self.at >= n
+        }
+        self.buf.append(tmp[0:got])
+    }
+    return true
+}
+
+// A variable-length integer; -1 at a clean end of the stream.
+!i64 H3Reader.varint() {
+    if !try self.fill(1) {
+        return -1
+    }
+    first := i64(self.buf[self.at])
+    size := i64(1) << (first >> 6)
+    if !try self.fill(size) {
+        return error(quic.QuicError.protocol, "a frame cut short")
+    }
+    i64 v = first & 0x3f
+    for i in 1..size {
+        v = v << 8 | i64(self.buf[self.at + i])
+    }
+    self.at += size
+    return v
+}
+
+// The next frame's type and length; false at the end of the stream.
+!bool H3Reader.frame(i64 *kind, i64 *len) {
+    k := try self.varint()
+    if k < 0 {
+        return false
+    }
+    n := try self.varint()
+    if n < 0 {
+        return error(quic.QuicError.protocol, "a frame cut short")
+    }
+    *kind = k
+    *len = n
+    return true
+}
+
+// n bytes of payload, valid until the next read.
+!str H3Reader.take(i64 n) {
+    if !try self.fill(n) {
+        return error(quic.QuicError.protocol, "a frame cut short")
+    }
+    p := self.buf[self.at:self.at + n]
+    self.at += n
+    return p
+}
+
+// Skips n bytes of payload.
+!void H3Reader.skip(i64 n) {
+    i64 left = n
+    for left > 0 {
+        k := if left > 16384 { 16384 } else { left }
+        _ = try self.take(k)
+        left -= k
+    }
+}
+
+// Up to dst.len bytes of a DATA frame's payload, read straight into dst
+// once the buffer is empty.
+!i64 H3Reader.readInto(u8[] dst) {
+    ready := self.buf.len - self.at
+    if ready > 0 {
+        n := if ready < dst.len { ready } else { dst.len }
+        for i in 0..n {
+            dst[i] = self.buf[self.at + i]
+        }
+        self.at += n
+        return n
+    }
+    if self.eof {
+        return 0
+    }
+    n := try self.s.read(dst)
+    if n == 0 {
+        self.eof = true
+    }
+    return n
+}
+
+// Whether a frame type is one HTTP/3 reserves for greasing, which is
+// skipped (RFC 9114 7.2.8), or another we don't know.
+bool knownH3(i64 kind) => kind == H3_DATA || kind == H3_HEADERS || kind == H3_CANCEL_PUSH || kind == H3_SETTINGS ||
+    kind == H3_PUSH_PROMISE || kind == H3_GOAWAY || kind == H3_MAX_PUSH_ID || kind == 2 || kind == 6 || kind == 8 ||
+    kind == 9
+
+// Headers in HTTP/3's form as a HEADERS frame's field section.
+void qpackLines(String *block, str lines) {
+    str rest = lines
+    for rest.len > 0 {
+        line, after, _ := str.cut(rest, "\n")
+        rest = after
+        if line.len > 0 && line[line.len - 1] == '\r' {
+            line = line[0:line.len - 1]
+        }
+        name, value, ok := str.cut(line, ":")
+        if !ok {
+            continue
+        }
+        scoped String lower = str.lower(str.trim(name))
+        if lower.len == 0 || lower[0] == ':' || lower == "connection" || lower == "keep-alive" ||
+            lower == "transfer-encoding" || lower == "upgrade" || lower == "proxy-connection" ||
+            lower == "content-length" {
+                continue
+            }
+        qpackField(block, lower, str.trim(value))
+    }
+}
+
+// The headers of a HEADERS frame as "name: value\n" lines.
+void linesOf(List[String] *names, List[String] *values, String *out) {
+    for i in 0..names.len {
+        out.append(names.at(i))
+        out.append(": ")
+        out.append(values.at(i))
+        out.append("\n")
+    }
+}
+
+void freeFields(List[String] *names, List[String] *values) {
+    names.freeEach()
+    values.freeEach()
+}
+
+// Our SETTINGS on the control stream: no dynamic table, and the largest
+// header section we take.
+String h3Settings(i64 maxField) {
+    String payload
+    putVar(&payload, H3_SET_QPACK_CAPACITY)
+    putVar(&payload, 0)
+    putVar(&payload, H3_SET_QPACK_BLOCKED)
+    putVar(&payload, 0)
+    putVar(&payload, H3_SET_MAX_FIELD_SECTION)
+    putVar(&payload, maxField)
+    String out
+    putVar(&out, H3_CONTROL)
+    putH3Frame(&out, H3_SETTINGS, payload)
+    payload.free()
+    return out
+}
+
+// A peer's SETTINGS: "" when they are fine.
+str checkSettings(str p) {
+    i64 at = 0
+    for at < p.len {
+        id := varAt(p, &at)
+        v := varAt(p, &at)
+        if id < 0 || v < 0 {
+            return "a SETTINGS frame cut short"
+        }
+        if id == 2 || id == 3 || id == 4 || id == 5 {
+            return "an HTTP/2 setting in SETTINGS"
+        }
+    }
+    return ""
+}
+
+i64 varAt(str p, i64 *at) {
+    if *at >= p.len {
+        return -1
+    }
+    first := i64(p[*at])
+    size := i64(1) << (first >> 6)
+    if *at + size > p.len {
+        return -1
+    }
+    i64 v = first & 0x3f
+    for i in 1..size {
+        v = v << 8 | i64(p[*at + i])
+    }
+    *at += size
+    return v
+}
+
+// A stream the peer opened one way: its control stream, QPACK's streams
+// (read and dropped: our table holds nothing), or one we don't know,
+// which we stop reading.
+void h3Uni(H3Conn *h, quic.Stream s) {
+    h.tasks += 1
+    defer h.tasks -= 1
+    H3Reader r = H3Reader{s: s}
+    defer r.free()
+    defer s.close()
+    kind := r.varint() catch -1
+    if kind < 0 {
+        return
+    }
+    if kind == H3_CONTROL {
+        if h.gotControl {
+            h.fail(H3_STREAM_CREATION_ERROR, "a second control stream")
+            return
+        }
+        h.gotControl = true
+        h3Control(h, &r)
+        return
+    }
+    if kind == H3_PUSH && h.server {
+        h.fail(H3_STREAM_CREATION_ERROR, "a client opened a push stream")
+        return
+    }
+    if kind == H3_QPACK_ENCODER || kind == H3_QPACK_DECODER {
+        u8[4096] buf
+        for {
+            n := r.readInto(buf[:]) catch 0
+            if n == 0 {
+                break
+            }
+        }
+        return
+    }
+    s.stopReading(H3_STREAM_CREATION_ERROR)
+}
+
+void h3Control(H3Conn *h, H3Reader *r) {
+    bool first = true
+    for {
+        i64 kind
+        i64 len
+        more := r.frame(&kind, &len) catch e {
+            if !h.c.closed() {
+                h.fail(H3_FRAME_ERROR, e.message)
+            }
+            return
+        }
+        if !more {
+            if !h.c.closed() {
+                h.fail(H3_CLOSED_CRITICAL_STREAM, "the control stream ended")
+            }
+            return
+        }
+        if first && kind != H3_SETTINGS {
+            h.fail(H3_MISSING_SETTINGS, "the control stream doesn't start with SETTINGS")
+            return
+        }
+        if !first && kind == H3_SETTINGS {
+            h.fail(H3_FRAME_UNEXPECTED, "a second SETTINGS frame")
+            return
+        }
+        if kind == H3_DATA || kind == H3_HEADERS || kind == H3_PUSH_PROMISE {
+            h.fail(H3_FRAME_UNEXPECTED, "a request frame on the control stream")
+            return
+        }
+        if len > H3_MAX_FRAME {
+            h.fail(H3_EXCESSIVE_LOAD, "a control frame too large")
+            return
+        }
+        payload := r.take(len) catch e {
+            return
+        }
+        if kind == H3_SETTINGS {
+            why := checkSettings(payload)
+            if why.len > 0 {
+                h.fail(H3_SETTINGS_ERROR, why)
+                return
+            }
+        } else if kind == H3_GOAWAY {
+            h.peerGone = true
+        }
+        first = false
+    }
+}
+
+const H3_EXCESSIVE_LOAD = 0x107
+
+// ------------------------------------------------------------ the server
+
+// One HTTP/3 connection a server answers on.
+struct H3Conn {
+    quic.Conn c
+    bool server
+    Target target
+    Limits limits
+    net.Addr remote
+    net.Addr local
+    quic.Stream control
+    bool gotControl
+    bool peerGone
+    bool failed
+    bool wentAway
+    i64 nextId   // the stream after the last request taken, for GOAWAY
+    i64 tasks    // tasks of the connection still running
+    i64 requests // requests being answered
+}
+
+void H3Conn.fail(i64 code, str why) {
+    if self.failed {
+        return
+    }
+    self.failed = true
+    self.c.end(code, why)
+}
+
+// A streamed answer's stream, which Response.write writes frames to.
+struct H3Out {
+    quic.Stream *s
+    bool head // the answer to HEAD, which has no body
+}
+
+// A body read as it comes, from a request stream's DATA frames.
+struct H3In {
+    H3Reader *r
+    i64 left // what is left of the DATA frame being read
+    bool done
+}
+
+// The next bytes of the body into buf: 0 at its end, once the trailers,
+// if any, went to trailers.
+!i64 H3In.read(u8[] buf, String *trailers) {
+    for self.left == 0 {
+        if self.done {
+            return 0
+        }
+        i64 kind
+        i64 len
+        if !try self.r.frame(&kind, &len) {
+            self.done = true
+            return 0
+        }
+        if kind == H3_DATA {
+            self.left = len
+        } else if kind == H3_HEADERS {
+            block := try self.r.take(len)
+            List[String] names
+            List[String] values
+            why := qpackDecode(block, &names, &values, 64KiB)
+            if why.len == 0 {
+                linesOf(&names, &values, trailers)
+            }
+            freeFields(&names, &values)
+            self.done = true
+            if why.len > 0 {
+                return error(HttpError.badRequest, why)
+            }
+            return 0
+        } else {
+            try self.r.skip(len)
+        }
+    }
+    want := if buf.len < self.left { buf.len } else { self.left }
+    n := try self.r.readInto(buf[0:want])
+    if n == 0 {
+        return error(net.NetError.closed, "the client ended the stream in the middle of the body")
+    }
+    self.left -= n
+    return n
+}
+
+// The connections an accept loop serves, so that a server that stops can
+// end them.
+struct H3Hub {
+    List[H3Conn *] conns
+}
+
+void H3Hub.drop(H3Conn *h) {
+    for i in 0..self.conns.len {
+        if self.conns.at(i) == h {
+            _ = self.conns.remove(i)
+            return
+        }
+    }
+}
+
+// Sends GOAWAY: the requests that came are answered, no new ones.
+void H3Conn.goAway() {
+    if self.wentAway || self.c.closed() {
+        return
+    }
+    self.wentAway = true
+    scoped String away
+    scoped String id
+    putVar(&id, self.nextId)
+    putH3Frame(&away, H3_GOAWAY, id)
+    self.control.write(away) catch e { }
+}
+
+// A server that stops: GOAWAY, then the end once the requests are
+// answered or the router's wait is over.
+void h3Drain(H3Conn *h, Duration until) {
+    h.goAway()
+    for h.requests > 0 && !h.c.closed() && time.clock() < until {
+        sleep(1ms)
+    }
+    h.c.end(H3_NO_ERROR)
+}
+
+// Serves HTTP/3 on a connection whose handshake is done, until it closes.
+void serveH3Conn(quic.Conn c, Target target, H3Hub *hub) {
+    H3Conn h = H3Conn{c: c, server: true, target: target, limits: target.limits, remote: c.remoteAddr()}
+    hub.conns.push(&h)
+    defer hub.drop(&h)
+    ctl := c.openUniStream() catch e {
+        c.close()
+        return
+    }
+    h.control = ctl
+    scoped String settings = h3Settings(h.limits.maxHeader * 8)
+    ctl.write(settings) catch e { }
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        if s.isUni() {
+            spawn h3Uni(&h, s)
+        } else if h.wentAway {
+            // after GOAWAY: the client sends it again elsewhere
+            abortStream(&s, H3_REQUEST_REJECTED)
+            s.close()
+        } else {
+            h.nextId = s.id + 4
+            h.tasks += 1
+            h.requests += 1
+            spawn h3Request(&h, s)
+        }
+    }
+    // the tasks of the streams see the end and leave
+    c.end(H3_NO_ERROR)
+    for h.tasks > 0 {
+        sleep(1ms)
+    }
+    ctl.close()
+    c.close()
+}
+
+// Ends a request stream with an error code.
+void abortStream(quic.Stream *s, i64 code) {
+    s.reset(code)
+    s.stopReading(code)
+}
+
+// One request: its HEADERS, its body, then the handler's answer.
+void h3Request(H3Conn *h, quic.Stream s) {
+    defer h.tasks -= 1
+    defer h.requests -= 1
+    defer s.close()
+    H3Reader r = H3Reader{s: s}
+    defer r.free()
+    i64 kind
+    i64 len
+    for {
+        more := r.frame(&kind, &len) catch e {
+            abortStream(&s, H3_REQUEST_INCOMPLETE)
+            return
+        }
+        if !more {
+            abortStream(&s, H3_REQUEST_INCOMPLETE)
+            return
+        }
+        if kind == H3_HEADERS {
+            break
+        }
+        if kind == H3_DATA || (knownH3(kind) && kind != H3_DATA) {
+            h.fail(H3_FRAME_UNEXPECTED, "a request that doesn't start with HEADERS")
+            return
+        }
+        r.skip(len) catch e {
+            return
+        }
+    }
+    if len > h.limits.maxHeader * 8 {
+        abortStream(&s, H3_EXCESSIVE_LOAD)
+        return
+    }
+    block := r.take(len) catch e {
+        abortStream(&s, H3_REQUEST_INCOMPLETE)
+        return
+    }
+    List[String] names
+    List[String] values
+    why := qpackDecode(block, &names, &values, h.limits.maxHeader * 8)
+    if why.len > 0 {
+        freeFields(&names, &values)
+        h.fail(H3_QPACK_DECOMPRESSION_FAILED, why)
+        return
+    }
+    Request req
+    req.remote = h.remote
+    req.local = h.local
+    i64 length
+    code := fillRequest(&req, &names, &values, &length)
+    freeFields(&names, &values)
+    req.protocol = "HTTP/3"
+    if code != E_NONE {
+        req.free()
+        abortStream(&s, H3_MESSAGE_ERROR)
+        return
+    }
+    router := h.target.router
+    H3In body = H3In{r: &r}
+    if router != null && router.streams(&req) {
+        req.h3in = &body
+    } else {
+        // the body comes whole before the handler runs
+        bool tooBig = false
+        for {
+            more := r.frame(&kind, &len) catch e {
+                req.free()
+                abortStream(&s, H3_REQUEST_INCOMPLETE)
+                return
+            }
+            if !more {
+                break
+            }
+            if kind == H3_DATA {
+                if req.body.len + len > h.limits.maxBody {
+                    tooBig = true
+                    break
+                }
+                part := r.take(len) catch e {
+                    req.free()
+                    abortStream(&s, H3_REQUEST_INCOMPLETE)
+                    return
+                }
+                req.body.append(part)
+            } else if kind == H3_HEADERS {
+                tblock := r.take(len) catch e {
+                    req.free()
+                    return
+                }
+                List[String] tn
+                List[String] tv
+                if qpackDecode(tblock, &tn, &tv, h.limits.maxHeader * 8).len == 0 {
+                    linesOf(&tn, &tv, &req.trailerText)
+                }
+                freeFields(&tn, &tv)
+            } else if knownH3(kind) {
+                req.free()
+                h.fail(H3_FRAME_UNEXPECTED, "a frame that doesn't belong on a request stream")
+                return
+            } else {
+                r.skip(len) catch e {
+                    req.free()
+                    return
+                }
+            }
+        }
+        if tooBig {
+            req.free()
+            s.stopReading(H3_REQUEST_REJECTED)
+            scoped String reply = h3Reply(413, "text/plain; charset=utf-8", "", "the body is too large\n", "")
+            s.write(reply) catch e { }
+            s.closeWrite()
+            return
+        }
+        if length >= 0 && length != req.body.len {
+            req.free()
+            abortStream(&s, H3_MESSAGE_ERROR)
+            return
+        }
+    }
+    req.received = time.clock()
+    Response res
+    res.status = 200
+    res.contentType = "text/plain; charset=utf-8".copy()
+    H3Out out = H3Out{s: &s, head: req.method == "HEAD"}
+    res.h3 = &out
+    if router != null {
+        router.busy.add(1)
+        router.dispatch(&req, &res)
+    } else {
+        run(h.target.handler, &req, &res)
+    }
+    if res.streaming {
+        if res.trailers.len > 0 {
+            scoped String t = h3Trailers(res.trailers)
+            s.write(t) catch e { }
+        }
+    } else {
+        maybeGzip(router, &req, &res)
+        scoped String reply = h3Reply(res.status, res.contentType, res.headers, res.body, res.trailers,
+            req.method == "HEAD")
+        s.write(reply) catch e { }
+    }
+    s.closeWrite()
+    req.free()
+    res.body.free()
+    res.headers.free()
+    res.trailers.free()
+    res.contentType.free()
+    if router != null {
+        router.busy.sub(1)
+    }
+}
+
+// A whole answer: HEADERS, the body as one DATA frame, and the trailers.
+// A HEAD request, and a 204 or 304 answer, have no body: only its length.
+String h3Reply(i32 status, str contentType, str headers, str body, str trailers, bool head = false) {
+    String out
+    scoped String block = h3Head(status, contentType, headers, body.len)
+    putH3Frame(&out, H3_HEADERS, block)
+    if body.len > 0 && !head && status != 204 && status != 304 {
+        putVar(&out, H3_DATA)
+        putVar(&out, body.len)
+        out.append(body)
+    }
+    if trailers.len > 0 {
+        scoped String t = h3Trailers(trailers)
+        out.append(t)
+    }
+    return out
+}
+
+// The field section of an answer's headers; length -1 for a streamed one.
+String h3Head(i32 status, str contentType, str headers, i64 length) {
+    String block
+    qpackStart(&block)
+    scoped String code = format("{status}")
+    qpackField(&block, ":status", code)
+    if contentType.len > 0 {
+        qpackField(&block, "content-type", contentType)
+    }
+    if length >= 0 {
+        scoped String n = format("{length}")
+        qpackField(&block, "content-length", n)
+    }
+    qpackLines(&block, headers)
+    return block
+}
+
+String h3Trailers(str trailers) {
+    String block
+    qpackStart(&block)
+    qpackLines(&block, trailers)
+    String out
+    putH3Frame(&out, H3_HEADERS, block)
+    block.free()
+    return out
+}
+
+!void Response.writeH3(str data) {
+    o := self.h3
+    if !self.streaming {
+        scoped String block = h3Head(self.status, self.contentType, self.headers, -1)
+        scoped String head
+        putH3Frame(&head, H3_HEADERS, block)
+        try o.s.write(head)
+        self.streaming = true
+    }
+    if data.len == 0 || o.head {
+        return
+    }
+    scoped String frame
+    putVar(&frame, H3_DATA)
+    putVar(&frame, data.len)
+    try o.s.write(frame)
+    try o.s.write(data)
+}
+
+// The accept loop of one thread's listener.
+void h3Accept(quic.Listener ln, Target target) {
+    H3Hub hub
+    for {
+        c := ln.accept() catch e {
+            break
+        }
+        spawn serveH3Conn(c, target, &hub)
+    }
+    ln.close()
+    Duration until = time.clock() + 10s
+    if target.router != null && target.router.drainEnd.load() != 0 {
+        until = Duration(target.router.drainEnd.load())
+    }
+    for h in hub.conns {
+        spawn h3Drain(h, until)
+    }
+    for hub.conns.len > 0 {
+        sleep(1ms)
+    }
+    hub.conns.free()
+}
+
+void h3Thread(u16 port, str host, net.TlsConfig *tls, Target target) {
+    ln := quic.listen(port, tls, quic.Config{alpn: "h3"}, host) catch e {
+        return
+    }
+    if target.router != null {
+        target.router.addQuic(ln)
+    }
+    h3Accept(ln, target)
+}
+
+!void serveH3Target(u16 port, str host, net.TlsConfig *tls, Target target, i64 threads) {
+    target.limits = limitsOf(target.router)
+    n := if threads > 0 { threads } else { cpuCount() }
+    // macOS gives a UDP port's datagrams to one socket only
+    if listenPerThread() != 1 {
+        n = 1
+    }
+    ln := try quic.listen(port, tls, quic.Config{alpn: "h3"}, host)
+    if target.router != null {
+        target.router.addQuic(ln)
+    }
+    for i in 1..n {
+        thread h3Thread(ln.port, host, tls, target)
+    }
+    h3Accept(ln, target)
+}
+
+// Answers HTTP/3 on UDP port with handler, with the certificate chain and
+// key in the PEM files. threads event loops share the work, as for serve.
+pub !void serveH3(u16 port, Handler handler, str certFile, str keyFile, str host = "", i64 threads = 0) {
+    config := try net.tlsConfig(certFile, keyFile)
+    tls := tlsKept(config)
+    try serveH3Target(port, host, tls, Target{handler: handler}, threads)
+}
+
+// Like serveH3, on a QUIC listener that is open already (for port 0),
+// whose Config offered "h3", on the thread that opened it.
+pub void serveH3On(quic.Listener ln, Handler handler) {
+    Target t = Target{handler: handler}
+    t.limits = limitsOf(null)
+    h3Accept(ln, t)
+}
+
+// Answers HTTP/3 with the router on UDP port, as serveH3 does.
+pub !void Router.serveH3(u16 port, str certFile, str keyFile, str host = "", i64 threads = 0) {
+    config := try net.tlsConfig(certFile, keyFile)
+    tls := tlsKept(config)
+    try serveH3Target(port, host, tls, Target{router: self}, threads)
+}
+
+// Answers HTTP/3 with the router on a QUIC listener that is open already,
+// on the thread that opened it.
+pub void Router.serveH3On(quic.Listener ln) {
+    self.addQuic(ln)
+    Target t = Target{router: self}
+    t.limits = limitsOf(self)
+    h3Accept(ln, t)
+}
+
+void routerH3(Router *r, u16 port, str host, net.TlsConfig *tls, i64 threads) {
+    serveH3Target(port, host, tls, Target{router: r}, threads) catch e { }
+}
+
+// Says in every answer over HTTP/1.1 and HTTP/2 that HTTP/3 is on UDP
+// port, with Alt-Svc, so clients that speak it move there.
+pub void Router.advertiseH3(u16 port) {
+    self.altSvc.free()
+    self.altSvc = format("h3=\":{port}\"; ma=86400")
+}
+
+void Router.addQuic(quic.Listener ln) {
+    self.lock.lock()
+    self.quics.push(ln)
+    self.lock.unlock()
+}
+
+// A TlsConfig that stays for the life of the server.
+net.TlsConfig *tlsKept(net.TlsConfig config) {
+    net.TlsConfig[] mem = alloc(net.TlsConfig, 1)
+    mem[0] = config
+    return &mem[0]
+}

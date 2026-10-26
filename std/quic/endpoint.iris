@@ -1,0 +1,318 @@
+// An endpoint: one UDP socket, a reader task that hands each datagram to
+// its connection by Destination Connection ID, and for a server the new
+// connections the clients start.
+
+import math, net, random, time
+
+@extern("iris_quic_recv")
+i64 rawRecv(i32 fd, u8 *buf, i64 len, u8 *ip, i64 *port, i64 *segment, i64 timeout)
+
+@extern("iris_quic_buffers")
+void rawBuffers(i32 fd, i64 n)
+
+@extern("iris_udp_sendmsg")
+i32 rawSendMsg(i32 fd, i32 family, u8 *buf, i64 len, u8 *ip, i64 port, u8 *from, i64 tos, i64 segment, i64 timeout)
+
+@extern("iris_udp_send")
+i32 rawUdpSend(i32 fd, i32 family, u8 *buf, i64 len, u8 *ip, i64 port, i64 timeout)
+
+@extern("iris_udp_info")
+i32 rawUdpInfo(i32 fd, i32 family, i32 op, i32 value)
+
+@extern("iris_net_stop_listener")
+void rawStop(i32 fd)
+
+@extern("iris_quic_family")
+i32 rawFamily(i32 fd)
+
+@extern("iris_net_close")
+void rawClose(i32 fd)
+
+struct Endpoint {
+    net.Udp sock
+    i32 family
+    bool server
+    net.TlsConfig *tls
+    Config config
+    Map[u64, Link *] links
+    chan[Link *] accepted
+    Link *only // a client's one connection
+    i64 live   // connections not yet forgotten
+    bool closed
+    bool stopped
+    bool gso
+}
+
+Endpoint *newEndpoint(net.Udp sock, bool server, Config config) {
+    Endpoint[] mem = alloc(Endpoint, 1)
+    Endpoint *ep = &mem[0]
+    ep.sock = sock
+    ep.family = rawFamily(sock.fd())
+    ep.server = server
+    ep.config = config
+    ep.accepted = chan[Link *](config.backlog)
+    rawBuffers(sock.fd(), 4MiB)
+    when os == .linux {
+        ep.gso = true
+        _ = rawUdpInfo(sock.fd(), ep.family, 3, 1) // GRO
+    }
+    return ep
+}
+
+// A connection ID of ours as a key: its 8 bytes.
+u64 cidKey(str id) {
+    u64 k = 0
+    for b in id {
+        k = k << 8 | u64(b)
+    }
+    return k
+}
+
+// The key of a client's first Destination Connection ID, which it chose:
+// a hash of it, kept apart from ours by the low bit.
+u64 initialKeyOf(str id, net.Addr from) {
+    i64 h = 1469598103934665603
+    for b in id {
+        h = math.mulWrap(h ^ i64(b), 1099511628211)
+    }
+    for b in from.ip {
+        h = math.mulWrap(h ^ i64(b), 1099511628211)
+    }
+    h = math.mulWrap(h ^ i64(from.port), 1099511628211)
+    return u64(h & 0x3fffffffffffffff) | 1
+}
+
+void Endpoint.send(str data, i64 seg, i64 count, net.Addr to) {
+    fd := self.sock.fd()
+    if count > 1 && self.gso {
+        code := rawSendMsg(fd, self.family, data.ptr, data.len, &to.ip[0], i64(to.port), null, -1, seg, 0)
+        if code != 10 {
+            return
+        }
+        self.gso = false
+    }
+    if count == 1 {
+        _ = rawUdpSend(fd, self.family, data.ptr, data.len, &to.ip[0], i64(to.port), 0)
+        return
+    }
+    i64 at = 0
+    for at < data.len {
+        n := if data.len - at < seg { data.len - at } else { seg }
+        _ = rawUdpSend(fd, self.family, data.ptr + at, n, &to.ip[0], i64(to.port), 0)
+        at += n
+    }
+}
+
+// The reader task: each datagram, or each of a GRO batch, goes to its
+// connection. It ends once the endpoint stops, and closes the socket.
+void Endpoint.run() {
+    u8[] buf = alloc(u8, 65536)
+    for {
+        net.Addr from
+        i64 port
+        i64 seg
+        n := rawRecv(self.sock.fd(), buf.ptr, buf.len, &from.ip[0], &port, &seg, 0)
+        if n == -2 || self.stopped {
+            break
+        }
+        if n < 0 {
+            continue
+        }
+        from.port = u16(port)
+        if seg > 0 && seg < n {
+            i64 at = 0
+            for at < n {
+                k := if n - at < seg { n - at } else { seg }
+                if !dropping() {
+                    self.datagram(buf[at:at + k], from)
+                }
+                at += k
+            }
+        } else if !dropping() {
+            self.datagram(buf[0:n], from)
+        }
+    }
+    free(buf)
+    rawClose(self.sock.fd())
+    self.links.free()
+    self.accepted.free()
+    free(self[0:1])
+}
+
+void Endpoint.datagram(u8[] data, net.Addr from) {
+    if data.len < 7 {
+        return
+    }
+    if !self.server {
+        if self.only != null {
+            self.only.datagram(data, from)
+        }
+        return
+    }
+    first := data[0]
+    if first & 0x80 == 0 {
+        if data.len < 1 + CID_LEN {
+            return
+        }
+        l, ok := self.links.get(cidKey(data[1:1 + CID_LEN]))
+        if ok {
+            l.datagram(data, from)
+        }
+        return
+    }
+    dl := i64(data[5])
+    if dl > 20 || 6 + dl + 1 > data.len {
+        return
+    }
+    dcid := data[6:6 + dl]
+    if dl == CID_LEN {
+        l, ok := self.links.get(cidKey(dcid))
+        if ok {
+            l.datagram(data, from)
+            return
+        }
+    }
+    l, ok := self.links.get(initialKeyOf(dcid, from))
+    if ok && l.odcid[0:l.odcidLen] == dcid {
+        l.datagram(data, from)
+        return
+    }
+    version := i64(data[1]) << 24 | i64(data[2]) << 16 | i64(data[3]) << 8 | i64(data[4])
+    if data.len < MIN_DATAGRAM {
+        return // a client's first datagram is at least 1200 bytes
+    }
+    sl := i64(data[6 + dl])
+    if sl > 20 || 7 + dl + sl > data.len {
+        return
+    }
+    scid := data[7 + dl:7 + dl + sl]
+    if version != VERSION_1 {
+        self.negotiate(dcid, scid, from)
+        return
+    }
+    if first >> 4 & 3 != PT_INITIAL || dl < 8 || self.closed {
+        return
+    }
+    self.start(data, from, dcid, scid)
+}
+
+// Version Negotiation (RFC 9000 17.2.1): the versions we speak.
+void Endpoint.negotiate(str dcid, str scid, net.Addr to) {
+    u8[64] buf
+    Out o = Out{b: buf[:]}
+    u8[1] r
+    random.bytes(r[:])
+    o.put8(0x80 | i64(r[0]) & 0x7f)
+    o.put32(0)
+    o.put8(scid.len)
+    o.putBytes(scid)
+    o.put8(dcid.len)
+    o.putBytes(dcid)
+    o.put32(VERSION_1)
+    self.send(buf[0:o.n], 0, 1, to)
+}
+
+// A client's first Initial: a new connection.
+void Endpoint.start(u8[] data, net.Addr from, str dcid, str scid) {
+    if self.live >= self.config.maxConnections {
+        return
+    }
+    l := newLink(self, self.config, true, from)
+    l.released = true // the endpoint's until accept hands it out
+    _ = copyCid(l.odcid[:], &l.odcidLen, dcid)
+    _ = copyCid(l.dcid[:], &l.dcidLen, scid)
+    _ = copyCid(l.ours.originalDcid[:], &l.ours.originalDcidLen, dcid)
+    sp := &l.sp[SP_INITIAL]
+    rawInitialKeys(dcid.ptr, dcid.len, 1, &sp.rkey, &sp.wkey)
+    if !l.startTls() {
+        l.destroy()
+        return
+    }
+    self.links.set(cidKey(l.scid[0:l.scidLen]), l)
+    l.initialKey = initialKeyOf(dcid, from)
+    self.links.set(l.initialKey, l)
+    self.live += 1
+    spawn l.drive()
+    l.datagram(data, from)
+}
+
+// The server's side of a connection whose handshake is done: it waits
+// for accept.
+void Endpoint.ready(Link *l) {
+    l.forgetInitialKey()
+    if self.closed {
+        l.startClose(E_CONNECTION_REFUSED, false, "the server is closing")
+        return
+    }
+    l.released = false
+    if !self.accepted.trySend(l) {
+        l.released = true
+        l.startClose(E_CONNECTION_REFUSED, false, "too many connections waiting to be accepted")
+    }
+}
+
+void Link.forgetInitialKey() {
+    if self.initialKey != 0 {
+        _ = self.ep.links.remove(self.initialKey)
+        self.initialKey = 0
+    }
+}
+
+// A connection that is over leaves the endpoint. A client's endpoint, or
+// a closed server's with no connections left, stops.
+void Endpoint.forget(Link *l) {
+    l.forgetInitialKey()
+    _ = self.links.remove(cidKey(l.scid[0:l.scidLen]))
+    if self.only == l {
+        self.only = null
+    }
+    self.live -= 1
+    if self.live == 0 && (!self.server || self.closed) {
+        self.stop()
+    }
+}
+
+void Endpoint.stop() {
+    if !self.stopped {
+        self.stopped = true
+        rawStop(self.sock.fd())
+    }
+}
+
+// The connection's task: it sends, waits, and runs the timers, until the
+// connection is over; then it frees it once the program let go of it.
+void Link.drive() {
+    i64 spins = 0
+    for self.phase != .closed {
+        now := time.clock()
+        self.timers(now)
+        if self.phase == .closed {
+            break
+        }
+        self.flush()
+        wait := self.deadline() - time.clock()
+        if wait <= 0s {
+            // a timer that is due again at once: a short wait now and then
+            // keeps a mistake from spinning
+            spins += 1
+            if spins < 64 {
+                continue
+            }
+            wait = 1ms
+        }
+        spins = 0
+        select {
+            _ := <-self.wake => {}
+            after(wait) => {}
+        }
+    }
+    self.wakeAll()
+    self.ep.forget(self)
+    for !self.released || self.users > 0 {
+        select {
+            _ := <-self.wake => {}
+            after(1s) => {}
+        }
+    }
+    self.destroy()
+}

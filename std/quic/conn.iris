@@ -1,0 +1,1378 @@
+// A connection (RFC 9000): its packet number spaces, the handshake, the
+// frames that come in and the streams they carry. The endpoint's reader
+// task hands it each packet; the connection's own task sends and runs its
+// timers. Everything of a connection happens on the thread that made it.
+
+import net, random, str, time
+
+// packet number spaces, and the TLS level of each
+const i64 SP_INITIAL = 0
+const i64 SP_HANDSHAKE = 1
+const i64 SP_APP = 2
+
+i64 levelOf(i64 sp) => if sp == SP_INITIAL { 0 } else if sp == SP_HANDSHAKE { 2 } else { 3 }
+
+// long header packet types
+const i64 PT_INITIAL = 0
+const i64 PT_ZERO_RTT = 1
+const i64 PT_HANDSHAKE = 2
+const i64 PT_RETRY = 3
+
+// the smallest datagram a path must carry, and the size we try once the
+// handshake is done
+const i64 MIN_DATAGRAM = 1200
+const i64 PROBE_DATAGRAM = 1452
+const i64 CID_LEN = 8
+
+// A frame that a lost packet carried and that must go again: a stream's
+// bytes, handshake bytes, or a control frame.
+struct Rec {
+    i64 kind
+    i64 id
+    i64 off
+    i64 len
+    bool fin
+}
+
+// A packet we sent and haven't seen acknowledged or lost.
+struct Sent {
+    i64 pn
+    Duration time
+    i64 size
+    bool eliciting
+    bool inFlight
+    bool done
+    bool probe    // an MTU probe: its loss says nothing of congestion
+    i64 ackedUpTo // the largest packet number its ACK frame told of, or -1
+    i64 nrec
+    Rec r0
+    List[Rec] more
+}
+
+void Sent.add(Rec r) {
+    if self.nrec == 0 {
+        self.r0 = r
+    } else {
+        self.more.push(r)
+    }
+    self.nrec += 1
+}
+
+Rec Sent.rec(i64 i) => if i == 0 { self.r0 } else { self.more.at(i - 1) }
+
+// One packet number space.
+struct Space {
+    u8 *rkey
+    u8 *wkey
+    bool gone // its keys were dropped
+    i64 nextPn
+    Deque[Sent] sent
+    i64 firstPn // the packet number of sent.at(0)
+    i64 largestAcked = -1
+    Duration lossTime
+    Duration lastEliciting
+    i64 elicitingOut // ack-eliciting packets in flight
+    // what came
+    Ranges got
+    i64 floor // packets below it are taken as seen
+    i64 largestGot = -1
+    Duration largestGotAt
+    i64 unacked // ack-eliciting packets since our last ACK
+    bool ackNow
+    Duration ackBy
+    i64 probes // PTO probes to send
+    // the handshake bytes of this level
+    SendBuf crypto
+    RecvBuf cryptoIn
+}
+
+// A control frame to send. a is the stream for the stream's frames.
+struct Ctl {
+    i64 kind
+    i64 a
+    i64 b
+}
+
+// A connection ID of the peer's, from NEW_CONNECTION_ID.
+struct PeerCid {
+    i64 seq
+    u8[20] id
+    i64 len
+    u8[16] token
+}
+
+enum Phase { handshake, open, closing, draining, closed }
+
+struct Link {
+    Endpoint *ep
+    Config config
+    bool server
+    Phase phase
+    net.Addr peer
+    // the connection IDs: the peer's we send to, ours, and the client's
+    // first Destination Connection ID
+    u8[20] dcid
+    i64 dcidLen
+    i64 dcidSeq
+    u8[20] scid
+    i64 scidLen
+    u8[20] odcid
+    i64 odcidLen
+    u64 initialKey // the server's key for the client's first DCID, 0 once gone
+    List[PeerCid] peerCids
+    u8[16] resetToken // the peer's stateless reset token
+    bool hasResetToken
+    // a client's token from a Retry
+    String token
+    bool retried
+
+    u8 *tls
+    bool tlsDone
+    bool confirmed // the handshake is confirmed (RFC 9001 4.1.2)
+    Space[3] sp
+    Params ours
+    Params theirs
+    bool gotParams
+    String alpn
+    // 1-RTT key updates (RFC 9001 6)
+    u8 *readNext
+    u8 *readPrev
+    u8 *writeNext
+    i64 keyPhase
+    i64 phaseStartPn // the first packet we sent with the current phase
+    bool updating    // waiting for an ACK of the new phase before another
+
+    // streams
+    Map[i64, Strm *] streams
+    i64 openedBidi // streams we opened, of each kind
+    i64 openedUni
+    i64 maxBidiOut // how many the peer lets us open
+    i64 maxUniOut
+    i64 peerBidi // streams the peer opened, of each kind
+    i64 peerUni
+    i64 maxBidiIn // how many we let it open
+    i64 maxUniIn
+    i64 doneBidi // the peer's streams that are finished
+    i64 doneUni
+    bool maxStreamsBidiQueued
+    bool maxStreamsUniQueued
+    chan[Strm *] incoming
+    List[Strm *] sendQ
+    List[Ctl] ctl
+    bool handshakeDoneQueued
+    // connection flow control
+    i64 maxDataOut // what the peer lets us send in all
+    i64 sentData
+    i64 maxDataIn
+    i64 gotData  // the sum of what came on every stream (the largest offsets)
+    i64 readData // what was read or dropped
+    bool maxDataQueued
+    bool blockedSent
+
+    // recovery (RFC 9002)
+    Duration srtt
+    Duration rttvar
+    Duration minRtt
+    Duration latestRtt
+    bool hasRtt
+    i64 ptoCount
+    i64 cwnd
+    i64 ssthresh
+    i64 inFlight
+    i64 acked // bytes acknowledged toward the next step of congestion avoidance
+    Duration recoveryStart
+    i64 mtu // the datagram size in use
+    bool mtuProbed
+    Duration lastSend
+    // anti-amplification (RFC 9000 8): a server sends at most 3 times what
+    // came until the client's address is validated
+    bool validated
+    i64 bytesIn
+    i64 bytesOut
+
+    // the end
+    Duration idleEnd
+    Duration idleTimeout
+    Duration closeEnd
+    i64 closeCode
+    bool closeApp
+    String closeReason
+    bool closeQueued
+    String why // why the connection ended
+    QuicError whyCode
+    bool released // the program let go of it
+    bool forgotten
+    i64 users // tasks of the program waiting inside one of its calls
+
+    chan[bool] wake
+    chan[bool] ready // the handshake finished or failed
+    u8[] sbuf        // datagrams being sent, when this connection has its own
+}
+
+// The OpenSSL context of a TlsConfig: the struct's one field.
+u8 *tlsCtx(net.TlsConfig *config) {
+    u8 *raw = config
+    u8 **field = raw
+    return *field
+}
+
+void poke(chan[bool] c) {
+    _ = c.trySend(true)
+}
+
+void Link.poke() => poke(self.wake)
+
+bool Link.ended() => self.phase == .closing || self.phase == .draining || self.phase == .closed
+
+QuicError Link.endCode() => self.whyCode
+
+Link *newLink(Endpoint *ep, Config config, bool server, net.Addr peer) {
+    Link[] mem = alloc(Link, 1)
+    Link *l = &mem[0]
+    l.ep = ep
+    l.config = config
+    l.server = server
+    l.peer = peer
+    l.phase = .handshake
+    for i in 0..3 {
+        l.sp[i].largestAcked = -1
+        l.sp[i].largestGot = -1
+        l.sp[i].cryptoIn.finalSize = -1
+    }
+    l.scidLen = CID_LEN
+    random.bytes(l.scid[0:CID_LEN])
+    l.cwnd = 10 * MIN_DATAGRAM
+    l.ssthresh = MAX_VARINT
+    l.mtu = MIN_DATAGRAM
+    l.srtt = 333ms
+    l.rttvar = 333ms / 2
+    l.whyCode = QuicError.closed
+    l.wake = chan[bool](1)
+    l.ready = chan[bool](1)
+    l.incoming = chan[Strm *](config.maxStreams + 16)
+    l.maxBidiIn = config.maxStreams
+    l.maxUniIn = config.maxUniStreams
+    l.maxDataIn = config.connWindow
+    l.idleTimeout = config.idleTimeout
+    l.idleEnd = time.clock() + config.idleTimeout
+    // alloc's memory is zeros: the defaults come from literals
+    l.theirs = Params{}
+    l.ours = Params{}
+    // our transport parameters
+    l.ours.idleTimeoutMs = i64(config.idleTimeout) / 1000000
+    l.ours.maxUdpPayload = 1472
+    l.ours.maxData = config.connWindow
+    l.ours.streamDataBidiLocal = config.streamWindow
+    l.ours.streamDataBidiRemote = config.streamWindow
+    l.ours.streamDataUni = config.streamWindow
+    l.ours.maxStreamsBidi = config.maxStreams
+    l.ours.maxStreamsUni = config.maxUniStreams
+    l.ours.disableMigration = true
+    _ = copyCid(l.ours.initialScid[:], &l.ours.initialScidLen, l.scid[0:l.scidLen])
+    return l
+}
+
+void Link.destroy() {
+    for i in 0..3 {
+        sp := &self.sp[i]
+        rawKeyFree(sp.rkey)
+        rawKeyFree(sp.wkey)
+        for j in 0..sp.sent.len {
+            s := sp.sent.at(j)
+            s.more.free()
+        }
+        sp.sent.free()
+        sp.got.free()
+        sp.crypto.free()
+        sp.cryptoIn.free()
+    }
+    rawKeyFree(self.readNext)
+    rawKeyFree(self.readPrev)
+    rawKeyFree(self.writeNext)
+    if self.tls != null {
+        rawTlsFree(self.tls)
+    }
+    for _, s in self.streams {
+        s.destroy()
+    }
+    self.streams.free()
+    self.incoming.free()
+    self.sendQ.free()
+    self.ctl.free()
+    self.peerCids.free()
+    self.token.free()
+    self.alpn.free()
+    self.closeReason.free()
+    self.why.free()
+    self.wake.free()
+    self.ready.free()
+    free(self.sbuf)
+    free(self[0:1])
+}
+
+// ------------------------------------------------------------ ending
+
+// Ends the connection with a transport error: CONNECTION_CLOSE goes to the
+// peer, and the connection waits a while for it to arrive.
+void Link.fail(i64 code, str reason) {
+    if self.ended() {
+        return
+    }
+    trace("{self.server} fail {code:x} {reason}")
+    self.startClose(code, false, reason)
+    if self.why.len == 0 {
+        self.why = format("the connection failed: {reason}")
+    }
+    self.whyCode = if code >= E_CRYPTO && code < E_CRYPTO + 256 { QuicError.tls } else { QuicError.protocol }
+    self.wakeAll()
+}
+
+void Link.startClose(i64 code, bool app, str reason) {
+    self.closeCode = code
+    self.closeApp = app
+    self.closeReason.free()
+    self.closeReason = reason.copy()
+    self.closeQueued = true
+    // the peer may need the close at a level it can read
+    self.phase = .closing
+    self.closeEnd = time.clock() + self.pto() * 3
+    self.poke()
+}
+
+// The peer closed the connection, or it went idle: nothing more is sent.
+void Link.drain(str why, QuicError code) {
+    if self.phase == .draining || self.phase == .closed {
+        return
+    }
+    if self.why.len == 0 {
+        self.why = why.copy()
+    }
+    if self.phase != .closing {
+        self.whyCode = code
+    }
+    self.phase = .draining
+    self.closeEnd = time.clock() + self.pto() * 3
+    self.wakeAll()
+    self.poke()
+}
+
+// Wakes every task waiting on the connection, so they see that it ended.
+void Link.wakeAll() {
+    for _, s in self.streams {
+        s.wake()
+    }
+    poke(self.ready)
+    // a task waiting in acceptStream
+    _ = self.incoming.trySend(null)
+}
+
+// ------------------------------------------------------------ the handshake
+
+// Starts TLS: the client's handshake, or the server's once the first
+// Initial came.
+bool Link.startTls() {
+    u8[512] buf
+    n := encodeParams(&self.ours, self.server, buf[:])
+    if self.server {
+        self.tls = rawTlsServer(tlsCtx(self.ep.tls), &buf[0], n)
+    } else {
+        alpn := wireAlpn(self.config.alpn)
+        self.tls = rawTlsClient(self.config.serverName.ptr, self.config.serverName.len, self.config.ca.ptr,
+            self.config.ca.len, alpn.ptr, alpn.len, self.config.cert.ptr, self.config.cert.len, self.config.key.ptr,
+            self.config.key.len, &buf[0], n)
+        alpn.free()
+    }
+    if self.tls == null {
+        self.why = format("starting TLS: {tlsMessage()}")
+        self.whyCode = QuicError.tls
+        return false
+    }
+    return true
+}
+
+// The protocols "h3,hq-interop" as ALPN wants them, each with its length
+// in front.
+String wireAlpn(str list) {
+    String out
+    i64 start = 0
+    for i in 0..list.len + 1 {
+        if i == list.len || list[i] == ',' {
+            p := list[start:i]
+            if p.len > 0 && p.len < 256 {
+                u8[1] size = [u8(p.len)]
+                out.append(size[:])
+                out.append(p)
+            }
+            start = i + 1
+        }
+    }
+    return out
+}
+
+// Runs TLS after handshake bytes came, then takes what it made: keys,
+// bytes to send and the peer's parameters.
+void Link.stepTls() {
+    if self.tls == null || self.ended() {
+        return
+    }
+    r := rawTlsStep(self.tls)
+    trace("{self.server} tls step {r}")
+    self.takeKeys()
+    for i in 0..3 {
+        sp := &self.sp[i]
+        if !sp.gone {
+            String out
+            rawTlsTake(self.tls, levelOf(i), &out)
+            if out.len > 0 {
+                sp.crypto.write(out)
+            }
+            out.free()
+        }
+    }
+    if r < 0 {
+        alert := rawTlsAlert(self.tls)
+        self.fail(E_CRYPTO + i64(alert), tlsMessage())
+        self.whyCode = QuicError.tls
+        self.why.free()
+        self.why = format("the TLS handshake failed: {tlsMessage()}")
+        return
+    }
+    if !self.gotParams {
+        u8 *p
+        i64 n
+        if rawTlsParams(self.tls, &p, &n) != 0 {
+            self.gotParams = true
+            why := decodeParams(p[0:n], !self.server, &self.theirs)
+            if why.len > 0 {
+                self.fail(E_TRANSPORT_PARAMETER, why)
+                return
+            }
+            if !self.checkParams() {
+                return
+            }
+            self.applyParams()
+        }
+    }
+    if r == 1 && !self.tlsDone {
+        self.handshakeDone()
+    }
+}
+
+void Link.takeKeys() {
+    for i in 1..3 {
+        sp := &self.sp[i]
+        level := levelOf(i)
+        r := rawTlsKey(self.tls, level, 0)
+        if r != null {
+            rawKeyFree(sp.rkey)
+            sp.rkey = r
+            if i == SP_APP {
+                self.readNext = rawKeyNext(r)
+            }
+        }
+        w := rawTlsKey(self.tls, level, 1)
+        if w != null {
+            rawKeyFree(sp.wkey)
+            sp.wkey = w
+            if i == SP_APP {
+                self.writeNext = rawKeyNext(w)
+            }
+        }
+    }
+    // 0-RTT keys aren't used
+    rawKeyFree(rawTlsKey(self.tls, 1, 0))
+    rawKeyFree(rawTlsKey(self.tls, 1, 1))
+}
+
+// The connection IDs in the parameters must be the ones the packets
+// carried (RFC 9000 7.3).
+bool Link.checkParams() {
+    t := &self.theirs
+    if t.initialScid[0:t.initialScidLen] != self.dcid[0:self.dcidLen] && !self.server {
+        self.fail(E_TRANSPORT_PARAMETER, "initial_source_connection_id isn't the server's")
+        return false
+    }
+    if self.server && t.initialScid[0:t.initialScidLen] != self.dcid[0:self.dcidLen] {
+        self.fail(E_TRANSPORT_PARAMETER, "initial_source_connection_id isn't the client's")
+        return false
+    }
+    if !self.server {
+        if t.originalDcid[0:t.originalDcidLen] != self.odcid[0:self.odcidLen] {
+            self.fail(E_TRANSPORT_PARAMETER, "original_destination_connection_id isn't ours")
+            return false
+        }
+        if self.retried != (t.retryScidLen >= 0) {
+            self.fail(E_TRANSPORT_PARAMETER, "retry_source_connection_id doesn't fit the Retry")
+            return false
+        }
+    }
+    return true
+}
+
+void Link.applyParams() {
+    t := &self.theirs
+    self.maxDataOut = t.maxData
+    self.maxBidiOut = t.maxStreamsBidi
+    self.maxUniOut = t.maxStreamsUni
+    if t.idleTimeoutMs > 0 {
+        peer := Duration(t.idleTimeoutMs) * 1ms
+        if peer < self.idleTimeout || self.idleTimeout <= 0 {
+            self.idleTimeout = peer
+        }
+    }
+    if t.hasResetToken {
+        self.resetToken = t.resetToken
+        self.hasResetToken = true
+    }
+}
+
+void Link.handshakeDone() {
+    self.tlsDone = true
+    u8 *p
+    i64 n
+    rawTlsAlpn(rawTlsSsl(self.tls), &p, &n)
+    self.alpn = p[0:n].copy()
+    if self.alpn.len == 0 {
+        // QUIC needs a protocol both sides agree on (RFC 9001 8.1)
+        self.fail(E_CRYPTO + 120, "no application protocol in common")
+        return
+    }
+    self.phase = .open
+    if self.server {
+        // the server's handshake is confirmed once it is complete
+        self.confirmed = true
+        self.handshakeDoneQueued = true
+        self.queueCtl(Ctl{kind: FR_HANDSHAKE_DONE})
+        self.dropSpace(SP_HANDSHAKE)
+        self.ep.ready(self)
+    }
+    poke(self.ready)
+}
+
+// Drops a space's keys and forgets its packets (RFC 9001 4.9).
+void Link.dropSpace(i64 i) {
+    sp := &self.sp[i]
+    if sp.gone {
+        return
+    }
+    sp.gone = true
+    for j in 0..sp.sent.len {
+        s := sp.sent.at(j)
+        if !s.done && s.inFlight {
+            self.inFlight -= s.size
+        }
+        s.more.free()
+    }
+    sp.sent.clear()
+    sp.firstPn = sp.nextPn
+    sp.elicitingOut = 0
+    sp.lossTime = 0s
+    sp.unacked = 0
+    sp.ackNow = false
+    sp.probes = 0
+    rawKeyFree(sp.rkey)
+    rawKeyFree(sp.wkey)
+    sp.rkey = null
+    sp.wkey = null
+    self.ptoCount = 0
+}
+
+// ------------------------------------------------------------ receiving
+
+// A datagram from the peer, maybe several packets.
+void Link.datagram(str data, net.Addr from) {
+    if self.phase == .closed {
+        return
+    }
+    self.bytesIn += data.len
+    i64 at = 0
+    for at < data.len {
+        n := self.packet(data[at:], from)
+        if n <= 0 {
+            return
+        }
+        at += n
+    }
+}
+
+// One packet at the start of data: how many bytes it took, 0 to drop the
+// rest of the datagram.
+i64 Link.packet(str data, net.Addr from) {
+    u8 *p = data.ptr
+    first := i64(data[0])
+    if first & 0x80 == 0 {
+        return self.shortPacket(data)
+    }
+    In r = In{d: data, at: 1}
+    version := r.getN(4)
+    dl := r.get8()
+    dcid := r.getBytes(dl)
+    sl := r.get8()
+    scid := r.getBytes(sl)
+    if r.bad || dl > 20 || sl > 20 {
+        return 0
+    }
+    if version == 0 {
+        // Version Negotiation: we speak only version 1, so the connection
+        // can't go on (RFC 9000 6.2)
+        if !self.server && self.phase == .handshake && self.sp[SP_INITIAL].largestGot < 0 {
+            self.drain("the server doesn't speak QUIC version 1", QuicError.refused)
+        }
+        return 0
+    }
+    if version != VERSION_1 {
+        return 0
+    }
+    kind := first >> 4 & 3
+    if kind == PT_RETRY {
+        self.retry(data, scid)
+        return 0
+    }
+    if kind == PT_ZERO_RTT {
+        // no 0-RTT: skip it
+        len := r.getVar()
+        return if r.bad { 0 } else { r.at + len }
+    }
+    if kind == PT_INITIAL {
+        tl := r.getVar()
+        _ = r.getBytes(tl)
+    }
+    len := r.getVar()
+    if r.bad || len > data.len - r.at {
+        return 0
+    }
+    end := r.at + len
+    i64 sp = if kind == PT_INITIAL { SP_INITIAL } else { SP_HANDSHAKE }
+    // the client takes the server's first SCID as where it sends from now
+    if !self.server && kind == PT_INITIAL && self.sp[SP_INITIAL].largestGot < 0 {
+        if !copyCid(self.dcid[:], &self.dcidLen, scid) {
+            return 0
+        }
+    }
+    self.protected(sp, p, r.at, end, false)
+    return end
+}
+
+i64 Link.shortPacket(str data) {
+    if data.len < 1 + self.scidLen + 1 {
+        return 0
+    }
+    if self.sp[SP_APP].rkey == null {
+        return 0
+    }
+    if !self.protected(SP_APP, data.ptr, 1 + self.scidLen, data.len, true) {
+        self.maybeReset(data)
+    }
+    return data.len
+}
+
+// A packet whose packet number starts at pnOff: its protection taken off,
+// then its frames. False when it didn't open.
+bool Link.protected(i64 i, u8 *p, i64 pnOff, i64 end, bool short) {
+    sp := &self.sp[i]
+    if sp.gone || sp.rkey == null {
+        return false
+    }
+    pn := rawUnprotect(sp.rkey, p, end, pnOff, sp.largestGot)
+    if pn < 0 {
+        trace("{self.server} recv sp {i}: too short")
+        return false
+    }
+    first := i64(p[0:1][0])
+    hdr := pnOff + (first & 3) + 1
+    u8 *key = sp.rkey
+    bool next = false
+    if short {
+        phase := first >> 2 & 1
+        if phase != self.keyPhase {
+            // a key update by the peer, or an old packet from before ours
+            if self.readPrev != null && pn < self.phaseStartPn {
+                key = self.readPrev
+            } else {
+                key = self.readNext
+                next = true
+            }
+        }
+    }
+    if key == null {
+        return false
+    }
+    n := rawOpen(key, p, hdr, end, pn)
+    trace("{self.server} recv sp {i} pn {pn} len {end} open {n}")
+    if n < 0 {
+        return false
+    }
+    // reserved bits must be zero once the protection is off
+    if (short && first & 0x18 != 0) || (!short && first & 0x0c != 0) {
+        self.fail(E_PROTOCOL_VIOLATION, "reserved header bits are set")
+        return true
+    }
+    if next {
+        self.peerKeyUpdate(pn)
+    }
+    if pn < sp.floor || sp.got.has(pn) {
+        return true // a duplicate
+    }
+    if self.server && i == SP_HANDSHAKE && !self.validated {
+        // a Handshake packet proves the client's address, and the
+        // Initial keys are no longer needed (RFC 9001 4.9.1)
+        self.validated = true
+        self.dropSpace(SP_INITIAL)
+        self.forgetInitialKey()
+    }
+    now := time.clock()
+    self.idleEnd = now + self.idleTimeoutNow()
+    In r = In{d: p[hdr:hdr + n]}
+    eliciting := self.frames(i, &r)
+    if self.phase == .closed {
+        return true
+    }
+    sp = &self.sp[i]
+    if sp.gone {
+        return true
+    }
+    if pn > sp.largestGot {
+        if sp.largestGot >= 0 && pn != sp.largestGot + 1 && eliciting {
+            sp.ackNow = true // a gap: the peer should know at once
+        }
+        sp.largestGot = pn
+        sp.largestGotAt = now
+    } else if eliciting {
+        sp.ackNow = true // came out of order
+    }
+    sp.got.add(pn, pn + 1)
+    sp.got.keepLast(32)
+    if eliciting {
+        sp.unacked += 1
+        if i != SP_APP || sp.unacked >= 2 {
+            sp.ackNow = true
+        } else if sp.ackBy == 0s {
+            sp.ackBy = now + Duration(self.ours.maxAckDelayMs) * 1ms
+        }
+    }
+    if self.phase == .closing {
+        // a peer that goes on sending hasn't seen our CONNECTION_CLOSE
+        self.closeQueued = true
+    }
+    self.poke()
+    return true
+}
+
+Duration Link.idleTimeoutNow() {
+    // at least 3 PTOs, so a slow handshake isn't taken as idle
+    t := self.idleTimeout
+    p := self.pto() * 3
+    return if t > p { t } else { p }
+}
+
+// The peer started a key update: our next keys become the current ones.
+void Link.peerKeyUpdate(i64 pn) {
+    if self.updating {
+        // the peer answers our update
+        self.updating = false
+    }
+    sp := &self.sp[SP_APP]
+    rawKeyFree(self.readPrev)
+    self.readPrev = sp.rkey
+    sp.rkey = self.readNext
+    self.readNext = rawKeyNext(sp.rkey)
+    old := sp.wkey
+    sp.wkey = self.writeNext
+    self.writeNext = rawKeyNext(sp.wkey)
+    rawKeyFree(old)
+    self.keyPhase = self.keyPhase ^ 1
+    self.phaseStartPn = sp.nextPn
+}
+
+// A packet that doesn't open may be a stateless reset (RFC 9000 10.3).
+void Link.maybeReset(str data) {
+    if !self.hasResetToken || data.len < 21 {
+        return
+    }
+    tail := data[data.len - 16:]
+    if tail == self.resetToken[:] {
+        self.drain("the peer reset the connection (stateless reset)", QuicError.closed)
+    }
+}
+
+void Link.retry(str data, str scid) {
+    if self.server || self.retried || self.sp[SP_INITIAL].largestGot >= 0 || data.len < 16 + 7 {
+        return
+    }
+    u8[16] tag
+    rawRetryTag(&self.odcid[0], self.odcidLen, data.ptr, data.len - 16, &tag[0])
+    if tag[:] != data[data.len - 16:] {
+        return
+    }
+    In r = In{d: data, at: 5}
+    dl := r.get8()
+    _ = r.getBytes(dl)
+    sl := r.get8()
+    _ = r.getBytes(sl)
+    token := data[r.at:data.len - 16]
+    if token.len == 0 {
+        return
+    }
+    self.retried = true
+    self.token.free()
+    self.token = token.copy()
+    _ = copyCid(self.dcid[:], &self.dcidLen, scid)
+    // new Initial keys for the new DCID; the handshake starts again from
+    // what TLS sent
+    sp := &self.sp[SP_INITIAL]
+    rawKeyFree(sp.rkey)
+    rawKeyFree(sp.wkey)
+    rawInitialKeys(&self.dcid[0], self.dcidLen, 0, &sp.rkey, &sp.wkey)
+    for j in 0..sp.sent.len {
+        s := sp.sent.at(j)
+        if !s.done && s.inFlight {
+            self.inFlight -= s.size
+        }
+        s.more.free()
+    }
+    sp.sent.clear()
+    sp.firstPn = sp.nextPn
+    sp.elicitingOut = 0
+    sp.crypto.lost.add(0, sp.crypto.next)
+    self.poke()
+}
+
+// The frames of a packet in space i. Gives whether one of them asks for
+// an ACK.
+bool Link.frames(i64 i, In *r) {
+    bool eliciting = false
+    for !r.done() {
+        kind := r.getVar()
+        if r.bad {
+            break
+        }
+        if kind != FR_PADDING && kind != FR_ACK && kind != FR_ACK_ECN && kind != FR_CLOSE && kind != FR_CLOSE_APP {
+            eliciting = true
+        }
+        if i != SP_APP && kind != FR_PADDING && kind != FR_PING && kind != FR_ACK && kind != FR_ACK_ECN &&
+            kind != FR_CRYPTO && kind != FR_CLOSE {
+                self.fail(E_PROTOCOL_VIOLATION, "a frame of type {kind} in an Initial or Handshake packet")
+                return eliciting
+            }
+        if kind >= FR_STREAM && kind <= FR_STREAM + 7 {
+            self.streamFrame(kind, r)
+        } else {
+            match kind {
+                FR_PADDING => {
+                    for r.at < r.d.len && r.d[r.at] == 0 {
+                        r.at += 1
+                    }
+                }
+                FR_PING => {}
+                FR_ACK, FR_ACK_ECN => self.ackFrame(i, kind, r)
+                FR_CRYPTO => self.cryptoFrame(i, r)
+                FR_RESET_STREAM => self.resetFrame(r)
+                FR_STOP_SENDING => self.stopFrame(r)
+                FR_NEW_TOKEN => {
+                    n := r.getVar()
+                    _ = r.getBytes(n)
+                    if self.server {
+                        self.fail(E_PROTOCOL_VIOLATION, "a client sent NEW_TOKEN")
+                    }
+                }
+                FR_MAX_DATA => {
+                    v := r.getVar()
+                    if v > self.maxDataOut {
+                        self.maxDataOut = v
+                        self.blockedSent = false
+                        self.wakeWriters()
+                    }
+                }
+                FR_MAX_STREAM_DATA => self.maxStreamDataFrame(r)
+                FR_MAX_STREAMS_BIDI, FR_MAX_STREAMS_UNI => {
+                    v := r.getVar()
+                    if v > 1152921504606846976 {
+                        self.fail(E_FRAME_ENCODING, "MAX_STREAMS over 2^60")
+                    } else if kind == FR_MAX_STREAMS_BIDI && v > self.maxBidiOut {
+                        self.maxBidiOut = v
+                        poke(self.ready)
+                    } else if kind == FR_MAX_STREAMS_UNI && v > self.maxUniOut {
+                        self.maxUniOut = v
+                        poke(self.ready)
+                    }
+                }
+                FR_DATA_BLOCKED => _ = r.getVar()
+                FR_STREAM_DATA_BLOCKED => {
+                    _ = r.getVar()
+                    _ = r.getVar()
+                }
+                FR_STREAMS_BLOCKED_BIDI, FR_STREAMS_BLOCKED_UNI => _ = r.getVar()
+                FR_NEW_CONNECTION_ID => self.newCidFrame(r)
+                FR_RETIRE_CONNECTION_ID => _ = r.getVar()
+                FR_PATH_CHALLENGE => {
+                    data := r.getN(8)
+                    self.queueCtl(Ctl{kind: FR_PATH_RESPONSE, a: data})
+                }
+                FR_PATH_RESPONSE => _ = r.getN(8)
+                FR_CLOSE, FR_CLOSE_APP => {
+                    code := r.getVar()
+                    if kind == FR_CLOSE {
+                        _ = r.getVar()
+                    }
+                    n := r.getVar()
+                    reason := r.getBytes(n)
+                    if !r.bad {
+                        self.peerClosed(kind == FR_CLOSE_APP, code, reason)
+                    }
+                    return eliciting
+                }
+                FR_HANDSHAKE_DONE => {
+                    if self.server {
+                        self.fail(E_PROTOCOL_VIOLATION, "a client sent HANDSHAKE_DONE")
+                        return eliciting
+                    }
+                    if !self.confirmed {
+                        self.confirmed = true
+                        self.dropSpace(SP_HANDSHAKE)
+                    }
+                }
+                _ => {
+                    self.fail(E_FRAME_ENCODING, "a frame of unknown type {kind}")
+                    return eliciting
+                }
+            }
+        }
+        if r.bad {
+            self.fail(E_FRAME_ENCODING, "a frame cut short")
+            return eliciting
+        }
+        if self.ended() || self.sp[i].gone {
+            return eliciting
+        }
+    }
+    return eliciting
+}
+
+void Link.peerClosed(bool app, i64 code, str reason) {
+    String why
+    if app {
+        why = format("the peer closed the connection (code {code}) {reason}")
+    } else if code == E_NO_ERROR {
+        why = format("the peer closed the connection {reason}")
+    } else {
+        why = format("the peer closed the connection with error {code:x} {reason}")
+    }
+    // the peer's reason is text it chose: only what prints is kept
+    String shown
+    for b in why {
+        u8[1] c = [if b < 32 || b > 126 { u8('?') } else { b }]
+        shown.append(c[:])
+    }
+    why.free()
+    self.drain(str.trim(shown), if app || code == E_NO_ERROR { QuicError.closed } else { QuicError.protocol })
+    shown.free()
+}
+
+void Link.cryptoFrame(i64 i, In *r) {
+    off := r.getVar()
+    n := r.getVar()
+    data := r.getBytes(n)
+    if r.bad {
+        return
+    }
+    sp := &self.sp[i]
+    if off + n > sp.cryptoIn.read + 64KiB {
+        self.fail(E_CRYPTO + 0, "too many handshake bytes at once")
+        return
+    }
+    sp.cryptoIn.add(off, data)
+    ready := sp.cryptoIn.ready()
+    if ready == 0 {
+        return
+    }
+    u8[] buf = alloc(u8, ready)
+    got := sp.cryptoIn.take(buf)
+    if i != SP_APP || self.server {
+        rawTlsFeed(self.tls, levelOf(i), buf.ptr, got)
+        self.stepTls()
+    }
+    // a client drops what comes after the handshake (NewSessionTicket):
+    // there is no resumption
+    free(buf)
+}
+
+void Link.newCidFrame(In *r) {
+    seq := r.getVar()
+    prior := r.getVar()
+    n := r.get8()
+    id := r.getBytes(n)
+    token := r.getBytes(16)
+    if r.bad {
+        return
+    }
+    if n < 1 || n > 20 || prior > seq {
+        self.fail(E_FRAME_ENCODING, "a NEW_CONNECTION_ID that doesn't fit")
+        return
+    }
+    if self.dcidLen == 0 {
+        self.fail(E_PROTOCOL_VIOLATION, "NEW_CONNECTION_ID with a zero-length connection ID")
+        return
+    }
+    for c in self.peerCids {
+        if c.seq == seq {
+            return
+        }
+    }
+    PeerCid c = PeerCid{seq: seq, len: n}
+    for j, b in id {
+        c.id[j] = b
+    }
+    for j, b in token {
+        c.token[j] = b
+    }
+    self.peerCids.push(c)
+    // the ones the peer retires go, and we move to a newer one when ours
+    // is among them
+    if prior > self.dcidSeq {
+        self.queueCtl(Ctl{kind: FR_RETIRE_CONNECTION_ID, a: self.dcidSeq})
+        i64 best = -1
+        for k in 0..self.peerCids.len {
+            p := self.peerCids.at(k)
+            if p.seq >= prior && (best < 0 || p.seq < self.peerCids.at(best).seq) {
+                best = k
+            }
+        }
+        if best >= 0 {
+            p := self.peerCids.at(best)
+            self.dcidSeq = p.seq
+            for j in 0..p.len {
+                self.dcid[j] = p.id[j]
+            }
+            self.dcidLen = p.len
+            self.resetToken = p.token
+            self.hasResetToken = true
+        }
+    }
+    i64 k = 0
+    for k < self.peerCids.len {
+        p := self.peerCids.at(k)
+        if p.seq < prior {
+            if p.seq != self.dcidSeq {
+                self.queueCtl(Ctl{kind: FR_RETIRE_CONNECTION_ID, a: p.seq})
+            }
+            _ = self.peerCids.remove(k)
+            continue
+        }
+        k += 1
+    }
+    if self.peerCids.len > self.ours.cidLimit + 2 {
+        self.fail(E_CONNECTION_ID_LIMIT, "more connection IDs than active_connection_id_limit")
+    }
+}
+
+// ------------------------------------------------------------ streams
+
+// The stream with id, opened now when it is the peer's and new; null when
+// it is gone or the frame shouldn't be about it (the connection fails
+// then).
+Strm *Link.streamFor(i64 id, bool sending) {
+    s, ok := self.streams.get(id)
+    if ok {
+        return s
+    }
+    theirs := idIsServers(id) != self.server
+    index := id >> 2
+    uni := idIsUni(id)
+    if !theirs {
+        opened := if uni { self.openedUni } else { self.openedBidi }
+        if index >= opened {
+            self.fail(E_STREAM_STATE, "a frame for stream {id}, which we didn't open")
+        }
+        return null // finished and gone
+    }
+    if sending && uni {
+        // the peer can't ask about our sending on its own one-way stream
+        self.fail(E_STREAM_STATE, "a frame for sending on the peer's one-way stream {id}")
+        return null
+    }
+    count := if uni { self.peerUni } else { self.peerBidi }
+    if index < count {
+        return null // finished and gone
+    }
+    limit := if uni { self.maxUniIn } else { self.maxBidiIn }
+    if index >= limit {
+        self.fail(E_STREAM_LIMIT, "the peer opened more streams than we allow")
+        return null
+    }
+    // opening a stream opens the ones below it of its kind too
+    for j in count..index + 1 {
+        ns := self.newStream(j << 2 | (id & 3))
+        if self.incoming.len() < self.config.maxStreams + 8 {
+            self.incoming <- ns
+        }
+    }
+    if uni {
+        self.peerUni = index + 1
+    } else {
+        self.peerBidi = index + 1
+    }
+    st, _ := self.streams.get(id)
+    return st
+}
+
+Strm *Link.newStream(i64 id) {
+    Strm[] mem = alloc(Strm, 1)
+    Strm *s = &mem[0]
+    s.l = self
+    s.id = id
+    ours := idIsServers(id) == self.server
+    uni := idIsUni(id)
+    s.canSend = ours || !uni
+    s.canRecv = !ours || !uni
+    s.rx.finalSize = -1
+    s.window = self.config.streamWindow
+    s.recvMax = self.config.streamWindow
+    t := &self.theirs
+    if uni {
+        s.sendMax = t.streamDataUni
+    } else if ours {
+        s.sendMax = t.streamDataBidiRemote
+    } else {
+        s.sendMax = t.streamDataBidiLocal
+    }
+    s.readable = chan[bool](1)
+    s.writable = chan[bool](1)
+    self.streams.set(id, s)
+    return s
+}
+
+void Link.streamFrame(i64 kind, In *r) {
+    id := r.getVar()
+    i64 off = 0
+    if kind & 4 != 0 {
+        off = r.getVar()
+    }
+    i64 n = r.d.len - r.at
+    if kind & 2 != 0 {
+        n = r.getVar()
+    }
+    data := r.getBytes(n)
+    fin := kind & 1 != 0
+    if r.bad {
+        return
+    }
+    if off + n > MAX_VARINT {
+        self.fail(E_FRAME_ENCODING, "stream data past 2^62")
+        return
+    }
+    s := self.streamFor(id, false)
+    if s == null {
+        return
+    }
+    if !s.canRecv {
+        self.fail(E_STREAM_STATE, "data on our own one-way stream {id}")
+        return
+    }
+    end := off + n
+    if s.rx.finalSize >= 0 && (end > s.rx.finalSize || (fin && end != s.rx.finalSize)) {
+        self.fail(E_FINAL_SIZE, "stream {id} has data past its final size")
+        return
+    }
+    if fin {
+        if end < s.rx.highest {
+            self.fail(E_FINAL_SIZE, "stream {id} ends before data it had")
+            return
+        }
+        s.rx.finalSize = end
+    }
+    if end > s.recvMax {
+        self.fail(E_FLOW_CONTROL, "stream {id} has more data than its window")
+        return
+    }
+    if end > s.rx.highest {
+        self.gotData += end - s.rx.highest
+        if self.gotData > self.maxDataIn {
+            self.fail(E_FLOW_CONTROL, "more data than the connection's window")
+            return
+        }
+    }
+    if s.gotReset || s.stopSent || s.released {
+        // nobody reads it: it counts as read at once
+        if end > s.rx.highest {
+            self.readData += end - s.rx.highest
+            s.rx.highest = end
+            self.refreshMaxData()
+        }
+        self.maybeForget(s)
+        return
+    }
+    s.rx.add(off, data)
+    poke(s.readable)
+    self.maybeForget(s)
+}
+
+void Link.resetFrame(In *r) {
+    id := r.getVar()
+    code := r.getVar()
+    size := r.getVar()
+    if r.bad {
+        return
+    }
+    s := self.streamFor(id, false)
+    if s == null {
+        return
+    }
+    if !s.canRecv {
+        self.fail(E_STREAM_STATE, "RESET_STREAM on our own one-way stream {id}")
+        return
+    }
+    if size < s.rx.highest || (s.rx.finalSize >= 0 && size != s.rx.finalSize) {
+        self.fail(E_FINAL_SIZE, "RESET_STREAM with a final size that doesn't fit")
+        return
+    }
+    if s.gotReset {
+        return
+    }
+    self.gotData += size - s.rx.highest
+    if self.gotData > self.maxDataIn {
+        self.fail(E_FLOW_CONTROL, "more data than the connection's window")
+        return
+    }
+    // what wasn't read counts as read for the connection's window
+    self.readData += size - s.rx.read
+    s.rx.highest = size
+    s.rx.finalSize = size
+    s.gotReset = true
+    s.gotResetCode = code
+    self.refreshMaxData()
+    s.wake()
+    self.maybeForget(s)
+}
+
+void Link.stopFrame(In *r) {
+    id := r.getVar()
+    code := r.getVar()
+    if r.bad {
+        return
+    }
+    s := self.streamFor(id, true)
+    if s == null {
+        return
+    }
+    if !s.canSend {
+        self.fail(E_STREAM_STATE, "STOP_SENDING on the peer's one-way stream {id}")
+        return
+    }
+    if s.gotStop {
+        return
+    }
+    s.gotStop = true
+    s.gotStopCode = code
+    // the answer to STOP_SENDING is RESET_STREAM (RFC 9000 3.5)
+    if !s.resetSent && !s.tx.allAcked() {
+        s.resetSent = true
+        s.resetCode = code
+        s.resetQueued = true
+        self.queueCtl(Ctl{kind: FR_RESET_STREAM, a: s.id})
+    }
+    s.wake()
+    self.maybeForget(s)
+}
+
+void Link.maxStreamDataFrame(In *r) {
+    id := r.getVar()
+    v := r.getVar()
+    if r.bad {
+        return
+    }
+    s := self.streamFor(id, true)
+    if s == null {
+        return
+    }
+    if !s.canSend {
+        self.fail(E_STREAM_STATE, "MAX_STREAM_DATA for the peer's one-way stream {id}")
+        return
+    }
+    if v > s.sendMax {
+        s.sendMax = v
+        if s.tx.pending() {
+            self.wantSend(s)
+        }
+        poke(s.writable)
+    }
+}
+
+void Link.wakeWriters() {
+    for s in self.sendQ {
+        poke(s.writable)
+    }
+    self.poke()
+}
+
+// The program read n bytes of s: the windows open again as they empty.
+void Link.consumed(Strm *s, i64 n) {
+    self.readData += n
+    if s.recvMax - s.rx.read < s.window / 2 && s.rx.finalSize < 0 {
+        s.recvMax = s.rx.read + s.window
+        if !s.maxQueued {
+            s.maxQueued = true
+            self.queueCtl(Ctl{kind: FR_MAX_STREAM_DATA, a: s.id})
+        }
+    }
+    self.refreshMaxData()
+    if s.rx.finished() {
+        self.maybeForget(s)
+    }
+}
+
+void Link.refreshMaxData() {
+    if self.maxDataIn - self.readData < self.config.connWindow / 2 {
+        self.maxDataIn = self.readData + self.config.connWindow
+        if !self.maxDataQueued {
+            self.maxDataQueued = true
+            self.queueCtl(Ctl{kind: FR_MAX_DATA})
+        }
+    }
+}
+
+void Link.queueCtl(Ctl c) {
+    self.ctl.push(c)
+    self.poke()
+}
+
+// s has something to send.
+void Link.wantSend(Strm *s) {
+    if !s.queued {
+        s.queued = true
+        self.sendQ.push(s)
+    }
+    self.poke()
+}
+
+// Frees a stream that both sides and the program are done with. A peer's
+// stream lets the peer open another one.
+void Link.maybeForget(Strm *s) {
+    if !s.released || !s.finished() || s.queued || s.resetQueued || s.stopQueued {
+        return
+    }
+    _ = self.streams.remove(s.id)
+    theirs := idIsServers(s.id) != self.server
+    if theirs {
+        if idIsUni(s.id) {
+            self.doneUni += 1
+            self.maxUniIn = self.doneUni + self.config.maxUniStreams
+            if !self.maxStreamsUniQueued {
+                self.maxStreamsUniQueued = true
+                self.queueCtl(Ctl{kind: FR_MAX_STREAMS_UNI})
+            }
+        } else {
+            self.doneBidi += 1
+            self.maxBidiIn = self.doneBidi + self.config.maxStreams
+            if !self.maxStreamsBidiQueued {
+                self.maxStreamsBidiQueued = true
+                self.queueCtl(Ctl{kind: FR_MAX_STREAMS_BIDI})
+            }
+        }
+    }
+    // what came and wasn't read counts as read
+    if s.rx.highest > s.rx.read {
+        self.readData += s.rx.highest - s.rx.read
+        self.refreshMaxData()
+    }
+    s.destroy()
+}

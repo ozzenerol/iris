@@ -1,0 +1,330 @@
+// The wire format (RFC 9000 16, 17, 19): variable-length integers,
+// writing into and reading from a packet's bytes, and sets of ranges for
+// the packet numbers and stream bytes that came.
+
+// frame types
+const i64 FR_PADDING = 0x00
+const i64 FR_PING = 0x01
+const i64 FR_ACK = 0x02
+const i64 FR_ACK_ECN = 0x03
+const i64 FR_RESET_STREAM = 0x04
+const i64 FR_STOP_SENDING = 0x05
+const i64 FR_CRYPTO = 0x06
+const i64 FR_NEW_TOKEN = 0x07
+const i64 FR_STREAM = 0x08 // to 0x0f: OFF 0x04, LEN 0x02, FIN 0x01
+const i64 FR_MAX_DATA = 0x10
+const i64 FR_MAX_STREAM_DATA = 0x11
+const i64 FR_MAX_STREAMS_BIDI = 0x12
+const i64 FR_MAX_STREAMS_UNI = 0x13
+const i64 FR_DATA_BLOCKED = 0x14
+const i64 FR_STREAM_DATA_BLOCKED = 0x15
+const i64 FR_STREAMS_BLOCKED_BIDI = 0x16
+const i64 FR_STREAMS_BLOCKED_UNI = 0x17
+const i64 FR_NEW_CONNECTION_ID = 0x18
+const i64 FR_RETIRE_CONNECTION_ID = 0x19
+const i64 FR_PATH_CHALLENGE = 0x1a
+const i64 FR_PATH_RESPONSE = 0x1b
+const i64 FR_CLOSE = 0x1c
+const i64 FR_CLOSE_APP = 0x1d
+const i64 FR_HANDSHAKE_DONE = 0x1e
+
+// transport error codes
+const i64 E_NO_ERROR = 0x0
+const i64 E_INTERNAL = 0x1
+const i64 E_CONNECTION_REFUSED = 0x2
+const i64 E_FLOW_CONTROL = 0x3
+const i64 E_STREAM_LIMIT = 0x4
+const i64 E_STREAM_STATE = 0x5
+const i64 E_FINAL_SIZE = 0x6
+const i64 E_FRAME_ENCODING = 0x7
+const i64 E_TRANSPORT_PARAMETER = 0x8
+const i64 E_CONNECTION_ID_LIMIT = 0x9
+const i64 E_PROTOCOL_VIOLATION = 0xa
+const i64 E_INVALID_TOKEN = 0xb
+const i64 E_KEY_UPDATE = 0xe
+const i64 E_CRYPTO = 0x100 // plus the TLS alert
+
+const i64 VERSION_1 = 1
+const i64 MAX_VARINT = 4611686018427387903
+
+// The bytes a value takes as a variable-length integer.
+i64 varLen(i64 v) {
+    if v < 64 {
+        return 1
+    }
+    if v < 16384 {
+        return 2
+    }
+    if v < 1073741824 {
+        return 4
+    }
+    return 8
+}
+
+// Writes into a packet's buffer: b[n:] is the room left.
+struct Out {
+    u8[] b
+    i64 n
+}
+
+i64 Out.room() => self.b.len - self.n
+
+@inline
+void Out.put8(i64 v) {
+    self.b[self.n] = u8(v & 255)
+    self.n += 1
+}
+
+void Out.put16(i64 v) {
+    self.b[self.n] = u8(v >> 8 & 255)
+    self.b[self.n + 1] = u8(v & 255)
+    self.n += 2
+}
+
+void Out.put32(i64 v) {
+    self.b[self.n] = u8(v >> 24 & 255)
+    self.b[self.n + 1] = u8(v >> 16 & 255)
+    self.b[self.n + 2] = u8(v >> 8 & 255)
+    self.b[self.n + 3] = u8(v & 255)
+    self.n += 4
+}
+
+// v in the size it needs.
+void Out.putVar(i64 v) {
+    if v < 64 {
+        self.put8(v)
+    } else if v < 16384 {
+        self.put16(v | 0x4000)
+    } else if v < 1073741824 {
+        self.put32(v | 0x80000000)
+    } else {
+        self.put32(v >> 32 | 0xc0000000)
+        self.put32(v & 0xffffffff)
+    }
+}
+
+// v in exactly size bytes (1, 2, 4 or 8), for a length filled in later.
+void Out.putVarIn(i64 v, i64 size) {
+    match size {
+        1 => self.put8(v)
+        2 => self.put16(v | 0x4000)
+        4 => self.put32(v | 0x80000000)
+        _ => {
+            self.put32(v >> 32 | 0xc0000000)
+            self.put32(v & 0xffffffff)
+        }
+    }
+}
+
+void Out.putBytes(str data) {
+    if data.len > 0 {
+        memMove(&self.b[self.n], data.ptr, data.len)
+        self.n += data.len
+    }
+}
+
+// Zeros up to n, which is PADDING.
+void Out.padTo(i64 n) {
+    for self.n < n {
+        self.b[self.n] = 0
+        self.n += 1
+    }
+}
+
+// Reads the fields of a packet or frame. A field past the end sets bad and
+// reads as 0.
+struct In {
+    str d
+    i64 at
+    bool bad
+}
+
+bool In.done() => self.at >= self.d.len
+
+i64 In.get8() {
+    if self.at >= self.d.len {
+        self.bad = true
+        return 0
+    }
+    v := i64(self.d[self.at])
+    self.at += 1
+    return v
+}
+
+i64 In.getN(i64 n) {
+    if self.at + n > self.d.len {
+        self.bad = true
+        self.at = self.d.len
+        return 0
+    }
+    i64 v = 0
+    for i in 0..n {
+        v = v << 8 | i64(self.d[self.at + i])
+    }
+    self.at += n
+    return v
+}
+
+i64 In.getVar() {
+    if self.at >= self.d.len {
+        self.bad = true
+        return 0
+    }
+    first := i64(self.d[self.at])
+    size := i64(1) << (first >> 6)
+    if self.at + size > self.d.len {
+        self.bad = true
+        self.at = self.d.len
+        return 0
+    }
+    i64 v = first & 0x3f
+    for i in 1..size {
+        v = v << 8 | i64(self.d[self.at + i])
+    }
+    self.at += size
+    return v
+}
+
+str In.getBytes(i64 n) {
+    if n < 0 || self.at + n > self.d.len {
+        self.bad = true
+        self.at = self.d.len
+        return ""
+    }
+    s := self.d[self.at:self.at + n]
+    self.at += n
+    return s
+}
+
+// ------------------------------------------------------------ ranges
+
+struct Range {
+    i64 lo
+    i64 hi // one past the last
+}
+
+// Ranges of numbers, sorted and apart: the packet numbers that came, or
+// the bytes of a stream that were acknowledged.
+struct Ranges {
+    List[Range] r
+}
+
+void Ranges.free() => self.r.free()
+
+bool Ranges.empty() => self.r.len == 0
+
+i64 Ranges.max() => self.r.at(self.r.len - 1).hi - 1
+
+i64 Ranges.min() => self.r.at(0).lo
+
+bool Ranges.has(i64 x) {
+    i64 i = self.r.len - 1
+    for i >= 0 {
+        g := self.r.at(i)
+        if x >= g.hi {
+            return false
+        }
+        if x >= g.lo {
+            return true
+        }
+        i -= 1
+    }
+    return false
+}
+
+// Adds [lo, hi). Most additions are at the end, so the search starts
+// there.
+void Ranges.add(i64 lo, i64 hi) {
+    if lo >= hi {
+        return
+    }
+    n := self.r.len
+    if n == 0 || lo > self.r.at(n - 1).hi {
+        self.r.push(Range{lo: lo, hi: hi})
+        return
+    }
+    // the first range that ends at or after lo
+    i64 i = n - 1
+    for i > 0 && self.r.at(i - 1).hi >= lo {
+        i -= 1
+    }
+    g := self.r.at(i)
+    if hi < g.lo {
+        self.r.insert(i, Range{lo: lo, hi: hi})
+        return
+    }
+    if lo < g.lo {
+        g.lo = lo
+    }
+    if hi > g.hi {
+        g.hi = hi
+    }
+    // swallow the ranges it reaches now
+    for i + 1 < self.r.len && self.r.at(i + 1).lo <= g.hi {
+        next := self.r.remove(i + 1)
+        if next.hi > g.hi {
+            g.hi = next.hi
+        }
+    }
+    self.r.set(i, g)
+}
+
+// Drops everything below x.
+void Ranges.dropBelow(i64 x) {
+    i64 k = 0
+    for k < self.r.len && self.r.at(k).hi <= x {
+        k += 1
+    }
+    if k > 0 {
+        for i in k..self.r.len {
+            self.r.set(i - k, self.r.at(i))
+        }
+        self.r.resize(self.r.len - k)
+    }
+    if self.r.len > 0 && self.r.at(0).lo < x {
+        g := self.r.at(0)
+        g.lo = x
+        self.r.set(0, g)
+    }
+}
+
+// Keeps the newest n ranges.
+void Ranges.keepLast(i64 n) {
+    if self.r.len > n {
+        self.dropBelow(self.r.at(self.r.len - n).lo)
+    }
+}
+
+@extern("iris_mem_move")
+void memMove(u8 *dst, u8 *src, i64 n)
+
+test "varints (RFC 9000 A.1)" {
+    u8[16] buf
+    Out o = Out{b: buf[:]}
+    o.putVar(151288809941952652)
+    o.putVar(494878333)
+    o.putVar(15293)
+    o.putVar(37)
+    In r = In{d: buf[0:o.n]}
+    expect(o.n == 15 && buf[0] == 0xc2 && buf[8] == 0x9d && buf[12] == 0x7b)
+    expect(r.getVar() == 151288809941952652 && r.getVar() == 494878333 && r.getVar() == 15293)
+    expect(r.getVar() == 37 && r.done() && !r.bad)
+    expect(r.getVar() == 0 && r.bad)
+}
+
+test "ranges" {
+    scoped Ranges s
+    s.add(5, 7)
+    s.add(0, 2)
+    s.add(10, 12)
+    s.add(3, 4)
+    expect(s.r.len == 4)
+    s.add(2, 3)
+    expect(s.r.len == 3 && s.r.at(0).hi == 4)
+    s.add(4, 10)
+    expect(s.r.len == 1 && s.min() == 0 && s.max() == 11)
+    expect(s.has(7) && !s.has(12))
+    s.add(20, 30)
+    s.dropBelow(25)
+    expect(s.r.len == 1 && s.min() == 25)
+}
