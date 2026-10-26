@@ -66,8 +66,8 @@ try {
 <ul><li><code>connect</code>: the server can't be reached.</li><li><code>hostKey</code>: its key isn't the one known for it.</li><li><code>auth</code>: the login is refused.</li><li><code>closed</code>: the connection went away.</li></ul>
 <p><code>run(command, input)</code> also gives the command something to read on its standard input.</p>
 <h2 id="logging-in"><a href="#logging-in">Logging in</a></h2>
-<p><code>Config.key</code> is an Ed25519 key, the kind <code>ssh-keygen -t ed25519</code> makes. <code>loadKey</code> reads its private key file. A key with a passphrase has to have it taken off first (<code>ssh-keygen -p -N &#x27;&#x27;</code>). <code>Config.password</code> logs in with a password instead. With both, the key is tried first.</p>
-<p><code>ssh.generateKey(comment)</code> makes a new key. <code>privateText()</code> gives it in the format of <code>~/.ssh/id_ed25519</code>, and <code>publicText()</code> gives the line that goes in a server's <code>~/.ssh/authorized_keys</code>:</p>
+<p><code>Config.key</code> is an Ed25519 key, the kind <code>ssh-keygen -t ed25519</code> makes. <code>loadKey</code> reads its private key file. A key with a passphrase takes it too, as in <code>loadKey(path, passphrase)</code>. <code>Config.password</code> logs in with a password instead. With both, the key is tried first.</p>
+<p><code>ssh.generateKey(comment)</code> makes a new key. <code>privateText()</code> gives it in the format of <code>~/.ssh/id_ed25519</code>, and <code>privateText(passphrase)</code> encrypts it with the passphrase as <code>ssh-keygen</code> does. <code>publicText()</code> gives the line that goes in a server's <code>~/.ssh/authorized_keys</code>:</p>
 <pre class="code run"><code><span class="k">import</span> ssh, <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">main</span>() {
@@ -86,7 +86,7 @@ ssh-ed25519 ... deploy@ci
 SHA256: and 43 more characters</code></pre>
 <p><code>fingerprint()</code> is the key's hash as <code>ssh-keygen -l</code> shows it.</p>
 <h2 id="the-server-s-key"><a href="#the-server-s-key">The server's key</a></h2>
-<p>Before it logs in, <code>dial</code> checks that the server is the one it should be. As <code>ssh</code> does, it looks the server's key up in <code>~/.ssh/known_hosts</code>, with hashed names too, and with <code>[host]:port</code> for a port other than 22. <code>Config.knownHosts</code> names another file.</p>
+<p>Before it logs in, <code>dial</code> checks that the server is the one it should be. As <code>ssh</code> does, it looks the server's key up in <code>~/.ssh/known_hosts</code>, with hashed names too, and with <code>[host]:port</code> for a port other than 22. <code>Config.knownHosts</code> names another file. The server's key can be Ed25519, ECDSA on P-256, P-384 or P-521, or RSA. When the file has a key of one of these types for the server, <code>dial</code> asks the server for that type first.</p>
 <p>A server that isn't in the file is refused with <code>SshError.hostKey</code>. The message has the server's fingerprint and the line to add once the fingerprint is checked. A server whose key has changed is refused too. <code>Config.hostKey</code> gives the key directly, as a public key line or a <code>SHA256:</code> fingerprint. <code>Client.serverKey</code> is the key the server showed. <code>Config.anyHostKey</code> trusts any key and is only for tests.</p>
 <h2 id="output-as-it-comes"><a href="#output-as-it-comes">Output as it comes</a></h2>
 <p><code>exec(command)</code> starts a command and gives a <code>Channel</code> without waiting for the command to end. <code>read</code> gives its output as it comes, <code>readStderr</code> its errors, and <code>write</code> gives it input. <code>closeWrite</code> ends the input, and <code>wait</code> gives the exit status once the command ends:</p>
@@ -206,7 +206,7 @@ reboot: not found (127)</code></pre>
 }</code></pre>
 <p><code>ssh -p 2222 ada@host</code>, <code>scp -P 2222</code> and <code>sftp -P 2222</code> all work with it. <code>Server.forward</code> takes a user, a host and a port and says whether that user may reach it through the server with <code>ssh -L</code>. While it is <code>null</code>, forwarding is refused.</p>
 <h2 id="what-it-speaks"><a href="#what-it-speaks">What it speaks</a></h2>
-<p>Connections use the curve25519-sha256 key exchange, Ed25519 keys for servers and users, and AES-256-GCM, AES-128-GCM or ChaCha20-Poly1305. Both sides make new keys after <code>Config.rekeyAfter</code> bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Servers that have only RSA or ECDSA host keys, and keys with a passphrase, are not supported yet.</p>
+<p>Connections use the mlkem768x25519-sha256 key exchange, as OpenSSH does since 10.0. It joins ML-KEM-768 with X25519, so that what is recorded now can't be read later by a quantum computer. With a side that doesn't have it, they use curve25519-sha256. The ciphers are AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305. Both sides make new keys after <code>Config.rekeyAfter</code> bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Users log in with Ed25519 keys, and an Iris server's own key is Ed25519 too.</p>
     <nav class="pager"><a class="prev" href="21-binary-messages.html"><span>Previous</span>Binary messages</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>

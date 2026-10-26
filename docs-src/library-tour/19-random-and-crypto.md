@@ -107,7 +107,7 @@ void main() {
 matches: true
 ```
 
-`sha384` gives 48 bytes and `sha512` 64. `sha1` and `md5` are there for older protocols that still use them and are not safe for anything new.
+`sha384` gives 48 bytes and `sha512` 64. `sha3_256` and `sha3_512` are SHA-3, and `shake(data, size)` gives as many bytes of SHAKE256 as asked, or of SHAKE128 with `shake(data, size, 128)`. `sha1` and `md5` are there for older protocols that still use them and are not safe for anything new.
 
 ## Signing messages with a shared key
 
@@ -192,7 +192,7 @@ right: true
 wrong: false
 ```
 
-The number of rounds sets how slow it is. More rounds make guessing harder and each login slower by the same amount.
+The number of rounds sets how slow it is. More rounds make guessing harder and each login slower by the same amount. `bcryptPbkdf(password, salt, rounds, size)` makes a key the same way with bcrypt, as OpenSSH does for a private key with a passphrase.
 
 ## Encrypting data
 
@@ -240,6 +240,28 @@ CryptoError.tampered
 
 `aesSeal` and `aesUnseal` do the same with AES-GCM, which many file formats and protocols use. An optional `extra` text, such as a record's id, goes along unencrypted but is checked too. The [library](../std/index.html#crypto) has them, and key agreement with X25519.
 
+ML-KEM-768 (FIPS 203) agrees on a key in a way a quantum computer can't break, and SSH and TLS use it together with X25519. One side keeps a secret seed of 64 random bytes and sends `mlkemPublic(seed)`. The other runs `mlkemEncapsulate(public)`, which gives a ciphertext to send back and a 32-byte secret. `mlkemDecapsulate(seed, ciphertext)` gives the first side the same secret:
+
+```iris run
+import crypto, random
+
+!void main() {
+    u8[64] seed
+    random.bytes(seed[0:64])
+    scoped String public = crypto.mlkemPublic(seed[0:64])
+
+    ciphertext, theirs := try crypto.mlkemEncapsulate(public)
+    defer ciphertext.free()
+
+    mine := try crypto.mlkemDecapsulate(seed[0:64], ciphertext)
+    print("{public.len} and {ciphertext.len} bytes sent, same secret: {crypto.equal(mine[0:32], theirs[0:32])}")
+}
+```
+
+```output
+1184 and 1088 bytes sent, same secret: true
+```
+
 Protocols that build their own encryption need the ciphers alone. `aesCtr(key, iv, data)` is AES in counter mode, as SSH's `aes128-ctr` uses, `aesBlock(key, block)` encrypts one 16-byte block, as QUIC's header protection does, and `chacha20(key, nonce, data, counter)` is the ChaCha20 stream. None of them checks that the data wasn't changed, so the protocol adds a MAC: `hmacSha256`, `hmacSha384`, `hmacSha512`, or `hmacSha1` for older ones such as TOTP codes. `wipe(bytes)` overwrites a key with zeros once it is done with, in a way the compiler can't leave out.
 
 ## Signatures
@@ -271,7 +293,7 @@ true
 false
 ```
 
-Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A `crypto.PrivateKey` comes from `loadPrivateKey(pem)`, PEM or DER as openssl writes it, or from `generateKey(.ecP256)`, `.ecP384` or `.rsa` with its bits. `sign(data, hash, padding)` signs, and `publicKey()` gives the half to share. A `crypto.PublicKey` comes from `loadPublicKey` too, from an EC point with `ecPublicKey(curve, point)`, or from RSA's modulus and exponent with `rsaPublicKey(n, e)`, as DNSSEC records hold them. `verify(data, signature, hash, padding)` checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or `.pss`, as TLS 1.3 does. ECDSA signatures are in DER, and `ecdsaRaw(sig, 32)` and `ecdsaDer(raw)` turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.
+Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A `crypto.PrivateKey` comes from `loadPrivateKey(pem)`, PEM or DER as openssl writes it, or from `generateKey(.ecP256)`, `.ecP384`, `.ecP521` or `.rsa` with its bits. `sign(data, hash, padding)` signs, and `publicKey()` gives the half to share. A `crypto.PublicKey` comes from `loadPublicKey` too, from an EC point with `ecPublicKey(curve, point)`, or from RSA's modulus and exponent with `rsaPublicKey(n, e)`, as DNSSEC records hold them. `verify(data, signature, hash, padding)` checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or `.pss`, as TLS 1.3 does. ECDSA signatures are in DER, and `ecdsaRaw(sig, 32)` and `ecdsaDer(raw)` turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.
 
 ```iris run
 import crypto

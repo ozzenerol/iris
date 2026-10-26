@@ -83,9 +83,9 @@ The servers do less work than the rates show, since the load generator limits th
 | x509-parse | a certificate parsed 200000 times | **0.240** | 0.384 | 1.116 | x509-parser | `crypto/x509` |
 | yaml-parse | a 6.7 MB YAML list, 3 times | **0.458** | 1.244 | 2.458 | serde_yaml | `gopkg.in/yaml.v3` |
 | wire | 100,000 binary messages read and written, 30 times | **0.119** | 0.120 | 0.194 | by hand, `from_be_bytes` | `encoding/binary` |
-| ssh | 100 SSH logins with a command each, then 512 MiB through a channel | **0.329** | 0.438 | 0.804 | russh | `x/crypto/ssh` |
+| ssh | 100 SSH logins with a command each, then 512 MiB through a channel | **0.348** | 0.460 | 0.834 | russh | `x/crypto/ssh` |
 
-In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. In wire, Rust and Go read and write the messages by hand, the usual way to write a binary protocol in each. In ssh, a server and a client run in one program, all three with curve25519-sha256, Ed25519 keys and AES-256-GCM; russh is set to TCP_NODELAY, as Iris and Go are. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
+In zip each writes at its default level: Iris's archive is 2.8 MB, Go's 3.3 MB. In wire, Rust and Go read and write the messages by hand, the usual way to write a binary protocol in each. In ssh, a server and a client run in one program, all three with mlkem768x25519-sha256, Ed25519 keys and AES-256-GCM; russh is set to TCP_NODELAY, as Iris and Go are. Iris signs and checks ECDSA and RSA with the system's OpenSSL.
 
 ## Building and installing
 

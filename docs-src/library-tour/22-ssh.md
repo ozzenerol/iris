@@ -33,9 +33,9 @@ A status other than 0 is no error: the command ran and ended that way. The error
 
 ## Logging in
 
-`Config.key` is an Ed25519 key, the kind `ssh-keygen -t ed25519` makes. `loadKey` reads its private key file. A key with a passphrase has to have it taken off first (`ssh-keygen -p -N ''`). `Config.password` logs in with a password instead. With both, the key is tried first.
+`Config.key` is an Ed25519 key, the kind `ssh-keygen -t ed25519` makes. `loadKey` reads its private key file. A key with a passphrase takes it too, as in `loadKey(path, passphrase)`. `Config.password` logs in with a password instead. With both, the key is tried first.
 
-`ssh.generateKey(comment)` makes a new key. `privateText()` gives it in the format of `~/.ssh/id_ed25519`, and `publicText()` gives the line that goes in a server's `~/.ssh/authorized_keys`:
+`ssh.generateKey(comment)` makes a new key. `privateText()` gives it in the format of `~/.ssh/id_ed25519`, and `privateText(passphrase)` encrypts it with the passphrase as `ssh-keygen` does. `publicText()` gives the line that goes in a server's `~/.ssh/authorized_keys`:
 
 ```iris run
 import ssh, str
@@ -63,7 +63,7 @@ SHA256: and 43 more characters
 
 ## The server's key
 
-Before it logs in, `dial` checks that the server is the one it should be. As `ssh` does, it looks the server's key up in `~/.ssh/known_hosts`, with hashed names too, and with `[host]:port` for a port other than 22. `Config.knownHosts` names another file.
+Before it logs in, `dial` checks that the server is the one it should be. As `ssh` does, it looks the server's key up in `~/.ssh/known_hosts`, with hashed names too, and with `[host]:port` for a port other than 22. `Config.knownHosts` names another file. The server's key can be Ed25519, ECDSA on P-256, P-384 or P-521, or RSA. When the file has a key of one of these types for the server, `dial` asks the server for that type first.
 
 A server that isn't in the file is refused with `SshError.hostKey`. The message has the server's fingerprint and the line to add once the fingerprint is checked. A server whose key has changed is refused too. `Config.hostKey` gives the key directly, as a public key line or a `SHA256:` fingerprint. `Client.serverKey` is the key the server showed. `Config.anyHostKey` trusts any key and is only for tests.
 
@@ -215,4 +215,4 @@ bool checkKey(str user, str key) {
 
 ## What it speaks
 
-Connections use the curve25519-sha256 key exchange, Ed25519 keys for servers and users, and AES-256-GCM, AES-128-GCM or ChaCha20-Poly1305. Both sides make new keys after `Config.rekeyAfter` bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Servers that have only RSA or ECDSA host keys, and keys with a passphrase, are not supported yet.
+Connections use the mlkem768x25519-sha256 key exchange, as OpenSSH does since 10.0. It joins ML-KEM-768 with X25519, so that what is recorded now can't be read later by a quantum computer. With a side that doesn't have it, they use curve25519-sha256. The ciphers are AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305. Both sides make new keys after `Config.rekeyAfter` bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Users log in with Ed25519 keys, and an Iris server's own key is Ed25519 too.

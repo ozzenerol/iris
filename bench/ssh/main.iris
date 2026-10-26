@@ -2,7 +2,8 @@ import net, ssh
 
 // An SSH server and client in one program, over loopback: 100 logins with
 // an Ed25519 key, each running a command, then 512 MiB through one
-// channel. AES-256-GCM, as the Rust and Go versions are set to use.
+// channel. mlkem768x25519-sha256 and AES-256-GCM, Iris's first choices,
+// as the Rust and Go versions are set to use.
 
 ssh.Key userKey
 

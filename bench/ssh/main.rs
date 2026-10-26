@@ -1,7 +1,7 @@
 // An SSH server and client in one program, over loopback: 100 logins with
 // an Ed25519 key, each running a command, then 512 MiB through one
-// channel. AES-256-GCM, as the Iris and Go versions use. russh with its
-// default aws-lc-rs crypto.
+// channel. mlkem768x25519-sha256 and AES-256-GCM, as the Iris and Go
+// versions use. russh with its default aws-lc-rs crypto.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 
 fn preferred() -> Preferred {
     Preferred {
-        kex: Cow::Owned(vec![russh::kex::CURVE25519]),
+        kex: Cow::Owned(vec![russh::kex::MLKEM768X25519_SHA256]),
         key: Cow::Owned(vec![Algorithm::Ed25519]),
         cipher: Cow::Owned(vec![russh::cipher::AES_256_GCM]),
         ..Preferred::default()

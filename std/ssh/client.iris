@@ -18,8 +18,9 @@ pub struct Config {
     pub str password
     // an Ed25519 key, from loadKey or generateKey
     pub Key *key
-    // the server's key, as a public key line ("ssh-ed25519 AAAA...") or a
-    // fingerprint ("SHA256:..."), when it isn't looked up in knownHosts
+    // the server's key, as a public key line ("ssh-ed25519 AAAA...",
+    // "ecdsa-sha2-nistp256 AAAA..." or "ssh-rsa AAAA...") or a fingerprint
+    // ("SHA256:..."), when it isn't looked up in knownHosts
     pub str hostKey
     // the known_hosts file to look the server's key up in; "" is
     // ~/.ssh/known_hosts
@@ -68,6 +69,33 @@ pub !Client clientOn(net.Conn conn, str host, u16 port, Config config) {
         return error(e.code, "{host}:{port}: {e.message}")
     }
     writing = true
+    String path
+    defer path.free()
+    String known
+    defer known.free()
+    try knownHosts(config, &path, &known)
+    scoped String name = if port == 22 { host.copy() } else { format("[{host}]:{port}") }
+    if config.hostKey.len > 0 && !str.startsWith(config.hostKey, "SHA256:") {
+        // the type of the key given first
+        fields := str.fields(config.hostKey)
+        defer fields.free()
+        for f in fields {
+            if hostKeyType(f) {
+                l.hostAlgs.append(algorithmsFor(f))
+                break
+            }
+        }
+        for kind in str.split(HOST_KEY_ALGORITHMS, ",") {
+            if !listHas(l.hostAlgs, kind) {
+                if l.hostAlgs.len > 0 {
+                    l.hostAlgs.append(",")
+                }
+                l.hostAlgs.append(kind)
+            }
+        }
+    } else {
+        l.hostAlgs = knownAlgorithms(known, name)
+    }
     spawn writer(l)
     l.startKex()
     l.queue(l.ourInit.copy(), Job.kexinit)
@@ -78,13 +106,11 @@ pub !Client clientOn(net.Conn conn, str host, u16 port, Config config) {
     l.kex(init) catch e {
         return error(e.code, "{host}:{port}: {e.message}")
     }
-    try checkHost(l, host, port, config)
+    try checkHost(l, host, port, config, path, known)
     try l.login(config)
     l.conn.setTimeout(0s)
     spawn clientReader(l)
-    key := blobKey(l.serverKey)
-    scoped String blob = blobOf(key)
-    return Client{link: l, serverKey: publicTextOf(blob, "")}
+    return Client{link: l, serverKey: publicTextOf(l.serverKey, "")}
 }
 
 void clientReader(Link *l) {
@@ -92,9 +118,28 @@ void clientReader(Link *l) {
     l.readerDone <- true
 }
 
-!void checkHost(Link *l, str host, u16 port, Config config) {
-    key := blobKey(l.serverKey)
-    scoped String found = fingerprintOfBlob(l.serverKey)
+// The known_hosts file's path and text: "" when it is missing, or when
+// the key is given in config.
+!void knownHosts(Config config, String *path, String *text) {
+    if config.anyHostKey || config.hostKey.len > 0 {
+        return
+    }
+    if config.knownHosts.len > 0 {
+        path.append(config.knownHosts)
+    } else {
+        home := os.home() catch e {
+            return error(SshError.hostKey, "no known_hosts to check the server's key in: the user has no home folder")
+        }
+        path.append(home)
+        path.append("/.ssh/known_hosts")
+        home.free()
+    }
+    *text = fs.readAll(*path) catch "".copy()
+}
+
+!void checkHost(Link *l, str host, u16 port, Config config, str path, str known) {
+    blob := l.serverKey
+    scoped String found = fingerprintOfBlob(blob)
     if config.anyHostKey {
         return
     }
@@ -105,38 +150,26 @@ void clientReader(Link *l) {
             }
             return
         }
-        want := parsePublicKey(config.hostKey) catch e {
+        want := parseBlob(config.hostKey) catch e {
             return error(SshError.hostKey, "Config.hostKey: {e.message}")
         }
-        if !crypto.equal(want[0:32], key) {
+        defer want.free()
+        if !crypto.equal(want, blob) {
             return error(SshError.hostKey, "{host}'s key is {found}, not the one in Config.hostKey")
         }
         return
     }
-    String path
-    defer path.free()
-    if config.knownHosts.len > 0 {
-        path.append(config.knownHosts)
-    } else {
-        home := os.home() catch e {
-            return error(SshError.hostKey, "no known_hosts to check {host}'s key {found} in: the user has no home folder")
-        }
-        path.append(home)
-        path.append("/.ssh/known_hosts")
-        home.free()
-    }
-    text := fs.readAll(path) catch "".copy()
-    defer text.free()
     scoped String name = if port == 22 { host.copy() } else { format("[{host}]:{port}") }
-    known := knownHost(text, name, key)
-    if known == 1 {
+    result := knownHost(known, name, blob)
+    if result == 1 {
         return
     }
-    if known == -1 {
-        return error(SshError.hostKey, "{host}'s key {found} isn't the one {path} has for it: the server changed, or someone is in between")
+    kind := blobType(blob)
+    if result == -1 {
+        return error(SshError.hostKey, "{host}'s {kind} key {found} isn't the one {path} has for it: the server changed, or someone is in between")
     }
-    scoped String line = knownLine(host, port, key)
-    return error(SshError.hostKey, "{host}'s key {found} isn't in {path}; once it is checked, add this line: {line}")
+    scoped String line = knownLine(host, port, blob)
+    return error(SshError.hostKey, "{host}'s {kind} key {found} isn't in {path}; once it is checked, add this line: {line}")
 }
 
 // The methods a USERAUTH_FAILURE lists.

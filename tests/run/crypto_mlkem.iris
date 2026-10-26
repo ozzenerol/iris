@@ -1,0 +1,69 @@
+// expect: sha3-256: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+// expect: sha3-512: b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+// expect: shake128: 7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26
+// expect: shake256: 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739d5a15bef186a5386
+// expect: bcrypt_pbkdf: 5bbf0cc293587f1c3635555c27796598d47e579071bf427e9d8fbe842aba34d9
+// expect: public key: 1184 bytes, sha256 0b7934c83125c788995e2ba6bd761e33046b3e40571be53e023309a29f398cc9
+// expect: fixed ciphertext: c8f2ad3991ef968727b7af34e3b2297587c7e2f1199c70a88dd4af476d4ce2ec
+// expect: 50 round trips: 50 same, 0 tampered ones same
+// expect: short key: CryptoError.badKey
+// SHA-3 (FIPS 202), bcrypt_pbkdf and ML-KEM-768 (FIPS 203); the values are
+// Python's hashlib and bcrypt, and OpenSSL 3.5's ML-KEM.
+import crypto, hex, random
+
+void show(str name, str bytes) {
+    scoped String h = hex.encode(bytes)
+    print("{name}: {h}")
+}
+
+!void main() {
+    a := crypto.sha3_256("abc")
+    show("sha3-256", a[0:32])
+    b := crypto.sha3_512("abc")
+    show("sha3-512", b[0:64])
+    scoped String c = crypto.shake("", 32, 128)
+    show("shake128", c)
+    scoped String d = crypto.shake("abc", 40)
+    show("shake256", d)
+    scoped String k = crypto.bcryptPbkdf("password", "salt", 4)
+    show("bcrypt_pbkdf", k)
+
+    u8[64] seed
+    for i in 0..64 {
+        seed[i] = u8(i)
+    }
+    scoped String pk = crypto.mlkemPublic(seed[0:64])
+    ph := crypto.sha256(pk)
+    scoped String phh = hex.encode(ph[0:32])
+    print("public key: {pk.len} bytes, sha256 {phh}")
+    u8[1088] ct
+    for i in 0..1088 {
+        ct[i] = u8(i * 7 & 255)
+    }
+    s := try crypto.mlkemDecapsulate(seed[0:64], ct[0:1088])
+    show("fixed ciphertext", s[0:32])
+
+    i64 same = 0
+    i64 tampered = 0
+    for i in 0..50 {
+        u8[64] sd
+        random.bytes(sd[0:64])
+        scoped String p = crypto.mlkemPublic(sd[0:64])
+        cipher, mine := try crypto.mlkemEncapsulate(p)
+        defer cipher.free()
+        theirs := try crypto.mlkemDecapsulate(sd[0:64], cipher)
+        if crypto.equal(mine[0:32], theirs[0:32]) {
+            same += 1
+        }
+        cipher[i * 21] ^= 1
+        other := try crypto.mlkemDecapsulate(sd[0:64], cipher)
+        if crypto.equal(mine[0:32], other[0:32]) {
+            tampered += 1
+        }
+    }
+    print("50 round trips: {same} same, {tampered} tampered ones same")
+    _ = crypto.mlkemEncapsulate(pk[0:100]) catch e {
+        print("short key: {e.code}")
+        return
+    }
+}

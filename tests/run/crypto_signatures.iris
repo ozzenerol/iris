@@ -8,7 +8,8 @@
 // expect: own RSA PSS: true, PKCS#1: true
 // expect: PEM round trip: true, public PEM: true, DER: true
 // expect: CryptoError.badKey
-// expect: generated: ecP256 ecP384 rsa
+// expect: generated: ecP256 ecP384 rsa ecP521
+// expect: P-521 signs and verifies: true, through its point: true
 
 import crypto, fs, hex, str
 
@@ -79,5 +80,11 @@ import crypto, fs, hex, str
     scoped g1 := try crypto.generateKey(.ecP256)
     scoped g2 := try crypto.generateKey(.ecP384)
     scoped g3 := try crypto.generateKey(.rsa, 2048)
-    print("generated: {g1.kind()} {g2.kind()} {g3.kind()}")
+    scoped g4 := try crypto.generateKey(.ecP521)
+    print("generated: {g1.kind()} {g2.kind()} {g3.kind()} {g4.kind()}")
+    scoped p4 := g4.publicKey()
+    scoped String sig4 = try g4.sign("data", .sha512)
+    scoped String d4 = p4.der()
+    scoped q4 := try crypto.ecPublicKey(.ecP521, d4[d4.len - 133:])
+    print("P-521 signs and verifies: {p4.verify("data", sig4, .sha512)}, through its point: {q4.verify("data", sig4, .sha512)}")
 }

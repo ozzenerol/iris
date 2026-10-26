@@ -1,10 +1,12 @@
 // SSH: running commands on other machines, and serving logins, shells and
 // commands. dial connects to a server; serve answers clients, ssh among
-// them. Connections use curve25519-sha256 key exchange, Ed25519 host and
-// user keys and AES-GCM.
+// them. Connections use the mlkem768x25519-sha256 key exchange, which holds
+// up against quantum computers, or curve25519-sha256, and AES-GCM or
+// ChaCha20-Poly1305. Users log in with Ed25519 keys; a server's key can be
+// Ed25519, ECDSA or RSA.
 //
 //     key := try ssh.loadKey("/home/ada/.ssh/id_ed25519")
-//     c := try ssh.dial("db1.example.com", 22, ssh.Config{user: "ada", key: key})
+//     c := try ssh.dial("db1.example.com", 22, ssh.Config{user: "ada", key: &key})
 //     defer c.close()
 //     scoped out := try c.run("uptime")
 //     print(out.stdout)
@@ -113,6 +115,9 @@ bool listHas(str list, str name) {
 
 // ------------------------------------------------------------ keys
 
+// the host keys a client takes, best first
+const str HOST_KEY_ALGORITHMS = "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256"
+
 // An Ed25519 key: the secret seed, the public half, and a comment such as
 // ada@laptop. generateKey makes one and loadKey reads one that ssh-keygen
 // wrote. A host key is one too.
@@ -177,12 +182,138 @@ String fingerprintOfBlob(str blob) {
     return format("SHA256:{bare}")
 }
 
+// The type a key blob starts with: ssh-ed25519, ssh-rsa, ecdsa-sha2-nistp256...
+str blobType(str blob) {
+    r := Reader{data: blob}
+    return r.string()
+}
+
 String publicTextOf(str blob, str comment) {
     scoped String b = base64.encode(blob)
     if comment.len > 0 {
-        return format("ssh-ed25519 {b} {comment}")
+        return format("{blobType(blob)} {b} {comment}")
     }
-    return format("ssh-ed25519 {b}")
+    return format("{blobType(blob)} {b}")
+}
+
+// Whether name is a type of public key that a server may have.
+bool hostKeyType(str name) {
+    return name == "ssh-ed25519" || name == "ssh-rsa" || name == "ecdsa-sha2-nistp256" || name == "ecdsa-sha2-nistp384" ||
+        name == "ecdsa-sha2-nistp521"
+}
+
+// The key blob of a public key line of any type a server may have, as in
+// known_hosts: "ecdsa-sha2-nistp256 AAAA... comment".
+!String parseBlob(str line) {
+    fields := str.fields(line)
+    defer fields.free()
+    for i in 0..fields.len {
+        if hostKeyType(fields.at(i)) && i + 1 < fields.len {
+            blob := base64.decode(fields.at(i + 1)) catch e {
+                return error(SshError.key, "the key in '{line}' isn't Base64")
+            }
+            if blobType(blob) != fields.at(i) {
+                blob.free()
+                return error(SshError.key, "the key in '{line}' isn't a {fields.at(i)} key")
+            }
+            return blob
+        }
+    }
+    return error(SshError.key, "'{line}' isn't a public key line")
+}
+
+// The host key algorithms for a key type: an RSA key signs with SHA-512
+// or SHA-256.
+str algorithmsFor(str kind) => "rsa-sha2-512,rsa-sha2-256" if kind == "ssh-rsa" else kind
+
+// An mpint's number without the zero byte in front.
+str unsignedOf(str n) {
+    str v = n
+    for v.len > 0 && v[0] == 0 {
+        v = v[1:]
+    }
+    return v
+}
+
+// Whether sigBlob is the host key's signature of h with alg, the host key
+// algorithm the key exchange chose.
+bool verifyHostSignature(str alg, str blob, str h, str sigBlob) {
+    sr := Reader{data: sigBlob}
+    sigKind := sr.string()
+    sig := sr.string()
+    if sr.bad || sr.at != sigBlob.len || sigKind != alg {
+        return false
+    }
+    if alg == "ssh-ed25519" {
+        k := blobKey(blob)
+        return k.len == 32 && crypto.ed25519Verify(k, h, sig)
+    }
+    br := Reader{data: blob}
+    kind := br.string()
+    if alg == "rsa-sha2-256" || alg == "rsa-sha2-512" {
+        e := unsignedOf(br.string())
+        n := unsignedOf(br.string())
+        // as OpenSSH, no RSA key under 1024 bits
+        if br.bad || br.at != blob.len || kind != "ssh-rsa" || n.len < 128 || sig.len > n.len {
+            return false
+        }
+        key := crypto.rsaPublicKey(n, e) catch e2 {
+            return false
+        }
+        defer key.free()
+        // a signature with its leading zeros left out is padded back
+        String padded
+        defer padded.free()
+        for padded.len + sig.len < n.len {
+            putByte(&padded, 0)
+        }
+        padded.append(sig)
+        return key.verify(h, padded, crypto.Hash.sha512 if alg == "rsa-sha2-512" else crypto.Hash.sha256)
+    }
+    curve := br.string()
+    point := br.string()
+    if br.bad || br.at != blob.len || kind != alg || !str.startsWith(alg, "ecdsa-sha2-") || curve != alg[11:] {
+        return false
+    }
+    i64 size = 0
+    crypto.KeyType t = .ecP256
+    crypto.Hash hash = .sha256
+    if curve == "nistp256" {
+        size = 32
+    } else if curve == "nistp384" {
+        size = 48
+        t = .ecP384
+        hash = .sha384
+    } else if curve == "nistp521" {
+        size = 66
+        t = .ecP521
+        hash = .sha512
+    } else {
+        return false
+    }
+    key := crypto.ecPublicKey(t, point) catch e {
+        return false
+    }
+    defer key.free()
+    rs := Reader{data: sig}
+    r := unsignedOf(rs.string())
+    s := unsignedOf(rs.string())
+    if rs.bad || rs.at != sig.len || r.len > size || s.len > size {
+        return false
+    }
+    // r and s of size bytes each, as ecdsaDer takes them
+    String raw
+    defer raw.free()
+    for raw.len + r.len < size {
+        putByte(&raw, 0)
+    }
+    raw.append(r)
+    for raw.len + s.len < 2 * size {
+        putByte(&raw, 0)
+    }
+    raw.append(s)
+    scoped String der = crypto.ecdsaDer(raw)
+    return key.verify(h, der, hash)
 }
 
 // The public key as one line of an authorized_keys file:
@@ -236,9 +367,21 @@ const str PRIVATE_BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----"
 const str PRIVATE_END = "-----END OPENSSH PRIVATE KEY-----"
 const str KEY_MAGIC = "openssh-key-v1\x00"
 
+// The cipher a private key is encrypted with: its key and IV sizes, and
+// whether it is AES-GCM, whose tag comes after the encrypted part.
+(i64, i64, bool) keyCipher(str name) => match name {
+    "aes256-ctr" => (32, 16, false)
+    "aes192-ctr" => (24, 16, false)
+    "aes128-ctr" => (16, 16, false)
+    "aes256-gcm@openssh.com" => (32, 12, true)
+    _ => (0, 0, false)
+}
+
 // The key in OpenSSH's private key format, as ssh-keygen writes it, for a
-// file only its owner can read.
-pub String Key.privateText() {
+// file only its owner can read. With a passphrase, the key is encrypted
+// with AES-256-CTR and a key from bcrypt_pbkdf of rounds, as ssh-keygen
+// does.
+pub String Key.privateText(str passphrase = "", i64 rounds = 16) {
     scoped String blob = blobOf(self.public[0:32])
     String secret
     defer {
@@ -255,8 +398,9 @@ pub String Key.privateText() {
     secret.append(self.seed[0:32])
     secret.append(self.public[0:32])
     putString(&secret, self.comment)
+    i64 block = 8 if passphrase.len == 0 else 16
     i64 pad = 1
-    for secret.len % 8 != 0 {
+    for secret.len % block != 0 {
         putByte(&secret, pad)
         pad += 1
     }
@@ -265,12 +409,31 @@ pub String Key.privateText() {
         crypto.wipe(all.ptr[0:all.len])
         all.free()
     }
-    putString(&all, "none")
-    putString(&all, "none")
-    putString(&all, "")
-    putU32(&all, 1)
-    putString(&all, blob)
-    putString(&all, secret)
+    if passphrase.len == 0 {
+        putString(&all, "none")
+        putString(&all, "none")
+        putString(&all, "")
+        putU32(&all, 1)
+        putString(&all, blob)
+        putString(&all, secret)
+    } else {
+        u8[16] salt
+        random.bytes(salt[0:16])
+        String options
+        putString(&options, salt[0:16])
+        putU32(&options, rounds)
+        putString(&all, "aes256-ctr")
+        putString(&all, "bcrypt")
+        putString(&all, options)
+        options.free()
+        putU32(&all, 1)
+        putString(&all, blob)
+        scoped String made = crypto.bcryptPbkdf(passphrase, salt[0:16], rounds, 48)
+        String sealed = crypto.aesCtr(made[0:32], made[32:48], secret)
+        putString(&all, sealed)
+        sealed.free()
+        crypto.wipe(made.ptr[0:made.len])
+    }
     String b64 = base64.encode(all)
     defer {
         crypto.wipe(b64.ptr[0:b64.len])
@@ -290,9 +453,10 @@ pub String Key.privateText() {
     return out
 }
 
-// The key in an OpenSSH private key, as ssh-keygen -t ed25519 writes it.
-// SshError.key when it is another kind of key, or has a passphrase.
-pub !Key parseKey(str text) {
+// The key in an OpenSSH private key, as ssh-keygen -t ed25519 writes it,
+// with its passphrase if it has one. SshError.key when it is another kind
+// of key, or the passphrase is missing or wrong.
+pub !Key parseKey(str text, str passphrase = "") {
     begin := str.find(text, PRIVATE_BEGIN)
     end := str.find(text, PRIVATE_END)
     if begin < 0 || end < begin {
@@ -321,23 +485,62 @@ pub !Key parseKey(str text) {
     }
     r := Reader{data: all, at: KEY_MAGIC.len}
     cipher := r.string()
-    _ = r.string()
-    _ = r.string()
+    kdf := r.string()
+    options := r.string()
     count := r.u32()
     _ = r.string()
-    secret := r.string()
+    str secret = r.string()
     if r.bad {
         return error(SshError.key, "the private key is cut short")
-    }
-    if cipher != "none" {
-        return error(SshError.key, "the private key has a passphrase: ssh-keygen -p -N '' takes it off")
     }
     if count != 1 {
         return error(SshError.key, "the file holds {count} keys, not one")
     }
+    String plain
+    defer {
+        crypto.wipe(plain.ptr[0:plain.len])
+        plain.free()
+    }
+    if cipher != "none" {
+        keyLen, ivLen, gcm := keyCipher(cipher)
+        if keyLen == 0 || kdf != "bcrypt" {
+            return error(SshError.key, "the private key is encrypted with {cipher} and {kdf}, which aren't supported")
+        }
+        if passphrase.len == 0 {
+            return error(SshError.key, "the private key has a passphrase, and none was given")
+        }
+        o := Reader{data: options}
+        salt := o.string()
+        rounds := o.u32()
+        if o.bad || rounds < 1 || rounds > 1000000 {
+            return error(SshError.key, "the private key's bcrypt options are broken")
+        }
+        scoped String made = crypto.bcryptPbkdf(passphrase, salt, rounds, keyLen + ivLen)
+        defer crypto.wipe(made.ptr[0:made.len])
+        if gcm {
+            // the tag follows the encrypted part
+            if r.at + 16 > all.len {
+                return error(SshError.key, "the private key is cut short")
+            }
+            scoped String sealed = secret.copy()
+            sealed.append(all[r.at:r.at + 16])
+            plain = crypto.aesUnseal(made[0:keyLen], made[keyLen:keyLen + ivLen], sealed) catch e {
+                return error(SshError.key, "the passphrase is wrong")
+            }
+        } else {
+            plain = crypto.aesCtr(made[0:keyLen], made[keyLen:keyLen + ivLen], secret)
+        }
+        secret = plain
+    }
     s := Reader{data: secret}
     a := s.u32()
     b := s.u32()
+    if s.bad || a != b {
+        if cipher != "none" {
+            return error(SshError.key, "the passphrase is wrong")
+        }
+        return error(SshError.key, "the private key is broken")
+    }
     kind := s.string()
     if kind != "ssh-ed25519" {
         return error(SshError.key, "a {kind} key: only ssh-ed25519 keys are read")
@@ -356,8 +559,9 @@ pub !Key parseKey(str text) {
     return k
 }
 
-// The key in the private key file at path.
-pub !Key loadKey(str path) {
+// The key in the private key file at path, with its passphrase if it has
+// one.
+pub !Key loadKey(str path, str passphrase = "") {
     text := fs.readAll(path) catch e {
         return error(SshError.key, "{path}: {e.message}")
     }
@@ -365,7 +569,7 @@ pub !Key loadKey(str path) {
         crypto.wipe(text.ptr[0:text.len])
         text.free()
     }
-    k := parseKey(text) catch e {
+    k := parseKey(text, passphrase) catch e {
         return error(SshError.key, "{path}: {e.message}")
     }
     return k
@@ -438,54 +642,60 @@ bool glob(str p, str s) {
     return false
 }
 
-// What known_hosts says about name's key: 1 when the key is there, -1
-// when the host is there with another Ed25519 key or the key is revoked,
-// 0 when it has no Ed25519 key for the host.
-i64 knownHost(str text, str name, str key) {
+// The key type and Base64 key of a known_hosts line that is for name, or
+// that revokes a key (revoked says so); "" when it is neither.
+(str, str, bool) knownEntry(str line, str name) {
+    l := str.trim(line)
+    if l.len == 0 || l[0] == '#' {
+        return ("", "", false)
+    }
+    fields := str.fields(l)
+    defer fields.free()
+    i64 at = 0
+    bool revoked = false
+    if fields.len > 0 && fields.at(0)[0] == '@' {
+        if fields.at(0) != "@revoked" {
+            return ("", "", false) // a certificate authority
+        }
+        revoked = true
+        at = 1
+    }
+    if fields.len < at + 3 || !hostKeyType(fields.at(at + 1)) {
+        return ("", "", false)
+    }
+    bool hit = false
+    bool negated = false
+    for pattern in str.split(fields.at(at), ",") {
+        if pattern.len > 0 && pattern[0] == '!' {
+            if hostMatches(pattern[1:], name) {
+                negated = true
+            }
+        } else if hostMatches(pattern, name) {
+            hit = true
+        }
+    }
+    if !revoked && (!hit || negated) {
+        return ("", "", false)
+    }
+    return (fields.at(at + 1), fields.at(at + 2), revoked)
+}
+
+// What known_hosts says about name's key blob: 1 when the key is there,
+// -1 when the host is there with another key of the same type or the key
+// is revoked, 0 when it has no key of that type for the host.
+i64 knownHost(str text, str name, str blob) {
     i64 result = 0
+    kind := blobType(blob)
     for line in str.lines(text) {
-        l := str.trim(line)
-        if l.len == 0 || l[0] == '#' {
+        lineKind, key64, revoked := knownEntry(line, name)
+        if lineKind != kind {
             continue
         }
-        fields := str.fields(l)
-        defer fields.free()
-        i64 at = 0
-        bool revoked = false
-        if fields.len > 0 && fields.at(0)[0] == '@' {
-            if fields.at(0) == "@revoked" {
-                revoked = true
-            } else {
-                continue // a certificate authority
-            }
-            at = 1
-        }
-        if fields.len < at + 3 || fields.at(at + 1) != "ssh-ed25519" {
+        known := base64.decode(key64) catch e {
             continue
         }
-        bool hit = false
-        bool negated = false
-        for pattern in str.split(fields.at(at), ",") {
-            if pattern.len > 0 && pattern[0] == '!' {
-                if hostMatches(pattern[1:], name) {
-                    negated = true
-                }
-            } else if hostMatches(pattern, name) {
-                hit = true
-            }
-        }
-        if !revoked && (!hit || negated) {
-            continue
-        }
-        blob := base64.decode(fields.at(at + 2)) catch e {
-            continue
-        }
-        defer blob.free()
-        k := blobKey(blob)
-        if k.len != 32 {
-            continue
-        }
-        same := crypto.equal(k, key)
+        defer known.free()
+        same := crypto.equal(known, blob)
         if revoked {
             if same {
                 return -1
@@ -501,10 +711,41 @@ i64 knownHost(str text, str name, str key) {
     return result
 }
 
-// The line for a host and its key in a known_hosts file: host is the name
-// dial got, with :port after it when the port isn't 22.
-String knownLine(str host, u16 port, str key) {
-    scoped String blob = blobOf(key)
+// The host key algorithms to ask name for: those of the key types
+// known_hosts has for it first, so the server shows a key that can be
+// checked, then the rest.
+String knownAlgorithms(str text, str name) {
+    String first
+    for kind in str.split(HOST_KEY_ALGORITHMS, ",") {
+        bool known = false
+        for line in str.lines(text) {
+            lineKind, _, revoked := knownEntry(line, name)
+            if !revoked && lineKind.len > 0 && listHas(algorithmsFor(lineKind), kind) {
+                known = true
+                break
+            }
+        }
+        if known {
+            if first.len > 0 {
+                first.append(",")
+            }
+            first.append(kind)
+        }
+    }
+    for kind in str.split(HOST_KEY_ALGORITHMS, ",") {
+        if !listHas(first, kind) {
+            if first.len > 0 {
+                first.append(",")
+            }
+            first.append(kind)
+        }
+    }
+    return first
+}
+
+// The line for a host and its key blob in a known_hosts file: host is the
+// name dial got, with :port after it when the port isn't 22.
+String knownLine(str host, u16 port, str blob) {
     scoped String text = publicTextOf(blob, "")
     if port == 22 {
         return format("{host} {text}")
@@ -549,22 +790,100 @@ test "a key that ssh-keygen wrote" {
 test "known_hosts lines" {
     scoped k := generateKey()
     scoped other := generateKey()
-    scoped String plain = knownLine("db1.example.com", 22, k.public[0:32])
-    scoped String ported = knownLine("db1.example.com", 2222, k.public[0:32])
-    expect(knownHost(plain, "db1.example.com", k.public[0:32]) == 1)
-    expect(knownHost(plain, "DB1.example.com", k.public[0:32]) == 1)
-    expect(knownHost(plain, "db1.example.com", other.public[0:32]) == -1)
-    expect(knownHost(plain, "db2.example.com", k.public[0:32]) == 0)
-    expect(knownHost(ported, "[db1.example.com]:2222", k.public[0:32]) == 1)
+    scoped String kb = blobOf(k.public[0:32])
+    scoped String ob = blobOf(other.public[0:32])
+    scoped String plain = knownLine("db1.example.com", 22, kb)
+    scoped String ported = knownLine("db1.example.com", 2222, kb)
+    expect(knownHost(plain, "db1.example.com", kb) == 1)
+    expect(knownHost(plain, "DB1.example.com", kb) == 1)
+    expect(knownHost(plain, "db1.example.com", ob) == -1)
+    expect(knownHost(plain, "db2.example.com", kb) == 0)
+    expect(knownHost(ported, "[db1.example.com]:2222", kb) == 1)
     scoped String text = str.replace(plain, "db1.example.com", "*.example.com,!db3.example.com")
-    expect(knownHost(text, "db9.example.com", k.public[0:32]) == 1)
-    expect(knownHost(text, "db3.example.com", k.public[0:32]) == 0)
+    expect(knownHost(text, "db9.example.com", kb) == 1)
+    expect(knownHost(text, "db3.example.com", kb) == 0)
     // hashed: |1|salt|HMAC-SHA1(salt, name)
     u8[20] salt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     mac := crypto.hmacSha1(salt[0:20], "db1.example.com")
     scoped String s64 = base64.encode(salt[0:20])
     scoped String m64 = base64.encode(mac[0:20])
     scoped String hashed = str.replace(plain, "db1.example.com", "|1|{s64}|{m64}")
-    expect(knownHost(hashed, "db1.example.com", k.public[0:32]) == 1)
-    expect(knownHost(hashed, "db2.example.com", k.public[0:32]) == 0)
+    expect(knownHost(hashed, "db1.example.com", kb) == 1)
+    expect(knownHost(hashed, "db2.example.com", kb) == 0)
+}
+
+test "host keys known_hosts has are asked for first" {
+    // ssh-keyscan -t ecdsa,rsa: a P-256 key and an RSA key, cut short
+    text := "db1 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY=\ndb2 ssh-rsa AAAAB3NzaC1yc2E=\n"
+    scoped String a = knownAlgorithms(text, "db1")
+    expect(a == "ecdsa-sha2-nistp256,ssh-ed25519,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256")
+    scoped String b = knownAlgorithms(text, "db2")
+    expect(b == "rsa-sha2-512,rsa-sha2-256,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521")
+    scoped String c = knownAlgorithms(text, "db3")
+    expect(c == HOST_KEY_ALGORITHMS)
+    scoped String blob = try parseBlob("db1 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY=")
+    expect(blobType(blob) == "ecdsa-sha2-nistp256")
+}
+
+test "host key signatures of each type" {
+    h := "an exchange hash"
+    // ECDSA: SSH's blob holds the curve's name and the point, which ends
+    // the key's DER, and its signature r and s as two mpints
+    curves := [(crypto.KeyType.ecP256, "ecdsa-sha2-nistp256", 32, crypto.Hash.sha256),
+        (crypto.KeyType.ecP384, "ecdsa-sha2-nistp384", 48, crypto.Hash.sha384),
+        (crypto.KeyType.ecP521, "ecdsa-sha2-nistp521", 66, crypto.Hash.sha512)]
+    for c in curves {
+        t, alg, size, hash := c
+        scoped key := try crypto.generateKey(t)
+        scoped public := key.publicKey()
+        scoped String der = public.der()
+        scoped String blob
+        putString(&blob, alg)
+        putString(&blob, alg[11:])
+        putString(&blob, der[der.len - 2 * size - 1:])
+        scoped String sig = try key.sign(h, hash)
+        scoped String raw = try crypto.ecdsaRaw(sig, size)
+        scoped String inner
+        putMpint(&inner, raw[0:size])
+        putMpint(&inner, raw[size:])
+        scoped String sigBlob
+        putString(&sigBlob, alg)
+        putString(&sigBlob, inner)
+        expect(verifyHostSignature(alg, blob, h, sigBlob))
+        expect(!verifyHostSignature(alg, blob, "another hash", sigBlob))
+        expect(!verifyHostSignature("ssh-ed25519", blob, h, sigBlob))
+    }
+    // RSA 2048 with e 65537: in the DER, n is at 33 and e at 291
+    scoped key := try crypto.generateKey(.rsa, 2048)
+    scoped public := key.publicKey()
+    scoped String der = public.der()
+    scoped String blob
+    putString(&blob, "ssh-rsa")
+    putMpint(&blob, der[291:294])
+    putMpint(&blob, der[33:289])
+    for alg in ["rsa-sha2-256", "rsa-sha2-512"] {
+        scoped String sig = try key.sign(h, if alg == "rsa-sha2-512" { crypto.Hash.sha512 } else { crypto.Hash.sha256 })
+        scoped String sigBlob
+        putString(&sigBlob, alg)
+        putString(&sigBlob, sig)
+        expect(verifyHostSignature(alg, blob, h, sigBlob))
+        expect(!verifyHostSignature(alg, blob, "another hash", sigBlob))
+    }
+    scoped String wrongName
+    putString(&wrongName, "rsa-sha2-256")
+    scoped String sig512 = try key.sign(h, .sha512)
+    putString(&wrongName, sig512)
+    expect(!verifyHostSignature("rsa-sha2-512", blob, h, wrongName))
+}
+
+test "keys with a passphrase" {
+    scoped k := generateKey("ada@laptop")
+    scoped String text = k.privateText("open sesame", 2)
+    scoped back := try parseKey(text, "open sesame")
+    expect(crypto.equal(back.public[0:32], k.public[0:32]) && back.comment == "ada@laptop")
+    e1 := parseKey(text, "wrong") catch e {
+        expect(e.message == "the passphrase is wrong")
+        return
+    }
+    expect(false)
 }

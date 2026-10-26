@@ -522,15 +522,15 @@
    "iris": 0.277,
    "iris_out": "4000",
    "iris_mem": 7.6,
-   "iris_safe": 0.277,
+   "iris_safe": 0.276,
    "iris_safe_out": "4000",
    "iris_safe_mem": 7.6,
-   "rust": 0.223,
+   "rust": 0.222,
    "rust_out": "4000",
-   "rust_mem": 2.1,
-   "go": 0.329,
+   "rust_mem": 2.0,
+   "go": 0.326,
    "go_out": "4000",
-   "go_mem": 10.1
+   "go_mem": 9.9
   },
   "rsa": {
    "iris": 0.385,
@@ -631,25 +631,25 @@
    "go_mem": 10.1
   },
   "ssh": {
-   "iris": 0.329,
+   "iris": 0.348,
    "iris_out": "logins 100, bytes 536870912",
-   "iris_mem": 6.9,
-   "iris_safe": 0.325,
+   "iris_mem": 7.1,
+   "iris_safe": 0.347,
    "iris_safe_out": "logins 100, bytes 536870912",
-   "iris_safe_mem": 6.9,
-   "rust": 0.438,
+   "iris_safe_mem": 7.2,
+   "rust": 0.46,
    "rust_out": "logins 100, bytes 536870912",
-   "rust_mem": 8.9,
-   "go": 0.804,
+   "rust_mem": 9.0,
+   "go": 0.834,
    "go_out": "logins 100, bytes 536870912",
-   "go_mem": 14.5
+   "go_mem": 14.7
   }
  },
  "setup": {
   "machine": "iris-testbench, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
-  "iris": "iris 0.79.0",
+  "iris": "iris 0.80.0",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-10-26 17:59"
+  "date": "2026-10-26 18:44"
  }
 }

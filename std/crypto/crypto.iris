@@ -411,6 +411,114 @@ pub String chacha20(str key, str nonce, str data, u32 counter = 0) {
 // wipe(secret.items()).
 pub void wipe(u8[] bytes) => rawWipe(bytes.ptr, bytes.len)
 
+@extern("iris_bcrypt_pbkdf")
+void rawBcryptPbkdf(u8 *password, i64 passwordLen, u8 *salt, i64 saltLen, i64 rounds, u8 *key, i64 size)
+
+// bcrypt_pbkdf: a key of size bytes from a password and a salt, made slow
+// by rounds, as OpenSSH uses for private keys with a passphrase (16 rounds
+// unless ssh-keygen -a says).
+pub String bcryptPbkdf(str password, str salt, i64 rounds, i64 size = 32) {
+    if rounds < 1 || size < 1 || size > 1024 {
+        panic("bcryptPbkdf takes 1 or more rounds and 1 to 1024 bytes, not {rounds} and {size}")
+    }
+    String out
+    out.reserve(size)
+    for out.len < size {
+        out.append("\x00")
+    }
+    rawBcryptPbkdf(password.ptr, password.len, salt.ptr, salt.len, rounds, out.ptr, size)
+    return out
+}
+
+// ------------------------------------------------------------ SHA-3 and ML-KEM
+
+@extern("iris_sha3")
+void rawSha3(i32 bits, u8 *data, i64 len, u8 *out)
+
+@extern("iris_shake")
+void rawShake(i32 bits, u8 *data, i64 len, String *out, i64 size)
+
+@extern("iris_mlkem768_public")
+void rawMlkemPublic(u8 *seed, String *out)
+
+@extern("iris_mlkem768_encapsulate")
+i32 rawMlkemEncapsulate(u8 *publicKey, String *ciphertext, u8 *shared)
+
+@extern("iris_mlkem768_decapsulate")
+void rawMlkemDecapsulate(u8 *seed, u8 *ciphertext, u8 *shared)
+
+// The SHA3-256 hash of data (FIPS 202): 32 bytes.
+pub u8[32] sha3_256(str data) {
+    u8[32] out
+    rawSha3(256, data.ptr, data.len, &out[0])
+    return out
+}
+
+// The SHA3-512 hash of data: 64 bytes.
+pub u8[64] sha3_512(str data) {
+    u8[64] out
+    rawSha3(512, data.ptr, data.len, &out[0])
+    return out
+}
+
+// size bytes of SHAKE128 or SHAKE256 of data, as bits says (128 or 256).
+pub String shake(str data, i64 size, i64 bits = 256) {
+    if bits != 128 && bits != 256 {
+        panic("SHAKE is SHAKE128 or SHAKE256, not {bits}")
+    }
+    String out
+    rawShake(i32(bits), data.ptr, data.len, &out, size)
+    return out
+}
+
+// The sizes of ML-KEM-768's keys and ciphertexts.
+pub const i64 MLKEM_SEED = 64
+pub const i64 MLKEM_PUBLIC = 1184
+pub const i64 MLKEM_CIPHERTEXT = 1088
+
+// The public key (the encapsulation key, 1184 bytes) of the ML-KEM-768
+// key with the secret seed of 64 random bytes (FIPS 203). The seed is how
+// the secret key is kept, as TLS and SSH do.
+pub String mlkemPublic(str seed) {
+    if seed.len != MLKEM_SEED {
+        panic("an ML-KEM seed is 64 bytes, not {seed.len}")
+    }
+    String out
+    rawMlkemPublic(seed.ptr, &out)
+    return out
+}
+
+// A new shared secret for the holder of publicKey: the ciphertext to send
+// them (1088 bytes) and the 32-byte secret. CryptoError.badKey when
+// publicKey isn't an ML-KEM-768 key.
+pub !(String, u8[32]) mlkemEncapsulate(str publicKey) {
+    if publicKey.len != MLKEM_PUBLIC {
+        return error(CryptoError.badKey, "an ML-KEM-768 public key is 1184 bytes, not {publicKey.len}")
+    }
+    String c
+    u8[32] shared
+    if rawMlkemEncapsulate(publicKey.ptr, &c, &shared[0]) == 0 {
+        c.free()
+        return error(CryptoError.badKey, "not an ML-KEM-768 public key")
+    }
+    return (c, shared)
+}
+
+// The shared secret in ciphertext, for the key with the secret seed. A
+// ciphertext that was changed gives another secret, not an error, so the
+// two sides' secrets differ.
+pub !u8[32] mlkemDecapsulate(str seed, str ciphertext) {
+    if seed.len != MLKEM_SEED {
+        panic("an ML-KEM seed is 64 bytes, not {seed.len}")
+    }
+    if ciphertext.len != MLKEM_CIPHERTEXT {
+        return error(CryptoError.badKey, "an ML-KEM-768 ciphertext is 1088 bytes, not {ciphertext.len}")
+    }
+    u8[32] shared
+    rawMlkemDecapsulate(seed.ptr, ciphertext.ptr, &shared[0])
+    return shared
+}
+
 // ------------------------------------------------------------ ECDSA and RSA
 
 @extern("iris_pk_load_private")
@@ -457,9 +565,9 @@ i64 rawMessageLen()
 
 str keyMessage() => rawMessagePtr()[0:rawMessageLen()]
 
-// The kinds of key for ECDSA and RSA signatures: ECDSA on the curves P-256
-// and P-384, and RSA.
-pub enum KeyType { ecP256, ecP384, rsa, other }
+// The kinds of key for ECDSA and RSA signatures: ECDSA on the curves
+// P-256, P-384 and P-521, and RSA.
+pub enum KeyType { ecP256, ecP384, ecP521, rsa, other }
 
 // The hash a signature is made over.
 pub enum Hash { sha1, sha256, sha384, sha512 }
@@ -489,7 +597,7 @@ KeyType typeOf(u8 *k) {
     i64 bits
     kind := rawKind(k, &bits)
     if kind == 1 {
-        return if bits <= 256 { KeyType.ecP256 } else { KeyType.ecP384 }
+        return if bits <= 256 { KeyType.ecP256 } else if bits <= 384 { KeyType.ecP384 } else { KeyType.ecP521 }
     }
     return if kind == 2 { KeyType.rsa } else { KeyType.other }
 }
@@ -515,13 +623,17 @@ pub !PublicKey loadPublicKey(str data) {
 }
 
 // An ECDSA public key from its point: 04 then x and y, or x and y alone,
-// as DNSSEC's DNSKEY records and JSON Web Keys hold it. curve is ecP256
-// or ecP384.
+// as DNSSEC's DNSKEY records and JSON Web Keys hold it. curve is ecP256,
+// ecP384 or ecP521.
 pub !PublicKey ecPublicKey(KeyType curve, str point) {
-    if curve != .ecP256 && curve != .ecP384 {
-        return error(CryptoError.badKey, "an EC point needs the curve ecP256 or ecP384")
+    if curve != .ecP256 && curve != .ecP384 && curve != .ecP521 {
+        return error(CryptoError.badKey, "an EC point needs the curve ecP256, ecP384 or ecP521")
     }
-    k := rawEcPublic(if curve == .ecP256 { 0 } else { 1 }, point.ptr, point.len)
+    k := rawEcPublic(match curve {
+        .ecP256 => 0
+        .ecP384 => 1
+        _ => 2
+    }, point.ptr, point.len)
     if k == null {
         return error(CryptoError.badKey, keyMessage())
     }
@@ -538,8 +650,8 @@ pub !PublicKey rsaPublicKey(str n, str e) {
     return PublicKey{k: k}
 }
 
-// A new private key of type: ecP256, ecP384, or rsa of bits (2048 or
-// more). It needs OpenSSL 3.
+// A new private key of type: ecP256, ecP384, ecP521, or rsa of bits (2048
+// or more). It needs OpenSSL 3.
 pub !PrivateKey generateKey(KeyType t, i64 bits = 2048) {
     if t == .other {
         return error(CryptoError.badKey, "no key of type other")
@@ -547,6 +659,7 @@ pub !PrivateKey generateKey(KeyType t, i64 bits = 2048) {
     k := rawGenerate(match t {
         .ecP256 => 0
         .ecP384 => 1
+        .ecP521 => 3
         _ => 2
     }, bits)
     if k == null {
@@ -555,10 +668,10 @@ pub !PrivateKey generateKey(KeyType t, i64 bits = 2048) {
     return PrivateKey{k: k}
 }
 
-// The key's kind: ecP256, ecP384 or rsa.
+// The key's kind: ecP256, ecP384, ecP521 or rsa.
 pub KeyType PrivateKey.kind() => typeOf(self.k)
 
-// The key's kind: ecP256, ecP384 or rsa.
+// The key's kind: ecP256, ecP384, ecP521 or rsa.
 pub KeyType PublicKey.kind() => typeOf(self.k)
 
 // The public half of the key.
@@ -620,7 +733,7 @@ pub void PublicKey.free() {
 }
 
 // An ECDSA signature in DER as r and s of size bytes each (32 for P-256,
-// 48 for P-384), as DNSSEC and JSON Web Tokens carry it.
+// 48 for P-384, 66 for P-521), as DNSSEC and JSON Web Tokens carry it.
 pub !String ecdsaRaw(str der, i64 size) {
     String out
     if rawDerToRaw(der.ptr, der.len, size, &out) == 0 {

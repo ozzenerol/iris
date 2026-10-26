@@ -116,7 +116,7 @@ picked one of them: true
 }</code></pre>
 <pre class="out"><code>22220c10fb3e49e6f04249e177d1f1a90b1ffd6498599a74355de72dcde32f18
 matches: true</code></pre>
-<p><code>sha384</code> gives 48 bytes and <code>sha512</code> 64. <code>sha1</code> and <code>md5</code> are there for older protocols that still use them and are not safe for anything new.</p>
+<p><code>sha384</code> gives 48 bytes and <code>sha512</code> 64. <code>sha3_256</code> and <code>sha3_512</code> are SHA-3, and <code>shake(data, size)</code> gives as many bytes of SHAKE256 as asked, or of SHAKE128 with <code>shake(data, size, 128)</code>. <code>sha1</code> and <code>md5</code> are there for older protocols that still use them and are not safe for anything new.</p>
 <h2 id="signing-messages-with-a-shared-key"><a href="#signing-messages-with-a-shared-key">Signing messages with a shared key</a></h2>
 <p>An HMAC is a hash mixed with a secret key, so only someone with the key can make it. A service that sends webhooks signs each body with <code>crypto.hmacSha256</code>, and the receiver makes the same HMAC and compares. <code>crypto.equal</code> takes the same time wherever the values differ, so its timing gives nothing away:</p>
 <pre class="code run"><code><span class="k">import</span> crypto, hex
@@ -184,7 +184,7 @@ other key: false</code></pre>
 <pre class="out"><code>salt 32 digits, hash 64 digits
 right: true
 wrong: false</code></pre>
-<p>The number of rounds sets how slow it is. More rounds make guessing harder and each login slower by the same amount.</p>
+<p>The number of rounds sets how slow it is. More rounds make guessing harder and each login slower by the same amount. <code>bcryptPbkdf(password, salt, rounds, size)</code> makes a key the same way with bcrypt, as OpenSSH does for a private key with a passphrase.</p>
 <h2 id="encrypting-data"><a href="#encrypting-data">Encrypting data</a></h2>
 <p><code>crypto.seal(key, nonce, data)</code> encrypts data with ChaCha20-Poly1305, using a 32-byte key and a 12-byte nonce, and adds 16 bytes to check it. <code>crypto.unseal</code> gives the data back, or fails with <code>CryptoError.tampered</code> when a byte was changed or the key is a different one. A nonce must never be used twice with the same key, so here each message gets a random one, kept in front of the sealed data:</p>
 <pre class="code run"><code><span class="k">import</span> crypto, random
@@ -221,6 +221,21 @@ db password: hunter2
 CryptoError.tampered</code></pre>
 <p><code>sealTo(&amp;out, key, nonce, data)</code> adds the sealed data to the end of a String instead of making a new one, as <code>encrypt</code> does above after the nonce. A program that seals many packets keeps one String and clears it between them. <code>unsealTo</code> does the same for opening, and <code>aesSealTo</code> and <code>aesUnsealTo</code> do both for AES-GCM.</p>
 <p><code>aesSeal</code> and <code>aesUnseal</code> do the same with AES-GCM, which many file formats and protocols use. An optional <code>extra</code> text, such as a record's id, goes along unencrypted but is checked too. The <a href="../std/index.html#crypto">library</a> has them, and key agreement with X25519.</p>
+<p>ML-KEM-768 (FIPS 203) agrees on a key in a way a quantum computer can't break, and SSH and TLS use it together with X25519. One side keeps a secret seed of 64 random bytes and sends <code>mlkemPublic(seed)</code>. The other runs <code>mlkemEncapsulate(public)</code>, which gives a ciphertext to send back and a 32-byte secret. <code>mlkemDecapsulate(seed, ciphertext)</code> gives the first side the same secret:</p>
+<pre class="code run"><code><span class="k">import</span> crypto, random
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="t">u8</span>[<span class="n">64</span>] seed
+    random.<span class="f">bytes</span>(seed[<span class="n">0</span>:<span class="n">64</span>])
+    <span class="k">scoped</span> <span class="t">String</span> public = crypto.<span class="f">mlkemPublic</span>(seed[<span class="n">0</span>:<span class="n">64</span>])
+
+    ciphertext, theirs := <span class="k">try</span> crypto.<span class="f">mlkemEncapsulate</span>(public)
+    <span class="k">defer</span> ciphertext.<span class="f">free</span>()
+
+    mine := <span class="k">try</span> crypto.<span class="f">mlkemDecapsulate</span>(seed[<span class="n">0</span>:<span class="n">64</span>], ciphertext)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>public.len<span class="e">}</span><span class="s"> and </span><span class="e">{</span>ciphertext.len<span class="e">}</span><span class="s"> bytes sent, same secret: </span><span class="e">{</span>crypto.<span class="f">equal</span>(mine[<span class="n">0</span>:<span class="n">32</span>], theirs[<span class="n">0</span>:<span class="n">32</span>])<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>1184 and 1088 bytes sent, same secret: true</code></pre>
 <p>Protocols that build their own encryption need the ciphers alone. <code>aesCtr(key, iv, data)</code> is AES in counter mode, as SSH's <code>aes128-ctr</code> uses, <code>aesBlock(key, block)</code> encrypts one 16-byte block, as QUIC's header protection does, and <code>chacha20(key, nonce, data, counter)</code> is the ChaCha20 stream. None of them checks that the data wasn't changed, so the protocol adds a MAC: <code>hmacSha256</code>, <code>hmacSha384</code>, <code>hmacSha512</code>, or <code>hmacSha1</code> for older ones such as TOTP codes. <code>wipe(bytes)</code> overwrites a key with zeros once it is done with, in a way the compiler can't leave out.</p>
 <h2 id="signatures"><a href="#signatures">Signatures</a></h2>
 <p>A signature lets anyone check that a message came from one signer, without being able to sign anything themselves. Ed25519 signs with a secret seed of 32 random bytes.</p>
@@ -240,7 +255,7 @@ CryptoError.tampered</code></pre>
 }</code></pre>
 <pre class="out"><code>true
 false</code></pre>
-<p>Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A <code>crypto.PrivateKey</code> comes from <code>loadPrivateKey(pem)</code>, PEM or DER as openssl writes it, or from <code>generateKey(.ecP256)</code>, <code>.ecP384</code> or <code>.rsa</code> with its bits. <code>sign(data, hash, padding)</code> signs, and <code>publicKey()</code> gives the half to share. A <code>crypto.PublicKey</code> comes from <code>loadPublicKey</code> too, from an EC point with <code>ecPublicKey(curve, point)</code>, or from RSA's modulus and exponent with <code>rsaPublicKey(n, e)</code>, as DNSSEC records hold them. <code>verify(data, signature, hash, padding)</code> checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or <code>.pss</code>, as TLS 1.3 does. ECDSA signatures are in DER, and <code>ecdsaRaw(sig, 32)</code> and <code>ecdsaDer(raw)</code> turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.</p>
+<p>Certificates, DNSSEC, SSH and QUIC also sign with ECDSA and RSA. A <code>crypto.PrivateKey</code> comes from <code>loadPrivateKey(pem)</code>, PEM or DER as openssl writes it, or from <code>generateKey(.ecP256)</code>, <code>.ecP384</code>, <code>.ecP521</code> or <code>.rsa</code> with its bits. <code>sign(data, hash, padding)</code> signs, and <code>publicKey()</code> gives the half to share. A <code>crypto.PublicKey</code> comes from <code>loadPublicKey</code> too, from an EC point with <code>ecPublicKey(curve, point)</code>, or from RSA's modulus and exponent with <code>rsaPublicKey(n, e)</code>, as DNSSEC records hold them. <code>verify(data, signature, hash, padding)</code> checks a signature. RSA signs with PKCS#1 v1.5 padding, the start, or <code>.pss</code>, as TLS 1.3 does. ECDSA signatures are in DER, and <code>ecdsaRaw(sig, 32)</code> and <code>ecdsaDer(raw)</code> turn them into r and s and back, the form JSON Web Tokens and DNSSEC carry.</p>
 <pre class="code run"><code><span class="k">import</span> crypto
 
 !<span class="t">void</span> <span class="f">main</span>() {

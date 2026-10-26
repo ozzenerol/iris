@@ -19,7 +19,8 @@ const i64 MSG_KEX_ECDH_INIT = 30
 const i64 MSG_KEX_ECDH_REPLY = 31
 
 const str VERSION = "SSH-2.0-iris"
-const str KEX_ALGORITHMS = "curve25519-sha256,curve25519-sha256@libssh.org"
+const str KEX_ALGORITHMS = "mlkem768x25519-sha256,curve25519-sha256,curve25519-sha256@libssh.org"
+const str MLKEM = "mlkem768x25519-sha256"
 const str CIPHERS = "aes256-gcm@openssh.com,aes128-gcm@openssh.com,chacha20-poly1305@openssh.com"
 const i64 MAX_PACKET = 256KiB
 // what one read from the connection may take: several packets
@@ -108,6 +109,7 @@ struct Link {
     bool firstKex
     bool strict
     String ourInit
+    String hostAlgs  // the host key algorithms a client asks for
     String serverKey // the server's key blob
     Key hostKey      // a server's own key
 
@@ -152,6 +154,7 @@ void Link.free() {
     self.sessionId.free()
     self.why.free()
     self.ourInit.free()
+    self.hostAlgs.free()
     self.serverKey.free()
     self.hostKey.free()
     self.inKeys.wipe()
@@ -453,7 +456,11 @@ void Link.startKex() {
     } else {
         putString(&m, "{KEX_ALGORITHMS},kex-strict-c-v00@openssh.com")
     }
-    putString(&m, "ssh-ed25519")
+    if self.isServer || self.hostAlgs.len == 0 {
+        putString(&m, "ssh-ed25519")
+    } else {
+        putString(&m, self.hostAlgs)
+    }
     putString(&m, CIPHERS)
     putString(&m, CIPHERS)
     putString(&m, "hmac-sha2-256")
@@ -572,8 +579,10 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
     if kexAlg.len == 0 {
         return error(SshError.protocol, "no key exchange in common: the other side has {kexList}")
     }
-    if !listHas(hostList, "ssh-ed25519") {
-        return error(SshError.protocol, "the server has no ssh-ed25519 host key: it has {hostList}")
+    str ourHosts = "ssh-ed25519" if self.isServer || self.hostAlgs.len == 0 else self.hostAlgs
+    hostAlg := if self.isServer { choose(hostList, ourHosts) } else { choose(ourHosts, hostList) }
+    if hostAlg.len == 0 {
+        return error(SshError.protocol, "no host key type in common: the server has {hostList}")
     }
     csAlg := if self.isServer { choose(cipherCs, CIPHERS) } else { choose(CIPHERS, cipherCs) }
     scAlg := if self.isServer { choose(cipherSc, CIPHERS) } else { choose(CIPHERS, cipherSc) }
@@ -594,10 +603,11 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
         // one whose first choices differ
         first, _, _ := str.cut(kexList, ",")
         hfirst, _, _ := str.cut(hostList, ",")
-        if first != kexAlg || hfirst != "ssh-ed25519" {
+        if first != kexAlg || hfirst != hostAlg {
             scoped String skip = try self.readPacket()
         }
     }
+    hybrid := kexAlg == MLKEM
 
     u8[32] secret
     random.bytes(secret[0:32])
@@ -612,20 +622,43 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
         crypto.wipe(shared.ptr[0:shared.len])
         shared.free()
     }
-    String theirs
-    defer theirs.free()
+    // what each side sent: an X25519 key, or for the hybrid the client's
+    // ML-KEM key or the server's ciphertext before it
+    String clientValue
+    defer clientValue.free()
+    String serverValue
+    defer serverValue.free()
 
     if self.isServer {
         scoped String init = try self.kexPacket(MSG_KEX_ECDH_INIT)
         ir := Reader{data: init, at: 1}
-        theirs = ir.string().copy()
-        k := crypto.x25519(secret[0:32], theirs) catch e {
-            return error(SshError.protocol, "the client's key exchange value: {e.message}")
+        clientValue = ir.string().copy()
+        if hybrid {
+            if clientValue.len != crypto.MLKEM_PUBLIC + 32 {
+                return error(SshError.protocol, "the client's key exchange value is {clientValue.len} bytes, not 1216")
+            }
+            ct, kpq := crypto.mlkemEncapsulate(clientValue[0:crypto.MLKEM_PUBLIC]) catch e {
+                return error(SshError.protocol, "the client's ML-KEM key: {e.message}")
+            }
+            k := crypto.x25519(secret[0:32], clientValue[crypto.MLKEM_PUBLIC:]) catch e {
+                ct.free()
+                return error(SshError.protocol, "the client's key exchange value: {e.message}")
+            }
+            shared = hybridSecret(kpq[0:32], k[0:32])
+            crypto.wipe(kpq[0:32])
+            crypto.wipe(k[0:32])
+            serverValue = ct
+            serverValue.append(mine[0:32])
+        } else {
+            k := crypto.x25519(secret[0:32], clientValue) catch e {
+                return error(SshError.protocol, "the client's key exchange value: {e.message}")
+            }
+            putMpint(&shared, k[0:32])
+            crypto.wipe(k[0:32])
+            serverValue = mine[0:32].copy()
         }
-        putMpint(&shared, k[0:32])
-        crypto.wipe(k[0:32])
         hostBlob = blobOf(self.hostKey.public[0:32])
-        h = self.exchangeHash(peerInit, hostBlob, theirs, mine[0:32], shared)
+        h = self.exchangeHash(peerInit, hostBlob, clientValue, serverValue, shared)
         sig := crypto.ed25519Sign(self.hostKey.seed[0:32], h)
         String sigBlob
         putString(&sigBlob, "ssh-ed25519")
@@ -633,37 +666,52 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
         String reply
         putByte(&reply, MSG_KEX_ECDH_REPLY)
         putString(&reply, hostBlob)
-        putString(&reply, mine[0:32])
+        putString(&reply, serverValue)
         putString(&reply, sigBlob)
         sigBlob.free()
         self.queue(reply, Job.kex)
     } else {
+        u8[64] seed
+        defer crypto.wipe(seed[0:64])
+        if hybrid {
+            random.bytes(seed[0:64])
+            clientValue = crypto.mlkemPublic(seed[0:64])
+        }
+        clientValue.append(mine[0:32])
         String init
         putByte(&init, MSG_KEX_ECDH_INIT)
-        putString(&init, mine[0:32])
+        putString(&init, clientValue)
         self.queue(init, Job.kex)
         scoped String reply = try self.kexPacket(MSG_KEX_ECDH_REPLY)
         rr := Reader{data: reply, at: 1}
         hostBlob = rr.string().copy()
-        theirs = rr.string().copy()
+        serverValue = rr.string().copy()
         sigBlob := rr.string()
         if rr.bad {
             return error(SshError.protocol, "a key exchange reply that is cut short")
         }
-        hostKey := blobKey(hostBlob)
-        if hostKey.len != 32 {
-            return error(SshError.protocol, "the server's host key isn't an ssh-ed25519 key")
+        if hybrid {
+            if serverValue.len != crypto.MLKEM_CIPHERTEXT + 32 {
+                return error(SshError.protocol, "the server's key exchange value is {serverValue.len} bytes, not 1120")
+            }
+            kpq := crypto.mlkemDecapsulate(seed[0:64], serverValue[0:crypto.MLKEM_CIPHERTEXT]) catch e {
+                return error(SshError.protocol, "the server's ciphertext: {e.message}")
+            }
+            k := crypto.x25519(secret[0:32], serverValue[crypto.MLKEM_CIPHERTEXT:]) catch e {
+                return error(SshError.protocol, "the server's key exchange value: {e.message}")
+            }
+            shared = hybridSecret(kpq[0:32], k[0:32])
+            crypto.wipe(kpq[0:32])
+            crypto.wipe(k[0:32])
+        } else {
+            k := crypto.x25519(secret[0:32], serverValue) catch e {
+                return error(SshError.protocol, "the server's key exchange value: {e.message}")
+            }
+            putMpint(&shared, k[0:32])
+            crypto.wipe(k[0:32])
         }
-        k := crypto.x25519(secret[0:32], theirs) catch e {
-            return error(SshError.protocol, "the server's key exchange value: {e.message}")
-        }
-        putMpint(&shared, k[0:32])
-        crypto.wipe(k[0:32])
-        h = self.exchangeHash(peerInit, hostBlob, mine[0:32], theirs, shared)
-        sr := Reader{data: sigBlob}
-        kind := sr.string()
-        sig := sr.string()
-        if sr.bad || kind != "ssh-ed25519" || !crypto.ed25519Verify(hostKey, h, sig) {
+        h = self.exchangeHash(peerInit, hostBlob, clientValue, serverValue, shared)
+        if !verifyHostSignature(hostAlg, hostBlob, h, sigBlob) {
             return error(SshError.hostKey, "the server's signature doesn't match its host key")
         }
         if self.firstKex {
@@ -688,6 +736,21 @@ Keys keysFor(str k, str h, str sessionId, u8 ivLetter, u8 keyLetter, str cipher)
     }
     self.kexStarted = false
     self.firstKex = false
+}
+
+// The hybrid's shared secret: SHA-256 of the ML-KEM secret and the
+// X25519 one, sent as a string where curve25519 sends an mpint.
+String hybridSecret(str kpq, str kcl) {
+    String both
+    both.append(kpq)
+    both.append(kcl)
+    d := crypto.sha256(both)
+    crypto.wipe(both.ptr[0:both.len])
+    both.free()
+    String out
+    putString(&out, d[0:32])
+    crypto.wipe(d[0:32])
+    return out
 }
 
 String Link.exchangeHash(str peerInit, str hostBlob, str clientValue, str serverValue, str shared) {

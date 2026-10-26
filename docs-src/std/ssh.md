@@ -30,4 +30,4 @@ void serveOn(net.Listener ln, ssh.Server s) {
 hello ada, you ran whoami
 ```
 
-The server's key is checked against `~/.ssh/known_hosts` unless `Config.hostKey` gives it. Keys are Ed25519, in the formats `ssh-keygen` reads and writes.
+The server's key is checked against `~/.ssh/known_hosts` unless `Config.hostKey` gives it. A server's key can be Ed25519, ECDSA or RSA. The keys this module makes and logs in with are Ed25519, in the formats `ssh-keygen` reads and writes, with or without a passphrase.

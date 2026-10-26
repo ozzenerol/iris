@@ -2,7 +2,8 @@ package main
 
 // An SSH server and client in one program, over loopback: 100 logins with
 // an Ed25519 key, each running a command, then 512 MiB through one
-// channel. AES-256-GCM, as the Iris and Rust versions use.
+// channel. mlkem768x25519-sha256 and AES-256-GCM, as the Iris and Rust
+// versions use.
 
 import (
 	"bytes"
@@ -17,7 +18,7 @@ import (
 )
 
 var algorithms = ssh.Config{
-	KeyExchanges: []string{"curve25519-sha256"},
+	KeyExchanges: []string{"mlkem768x25519-sha256"},
 	Ciphers:      []string{"aes256-gcm@openssh.com"},
 }
 
