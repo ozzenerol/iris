@@ -1,0 +1,73 @@
+import crypto, fs, net, ssh
+
+// An SFTP server and client in one program, over loopback, through one
+// SSH connection: 1000 small files written, stat'ed, read back and
+// removed, then a 256 MiB file uploaded and downloaded. The server keeps
+// the files in a temporary folder and runs on a thread of its own, as the
+// Go and Rust servers run on other cores. mlkem768x25519-sha256 and
+// AES-256-GCM, as the Rust and Go versions are set to use.
+
+ssh.Key userKey
+String root
+
+bool checkKey(str user, str key) {
+    scoped String mine = userKey.fingerprint()
+    scoped String theirs = ssh.fingerprint(key) catch "".copy()
+    return mine == theirs
+}
+
+!void handle(ssh.Session *s) {
+    if s.kind == .subsystem && s.command == "sftp" {
+        try ssh.serveSftp(s, root)
+    }
+}
+
+void serveIt(net.Listener ln, ssh.Server s) {
+    ssh.serveOn(ln, s) catch e { }
+}
+
+!void main() {
+    root = try fs.tempDir("sftp-bench")
+    defer fs.removeAll(root) catch e { }
+    userKey = ssh.generateKey()
+    hostKey := ssh.generateKey()
+    ln := try net.listen(0, "127.0.0.1")
+    _ = thread serveIt(ln, ssh.Server{hostKey: hostKey, publicKey: checkKey, handle: handle})
+    scoped String hostLine = hostKey.publicText()
+    c := try ssh.dial("127.0.0.1", ln.port, ssh.Config{user: "bench", key: &userKey, hostKey: hostLine})
+    defer c.close()
+    s := try c.sftp()
+    defer s.close()
+
+    u8[] small = alloc(u8, 1KiB)
+    defer free(small)
+    for i in 0..small.len {
+        small[i] = u8(i * 7 & 255)
+    }
+    i64 files = 0
+    for i in 0..1000 {
+        scoped String name = format("f{i}")
+        try s.writeAll(name, small)
+        info := try s.stat(name)
+        scoped String back = try s.readAll(name)
+        if info.size == small.len && crypto.equal(back, small) {
+            files += 1
+        }
+        try s.remove(name)
+    }
+
+    String big
+    defer big.free()
+    big.reserve(256MiB)
+    u8[] block = alloc(u8, 1MiB)
+    defer free(block)
+    for i in 0..block.len {
+        block[i] = u8(i * 7 & 255)
+    }
+    for i in 0..256 {
+        big.append(block)
+    }
+    try s.writeAll("big", big)
+    scoped String got = try s.readAll("big")
+    print("files {files}, bytes {got.len}, same {crypto.equal(got, big)}")
+}

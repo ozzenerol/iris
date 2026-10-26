@@ -27,6 +27,7 @@ ring = "0.17"
 x509-parser = "0.18"
 serde_yaml = "0.9"
 russh = "0.65"
+russh-sftp = "3"
 rand = "0.10"
 
 [profile.release]
@@ -214,3 +215,7 @@ path = "../wire/main.rs"
 [[bin]]
 name = "ssh"
 path = "../ssh/main.rs"
+
+[[bin]]
+name = "sftp"
+path = "../sftp/main.rs"

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFTP and scp - Iris</title>
+<meta name="description" content="SFTP works on the files of an SSH server: it copies them, lists folders, renames and removes. It runs over an SSH connection, so it logs in and checks the server as SSH does. The ssh module has its client and its server, and copies with scp for servers that have no SFTP.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<script>/* the theme: the one picked last in this tab (its name), else the one in
+   the address (?theme=dark, which links carry, also into new tabs), else
+   the one remembered. Pages opened as files can't share storage in every
+   browser, so the first two carry it there. */
+var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) document.documentElement.dataset.theme = t[1];
+try {
+  if (t) localStorage.setItem("iris-theme", t[1]);
+  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
+  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {
+    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  });
+} catch (e) {}</script>
+</head>
+<body class="wide">
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
+    <nav class="main">
+      <a href="../tour/index.html">Language Tour</a>
+      <a href="../library-tour/index.html" class="on">Library Tour</a>
+      <a href="../std/index.html">Library</a>
+      <a href="../design/index.html">Design</a>
+    </nav>
+    <div class="search" data-root="../">
+      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
+      <kbd>/</kbd>
+      <ul id="site-results" class="results" hidden></ul>
+    </div>
+    <span class="ver">v0.81.0</span>
+    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
+  </div>
+</header>
+<div class="doc">
+  <button class="side-toggle" type="button" data-side="chapters" data-text="Library Tour" data-label="the chapter list" aria-expanded="true">&#8249; Library Tour</button>
+  <aside class="chapters" aria-label="Chapters"><h4>Library Tour</h4><ol><li><a href="01-json.html"><span class="num">1</span>JSON</a></li><li><a href="02-files.html"><span class="num">2</span>Files</a></li><li><a href="03-time.html"><span class="num">3</span>Time</a></li><li><a href="04-logging.html"><span class="num">4</span>Input, output and logging</a></li><li><a href="05-flags.html"><span class="num">5</span>Command-line flags</a></li><li><a href="06-processes.html"><span class="num">6</span>Programs and the environment</a></li><li><a href="07-terminal.html"><span class="num">7</span>Terminal output and input</a></li><li><a href="08-configuration.html"><span class="num">8</span>Configuration files</a></li><li><a href="09-regular-expressions.html"><span class="num">9</span>Regular expressions</a></li><li><a href="10-csv-and-xml.html"><span class="num">10</span>CSV and XML</a></li><li><a href="11-encodings-and-ids.html"><span class="num">11</span>Encodings and ids</a></li><li><a href="12-templates.html"><span class="num">12</span>Templates</a></li><li><a href="13-compression-and-archives.html"><span class="num">13</span>Compression and archives</a></li><li><a href="14-http.html"><span class="num">14</span>HTTP</a></li><li><a href="15-networking.html"><span class="num">15</span>Networking</a></li><li><a href="16-email.html"><span class="num">16</span>Sending email</a></li><li><a href="17-sqlite.html"><span class="num">17</span>SQLite</a></li><li><a href="18-postgres-and-redis.html"><span class="num">18</span>PostgreSQL and Redis</a></li><li><a href="19-random-and-crypto.html"><span class="num">19</span>Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html"><span class="num">20</span>Math and big numbers</a></li><li><a href="21-binary-messages.html"><span class="num">21</span>Binary messages</a></li><li><a href="22-ssh.html"><span class="num">22</span>SSH</a></li><li><a href="23-sftp.html" class="on"><span class="num">23</span>SFTP and scp</a></li></ol></aside>
+  <article class="prose">
+<h1>SFTP and scp</h1>
+<p class="lede">SFTP works on the files of an SSH server: it copies them, lists folders, renames and removes. It runs over an SSH connection, so it logs in and checks the server as <a href="22-ssh.html">SSH</a> does. The <code>ssh</code> module has its client and its server, and copies with scp for servers that have no SFTP.</p>
+<h2 id="copying-files"><a href="#copying-files">Copying files</a></h2>
+<p><code>Client.sftp()</code> starts SFTP on a connection and gives an <code>Sftp</code>. <code>upload(local, remote)</code> copies a file to the server and <code>download(remote, local)</code> copies one back:</p>
+<pre class="code"><code><span class="k">import</span> ssh
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    <span class="k">scoped</span> key := <span class="k">try</span> ssh.<span class="f">loadKey</span>(<span class="s">&quot;/home/ada/.ssh/id_ed25519&quot;</span>)
+    c := <span class="k">try</span> ssh.<span class="f">dial</span>(<span class="s">&quot;files.example.com&quot;</span>, <span class="n">22</span>, ssh.<span class="t">Config</span>{user: <span class="s">&quot;ada&quot;</span>, key: &amp;key})
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    s := <span class="k">try</span> c.<span class="f">sftp</span>()
+    <span class="k">defer</span> s.<span class="f">close</span>()
+
+    <span class="k">try</span> s.<span class="f">upload</span>(<span class="s">&quot;report.pdf&quot;</span>, <span class="s">&quot;reports/2026-10.pdf&quot;</span>)
+    <span class="k">try</span> s.<span class="f">download</span>(<span class="s">&quot;logs/app.log&quot;</span>, <span class="s">&quot;app.log&quot;</span>)
+}</code></pre>
+<p>Paths without a <code>/</code> in front start from the folder SFTP starts in, usually the user's home. <code>realPath(&quot;.&quot;)</code> says which it is. <code>upload</code> keeps the local file's permission bits. Both keep 64 reads or writes of 32 KiB going at once, so a far server isn't waited on for each piece.</p>
+<p><code>readAll(path)</code> gives a whole file as a <code>String</code>, and <code>writeAll(path, data)</code> replaces one, as the <code>fs</code> functions of the same names do (see <a href="02-files.html">Files</a>).</p>
+<h2 id="folders-and-names"><a href="#folders-and-names">Folders and names</a></h2>
+<p><code>list(path)</code> gives the names in a folder, each with an <code>fs.Info</code> as <code>fs.lstat</code> gives it: the size, whether it is a folder or a link, the permission bits, the owner and the times:</p>
+<pre class="code"><code><span class="k">scoped</span> entries := <span class="k">try</span> s.<span class="f">list</span>(<span class="s">&quot;reports&quot;</span>)
+<span class="k">for</span> e <span class="k">in</span> entries {
+    kind := <span class="s">&quot;/&quot;</span> <span class="k">if</span> e.info.isDir <span class="k">else</span> <span class="s">&quot;&quot;</span>
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.name<span class="e">}</span><span class="e">{</span>kind<span class="e">}</span><span class="s"> </span><span class="e">{</span>e.info.size<span class="e">}</span><span class="s"> bytes, changed </span><span class="e">{</span>e.info.modified<span class="e">}</span><span class="s">&quot;</span>)
+    e.name.<span class="f">free</span>()
+}</code></pre>
+<p><code>stat</code> and <code>lstat</code> tell about one path and <code>exists</code> says whether something is there. <code>mkdir</code>, <code>mkdirAll</code>, <code>rmdir</code> and <code>remove</code> make and remove folders and files. <code>rename(from, to)</code> renames, replacing what is at <code>to</code> when the server allows it, as OpenSSH's does. <code>symlink(target, path)</code> and <code>readLink(path)</code> make and read symbolic links, and <code>chmod</code> and <code>setTimes</code> change permissions and times.</p>
+<p>The errors are <code>SftpError</code> codes from what the server said: <code>notFound</code>, <code>permission</code>, <code>failure</code>, <code>unsupported</code>, <code>badMessage</code> and <code>eof</code>. A connection that goes away is <code>SshError.closed</code>.</p>
+<h2 id="open-files"><a href="#open-files">Open files</a></h2>
+<p><code>open(path)</code> opens a file to read, <code>create(path)</code> to write from empty, and <code>openAppend(path)</code> to add to its end. A <code>RemoteFile</code> reads and writes from its <code>offset</code>, which moves on, or at an offset given to <code>readAt</code> and <code>writeAt</code>. <code>info()</code> tells about it, and <code>close</code> closes it:</p>
+<pre class="code"><code>f := <span class="k">try</span> s.<span class="f">open</span>(<span class="s">&quot;logs/app.log&quot;</span>)
+<span class="k">defer</span> f.<span class="f">close</span>()
+info := <span class="k">try</span> f.<span class="f">info</span>()
+<span class="t">u8</span>[<span class="n">4096</span>] tail
+n := <span class="k">try</span> f.<span class="f">readAt</span>(tail[<span class="n">0</span>:<span class="n">4096</span>], info.size - <span class="n">4096</span> <span class="k">if</span> info.size &gt; <span class="n">4096</span> <span class="k">else</span> <span class="n">0</span>)
+io.<span class="f">write</span>(tail[<span class="n">0</span>:n])</code></pre>
+<h2 id="an-sftp-server"><a href="#an-sftp-server">An SFTP server</a></h2>
+<p><code>ssh.serveSftp(session, root)</code> serves SFTP for a session that asked for the <code>sftp</code> subsystem, which is what <code>sftp</code>, <code>scp</code> and file managers ask for. The client sees <code>root</code> as <code>/</code> and its paths stay inside it. Symbolic links the client makes point inside it too. The files are read and written as the user the server runs as. This program runs a server and a client together:</p>
+<pre class="code run"><code><span class="k">import</span> fs, net, ssh
+
+<span class="t">String</span> root
+ssh.<span class="t">Key</span> userKey
+
+<span class="t">bool</span> <span class="f">checkKey</span>(<span class="t">str</span> user, <span class="t">str</span> key) {
+    <span class="k">scoped</span> <span class="t">String</span> want = userKey.<span class="f">fingerprint</span>()
+    <span class="k">scoped</span> <span class="t">String</span> got = ssh.<span class="f">fingerprint</span>(key) <span class="k">catch</span> <span class="s">&quot;&quot;</span>.<span class="f">copy</span>()
+    <span class="k">return</span> got == want
+}
+
+!<span class="t">void</span> <span class="f">handle</span>(ssh.<span class="t">Session</span> *s) {
+    <span class="k">if</span> s.kind == .subsystem &amp;&amp; s.command == <span class="s">&quot;sftp&quot;</span> {
+        <span class="k">try</span> ssh.<span class="f">serveSftp</span>(s, root)
+        <span class="k">return</span>
+    }
+    s.status = <span class="n">1</span>
+}
+
+<span class="t">void</span> <span class="f">serveOn</span>(net.<span class="t">Listener</span> ln, ssh.<span class="t">Server</span> s) {
+    ssh.<span class="f">serveOn</span>(ln, s) <span class="k">catch</span> e { }
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    root = <span class="k">try</span> fs.<span class="f">tempDir</span>(<span class="s">&quot;files&quot;</span>)
+    <span class="k">defer</span> fs.<span class="f">removeAll</span>(root) <span class="k">catch</span> e { }
+    userKey = ssh.<span class="f">generateKey</span>()
+    <span class="k">scoped</span> hostKey := ssh.<span class="f">generateKey</span>()
+    ln := <span class="k">try</span> net.<span class="f">listen</span>(<span class="n">0</span>, <span class="s">&quot;127.0.0.1&quot;</span>)
+    <span class="k">spawn</span> <span class="f">serveOn</span>(ln, ssh.<span class="t">Server</span>{hostKey: hostKey, publicKey: checkKey, handle: handle})
+
+    <span class="k">scoped</span> <span class="t">String</span> known = hostKey.<span class="f">publicText</span>()
+    c := <span class="k">try</span> ssh.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, ln.port, ssh.<span class="t">Config</span>{user: <span class="s">&quot;ada&quot;</span>, key: &amp;userKey, hostKey: known})
+    <span class="k">defer</span> c.<span class="f">close</span>()
+    s := <span class="k">try</span> c.<span class="f">sftp</span>()
+    <span class="k">defer</span> s.<span class="f">close</span>()
+    <span class="k">try</span> s.<span class="f">mkdir</span>(<span class="s">&quot;notes&quot;</span>)
+    <span class="k">try</span> s.<span class="f">writeAll</span>(<span class="s">&quot;notes/todo.txt&quot;</span>, <span class="s">&quot;buy cables</span><span class="e">\n</span><span class="s">&quot;</span>)
+    <span class="k">try</span> s.<span class="f">rename</span>(<span class="s">&quot;notes/todo.txt&quot;</span>, <span class="s">&quot;notes/done.txt&quot;</span>)
+    <span class="k">scoped</span> entries := <span class="k">try</span> s.<span class="f">list</span>(<span class="s">&quot;notes&quot;</span>)
+    <span class="k">for</span> e <span class="k">in</span> entries {
+        <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>e.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>e.info.size<span class="e">}</span><span class="s"> bytes&quot;</span>)
+        e.name.<span class="f">free</span>()
+    }
+    <span class="k">scoped</span> <span class="t">String</span> text = <span class="k">try</span> s.<span class="f">readAll</span>(<span class="s">&quot;/notes/done.txt&quot;</span>)
+    <span class="f">print</span>(text.<span class="f">trim</span>())
+}</code></pre>
+<pre class="out"><code>done.txt: 11 bytes
+buy cables</code></pre>
+<p>To serve each user their own files, give each a root of their own, such as their home, and run the server as a user that may read them.</p>
+<h2 id="scp"><a href="#scp">scp</a></h2>
+<p>Some servers have no SFTP, only the <code>scp</code> program. <code>Client.scpUpload(local, remote)</code> and <code>Client.scpDownload(remote, local)</code> copy one file through it, keeping its permission bits:</p>
+<pre class="code"><code><span class="k">try</span> c.<span class="f">scpUpload</span>(<span class="s">&quot;backup.tar.gz&quot;</span>, <span class="s">&quot;/var/backups/&quot;</span>)
+<span class="k">try</span> c.<span class="f">scpDownload</span>(<span class="s">&quot;/etc/nginx/nginx.conf&quot;</span>, <span class="s">&quot;nginx.conf&quot;</span>)</code></pre>
+<p><code>remote</code> may be a folder for <code>scpUpload</code>. When scp on the server refuses, the error is <code>SshError.refused</code> with its message.</p>
+    <nav class="pager"><a class="prev" href="22-ssh.html"><span>Previous</span>SSH</a></nav>
+  </article>
+  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#copying-files">Copying files</a></li><li><a href="#folders-and-names">Folders and names</a></li><li><a href="#open-files">Open files</a></li><li><a href="#an-sftp-server">An SFTP server</a></li><li><a href="#scp">scp</a></li></ul></aside>
+</div>
+<footer>
+  <div class="bar">
+    <span>Iris v0.81.0</span>
+    <a href="../tour/index.html">Language Tour</a>
+    <a href="../library-tour/index.html">Library Tour</a>
+    <a href="../std/index.html">Library</a>
+  </div>
+</footer>
+<script src="../assets/search.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

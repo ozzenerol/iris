@@ -42,6 +42,7 @@ pub !Agent agent(str path = "") {
     return Agent{conn: conn}
 }
 
+// Ends the connection to the agent.
 pub void Agent.close() => self.conn.close()
 
 // One message to the agent and its answer: its type, then the rest.
@@ -351,8 +352,10 @@ String agentAnswer(Keyring *ring, str m) {
         if !r.bad && at >= 0 {
             ks := ring.keys.items()
             k := &ks[at]
-            alg := "rsa-sha2-512" if k.kind == .rsa && flags & AGENT_RSA_SHA2_512 != 0 else
-                "rsa-sha2-256" if k.kind == .rsa else k.algorithm()
+            str alg = k.algorithm()
+            if k.kind == .rsa {
+                alg = "rsa-sha2-512" if flags & AGENT_RSA_SHA2_512 != 0 else "rsa-sha2-256"
+            }
             sig := k.sign(data, alg) catch e {
                 putByte(&out, AGENT_FAILURE)
                 return out

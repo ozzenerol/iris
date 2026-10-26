@@ -570,6 +570,7 @@ pub !RemoteFile Sftp.openAppend(str path, i64 mode = 0o644) {
     return RemoteFile{sftp: self, handle: h}
 }
 
+// Closes the file on the server.
 pub void RemoteFile.close() {
     self.sftp.closeHandle(self.handle)
     self.handle.free()

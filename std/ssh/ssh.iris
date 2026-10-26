@@ -1013,6 +1013,7 @@ pub struct Certificate {
     String ca
 }
 
+// Frees what the certificate holds.
 pub void Certificate.free() {
     self.keyId.free()
     self.principals.freeEach()
@@ -1023,9 +1024,10 @@ pub void Certificate.free() {
     self.ca.free()
 }
 
-// The certificate's key and the authority's key, as public key lines.
+// The key the certificate is for, as a public key line.
 pub String Certificate.keyText() => publicTextOf(self.key, "")
 
+// The authority's key, as a public key line.
 pub String Certificate.caText() => publicTextOf(self.ca, "")
 
 // Whether the certificate is valid at the time now, in seconds since 1970.

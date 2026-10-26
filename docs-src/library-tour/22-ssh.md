@@ -33,9 +33,9 @@ A status other than 0 is no error: the command ran and ended that way. The error
 
 ## Logging in
 
-`Config.key` is an Ed25519 key, the kind `ssh-keygen -t ed25519` makes. `loadKey` reads its private key file. A key with a passphrase takes it too, as in `loadKey(path, passphrase)`. `Config.password` logs in with a password instead. With both, the key is tried first.
+`Config.key` is the key to log in with. `loadKey` reads a private key file as `ssh-keygen` writes it: Ed25519, ECDSA on P-256, P-384 or P-521, or RSA, and the older PEM files of the last two. A key with a passphrase takes it too, as in `loadKey(path, passphrase)`. `Config.password` logs in with a password instead. With both, the key is tried first.
 
-`ssh.generateKey(comment)` makes a new key. `privateText()` gives it in the format of `~/.ssh/id_ed25519`, and `privateText(passphrase)` encrypts it with the passphrase as `ssh-keygen` does. `publicText()` gives the line that goes in a server's `~/.ssh/authorized_keys`:
+`ssh.generateKey(comment)` makes a new Ed25519 key. `ssh.generateKeyOf(.ecdsaP256, comment)` makes another kind (`ecdsaP384`, `ecdsaP521`, or `rsa` with a size in bits, 3072 unless given). `privateText()` gives it in the format of `~/.ssh/id_ed25519`, and `privateText(passphrase)` encrypts it with the passphrase as `ssh-keygen` does. `publicText()` gives the line that goes in a server's `~/.ssh/authorized_keys`:
 
 ```iris run
 import ssh, str
@@ -86,7 +86,7 @@ for {
 print("ended with {ch.wait()}")
 ```
 
-`shell()` starts the user's shell on a terminal, as `ssh` does when it logs in. `resize(rows, cols)` gives the terminal a new size, and `signal("INT")` sends the command a signal. `subsystem("sftp")` starts the server's sftp subsystem.
+`shell()` starts the user's shell on a terminal, as `ssh` does when it logs in. `resize(rows, cols)` gives the terminal a new size, and `signal("INT")` sends the command a signal. `subsystem(name)` starts one of the server's subsystems. Files are copied with `sftp()` or `scpUpload` (see [SFTP and scp](23-sftp.html)).
 
 A connection carries many channels at once, each with its own flow, so a slow reader of one doesn't hold up the others. Several tasks can each run their own command on one `Client`. A `Client` and its channels stay on the thread that made them.
 
@@ -117,6 +117,55 @@ void tunnel(ssh.Client *c, net.Conn local) {
     }
 }
 ```
+
+## A port on the server
+
+`listen(host, port)` asks the server to listen on a port for the client, as `ssh -R` does. Each connection made to it comes as a `Channel` from `accept`. Port 0 lets the server choose, and `port` says which it took. `close` asks it to stop:
+
+```iris
+rl := try c.listen("localhost", 8080)
+defer rl.close()
+for {
+    ch := try rl.accept()
+    spawn serveVisitor(ch)
+}
+```
+
+## Agents
+
+An agent holds private keys and signs with them, so that programs that log in never see the keys. `ssh.agent()` connects to the one in `SSH_AUTH_SOCK`, as `ssh-agent` sets it, and `Config.agent` logs in with its keys after `Config.key`:
+
+```iris
+a := try ssh.agent()
+defer a.close()
+c := try ssh.dial("db1.example.com", 22, ssh.Config{user: "ada", agent: &a})
+```
+
+`keys()` lists what the agent holds as public key lines, `add(&key)` gives it a key as `ssh-add` does, and `remove` and `removeAll` take keys out. `Config.forwardAgent` lets commands on the server use the agent, as `ssh -A` does. `ssh.serveAgent(listener)` is an agent itself, on a `net.listenUnix` socket, and `ssh-add` and `ssh` work with it.
+
+## Certificates
+
+A certificate is a key signed by a certificate authority, for some users or host names and for some time. A server that trusts the authority takes every user it signed, with no `authorized_keys` to keep, and a client that trusts it takes every host it signed. `signCertificate` signs one with the authority's key, as `ssh-keygen -s` does, and `setCertificate` gives a key its certificate:
+
+```iris run
+import ssh
+
+void main() {
+    scoped ca := ssh.generateKey("ca")
+    scoped user := ssh.generateKey("ada@laptop")
+    scoped String userLine = user.publicText()
+    scoped String line = ca.signCertificate(userLine, ssh.CertOptions{keyId: "ada", principals: ["ada", "deploy"],
+        validBefore: 2000000000}) catch "".copy()
+    scoped cert := ssh.parseCertificate(line) catch ssh.Certificate{}
+    print("{cert.keyId} for {cert.principals.len} users, host {cert.host}, valid now {cert.validAt(1800000000)}")
+}
+```
+
+```output
+ada for 2 users, host false, valid now true
+```
+
+`loadKey` also reads the certificate `ssh-keygen -s` writes next to the key, in `<path>-cert.pub`, and `dial` shows it before the plain key. On the server, `Server.userCAs` holds the authorities' public key lines. A certificate logs in as one of its principals, and its `force-command` and `source-address` options are kept. On the client, a `@cert-authority` line in `known_hosts` trusts the host certificates an authority signed. A server shows its certificate when its `hostKey` has one.
 
 ## A server
 
@@ -211,8 +260,8 @@ bool checkKey(str user, str key) {
 }
 ```
 
-`ssh -p 2222 ada@host`, `scp -P 2222` and `sftp -P 2222` all work with it. `Server.forward` takes a user, a host and a port and says whether that user may reach it through the server with `ssh -L`. While it is `null`, forwarding is refused.
+`ssh -p 2222 ada@host`, `scp -P 2222` and `sftp -P 2222` all work with it. `ssh.serveSftp(s, root)` serves SFTP without OpenSSH's program (see [SFTP and scp](23-sftp.html)). `Server.forward` takes a user, a host and a port and says whether that user may reach it through the server with `ssh -L`. While it is `null`, forwarding is refused. `Server.remoteForward` says the same for ports the server listens on for a user with `ssh -R`. `Server.agentForwarding` lets sessions use the client's agent with `ssh -A`: `Session.agentSocket` is its socket, and programs that `run` starts find it in `SSH_AUTH_SOCK`.
 
 ## What it speaks
 
-Connections use the mlkem768x25519-sha256 key exchange, as OpenSSH does since 10.0. It joins ML-KEM-768 with X25519, so that what is recorded now can't be read later by a quantum computer. With a side that doesn't have it, they use curve25519-sha256. The ciphers are AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305. Both sides make new keys after `Config.rekeyAfter` bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Users log in with Ed25519 keys, and an Iris server's own key is Ed25519 too.
+Connections use the mlkem768x25519-sha256 key exchange, as OpenSSH does since 10.0. It joins ML-KEM-768 with X25519, so that what is recorded now can't be read later by a quantum computer. With a side that doesn't have it, they use curve25519-sha256. The ciphers are AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305. Both sides make new keys after `Config.rekeyAfter` bytes, 1 GiB unless set, and whenever the other side asks. The key exchange is the strict one, which OpenSSH added against the Terrapin attack. Keys are Ed25519, ECDSA on P-256, P-384 and P-521, and RSA with SHA-256 or SHA-512, for users, servers and certificates.
