@@ -1,0 +1,31 @@
+import crypto, compress
+
+i64 next(i64 *s) {
+    *s = (*s * 1103515245 + 12345) % 2147483648
+    return *s
+}
+
+str[10] WORDS = ["alpha ", "beta ", "gamma ", "delta ", "error ", "ok ", "GET /index.html ", "200 ", "404 ", "\n"]
+
+// A 64 KiB block sealed with AES-256-GCM and opened again 2000 times,
+// each round with its own key and nonce.
+!void main() {
+    i64 seed = 1
+    String chunk
+    defer chunk.free()
+    for chunk.len < 65536 {
+        chunk.append(WORDS[next(&seed) % 10])
+    }
+    chunk.truncate(65536)
+    u32 c = 0
+    for i in 0..2000 {
+        at := i % 997
+        key := chunk[at:at + 32]
+        nonce := chunk[at + 32:at + 44]
+        scoped String sealed = crypto.aesSeal(key, nonce, chunk)
+        c = compress.crc32(sealed[sealed.len - 16:], c)
+        scoped String back = try crypto.aesUnseal(key, nonce, sealed)
+        c = compress.crc32(back[i:i + 1], c)
+    }
+    print("{c}")
+}

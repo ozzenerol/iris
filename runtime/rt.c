@@ -13244,6 +13244,9 @@ typedef struct {
     int rounds;
     int hw;
     uint64_t h1, h0;            /* GHASH's H, high and low 64 bits */
+    /* with the CPU's carry-less multiply: H^(i+1) as low, high 64 bits
+       and the two xored, so 8 blocks share one reduction */
+    uint64_t hp[8][2], hk[8][2];
 } AesGcm;
 
 static int aesHw = -1;
@@ -13456,18 +13459,10 @@ static void store64be(uint8_t *p, uint64_t v) {
     }
 }
 
-/* y = (y ^ block) * H in GF(2^128), as GCM defines it */
-static void ghashBlock(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t block[16]) {
-    uint64_t x1 = *y1 ^ load64be(block), x0 = *y0 ^ load64be(block + 8);
-    uint64_t z0h, z0l, z1h, z1l, z2h, z2l;
-    clmul(a, x0, a->h0, &z0h, &z0l);
-    clmul(a, x1, a->h1, &z1h, &z1l);
-    clmul(a, x0 ^ x1, a->h0 ^ a->h1, &z2h, &z2l);
-    z2h ^= z0h ^ z1h;
-    z2l ^= z0l ^ z1l;
-    uint64_t v0 = z0l, v1 = z0h ^ z2l, v2 = z1l ^ z2h, v3 = z1h;
-    /* the bits are reflected: shift left once, then reduce by
-       x^128 + x^7 + x^2 + x + 1 */
+/* The 256-bit product v3:v2:v1:v0 of two GCM field elements reduced to
+   y1:y0. The bits are reflected: shift left once, then reduce by
+   x^128 + x^7 + x^2 + x + 1. */
+static void ghashReduce(uint64_t v3, uint64_t v2, uint64_t v1, uint64_t v0, uint64_t *y1, uint64_t *y0) {
     v3 = (v3 << 1) | (v2 >> 63);
     v2 = (v2 << 1) | (v1 >> 63);
     v1 = (v1 << 1) | (v0 >> 63);
@@ -13480,7 +13475,74 @@ static void ghashBlock(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_
     *y0 = v2;
 }
 
+/* y = x * h in GF(2^128), as GCM defines it */
+static void ghashMul(const AesGcm *a, uint64_t x1, uint64_t x0, uint64_t h1, uint64_t h0, uint64_t *y1,
+                     uint64_t *y0) {
+    uint64_t z0h, z0l, z1h, z1l, z2h, z2l;
+    clmul(a, x0, h0, &z0h, &z0l);
+    clmul(a, x1, h1, &z1h, &z1l);
+    clmul(a, x0 ^ x1, h0 ^ h1, &z2h, &z2l);
+    z2h ^= z0h ^ z1h;
+    z2l ^= z0l ^ z1l;
+    ghashReduce(z1h, z1l ^ z2h, z0h ^ z2l, z0l, y1, y0);
+}
+
+/* y = (y ^ block) * H */
+static void ghashBlock(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t block[16]) {
+    ghashMul(a, *y1 ^ load64be(block), *y0 ^ load64be(block + 8), a->h1, a->h0, y1, y0);
+}
+
+#ifdef AES_HW_TARGET
+/* 8 blocks into y at once: y = (((y ^ b0) * H ^ b1) * H ...) * H is
+   (y ^ b0) * H^8 ^ b1 * H^7 ^ ... ^ b7 * H, so the products are added
+   up unreduced and reduced once. */
+#if defined(__x86_64__)
+__attribute__((target("aes,pclmul,ssse3"))) static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0,
+                                                                  const uint8_t *p) {
+    const __m128i rev = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    __m128i lo = _mm_setzero_si128(), hi = lo, mid = lo;
+    for (int i = 0; i < 8; i++) {
+        __m128i x = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16 * i)), rev);
+        if (i == 0) x = _mm_xor_si128(x, _mm_set_epi64x((long long)*y1, (long long)*y0));
+        __m128i h = _mm_loadu_si128((const __m128i *)a->hp[7 - i]);
+        __m128i hk = _mm_loadu_si128((const __m128i *)a->hk[7 - i]);
+        lo = _mm_xor_si128(lo, _mm_clmulepi64_si128(x, h, 0x00));
+        hi = _mm_xor_si128(hi, _mm_clmulepi64_si128(x, h, 0x11));
+        __m128i xk = _mm_xor_si128(x, _mm_shuffle_epi32(x, 0x4e));
+        mid = _mm_xor_si128(mid, _mm_clmulepi64_si128(xk, hk, 0x00));
+    }
+    mid = _mm_xor_si128(mid, _mm_xor_si128(lo, hi));
+    uint64_t l0 = (uint64_t)_mm_cvtsi128_si64(lo), l1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(lo, lo));
+    uint64_t h0 = (uint64_t)_mm_cvtsi128_si64(hi), h1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(hi, hi));
+    uint64_t m0 = (uint64_t)_mm_cvtsi128_si64(mid), m1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(mid, mid));
+    ghashReduce(h1, h0 ^ m1, l1 ^ m0, l0, y1, y0);
+}
+#else
+AES_HW_TARGET static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p) {
+    poly128_t lo = 0, hi = 0, mid = 0;
+    for (int i = 0; i < 8; i++) {
+        uint64x2_t x = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 16 * i)));
+        x = vextq_u64(x, x, 1);
+        if (i == 0) x = veorq_u64(x, vcombine_u64(vcreate_u64(*y0), vcreate_u64(*y1)));
+        uint64x2_t h = vld1q_u64(a->hp[7 - i]);
+        lo ^= vmull_p64((poly64_t)vgetq_lane_u64(x, 0), (poly64_t)vgetq_lane_u64(h, 0));
+        hi ^= vmull_high_p64(vreinterpretq_p64_u64(x), vreinterpretq_p64_u64(h));
+        mid ^= vmull_p64((poly64_t)(vgetq_lane_u64(x, 0) ^ vgetq_lane_u64(x, 1)), (poly64_t)a->hk[7 - i][0]);
+    }
+    mid ^= lo ^ hi;
+    uint64_t l0 = (uint64_t)lo, l1 = (uint64_t)(lo >> 64), h0 = (uint64_t)hi, h1 = (uint64_t)(hi >> 64);
+    uint64_t m0 = (uint64_t)mid, m1 = (uint64_t)(mid >> 64);
+    ghashReduce(h1, h0 ^ m1, l1 ^ m0, l0, y1, y0);
+}
+#endif
+#endif
+
 static void ghashPadded(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p, size_t n) {
+#ifdef AES_HW_TARGET
+    if (a->hw) {
+        for (; n >= 128; p += 128, n -= 128) ghash8Hw(a, y1, y0, p);
+    }
+#endif
     while (n >= 16) {
         ghashBlock(a, y1, y0, p);
         p += 16;
@@ -13500,6 +13562,15 @@ static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
     aesBlock(a, zero, h);
     a->h1 = load64be(h);
     a->h0 = load64be(h + 8);
+    if (a->hw) {
+        uint64_t p1 = a->h1, p0 = a->h0;
+        for (int i = 0; i < 8; i++) {
+            if (i > 0) ghashMul(a, p1, p0, a->h1, a->h0, &p1, &p0);
+            a->hp[i][0] = p0;
+            a->hp[i][1] = p1;
+            a->hk[i][0] = a->hk[i][1] = p0 ^ p1;
+        }
+    }
 }
 
 /* in xored with AES of the counter block ctr, ctr + 1, ...: counted over
