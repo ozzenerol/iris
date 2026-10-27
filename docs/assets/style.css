@@ -131,60 +131,75 @@ th { font-weight: 600; }
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
-.chapters, .onpage { position: sticky; top: calc(var(--bar-h) + 24px); align-self: start; max-height: calc(100vh - var(--bar-h) - 48px); overflow-y: auto; font-size: 14px; }
-.chapters h4, .onpage h4 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-.chapters ol, .onpage ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.chapters a { display: flex; gap: 8px; color: var(--fg); padding: 2px 0; }
-.chapters a.on { color: var(--accent); font-weight: 600; }
-.chapters .num, .toc .num { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 2ch; text-align: right; padding-top: 2px; }
-.onpage a { color: var(--muted); display: block; padding: 2px 0; }
-.onpage a.on { color: var(--fg); }
-.pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 56px; border-top: 1px solid var(--line); padding-top: 20px; }
-.pager a { display: grid; color: var(--fg); }
-.pager a span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.pager .next { text-align: right; margin-left: auto; }
-.toc { list-style: none; padding: 0; margin: 32px 0 0; border-top: 1px solid var(--line); }
+.chapters, .onpage { position: sticky; top: calc(var(--bar-h) + 24px); align-self: start; max-height: calc(100vh - var(--bar-h) - 48px); overflow-y: auto; font-size: 14px; overscroll-behavior: contain; }
+.side-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.side-head a { color: var(--fg); }
+.chapters .side-head, .onpage .side-head { position: sticky; top: 0; z-index: 1; background: var(--bg); padding-bottom: 6px; margin-bottom: 2px; }
+.std-left .side-head a { display: inline; padding: 0; font-family: var(--sans); font-size: 12px; background: none; }
+.chapters h5, .chap-menu h5 { margin: 18px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.chapters h5:first-child, .chap-menu h5:first-child { margin-top: 4px; }
+.chapters ol, .onpage ul, .chap-menu ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.chapters a, .chap-menu a { display: flex; gap: 8px; color: var(--fg); padding: 3px 8px; border-radius: 4px; }
+.chapters a:hover, .chap-menu a:hover { background: var(--code-bg); text-decoration: none; }
+.chapters a.on, .chap-menu a.on { color: var(--accent); font-weight: 600; background: var(--code-bg); }
+.chapters .num, .chap-menu .num, .toc .num { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 2ch; text-align: right; padding-top: 2px; }
+.onpage ul { border-left: 1px solid var(--line); }
+.onpage a { color: var(--muted); display: block; padding: 3px 0 3px 12px; margin-left: -1px; border-left: 2px solid transparent; }
+.onpage a.on { color: var(--fg); border-left-color: var(--accent); }
+
+/* where the chapter is: the tour, its part, and how far in */
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+.crumbs .pos { margin-left: auto; font-size: 13px; }
+.prose .crumbs + * , .prose .chap-menu + * { margin-top: 0; }
+.chap-menu { display: none; }
+
+.pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 56px; }
+.pager a { display: grid; gap: 2px; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; font-weight: 600; }
+.pager a:hover { border-color: var(--accent); text-decoration: none; }
+.pager a span { font-size: 12px; font-weight: 400; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.pager .next { text-align: right; grid-column: 2; }
+
+.narrow h2 { font-size: 20px; margin: 40px 0 0; }
+.toc { list-style: none; padding: 0; margin: 12px 0 0; border-top: 1px solid var(--line); }
+.narrow > .lede + .toc, .narrow > .start + .toc { margin-top: 32px; }
 .toc li { border-bottom: 1px solid var(--line); }
 .toc a { display: grid; grid-template-columns: 2.5ch 12rem 1fr; gap: 16px; padding-block: 12px; color: var(--fg); align-items: baseline; }
+.toc.plain a { grid-template-columns: 12rem 1fr; }
 .toc a:hover { text-decoration: none; }
 .toc a:hover b { color: var(--accent); }
 .toc .desc { color: var(--muted); font-size: 15px; }
+.start { margin: 24px 0 0; }
+.button { display: inline-block; background: var(--accent); color: var(--bg); font-weight: 600; padding: 8px 16px; border-radius: 6px; }
+.button:hover { text-decoration: none; opacity: 0.9; }
 
 /* ---- closable sidebars ----
-   Each toggle is a sibling of the aside it controls, not a child of it, and it
-   is always anchored to the same spot (the left or right edge of the grid, just
-   under the top bar) whether the aside is open or closed. That way closing a
-   sidebar can never also hide the control that reopens it. */
-.doc, .std { position: relative; }
-/* pinned so that display:none on a closed sidebar doesn't let the main
-   content get auto-placed into its column instead of staying in the middle */
+   A sidebar's heading has a button that hides it, and a button on the edge
+   of the page shows it again. Both carry data-side; the open/closed class
+   lives on <html>, set in <head> so a page doesn't jump while it loads. */
 .doc > .chapters { grid-column: 1; }
 .doc > .prose { grid-column: 2; }
 .doc > .onpage { grid-column: 3; }
 .std > .std-left { grid-column: 1; }
 .std > .std-main { grid-column: 2; }
 .std > .std-right { grid-column: 3; }
-.side-toggle {
-  position: absolute; top: 0; z-index: 2;
-  display: flex; align-items: center; gap: 8px; min-height: 40px;
-  font: inherit; font-size: 14px; font-weight: 600; line-height: 1; white-space: nowrap;
-  background: var(--bg); color: var(--muted);
-  border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 0;
-  padding: 11px 16px; cursor: pointer;
+.side-btn {
+  font: inherit; font-size: 16px; line-height: 1; cursor: pointer; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  width: 26px; height: 26px; display: inline-grid; place-items: center; padding: 0; flex: none;
 }
-.side-toggle.side-toggle-r { left: auto; right: 0; border-radius: 0 0 0 10px; }
-.side-toggle:not(.side-toggle-r) { left: 0; }
-.side-toggle:hover, .side-toggle:focus-visible { color: var(--fg); background: var(--code-bg); border-color: var(--accent); }
+.side-btn:hover, .side-btn:focus-visible { color: var(--fg); border-color: var(--accent); }
+.side-show { display: none; position: fixed; top: calc(var(--bar-h) + 24px + env(safe-area-inset-top, 0px)); z-index: 2; height: 40px; }
+.side-show-l { left: 0; border-left: 0; border-radius: 0 6px 6px 0; }
+.side-show-r { right: 0; border-right: 0; border-radius: 6px 0 0 6px; }
 html.closed-chapters .doc { grid-template-columns: 0 minmax(0, 760px) 200px; }
 html.closed-onpage .doc { grid-template-columns: 220px minmax(0, 760px) 0; }
 html.closed-chapters.closed-onpage .doc { grid-template-columns: 0 minmax(0, 760px) 0; }
 html.closed-chapters .chapters, html.closed-onpage .onpage { display: none; }
-/* on reading pages the buttons stay under the top bar while the page
-   scrolls, so a sidebar can be opened or closed from anywhere; the
-   sidebars sit below them */
-.doc > .side-toggle { position: fixed; top: calc(var(--bar-h) + env(safe-area-inset-top, 0px)); }
-.doc > .chapters, .doc > .onpage { top: calc(var(--bar-h) + 64px); max-height: calc(100vh - var(--bar-h) - 88px); }
-.doc > .side-toggle[aria-expanded="false"] { padding-inline: 14px; }
+html.closed-chapters .side-show[data-side="chapters"], html.closed-onpage .side-show[data-side="onpage"],
+html.closed-std-left .side-show[data-side="std-left"], html.closed-std-right .side-show[data-side="std-right"] { display: grid; }
 
 /* ---- home ---- */
 .home {
@@ -209,26 +224,38 @@ html.closed-chapters .chapters, html.closed-onpage .onpage { display: none; }
 .paths a:hover b { color: var(--accent); }
 .paths span { color: var(--muted); }
 
+.paths-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
+.paths-cards a { display: grid; gap: 4px; align-content: start; border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; color: var(--fg); }
+.paths-cards a:hover { border-color: var(--accent); text-decoration: none; }
+.paths-cards b { color: var(--accent); }
+.paths-cards span { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
 /* ---- library: three panes ---- */
 .std {
   display: grid; grid-template-columns: 260px minmax(0, 1fr) 240px;
   height: calc(100vh - var(--bar-h) - 1px);
 }
 body.wide footer { margin-top: 0; }
-.std-left, .std-right { border-right: 1px solid var(--line); overflow-y: auto; font-size: 14px; padding: 48px 16px 16px; }
+.std-left, .std-right { border-right: 1px solid var(--line); overflow-y: auto; font-size: 14px; padding: 24px 16px 16px; }
 .std-right { border-right: 0; border-left: 1px solid var(--line); }
 .std-left input {
   width: 100%; font: inherit; font-size: 14px; padding: 6px 10px; border: 1px solid var(--line);
   border-radius: 4px; background: var(--bg); color: var(--fg); margin-bottom: 12px;
 }
-.std .side-toggle { border-top: 1px solid var(--line); border-radius: 0 0 8px 0; }
-.std .side-toggle.side-toggle-r { border-radius: 0 0 0 8px; }
+.std-left .side-head, .std-right .side-head { margin-bottom: 12px; }
+/* the filter stays at the top of the module list while it scrolls */
+.std-top { position: sticky; top: -24px; z-index: 1; background: var(--bg); margin: -24px -16px 0; padding: 24px 16px 4px; }
+.std-right .side-head { position: sticky; top: -24px; z-index: 1; background: var(--bg); margin: -24px -16px 12px; padding: 24px 16px 6px; }
+/* the library's front page has no names on the right */
+.std:has(#std-right:empty) { grid-template-columns: 260px minmax(0, 1fr) 0; }
+.std:has(#std-right:empty) .std-right, .std:has(#std-right:empty) .side-show-r { display: none !important; }
+html.closed-std-left .std:has(#std-right:empty) { grid-template-columns: 0 minmax(0, 1fr) 0; }
 html.closed-std-left .std { grid-template-columns: 0 minmax(0, 1fr) 240px; }
 html.closed-std-right .std { grid-template-columns: 260px minmax(0, 1fr) 0; }
 html.closed-std-left.closed-std-right .std { grid-template-columns: 0 minmax(0, 1fr) 0; }
 html.closed-std-left .std-left, html.closed-std-right .std-right { display: none; }
 .std-left h4, .std-right h4 { margin: 16px 0 4px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-.std-left h4:first-child, .std-right h4:first-child { margin-top: 0; }
+.std-left nav h4:first-child, #std-right h4:first-child { margin-top: 0; }
 .std-left ul, .std-right ul { list-style: none; margin: 0; padding: 0; }
 .std-left a, .std-right a { display: block; padding: 2px 6px; border-radius: 3px; color: var(--fg); font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
 .std-left a:hover, .std-right a:hover { background: var(--code-bg); text-decoration: none; }
@@ -257,24 +284,34 @@ html.closed-std-left .std-left, html.closed-std-right .std-right { display: none
 .std-toggle { display: none; }
 
 @media (max-width: 1100px) {
-  .doc { grid-template-columns: 200px minmax(0, 1fr); }
-  .onpage, .side-toggle.side-toggle-r { display: none; }
+  .doc { grid-template-columns: 220px minmax(0, 1fr); }
+  .onpage, .side-show-r { display: none !important; }
+  html.closed-chapters .doc { grid-template-columns: 0 minmax(0, 1fr); }
   .std { grid-template-columns: 240px minmax(0, 1fr); }
   .std-right { display: none; }
-  html.closed-chapters .doc { grid-template-columns: 0 minmax(0, 1fr); }
   html.closed-std-left .std { grid-template-columns: 0 minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
-  .doc { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-block: 24px; }
-  .doc > .chapters, .doc > .prose, .doc > .onpage { grid-column: auto; }
-  .chapters { position: relative; top: 0; max-height: none; }
-  .doc > .side-toggle { position: absolute; top: 0; }
-  .chapters ol { display: flex; flex-wrap: wrap; gap: 4px 14px; }
-  .chapters .num { display: none; }
-  html.closed-chapters .doc { grid-template-columns: minmax(0, 1fr); }
+  header.top { position: static; }
+  header.top .bar { gap: 8px 16px; }
+  nav.main { order: 4; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; gap: 16px; font-size: 15px; scrollbar-width: none; }
+  nav.main::-webkit-scrollbar { display: none; }
+  nav.main a { white-space: nowrap; }
+  .ver { margin-left: auto; }
   .search { margin-left: 0; order: 5; flex: 1 1 100%; }
   .search input { width: 100%; }
-  .paths a, .toc a { grid-template-columns: 1fr; gap: 0; }
+  html { scroll-padding-top: 16px; }
+  .doc, html.closed-chapters .doc { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 20px; }
+  .doc > .prose { grid-column: 1; }
+  .doc > .chapters, .side-show, .side-hide { display: none !important; }
+  .chap-menu { display: block; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 20px; font-size: 15px; }
+  .chap-menu summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
+  .chap-menu[open] summary { border-bottom: 1px solid var(--line); }
+  .chap-menu nav { padding: 4px 8px 12px; max-height: 60vh; overflow-y: auto; }
+  .pager { grid-template-columns: 1fr; }
+  .pager .next { grid-column: 1; }
+  .paths-cards { grid-template-columns: 1fr; }
+  .paths a, .toc a, .toc.plain a { grid-template-columns: 1fr; gap: 0; }
   .toc .num { display: none; }
   .std { display: block; height: auto; }
   .std-left { border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }

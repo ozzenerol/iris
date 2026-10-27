@@ -43,9 +43,14 @@ try {
   </div>
 </header>
 <div class="doc">
-  <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html" class="on"><span class="num">8</span>Working on Iris</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters">
+    <div class="side-head"><a href="index.html">Design</a><button class="side-btn side-hide" type="button" data-side="chapters" aria-expanded="true" aria-label="Hide the chapter list" title="Hide the chapter list">&#8249;</button></div>
+    <nav><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html" class="on" aria-current="page"><span class="num">8</span>Working on Iris</a></li></ol></nav>
+  </aside>
+  <button class="side-btn side-show side-show-l" type="button" data-side="chapters" aria-expanded="true" aria-label="Show the chapter list" title="Show the chapter list">&#8250;</button>
   <article class="prose">
+<div class="crumbs"><a href="index.html">Design</a><span aria-hidden="true">/</span><span>The compiler</span><span class="pos">8 of 8</span></div>
+<details class="chap-menu"><summary>All chapters</summary><nav aria-label="Chapters"><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html" class="on" aria-current="page"><span class="num">8</span>Working on Iris</a></li></ol></nav></details>
 <h1>Working on Iris</h1>
 <p class="lede">Where to start reading for a change, and how changes are built, tested and released. This applies to people and to agents.</p>
 <h2 id="where-to-start"><a href="#where-to-start">Where to start</a></h2>
@@ -86,10 +91,13 @@ make test-debug   # all the tests with iris-debug</code></pre>
 <h2 id="writing-the-docs"><a href="#writing-the-docs">Writing the docs</a></h2>
 <p>The docs are Markdown files in <code>docs-src/</code>. <code>python3 tools/build_docs.py</code> builds the HTML into <code>docs/</code> and fails on a broken link. Commit both.</p>
 <p>Write plainly. Say what a thing does, in short sentences. Don't sell it, don't compare it with other languages, and give every feature an example.</p>
-    <nav class="pager"><a class="prev" href="07-decisions.html"><span>Previous</span>Decisions</a></nav>
+    <nav class="pager" aria-label="Previous and next chapter"><a class="prev" href="07-decisions.html"><span>&#8249; Previous</span>Decisions</a></nav>
   </article>
-  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#where-to-start">Where to start</a></li><li><a href="#adding-a-feature">Adding a feature</a></li><li><a href="#building">Building</a></li><li><a href="#tests">Tests</a></li><li><a href="#platforms">Platforms</a></li><li><a href="#git">Git</a></li><li><a href="#releases">Releases</a></li><li><a href="#writing-the-docs">Writing the docs</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page">
+    <div class="side-head"><span>On this page</span><button class="side-btn side-hide" type="button" data-side="onpage" aria-expanded="true" aria-label="Hide on this page" title="Hide on this page">&#8250;</button></div>
+    <ul><li><a href="#where-to-start">Where to start</a></li><li><a href="#adding-a-feature">Adding a feature</a></li><li><a href="#building">Building</a></li><li><a href="#tests">Tests</a></li><li><a href="#platforms">Platforms</a></li><li><a href="#git">Git</a></li><li><a href="#releases">Releases</a></li><li><a href="#writing-the-docs">Writing the docs</a></li></ul>
+  </aside>
+  <button class="side-btn side-show side-show-r" type="button" data-side="onpage" aria-expanded="true" aria-label="Show on this page" title="Show on this page">&#8249;</button>
 </div>
 <footer>
   <div class="bar">

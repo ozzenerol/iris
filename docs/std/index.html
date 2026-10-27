@@ -43,15 +43,20 @@ try {
   </div>
 </header>
 <div class="std" id="std">
-  <button class="side-toggle" type="button" data-side="std-left" data-text="Modules" data-label="modules" aria-expanded="true">&#8249; Modules</button>
   <aside class="std-left" aria-label="Modules">
-    <input id="std-filter" type="search" placeholder="Find a function, type or module" aria-label="Find in the library" autocomplete="off">
+    <div class="std-top">
+      <div class="side-head"><a href="index.html">Modules</a><button class="side-btn side-hide" type="button" data-side="std-left" aria-expanded="true" aria-label="Hide the module list" title="Hide the module list">&#8249;</button></div>
+      <input id="std-filter" type="search" placeholder="Find a function, type or module" aria-label="Find in the library" autocomplete="off">
+    </div>
     <nav id="std-modules"></nav>
     <ul id="std-found" class="std-found" hidden></ul>
   </aside>
   <main id="std-main" class="std-main"></main>
-  <button class="side-toggle side-toggle-r" type="button" data-side="std-right" data-text="Names" data-label="this module's names" aria-expanded="true">Names &#8250;</button>
-  <aside id="std-right" class="std-right" aria-label="In this module"></aside>
+  <aside class="std-right" aria-label="In this module">
+    <div class="side-head"><span>In this module</span><button class="side-btn side-hide" type="button" data-side="std-right" aria-expanded="true" aria-label="Hide this module's names" title="Hide this module's names">&#8250;</button></div>
+    <div id="std-right"></div>
+  </aside>
+  <button class="side-btn side-show side-show-l" type="button" data-side="std-left" aria-expanded="true" aria-label="Show the module list" title="Show the module list">&#8250;</button><button class="side-btn side-show side-show-r" type="button" data-side="std-right" aria-expanded="true" aria-label="Show this module's names" title="Show this module's names">&#8249;</button>
 </div>
 <script src="data.js"></script>
 <script src="../assets/std.js"></script>

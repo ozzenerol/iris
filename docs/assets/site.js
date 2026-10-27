@@ -1,4 +1,4 @@
-/* The search box, the theme switch, Copy buttons and "On this page". */
+/* The search box, the theme switch, Copy buttons, the sidebars and "On this page". */
 (function () {
   document.querySelectorAll(".ver").forEach(function (v) {
     v.textContent = window.IRIS_VERSION || "";
@@ -140,37 +140,34 @@
 
   /* closable sidebars: chapters, on this page, and the library's two panes.
      the open/closed class lives on <html> (set early, in <head>, to avoid a layout
-     flash) and the CSS keys off it; this just keeps buttons and storage in sync. */
-  var SIDES = { chapters: "left", onpage: "right", "std-left": "left", "std-right": "right" };
-  function syncButtons(side, closed) {
-    var left = SIDES[side] === "left";
-    var open = left ? "‹" : "›";
-    var shut = left ? "›" : "‹";
-    document.querySelectorAll('.side-toggle[data-side="' + side + '"]').forEach(function (b) {
-      var icon = closed ? shut : open;
-      var text = b.getAttribute("data-text");
-      /* closed on a reading page, the pinned button is only its arrow, so
-         it doesn't cover the text */
-      var small = closed && b.parentNode.classList.contains("doc");
-      b.textContent = small ? icon : left ? icon + " " + text : text + " " + icon;
-      b.setAttribute("aria-expanded", String(!closed));
-      b.setAttribute("aria-label", (closed ? "Show " : "Hide ") + b.getAttribute("data-label"));
+     flash) and the CSS keys off it; this keeps aria-expanded and storage in sync. */
+  function sync(side) {
+    var open = !document.documentElement.classList.contains("closed-" + side);
+    document.querySelectorAll('.side-btn[data-side="' + side + '"]').forEach(function (b) {
+      b.setAttribute("aria-expanded", String(open));
     });
   }
-  Object.keys(SIDES).forEach(function (side) {
-    var closed = document.documentElement.classList.contains("closed-" + side);
-    syncButtons(side, closed);
-  });
-  document.querySelectorAll(".side-toggle").forEach(function (b) {
+  ["chapters", "onpage", "std-left", "std-right"].forEach(sync);
+  document.querySelectorAll(".side-btn").forEach(function (b) {
     b.addEventListener("click", function () {
       var side = b.getAttribute("data-side");
-      var cls = "closed-" + side;
-      var closed = !document.documentElement.classList.contains(cls);
-      document.documentElement.classList.toggle(cls, closed);
-      syncButtons(side, closed);
+      var closed = document.documentElement.classList.toggle("closed-" + side);
+      sync(side);
       try { localStorage.setItem("iris-side-" + side, closed ? "closed" : "open"); } catch (e) {}
+      if (!closed) {
+        var other = document.querySelector('.side-hide[data-side="' + side + '"]');
+        if (other) other.focus();
+      }
     });
   });
+
+  /* the chapter being read is in view in the chapter list */
+  var current = document.querySelector(".chapters a.on");
+  if (current) {
+    var list = current.closest(".chapters");
+    var top = current.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    if (top > list.clientHeight - 80) list.scrollTop = top - list.clientHeight / 3;
+  }
 
   /* "On this page": the section being read */
   var links = document.querySelectorAll(".onpage a");

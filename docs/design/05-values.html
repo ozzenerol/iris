@@ -43,9 +43,14 @@ try {
   </div>
 </header>
 <div class="doc">
-  <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html" class="on"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters">
+    <div class="side-head"><a href="index.html">Design</a><button class="side-btn side-hide" type="button" data-side="chapters" aria-expanded="true" aria-label="Hide the chapter list" title="Hide the chapter list">&#8249;</button></div>
+    <nav><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html" class="on" aria-current="page"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></nav>
+  </aside>
+  <button class="side-btn side-show side-show-l" type="button" data-side="chapters" aria-expanded="true" aria-label="Show the chapter list" title="Show the chapter list">&#8250;</button>
   <article class="prose">
+<div class="crumbs"><a href="index.html">Design</a><span aria-hidden="true">/</span><span>The compiler</span><span class="pos">5 of 8</span></div>
+<details class="chap-menu"><summary>All chapters</summary><nav aria-label="Chapters"><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html" class="on" aria-current="page"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></nav></details>
 <h1>How values are stored</h1>
 <p class="lede">What each Iris type looks like in memory and in LLVM IR. <code>llType</code> in <code>src/ir.c</code> maps a <code>Type</code> to its IR type, and <code>typeSize</code> and <code>typeAlign</code> in <code>src/check.c</code> give its size and alignment.</p>
 <h2 id="numbers-bool-and-pointers"><a href="#numbers-bool-and-pointers">Numbers, bool and pointers</a></h2>
@@ -88,10 +93,13 @@ try {
 <p><code>Atomic[T]</code> has the layout of <code>T</code>, with <code>bool</code> as one byte, and its methods become LLVM atomic instructions, all sequentially consistent. A <code>Mutex</code> is 32 bytes, <code>[4 x i64]</code> in IR: a spin lock, a locked flag, the list of waiting tasks, and the thread that holds it. Neither can be copied.</p>
 <h2 id="string-interpolation"><a href="#string-interpolation">String interpolation</a></h2>
 <p><code>print(&quot;got {n} bytes&quot;)</code> writes <code>&quot;got &quot;</code>, then <code>n</code>, then <code>&quot; bytes&quot;</code> straight to the output, with one runtime call each. Nothing is allocated. <code>format(...)</code> writes the same parts into a new <code>String</code>.</p>
-    <nav class="pager"><a class="prev" href="04-ir.html"><span>Previous</span>The IR writer</a><a class="next" href="06-runtime.html"><span>Next</span>The runtime</a></nav>
+    <nav class="pager" aria-label="Previous and next chapter"><a class="prev" href="04-ir.html"><span>&#8249; Previous</span>The IR writer</a><a class="next" href="06-runtime.html"><span>Next &#8250;</span>The runtime</a></nav>
   </article>
-  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#numbers-bool-and-pointers">Numbers, bool and pointers</a></li><li><a href="#slices-and-str">Slices and str</a></li><li><a href="#string">String</a></li><li><a href="#arrays">Arrays</a></li><li><a href="#structs">Structs</a></li><li><a href="#enums">Enums</a></li><li><a href="#several-return-values">Several return values</a></li><li><a href="#errors-and-t">Errors and !T</a></li><li><a href="#dyn-and-interfaces">dyn and interfaces</a></li><li><a href="#generics">Generics</a></li><li><a href="#sync-types">Sync types</a></li><li><a href="#string-interpolation">String interpolation</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page">
+    <div class="side-head"><span>On this page</span><button class="side-btn side-hide" type="button" data-side="onpage" aria-expanded="true" aria-label="Hide on this page" title="Hide on this page">&#8250;</button></div>
+    <ul><li><a href="#numbers-bool-and-pointers">Numbers, bool and pointers</a></li><li><a href="#slices-and-str">Slices and str</a></li><li><a href="#string">String</a></li><li><a href="#arrays">Arrays</a></li><li><a href="#structs">Structs</a></li><li><a href="#enums">Enums</a></li><li><a href="#several-return-values">Several return values</a></li><li><a href="#errors-and-t">Errors and !T</a></li><li><a href="#dyn-and-interfaces">dyn and interfaces</a></li><li><a href="#generics">Generics</a></li><li><a href="#sync-types">Sync types</a></li><li><a href="#string-interpolation">String interpolation</a></li></ul>
+  </aside>
+  <button class="side-btn side-show side-show-r" type="button" data-side="onpage" aria-expanded="true" aria-label="Show on this page" title="Show on this page">&#8249;</button>
 </div>
 <footer>
   <div class="bar">

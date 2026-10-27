@@ -12,7 +12,8 @@
   docs/assets/               docs-src/assets/, search.js (what the search box finds) and
                              version.js (the version every page shows)
 
-A section's pages are its NN-name.md files in order; its index page lists them.
+A section's pages are its NN-name.md files, in the parts PARTS gives them;
+its index page lists them by part.
 
 Run from anywhere: python3 tools/build_docs.py [--iris PATH] [--serve [PORT]]
 
@@ -56,6 +57,36 @@ SECTIONS = [
      "The compiler's architecture: the passes, their data structures, the runtime, and where to start "
      "reading the source."),
 ]
+
+
+# Each section's chapters in parts: (part title, [file stems without NN-]).
+# The chapters are read in this order, and a new chapter goes into a part.
+PARTS = {
+    "tour": [
+        ("Basics", ["hello", "variables", "integers", "floating-point", "booleans-and-operators", "text",
+                    "values-in-text", "if-and-match", "loops"]),
+        ("Functions and data", ["functions", "function-values", "arrays-and-slices", "structs", "methods",
+                                "enums", "tuples-and-aliases"]),
+        ("Memory and errors", ["pointers", "errors", "memory"]),
+        ("Building larger programs", ["generics", "interfaces", "collections", "modules"]),
+        ("Concurrency", ["tasks-and-channels", "threads"]),
+        ("Going further", ["compile-time", "attributes", "calling-c", "testing", "tools"]),
+    ],
+    "library-tour": [
+        ("Programs and the system", ["files", "time", "logging", "flags", "processes", "terminal",
+                                     "configuration", "machine-numbers", "metrics-and-tracing"]),
+        ("Text and data", ["json", "regular-expressions", "csv-and-xml", "encodings-and-ids", "templates",
+                           "compression-and-archives", "binary-messages", "msgpack-and-cbor"]),
+        ("Networking", ["http", "networking", "quic-and-http3", "protobuf-and-grpc", "mqtt", "email",
+                        "ssh", "sftp", "s3", "acme"]),
+        ("Databases", ["sqlite", "postgres-and-redis", "mysql", "mongodb", "rows-as-structs", "migrations"]),
+        ("Numbers and security", ["random-and-crypto", "math-and-big-numbers"]),
+    ],
+    "design": [
+        ("The compiler", ["overview", "front-end", "checker", "ir", "values", "runtime", "decisions",
+                          "workflow"]),
+    ],
+}
 
 
 def shell(title, body, root, section="", wide=False, desc=""):
@@ -133,39 +164,98 @@ def write(rel, text):
 
 
 def chapters(section):
-    """[(file stem, title, lede, html, toc)] in order"""
+    """[(file stem, title, lede, html, toc, part)] in the order of PARTS"""
+    found = {}
+    for path in glob.glob(os.path.join(SRC, section, "[0-9][0-9]-*.md")):
+        stem = os.path.basename(path)[:-3]
+        found[stem[3:]] = (stem, path)
     out = []
-    for path in sorted(glob.glob(os.path.join(SRC, section, "[0-9][0-9]-*.md"))):
-        title, lede, body, toc, _ = md.convert(open(path).read())
-        out.append((os.path.basename(path)[:-3], title, lede, body, toc))
+    for part, names in PARTS[section]:
+        for name in names:
+            if name not in found:
+                sys.exit(f"PARTS in tools/build_docs.py names {section}/{name}, which has no NN-{name}.md")
+            stem, path = found.pop(name)
+            title, lede, body, toc, _ = md.convert(open(path).read())
+            out.append((stem, title, lede, body, toc, part))
+    for name, (stem, _) in sorted(found.items()):
+        sys.exit(f"docs-src/{section}/{stem}.md isn't in a part: add it to PARTS in tools/build_docs.py")
     return out
 
 
+def by_part(chs):
+    """[(part, [(number from 1, chapter)])]"""
+    out = []
+    for n, ch in enumerate(chs, 1):
+        if not out or out[-1][0] != ch[5]:
+            out.append((ch[5], []))
+        out[-1][1].append((n, ch))
+    return out
+
+
+# The sections whose chapters are read in order, and so show their numbers
+NUMBERED = {"tour", "design"}
+
+
+def chapter_list(parts, section, stem_on=None):
+    """The chapters by part, as the sidebar and the phone's menu show them"""
+    out = []
+    for part, items in parts:
+        lis = "".join(
+            f'<li><a href="{ch[0]}.html"{' class="on" aria-current="page"' if ch[0] == stem_on else ''}>'
+            + (f'<span class="num">{n}</span>' if section in NUMBERED else "")
+            + f'{html.escape(ch[1])}</a></li>'
+            for n, ch in items)
+        out.append(f'<h5>{html.escape(part)}</h5><ol>{lis}</ol>')
+    return "".join(out)
+
+
+def hide_button(side, label, arrow):
+    return (f'<button class="side-btn side-hide" type="button" data-side="{side}" aria-expanded="true" '
+            f'aria-label="Hide {label}" title="Hide {label}">{arrow}</button>')
+
+
+def show_button(side, label, arrow, where):
+    return (f'<button class="side-btn side-show side-show-{where}" type="button" data-side="{side}" '
+            f'aria-expanded="true" aria-label="Show {label}" title="Show {label}">{arrow}</button>')
+
+
 def chapter_pages(chs, index, section, label):
-    side = "".join(
-        f'<li><a href="{stem}.html"{{on{stem}}}><span class="num">{stem[:2].lstrip("0")}</span>{html.escape(title)}</a></li>'
-        for stem, title, _, _, _ in chs)
-    for n, (stem, title, lede, body, toc) in enumerate(chs):
-        nav = side
-        for s, *_ in chs:
-            nav = nav.replace("{on" + s + "}", ' class="on"' if s == stem else "")
+    parts = by_part(chs)
+    total = len(chs)
+    for n, (stem, title, lede, body, toc, part) in enumerate(chs):
+        side = chapter_list(parts, section, stem)
         on_page = "".join(f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc)
         prev_link = next_link = ""
         if n > 0:
             p = chs[n - 1]
-            prev_link = f'<a class="prev" href="{p[0]}.html"><span>Previous</span>{html.escape(p[1])}</a>'
+            prev_link = f'<a class="prev" href="{p[0]}.html"><span>&#8249; Previous</span>{html.escape(p[1])}</a>'
         if n + 1 < len(chs):
             q = chs[n + 1]
-            next_link = f'<a class="next" href="{q[0]}.html"><span>Next</span>{html.escape(q[1])}</a>'
+            next_link = f'<a class="next" href="{q[0]}.html"><span>Next &#8250;</span>{html.escape(q[1])}</a>'
+        crumbs = (f'<div class="crumbs"><a href="index.html">{html.escape(label)}</a><span aria-hidden="true">/</span>'
+                  f'<span>{html.escape(part)}</span><span class="pos">{n + 1} of {total}</span></div>')
+        menu = (f'<details class="chap-menu"><summary>All chapters</summary>'
+                f'<nav aria-label="Chapters">{side}</nav></details>')
+        onpage = ""
+        if toc:
+            onpage = f"""<aside class="onpage" aria-label="On this page">
+    <div class="side-head"><span>On this page</span>{hide_button("onpage", "on this page", "&#8250;")}</div>
+    <ul>{on_page}</ul>
+  </aside>
+  {show_button("onpage", "on this page", "&#8249;", "r")}"""
         page = f"""<div class="doc">
-  <button class="side-toggle" type="button" data-side="chapters" data-text="{html.escape(label)}" data-label="the chapter list" aria-expanded="true">&#8249; {html.escape(label)}</button>
-  <aside class="chapters" aria-label="Chapters"><h4>{label}</h4><ol>{nav}</ol></aside>
+  <aside class="chapters" aria-label="Chapters">
+    <div class="side-head"><a href="index.html">{html.escape(label)}</a>{hide_button("chapters", "the chapter list", "&#8249;")}</div>
+    <nav>{side}</nav>
+  </aside>
+  {show_button("chapters", "the chapter list", "&#8250;", "l")}
   <article class="prose">
+{crumbs}
+{menu}
 {body}
-    <nav class="pager">{prev_link}{next_link}</nav>
+    <nav class="pager" aria-label="Previous and next chapter">{prev_link}{next_link}</nav>
   </article>
-  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul>{on_page}</ul></aside>
+  {onpage}
 </div>"""
         write(f"{section}/{stem}.html", shell(title, page, "../", section, wide=True, desc=lede))
         for sid, text in toc:
@@ -174,14 +264,22 @@ def chapter_pages(chs, index, section, label):
 
 
 def section_index(section, label, lede, chs):
-    items = "".join(
-        f'<li><a href="{stem}.html"><span class="num">{stem[:2].lstrip("0")}</span>'
-        f'<b>{html.escape(title)}</b><span class="desc">{html.escape(desc)}</span></a></li>'
-        for stem, title, desc, _, _ in chs)
+    groups = []
+    for part, items in by_part(chs):
+        lis = "".join(
+            f'<li><a href="{ch[0]}.html">'
+            + (f'<span class="num">{n}</span>' if section in NUMBERED else "")
+            + f'<b>{html.escape(ch[1])}</b><span class="desc">{html.escape(ch[2])}</span></a></li>'
+            for n, ch in items)
+        head = f'<h2>{html.escape(part)}</h2>' if len(PARTS[section]) > 1 else ""
+        groups.append(f'{head}<ol class="toc{" plain" if section not in NUMBERED else ""}">{lis}</ol>')
+    start = f'<p class="start"><a class="button" href="{chs[0][0]}.html">Start with {html.escape(chs[0][1])} &#8250;</a></p>' \
+        if section in NUMBERED else ""
     body = f"""<main class="narrow">
   <h1>{html.escape(label)}</h1>
   <p class="lede">{html.escape(lede)}</p>
-  <ol class="toc">{items}</ol>
+  {start}
+  {"".join(groups)}
 </main>"""
     write(f"{section}/index.html", shell(label, body, "../", section, desc=lede))
 
@@ -215,15 +313,20 @@ def std_pages(index, iris):
     data = {"modules": mods}
     write("std/data.js", "window.IRIS_STD = " + json.dumps(data, separators=(",", ":")) + ";\n")
     body = """<div class="std" id="std">
-  <button class="side-toggle" type="button" data-side="std-left" data-text="Modules" data-label="modules" aria-expanded="true">&#8249; Modules</button>
   <aside class="std-left" aria-label="Modules">
-    <input id="std-filter" type="search" placeholder="Find a function, type or module" aria-label="Find in the library" autocomplete="off">
+    <div class="std-top">
+      <div class="side-head"><a href="index.html">Modules</a>""" + hide_button("std-left", "the module list", "&#8249;") + """</div>
+      <input id="std-filter" type="search" placeholder="Find a function, type or module" aria-label="Find in the library" autocomplete="off">
+    </div>
     <nav id="std-modules"></nav>
     <ul id="std-found" class="std-found" hidden></ul>
   </aside>
   <main id="std-main" class="std-main"></main>
-  <button class="side-toggle side-toggle-r" type="button" data-side="std-right" data-text="Names" data-label="this module's names" aria-expanded="true">Names &#8250;</button>
-  <aside id="std-right" class="std-right" aria-label="In this module"></aside>
+  <aside class="std-right" aria-label="In this module">
+    <div class="side-head"><span>In this module</span>""" + hide_button("std-right", "this module's names", "&#8250;") + """</div>
+    <div id="std-right"></div>
+  </aside>
+  """ + show_button("std-left", "the module list", "&#8250;", "l") + show_button("std-right", "this module's names", "&#8249;", "r") + """
 </div>
 <script src="data.js"></script>
 <script src="../assets/std.js"></script>"""
@@ -232,9 +335,20 @@ def std_pages(index, iris):
     return sum(len(m["decls"]) for m in mods)
 
 
+START = """<nav class="paths-cards" aria-label="Where to start">
+  <a href="tour/index.html"><b>Language Tour</b><span>The whole language, one topic per chapter. Start here.</span></a>
+  <a href="library-tour/index.html"><b>Library Tour</b><span>One task per chapter: files, HTTP, databases, formats and more.</span></a>
+  <a href="std/index.html"><b>Library</b><span>Every module, type and function of the standard library.</span></a>
+</nav>"""
+
+
 def prose_page(name, title, section, desc, index):
     src = open(os.path.join(SRC, name + ".md")).read()
     page_title, lede, body, toc, _ = md.convert(src)
+    if name == "index":
+        # where to go next, right under the first lines
+        cut = body.index("</p>", body.index('class="lede"')) + 4
+        body = body[:cut] + START + body[cut:]
     write(name + ".html", shell(title, f'<main class="narrow prose">\n{body}\n</main>', "", section,
                                 desc=desc or lede))
     index.append({"t": page_title or title, "p": "Iris", "u": name + ".html", "k": "page"})

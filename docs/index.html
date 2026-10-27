@@ -44,7 +44,11 @@ try {
 </header>
 <main class="narrow prose">
 <h1>Iris</h1>
-<p class="lede">Iris is a compiled language for servers, network tools and command-line programs.</p>
+<p class="lede">Iris is a compiled language for servers, network tools and command-line programs.</p><nav class="paths-cards" aria-label="Where to start">
+  <a href="tour/index.html"><b>Language Tour</b><span>The whole language, one topic per chapter. Start here.</span></a>
+  <a href="library-tour/index.html"><b>Library Tour</b><span>One task per chapter: files, HTTP, databases, formats and more.</span></a>
+  <a href="std/index.html"><b>Library</b><span>Every module, type and function of the standard library.</span></a>
+</nav>
 <ul><li>No garbage collector. The program frees memory, and <code>defer</code> and <code>scoped</code> make that hard to forget.</li><li>Errors are values that must be handled. Every index is checked.</li><li>Tasks and channels run many things at once on one thread, and threads spread work over cores.</li><li>The compiler is written in C and produces native code through LLVM.</li></ul>
 <pre class="code run"><code><span class="k">import</span> http
 
@@ -61,8 +65,6 @@ try {
 }</code></pre>
 <pre class="out"><code>routes ready</code></pre>
 <p>Add <code>try r.serve(8080)</code> at the end and it is a web server on every CPU core, speaking HTTP/1.1 and HTTP/2.</p>
-<h2 id="where-to-start"><a href="#where-to-start">Where to start</a></h2>
-<ul><li><a href="tour/index.html">Language Tour</a>: the whole language, one topic per chapter, with runnable programs and their output. Start here.</li><li><a href="library-tour/index.html">Library Tour</a>: the standard library, one task per chapter: files, HTTP, databases, formats, cryptography and more.</li><li><a href="std/index.html">Library</a>: every module, type and function of the standard library.</li><li><a href="design/index.html">Design</a>: the compiler's architecture, for people working on it.</li></ul>
 <h2 id="install"><a href="#install">Install</a></h2>
 <p>Iris builds from source. It needs a C compiler and <code>clang</code> 15 or newer, which it uses to produce programs.</p>
 <ul><li>Debian and Ubuntu: <code>sudo apt install build-essential clang</code></li><li>macOS: the Xcode command-line tools</li></ul>

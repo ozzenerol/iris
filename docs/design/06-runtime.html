@@ -43,9 +43,14 @@ try {
   </div>
 </header>
 <div class="doc">
-  <button class="side-toggle" type="button" data-side="chapters" data-text="Design" data-label="the chapter list" aria-expanded="true">&#8249; Design</button>
-  <aside class="chapters" aria-label="Chapters"><h4>Design</h4><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html" class="on"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></aside>
+  <aside class="chapters" aria-label="Chapters">
+    <div class="side-head"><a href="index.html">Design</a><button class="side-btn side-hide" type="button" data-side="chapters" aria-expanded="true" aria-label="Hide the chapter list" title="Hide the chapter list">&#8249;</button></div>
+    <nav><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html" class="on" aria-current="page"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></nav>
+  </aside>
+  <button class="side-btn side-show side-show-l" type="button" data-side="chapters" aria-expanded="true" aria-label="Show the chapter list" title="Show the chapter list">&#8250;</button>
   <article class="prose">
+<div class="crumbs"><a href="index.html">Design</a><span aria-hidden="true">/</span><span>The compiler</span><span class="pos">6 of 8</span></div>
+<details class="chap-menu"><summary>All chapters</summary><nav aria-label="Chapters"><h5>The compiler</h5><ol><li><a href="01-overview.html"><span class="num">1</span>Overview</a></li><li><a href="02-front-end.html"><span class="num">2</span>Loading and parsing</a></li><li><a href="03-checker.html"><span class="num">3</span>The checker</a></li><li><a href="04-ir.html"><span class="num">4</span>The IR writer</a></li><li><a href="05-values.html"><span class="num">5</span>How values are stored</a></li><li><a href="06-runtime.html" class="on" aria-current="page"><span class="num">6</span>The runtime</a></li><li><a href="07-decisions.html"><span class="num">7</span>Decisions</a></li><li><a href="08-workflow.html"><span class="num">8</span>Working on Iris</a></li></ol></nav></details>
 <h1>The runtime</h1>
 <p class="lede">What <code>runtime/rt.c</code> does and how the generated code uses it. The runtime is one C file, carried inside the <code>iris</code> binary and compiled with every program (see <a href="04-ir.html#calling-clang">The IR writer</a>). Its exported functions start with <code>iris_</code>. The generated code calls the ones <code>writeIR</code> declares, and the standard library calls the rest through <code>@extern</code>.</p>
 <h2 id="layout-of-rt-c"><a href="#layout-of-rt-c">Layout of rt.c</a></h2>
@@ -72,10 +77,13 @@ try {
 <p><code>thread f(a, b)</code> calls <code>iris_thread_new(thunk, env)</code>, which starts a detached pthread. The thread runs the thunk on a scheduler of its own. A thread ends when its function and every task it spawned have finished, and then wakes the task waiting in <code>join</code>. Tasks never move between threads, so a task needs no locks for its own data. <code>http.serve</code> starts one thread per core, each with its own event loop, and several threads may <code>accept</code> on one listener.</p>
 <h2 id="tls-and-compression"><a href="#tls-and-compression">TLS and compression</a></h2>
 <p>TLS uses OpenSSL and compression uses zlib. Both are loaded with <code>dlopen</code> the first time a program uses them, so building needs no headers or link flags, and programs that don't use them don't depend on them. TLS lives inside <code>net.Conn</code>, so reading lines, the HTTP server and the client work the same over TLS. OpenSSL's calls hold SIGPIPE back on Linux.</p>
-    <nav class="pager"><a class="prev" href="05-values.html"><span>Previous</span>How values are stored</a><a class="next" href="07-decisions.html"><span>Next</span>Decisions</a></nav>
+    <nav class="pager" aria-label="Previous and next chapter"><a class="prev" href="05-values.html"><span>&#8249; Previous</span>How values are stored</a><a class="next" href="07-decisions.html"><span>Next &#8250;</span>Decisions</a></nav>
   </article>
-  <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#layout-of-rt-c">Layout of rt.c</a></li><li><a href="#memory">Memory</a></li><li><a href="#errors">Errors</a></li><li><a href="#tasks">Tasks</a></li><li><a href="#channels-and-select">Channels and select</a></li><li><a href="#mutex-and-atomic">Mutex and Atomic</a></li><li><a href="#threads">Threads</a></li><li><a href="#tls-and-compression">TLS and compression</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page">
+    <div class="side-head"><span>On this page</span><button class="side-btn side-hide" type="button" data-side="onpage" aria-expanded="true" aria-label="Hide on this page" title="Hide on this page">&#8250;</button></div>
+    <ul><li><a href="#layout-of-rt-c">Layout of rt.c</a></li><li><a href="#memory">Memory</a></li><li><a href="#errors">Errors</a></li><li><a href="#tasks">Tasks</a></li><li><a href="#channels-and-select">Channels and select</a></li><li><a href="#mutex-and-atomic">Mutex and Atomic</a></li><li><a href="#threads">Threads</a></li><li><a href="#tls-and-compression">TLS and compression</a></li></ul>
+  </aside>
+  <button class="side-btn side-show side-show-r" type="button" data-side="onpage" aria-expanded="true" aria-label="Show on this page" title="Show on this page">&#8249;</button>
 </div>
 <footer>
   <div class="bar">

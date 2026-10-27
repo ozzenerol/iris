@@ -29,13 +29,6 @@ routes ready
 
 Add `try r.serve(8080)` at the end and it is a web server on every CPU core, speaking HTTP/1.1 and HTTP/2.
 
-## Where to start
-
-- [Language Tour](tour/index.html): the whole language, one topic per chapter, with runnable programs and their output. Start here.
-- [Library Tour](library-tour/index.html): the standard library, one task per chapter: files, HTTP, databases, formats, cryptography and more.
-- [Library](std/index.html): every module, type and function of the standard library.
-- [Design](design/index.html): the compiler's architecture, for people working on it.
-
 ## Install
 
 Iris builds from source. It needs a C compiler and `clang` 15 or newer, which it uses to produce programs.
