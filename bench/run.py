@@ -15,7 +15,7 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt", "quic",
-       "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "mysql-query", "bson", "mongo-query"]
+       "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "sys", "mysql-query", "bson", "mongo-query"]
 # benchmarks that talk to a database server: the tools/ script that starts
 # one, the variable it sets, and the one the programs read
 DB = {"mysql-query": ("mysql-server.sh", "IRIS_MYSQL_URL", "IRIS_BENCH_MYSQL"),

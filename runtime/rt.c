@@ -2546,6 +2546,44 @@ int iris_fs_space(const char *path, int64_t n, int64_t *v) {
     return 0;
 }
 
+/* A file of /proc or /sys into out, which is emptied first: one open and
+   reads until the end, without stdio or a stat. 0 or a code. */
+int iris_sys_read(const char *path, int64_t n, IrisString *out) {
+    char *p = cpath(path, n);
+    if (!p) return 1;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    int err = errno;
+    free(p);
+    if (fd < 0) return fsCode(err);
+    out->len = 0;
+    char buf[8192];
+    for (;;) {
+        ssize_t k = read(fd, buf, sizeof buf);
+        if (k > 0) {
+            iris_string_append(out, buf, (int64_t)k);
+        } else if (k == 0) {
+            break;
+        } else if (errno != EINTR) {
+            err = errno;
+            close(fd);
+            return fsCode(err);
+        }
+    }
+    close(fd);
+    return 0;
+}
+
+/* The kernel's clock ticks per second, which /proc counts CPU time in. */
+int64_t iris_sys_ticks(void) {
+    long t = sysconf(_SC_CLK_TCK);
+    return t > 0 ? (int64_t)t : 100;
+}
+
+int64_t iris_sys_page_size(void) {
+    long p = sysconf(_SC_PAGESIZE);
+    return p > 0 ? (int64_t)p : 4096;
+}
+
 /* Reads and writes at an offset, without moving the file's position:
    bytes read (0 at the end) or -code; 0 or a code. */
 int64_t iris_fs_pread(int fd, char *buf, int64_t len, int64_t off) {

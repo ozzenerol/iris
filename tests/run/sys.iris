@@ -1,0 +1,78 @@
+// os: linux
+// expect: cpu: counted, cores match: true
+// expect: busy between two snapshots: in range
+// expect: load: in range
+// expect: memory: in range
+// expect: uptime grows: true
+// expect: oom kills: counted
+// expect: loopback: lo
+// expect: disks: counted
+// expect: root: / readable
+// expect: /proc on proc
+// expect: this program: true running, parent true, threads 1
+// expect: memory and time: true true
+// expect: SysError.notFound: no process 999999999
+
+import os, sys
+
+i64 spin(i64 n) {
+    i64 x = 1
+    for i in 0..n {
+        x = (x * 31 + i) % 1000003
+    }
+    return x
+}
+
+!void main() {
+    c := try sys.cpu()
+    cores := try sys.cpus()
+    defer cores.free()
+    bool counted = c.total() > 0 && c.busy() > 0 && c.idle > 0
+    print("cpu: {if counted { "counted" } else { "zero" }}, cores match: {cores.len == os.cpuCount() && cores.at(0).core == 0}")
+    _ = spin(20000000)
+    c2 := try sys.cpu()
+    p := c2.percentSince(c)
+    print("busy between two snapshots: {if p >= 0.0 && p <= 100.0 { "in range" } else { "out of range" }}")
+
+    l := try sys.load()
+    print("load: {if l.one >= 0.0 && l.running >= 1 && l.tasks >= l.running { "in range" } else { "out of range" }}")
+
+    m := try sys.memory()
+    ok := m.total > 0 && m.available > 0 && m.available <= m.total && m.used() >= 0 && m.swapUsed() >= 0
+    print("memory: {if ok { "in range" } else { "out of range" }}")
+
+    u1 := try sys.uptime()
+    sleep(20ms)
+    u2 := try sys.uptime()
+    print("uptime grows: {u1 > 0 && u2 > u1}")
+    print("oom kills: {if try sys.oomKills() >= 0 { "counted" } else { "negative" }}")
+
+    nets := try sys.network()
+    defer nets.freeEach()
+    for n in nets {
+        if n.name == "lo" {
+            print("loopback: {n.name}")
+        }
+    }
+    disks := try sys.disks()
+    defer disks.freeEach()
+    bool sane = true
+    for d in disks {
+        sane = sane && d.name.len > 0 && d.reads >= 0 && d.readBytes >= 0 && d.busy >= 0
+    }
+    print("disks: {if sane { "counted" } else { "bad" }}")
+
+    scoped root := try sys.mountOf("/")
+    space := try root.space()
+    print("root: {root.path} {if space.total > 0 { "readable" } else { "empty" }}")
+    scoped procfs := try sys.mountOf("/proc/self")
+    print("{procfs.path} on {procfs.fsType}")
+
+    scoped me := try sys.process()
+    print("this program: {me.name.len > 0} {me.state}, parent {me.parent > 0}, threads {me.threads}")
+    print("memory and time: {me.rss > 0 && me.virtual >= me.rss} {me.cpuTime() > 0 && me.started > 0}")
+    _ = sys.process(999999999) catch e {
+        print("{e.code}: {e.message}")
+        sys.Process{name: "".copy()}
+    }
+}

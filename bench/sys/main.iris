@@ -1,0 +1,28 @@
+import sys
+
+// The machine's numbers read 20,000 times: the CPU time of each core,
+// memory, load, network interfaces, disks, mounts and this process.
+!void main() {
+    i64 total = 0
+    for i in 0..20000 {
+        cores := try sys.cpus()
+        total += cores.len
+        cores.free()
+        m := try sys.memory()
+        total += if m.total > 0 { 1 } else { 0 }
+        l := try sys.load()
+        total += if l.one >= 0.0 { 1 } else { 0 }
+        nets := try sys.network()
+        total += nets.len
+        nets.freeEach()
+        disks := try sys.disks()
+        total += disks.len
+        disks.freeEach()
+        mounts := try sys.mounts()
+        total += mounts.len
+        mounts.freeEach()
+        scoped p := try sys.process()
+        total += if p.rss > 0 { 1 } else { 0 }
+    }
+    print("{total}")
+}

@@ -1,0 +1,609 @@
+// The machine's own numbers, as the Linux kernel keeps them in /proc: CPU
+// time, load, memory and swap, uptime, OOM kills, network and disk
+// counters, mounts, and the memory and CPU time of a process. Each call
+// reads its file once and gives a snapshot. Counters grow from boot, so a
+// rate is the difference between two snapshots. Linux only: elsewhere
+// every call fails with SysError.notFound.
+
+import fs, str
+
+// What the calls fail with: notFound for a file that isn't there (no such
+// process, or not Linux), permission, and other.
+pub enum SysError { notFound, permission, other }
+
+@extern("iris_sys_read")
+i32 rawRead(u8 *path, i64 n, String *out)
+
+@extern("iris_sys_ticks")
+i64 rawTicks()
+
+@extern("iris_sys_page_size")
+i64 rawPageSize()
+
+Error fail(i32 code, str path) => match code {
+    1 => error(SysError.notFound, "{path}: not there (sys reads /proc, which only Linux has)")
+    2 => error(SysError.permission, "{path}: permission denied")
+    _ => error(SysError.other, "{path}: can't be read")
+}
+
+!void readInto(str path, String *out) {
+    code := rawRead(path.ptr, path.len, out)
+    if code != 0 {
+        return fail(code, path)
+    }
+}
+
+Error bad(str path) => error(SysError.other, "{path}: not in the form the kernel writes")
+
+bool blank(u8 c) => c == ' ' || c == '\t'
+
+// The number at *at, after any spaces; *at moves past it.
+i64 number(str s, i64 *at) {
+    i := *at
+    for i < s.len && blank(s[i]) {
+        i += 1
+    }
+    i64 n
+    for i < s.len && s[i] >= '0' && s[i] <= '9' {
+        n = n * 10 + i64(s[i] - '0')
+        i += 1
+    }
+    *at = i
+    return n
+}
+
+// The word at *at, after any spaces, up to a space or the end of the line.
+str word(str s, i64 *at) {
+    i := *at
+    for i < s.len && blank(s[i]) {
+        i += 1
+    }
+    start := i
+    for i < s.len && !blank(s[i]) && s[i] != '\n' {
+        i += 1
+    }
+    *at = i
+    return s[start:i]
+}
+
+// Moves *at to the start of the next line.
+void skipLine(str s, i64 *at) {
+    i := *at
+    for i < s.len && s[i] != '\n' {
+        i += 1
+    }
+    *at = if i < s.len { i + 1 } else { i }
+}
+
+Duration ticks(i64 n, i64 hz) => Duration(n) * 1s / Duration(hz)
+
+// The time the CPUs spent in each state since boot, added over all cores
+// or for one. user includes the time of virtual machines (guest).
+pub struct Cpu {
+    // the core, or -1 for all of them
+    pub i64 core
+    pub Duration user
+    pub Duration nice
+    pub Duration system
+    pub Duration idle
+    pub Duration iowait
+    pub Duration irq
+    pub Duration softirq
+    pub Duration steal
+}
+
+// All the time counted, busy or not.
+pub Duration Cpu.total() => self.user + self.nice + self.system + self.idle + self.iowait + self.irq + self.softirq +
+    self.steal
+
+// The time spent on work: everything but idle and iowait.
+pub Duration Cpu.busy() => self.total() - self.idle - self.iowait
+
+// How busy the CPU was between an earlier snapshot and this one, from 0
+// to 100. 0 when no time was counted in between.
+pub f64 Cpu.percentSince(Cpu before) {
+    total := self.total() - before.total()
+    if total <= 0 {
+        return 0.0
+    }
+    return f64(self.busy() - before.busy()) * 100.0 / f64(total)
+}
+
+Cpu cpuLine(str s, i64 *at, i64 core, i64 hz) {
+    c := Cpu{core: core}
+    c.user = ticks(number(s, at), hz)
+    c.nice = ticks(number(s, at), hz)
+    c.system = ticks(number(s, at), hz)
+    c.idle = ticks(number(s, at), hz)
+    c.iowait = ticks(number(s, at), hz)
+    c.irq = ticks(number(s, at), hz)
+    c.softirq = ticks(number(s, at), hz)
+    c.steal = ticks(number(s, at), hz)
+    skipLine(s, at)
+    return c
+}
+
+// The CPU time of all cores together, from /proc/stat.
+pub !Cpu cpu() {
+    scoped String text
+    try readInto("/proc/stat", &text)
+    i64 at = 0
+    if word(text, &at) != "cpu" {
+        return bad("/proc/stat")
+    }
+    return cpuLine(text, &at, -1, rawTicks())
+}
+
+// The CPU time of each core, in the order of their numbers. The caller
+// frees the list.
+pub !List[Cpu] cpus() {
+    scoped String text
+    try readInto("/proc/stat", &text)
+    hz := rawTicks()
+    List[Cpu] out
+    i64 at = 0
+    for at < text.len {
+        name := word(text, &at)
+        if name.len > 3 && str.startsWith(name, "cpu") {
+            core := str.parseInt(name[3:]) catch -1
+            out.push(cpuLine(text, &at, core, hz))
+        } else if name.len > 0 && !str.startsWith(name, "cpu") {
+            // the cpu lines come first
+            break
+        } else {
+            skipLine(text, &at)
+        }
+    }
+    return out
+}
+
+// The load average: the tasks running or waiting for a CPU (or for the
+// disk), averaged over 1, 5 and 15 minutes, and how many tasks there are.
+pub struct Load {
+    pub f64 one
+    pub f64 five
+    pub f64 fifteen
+    // tasks running now
+    pub i64 running
+    // all tasks (threads)
+    pub i64 tasks
+}
+
+// The load average, from /proc/loadavg.
+pub !Load load() {
+    scoped String text
+    try readInto("/proc/loadavg", &text)
+    i64 at = 0
+    one := str.parseFloat(word(text, &at)) catch e {
+        return bad("/proc/loadavg")
+    }
+    five := str.parseFloat(word(text, &at)) catch e {
+        return bad("/proc/loadavg")
+    }
+    fifteen := str.parseFloat(word(text, &at)) catch e {
+        return bad("/proc/loadavg")
+    }
+    running := number(text, &at)
+    at += 1
+    tasks := number(text, &at)
+    return Load{one: one, five: five, fifteen: fifteen, running: running, tasks: tasks}
+}
+
+// Memory and swap in bytes. available is what programs can still get
+// without swapping, counting caches the kernel can drop.
+pub struct Memory {
+    pub i64 total
+    pub i64 free
+    pub i64 available
+    pub i64 buffers
+    pub i64 cached
+    pub i64 shared
+    pub i64 swapTotal
+    pub i64 swapFree
+}
+
+// The memory in use: total less available, as free(1) counts it.
+pub i64 Memory.used() => self.total - self.available
+
+// The swap in use.
+pub i64 Memory.swapUsed() => self.swapTotal - self.swapFree
+
+// Memory and swap, from /proc/meminfo.
+pub !Memory memory() {
+    scoped String text
+    try readInto("/proc/meminfo", &text)
+    return try parseMemory(text)
+}
+
+!Memory parseMemory(str text) {
+    m := Memory{available: -1}
+    i64 at = 0
+    i64 found = 0
+    for at < text.len && found < 8 {
+        name := word(text, &at)
+        n := number(text, &at) * 1024
+        match name {
+            "MemTotal:" => m.total = n
+            "MemFree:" => m.free = n
+            "MemAvailable:" => m.available = n
+            "Buffers:" => m.buffers = n
+            "Cached:" => m.cached = n
+            "Shmem:" => m.shared = n
+            "SwapTotal:" => m.swapTotal = n
+            "SwapFree:" => m.swapFree = n
+            _ => found -= 1
+        }
+        found += 1
+        skipLine(text, &at)
+    }
+    if m.total == 0 {
+        return bad("/proc/meminfo")
+    }
+    if m.available < 0 {
+        // kernels before 3.14
+        m.available = m.free + m.buffers + m.cached
+    }
+    return m
+}
+
+// The time since boot, from /proc/uptime. It goes down only after a reboot.
+pub !Duration uptime() {
+    scoped String text
+    try readInto("/proc/uptime", &text)
+    i64 at = 0
+    secs := number(text, &at)
+    if at >= text.len || text[at] != '.' {
+        return bad("/proc/uptime")
+    }
+    at += 1
+    start := at
+    cents := number(text, &at)
+    return Duration(secs) * 1s + if at - start == 2 { Duration(cents) * 10ms } else { Duration(0) }
+}
+
+// The processes the kernel killed for lack of memory since boot, from
+// oom_kill in /proc/vmstat. 0 on kernels before 4.13, which don't count them.
+pub !i64 oomKills() {
+    scoped String text
+    try readInto("/proc/vmstat", &text)
+    i64 at = 0
+    for at < text.len {
+        if word(text, &at) == "oom_kill" {
+            return number(text, &at)
+        }
+        skipLine(text, &at)
+    }
+    return 0
+}
+
+// The traffic of one network interface since it came up.
+pub struct Interface {
+    pub String name
+    pub i64 rxBytes
+    pub i64 rxPackets
+    pub i64 rxErrors
+    pub i64 rxDropped
+    pub i64 txBytes
+    pub i64 txPackets
+    pub i64 txErrors
+    pub i64 txDropped
+}
+
+// Gives the name back.
+pub void Interface.free() {
+    self.name.free()
+}
+
+// Every network interface of the program's network namespace, loopback
+// too, from /proc/net/dev. The caller frees the list with freeEach.
+pub !List[Interface] network() {
+    scoped String text
+    try readInto("/proc/net/dev", &text)
+    List[Interface] out
+    i64 at = 0
+    skipLine(text, &at)
+    skipLine(text, &at)
+    for at < text.len {
+        for at < text.len && blank(text[at]) {
+            at += 1
+        }
+        start := at
+        for at < text.len && text[at] != ':' && text[at] != '\n' {
+            at += 1
+        }
+        if at >= text.len || text[at] != ':' {
+            break
+        }
+        n := Interface{name: text[start:at].copy()}
+        at += 1
+        n.rxBytes = number(text, &at)
+        n.rxPackets = number(text, &at)
+        n.rxErrors = number(text, &at)
+        n.rxDropped = number(text, &at)
+        for _ in 0..4 {
+            _ = number(text, &at)
+        }
+        n.txBytes = number(text, &at)
+        n.txPackets = number(text, &at)
+        n.txErrors = number(text, &at)
+        n.txDropped = number(text, &at)
+        out.push(n)
+        skipLine(text, &at)
+    }
+    return out
+}
+
+// The reads and writes of one block device (a disk, a partition, loop, dm
+// or md device) since boot.
+pub struct Disk {
+    pub String name
+    pub i64 major
+    pub i64 minor
+    pub i64 reads
+    pub i64 readBytes
+    pub i64 writes
+    pub i64 writtenBytes
+    // time spent on reads and on writes, added over requests in flight
+    pub Duration readTime
+    pub Duration writeTime
+    // requests in flight now
+    pub i64 inFlight
+    // time with at least one request in flight
+    pub Duration busy
+}
+
+// Gives the name back.
+pub void Disk.free() {
+    self.name.free()
+}
+
+// How busy the device was between an earlier snapshot and this one, from
+// 0 to 100, as iostat's %util: the share of the time with a request in
+// flight.
+pub f64 Disk.percentSince(Disk before, Duration elapsed) {
+    if elapsed <= 0 {
+        return 0.0
+    }
+    p := f64(self.busy - before.busy) * 100.0 / f64(elapsed)
+    return if p > 100.0 { 100.0 } else { p }
+}
+
+// Every block device, from /proc/diskstats. The caller frees the list with
+// freeEach.
+pub !List[Disk] disks() {
+    scoped String text
+    try readInto("/proc/diskstats", &text)
+    List[Disk] out
+    i64 at = 0
+    for at < text.len {
+        major := number(text, &at)
+        minor := number(text, &at)
+        name := word(text, &at)
+        if name.len == 0 {
+            break
+        }
+        d := Disk{name: name.copy(), major: major, minor: minor}
+        d.reads = number(text, &at)
+        _ = number(text, &at)
+        // sectors here are always 512 bytes
+        d.readBytes = number(text, &at) * 512
+        d.readTime = Duration(number(text, &at)) * 1ms
+        d.writes = number(text, &at)
+        _ = number(text, &at)
+        d.writtenBytes = number(text, &at) * 512
+        d.writeTime = Duration(number(text, &at)) * 1ms
+        d.inFlight = number(text, &at)
+        d.busy = Duration(number(text, &at)) * 1ms
+        out.push(d)
+        skipLine(text, &at)
+    }
+    return out
+}
+
+// A mounted file system: what is mounted, where, its type (ext4, cifs,
+// tmpfs...) and the options it was mounted with.
+pub struct Mount {
+    pub String device
+    pub String path
+    pub String fsType
+    pub String options
+}
+
+// Gives the texts back.
+pub void Mount.free() {
+    self.device.free()
+    self.path.free()
+    self.fsType.free()
+    self.options.free()
+}
+
+// The room on the file system, as fs.space gives it.
+pub !fs.Space Mount.space() => try fs.space(self.path)
+
+// Whether it was mounted read-only.
+pub bool Mount.readOnly() {
+    for o in str.split(self.options, ",") {
+        if o == "ro" {
+            return true
+        }
+    }
+    return false
+}
+
+// A field of /proc/self/mounts, where a space, tab, line break or \ is
+// written as \ and three octal digits.
+String unescape(str s) {
+    String out
+    out.reserve(s.len)
+    i64 i = 0
+    for i < s.len {
+        c := s[i]
+        if c == '\\' && i + 3 < s.len && s[i + 1] >= '0' && s[i + 1] <= '3' {
+            u8[1] b = [u8((s[i + 1] - '0') * 64 + (s[i + 2] - '0') * 8 + (s[i + 3] - '0'))]
+            out.append(b[0:1])
+            i += 4
+        } else {
+            u8[1] b = [c]
+            out.append(b[0:1])
+            i += 1
+        }
+    }
+    return out
+}
+
+// Every file system mounted in the program's mount namespace, in the
+// order they were mounted, from /proc/self/mounts. The caller frees the
+// list with freeEach.
+pub !List[Mount] mounts() {
+    scoped String text
+    try readInto("/proc/self/mounts", &text)
+    List[Mount] out
+    i64 at = 0
+    for at < text.len {
+        device := word(text, &at)
+        path := word(text, &at)
+        fsType := word(text, &at)
+        options := word(text, &at)
+        if options.len == 0 {
+            break
+        }
+        out.push(Mount{device: unescape(device), path: unescape(path), fsType: fsType.copy(),
+            options: options.copy()})
+        skipLine(text, &at)
+    }
+    return out
+}
+
+// The mount that holds path: the one with the longest path that path is
+// in. path must be absolute.
+pub !Mount mountOf(str path) {
+    all := try mounts()
+    defer all.freeEach()
+    i64 best = -1
+    for i in 0..all.len {
+        p := all.at(i).path
+        inside := p == "/" || path == p || (str.startsWith(path, p) && path.len > p.len && path[p.len] == '/')
+        if inside && (best < 0 || p.len >= all.at(best).path.len) {
+            best = i
+        }
+    }
+    if best < 0 {
+        return error(SysError.notFound, "{path}: on no mount")
+    }
+    m := all.at(best)
+    return Mount{device: m.device.copy(), path: m.path.copy(), fsType: m.fsType.copy(), options: m.options.copy()}
+}
+
+// What a process is doing, from the letter ps shows: running (R), sleeping
+// (S), waiting for the disk (D), zombie (Z), stopped (T), traced (t),
+// dead (X), idle kernel thread (I).
+pub enum State { running, sleeping, disk, zombie, stopped, traced, dead, idle, other }
+
+State stateOf(u8 c) => match c {
+    'R' => State.running
+    'S' => State.sleeping
+    'D' => State.disk
+    'Z' => State.zombie
+    'T' => State.stopped
+    't' => State.traced
+    'X', 'x' => State.dead
+    'I' => State.idle
+    _ => State.other
+}
+
+// A process: its name and parent, what it is doing, its threads, the CPU
+// time it used, and its memory in bytes.
+pub struct Process {
+    pub i64 pid
+    pub String name
+    pub i64 parent
+    pub State state
+    pub i64 threads
+    pub Duration userTime
+    pub Duration systemTime
+    // the memory it holds now
+    pub i64 rss
+    // its address space
+    pub i64 virtual
+    // when it started, as time since boot
+    pub Duration started
+}
+
+// Gives the name back.
+pub void Process.free() {
+    self.name.free()
+}
+
+// The CPU time used, user and system.
+pub Duration Process.cpuTime() => self.userTime + self.systemTime
+
+// A process, from /proc/<pid>/stat: this program's with no pid. Fails with
+// SysError.notFound when there is no such process.
+pub !Process process(i64 pid = 0) {
+    scoped String path = if pid == 0 { "/proc/self/stat".copy() } else { format("/proc/{pid}/stat") }
+    scoped String text
+    readInto(path, &text) catch e {
+        if e.code == SysError.notFound && pid != 0 {
+            return error(SysError.notFound, "no process {pid}")
+        }
+        return e
+    }
+    return try parseProcess(text, path)
+}
+
+!Process parseProcess(str text, str path) {
+    // the name is in parentheses and may hold spaces or parentheses itself
+    open := str.find(text, "(")
+    close := str.findLast(text, ")")
+    if open < 0 || close < open || close + 2 >= text.len {
+        return bad(path)
+    }
+    i64 at = 0
+    p := Process{pid: number(text, &at), name: text[open + 1:close].copy()}
+    at = close + 2
+    p.state = stateOf(text[at])
+    at += 1
+    p.parent = number(text, &at)
+    // pgrp to cmajflt
+    for _ in 0..9 {
+        _ = word(text, &at)
+    }
+    hz := rawTicks()
+    p.userTime = ticks(number(text, &at), hz)
+    p.systemTime = ticks(number(text, &at), hz)
+    // cutime, cstime, priority, nice
+    for _ in 0..4 {
+        _ = word(text, &at)
+    }
+    p.threads = number(text, &at)
+    _ = word(text, &at)
+    p.started = ticks(number(text, &at), hz)
+    p.virtual = number(text, &at)
+    p.rss = number(text, &at) * rawPageSize()
+    return p
+}
+
+test "a process name with spaces and parentheses" {
+    text := "4242 (a (b) c) S 1 4242 4242 0 -1 4194560 120 0 0 0 250 30 0 0 20 0 3 0 1500 10485760 256 18446744073709551615\n"
+    scoped p := try parseProcess(text, "stat")
+    expect(p.pid == 4242 && p.name == "a (b) c" && p.state == State.sleeping && p.parent == 1, p.name)
+    expect(p.threads == 3 && p.virtual == 10485760 && p.rss == 256 * rawPageSize())
+    hz := rawTicks()
+    expect(p.userTime == ticks(250, hz) && p.systemTime == ticks(30, hz) && p.started == ticks(1500, hz))
+    _ = parseProcess("4242 no name", "stat") catch e {
+        expect(e.code == SysError.other)
+        Process{name: "".copy()}
+    }
+}
+
+test "meminfo without MemAvailable" {
+    m := try parseMemory("MemTotal: 1000 kB\nMemFree: 100 kB\nBuffers: 20 kB\nCached: 300 kB\nSwapTotal: 50 kB\nSwapFree: 40 kB\n")
+    expect(m.total == 1024000 && m.available == 420 * 1024 && m.used() == 580 * 1024 && m.swapUsed() == 10 * 1024)
+}
+
+test "mount fields with escapes" {
+    scoped String a = unescape("/mnt/my\\040disk")
+    expect(a == "/mnt/my disk", a)
+    scoped String b = unescape("/plain\\")
+    expect(b == "/plain\\", b)
+}

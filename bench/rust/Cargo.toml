@@ -49,6 +49,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 bson = "2"
 mongodb = "3"
 futures = "0.3"
+procfs = { version = "0.18", default-features = false }
 
 [profile.release]
 opt-level = 3
@@ -267,6 +268,10 @@ path = "../sigv4/main.rs"
 [[bin]]
 name = "mysql-query"
 path = "../mysql-query/main.rs"
+
+[[bin]]
+name = "sys"
+path = "../sys/main.rs"
 
 [[bin]]
 name = "metrics"
