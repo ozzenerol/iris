@@ -211,7 +211,7 @@
   /* ---- middle ---- */
   function overview() {
     var html = "<h1 style=\"font-family:var(--sans)\">Standard library</h1>" +
-      '<p class="lede">Every module of the Iris standard library. A program imports a module (<code>import str</code>) and uses its names with its name in front (<code>str.cut</code>). <code>core</code>, with <code>List</code> and <code>Map</code>, needs no import. Generated from the library\'s source, Iris ' + esc(data.version) + ".</p>" +
+      '<p class="lede">Every module of the Iris standard library. A program imports a module (<code>import str</code>) and uses its names with its name in front (<code>str.cut</code>). <code>core</code>, with <code>List</code> and <code>Map</code>, needs no import. Generated from the library\'s source, Iris ' + esc(window.IRIS_VERSION || "") + ".</p>" +
       '<div class="modgrid" style="margin-top:28px">';
     var group = null;
     mods.forEach(function (m) {

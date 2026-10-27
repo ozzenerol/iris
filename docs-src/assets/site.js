@@ -1,5 +1,8 @@
 /* The search box, the theme switch, Copy buttons and "On this page". */
 (function () {
+  document.querySelectorAll(".ver").forEach(function (v) {
+    v.textContent = window.IRIS_VERSION || "";
+  });
   var box = document.querySelector(".search");
   var input = document.getElementById("site-search");
   var list = document.getElementById("site-results");

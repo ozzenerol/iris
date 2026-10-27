@@ -9,7 +9,8 @@
   docs/std/data.js           the library's API: `iris doc --json` on every module
                              of docs-src/std/modules.json, with docs-src/std/NAME.md
                              as a module's introduction when there is one
-  docs/assets/               docs-src/assets/, and search.js (what the search box finds)
+  docs/assets/               docs-src/assets/, search.js (what the search box finds) and
+                             version.js (the version every page shows)
 
 A section's pages are its NN-name.md files in order; its index page lists them.
 
@@ -74,6 +75,7 @@ def shell(title, body, root, section="", wide=False, desc=""):
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="{root}assets/style.css">
 <link rel="icon" href="{root}assets/logo.svg" type="image/svg+xml">
+<script src="{root}assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
    the one remembered. Pages opened as files can't share storage in every
@@ -103,14 +105,14 @@ try {{
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">{VERSION}</span>
+    <span class="ver"></span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
 {body}
 <footer>
   <div class="bar">
-    <span>Iris {VERSION}</span>
+    <span>Iris <span class="ver"></span></span>
     <a href="{root}tour/index.html">Language Tour</a>
     <a href="{root}library-tour/index.html">Library Tour</a>
     <a href="{root}std/index.html">Library</a>
@@ -210,7 +212,7 @@ def std_pages(index, iris):
             index.append({"t": f"{m['name']}.{d['name']}", "p": m["title"],
                           "u": f"std/index.html#{m['name']}/{d['name']}", "k": d["kind"]})
         index.append({"t": m["name"], "p": m["title"], "u": f"std/index.html#{m['name']}", "k": "module"})
-    data = {"version": VERSION, "modules": mods}
+    data = {"modules": mods}
     write("std/data.js", "window.IRIS_STD = " + json.dumps(data, separators=(",", ":")) + ";\n")
     body = """<div class="std" id="std">
   <button class="side-toggle" type="button" data-side="std-left" data-text="Modules" data-label="modules" aria-expanded="true">&#8249; Modules</button>
@@ -270,6 +272,8 @@ def main():
         counts.append(f"{len(chs)} {section}")
     n = std_pages(index, iris)
     prose_page("index", "Iris", "", "Iris, a compiled language for servers, network tools and system programs.", index)
+    # the only file a new version changes; site.js puts it into each page
+    write("assets/version.js", "window.IRIS_VERSION = " + json.dumps(VERSION) + ";\n")
     write("assets/search.js", "window.IRIS_SEARCH = " + json.dumps(index, separators=(",", ":")) + ";\n")
     print(f"docs built: {', '.join(counts)}, {n} library declarations, {len(index)} search entries")
     broken = broken_links()
