@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.82.0</span>
+    <span class="ver">v0.83.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -107,6 +107,27 @@ you sent 3 bytes: two</code></pre>
 <p><code>write</code> waits while the peer's flow control holds the data back, or while <code>Config.streamBuffer</code> bytes wait to go. <code>reset(code)</code> abandons what this side sends, and the peer's reads fail with <code>QuicError.reset</code>. <code>stopReading(code)</code> asks the peer to stop sending, and its writes fail with <code>QuicError.stopped</code>. <code>setTimeout(d)</code> makes a read or a write that waits longer than <code>d</code> fail with <code>QuicError.timeout</code>.</p>
 <p>A connection that hears nothing for <code>Config.idleTimeout</code> ends. <code>close(code, reason)</code> ends it with an error code of the application, which the peer sees in <code>why()</code>. The errors are <code>QuicError</code> codes:</p>
 <ul><li><code>closed</code>: the connection or the stream ended.</li><li><code>timeout</code>: nothing came for too long, or the handshake took longer than <code>Config.handshakeTimeout</code>.</li><li><code>refused</code>: the server turned the connection down.</li><li><code>tls</code>: the handshake failed, as for a certificate that doesn't check.</li><li><code>protocol</code>: the peer broke the rules of QUIC.</li><li><code>reset</code> and <code>stopped</code>: the peer reset a stream, or stopped reading it.</li><li><code>tooLarge</code>: a stream had more than <code>readAll</code>'s limit.</li></ul>
+<h2 id="0-rtt"><a href="#0-rtt">0-RTT</a></h2>
+<p>With <code>Config.earlyData</code> set on both sides, a client sends its first bytes along with the handshake when it reconnects. The server sends session tickets after each handshake, and the client keeps them for that server, port and settings. The next <code>dial</code> with a ticket returns at once, and what the program writes goes in 0-RTT packets. <code>Conn.earlyData()</code> tells what happened:</p>
+<ul><li><code>none</code>: the client had no ticket, or earlyData is off.</li><li><code>waiting</code>: the client's handshake is still going.</li><li><code>accepted</code>: the server read the 0-RTT data.</li><li><code>rejected</code>: the server couldn't use the ticket, and what was written went again after the handshake.</li></ul>
+<p>Each ticket is used once. Someone who records 0-RTT data can still send it to another server that has the same ticket keys, so send only requests that are safe to repeat this way.</p>
+<pre class="code"><code><span class="k">import</span> net, quic
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    config := quic.<span class="t">Config</span>{alpn: <span class="s">&quot;demo&quot;</span>, earlyData: <span class="k">true</span>}
+    c := <span class="k">try</span> quic.<span class="f">dial</span>(<span class="s">&quot;example.com&quot;</span>, <span class="n">443</span>, config)
+    s := <span class="k">try</span> c.<span class="f">openStream</span>()
+    <span class="k">try</span> s.<span class="f">write</span>(<span class="s">&quot;GET /&quot;</span>)
+    s.<span class="f">closeWrite</span>()
+    <span class="k">scoped</span> <span class="t">String</span> reply = <span class="k">try</span> s.<span class="f">readAll</span>()
+    s.<span class="f">close</span>()
+    c.<span class="f">close</span>()
+    <span class="c">// a second dial within the ticket&#x27;s lifetime sends the request in 0-RTT</span>
+    c = <span class="k">try</span> quic.<span class="f">dial</span>(<span class="s">&quot;example.com&quot;</span>, <span class="n">443</span>, config)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>c.<span class="f">earlyData</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    c.<span class="f">close</span>()
+}</code></pre>
+<h2 id="recovery"><a href="#recovery">Recovery</a></h2>
 <p>Lost packets are found and sent again, and NewReno congestion control keeps the sender from flooding the path. On Linux, datagrams go out in batches and come in coalesced (GSO and GRO), which saves system calls on large transfers.</p>
 <h2 id="http-3"><a href="#http-3">HTTP/3</a></h2>
 <p><code>r.serveTls(8443, &quot;cert.pem&quot;, &quot;key.pem&quot;, http3: true)</code> serves HTTPS on TCP port 8443 and HTTP/3 on UDP port 8443, with the same routes. Answers over HTTP/1.1 and HTTP/2 carry an <code>Alt-Svc</code> header that tells clients where HTTP/3 is, and browsers move there. <code>r.serveH3(port, certFile, keyFile)</code> serves HTTP/3 alone. <code>r.advertiseH3(port)</code> adds the <code>Alt-Svc</code> header when HTTP/3 is served some other way. A handler sees <code>req.protocol</code> as <code>&quot;HTTP/3&quot;</code>.</p>
@@ -142,11 +163,11 @@ you sent 3 bytes: two</code></pre>
     <nav class="pager"><a class="prev" href="23-sftp.html"><span>Previous</span>SFTP and scp</a><a class="next" href="25-protobuf-and-grpc.html"><span>Next</span>Protocol Buffers and gRPC</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#streams">Streams</a></li><li><a href="#http-3">HTTP/3</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#a-server-and-a-client">A server and a client</a></li><li><a href="#streams">Streams</a></li><li><a href="#0-rtt">0-RTT</a></li><li><a href="#recovery">Recovery</a></li><li><a href="#http-3">HTTP/3</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.82.0</span>
+    <span>Iris v0.83.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>

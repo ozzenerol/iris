@@ -37,7 +37,7 @@ try {
       <kbd>/</kbd>
       <ul id="site-results" class="results" hidden></ul>
     </div>
-    <span class="ver">v0.82.0</span>
+    <span class="ver">v0.83.0</span>
     <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
@@ -89,7 +89,7 @@ try {
 }</code></pre>
 <pre class="out"><code>tea is 24 hex digits: true
 2 more, 3 in all</code></pre>
-<ul><li>The address is <code>mongodb://user:password@host:port/database</code>. <code>?authSource=admin</code> names the database that holds the user, which is the address's database unless given.</li><li><code>?tls=true</code> makes the connection use TLS, and <code>?tlsCAFile=root.pem</code> trusts that file's certificates.</li><li>The login is SCRAM-SHA-256, MongoDB's default.</li><li>A refused login fails with <code>MongoError.auth</code>, and a server that can't be reached with <code>MongoError.connect</code>.</li><li><code>drop</code> removes a collection. One that isn't there is no error.</li></ul>
+<ul><li>The address is <code>mongodb://user:password@host:port/database</code>. <code>?authSource=admin</code> names the database that holds the user, which is the address's database unless given.</li><li><code>?tls=true</code> makes the connection use TLS, and <code>?tlsCAFile=root.pem</code> trusts that file's certificates.</li><li>Several hosts, as in <code>mongodb://root:secret@db1,db2,db3/shop?replicaSet=rs0</code>, name the members of a replica set. The client finds the primary and sends every command there.</li><li><code>mongodb+srv://root:secret@cluster.example.com/shop</code> looks up the hosts in the SRV records of <code>_mongodb._tcp.cluster.example.com</code>, and <code>authSource</code> and <code>replicaSet</code> in its TXT record. It uses TLS.</li><li>The login is SCRAM-SHA-256, MongoDB's default.</li><li>A refused login fails with <code>MongoError.auth</code>, and a server that can't be reached with <code>MongoError.connect</code>.</li><li><code>drop</code> removes a collection. One that isn't there is no error.</li></ul>
 <h2 id="finding-documents"><a href="#finding-documents">Finding documents</a></h2>
 <p>A filter is a <code>bson.Doc</code>. <code>bson.fromJson</code> reads one from JSON text written the way MongoDB shows queries, and <code>bson.doc()</code> builds one with calls such as <code>text</code>, <code>int</code> and <code>doc</code>. <code>mongo.find[T]</code> gives every document that matches as a <code>List[T]</code>, with an optional sort, projection, limit and skip. <code>mongo.findOne[T]</code> gives the first, and fails with <code>MongoError.notFound</code> when there is none. Fields the struct doesn't have are skipped:</p>
 <pre class="code"><code><span class="k">import</span> bson, mongo, os
@@ -203,6 +203,48 @@ coffee: 21
 scone: 6
 37 items worth 96.42</code></pre>
 <p><code>db.command(database, cmd)</code> runs any other command and gives its reply as a <code>bson.Doc</code>.</p>
+<h2 id="replica-sets-transactions-and-change-streams"><a href="#replica-sets-transactions-and-change-streams">Replica sets, transactions and change streams</a></h2>
+<p>When the primary steps down or goes away, the client looks for the new one for up to 30 seconds (<code>?serverSelectionTimeoutMS=</code> sets this). A command that failed because of that runs again once on the new primary: reads, inserts, and updates and deletes of one document. Those writes carry a transaction number, so the server doesn't do them twice. <code>?retryWrites=false</code> turns this off for writes. Updates and deletes of many documents run only once.</p>
+<p>A session runs a transaction. <code>startSession</code> gives one, and the collections it gives run their commands in it. What happens between <code>startTransaction</code> and <code>commit</code> is seen by others only after the commit, and not at all after <code>abort</code>. A command that fails with <code>MongoError.transient</code> means the transaction may work if it runs again: abort it and start over. <code>end</code> ends the session.</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Account</span> {
+    <span class="t">String</span> name
+    <span class="t">i64</span> balance
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@db1,db2/bank?replicaSet=rs0&amp;authSource=admin&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    sess := db.<span class="f">startSession</span>()
+    <span class="k">defer</span> sess.<span class="f">end</span>()
+    accounts := sess.<span class="f">collection</span>(<span class="s">&quot;accounts&quot;</span>)
+    <span class="k">scoped</span> from := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;name&quot;: &quot;ada&quot;}&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> to := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;name&quot;: &quot;bob&quot;}&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> take := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;$inc&quot;: {&quot;balance&quot;: -10}}&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> give := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;{&quot;$inc&quot;: {&quot;balance&quot;: 10}}&quot;&quot;&quot;</span>)
+    <span class="k">try</span> sess.<span class="f">startTransaction</span>()
+    _ = <span class="k">try</span> accounts.<span class="f">updateOne</span>(&amp;from, &amp;take)
+    _ = <span class="k">try</span> accounts.<span class="f">updateOne</span>(&amp;to, &amp;give)
+    <span class="k">try</span> sess.<span class="f">commit</span>()
+}</code></pre>
+<p><code>watch</code> follows the changes to a collection as they happen. Each document its cursor gives is one change, with <code>operationType</code> (<code>insert</code>, <code>update</code>, <code>replace</code>, <code>delete</code>...), <code>documentKey</code>, and <code>fullDocument</code> for an insert, or for an update too with <code>fullDocument: true</code>. A pipeline adds stages, such as a <code>$match</code> on the kind of change. <code>next</code> waits for the next change. With <code>wait</code>, it gives false after that long without one, and can be called again. When the primary changes, the stream goes on from the last change it gave.</p>
+<pre class="code"><code><span class="k">import</span> bson, mongo, os
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mongo.<span class="f">connect</span>(os.<span class="f">env</span>(<span class="s">&quot;MONGO_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mongodb://root:secret@db1,db2/shop?replicaSet=rs0&amp;authSource=admin&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    orders := db.<span class="f">collection</span>(<span class="s">&quot;orders&quot;</span>)
+    <span class="k">scoped</span> inserts := <span class="k">try</span> bson.<span class="f">fromJson</span>(<span class="s">r&quot;&quot;&quot;[{&quot;$match&quot;: {&quot;operationType&quot;: &quot;insert&quot;}}]&quot;&quot;&quot;</span>)
+    <span class="k">scoped</span> changes := <span class="k">try</span> orders.<span class="f">watch</span>(&amp;inserts)
+    <span class="k">for</span> <span class="k">try</span> changes.<span class="f">next</span>() {
+        order, _ := changes.<span class="f">doc</span>().<span class="f">get</span>(<span class="s">&quot;fullDocument&quot;</span>)
+        id, _ := order.<span class="f">doc</span>().<span class="f">get</span>(<span class="s">&quot;_id&quot;</span>)
+        <span class="f">print</span>(<span class="s">&quot;new order </span><span class="e">{</span>id.<span class="f">id</span>().<span class="f">hex</span>()<span class="e">}</span><span class="s">&quot;</span>)
+    }
+}</code></pre>
+<p>Transactions and change streams need a replica set or a sharded cluster. A replica set of one member is enough for development.</p>
 <h2 id="bson"><a href="#bson">BSON</a></h2>
 <p>The <code>bson</code> module works without a server. <code>bson.encode</code> turns a <code>@json</code> struct into BSON and <code>bson.decode[T]</code> turns it back. <code>bson.ObjectId</code>, <code>bson.Date</code>, <code>bson.Binary</code> and <code>bson.Decimal128</code> are fields of those BSON types. A <code>bson.Raw</code> reads a document in place, and <code>for e in raw</code> goes through its fields:</p>
 <pre class="code run"><code><span class="k">import</span> bson
@@ -254,11 +296,11 @@ lang 1: go</code></pre>
     <nav class="pager"><a class="prev" href="29-mysql.html"><span>Previous</span>MySQL</a><a class="next" href="31-s3.html"><span>Next</span>S3</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-and-inserting">Connecting and inserting</a></li><li><a href="#finding-documents">Finding documents</a></li><li><a href="#changing-and-removing">Changing and removing</a></li><li><a href="#cursors-and-aggregation">Cursors and aggregation</a></li><li><a href="#bson">BSON</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-and-inserting">Connecting and inserting</a></li><li><a href="#finding-documents">Finding documents</a></li><li><a href="#changing-and-removing">Changing and removing</a></li><li><a href="#cursors-and-aggregation">Cursors and aggregation</a></li><li><a href="#replica-sets-transactions-and-change-streams">Replica sets, transactions and change streams</a></li><li><a href="#bson">BSON</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">
-    <span>Iris v0.82.0</span>
+    <span>Iris v0.83.0</span>
     <a href="../tour/index.html">Language Tour</a>
     <a href="../library-tour/index.html">Library Tour</a>
     <a href="../std/index.html">Library</a>
