@@ -17,6 +17,12 @@ import net, random, time
 // stopped reading one, tooLarge for a stream longer than readAll's limit.
 pub enum QuicError { closed, timeout, refused, tls, protocol, reset, stopped, tooLarge }
 
+// What became of 0-RTT on a connection: none when it wasn't used, waiting
+// while a client's handshake goes on, accepted when the server read it,
+// rejected when it didn't and what was written went again after the
+// handshake.
+pub enum EarlyData { none, waiting, accepted, rejected }
+
 // The settings of a connection. A client sets alpn, and serverName when
 // the name to check the certificate against isn't the host it dials.
 pub struct Config {
@@ -47,6 +53,12 @@ pub struct Config {
     // wait for accept
     pub i64 maxConnections = 10000
     pub i64 backlog = 256
+    // 0-RTT (RFC 9001 4.6). A client keeps the server's session tickets,
+    // and with one from an earlier connection dial returns at once:
+    // what it writes goes with the handshake. A server sends tickets that
+    // allow it and reads such data. An attacker who records 0-RTT data
+    // can send it again, so it suits requests that are safe to repeat.
+    pub bool earlyData
 }
 
 // A connection, from dial or accept. close lets go of it.
@@ -107,7 +119,7 @@ pub !Conn dial(str host, u16 port, Config config = Config{}) {
     spawn l.drive()
     deadline := time.clock() + ep.config.handshakeTimeout
     bool late = false
-    for !l.tlsDone && !l.ended() {
+    for !l.tlsDone && l.zkey == null && !l.ended() {
         left := deadline - time.clock()
         if left <= 0s {
             late = true
@@ -120,7 +132,7 @@ pub !Conn dial(str host, u16 port, Config config = Config{}) {
         }
         l.users -= 1
     }
-    if !l.tlsDone || l.ended() {
+    if (!l.tlsDone && l.zkey == null) || l.ended() {
         code := if late { QuicError.timeout } else { l.whyCode }
         String why = if late {
             format("dialing {host}: no handshake within {ep.config.handshakeTimeout}")
@@ -254,6 +266,10 @@ pub !Stream Conn.acceptStream() {
 
 // The protocol the two sides chose with ALPN, such as "h3".
 pub str Conn.protocol() => self.l.alpn
+
+// What became of 0-RTT. On a client that dialed with a ticket it is
+// waiting until the handshake is done.
+pub EarlyData Conn.earlyData() => self.l.early
 
 // The peer's address.
 pub net.Addr Conn.remoteAddr() => self.l.peer

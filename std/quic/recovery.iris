@@ -283,6 +283,22 @@ void Link.onLost(i64 i, Sent *s) {
     s.more.free()
 }
 
+// The 0-RTT packets are taken as lost: the server turned 0-RTT down, or
+// a Retry came before it read them. What they carried goes again.
+void Link.loseEarly() {
+    sp := &self.sp[SP_APP]
+    for idx in 0..sp.sent.len {
+        s := sp.sent.at(idx)
+        if !s.done {
+            s.done = true
+            self.onLost(SP_APP, &s)
+            sp = &self.sp[SP_APP]
+            sp.sent.set(idx, s)
+        }
+    }
+    self.popDone(SP_APP)
+}
+
 // Sends what a packet carried again: it was lost, or a probe repeats it.
 void Link.resend(i64 i, Sent *s) {
     sp := &self.sp[i]
@@ -371,6 +387,10 @@ bool Link.peerValidated() => self.server || self.confirmed || self.sp[SP_HANDSHA
     }
     bool any = false
     for i in 0..3 {
+        // 0-RTT packets don't keep the handshake going
+        if i == SP_APP && !self.confirmed {
+            continue
+        }
         if !self.sp[i].gone && self.sp[i].elicitingOut > 0 {
             any = true
         }

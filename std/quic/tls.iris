@@ -4,10 +4,10 @@
 
 @extern("iris_quic_tls_client")
 u8 *rawTlsClient(u8 *host, i64 hostLen, u8 *ca, i64 caLen, u8 *alpn, i64 alpnLen, u8 *cert, i64 certLen, u8 *key,
-    i64 keyLen, u8 *params, i64 paramsLen)
+    i64 keyLen, u8 *params, i64 paramsLen, u8 *ticket, i64 ticketLen)
 
 @extern("iris_quic_tls_server")
-u8 *rawTlsServer(u8 *ctx, u8 *params, i64 paramsLen)
+u8 *rawTlsServer(u8 *ctx, u8 *params, i64 paramsLen, i64 early)
 
 @extern("iris_quic_tls_feed")
 void rawTlsFeed(u8 *tls, i64 level, u8 *data, i64 len)
@@ -29,6 +29,15 @@ i32 rawTlsParams(u8 *tls, u8 **p, i64 *n)
 
 @extern("iris_quic_tls_ssl")
 u8 *rawTlsSsl(u8 *tls)
+
+@extern("iris_quic_tls_remembered")
+i32 rawTlsRemembered(u8 *tls, u8 **p, i64 *n)
+
+@extern("iris_quic_tls_early")
+i32 rawTlsEarly(u8 *tls)
+
+@extern("iris_quic_tls_after")
+void rawTlsAfter(u8 *tls)
 
 @extern("iris_quic_tls_free")
 void rawTlsFree(u8 *tls)

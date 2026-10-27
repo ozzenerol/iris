@@ -134,6 +134,13 @@ struct Link {
     Params theirs
     bool gotParams
     String alpn
+    // 0-RTT (RFC 9001 4.6): the key a client writes and a server reads
+    // with, whether the client offered it, what became of it, and whether
+    // the packet being read is one
+    u8 *zkey
+    bool earlyOffered
+    EarlyData early
+    bool zeroIn
     // 1-RTT key updates (RFC 9001 6)
     u8 *readNext
     u8 *readPrev
@@ -286,6 +293,7 @@ void Link.destroy() {
         sp.crypto.free()
         sp.cryptoIn.free()
     }
+    rawKeyFree(self.zkey)
     rawKeyFree(self.readNext)
     rawKeyFree(self.readPrev)
     rawKeyFree(self.writeNext)
@@ -373,14 +381,25 @@ void Link.wakeAll() {
 bool Link.startTls() {
     u8[512] buf
     n := encodeParams(&self.ours, self.server, buf[:])
+    c := &self.config
     if self.server {
-        self.tls = rawTlsServer(tlsCtx(self.ep.tls), &buf[0], n)
+        self.tls = rawTlsServer(tlsCtx(self.ep.tls), &buf[0], n, if c.earlyData { 1 } else { 0 })
     } else {
-        alpn := wireAlpn(self.config.alpn)
-        self.tls = rawTlsClient(self.config.serverName.ptr, self.config.serverName.len, self.config.ca.ptr,
-            self.config.ca.len, alpn.ptr, alpn.len, self.config.cert.ptr, self.config.cert.len, self.config.key.ptr,
-            self.config.key.len, &buf[0], n)
+        alpn := wireAlpn(c.alpn)
+        // tickets are kept for this server and these settings
+        String ticket
+        if c.earlyData {
+            addr := self.peer.format()
+            ticket = format("{c.serverName}|{addr}|{c.alpn}|{c.ca}|{c.cert}|{c.key}")
+            addr.free()
+        }
+        self.tls = rawTlsClient(c.serverName.ptr, c.serverName.len, c.ca.ptr, c.ca.len, alpn.ptr, alpn.len,
+            c.cert.ptr, c.cert.len, c.key.ptr, c.key.len, &buf[0], n, ticket.ptr, ticket.len)
         alpn.free()
+        ticket.free()
+        if self.tls != null {
+            self.remember()
+        }
     }
     if self.tls == null {
         self.why = format("starting TLS: {tlsMessage()}")
@@ -388,6 +407,33 @@ bool Link.startTls() {
         return false
     }
     return true
+}
+
+// A client that offers 0-RTT sends within the limits the server gave on
+// the connection the ticket came from (RFC 9000 7.4.1).
+void Link.remember() {
+    u8 *p
+    i64 n
+    if rawTlsRemembered(self.tls, &p, &n) == 0 {
+        return
+    }
+    Params t = Params{}
+    if decodeParams(p[0:n], true, &t).len > 0 {
+        return
+    }
+    self.earlyOffered = true
+    self.early = .waiting
+    th := &self.theirs
+    th.cidLimit = t.cidLimit
+    th.maxData = t.maxData
+    th.streamDataBidiLocal = t.streamDataBidiLocal
+    th.streamDataBidiRemote = t.streamDataBidiRemote
+    th.streamDataUni = t.streamDataUni
+    th.maxStreamsBidi = t.maxStreamsBidi
+    th.maxStreamsUni = t.maxStreamsUni
+    self.maxDataOut = t.maxData
+    self.maxBidiOut = t.maxStreamsBidi
+    self.maxUniOut = t.maxStreamsUni
 }
 
 // The protocols "h3,hq-interop" as ALPN wants them, each with its length
@@ -442,6 +488,9 @@ void Link.stepTls() {
         i64 n
         if rawTlsParams(self.tls, &p, &n) != 0 {
             self.gotParams = true
+            if self.earlyOffered {
+                self.theirs = Params{}
+            }
             why := decodeParams(p[0:n], !self.server, &self.theirs)
             if why.len > 0 {
                 self.fail(E_TRANSPORT_PARAMETER, why)
@@ -451,6 +500,9 @@ void Link.stepTls() {
                 return
             }
             self.applyParams()
+            if self.earlyOffered {
+                self.widenStreams()
+            }
         }
     }
     if r == 1 && !self.tlsDone {
@@ -479,9 +531,28 @@ void Link.takeKeys() {
             }
         }
     }
-    // 0-RTT keys aren't used
-    rawKeyFree(rawTlsKey(self.tls, 1, 0))
-    rawKeyFree(rawTlsKey(self.tls, 1, 1))
+    // the 0-RTT key: a client's to write with, a server's to read
+    z := rawTlsKey(self.tls, 1, if self.server { 0 } else { 1 })
+    if z != null {
+        rawKeyFree(self.zkey)
+        self.zkey = z
+    }
+    rawKeyFree(rawTlsKey(self.tls, 1, if self.server { 1 } else { 0 }))
+}
+
+// Streams opened in 0-RTT may send as far as the server's own
+// parameters allow.
+void Link.widenStreams() {
+    t := &self.theirs
+    for _, s in self.streams {
+        if idIsServers(s.id) == self.server {
+            m := if idIsUni(s.id) { t.streamDataUni } else { t.streamDataBidiRemote }
+            if m > s.sendMax {
+                s.sendMax = m
+                self.wantSend(s)
+            }
+        }
+    }
 }
 
 // The connection IDs in the parameters must be the ones the packets
@@ -538,6 +609,21 @@ void Link.handshakeDone() {
         return
     }
     self.phase = .open
+    e := rawTlsEarly(self.tls)
+    if self.server {
+        self.early = if e == 2 { EarlyData.accepted } else { EarlyData.none }
+    } else if self.earlyOffered {
+        // no more 0-RTT once 1-RTT keys are there
+        rawKeyFree(self.zkey)
+        self.zkey = null
+        if e == 2 {
+            self.early = .accepted
+        } else {
+            // the server didn't read it: what it carried goes again
+            self.early = .rejected
+            self.loseEarly()
+        }
+    }
     if self.server {
         // the server's handshake is confirmed once it is complete
         self.confirmed = true
@@ -629,9 +715,19 @@ i64 Link.packet(str data, net.Addr from) {
         return 0
     }
     if kind == PT_ZERO_RTT {
-        // no 0-RTT: skip it
         len := r.getVar()
-        return if r.bad { 0 } else { r.at + len }
+        if r.bad || len > data.len - r.at {
+            return 0
+        }
+        end := r.at + len
+        // a server reads 0-RTT once TLS took the ticket, in the space of
+        // 1-RTT
+        if self.server && self.zkey != null {
+            self.zeroIn = true
+            _ = self.protected(SP_APP, p, r.at, end, false)
+            self.zeroIn = false
+        }
+        return end
     }
     if kind == PT_INITIAL {
         tl := r.getVar()
@@ -662,6 +758,10 @@ i64 Link.shortPacket(str data) {
     }
     if !self.protected(SP_APP, data.ptr, 1 + self.scidLen, data.len, true) {
         self.maybeReset(data)
+    } else if self.zkey != null && self.server {
+        // the client has 1-RTT keys: no more 0-RTT comes
+        rawKeyFree(self.zkey)
+        self.zkey = null
     }
     return data.len
 }
@@ -670,17 +770,18 @@ i64 Link.shortPacket(str data) {
 // then its frames. False when it didn't open.
 bool Link.protected(i64 i, u8 *p, i64 pnOff, i64 end, bool short) {
     sp := &self.sp[i]
-    if sp.gone || sp.rkey == null {
+    u8 *rk = if self.zeroIn { self.zkey } else { sp.rkey }
+    if sp.gone || rk == null {
         return false
     }
-    pn := rawUnprotect(sp.rkey, p, end, pnOff, sp.largestGot)
+    pn := rawUnprotect(rk, p, end, pnOff, sp.largestGot)
     if pn < 0 {
         trace("{self.server} recv sp {i}: too short")
         return false
     }
     first := i64(p[0:1][0])
     hdr := pnOff + (first & 3) + 1
-    u8 *key = sp.rkey
+    u8 *key = rk
     bool next = false
     if short {
         phase := first >> 2 & 1
@@ -834,6 +935,7 @@ void Link.retry(str data, str scid) {
     sp.firstPn = sp.nextPn
     sp.elicitingOut = 0
     sp.crypto.lost.add(0, sp.crypto.next)
+    self.loseEarly()
     self.poke()
 }
 
@@ -854,6 +956,11 @@ bool Link.frames(i64 i, In *r) {
                 self.fail(E_PROTOCOL_VIOLATION, "a frame of type {kind} in an Initial or Handshake packet")
                 return eliciting
             }
+        if self.zeroIn && (kind == FR_ACK || kind == FR_ACK_ECN || kind == FR_CRYPTO || kind == FR_HANDSHAKE_DONE ||
+                kind == FR_NEW_TOKEN || kind == FR_PATH_RESPONSE || kind == FR_RETIRE_CONNECTION_ID) {
+                    self.fail(E_PROTOCOL_VIOLATION, "a frame of type {kind} in a 0-RTT packet")
+                    return eliciting
+                }
         if kind >= FR_STREAM && kind <= FR_STREAM + 7 {
             self.streamFrame(kind, r)
         } else {
@@ -990,9 +1097,11 @@ void Link.cryptoFrame(i64 i, In *r) {
     if i != SP_APP || self.server {
         rawTlsFeed(self.tls, levelOf(i), buf.ptr, got)
         self.stepTls()
+    } else if self.config.earlyData && self.tlsDone {
+        // a client keeps the server's tickets for 0-RTT next time
+        rawTlsFeed(self.tls, 3, buf.ptr, got)
+        rawTlsAfter(self.tls)
     }
-    // a client drops what comes after the handshake (NewSessionTicket):
-    // there is no resumption
     free(buf)
 }
 

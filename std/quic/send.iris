@@ -17,6 +17,7 @@ struct Plan {
     i64 pnLen
     i64 lenOff // the long header's 2-byte length, -1 for a short header
     i64 end
+    bool zero // a client's 0-RTT packet
     Sent sent
 }
 
@@ -89,7 +90,9 @@ i64 Link.buildDatagram(u8[] dg, Duration now) {
     bool eliciting = false
     for i in 0..3 {
         sp := &self.sp[i]
-        if sp.gone || sp.wkey == null {
+        // before 1-RTT keys a client with a ticket sends 0-RTT
+        zero := i == SP_APP && sp.wkey == null && self.zkey != null && !self.server && self.phase == .handshake
+        if sp.gone || (sp.wkey == null && !zero) {
             continue
         }
         if dg.len - at < 64 {
@@ -102,7 +105,7 @@ i64 Link.buildDatagram(u8[] dg, Duration now) {
         if self.phase == .closing && i == SP_INITIAL && self.sp[SP_HANDSHAKE].wkey != null && !self.server {
             continue
         }
-        Plan p = Plan{sp: i, start: at}
+        Plan p = Plan{sp: i, start: at, zero: zero}
         if !self.buildPacket(i, dg, now, &p) {
             continue
         }
@@ -138,7 +141,7 @@ i64 Link.buildDatagram(u8[] dg, Duration now) {
             o.putVarIn(p.end + 16 - p.pnOff, 2)
         }
         sp := &self.sp[p.sp]
-        key := sp.wkey
+        key := if p.zero { self.zkey } else { sp.wkey }
         _ = rawSeal(key, &dg[p.start], p.pnOff - p.start, p.pnLen, p.sent.pn, p.end - p.start)
         p.sent.size = p.end + 16 - p.start
         if k == n - 1 {
@@ -170,7 +173,8 @@ void Link.record(i64 i, Sent s, Duration now) {
 bool Link.buildPacket(i64 i, u8[] dg, Duration now, Plan *p) {
     sp := &self.sp[i]
     closing := self.phase == .closing
-    wantAck := sp.unacked > 0 && (sp.ackNow || (sp.ackBy != 0s && now >= sp.ackBy))
+    // 0-RTT carries no ACK (RFC 9000 17.2.3)
+    wantAck := !p.zero && sp.unacked > 0 && (sp.ackNow || (sp.ackBy != 0s && now >= sp.ackBy))
     probe := sp.probes > 0
     bool allowed = probe || self.inFlight + self.mtu <= self.cwnd
     if self.server && !self.validated && self.bytesOut + p.start + self.mtu > 3 * self.bytesIn {
@@ -189,12 +193,12 @@ bool Link.buildPacket(i64 i, u8[] dg, Duration now, Plan *p) {
     pn := sp.nextPn
     pnLen := pnLenFor(pn, sp.largestAcked)
     Out o = Out{b: dg[0:dg.len - 16], n: p.start}
-    if i == SP_APP {
+    if i == SP_APP && !p.zero {
         o.put8(0x40 | self.keyPhase << 2 | (pnLen - 1))
         o.putBytes(self.dcid[0:self.dcidLen])
         p.lenOff = -1
     } else {
-        kind := if i == SP_INITIAL { PT_INITIAL } else { PT_HANDSHAKE }
+        kind := if p.zero { PT_ZERO_RTT } else if i == SP_INITIAL { PT_INITIAL } else { PT_HANDSHAKE }
         o.put8(0xc0 | kind << 4 | (pnLen - 1))
         o.put32(VERSION_1)
         o.put8(self.dcidLen)
@@ -222,7 +226,7 @@ bool Link.buildPacket(i64 i, u8[] dg, Duration now, Plan *p) {
     if closing {
         self.closeFrame(i, &o)
     } else {
-        if sp.unacked > 0 || (wantAck && !sp.got.empty()) {
+        if !p.zero && (sp.unacked > 0 || (wantAck && !sp.got.empty())) {
             self.writeAck(i, &o, now, &s)
         }
         if hasData || probe {

@@ -1,0 +1,80 @@
+// expect: first: none hello
+// expect: second: waiting
+// expect: second: accepted again
+// expect: server saw accepted
+// expect: third: rejected after restart
+
+import net, quic
+
+void echo(quic.Stream s) {
+    defer s.close()
+    scoped String got = s.readAll() catch e {
+        return
+    }
+    s.write(got) catch e {
+        return
+    }
+    s.closeWrite()
+}
+
+void handle(quic.Conn c, chan[quic.EarlyData] seen) {
+    _ = seen.trySend(c.earlyData())
+    for {
+        s := c.acceptStream() catch e {
+            break
+        }
+        spawn echo(s)
+    }
+    c.close()
+}
+
+void serve(quic.Listener ln, chan[quic.EarlyData] seen) {
+    for {
+        c := ln.accept() catch e {
+            return
+        }
+        spawn handle(c, seen)
+    }
+}
+
+!String ask(quic.Conn c, str what) {
+    s := try c.openStream()
+    defer s.close()
+    try s.write(what)
+    s.closeWrite()
+    return try s.readAll()
+}
+
+!void main() {
+    config := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    sc := quic.Config{alpn: "echo", earlyData: true}
+    seen := chan[quic.EarlyData](8)
+    ln := try quic.listen(0, &config, sc, "127.0.0.1")
+    port := ln.port
+    spawn serve(ln, seen)
+    cc := quic.Config{alpn: "echo", ca: "tests/data/tls/ca.pem", serverName: "localhost", earlyData: true}
+
+    c := try quic.dial("127.0.0.1", port, cc)
+    scoped String a = try ask(c, "hello")
+    print("first: {c.earlyData()} {a}")
+    c.close()
+    _ = <-seen
+
+    c = try quic.dial("127.0.0.1", port, cc)
+    print("second: {c.earlyData()}")
+    scoped String b = try ask(c, "again")
+    print("second: {c.earlyData()} {b}")
+    c.close()
+    print("server saw {<-seen}")
+
+    // a new server with other ticket keys can't read the ticket
+    ln.close()
+    config2 := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
+    ln2 := try quic.listen(port, &config2, sc, "127.0.0.1")
+    spawn serve(ln2, seen)
+    c = try quic.dial("127.0.0.1", port, cc)
+    scoped String d = try ask(c, "after restart")
+    print("third: {c.earlyData()} {d}")
+    c.close()
+    ln2.close()
+}

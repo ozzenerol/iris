@@ -83,6 +83,38 @@ A connection that hears nothing for `Config.idleTimeout` ends. `close(code, reas
 - `reset` and `stopped`: the peer reset a stream, or stopped reading it.
 - `tooLarge`: a stream had more than `readAll`'s limit.
 
+## 0-RTT
+
+With `Config.earlyData` set on both sides, a client sends its first bytes along with the handshake when it reconnects. The server sends session tickets after each handshake, and the client keeps them for that server, port and settings. The next `dial` with a ticket returns at once, and what the program writes goes in 0-RTT packets. `Conn.earlyData()` tells what happened:
+
+- `none`: the client had no ticket, or earlyData is off.
+- `waiting`: the client's handshake is still going.
+- `accepted`: the server read the 0-RTT data.
+- `rejected`: the server couldn't use the ticket, and what was written went again after the handshake.
+
+Each ticket is used once. Someone who records 0-RTT data can still send it to another server that has the same ticket keys, so send only requests that are safe to repeat this way.
+
+```iris
+import net, quic
+
+!void main() {
+    config := quic.Config{alpn: "demo", earlyData: true}
+    c := try quic.dial("example.com", 443, config)
+    s := try c.openStream()
+    try s.write("GET /")
+    s.closeWrite()
+    scoped String reply = try s.readAll()
+    s.close()
+    c.close()
+    // a second dial within the ticket's lifetime sends the request in 0-RTT
+    c = try quic.dial("example.com", 443, config)
+    print("{c.earlyData()}")
+    c.close()
+}
+```
+
+## Recovery
+
 Lost packets are found and sent again, and NewReno congestion control keeps the sender from flooding the path. On Linux, datagrams go out in batches and come in coalesced (GSO and GRO), which saves system calls on large transfers.
 
 ## HTTP/3

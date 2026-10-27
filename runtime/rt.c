@@ -21180,6 +21180,10 @@ typedef struct {
     int alert;
     int done;
     int failed;
+    char *ticketKey;            /* a client's key into quicTickets, when it keeps tickets */
+    uint8_t *remembered;        /* the server's parameters from the ticket offered for 0-RTT */
+    size_t rememberedLen;
+    void *stored;               /* the session last put in quicTickets */
 } QuicTls;
 
 static struct {
@@ -21194,6 +21198,17 @@ static struct {
     void (*connectState)(void *);
     void (*acceptState)(void *);
     int (*ctxUpRef)(void *);
+    int (*earlyEnabled)(void *, int);
+    int (*setSession)(void *, void *);
+    void *(*get1Session)(void *);
+    void *(*getSession)(const void *);
+    void (*sessionFree)(void *);
+    int (*resumable)(const void *);
+    uint32_t (*sessionMaxEarly)(const void *);
+    const void *(*sessionCipher)(const void *);
+    int (*earlyStatus)(const void *);
+    int (*readEx)(void *, void *, size_t, size_t *);
+    int (*initFinished)(const void *);
 } qtls;
 
 static pthread_once_t qtlsOnce = PTHREAD_ONCE_INIT;
@@ -21211,6 +21226,20 @@ static void qtlsLoad(void) {
     *(void **)&qtls.connectState = dlsym(h, "SSL_set_connect_state");
     *(void **)&qtls.acceptState = dlsym(h, "SSL_set_accept_state");
     *(void **)&qtls.ctxUpRef = dlsym(h, "SSL_CTX_up_ref");
+    *(void **)&qtls.earlyEnabled = dlsym(h, "SSL_set_quic_tls_early_data_enabled");
+    *(void **)&qtls.setSession = dlsym(h, "SSL_set_session");
+    *(void **)&qtls.get1Session = dlsym(h, "SSL_get1_session");
+    *(void **)&qtls.getSession = dlsym(h, "SSL_get_session");
+    *(void **)&qtls.sessionFree = dlsym(h, "SSL_SESSION_free");
+    *(void **)&qtls.resumable = dlsym(h, "SSL_SESSION_is_resumable");
+    *(void **)&qtls.sessionMaxEarly = dlsym(h, "SSL_SESSION_get_max_early_data");
+    *(void **)&qtls.sessionCipher = dlsym(h, "SSL_SESSION_get0_cipher");
+    *(void **)&qtls.earlyStatus = dlsym(h, "SSL_get_early_data_status");
+    *(void **)&qtls.readEx = dlsym(h, "SSL_read_ex");
+    *(void **)&qtls.initFinished = dlsym(h, "SSL_is_init_finished");
+    if (!(qtls.earlyEnabled && qtls.setSession && qtls.get1Session && qtls.getSession && qtls.sessionFree &&
+          qtls.resumable && qtls.sessionMaxEarly && qtls.sessionCipher && qtls.earlyStatus && qtls.readEx && qtls.initFinished))
+        qtls.earlyEnabled = NULL;           /* no 0-RTT */
     qtls.loaded = qtls.setCbs && qtls.setParams && qtls.doHandshake && qtls.cipherId && qtls.clearOptions &&
                   qtls.connectState && qtls.acceptState && qtls.ctxUpRef &&
                   (qtls.pendingCipher || qtls.currentCipher);
@@ -21256,7 +21285,13 @@ static int qtlsSecret(void *ssl, uint32_t level, int direction, const unsigned c
                       void *arg) {
     QuicTls *q = arg;
     if (level > 3 || (len != 32 && len != 48)) return 0;
-    const void *c = qtls.pendingCipher ? qtls.pendingCipher(ssl) : NULL;
+    const void *c = NULL;
+    if (level == 1 && qtls.earlyEnabled) {
+        /* 0-RTT keys use the cipher of the session resumed */
+        const void *sess = qtls.getSession(ssl);
+        if (sess) c = qtls.sessionCipher(sess);
+    }
+    if (!c && qtls.pendingCipher) c = qtls.pendingCipher(ssl);
     if (!c && qtls.currentCipher) c = qtls.currentCipher(ssl);
     uint32_t id = c ? qtls.cipherId(c) & 0xffff : (len == 48 ? 0x1302 : 0x1301);
     int suite = id == 0x1301 ? 1 : id == 0x1302 ? 2 : id == 0x1303 ? 3 : 0;
@@ -21313,7 +21348,69 @@ void iris_quic_tls_free(void *handle) {
     }
     free(q->params);
     free(q->ours);
+    free(q->ticketKey);
+    free(q->remembered);
+    if (q->stored) qtls.sessionFree(q->stored);
     free(q);
+}
+
+/* A client's session tickets that allow 0-RTT, each with the server's
+   transport parameters, for the server, port and settings of its key. A
+   ticket is taken out when used: a server takes each only once. */
+typedef struct {
+    char *key;
+    void *session;
+    uint8_t *params;
+    size_t paramsLen;
+} QuicTicket;
+static QuicTicket quicTickets[16];
+static int quicTicketNext, quicTicketLock;
+
+static void quicTicketClear(QuicTicket *t) {
+    if (t->session) qtls.sessionFree(t->session);
+    free(t->key);
+    free(t->params);
+    memset(t, 0, sizeof *t);
+}
+
+/* Takes the ticket for key: its session (a reference of the caller's) and
+   parameters, or NULL. */
+static void *quicTicketTake(const char *key, uint8_t **params, size_t *paramsLen) {
+    void *session = NULL;
+    spinLock(&quicTicketLock);
+    for (int i = 0; i < 16; i++) {
+        QuicTicket *t = &quicTickets[i];
+        if (t->key && strcmp(t->key, key) == 0) {
+            session = t->session;
+            *params = t->params;
+            *paramsLen = t->paramsLen;
+            t->session = NULL;
+            t->params = NULL;
+            quicTicketClear(t);
+            break;
+        }
+    }
+    spinUnlock(&quicTicketLock);
+    return session;
+}
+
+/* Keeps session (taking the caller's reference) as the ticket for key. */
+static void quicTicketPut(const char *key, void *session, const uint8_t *params, size_t paramsLen) {
+    uint8_t *p = malloc(paramsLen ? paramsLen : 1);
+    char *k = strdup(key);
+    if (!p || !k) outOfMemory();
+    memcpy(p, params, paramsLen);
+    spinLock(&quicTicketLock);
+    QuicTicket *t = NULL;
+    for (int i = 0; i < 16 && !t; i++)
+        if (quicTickets[i].key && strcmp(quicTickets[i].key, key) == 0) t = &quicTickets[i];
+    if (!t) {
+        t = &quicTickets[quicTicketNext];
+        quicTicketNext = (quicTicketNext + 1) % 16;
+    }
+    quicTicketClear(t);
+    *t = (QuicTicket){k, session, p, paramsLen};
+    spinUnlock(&quicTicketLock);
 }
 
 /* Sets up the QUIC side of an SSL that has its context: the callbacks,
@@ -21406,7 +21503,7 @@ static void *quicClientCtx(const char *ca, const char *cert, const char *key) {
    certificate of our own. NULL with the message set on an error. */
 void *iris_quic_tls_client(const char *host, int64_t hostLen, const char *ca, int64_t caLen, const char *alpn,
                            int64_t alpnLen, const char *cert, int64_t certLen, const char *key, int64_t keyLen,
-                           const uint8_t *params, int64_t paramsLen) {
+                           const uint8_t *params, int64_t paramsLen, const char *ticket, int64_t ticketLen) {
     if (!tlsReady() || !qtlsReady()) return NULL;
     if (hostLen <= 0) {
         tlsSay("a QUIC client needs the server's name or IP to check its certificate");
@@ -21435,12 +21532,29 @@ void *iris_quic_tls_client(const char *host, int64_t hostLen, const char *ca, in
     if (alpnLen > 0 && ossl.sslSetAlpnProtos) ossl.sslSetAlpnProtos(ssl, (const unsigned char *)alpn, (unsigned)alpnLen);
     QuicTls *q = qtlsStart(ssl, 0, params, paramsLen);
     if (!q) return NULL;
+    if (ticketLen > 0 && qtls.earlyEnabled) {
+        /* a ticket from before offers 0-RTT, and the new ones are kept */
+        q->ticketKey = cpath(ticket, ticketLen);
+        uint8_t *tp = NULL;
+        size_t tn = 0;
+        void *session = quicTicketTake(q->ticketKey, &tp, &tn);
+        if (session) {
+            if (qtls.setSession(ssl, session) == 1 && qtls.earlyEnabled(ssl, 1) == 1) {
+                q->remembered = tp;
+                q->rememberedLen = tn;
+                tp = NULL;
+            }
+            qtls.sessionFree(session);
+            if (ossl.errClear) ossl.errClear();
+        }
+        free(tp);
+    }
     qtls.connectState(ssl);
     return q;
 }
 
 /* A server's handshake with the certificates of a TlsConfig. */
-void *iris_quic_tls_server(void *server, const uint8_t *params, int64_t paramsLen) {
+void *iris_quic_tls_server(void *server, const uint8_t *params, int64_t paramsLen, int64_t early) {
     if (!tlsReady() || !qtlsReady()) return NULL;
     TlsServer *s = server;
     spinLock(&s->lock);
@@ -21459,6 +21573,8 @@ void *iris_quic_tls_server(void *server, const uint8_t *params, int64_t paramsLe
         return NULL;
     }
     q->gen = g;
+    /* the tickets this server sends allow 0-RTT, and it takes it */
+    if (early && qtls.earlyEnabled) qtls.earlyEnabled(ssl, 1);
     qtls.acceptState(ssl);
     return q;
 }
@@ -21478,6 +21594,9 @@ int iris_quic_tls_step(void *handle) {
     if (q->done) return 1;
     if (ossl.errClear) ossl.errClear();
     int r = qtls.doHandshake(q->ssl);
+    /* a server that takes 0-RTT hears 1 once it sent its flight, before the
+       client's Finished */
+    if (r == 1 && qtls.earlyEnabled && !qtls.initFinished(q->ssl)) return 0;
     if (r == 1) {
         q->done = 1;
         if (q->gen) {
@@ -21532,6 +21651,47 @@ int iris_quic_tls_params(void *handle, const uint8_t **p, int64_t *n) {
 }
 
 void *iris_quic_tls_ssl(void *handle) { return ((QuicTls *)handle)->ssl; }
+
+/* The server's transport parameters from the ticket a client offered
+   for 0-RTT, when it offered one. */
+int iris_quic_tls_remembered(void *handle, const uint8_t **p, int64_t *n) {
+    QuicTls *q = handle;
+    *p = q->remembered;
+    *n = (int64_t)q->rememberedLen;
+    return q->remembered != NULL;
+}
+
+/* What became of 0-RTT once the handshake is done: 0 none, 1 the server
+   turned it down, 2 it took it. */
+int iris_quic_tls_early(void *handle) {
+    QuicTls *q = handle;
+    if (!qtls.earlyEnabled || (!q->server && !q->remembered)) return 0;
+    int s = qtls.earlyStatus(q->ssl);
+    return s == 2 ? 2 : s == 1 ? 1 : 0;
+}
+
+/* Reads what the server sent after the handshake: a client keeps a new
+   ticket that allows 0-RTT. */
+void iris_quic_tls_after(void *handle) {
+    QuicTls *q = handle;
+    if (!q->done || q->failed || !qtls.readEx) return;
+    unsigned char b[1];
+    size_t n = 0;
+    if (ossl.errClear) ossl.errClear();
+    (void)qtls.readEx(q->ssl, b, 1, &n);
+    if (ossl.errClear) ossl.errClear();
+    if (!q->ticketKey || !q->params) return;
+    void *session = qtls.get1Session(q->ssl);
+    if (!session) return;
+    if (session == q->stored || !qtls.resumable(session) || qtls.sessionMaxEarly(session) != 0xffffffffu) {
+        qtls.sessionFree(session);
+        return;
+    }
+    if (q->stored) qtls.sessionFree(q->stored);
+    q->stored = session;
+    qtls.get1Session(q->ssl);           /* the reference quicTickets keeps */
+    quicTicketPut(q->ticketKey, session, q->params, q->paramsLen);
+}
 
 /* ---- QUIC: the socket */
 
