@@ -1,0 +1,69 @@
+// expect: RFC 6979 SHA-256: true, SHA-1: true, other hash: false
+// expect: tampered: false false false
+// expect: not DER: false, padded: false
+// expect: own signatures: 40 of 40, with SHA-384 and SHA-512: true true
+// expect: from the private key's PKCS#8: true
+// expect: secp256k1 through OpenSSL: true, its own: true
+// expect: point key: true
+
+import crypto, fs, hex
+
+// RFC 6979 A.2.5: the P-256 key and its signatures of "sample"
+str PRIVATE = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721a1440342000460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299"
+str POINT = "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299"
+str SIG256 = "3046022100efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716022100f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"
+str SIG1 = "3044022061340c88c3aaebeb4f6d667f672ca9759a6ccaa9fa8811313039ee4a35471d3202206d7f147dac089441bb2e2fe8f7a3fa264b9c475098fdcf6e00d7c996e1b8b7eb"
+
+!void main() {
+    scoped String der = try hex.decode(PRIVATE)
+    scoped key := try crypto.loadPrivateKey(der)
+    scoped public := key.publicKey()
+    scoped String s256 = try hex.decode(SIG256)
+    scoped String s1 = try hex.decode(SIG1)
+    print("RFC 6979 SHA-256: {public.verify("sample", s256)}, SHA-1: {public.verify("sample", s1, .sha1)}, other hash: {public.verify("sample", s256, .sha384)}")
+
+    // a bit changed in r, in s, and in the message
+    scoped String badR = s256[:].copy()
+    badR[10] = badR[10] ^ 1
+    scoped String badS = s256[:].copy()
+    badS[60] = badS[60] ^ 0x80
+    print("tampered: {public.verify("sample", badR)} {public.verify("sample", badS)} {public.verify("samplf", s256)}")
+
+    // the same r and s, but as BER: a long length, and a 0 that isn't needed
+    scoped String ber = "\x30\x81\x46".copy()
+    ber.append(s256[2:])
+    scoped String padded = "\x30\x45\x02\x21\x00".copy()
+    padded.append(s1[4:36])
+    padded.append(s1[36:])
+    print("not DER: {public.verify("sample", ber)}, padded: {public.verify("sample", padded)}")
+
+    // more than 16 checks, so the key's own table is used for the last ones
+    i64 good = 0
+    for i in 0..40 {
+        scoped String msg = format("message {i}")
+        scoped String sig = try key.sign(msg)
+        if public.verify(msg, sig) && !public.verify("other", sig) {
+            good += 1
+        }
+    }
+    scoped String sig384 = try key.sign("m", .sha384)
+    scoped String sig512 = try key.sign("m", .sha512)
+    print("own signatures: {good} of 40, with SHA-384 and SHA-512: {public.verify("m", sig384, .sha384)} {public.verify("m", sig512, .sha512)}")
+
+    scoped String sig = try key.sign("sample")
+    print("from the private key's PKCS#8: {public.verify("sample", sig)}")
+
+    // a 256-bit curve that isn't P-256 goes through OpenSSL
+    scoped String k1pem = try fs.readAll("tests/data/keys/k1.pem")
+    scoped String k1pub = try fs.readAll("tests/data/keys/k1pub.pem")
+    scoped String k1sig = try fs.readAll("tests/data/keys/k1.sig")
+    scoped String msg = try fs.readAll("tests/data/keys/msg")
+    scoped k1 := try crypto.loadPrivateKey(k1pem)
+    scoped p1 := try crypto.loadPublicKey(k1pub)
+    scoped String own = try k1.sign(msg)
+    print("secp256k1 through OpenSSL: {p1.verify(msg, k1sig)}, its own: {p1.verify(msg, own)}")
+
+    scoped String point = try hex.decode(POINT)
+    scoped pk := try crypto.ecPublicKey(.ecP256, point)
+    print("point key: {pk.verify("sample", s256)}")
+}

@@ -11002,10 +11002,1146 @@ static void *sharedClientCtx(void) {
     return c;
 }
 
+/* ---------------------------------------------------------------- P-256 */
+
+void iris_sha1(const char *data, int64_t len, unsigned char *out);
+void iris_sha256(const char *data, int64_t len, unsigned char *out);
+void iris_sha384(const char *data, int64_t len, unsigned char *out);
+void iris_sha512(const char *data, int64_t len, unsigned char *out);
+void iris_random_os(char *buf, int64_t len);
+
+/* ECDSA on P-256 (FIPS 186-5, SEC 1) without OpenSSL. Field elements are
+   4 limbs of 64 bits, little-endian, in Montgomery form (times 2^256), and
+   fully reduced. Points are Jacobian (X, Y, Z): x = X/Z^2, y = Y/Z^3, with
+   Z = 0 for the point at infinity. kG for signing takes the same time for
+   every k: 37 windows of 7 bits, each a signed digit (Booth's recoding)
+   that picks a point from a table of multiples of G read whole, so the
+   memory read doesn't depend on k. Checking a signature is public work and
+   takes the shortest path. */
+
+typedef unsigned __int128 p256u128;
+
+static const uint64_t p256P[4] = {0xffffffffffffffffULL, 0x00000000ffffffffULL, 0, 0xffffffff00000001ULL};
+static const uint64_t p256N[4] = {0xf3b9cac2fc632551ULL, 0xbce6faada7179e84ULL, 0xffffffffffffffffULL,
+                                  0xffffffff00000000ULL};
+static const uint64_t p256N0 = 0xccd1c8aaee00bc4fULL;   /* -1/n mod 2^64 */
+/* 2^512 mod p and mod n: a number times them, reduced, is in Montgomery form */
+static const uint64_t p256RRP[4] = {0x0000000000000003ULL, 0xfffffffbffffffffULL, 0xfffffffffffffffeULL,
+                                    0x00000004fffffffdULL};
+static const uint64_t p256RRN[4] = {0x83244c95be79eea2ULL, 0x4699799c49bd6fa6ULL, 0x2845b2392b6bec59ULL,
+                                    0x66e12d94f3d95620ULL};
+static const uint64_t p256One[4] = {0x0000000000000001ULL, 0xffffffff00000000ULL, 0xffffffffffffffffULL,
+                                    0x00000000fffffffeULL};
+static const uint64_t p256Gx[4] = {0x79e730d418a9143cULL, 0x75ba95fc5fedb601ULL, 0x79fb732b77622510ULL,
+                                   0x18905f76a53755c6ULL};
+static const uint64_t p256Gy[4] = {0xddf25357ce95560aULL, 0x8b4ab8e4ba19e45cULL, 0xd2e88688dd21f325ULL,
+                                   0x8571ff1825885d85ULL};
+
+typedef struct {
+    uint64_t x[4], y[4], z[4];
+} P256Jac;
+
+typedef struct {
+    uint64_t x[4], y[4];
+} P256Aff;
+
+/* r = t - m when that doesn't borrow past the carry c, else t: t < 2m */
+static inline void p256Reduce(uint64_t r[4], const uint64_t t[4], uint64_t c, const uint64_t m[4]) {
+    uint64_t d[4], b = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 v = (p256u128)t[i] - m[i] - b;
+        d[i] = (uint64_t)v;
+        b = (uint64_t)(v >> 64) & 1;
+    }
+    /* keep t when the subtraction borrowed more than the carry gives */
+    uint64_t keep = 0 - (uint64_t)(b > c);
+    for (int i = 0; i < 4; i++) r[i] = (t[i] & keep) | (d[i] & ~keep);
+}
+
+/* a * b / 2^256 mod m, for a, b < m (CIOS) */
+static inline void p256MontMul(uint64_t r[4], const uint64_t a[4], const uint64_t b[4], const uint64_t m[4],
+                               uint64_t m0) {
+    uint64_t t0 = 0, t1 = 0, t2 = 0, t3 = 0, t4 = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 c = (p256u128)a[0] * b[i] + t0;
+        t0 = (uint64_t)c;
+        c = (c >> 64) + (p256u128)a[1] * b[i] + t1;
+        t1 = (uint64_t)c;
+        c = (c >> 64) + (p256u128)a[2] * b[i] + t2;
+        t2 = (uint64_t)c;
+        c = (c >> 64) + (p256u128)a[3] * b[i] + t3;
+        t3 = (uint64_t)c;
+        c = (c >> 64) + t4;
+        t4 = (uint64_t)c;
+        uint64_t t5 = (uint64_t)(c >> 64);
+        uint64_t q = t0 * m0;
+        c = (p256u128)q * m[0] + t0;
+        c = (c >> 64) + (p256u128)q * m[1] + t1;
+        t0 = (uint64_t)c;
+        c = (c >> 64) + (p256u128)q * m[2] + t2;
+        t1 = (uint64_t)c;
+        c = (c >> 64) + (p256u128)q * m[3] + t3;
+        t2 = (uint64_t)c;
+        c = (c >> 64) + t4;
+        t3 = (uint64_t)c;
+        t4 = t5 + (uint64_t)(c >> 64);
+    }
+    uint64_t t[4] = {t0, t1, t2, t3};
+    p256Reduce(r, t, t4, m);
+}
+
+/* t[0..7] / 2^256 mod p. p is -1 mod 2^64, so each step's multiple of p
+   is the low word q itself, and q p = q 2^256 - q 2^224 + q 2^192 + q 2^96
+   - q needs one multiply. */
+static inline void feReduce8(uint64_t r[4], uint64_t t[8]) {
+    uint64_t top = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t q = t[i];
+        p256u128 v = (p256u128)t[i + 1] + ((p256u128)q << 32);
+        t[i + 1] = (uint64_t)v;
+        v = (v >> 64) + t[i + 2];
+        t[i + 2] = (uint64_t)v;
+        v = (v >> 64) + t[i + 3] + (p256u128)q * 0xffffffff00000001ULL;
+        t[i + 3] = (uint64_t)v;
+        v = (v >> 64) + t[i + 4] + top;
+        t[i + 4] = (uint64_t)v;
+        top = (uint64_t)(v >> 64);
+    }
+    p256Reduce(r, t + 4, top, p256P);
+}
+
+#if defined(__x86_64__)
+/* 1 when the CPU has MULX, ADCX and ADOX (BMI2 and ADX): set before the
+   first use of the table */
+static int p256Mulx;
+
+/* a * b / 2^256 mod p with two carry chains at once, as OpenSSL's
+   nistz256 does it: each word of b multiplied in and one word reduced */
+static void feMulX(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) {
+    __asm__ volatile(
+        "movq $32, %%r15\n\t"
+        "movq $0xffffffff00000001, %%r14\n\t"
+        "movq 0(%[b]), %%rdx\n\t"
+        "mulxq 0(%[a]), %%r8, %%r9\n\t"
+        "mulxq 8(%[a]), %%rax, %%r10\n\t"
+        "xorq %%r13, %%r13\n\t"
+        "mulxq 16(%[a]), %%rcx, %%r11\n\t"
+        "adcq %%rax, %%r9\n\t"
+        "mulxq 24(%[a]), %%rax, %%r12\n\t"
+        "movq %%r8, %%rdx\n\t"
+        "adcq %%rcx, %%r10\n\t"
+        "shlxq %%r15, %%r8, %%rcx\n\t"
+        "adcq %%rax, %%r11\n\t"
+        "shrxq %%r15, %%r8, %%rax\n\t"
+        "adcq $0, %%r12\n\t"
+        "addq %%rcx, %%r9\n\t"
+        "adcq %%rax, %%r10\n\t"
+        "mulxq %%r14, %%rax, %%rcx\n\t"
+        "movq 8(%[b]), %%rdx\n\t"
+        "adcq %%rax, %%r11\n\t"
+        "adcq %%rcx, %%r12\n\t"
+        "adcq $0, %%r13\n\t"
+        "xorq %%r8, %%r8\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r9\n\t"
+        "adoxq %%rcx, %%r10\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "movq %%r9, %%rdx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "adcxq %%r8, %%r13\n\t"
+        "adoxq %%r8, %%r8\n\t"
+        "adcq $0, %%r8\n\t"
+        "shlxq %%r15, %%r9, %%rax\n\t"
+        "shrxq %%r15, %%r9, %%rcx\n\t"
+        "addq %%rax, %%r10\n\t"
+        "adcq %%rcx, %%r11\n\t"
+        "mulxq %%r14, %%rax, %%rcx\n\t"
+        "movq 16(%[b]), %%rdx\n\t"
+        "adcq %%rax, %%r12\n\t"
+        "adcq %%rcx, %%r13\n\t"
+        "adcq $0, %%r8\n\t"
+        "xorq %%r9, %%r9\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "movq %%r10, %%rdx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "adcxq %%r9, %%r8\n\t"
+        "adoxq %%r9, %%r9\n\t"
+        "adcq $0, %%r9\n\t"
+        "shlxq %%r15, %%r10, %%rax\n\t"
+        "shrxq %%r15, %%r10, %%rcx\n\t"
+        "addq %%rax, %%r11\n\t"
+        "adcq %%rcx, %%r12\n\t"
+        "mulxq %%r14, %%rax, %%rcx\n\t"
+        "movq 24(%[b]), %%rdx\n\t"
+        "adcq %%rax, %%r13\n\t"
+        "adcq %%rcx, %%r8\n\t"
+        "adcq $0, %%r9\n\t"
+        "xorq %%r10, %%r10\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "movq %%r11, %%rdx\n\t"
+        "adcxq %%rax, %%r8\n\t"
+        "adoxq %%rcx, %%r9\n\t"
+        "adcxq %%r10, %%r9\n\t"
+        "adoxq %%r10, %%r10\n\t"
+        "adcq $0, %%r10\n\t"
+        "shlxq %%r15, %%r11, %%rax\n\t"
+        "shrxq %%r15, %%r11, %%rcx\n\t"
+        "addq %%rax, %%r12\n\t"
+        "adcq %%rcx, %%r13\n\t"
+        "mulxq %%r14, %%rax, %%rcx\n\t"
+        "adcq %%rax, %%r8\n\t"
+        "adcq %%rcx, %%r9\n\t"
+        "adcq $0, %%r10\n\t"
+        "xorq %%r11, %%r11\n\t"
+        "movq %%r12, %%rax\n\t"
+        "movq %%r13, %%rcx\n\t"
+        "movq %%r8, %%rdx\n\t"
+        "movq %%r9, %%r11\n\t"
+        "movl $0xffffffff, %%r15d\n\t"
+        "subq $-1, %%r12\n\t"
+        "sbbq %%r15, %%r13\n\t"
+        "sbbq $0, %%r8\n\t"
+        "sbbq %%r14, %%r9\n\t"
+        "sbbq $0, %%r10\n\t"
+        "cmovcq %%rax, %%r12\n\t"
+        "cmovcq %%rcx, %%r13\n\t"
+        "cmovcq %%rdx, %%r8\n\t"
+        "cmovcq %%r11, %%r9\n\t"
+        "movq %%r12, 0(%[r])\n\t"
+        "movq %%r13, 8(%[r])\n\t"
+        "movq %%r8, 16(%[r])\n\t"
+        "movq %%r9, 24(%[r])\n\t"
+        :
+        : [r] "r"(r), [a] "r"(a), [b] "r"(b)
+        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "cc", "memory");
+}
+#endif
+
+/* a * b / 2^256 mod p */
+static inline void feMulC(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) {
+    uint64_t t[8];
+    p256u128 v;
+    v = (p256u128)a[0] * b[0];
+    t[0] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[1] * b[0];
+    t[1] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[2] * b[0];
+    t[2] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[3] * b[0];
+    t[3] = (uint64_t)v;
+    t[4] = (uint64_t)(v >> 64);
+    for (int i = 1; i < 4; i++) {
+        v = (p256u128)a[0] * b[i] + t[i];
+        t[i] = (uint64_t)v;
+        v = (v >> 64) + (p256u128)a[1] * b[i] + t[i + 1];
+        t[i + 1] = (uint64_t)v;
+        v = (v >> 64) + (p256u128)a[2] * b[i] + t[i + 2];
+        t[i + 2] = (uint64_t)v;
+        v = (v >> 64) + (p256u128)a[3] * b[i] + t[i + 3];
+        t[i + 3] = (uint64_t)v;
+        t[i + 4] = (uint64_t)(v >> 64);
+    }
+    feReduce8(r, t);
+}
+
+/* a^2 / 2^256 mod p: the cross products once, doubled */
+static inline void feSqrC(uint64_t r[4], const uint64_t a[4]) {
+    uint64_t t[8];
+    p256u128 v;
+    /* a0a1, a0a2, a0a3 */
+    v = (p256u128)a[0] * a[1];
+    t[1] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[0] * a[2];
+    t[2] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[0] * a[3];
+    t[3] = (uint64_t)v;
+    t[4] = (uint64_t)(v >> 64);
+    /* a1a2, a1a3 */
+    v = (p256u128)a[1] * a[2] + t[3];
+    t[3] = (uint64_t)v;
+    v = (v >> 64) + (p256u128)a[1] * a[3] + t[4];
+    t[4] = (uint64_t)v;
+    t[5] = (uint64_t)(v >> 64);
+    /* a2a3 */
+    v = (p256u128)a[2] * a[3] + t[5];
+    t[5] = (uint64_t)v;
+    t[6] = (uint64_t)(v >> 64);
+    /* doubled */
+    t[7] = t[6] >> 63;
+    t[6] = (t[6] << 1) | (t[5] >> 63);
+    t[5] = (t[5] << 1) | (t[4] >> 63);
+    t[4] = (t[4] << 1) | (t[3] >> 63);
+    t[3] = (t[3] << 1) | (t[2] >> 63);
+    t[2] = (t[2] << 1) | (t[1] >> 63);
+    t[1] <<= 1;
+    /* and the squares, a_i^2 at words 2i and 2i + 1 */
+    t[0] = 0;
+    uint64_t c = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 sq = (p256u128)a[i] * a[i];
+        v = (p256u128)t[2 * i] + (uint64_t)sq + c;
+        t[2 * i] = (uint64_t)v;
+        v = (v >> 64) + t[2 * i + 1] + (uint64_t)(sq >> 64);
+        t[2 * i + 1] = (uint64_t)v;
+        c = (uint64_t)(v >> 64);
+    }
+    feReduce8(r, t);
+}
+
+static inline void feMul(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) {
+#if defined(__x86_64__)
+    if (p256Mulx) {
+        feMulX(r, a, b);
+        return;
+    }
+#endif
+    feMulC(r, a, b);
+}
+
+static inline void feSqr(uint64_t r[4], const uint64_t a[4]) {
+#if defined(__x86_64__)
+    if (p256Mulx) {
+        feMulX(r, a, a);
+        return;
+    }
+#endif
+    feSqrC(r, a);
+}
+
+static inline void p256AddMod(uint64_t r[4], const uint64_t a[4], const uint64_t b[4], const uint64_t m[4]) {
+    uint64_t t[4], c = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 v = (p256u128)a[i] + b[i] + c;
+        t[i] = (uint64_t)v;
+        c = (uint64_t)(v >> 64);
+    }
+    p256Reduce(r, t, c, m);
+}
+
+static inline void p256SubMod(uint64_t r[4], const uint64_t a[4], const uint64_t b[4], const uint64_t m[4]) {
+    uint64_t t[4], b0 = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 v = (p256u128)a[i] - b[i] - b0;
+        t[i] = (uint64_t)v;
+        b0 = (uint64_t)(v >> 64) & 1;
+    }
+    /* add m back when it borrowed */
+    uint64_t mask = 0 - b0, c = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 v = (p256u128)t[i] + (m[i] & mask) + c;
+        r[i] = (uint64_t)v;
+        c = (uint64_t)(v >> 64);
+    }
+}
+
+static inline void feAdd(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) { p256AddMod(r, a, b, p256P); }
+static inline void feSub(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) { p256SubMod(r, a, b, p256P); }
+
+static inline uint64_t feIsZero(const uint64_t a[4]) {
+    uint64_t z = a[0] | a[1] | a[2] | a[3];
+    return 0 - (uint64_t)(((z | (0 - z)) >> 63) ^ 1);    /* all ones when zero */
+}
+
+static inline bool feEqual(const uint64_t a[4], const uint64_t b[4]) {
+    return ((a[0] ^ b[0]) | (a[1] ^ b[1]) | (a[2] ^ b[2]) | (a[3] ^ b[3])) == 0;
+}
+
+/* r = a when mask is all ones, else unchanged */
+static inline void feSelect(uint64_t r[4], const uint64_t a[4], uint64_t mask) {
+    for (int i = 0; i < 4; i++) r[i] = (r[i] & ~mask) | (a[i] & mask);
+}
+
+/* r = a^(2^n) b */
+static void feSqrMul(uint64_t r[4], const uint64_t a[4], int n, const uint64_t b[4]) {
+    uint64_t t[4];
+    feSqr(t, a);
+    for (int i = 1; i < n; i++) feSqr(t, t);
+    feMul(r, t, b);
+}
+
+/* 1/a = a^(p - 2): 255 squarings and 13 multiplies, xk being a^(2^k - 1) */
+static void feInv(uint64_t r[4], const uint64_t a[4]) {
+    uint64_t x2[4], x4[4], x8[4], x16[4], x24[4], x28[4], x30[4], x32[4], t[4];
+    feSqrMul(x2, a, 1, a);
+    feSqrMul(x4, x2, 2, x2);
+    feSqrMul(x8, x4, 4, x4);
+    feSqrMul(x16, x8, 8, x8);
+    feSqrMul(x24, x16, 8, x8);
+    feSqrMul(x28, x24, 4, x4);
+    feSqrMul(x30, x28, 2, x2);
+    feSqrMul(x32, x30, 2, x2);
+    /* ffffffff 00000001 00000000 00000000 00000000 ffffffff ffffffff fffffffd */
+    feSqrMul(t, x32, 32, a);
+    for (int i = 0; i < 96; i++) feSqr(t, t);
+    feSqrMul(t, t, 32, x32);
+    feSqrMul(t, t, 32, x32);
+    feSqrMul(t, t, 30, x30);
+    feSqrMul(r, t, 2, a);
+}
+
+/* bytes, big-endian, to limbs and back */
+static void p256FromBytes(uint64_t r[4], const uint8_t b[32]) {
+    for (int i = 0; i < 4; i++) {
+        uint64_t v = 0;
+        for (int k = 0; k < 8; k++) v = (v << 8) | b[8 * (3 - i) + k];
+        r[i] = v;
+    }
+}
+
+static void p256ToBytes(uint8_t b[32], const uint64_t a[4]) {
+    for (int i = 0; i < 4; i++) {
+        for (int k = 0; k < 8; k++) b[8 * (3 - i) + k] = (uint8_t)(a[i] >> (56 - 8 * k));
+    }
+}
+
+/* a < m */
+static bool p256Less(const uint64_t a[4], const uint64_t m[4]) {
+    for (int i = 3; i >= 0; i--) {
+        if (a[i] != m[i]) return a[i] < m[i];
+    }
+    return false;
+}
+
+static void feToMont(uint64_t r[4], const uint64_t a[4]) { feMul(r, a, p256RRP); }
+
+static void feFromMont(uint64_t r[4], const uint64_t a[4]) {
+    static const uint64_t one[4] = {1, 0, 0, 0};
+    feMul(r, a, one);
+}
+
+/* 2P; P may be at infinity (Z = 0), and so is 2P then */
+static void p256Double(P256Jac *r, const P256Jac *p) {
+    uint64_t delta[4], gamma[4], beta[4], alpha[4], t[4], u[4];
+    feSqr(delta, p->z);
+    feSqr(gamma, p->y);
+    feMul(beta, p->x, gamma);
+    feSub(t, p->x, delta);
+    feAdd(u, p->x, delta);
+    feMul(alpha, t, u);
+    feAdd(t, alpha, alpha);
+    feAdd(alpha, alpha, t);                 /* 3 (X - delta)(X + delta) */
+    feAdd(t, p->y, p->z);
+    feSqr(t, t);
+    feSub(t, t, gamma);
+    feSub(r->z, t, delta);                  /* (Y + Z)^2 - gamma - delta = 2YZ */
+    feAdd(beta, beta, beta);
+    feAdd(beta, beta, beta);                /* 4 beta */
+    feSqr(t, alpha);
+    feAdd(u, beta, beta);
+    feSub(r->x, t, u);                      /* alpha^2 - 8 beta */
+    feSub(t, beta, r->x);
+    feMul(t, alpha, t);
+    feSqr(gamma, gamma);
+    feAdd(gamma, gamma, gamma);
+    feAdd(gamma, gamma, gamma);
+    feAdd(gamma, gamma, gamma);             /* 8 gamma^2 */
+    feSub(r->y, t, gamma);
+}
+
+/* P + Q for Q affine, P != Q: the formula alone, no special cases. */
+static void p256AddAffineRaw(P256Jac *r, const P256Jac *p, const P256Aff *q) {
+    uint64_t z1z1[4], u2[4], s2[4], h[4], hh[4], i4[4], j[4], rr[4], v[4], t[4];
+    feSqr(z1z1, p->z);
+    feMul(u2, q->x, z1z1);
+    feMul(s2, q->y, p->z);
+    feMul(s2, s2, z1z1);
+    feSub(h, u2, p->x);
+    feSqr(hh, h);
+    feAdd(i4, hh, hh);
+    feAdd(i4, i4, i4);
+    feMul(j, h, i4);
+    feSub(rr, s2, p->y);
+    feAdd(rr, rr, rr);
+    feMul(v, p->x, i4);
+    uint64_t x3[4], y3[4];
+    feSqr(x3, rr);
+    feSub(x3, x3, j);
+    feSub(x3, x3, v);
+    feSub(x3, x3, v);
+    feSub(t, v, x3);
+    feMul(y3, rr, t);
+    feMul(t, p->y, j);
+    feAdd(t, t, t);
+    feSub(y3, y3, t);
+    feAdd(t, p->z, h);
+    feSqr(t, t);
+    feSub(t, t, z1z1);
+    feSub(r->z, t, hh);
+    memcpy(r->x, x3, 32);
+    memcpy(r->y, y3, 32);
+}
+
+/* P + Q, both Jacobian: the formula alone */
+static void p256AddRaw(P256Jac *r, const P256Jac *p, const P256Jac *q, uint64_t h[4], uint64_t rr[4]) {
+    uint64_t z1z1[4], z2z2[4], u1[4], u2[4], s1[4], s2[4], i4[4], j[4], v[4], t[4];
+    feSqr(z1z1, p->z);
+    feSqr(z2z2, q->z);
+    feMul(u1, p->x, z2z2);
+    feMul(u2, q->x, z1z1);
+    feMul(s1, p->y, q->z);
+    feMul(s1, s1, z2z2);
+    feMul(s2, q->y, p->z);
+    feMul(s2, s2, z1z1);
+    feSub(h, u2, u1);
+    feSub(rr, s2, s1);
+    feAdd(i4, h, h);
+    feSqr(i4, i4);
+    feMul(j, h, i4);
+    feAdd(rr, rr, rr);
+    feMul(v, u1, i4);
+    uint64_t x3[4], y3[4];
+    feSqr(x3, rr);
+    feSub(x3, x3, j);
+    feSub(x3, x3, v);
+    feSub(x3, x3, v);
+    feSub(t, v, x3);
+    feMul(y3, rr, t);
+    feMul(t, s1, j);
+    feAdd(t, t, t);
+    feSub(y3, y3, t);
+    feAdd(t, p->z, q->z);
+    feSqr(t, t);
+    feSub(t, t, z1z1);
+    feSub(t, t, z2z2);
+    feMul(r->z, t, h);
+    memcpy(r->x, x3, 32);
+    memcpy(r->y, y3, 32);
+}
+
+/* P + Q for any two points, in time that depends on them */
+static void p256AddVar(P256Jac *r, const P256Jac *p, const P256Jac *q) {
+    if (feIsZero(p->z)) {
+        *r = *q;
+        return;
+    }
+    if (feIsZero(q->z)) {
+        *r = *p;
+        return;
+    }
+    uint64_t h[4], rr[4];
+    P256Jac s;
+    p256AddRaw(&s, p, q, h, rr);
+    if (feIsZero(h)) {
+        if (feIsZero(rr)) {
+            p256Double(r, p);
+        } else {
+            memset(r, 0, sizeof *r);
+        }
+        return;
+    }
+    *r = s;
+}
+
+/* P + Q for Q affine, in time that depends on them */
+static void p256AddAffineVar(P256Jac *r, const P256Jac *p, const P256Aff *q) {
+    if (feIsZero(p->z)) {
+        memcpy(r->x, q->x, 32);
+        memcpy(r->y, q->y, 32);
+        memcpy(r->z, p256One, 32);
+        return;
+    }
+    P256Jac qj;
+    memcpy(qj.x, q->x, 32);
+    memcpy(qj.y, q->y, 32);
+    memcpy(qj.z, p256One, 32);
+    /* the same point or its negative: h is zero */
+    uint64_t z1z1[4], u2[4];
+    feSqr(z1z1, p->z);
+    feMul(u2, q->x, z1z1);
+    if (feEqual(u2, p->x)) {
+        p256AddVar(r, p, &qj);
+        return;
+    }
+    p256AddAffineRaw(r, p, q);
+}
+
+/* the points as x and y, with one inversion for all of them */
+static void p256ToAffine(P256Aff *out, const P256Jac *in, int n, uint64_t (*tmp)[4]) {
+    /* tmp[i] = z0 * ... * zi */
+    memcpy(tmp[0], in[0].z, 32);
+    for (int i = 1; i < n; i++) feMul(tmp[i], tmp[i - 1], in[i].z);
+    uint64_t inv[4], zi[4], zi2[4];
+    feInv(inv, tmp[n - 1]);
+    for (int i = n - 1; i >= 0; i--) {
+        if (i > 0) {
+            feMul(zi, inv, tmp[i - 1]);
+            feMul(inv, inv, in[i].z);
+        } else {
+            memcpy(zi, inv, 32);
+        }
+        feSqr(zi2, zi);
+        feMul(out[i].x, in[i].x, zi2);
+        feMul(zi2, zi2, zi);
+        feMul(out[i].y, in[i].y, zi2);
+    }
+}
+
+/* A comb table for the point b with windows of w bits: row i holds
+   (j + 1) 2^(wi) b for j below 2^(w - 1), one row for each window of
+   p256CombWindow. */
+static int p256CombRows(int w) { return (256 + w) / w; }
+
+static void p256CombMake(P256Aff *t, const P256Aff *b, int w) {
+    int rows = p256CombRows(w), size = 1 << (w - 1);
+    P256Jac *row = malloc((size_t)size * sizeof *row);
+    uint64_t (*tmp)[4] = malloc((size_t)size * sizeof *tmp);
+    if (!row || !tmp) outOfMemory();
+    P256Aff base = *b;
+    for (int i = 0; i < rows; i++) {
+        memcpy(row[0].x, base.x, 32);
+        memcpy(row[0].y, base.y, 32);
+        memcpy(row[0].z, p256One, 32);
+        p256Double(&row[1], &row[0]);
+        for (int j = 2; j < size; j++) p256AddAffineRaw(&row[j], &row[j - 1], &base);
+        p256ToAffine(t + (size_t)i * size, row, size, tmp);
+        /* 2^w base = 2 (2^(w - 1) base) */
+        P256Jac next;
+        p256Double(&next, &row[size - 1]);
+        p256ToAffine(&base, &next, 1, tmp);
+    }
+    free(row);
+    free(tmp);
+}
+
+/* Booth's recoding of the w + 1 bits of a window: a digit from 0 to
+   2^(w - 1) and a sign (1 negative) */
+static inline unsigned p256Booth(unsigned in, int w) {
+    unsigned s = ~((in >> w) - 1);
+    unsigned d = (1u << (w + 1)) - in - 1;
+    d = (d & s) | (in & ~s);
+    d = (d >> 1) + (d & 1);
+    return (d << 1) + (s & 1);
+}
+
+/* bits wi - 1 to wi + w - 1 of the scalar k, as 33 bytes little-endian */
+static inline unsigned p256CombWindow(const uint8_t k[33], int i, int w) {
+    unsigned mask = (1u << (w + 1)) - 1;
+    if (i == 0) return ((unsigned)k[0] << 1) & mask;
+    int bit = w * i - 1;
+    unsigned v = (unsigned)k[bit / 8] | ((unsigned)k[bit / 8 + 1] << 8);
+    return (v >> (bit % 8)) & mask;
+}
+
+/* G's table, 7-bit windows */
+static P256Aff *p256Table;
+static pthread_once_t p256TableOnce = PTHREAD_ONCE_INIT;
+
+static void p256TableMake(void) {
+#if defined(__x86_64__)
+    __builtin_cpu_init();
+    p256Mulx = __builtin_cpu_supports("bmi2") && __builtin_cpu_supports("adx");
+#endif
+    P256Aff *t = malloc((size_t)p256CombRows(7) * 64 * sizeof *t), g;
+    if (!t) outOfMemory();
+    memcpy(g.x, p256Gx, 32);
+    memcpy(g.y, p256Gy, 32);
+    p256CombMake(t, &g, 7);
+    p256Table = t;
+}
+
+static void p256ScalarBytes(uint8_t out[33], const uint64_t k[4]) {
+    for (int i = 0; i < 32; i++) out[i] = (uint8_t)(k[i / 8] >> (8 * (i % 8)));
+    out[32] = 0;
+}
+
+/* y = p - y when neg is 1, in constant time */
+static inline void feCondNeg(uint64_t y[4], unsigned neg) {
+    uint64_t zero[4] = {0, 0, 0, 0}, n[4];
+    feSub(n, zero, y);
+    feSelect(y, n, 0 - (uint64_t)neg);
+}
+
+typedef uint64_t P256Vec __attribute__((vector_size(16)));
+
+/* row[digit - 1], or zeros for digit 0, reading all 64 entries */
+static inline void p256Pick(P256Aff *q, const P256Aff *row, unsigned digit) {
+    P256Vec acc0 = {0, 0}, acc1 = acc0, acc2 = acc0, acc3 = acc0;
+    for (unsigned j = 0; j < 64; j++) {
+        uint64_t m = 0 - (uint64_t)(((j + 1) ^ digit) == 0);
+        P256Vec mv = {m, m}, e0, e1, e2, e3;
+        const unsigned char *e = (const unsigned char *)&row[j];
+        memcpy(&e0, e, 16);
+        memcpy(&e1, e + 16, 16);
+        memcpy(&e2, e + 32, 16);
+        memcpy(&e3, e + 48, 16);
+        acc0 |= e0 & mv;
+        acc1 |= e1 & mv;
+        acc2 |= e2 & mv;
+        acc3 |= e3 & mv;
+    }
+    memcpy(q->x, &acc0, 16);
+    memcpy(q->x + 2, &acc1, 16);
+    memcpy(q->y, &acc2, 16);
+    memcpy(q->y + 2, &acc3, 16);
+}
+
+/* kG, reading the whole of each row of the table: k < n */
+static void p256BaseMul(P256Jac *r, const uint64_t k[4]) {
+    pthread_once(&p256TableOnce, p256TableMake);
+    uint8_t kb[33];
+    p256ScalarBytes(kb, k);
+    P256Jac acc;
+    memset(&acc, 0, sizeof acc);
+    uint64_t accInf = ~0ULL;
+    for (int i = 0; i < 37; i++) {
+        unsigned w = p256Booth(p256CombWindow(kb, i, 7), 7);
+        unsigned digit = w >> 1;
+        P256Aff q;
+        p256Pick(&q, p256Table + 64 * i, digit);
+        feCondNeg(q.y, w & 1);
+        uint64_t qInf = 0 - (uint64_t)(digit == 0);
+        P256Jac sum;
+        p256AddAffineRaw(&sum, &acc, &q);
+        /* acc at infinity: the sum is q; q at infinity: it is acc */
+        P256Jac qj;
+        memcpy(qj.x, q.x, 32);
+        memcpy(qj.y, q.y, 32);
+        memcpy(qj.z, p256One, 32);
+        feSelect(sum.x, qj.x, accInf);
+        feSelect(sum.y, qj.y, accInf);
+        feSelect(sum.z, qj.z, accInf);
+        feSelect(sum.x, acc.x, qInf);
+        feSelect(sum.y, acc.y, qInf);
+        feSelect(sum.z, acc.z, qInf);
+        acc = sum;
+        accInf &= qInf;
+    }
+    *r = acc;
+    iris_wipe(kb, sizeof kb);
+}
+
+/* kB for a public k from b's comb table of w-bit windows */
+static void p256CombMulVar(P256Jac *r, const P256Aff *t, int w, const uint64_t k[4]) {
+    uint8_t kb[33];
+    p256ScalarBytes(kb, k);
+    P256Jac acc;
+    memset(&acc, 0, sizeof acc);
+    int rows = p256CombRows(w), size = 1 << (w - 1);
+    for (int i = 0; i < rows; i++) {
+        unsigned d = p256Booth(p256CombWindow(kb, i, w), w);
+        unsigned digit = d >> 1;
+        if (digit == 0) continue;
+        P256Aff q = t[(size_t)i * size + digit - 1];
+        if (d & 1) feCondNeg(q.y, 1);
+        p256AddAffineVar(&acc, &acc, &q);
+    }
+    *r = acc;
+}
+
+/* kG for a public k */
+static void p256BaseMulVar(P256Jac *r, const uint64_t k[4]) {
+    pthread_once(&p256TableOnce, p256TableMake);
+    p256CombMulVar(r, p256Table, 7, k);
+}
+
+/* A public key's odd multiples Q, 3Q, ..., 15Q, for checking signatures */
+typedef struct {
+    P256Aff odd[8];
+} P256Pub;
+
+static void p256PubMake(P256Pub *pub, const uint64_t qx[4], const uint64_t qy[4]) {
+    P256Jac m[8], q2;
+    memcpy(m[0].x, qx, 32);
+    memcpy(m[0].y, qy, 32);
+    memcpy(m[0].z, p256One, 32);
+    p256Double(&q2, &m[0]);
+    for (int i = 1; i < 8; i++) p256AddVar(&m[i], &m[i - 1], &q2);
+    uint64_t tmp[8][4];
+    p256ToAffine(pub->odd, m, 8, tmp);
+}
+
+/* k as width-5 NAF digits, least significant first: odd digits from -15
+   to 15, each nonzero one followed by 4 zeros. The count. */
+static int p256Naf5(int8_t out[257], const uint64_t k[4]) {
+    uint64_t t[5] = {k[0], k[1], k[2], k[3], 0};
+    int n = 0;
+    while (t[0] | t[1] | t[2] | t[3] | t[4]) {
+        int d = 0;
+        if (t[0] & 1) {
+            d = (int)(t[0] & 31);
+            if (d > 16) d -= 32;
+            /* t -= d */
+            uint64_t sub = (uint64_t)(int64_t)d;
+            uint64_t ext = d < 0 ? ~0ULL : 0;
+            uint64_t b = 0;
+            for (int i = 0; i < 5; i++) {
+                uint64_t s = i == 0 ? sub : ext;
+                p256u128 v = (p256u128)t[i] - s - b;
+                t[i] = (uint64_t)v;
+                b = (uint64_t)(v >> 64) & 1;
+            }
+        }
+        out[n++] = (int8_t)d;
+        for (int i = 0; i < 4; i++) t[i] = (t[i] >> 1) | (t[i + 1] << 63);
+        t[4] >>= 1;
+    }
+    return n;
+}
+
+/* a mod n for a < 2^256 */
+static void p256ModN(uint64_t r[4], const uint64_t a[4]) { p256Reduce(r, a, 0, p256N); }
+
+/* the leftmost 256 bits of a hash as a number mod n (SEC 1 4.1.3) */
+static void p256HashToZ(uint64_t z[4], const uint8_t *h, size_t n) {
+    uint8_t b[32] = {0};
+    if (n >= 32) {
+        memcpy(b, h, 32);
+    } else {
+        memcpy(b + 32 - n, h, n);
+    }
+    uint64_t t[4];
+    p256FromBytes(t, b);
+    p256ModN(z, t);
+}
+
+#if defined(__x86_64__)
+/* a * b / 2^256 mod n, as feMulX does it with a general reduction */
+static void scMulX(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) {
+    __asm__ volatile(
+        "xorq %%r13, %%r13\n\t"
+        "xorq %%r12, %%r12\n\t"
+        "xorq %%r11, %%r11\n\t"
+        "xorq %%r10, %%r10\n\t"
+        "xorq %%r9, %%r9\n\t"
+        "xorq %%r8, %%r8\n\t"
+        "movq 0(%[b]), %%rdx\n\t"
+        "xorq %%r13, %%r13\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r8\n\t"
+        "adoxq %%rcx, %%r9\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r9\n\t"
+        "adoxq %%rcx, %%r10\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "adcxq %%r13, %%r12\n\t"
+        "adoxq %%r13, %%r13\n\t"
+        "adcq $0, %%r13\n\t"
+        "movq %%r8, %%rdx\n\t"
+        "mulxq %[n0], %%rdx, %%rcx\n\t"
+        "xorq %%rax, %%rax\n\t"
+        "movq %%rax, %%r14\n\t"
+        "mulxq 0(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r8\n\t"
+        "adoxq %%rcx, %%r9\n\t"
+        "mulxq 8(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r9\n\t"
+        "adoxq %%rcx, %%r10\n\t"
+        "mulxq 16(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 24(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "adcxq %%r14, %%r12\n\t"
+        "adoxq %%r14, %%r13\n\t"
+        "adcq $0, %%r13\n\t"
+        "movq 8(%[b]), %%rdx\n\t"
+        "xorq %%r8, %%r8\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r9\n\t"
+        "adoxq %%rcx, %%r10\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "adcxq %%r8, %%r13\n\t"
+        "adoxq %%r8, %%r8\n\t"
+        "adcq $0, %%r8\n\t"
+        "movq %%r9, %%rdx\n\t"
+        "mulxq %[n0], %%rdx, %%rcx\n\t"
+        "xorq %%rax, %%rax\n\t"
+        "movq %%rax, %%r14\n\t"
+        "mulxq 0(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r9\n\t"
+        "adoxq %%rcx, %%r10\n\t"
+        "mulxq 8(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 16(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 24(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "adcxq %%r14, %%r13\n\t"
+        "adoxq %%r14, %%r8\n\t"
+        "adcq $0, %%r8\n\t"
+        "movq 16(%[b]), %%rdx\n\t"
+        "xorq %%r9, %%r9\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "adcxq %%r9, %%r8\n\t"
+        "adoxq %%r9, %%r9\n\t"
+        "adcq $0, %%r9\n\t"
+        "movq %%r10, %%rdx\n\t"
+        "mulxq %[n0], %%rdx, %%rcx\n\t"
+        "xorq %%rax, %%rax\n\t"
+        "movq %%rax, %%r14\n\t"
+        "mulxq 0(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r10\n\t"
+        "adoxq %%rcx, %%r11\n\t"
+        "mulxq 8(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 16(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 24(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "adcxq %%r14, %%r8\n\t"
+        "adoxq %%r14, %%r9\n\t"
+        "adcq $0, %%r9\n\t"
+        "movq 24(%[b]), %%rdx\n\t"
+        "xorq %%r10, %%r10\n\t"
+        "mulxq 0(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 8(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 16(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "mulxq 24(%[a]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r8\n\t"
+        "adoxq %%rcx, %%r9\n\t"
+        "adcxq %%r10, %%r9\n\t"
+        "adoxq %%r10, %%r10\n\t"
+        "adcq $0, %%r10\n\t"
+        "movq %%r11, %%rdx\n\t"
+        "mulxq %[n0], %%rdx, %%rcx\n\t"
+        "xorq %%rax, %%rax\n\t"
+        "movq %%rax, %%r14\n\t"
+        "mulxq 0(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r11\n\t"
+        "adoxq %%rcx, %%r12\n\t"
+        "mulxq 8(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r12\n\t"
+        "adoxq %%rcx, %%r13\n\t"
+        "mulxq 16(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r13\n\t"
+        "adoxq %%rcx, %%r8\n\t"
+        "mulxq 24(%[n]), %%rax, %%rcx\n\t"
+        "adcxq %%rax, %%r8\n\t"
+        "adoxq %%rcx, %%r9\n\t"
+        "adcxq %%r14, %%r9\n\t"
+        "adoxq %%r14, %%r10\n\t"
+        "adcq $0, %%r10\n\t"
+        "movq %%r12, %%rax\n\t"
+        "movq %%r13, %%rcx\n\t"
+        "movq %%r8, %%rdx\n\t"
+        "movq %%r9, %%r11\n\t"
+        "subq 0(%[n]), %%r12\n\t"
+        "sbbq 8(%[n]), %%r13\n\t"
+        "sbbq 16(%[n]), %%r8\n\t"
+        "sbbq 24(%[n]), %%r9\n\t"
+        "sbbq $0, %%r10\n\t"
+        "cmovcq %%rax, %%r12\n\t"
+        "cmovcq %%rcx, %%r13\n\t"
+        "cmovcq %%rdx, %%r8\n\t"
+        "cmovcq %%r11, %%r9\n\t"
+        "movq %%r12, 0(%[r])\n\t"
+        "movq %%r13, 8(%[r])\n\t"
+        "movq %%r8, 16(%[r])\n\t"
+        "movq %%r9, 24(%[r])\n\t"
+        :
+        : [r] "r"(r), [a] "r"(a), [b] "r"(b), [n] "r"(p256N), [n0] "m"(p256N0)
+        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "cc", "memory");
+}
+#endif
+
+static void scMul(uint64_t r[4], const uint64_t a[4], const uint64_t b[4]) {
+#if defined(__x86_64__)
+    if (p256Mulx) {
+        scMulX(r, a, b);
+        return;
+    }
+#endif
+    p256MontMul(r, a, b, p256N, p256N0);
+}
+
+/* 1/a mod n in Montgomery form from a in Montgomery form, by Fermat */
+static void scInvMont(uint64_t r[4], const uint64_t a[4]) {
+    static const uint64_t e[4] = {0xf3b9cac2fc63254fULL, 0xbce6faada7179e84ULL, 0xffffffffffffffffULL,
+                                  0xffffffff00000000ULL};
+    static const uint64_t oneN[4] = {0x0c46353d039cdaafULL, 0x4319055258e8617bULL, 0, 0x00000000ffffffffULL};
+    uint64_t t[16][4];
+    memcpy(t[0], oneN, 32);
+    memcpy(t[1], a, 32);
+    for (int i = 2; i < 16; i++) scMul(t[i], t[i - 1], a);
+    uint64_t x[4];
+    memcpy(x, oneN, 32);
+    for (int i = 63; i >= 0; i--) {
+        for (int k = 0; k < 4; k++) scMul(x, x, x);
+        unsigned w = (unsigned)(e[i / 16] >> (4 * (i % 16))) & 15;
+        if (w) scMul(x, x, t[w]);
+    }
+    memcpy(r, x, 32);
+}
+
+static bool p256ScalarOk(const uint64_t a[4]) { return (a[0] | a[1] | a[2] | a[3]) != 0 && p256Less(a, p256N); }
+
+/* (r, s) for the hash h with the private key d (plain, < n), as 64 bytes */
+static void p256Sign(uint8_t out[64], const uint64_t d[4], const uint8_t *h, size_t hn) {
+    uint64_t z[4];
+    p256HashToZ(z, h, hn);
+    uint8_t db[32];
+    p256ToBytes(db, d);
+    for (;;) {
+        /* k from the key, the hash and fresh random bytes, so a weak
+           random source alone doesn't give the key away */
+        uint8_t seed[96], k64[64];
+        memcpy(seed, db, 32);
+        uint8_t zb[32];
+        p256ToBytes(zb, z);
+        memcpy(seed + 32, zb, 32);
+        iris_random_os((char *)seed + 64, 32);
+        iris_sha512((const char *)seed, 96, k64);
+        uint64_t hi[4], lo[4], k[4], t[4];
+        p256FromBytes(hi, k64);
+        p256FromBytes(lo, k64 + 32);
+        p256ModN(hi, hi);
+        p256ModN(lo, lo);
+        scMul(t, hi, p256RRN);              /* hi 2^256 mod n */
+        p256AddMod(k, t, lo, p256N);
+        iris_wipe(seed, sizeof seed);
+        iris_wipe(k64, sizeof k64);
+        if (!(k[0] | k[1] | k[2] | k[3])) continue;
+        P256Jac R;
+        p256BaseMul(&R, k);
+        uint64_t zi[4], x[4], r[4];
+        feInv(zi, R.z);
+        feSqr(zi, zi);
+        feMul(x, R.x, zi);
+        feFromMont(x, x);
+        p256ModN(r, x);
+        if (!(r[0] | r[1] | r[2] | r[3])) continue;
+        uint64_t km[4], kinv[4], rm[4], rd[4], s[4];
+        scMul(km, k, p256RRN);
+        scInvMont(kinv, km);                /* 1/k, Montgomery */
+        scMul(rm, r, p256RRN);
+        scMul(rd, rm, d);                   /* r d */
+        p256AddMod(t, z, rd, p256N);
+        scMul(s, kinv, t);                  /* (z + r d) / k */
+        iris_wipe(k, sizeof k);
+        iris_wipe(km, sizeof km);
+        iris_wipe(kinv, sizeof kinv);
+        iris_wipe(rd, sizeof rd);
+        if (!(s[0] | s[1] | s[2] | s[3])) continue;
+        p256ToBytes(out, r);
+        p256ToBytes(out + 32, s);
+        iris_wipe(db, sizeof db);
+        return;
+    }
+}
+
+/* whether (r, s), 64 bytes, signs the hash h for the public key; comb,
+   when not NULL, is the key's table of 6-bit windows */
+static bool p256Verify(const P256Pub *pub, const P256Aff *comb, const uint8_t *h, size_t hn, const uint8_t rs[64]) {
+    uint64_t r[4], s[4], z[4];
+    p256FromBytes(r, rs);
+    p256FromBytes(s, rs + 32);
+    if (!p256ScalarOk(r) || !p256ScalarOk(s)) return false;
+    p256HashToZ(z, h, hn);
+    uint64_t sm[4], w[4], u1[4], u2[4];
+    scMul(sm, s, p256RRN);
+    scInvMont(w, sm);                       /* 1/s, Montgomery */
+    scMul(u1, z, w);                        /* z / s */
+    scMul(u2, r, w);                        /* r / s */
+    P256Jac a;
+    p256BaseMulVar(&a, u1);
+    P256Jac b;
+    if (comb) {
+        p256CombMulVar(&b, comb, 6, u2);
+    } else {
+        /* u2 Q from the top digit down */
+        int8_t naf[257];
+        int nd = p256Naf5(naf, u2);
+        memset(&b, 0, sizeof b);
+        for (int i = nd - 1; i >= 0; i--) {
+            if (!feIsZero(b.z)) p256Double(&b, &b);
+            int d = naf[i];
+            if (d) {
+                P256Aff q = pub->odd[(d < 0 ? -d : d) >> 1];
+                if (d < 0) feCondNeg(q.y, 1);
+                p256AddAffineVar(&b, &b, &q);
+            }
+        }
+    }
+    P256Jac sum;
+    p256AddVar(&sum, &a, &b);
+    if (feIsZero(sum.z)) return false;
+    /* x(sum) mod n == r: X == r Z^2, or (r + n) Z^2 when r + n < p */
+    uint64_t z2[4], rm[4], t[4];
+    feSqr(z2, sum.z);
+    feToMont(rm, r);
+    feMul(t, rm, z2);
+    if (feEqual(t, sum.x)) return true;
+    uint64_t rn[4], c = 0;
+    for (int i = 0; i < 4; i++) {
+        p256u128 v = (p256u128)r[i] + p256N[i] + c;
+        rn[i] = (uint64_t)v;
+        c = (uint64_t)(v >> 64);
+    }
+    if (c || !p256Less(rn, p256P)) return false;
+    feToMont(rm, rn);
+    feMul(t, rm, z2);
+    return feEqual(t, sum.x);
+}
+
 /* ---------------------------------------------------------------- public-key signatures
 
    ECDSA (P-256, P-384) and RSA (PKCS#1 v1.5 and PSS) through libcrypto's
-   EVP calls, which OpenSSL 1.1 and 3 both have. A key is an EVP_PKEY. */
+   EVP calls, which OpenSSL 1.1 and 3 both have. A key is a PkKey: the
+   EVP_PKEY, and for P-256 the numbers the code above signs and checks
+   with. */
 
 static struct {
     int loaded;
@@ -11021,6 +12157,7 @@ static struct {
     void *(*d2iPriv)(void **, const unsigned char **, long);
     void *(*d2iPub)(void **, const unsigned char **, long);
     int (*i2dPub)(void *, unsigned char **);
+    int (*i2dPriv)(void *, unsigned char **);
     void (*pkeyFree)(void *);
     int (*baseId)(const void *);
     int (*bits)(const void *);
@@ -11077,6 +12214,7 @@ static void pkLoad(void) {
     *(void **)&pk.bits = dlsym(c, "EVP_PKEY_get_bits");
     if (!pk.bits) *(void **)&pk.bits = dlsym(c, "EVP_PKEY_bits");
     *(void **)&pk.keygen = dlsym(c, "EVP_PKEY_Q_keygen");       /* OpenSSL 3 */
+    *(void **)&pk.i2dPriv = dlsym(c, "i2d_PrivateKey");
     *(void **)&pk.setPadding = dlsym(c, "EVP_PKEY_CTX_set_rsa_padding");
     *(void **)&pk.setSaltLen = dlsym(c, "EVP_PKEY_CTX_set_rsa_pss_saltlen");
     *(void **)&pk.pkeyCtrl = dlsym(c, "EVP_PKEY_CTX_ctrl");
@@ -11092,6 +12230,108 @@ static bool pkReady(void) {
         return false;
     }
     return true;
+}
+
+/* After this many checked signatures a P-256 public key gets a comb table
+   of its own, so later checks skip the 256 doublings */
+#define PK_COMB_AFTER 16
+
+typedef struct {
+    void *evp;
+    int p256;                   /* 1: a P-256 public key; 2: the private key too */
+    uint64_t d[4];              /* the private scalar */
+    P256Pub pub;
+    _Atomic int checks;
+    _Atomic(P256Aff *) comb;
+} PkKey;
+
+static const unsigned char p256Spki[] = {0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02,
+                                         0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03,
+                                         0x42, 0x00, 0x04};
+
+/* the private scalar of a SEC 1 ECPrivateKey: SEQUENCE { INTEGER 1,
+   OCTET STRING d, ... } */
+static bool pkSec1Scalar(const unsigned char *der, int n, uint64_t d[4]) {
+    if (n < 8 || der[0] != 0x30) return false;
+    int at = 2;
+    if (der[1] & 0x80) at += der[1] & 0x7f;
+    if (at + 5 > n || der[at] != 0x02 || der[at + 1] != 1 || der[at + 2] != 1 || der[at + 3] != 0x04) return false;
+    int len = der[at + 4];
+    if (len < 1 || len > 32 || at + 5 + len > n) return false;
+    uint8_t b[32] = {0};
+    memcpy(b + 32 - len, der + at + 5, (size_t)len);
+    p256FromBytes(d, b);
+    iris_wipe(b, sizeof b);
+    return p256ScalarOk(d);
+}
+
+/* evp in a PkKey, with what P-256 needs when it is a P-256 key */
+static void *pkWrap(void *evp, bool private) {
+    if (!evp) return NULL;
+    PkKey *k = calloc(1, sizeof *k);
+    if (!k) outOfMemory();
+    k->evp = evp;
+    if (pk.baseId(evp) == 408 && pk.bits(evp) == 256) {
+        unsigned char *der = NULL;
+        int n = pk.i2dPub(evp, &der);
+        if (n == (int)sizeof p256Spki + 64 && memcmp(der, p256Spki, sizeof p256Spki) == 0) {
+            uint64_t x[4], y[4];
+            p256FromBytes(x, der + sizeof p256Spki);
+            p256FromBytes(y, der + sizeof p256Spki + 32);
+            feToMont(x, x);
+            feToMont(y, y);
+            p256PubMake(&k->pub, x, y);
+            k->p256 = 1;
+        }
+        if (der) pk.cryptoFree(der, "", 0);
+        if (k->p256 && private && pk.i2dPriv) {
+            der = NULL;
+            n = pk.i2dPriv(evp, &der);
+            if (n > 0 && pkSec1Scalar(der, n, k->d)) k->p256 = 2;
+            if (der) {
+                iris_wipe(der, n);
+                pk.cryptoFree(der, "", 0);
+            }
+        }
+    }
+    return k;
+}
+
+static void *pkEvp(void *key) { return ((PkKey *)key)->evp; }
+
+/* the hash of data: 0 SHA-1, 1 SHA-256, 2 SHA-384, 3 SHA-512; its size */
+static size_t pkHash(int hash, const char *data, int64_t len, unsigned char out[64]) {
+    switch (hash) {
+    case 0: iris_sha1(data, len, out); return 20;
+    case 1: iris_sha256(data, len, out); return 32;
+    case 2: iris_sha384(data, len, out); return 48;
+    default: iris_sha512(data, len, out); return 64;
+    }
+}
+
+/* r and s of a DER ECDSA signature for P-256, as 64 bytes; false for
+   anything but SEQUENCE { INTEGER r, INTEGER s } in DER's one encoding */
+static bool pkDerRs(const unsigned char *d, int64_t n, uint8_t rs[64]) {
+    if (n < 8 || n > 72 || d[0] != 0x30 || d[1] != n - 2) return false;
+    int64_t at = 2;
+    for (int k = 0; k < 2; k++) {
+        if (at + 2 > n || d[at] != 0x02) return false;
+        int64_t len = d[at + 1];
+        at += 2;
+        if (len < 1 || len > 33 || at + len > n) return false;
+        const unsigned char *v = d + at;
+        if (v[0] & 0x80) return false;                          /* negative */
+        if (len > 1 && v[0] == 0 && !(v[1] & 0x80)) return false; /* a 0 not needed */
+        if (v[0] == 0) {
+            v++;
+            len--;
+        }
+        if (len > 32) return false;
+        memset(rs + 32 * k, 0, 32);
+        memcpy(rs + 32 * k + 32 - len, v, (size_t)len);
+        at += (v - (d + at)) + len;
+    }
+    return at == n;
 }
 
 /* A private key from PEM (PKCS#8, or SEC1 and PKCS#1 with their headers)
@@ -11110,7 +12350,7 @@ void *iris_pk_load_private(const char *data, int64_t len) {
         key = pk.d2iPriv(NULL, &p, (long)len);
     }
     if (!key) tlsSayOpenssl("reading the private key");
-    return key;
+    return pkWrap(key, true);
 }
 
 /* A public key from PEM or DER (SubjectPublicKeyInfo). */
@@ -11128,7 +12368,7 @@ void *iris_pk_load_public(const char *data, int64_t len) {
         key = pk.d2iPub(NULL, &p, (long)len);
     }
     if (!key) tlsSayOpenssl("reading the public key");
-    return key;
+    return pkWrap(key, false);
 }
 
 /* A DER length at out (room for 5): its size in bytes. */
@@ -11187,7 +12427,7 @@ void *iris_pk_ec_public(int curve, const char *point, int64_t len) {
     const unsigned char *p = der;
     void *key = pk.d2iPub(NULL, &p, (long)(plen + 2 * coord));
     if (!key) tlsSayOpenssl("the EC point isn't on the curve");
-    return key;
+    return pkWrap(key, false);
 }
 
 /* An RSA public key from its modulus n and exponent e, big-endian. */
@@ -11231,7 +12471,7 @@ void *iris_pk_rsa_public(const char *n, int64_t nLen, const char *e, int64_t eLe
     free(inner);
     free(der);
     if (!key) tlsSayOpenssl("the RSA key isn't one");
-    return key;
+    return pkWrap(key, false);
 }
 
 /* A new key: kind 0 P-256, 1 P-384, 3 P-521, 2 RSA of bits. OpenSSL 3. */
@@ -11245,11 +12485,12 @@ void *iris_pk_generate(int kind, int64_t bits) {
     void *key = kind == 2 ? pk.keygen(NULL, NULL, "RSA", (size_t)bits)
                           : pk.keygen(NULL, NULL, "EC", kind == 0 ? "P-256" : kind == 1 ? "P-384" : "P-521");
     if (!key) tlsSayOpenssl("making the key");
-    return key;
+    return pkWrap(key, true);
 }
 
 /* 1 EC, 2 RSA, 0 another kind; and its size in bits. */
 int iris_pk_kind(void *key, int64_t *bits) {
+    key = pkEvp(key);
     *bits = pk.bits(key);
     int id = pk.baseId(key);
     return id == 408 ? 1 : (id == 6 || id == 912) ? 2 : 0;     /* EVP_PKEY_EC, RSA, RSA_PSS */
@@ -11258,6 +12499,7 @@ int iris_pk_kind(void *key, int64_t *bits) {
 /* The key as PEM (private: PKCS#8; public: SubjectPublicKeyInfo), or as
    DER for a public key with der; added to out. */
 int iris_pk_export(void *key, int private, int der, IrisString *out) {
+    key = pkEvp(key);
     if (der) {
         unsigned char *buf = NULL;
         int n = pk.i2dPub(key, &buf);
@@ -11277,7 +12519,12 @@ int iris_pk_export(void *key, int private, int der, IrisString *out) {
 }
 
 void iris_pk_free(void *key) {
-    if (key && pk.loaded) pk.pkeyFree(key);
+    if (!key) return;
+    PkKey *k = key;
+    if (pk.loaded) pk.pkeyFree(k->evp);
+    free(atomic_load(&k->comb));
+    iris_wipe(k, sizeof *k);
+    free(k);
 }
 
 static void *pkCtx(void *key, int hash, int pss, bool signing, void **mdOut) {
@@ -11307,6 +12554,19 @@ static void *pkCtx(void *key, int hash, int pss, bool signing, void **mdOut) {
 /* Signs data: ECDSA's signature in DER, or RSA's. 0 with the message set
    on an error. hash: 0 SHA-1, 1 SHA-256, 2 SHA-384, 3 SHA-512. */
 int iris_pk_sign(void *key, const char *data, int64_t len, int hash, int pss, IrisString *out) {
+    PkKey *k = key;
+    if (k->p256 == 2) {
+        unsigned char h[64], rs[64], der[72];
+        size_t hn = pkHash(hash, data, len, h);
+        p256Sign(rs, k->d, h, hn);
+        size_t body = derInt(der + 2, rs, 32);
+        body += derInt(der + 2 + body, rs + 32, 32);
+        der[0] = 0x30;
+        der[1] = (unsigned char)body;
+        iris_string_append(out, (const char *)der, (int64_t)(2 + body));
+        return 1;
+    }
+    key = k->evp;
     void *md = NULL;
     if (!pkCtx(key, hash, pss, true, &md)) {
         tlsSayOpenssl("signing");
@@ -11325,6 +12585,25 @@ int iris_pk_sign(void *key, const char *data, int64_t len, int hash, int pss, Ir
 
 /* 1 when sig is key's signature of data, 0 when it isn't. */
 int iris_pk_verify(void *key, const char *data, int64_t len, const char *sig, int64_t sigLen, int hash, int pss) {
+    PkKey *k = key;
+    if (k->p256) {
+        uint8_t rs[64];
+        if (!pkDerRs((const unsigned char *)sig, sigLen, rs)) return 0;
+        unsigned char h[64];
+        size_t hn = pkHash(hash, data, len, h);
+        P256Aff *comb = atomic_load_explicit(&k->comb, memory_order_acquire);
+        if (!comb && atomic_fetch_add(&k->checks, 1) + 1 == PK_COMB_AFTER) {
+            P256Aff *t = malloc((size_t)p256CombRows(6) * 32 * sizeof *t), q;
+            if (!t) outOfMemory();
+            memcpy(q.x, k->pub.odd[0].x, 32);
+            memcpy(q.y, k->pub.odd[0].y, 32);
+            p256CombMake(t, &q, 6);
+            atomic_store_explicit(&k->comb, t, memory_order_release);
+            comb = t;
+        }
+        return p256Verify(&k->pub, comb, h, hn, rs);
+    }
+    key = k->evp;
     void *md = NULL;
     if (!pkCtx(key, hash, pss, false, &md)) return 0;
     int r = pk.verify(md, (const unsigned char *)sig, (size_t)sigLen, (const unsigned char *)data, (size_t)len);
@@ -14334,6 +15613,8 @@ typedef struct {
     /* with the CPU's carry-less multiply: H^(i+1) as low, high 64 bits
        and the two xored, so 8 blocks share one reduction */
     uint64_t hp[16][2], hk[16][2];
+    /* H^(i+1) * x^-1 and its two halves xored, for 8 blocks without the VAES path */
+    uint64_t hs[8][2], hsk[8][2];
     int wide;                   /* x86_64 with VAES and VPCLMULQDQ: 2 blocks an instruction */
     /* for 2 blocks a register: H^(16 - 2j) and H^(15 - 2j) side by side */
     uint64_t hpw[8][4], hkw[8][4];
@@ -14671,44 +15952,196 @@ static void ghashBlock(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_
 #ifdef AES_HW_TARGET
 /* 8 blocks into y at once: y = (((y ^ b0) * H ^ b1) * H ...) * H is
    (y ^ b0) * H^8 ^ b1 * H^7 ^ ... ^ b7 * H, so the products are added
-   up unreduced and reduced once. */
+   up unreduced and reduced once. The powers are kept as H^i * x^-1, so
+   the products need no shift, and two multiplies by x^127 + x^126 +
+   x^121 + 1 fold the low half into the high one. */
 #if defined(__x86_64__)
-__attribute__((target("aes,pclmul,ssse3"))) static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0,
-                                                                  const uint8_t *p) {
+#define GCM_NARROW_TARGET __attribute__((target("aes,pclmul,ssse3")))
+typedef struct {
+    __m128i lo, hi, mid;
+} Ghash8;
+
+/* block i of the 8 at p hashed into g; y goes into the first */
+GCM_NARROW_TARGET static inline void ghash8Step(const AesGcm *a, Ghash8 *g, const uint8_t *p, int i, __m128i y) {
     const __m128i rev = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
-    __m128i lo = _mm_setzero_si128(), hi = lo, mid = lo;
-    for (int i = 0; i < 8; i++) {
-        __m128i x = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16 * i)), rev);
-        if (i == 0) x = _mm_xor_si128(x, _mm_set_epi64x((long long)*y1, (long long)*y0));
-        __m128i h = _mm_loadu_si128((const __m128i *)a->hp[7 - i]);
-        __m128i hk = _mm_loadu_si128((const __m128i *)a->hk[7 - i]);
-        lo = _mm_xor_si128(lo, _mm_clmulepi64_si128(x, h, 0x00));
-        hi = _mm_xor_si128(hi, _mm_clmulepi64_si128(x, h, 0x11));
-        __m128i xk = _mm_xor_si128(x, _mm_shuffle_epi32(x, 0x4e));
-        mid = _mm_xor_si128(mid, _mm_clmulepi64_si128(xk, hk, 0x00));
+    __m128i x = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16 * i)), rev);
+    __m128i h = _mm_loadu_si128((const __m128i *)a->hs[7 - i]);
+    __m128i hk = _mm_loadu_si128((const __m128i *)a->hsk[7 - i]);
+    if (i == 0) x = _mm_xor_si128(x, y);
+    __m128i lo = _mm_clmulepi64_si128(x, h, 0x00), hi = _mm_clmulepi64_si128(x, h, 0x11);
+    __m128i mid = _mm_clmulepi64_si128(_mm_xor_si128(x, _mm_shuffle_epi32(x, 0x4e)), hk, 0x00);
+    if (i == 0) {
+        g->lo = lo;
+        g->hi = hi;
+        g->mid = mid;
+    } else {
+        g->lo = _mm_xor_si128(g->lo, lo);
+        g->hi = _mm_xor_si128(g->hi, hi);
+        g->mid = _mm_xor_si128(g->mid, mid);
     }
-    mid = _mm_xor_si128(mid, _mm_xor_si128(lo, hi));
-    uint64_t l0 = (uint64_t)_mm_cvtsi128_si64(lo), l1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(lo, lo));
-    uint64_t h0 = (uint64_t)_mm_cvtsi128_si64(hi), h1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(hi, hi));
-    uint64_t m0 = (uint64_t)_mm_cvtsi128_si64(mid), m1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(mid, mid));
-    ghashReduce(h1, h0 ^ m1, l1 ^ m0, l0, y1, y0);
+}
+
+GCM_NARROW_TARGET static inline __m128i ghash8Reduce(const Ghash8 *g) {
+    const __m128i poly = _mm_set_epi64x((long long)0xc200000000000000ULL, 1);
+    __m128i l = g->lo, h = g->hi, m = _mm_xor_si128(g->mid, _mm_xor_si128(g->lo, g->hi));
+    m = _mm_xor_si128(m, _mm_xor_si128(_mm_shuffle_epi32(l, 0x4e), _mm_clmulepi64_si128(l, poly, 0x10)));
+    return _mm_xor_si128(h, _mm_xor_si128(_mm_shuffle_epi32(m, 0x4e), _mm_clmulepi64_si128(m, poly, 0x10)));
+}
+
+GCM_NARROW_TARGET static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p) {
+    Ghash8 g;
+    __m128i y = _mm_set_epi64x((long long)*y1, (long long)*y0);
+    for (int i = 0; i < 8; i++) ghash8Step(a, &g, p, i, y);
+    y = ghash8Reduce(&g);
+    *y0 = (uint64_t)_mm_cvtsi128_si64(y);
+    *y1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(y, y));
+}
+
+/* GCM's counter blocks from 2 on, 128 bytes at a time, xored into in,
+   with the ciphertext hashed into y. The hashing of 8 blocks is spread
+   over the AES rounds of the next 8, as aesGcmWide does it. The bytes
+   done. */
+GCM_NARROW_TARGET static size_t aesGcmNarrow(const AesGcm *a, const uint8_t nonce[12], int seal, const uint8_t *in,
+                                             uint8_t *out, size_t n, uint64_t *y1, uint64_t *y0) {
+    uint64_t chi = load64be(nonce), clo = ((uint64_t)nonce[8] << 56) | ((uint64_t)nonce[9] << 48) |
+                                         ((uint64_t)nonce[10] << 40) | ((uint64_t)nonce[11] << 32) | 2;
+    __m128i y = _mm_set_epi64x((long long)*y1, (long long)*y0);
+    size_t done = 0;
+    for (; n - done >= 128; done += 128) {
+        const uint8_t *p = seal ? (done > 0 ? out + done - 128 : NULL) : in + done;
+        Ghash8 g;
+        __m128i s[8];
+        __m128i k = _mm_loadu_si128((const __m128i *)a->rk[0]);
+        for (int i = 0; i < 8; i++) {
+            s[i] = _mm_xor_si128(_mm_set_epi64x((long long)__builtin_bswap64(clo), (long long)__builtin_bswap64(chi)), k);
+            aesCtrStep(&chi, &clo, 1);
+        }
+        for (int r = 1; r < a->rounds; r++) {
+            k = _mm_loadu_si128((const __m128i *)a->rk[r]);
+            for (int i = 0; i < 8; i++) s[i] = _mm_aesenc_si128(s[i], k);
+            if (p && r <= 8) ghash8Step(a, &g, p, r - 1, y);
+        }
+        k = _mm_loadu_si128((const __m128i *)a->rk[a->rounds]);
+        for (int i = 0; i < 8; i++) {
+            s[i] = _mm_aesenclast_si128(s[i], k);
+            __m128i d = _mm_loadu_si128((const __m128i *)(in + done + 16 * i));
+            _mm_storeu_si128((__m128i *)(out + done + 16 * i), _mm_xor_si128(s[i], d));
+        }
+        if (p) y = ghash8Reduce(&g);
+    }
+    if (seal && done > 0) {
+        Ghash8 g;
+        for (int i = 0; i < 8; i++) ghash8Step(a, &g, out + done - 128, i, y);
+        y = ghash8Reduce(&g);
+    }
+    *y0 = (uint64_t)_mm_cvtsi128_si64(y);
+    *y1 = (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(y, y));
+    return done;
 }
 #else
-AES_HW_TARGET static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p) {
-    poly128_t lo = 0, hi = 0, mid = 0;
-    for (int i = 0; i < 8; i++) {
-        uint64x2_t x = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 16 * i)));
-        x = vextq_u64(x, x, 1);
-        if (i == 0) x = veorq_u64(x, vcombine_u64(vcreate_u64(*y0), vcreate_u64(*y1)));
-        uint64x2_t h = vld1q_u64(a->hp[7 - i]);
-        lo ^= vmull_p64((poly64_t)vgetq_lane_u64(x, 0), (poly64_t)vgetq_lane_u64(h, 0));
-        hi ^= vmull_high_p64(vreinterpretq_p64_u64(x), vreinterpretq_p64_u64(h));
-        mid ^= vmull_p64((poly64_t)(vgetq_lane_u64(x, 0) ^ vgetq_lane_u64(x, 1)), (poly64_t)a->hk[7 - i][0]);
+#define GCM_NARROW_TARGET AES_HW_TARGET
+typedef struct {
+    uint64x2_t lo, hi, mid;
+} Ghash8;
+
+GCM_NARROW_TARGET static inline uint64x2_t clmulLo(uint64x2_t x, uint64_t y) {
+    return vreinterpretq_u64_p128(vmull_p64((poly64_t)vgetq_lane_u64(x, 0), (poly64_t)y));
+}
+
+/* block i of the 8 at p hashed into g; y goes into the first */
+GCM_NARROW_TARGET static inline void ghash8Step(const AesGcm *a, Ghash8 *g, const uint8_t *p, int i, uint64x2_t y) {
+    uint64x2_t x = vreinterpretq_u64_u8(vrev64q_u8(vld1q_u8(p + 16 * i)));
+    x = vextq_u64(x, x, 1);
+    if (i == 0) x = veorq_u64(x, y);
+    uint64x2_t h = vld1q_u64(a->hs[7 - i]);
+    uint64x2_t lo = clmulLo(x, vgetq_lane_u64(h, 0));
+    uint64x2_t hi = vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(x), vreinterpretq_p64_u64(h)));
+    /* the two cross products: PMULL is cheap enough here that four
+       multiplies beat Karatsuba's three and its extra xors */
+    uint64x2_t hsw = vextq_u64(h, h, 1);
+    uint64x2_t mid = veorq_u64(clmulLo(x, vgetq_lane_u64(h, 1)),
+                               vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(x), vreinterpretq_p64_u64(hsw))));
+    if (i == 0) {
+        g->lo = lo;
+        g->hi = hi;
+        g->mid = mid;
+    } else {
+        g->lo = veorq_u64(g->lo, lo);
+        g->hi = veorq_u64(g->hi, hi);
+        g->mid = veorq_u64(g->mid, mid);
     }
-    mid ^= lo ^ hi;
-    uint64_t l0 = (uint64_t)lo, l1 = (uint64_t)(lo >> 64), h0 = (uint64_t)hi, h1 = (uint64_t)(hi >> 64);
-    uint64_t m0 = (uint64_t)mid, m1 = (uint64_t)(mid >> 64);
-    ghashReduce(h1, h0 ^ m1, l1 ^ m0, l0, y1, y0);
+}
+
+GCM_NARROW_TARGET static inline uint64x2_t ghash8Reduce(const Ghash8 *g) {
+    const uint64_t poly = 0xc200000000000000ULL;
+    uint64x2_t l = g->lo, h = g->hi, m = g->mid;
+    m = veorq_u64(m, veorq_u64(vextq_u64(l, l, 1), clmulLo(l, poly)));
+    return veorq_u64(h, veorq_u64(vextq_u64(m, m, 1), clmulLo(m, poly)));
+}
+
+GCM_NARROW_TARGET static void ghash8Hw(const AesGcm *a, uint64_t *y1, uint64_t *y0, const uint8_t *p) {
+    Ghash8 g;
+    uint64x2_t y = vcombine_u64(vcreate_u64(*y0), vcreate_u64(*y1));
+    for (int i = 0; i < 8; i++) ghash8Step(a, &g, p, i, y);
+    y = ghash8Reduce(&g);
+    *y0 = vgetq_lane_u64(y, 0);
+    *y1 = vgetq_lane_u64(y, 1);
+}
+
+/* GCM's counter blocks from 2 on, 128 bytes at a time, xored into in,
+   with the ciphertext hashed into y. The hashing of 8 blocks is spread
+   over the AES rounds of the next 8, so the two kinds of instruction
+   overlap. The bytes done. */
+GCM_NARROW_TARGET static size_t aesGcmNarrow(const AesGcm *a, const uint8_t nonce[12], int seal, const uint8_t *in,
+                                             uint8_t *out, size_t n, uint64_t *y1, uint64_t *y0) {
+    /* the block's 4 words as numbers, so the counter, the last, is
+       counted with an add and the words turned around into a block */
+    uint8_t nb[16] = {0};
+    memcpy(nb, nonce, 12);
+    nb[15] = 2;
+    uint32x4_t ctr = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(nb)));
+    const uint32x4_t one = vcombine_u32(vcreate_u32(0), vcreate_u32(1ULL << 32));
+    uint64x2_t y = vcombine_u64(vcreate_u64(*y0), vcreate_u64(*y1));
+    uint8x16_t rk[15];
+    for (int r = 0; r <= a->rounds; r++) rk[r] = vld1q_u8(a->rk[r]);
+    size_t done = 0;
+    for (; n - done >= 128; done += 128) {
+        const uint8_t *p = seal ? (done > 0 ? out + done - 128 : NULL) : in + done;
+        Ghash8 g;
+        uint8x16_t s[8];
+        for (int i = 0; i < 8; i++) {
+            s[i] = vrev32q_u8(vreinterpretq_u8_u32(ctr));
+            ctr = vaddq_u32(ctr, one);
+        }
+        /* AES-128 has 9 rounds before the last, so every size has the 8 */
+        if (p) {
+            for (int r = 0; r < 8; r++) {
+                for (int i = 0; i < 8; i++) s[i] = vaesmcq_u8(vaeseq_u8(s[i], rk[r]));
+                ghash8Step(a, &g, p, r, y);
+            }
+        } else {
+            for (int r = 0; r < 8; r++) {
+                for (int i = 0; i < 8; i++) s[i] = vaesmcq_u8(vaeseq_u8(s[i], rk[r]));
+            }
+        }
+        for (int r = 8; r < a->rounds - 1; r++) {
+            for (int i = 0; i < 8; i++) s[i] = vaesmcq_u8(vaeseq_u8(s[i], rk[r]));
+        }
+        for (int i = 0; i < 8; i++) {
+            s[i] = veorq_u8(vaeseq_u8(s[i], rk[a->rounds - 1]), rk[a->rounds]);
+            vst1q_u8(out + done + 16 * i, veorq_u8(s[i], vld1q_u8(in + done + 16 * i)));
+        }
+        if (p) y = ghash8Reduce(&g);
+    }
+    if (seal && done > 0) {
+        Ghash8 g;
+        for (int i = 0; i < 8; i++) ghash8Step(a, &g, out + done - 128, i, y);
+        y = ghash8Reduce(&g);
+    }
+    *y0 = vgetq_lane_u64(y, 0);
+    *y1 = vgetq_lane_u64(y, 1);
+    memset(rk, 0, sizeof rk);
+    return done;
 }
 #endif
 #endif
@@ -14748,6 +16181,15 @@ static void aesGcmInit(AesGcm *a, const uint8_t *key, int keyLen) {
             a->hp[i][0] = p0;
             a->hp[i][1] = p1;
             a->hk[i][0] = a->hk[i][1] = p0 ^ p1;
+        }
+        /* H^i * x^-1, so the products need no shift: shifted left
+           once, with x^-1 = x^127 + x^6 + x + 1 for the bit that falls out */
+        for (int i = 0; i < 8; i++) {
+            const uint64_t *h = a->hp[i];
+            uint64_t carry = h[1] >> 63;
+            a->hs[i][0] = (h[0] << 1) ^ carry;
+            a->hs[i][1] = ((h[1] << 1) | (h[0] >> 63)) ^ (carry ? 0xc200000000000000ULL : 0);
+            a->hsk[i][0] = a->hsk[i][1] = a->hs[i][0] ^ a->hs[i][1];
         }
         if (a->wide) {
             /* H^i * x^-1, so the products need no shift: shifted left
@@ -14913,6 +16355,9 @@ static void aesGcmRun(const AesGcm *a, const uint8_t nonce[12], int seal, const 
     size_t done = 0;
 #ifdef GCM_WIDE_TARGET
     if (a->wide) done = aesGcmWide(a, nonce, seal, in, out, n, &y1, &y0);
+#endif
+#ifdef GCM_NARROW_TARGET
+    if (a->hw && !a->wide) done = aesGcmNarrow(a, nonce, seal, in, out, n, &y1, &y0);
 #endif
     if (!seal) ghashPadded(a, &y1, &y0, in + done, n - done);
     uint8_t ctr[16];
@@ -19349,6 +20794,7 @@ static void oaepLoad(void) {
 }
 
 int iris_pk_encrypt_oaep(void *key, const char *data, int64_t len, int hash, IrisString *out) {
+    key = pkEvp(key);
     pthread_once(&oaepOnce, oaepLoad);
     if (!oaep.loaded) {
         tlsSay("RSA encryption needs OpenSSL's libcrypto");
