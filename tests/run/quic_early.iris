@@ -67,8 +67,10 @@ void serve(quic.Listener ln, chan[quic.EarlyData] seen) {
     c.close()
     print("server saw {<-seen}")
 
-    // a new server with other ticket keys can't read the ticket
+    // a new server with other ticket keys can't read the ticket. The old
+    // one shares the port until its connections are gone
     ln.close()
+    sleep(1s)
     config2 := try net.tlsConfig("tests/data/tls/server.pem", "tests/data/tls/server.key")
     ln2 := try quic.listen(port, &config2, sc, "127.0.0.1")
     spawn serve(ln2, seen)
