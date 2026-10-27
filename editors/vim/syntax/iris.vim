@@ -46,7 +46,7 @@ syn region irisComment start="/\*" end="\*/" contains=irisTodo,@Spell
 syn region irisBlockBrace start="{" end="}" transparent fold contains=TOP
 
 hi def link irisKeyword Keyword
-hi def link irisOperator Operator
+hi def link irisOperator Keyword
 hi def link irisStructure Structure
 hi def link irisType Type
 hi def link irisUserType Type
