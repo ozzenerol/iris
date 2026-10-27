@@ -63,6 +63,8 @@ const i64 SFTP_MAX = 256KiB + 1KiB
 // what one read or write asks for, and how many go at once
 const i64 SFTP_CHUNK = 32KiB
 const i64 SFTP_AHEAD = 64
+// requests up to this size wait to go together
+const i64 SFTP_QUEUED = 1KiB
 
 // What went wrong on the server, from its status reply.
 pub enum SftpError { eof, notFound, permission, failure, badMessage, unsupported }
@@ -150,6 +152,9 @@ pub struct Sftp {
     // replies that came before the one waited for
     Map[i64, String] early
     u8[] buf
+    // small requests not sent yet: they go together when a reply is
+    // waited for, so a burst of reads is one write
+    String queued
     bool posixRename
     pub i64 version
 }
@@ -194,6 +199,8 @@ pub !Sftp Client.sftp() {
 
 // Ends the SFTP session.
 pub void Sftp.close() {
+    self.flush() catch e { }
+    self.queued.free()
     self.ch.close()
     self.pending.free()
     i64 at = 0
@@ -208,14 +215,29 @@ pub void Sftp.close() {
     free(self.buf)
 }
 
-// Sends a packet's body with its length in front.
+// Sends a packet's body with its length in front: a small one waits in
+// queued for the next reply.
 !void Sftp.send(str body) {
+    if body.len <= SFTP_QUEUED {
+        putU32(&self.queued, body.len)
+        self.queued.append(body)
+        return
+    }
+    try self.flush()
     String m
     defer m.free()
     m.reserve(4 + body.len)
     putU32(&m, body.len)
     m.append(body)
     try self.ch.write(m)
+}
+
+// Sends the requests that wait in queued.
+!void Sftp.flush() {
+    if self.queued.len > 0 {
+        defer self.queued.clear()
+        try self.ch.write(self.queued)
+    }
 }
 
 // The next packet's body.
@@ -243,6 +265,7 @@ pub void Sftp.close() {
             self.pending = rest
             self.pendingAt = 0
         }
+        try self.flush()
         k := try self.ch.read(self.buf)
         if k == 0 {
             return error(SshError.closed, "the server ended SFTP")
@@ -681,11 +704,12 @@ pub !fs.Info RemoteFile.info() {
     defer going.free()
     i64 next = 0
     bool end = false
-    for !end && going.len < SFTP_AHEAD {
-        id := try self.askRead(handle, next, SFTP_CHUNK)
-        going.push((id, next, SFTP_CHUNK))
-        next += SFTP_CHUNK
-    }
+    // one read at first, so a small file takes two reads; once one comes
+    // back full, SFTP_AHEAD go
+    i64 window = 1
+    id0 := try self.askRead(handle, next, SFTP_CHUNK)
+    going.push((id0, next, SFTP_CHUNK))
+    next += SFTP_CHUNK
     for going.len > 0 {
         id, offset, n := going.remove(0)
         scoped String reply = self.reply(id) catch e {
@@ -727,10 +751,15 @@ pub !fs.Info RemoteFile.info() {
             // a short read: the rest of it again
             rid := try self.askRead(handle, offset + data.len, n - data.len)
             going.push((rid, offset + data.len, n - data.len))
-        } else if !end {
-            nid := try self.askRead(handle, next, SFTP_CHUNK)
-            going.push((nid, next, SFTP_CHUNK))
-            next += SFTP_CHUNK
+        } else if going.len <= SFTP_AHEAD / 2 {
+            // topped up only when half have come back, so the requests go
+            // 32 at a time and the server answers them in one go
+            window = SFTP_AHEAD
+            for !end && going.len < window {
+                nid := try self.askRead(handle, next, SFTP_CHUNK)
+                going.push((nid, next, SFTP_CHUNK))
+                next += SFTP_CHUNK
+            }
         }
     }
 }
@@ -887,6 +916,7 @@ pub !void serveSftp(Session *s, str root) {
         v.prefix.free()
         free(v.data)
         v.io.pending.free()
+        v.io.queued.free()
         free(v.io.buf)
         free(mem)
     }

@@ -22,7 +22,7 @@ const i64 MSG_CHANNEL_FAILURE = 100
 
 // How much the other side may send before we take it, and the most in one
 // packet.
-const i64 WINDOW = 2MiB
+const i64 WINDOW = 4MiB
 const i64 PACKET_DATA = 32KiB
 // how much stderr that isn't read is kept
 const i64 STDERR_KEPT = 4MiB
