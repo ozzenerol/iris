@@ -266,7 +266,7 @@ void serve(http.Router *r, net.Listener ln) {
 400 {"error": "no photo"}
 ```
 
-The whole body is read before the handler runs, so an upload counts against the Router's `maxBody`, 16 MiB by default. A body can come with a `Content-Length` or in chunks (`Transfer-Encoding: chunked`), and a client that sends `Expect: 100-continue` is told to go on. A request that gives its length in two ways, or in a way the server can't follow, gets 400 and its connection is closed. `http.parseMultipart(body, contentType)` gives every part of a multipart body, in order.
+The whole body is read before the handler runs, so an upload counts against the Router's `maxBody`, 16 MiB by default. A body can come with a `Content-Length` or in chunks (`Transfer-Encoding: chunked`), and a client that sends `Expect: 100-continue` is told to go on. A request that gives its length in two ways, or in a way the server can't follow, gets 400 and its connection is closed. A connection whose first line isn't HTTP at all is closed without an answer. `http.parseMultipart(body, contentType)` gives every part of a multipart body, in order.
 
 ## Cookies
 

@@ -6,6 +6,8 @@
 // expect: two lengths: HTTP/1.1 400 Bad Request [two different Content-Lengths]
 // expect: bad size: HTTP/1.1 400 Bad Request [a chunk size that isn't hex: 'q']
 // expect: too big: HTTP/1.1 413 Content Too Large [the body is too large]
+// expect: HTTP/3.0: HTTP/1.1 400 Bad Request [a request line HTTP doesn't allow: 'GET / HTTP/3.0']
+// expect: not HTTP: closed with 0 bytes
 // expect: expect: HTTP/1.1 100 Continue
 // expect: expect then: HTTP/1.1 200 OK [got 4 bytes: ping]
 // expect: the server stopped
@@ -74,6 +76,15 @@ void server(http.Router *r, net.Listener ln, chan[String] out) {
     try ask("two lengths", ln.port, "POST /echo HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab")
     try ask("bad size", ln.port, "POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nq\r\n")
     try ask("too big", ln.port, "POST /echo HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n800\r\n")
+
+    try ask("HTTP/3.0", ln.port, "GET / HTTP/3.0\r\n\r\n")
+    // a line that isn't HTTP, such as a wrong HTTP/2 preface: closed
+    // without an answer
+    n := try net.dial("127.0.0.1", ln.port)
+    try n.write("INVALID CONNECTION PREFACE\r\n\r\n")
+    scoped String nothing = try n.readAll()
+    print("not HTTP: closed with {nothing.len} bytes")
+    n.close()
 
     // Expect: 100-continue: the body is sent after the server says so
     e := try net.dial("127.0.0.1", ln.port)

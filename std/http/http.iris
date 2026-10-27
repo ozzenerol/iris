@@ -657,6 +657,11 @@ i64 headEnd(str b, i64 from) {
     return n
 }
 
+// what a request line that isn't HTTP at all says first: the server
+// closes such a connection without an answer, as the other side wouldn't
+// read one
+const NOT_HTTP = "not HTTP: "
+
 // Fills req from the head of a request, its fields pointing into head.
 // The body's length as bodyLength gives it.
 !i64 parseHead(str head, Request *req, Limits *limits) {
@@ -665,6 +670,9 @@ i64 headEnd(str b, i64 from) {
     method, after, ok := str.cut(line, " ")
     path, version, ok2 := str.cut(after, " ")
     if !ok || !ok2 || !str.startsWith(version, "HTTP/1.") && !(method == "PRI" && version == "HTTP/2.0") {
+        if !str.startsWith(version, "HTTP/") {
+            return error(HttpError.badRequest, "{NOT_HTTP}'{line}'")
+        }
         return error(HttpError.badRequest, "a request line HTTP doesn't allow: '{line}'")
     }
     req.method = borrow(method)
@@ -836,6 +844,9 @@ i64 headEnd(str b, i64 from) {
     method, rest, ok := str.cut(line, " ")
     path, version, ok2 := str.cut(rest, " ")
     if !ok || !ok2 || !str.startsWith(version, "HTTP/1.") && !(method == "PRI" && version == "HTTP/2.0") {
+        if !str.startsWith(version, "HTTP/") {
+            return error(HttpError.badRequest, "{NOT_HTTP}'{line}'")
+        }
         return error(HttpError.badRequest, "a request line HTTP doesn't allow: '{line}'")
     }
     req.received = time.clock()
@@ -1097,7 +1108,7 @@ void serveConn(net.Conn conn, Target target) {
                 refuse(&conn, 431, "a header line is too long")
             } else if e.code == HttpError.tooBig {
                 refuse(&conn, 413, "the body is too large")
-            } else if e.code == HttpError.badRequest {
+            } else if e.code == HttpError.badRequest && !str.startsWith(e.message, NOT_HTTP) {
                 refuse(&conn, 400, e.message)
             }
             return
