@@ -155,6 +155,50 @@ PgError.noRows</code></pre>
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">0</span>)<span class="e">}</span><span class="s"> products, </span><span class="e">{</span>rows.<span class="f">int</span>(<span class="n">1</span>)<span class="e">}</span><span class="s"> in stock, </span><span class="e">{</span>rows.<span class="f">float</span>(<span class="n">2</span>):.<span class="n">2</span><span class="e">}</span><span class="s"> on average&quot;</span>)
 }</code></pre>
 <pre class="out"><code>3 products, 28 in stock, 3.52 on average</code></pre>
+<h2 id="adding-structs-as-rows"><a href="#adding-structs-as-rows">Adding structs as rows</a></h2>
+<p><code>pg.insert(&amp;db, table, &amp;row)</code> adds a <code>@json</code> struct as a row, each field in the column of its name. The fields named in <code>skip</code> are left out, such as an <code>id</code> that PostgreSQL makes, and the columns named in <code>returning</code> are read back into the struct. <code>pg.insertMany</code> adds a list of structs, many to a statement, and gives how many it added:</p>
+<pre class="code"><code><span class="k">import</span> os, pg
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    <span class="t">i64</span> id
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+    <span class="t">List</span>[<span class="t">String</span>] tags
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> pg.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;DATABASE_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;postgres://localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="k">try</span> db.<span class="f">execScript</span>(<span class="s">r&quot;&quot;&quot;
+        DROP TABLE IF EXISTS teas;
+        CREATE TABLE teas (id serial PRIMARY KEY, name text NOT NULL, price float8, stock int, tags jsonb);
+        &quot;&quot;&quot;</span>)
+
+    <span class="k">scoped</span> <span class="t">Product</span> green = <span class="t">Product</span>{name: <span class="s">&quot;green tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">3.5</span>, stock: <span class="n">10</span>}
+    green.tags.<span class="f">push</span>(<span class="s">&quot;loose&quot;</span>.<span class="f">copy</span>())
+    <span class="k">try</span> pg.<span class="f">insert</span>(&amp;db, <span class="s">&quot;teas&quot;</span>, &amp;green, skip: [<span class="s">&quot;id&quot;</span>], returning: [<span class="s">&quot;id&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;green tea is </span><span class="e">{</span>green.id<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="t">List</span>[<span class="t">Product</span>] more
+    <span class="k">defer</span> {
+        <span class="k">for</span> p <span class="k">in</span> more {
+            p.<span class="f">free</span>()
+        }
+        more.<span class="f">free</span>()
+    }
+    more.<span class="f">push</span>(<span class="t">Product</span>{name: <span class="s">&quot;black tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">2.9</span>, stock: <span class="n">4</span>})
+    more.<span class="f">push</span>(<span class="t">Product</span>{name: <span class="s">&quot;white tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">6.2</span>, stock: <span class="n">2</span>})
+    <span class="f">print</span>(<span class="s">&quot;added </span><span class="e">{</span><span class="k">try</span> pg.<span class="f">insertMany</span>(&amp;db, <span class="s">&quot;teas&quot;</span>, more.<span class="f">items</span>(), skip: [<span class="s">&quot;id&quot;</span>])<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="k">scoped</span> <span class="t">Product</span> back = <span class="k">try</span> pg.one[<span class="t">Product</span>](&amp;db, <span class="s">&quot;SELECT * FROM teas WHERE id = $1&quot;</span>, [.<span class="f">int</span>(green.id)])
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>back.name<span class="e">}</span><span class="s">: </span><span class="e">{</span>back.tags.<span class="f">at</span>(<span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>green tea is 1
+added 2
+green tea: loose</code></pre>
+<ul><li>A list, a map or a <code>@json</code> struct in a field goes in as JSON, for a <code>json</code> or <code>jsonb</code> column, and <code>all</code> and <code>one</code> read it back.</li><li>An enum goes in as the name of its value.</li><li>A statement takes at most 65535 values, so <code>insertMany</code> sends a long list in several. In a transaction they all take effect together.</li></ul>
 <h2 id="transactions"><a href="#transactions">Transactions</a></h2>
 <p><code>db.begin()</code> takes a connection from the pool for a transaction. Its <code>query</code> and <code>exec</code> run inside the transaction, and <code>commit</code> or <code>rollback</code> ends it and gives the connection back. With <code>scoped</code>, a transaction left without <code>commit</code>, by an error or a <code>return</code>, rolls back:</p>
 <pre class="code"><code><span class="k">import</span> os, pg
@@ -359,7 +403,7 @@ close 2</code></pre>
     <nav class="pager"><a class="prev" href="17-sqlite.html"><span>Previous</span>SQLite</a><a class="next" href="19-random-and-crypto.html"><span>Next</span>Random numbers and cryptography</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-to-postgresql">Connecting to PostgreSQL</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#transactions">Transactions</a></li><li><a href="#connecting-to-redis">Connecting to Redis</a></li><li><a href="#counters-hashes-and-lists">Counters, hashes and lists</a></li><li><a href="#any-command">Any command</a></li><li><a href="#publish-and-subscribe">Publish and subscribe</a></li><li><a href="#a-pool-for-other-connections">A pool for other connections</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting-to-postgresql">Connecting to PostgreSQL</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#adding-structs-as-rows">Adding structs as rows</a></li><li><a href="#transactions">Transactions</a></li><li><a href="#connecting-to-redis">Connecting to Redis</a></li><li><a href="#counters-hashes-and-lists">Counters, hashes and lists</a></li><li><a href="#any-command">Any command</a></li><li><a href="#publish-and-subscribe">Publish and subscribe</a></li><li><a href="#a-pool-for-other-connections">A pool for other connections</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

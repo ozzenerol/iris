@@ -149,6 +149,61 @@ import os, pg
 3 products, 28 in stock, 3.52 on average
 ```
 
+## Adding structs as rows
+
+`pg.insert(&db, table, &row)` adds a `@json` struct as a row, each field in the column of its name. The fields named in `skip` are left out, such as an `id` that PostgreSQL makes, and the columns named in `returning` are read back into the struct. `pg.insertMany` adds a list of structs, many to a statement, and gives how many it added:
+
+```iris
+import os, pg
+
+@json
+struct Product {
+    i64 id
+    String name
+    f64 price
+    i64 stock
+    List[String] tags
+}
+
+!void main() {
+    db := try pg.pool(os.env("DATABASE_URL") catch "postgres://localhost/shop")
+    defer db.close()
+    try db.execScript(r"""
+        DROP TABLE IF EXISTS teas;
+        CREATE TABLE teas (id serial PRIMARY KEY, name text NOT NULL, price float8, stock int, tags jsonb);
+        """)
+
+    scoped Product green = Product{name: "green tea".copy(), price: 3.5, stock: 10}
+    green.tags.push("loose".copy())
+    try pg.insert(&db, "teas", &green, skip: ["id"], returning: ["id"])
+    print("green tea is {green.id}")
+
+    List[Product] more
+    defer {
+        for p in more {
+            p.free()
+        }
+        more.free()
+    }
+    more.push(Product{name: "black tea".copy(), price: 2.9, stock: 4})
+    more.push(Product{name: "white tea".copy(), price: 6.2, stock: 2})
+    print("added {try pg.insertMany(&db, "teas", more.items(), skip: ["id"])}")
+
+    scoped Product back = try pg.one[Product](&db, "SELECT * FROM teas WHERE id = $1", [.int(green.id)])
+    print("{back.name}: {back.tags.at(0)}")
+}
+```
+
+```output
+green tea is 1
+added 2
+green tea: loose
+```
+
+- A list, a map or a `@json` struct in a field goes in as JSON, for a `json` or `jsonb` column, and `all` and `one` read it back.
+- An enum goes in as the name of its value.
+- A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
+
 ## Transactions
 
 `db.begin()` takes a connection from the pool for a transaction. Its `query` and `exec` run inside the transaction, and `commit` or `rollback` ends it and gives the connection back. With `scoped`, a transaction left without `commit`, by an error or a `return`, rolls back:

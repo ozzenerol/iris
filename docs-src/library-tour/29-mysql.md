@@ -128,6 +128,53 @@ MysqlError.noRows
 
 `Rows` can also be read one row at a time, as in the `pg` module: `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. Dates come as `2026-10-17` and times as `2026-10-17 09:30:00`, and a `bool` column, which MySQL keeps as a number, reads as `true` for anything but 0.
 
+## Adding structs as rows
+
+`mysql.insert(&db, table, &row)` adds a `@json` struct as a row, each field in the column of its name, and gives the `AUTO_INCREMENT` id the row got. The fields named in `skip` are left out, such as that id. `mysql.insertMany` adds a list of structs, many to a statement, and gives how many it added:
+
+```iris
+import mysql, os
+
+@json
+struct Product {
+    i64 id
+    String name
+    f64 price
+    i64 stock
+}
+
+!void main() {
+    db := try mysql.pool(os.env("MYSQL_URL") catch "mysql://root:secret@localhost/shop")
+    defer db.close()
+    try db.execScript(r"""
+        DROP TABLE IF EXISTS teas;
+        CREATE TABLE teas (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100) NOT NULL, price double, stock int);
+        """)
+
+    scoped Product green = Product{name: "green tea".copy(), price: 3.5, stock: 10}
+    green.id = try mysql.insert(&db, "teas", &green, skip: ["id"])
+    print("green tea is {green.id}")
+
+    List[Product] more
+    defer {
+        for p in more {
+            p.free()
+        }
+        more.free()
+    }
+    more.push(Product{name: "black tea".copy(), price: 2.9, stock: 4})
+    more.push(Product{name: "white tea".copy(), price: 6.2, stock: 2})
+    print("added {try mysql.insertMany(&db, "teas", more.items(), skip: ["id"])}")
+}
+```
+
+```output
+green tea is 1
+added 2
+```
+
+A list, a map or a `@json` struct in a field goes in as JSON, for a `json` column, and `all` and `one` read it back. A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
+
 ## Transactions
 
 `db.begin()` takes a connection from the pool for a transaction. Its `query` and `exec` run inside it, and `commit` or `rollback` ends it and gives the connection back. With `scoped`, a transaction left without `commit` rolls back:

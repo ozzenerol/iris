@@ -9,6 +9,7 @@
 // Values go apart from the SQL ($1, $2, ...), so they can't change what the
 // SQL means. Results come back as text and are read with Rows.int, text
 // and so on, or into @json structs by column name with all and one.
+// insert and insertMany add @json structs as rows.
 
 import base64, crypto, net, random, str, time, url
 
@@ -564,6 +565,152 @@ pub !T one[T, D: Querier](D *db, str sql, Value[] args = []) {
     T v
     try scan(&rows, &v)
     return v
+}
+
+// ------------------------------------------------------------ inserts
+
+@extern("iris_sql_fields")
+i64 rawFields(u8 *table)
+
+@extern("iris_sql_field")
+i64 rawField(u8 *table, u8 *row, i64 i, str *name, i64 *iv, f64 *fv, str *text, String *tmp)
+
+// A row's columns and values, for insert.
+struct Fields {
+    List[str] names
+    List[Value] values
+    List[String] made // the JSON and big numbers that values point into
+}
+
+void Fields.free() {
+    self.names.free()
+    self.values.free()
+    self.made.freeEach()
+}
+
+bool skipped(str[] skip, str name) {
+    for s in skip {
+        if s == name {
+            return true
+        }
+    }
+    return false
+}
+
+// Each field of a @json struct but those named in skip, as a column and a
+// value.
+void fieldsOf[T](T *row, str[] skip, Fields *f) {
+    table := tableOf(row)
+    for i in 0..rawFields(table) {
+        str name
+        i64 iv
+        f64 fv
+        str text
+        String tmp
+        kind := rawField(table, row, i, &name, &iv, &fv, &text, &tmp)
+        if skipped(skip, name) {
+            tmp.free()
+            continue
+        }
+        f.names.push(name)
+        f.made.push(tmp)
+        Value v = match kind {
+            0 => .int(iv),
+            1 => .float(fv),
+            3 => .bool(iv != 0),
+            _ => .text(text),
+        }
+        f.values.push(v)
+    }
+}
+
+// A column name in double quotes, so any name works.
+void putName(String *sql, str name) {
+    sql.append("\"")
+    for i in 0..name.len {
+        sql.append(name[i:i + 1])
+        if name[i] == '"' {
+            sql.append("\"")
+        }
+    }
+    sql.append("\"")
+}
+
+// INSERT INTO table (columns) VALUES and n rows of placeholders.
+void insertSql(String *sql, str table, str[] names, i64 n) {
+    sql.append("INSERT INTO ")
+    sql.append(table)
+    sql.append(" (")
+    for i, name in names {
+        if i > 0 {
+            sql.append(", ")
+        }
+        putName(sql, name)
+    }
+    sql.append(") VALUES ")
+    for r in 0..n {
+        sql.append(if r > 0 { ", (" } else { "(" })
+        for i in 0..names.len {
+            if i > 0 {
+                sql.append(", ")
+            }
+            sql.append("$")
+            sql.append("{r * names.len + i + 1}")
+        }
+        sql.append(")")
+    }
+}
+
+// Adds a @json struct to table as a row: each field goes in the column of
+// its name (or its @json name), except the fields named in skip, such as an
+// id the database makes. The columns named in returning are read back into
+// row: pg.insert(&db, "users", &u, skip: ["id"], returning: ["id"]).
+pub !void insert[T, D: Querier](D *db, str table, T *row, str[] skip = [], str[] returning = []) {
+    scoped Fields f
+    fieldsOf(row, skip, &f)
+    if f.names.len == 0 {
+        return error(PgError.failed, "the row has no fields to insert")
+    }
+    scoped String sql
+    insertSql(&sql, table, f.names.items(), 1)
+    if returning.len > 0 {
+        sql.append(" RETURNING ")
+        for i, name in returning {
+            if i > 0 {
+                sql.append(", ")
+            }
+            putName(&sql, name)
+        }
+    }
+    rows := try db.query(sql, f.values.items())
+    defer rows.close()
+    if returning.len > 0 && rows.next() {
+        try scan(&rows, row)
+    }
+}
+
+// Adds @json structs to table as rows, as insert does, many to a statement:
+// how many were added. A PostgreSQL statement takes at most 65535 values,
+// so a long list goes in several, which a Tx makes all or nothing.
+pub !i64 insertMany[T, D: Querier](D *db, str table, T[] rows, str[] skip = []) {
+    i64 done = 0
+    for done < rows.len {
+        scoped Fields f
+        fieldsOf(&rows[done], skip, &f)
+        cols := f.names.len
+        if cols == 0 {
+            return error(PgError.failed, "the rows have no fields to insert")
+        }
+        n := if rows.len - done < 65535 / cols { rows.len - done } else { 65535 / cols }
+        for r in 1..n {
+            fieldsOf(&rows[done + r], skip, &f)
+        }
+        scoped String sql
+        insertSql(&sql, table, f.names.items()[0:cols], n)
+        scoped Rows res = try db.query(sql, f.values.items())
+        done += n
+    }
+    return done
 }
 
 String textOf(Value v) => match v {

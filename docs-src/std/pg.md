@@ -63,6 +63,14 @@ struct User {
 }
 ```
 
+`pg.insert` adds a `@json` struct as a row, leaving out the fields named in `skip` and reading the columns named in `returning` back into it. `pg.insertMany` adds a list of them, many to a statement:
+
+```iris
+u := User{name: "Ada".copy(), age: 36}
+try pg.insert(&db, "users", &u, skip: ["id"], returning: ["id"])
+n := try pg.insertMany(&db, "users", more.items(), skip: ["id"])
+```
+
 `query` gives `Rows`, which can also be read one row at a time. `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. `close` ends them.
 
 ## Transactions

@@ -142,6 +142,44 @@ MysqlError.constraint: Duplicate entry &#x27;coffee&#x27; for key &#x27;products
 2 lemon cake: 4.25, 10 left
 MysqlError.noRows</code></pre>
 <p><code>Rows</code> can also be read one row at a time, as in the <code>pg</code> module: <code>next</code> moves to the next row, and <code>int</code>, <code>float</code>, <code>bool</code>, <code>text</code> and <code>isNull</code> read a column by its number, from 0. Dates come as <code>2026-10-17</code> and times as <code>2026-10-17 09:30:00</code>, and a <code>bool</code> column, which MySQL keeps as a number, reads as <code>true</code> for anything but 0.</p>
+<h2 id="adding-structs-as-rows"><a href="#adding-structs-as-rows">Adding structs as rows</a></h2>
+<p><code>mysql.insert(&amp;db, table, &amp;row)</code> adds a <code>@json</code> struct as a row, each field in the column of its name, and gives the <code>AUTO_INCREMENT</code> id the row got. The fields named in <code>skip</code> are left out, such as that id. <code>mysql.insertMany</code> adds a list of structs, many to a statement, and gives how many it added:</p>
+<pre class="code"><code><span class="k">import</span> mysql, os
+
+<span class="a">@json</span>
+<span class="k">struct</span> <span class="t">Product</span> {
+    <span class="t">i64</span> id
+    <span class="t">String</span> name
+    <span class="t">f64</span> price
+    <span class="t">i64</span> stock
+}
+
+!<span class="t">void</span> <span class="f">main</span>() {
+    db := <span class="k">try</span> mysql.<span class="f">pool</span>(os.<span class="f">env</span>(<span class="s">&quot;MYSQL_URL&quot;</span>) <span class="k">catch</span> <span class="s">&quot;mysql://root:secret@localhost/shop&quot;</span>)
+    <span class="k">defer</span> db.<span class="f">close</span>()
+    <span class="k">try</span> db.<span class="f">execScript</span>(<span class="s">r&quot;&quot;&quot;
+        DROP TABLE IF EXISTS teas;
+        CREATE TABLE teas (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100) NOT NULL, price double, stock int);
+        &quot;&quot;&quot;</span>)
+
+    <span class="k">scoped</span> <span class="t">Product</span> green = <span class="t">Product</span>{name: <span class="s">&quot;green tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">3.5</span>, stock: <span class="n">10</span>}
+    green.id = <span class="k">try</span> mysql.<span class="f">insert</span>(&amp;db, <span class="s">&quot;teas&quot;</span>, &amp;green, skip: [<span class="s">&quot;id&quot;</span>])
+    <span class="f">print</span>(<span class="s">&quot;green tea is </span><span class="e">{</span>green.id<span class="e">}</span><span class="s">&quot;</span>)
+
+    <span class="t">List</span>[<span class="t">Product</span>] more
+    <span class="k">defer</span> {
+        <span class="k">for</span> p <span class="k">in</span> more {
+            p.<span class="f">free</span>()
+        }
+        more.<span class="f">free</span>()
+    }
+    more.<span class="f">push</span>(<span class="t">Product</span>{name: <span class="s">&quot;black tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">2.9</span>, stock: <span class="n">4</span>})
+    more.<span class="f">push</span>(<span class="t">Product</span>{name: <span class="s">&quot;white tea&quot;</span>.<span class="f">copy</span>(), price: <span class="n">6.2</span>, stock: <span class="n">2</span>})
+    <span class="f">print</span>(<span class="s">&quot;added </span><span class="e">{</span><span class="k">try</span> mysql.<span class="f">insertMany</span>(&amp;db, <span class="s">&quot;teas&quot;</span>, more.<span class="f">items</span>(), skip: [<span class="s">&quot;id&quot;</span>])<span class="e">}</span><span class="s">&quot;</span>)
+}</code></pre>
+<pre class="out"><code>green tea is 1
+added 2</code></pre>
+<p>A list, a map or a <code>@json</code> struct in a field goes in as JSON, for a <code>json</code> column, and <code>all</code> and <code>one</code> read it back. A statement takes at most 65535 values, so <code>insertMany</code> sends a long list in several. In a transaction they all take effect together.</p>
 <h2 id="transactions"><a href="#transactions">Transactions</a></h2>
 <p><code>db.begin()</code> takes a connection from the pool for a transaction. Its <code>query</code> and <code>exec</code> run inside it, and <code>commit</code> or <code>rollback</code> ends it and gives the connection back. With <code>scoped</code>, a transaction left without <code>commit</code> rolls back:</p>
 <pre class="code"><code><span class="k">import</span> mysql, os
@@ -174,7 +212,7 @@ MysqlError.noRows</code></pre>
     <nav class="pager"><a class="prev" href="28-metrics-and-tracing.html"><span>Previous</span>Metrics and tracing</a><a class="next" href="30-mongodb.html"><span>Next</span>MongoDB</a></nav>
   </article>
   <button class="side-toggle side-toggle-r" type="button" data-side="onpage" data-text="On this page" data-label="on this page" aria-expanded="true">On this page &#8250;</button>
-  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting">Connecting</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#transactions">Transactions</a></li></ul></aside>
+  <aside class="onpage" aria-label="On this page"><h4>On this page</h4><ul><li><a href="#connecting">Connecting</a></li><li><a href="#changing-data">Changing data</a></li><li><a href="#reading-rows">Reading rows</a></li><li><a href="#adding-structs-as-rows">Adding structs as rows</a></li><li><a href="#transactions">Transactions</a></li></ul></aside>
 </div>
 <footer>
   <div class="bar">

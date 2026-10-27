@@ -17374,8 +17374,18 @@ static const char *setFromText(const JsonType *ft, bool duration, char *p, const
         }
         char *end;
         errno = 0;
-        long long n = strtoll(v, &end, 10);
         int bits = ft->size * 8;
+        if (ft->kind == J_UINT && bits == 64) {
+            /* above the i64 range too */
+            const char *d = v;
+            while (*d == ' ' || *d == '+') d++;
+            if (*d == '-') return "doesn't fit";
+            unsigned long long u = strtoull(v, &end, 10);
+            if (*end || end == v || errno) return "isn't a whole number";
+            writeInt(p, ft->size, (long long)u);
+            return NULL;
+        }
+        long long n = strtoll(v, &end, 10);
         bool fits = ft->kind == J_INT ? (bits == 64 || (n >= -(1LL << (bits - 1)) && n < (1LL << (bits - 1))))
                                       : (n >= 0 && (bits == 64 || n < (1LL << bits)));
         if (*end || end == v || errno) return "isn't a whole number";
@@ -17453,6 +17463,19 @@ int iris_pg_scan(const JsonType *t, char *out, const Slice *names, const Slice *
             *(uint8_t *)p = v->ptr[0] == 't';
             continue;
         }
+        int32_t k = f->type->kind;
+        if (k == J_STRUCT || k == J_MAP || k == J_SLICE || k == J_ARRAY || k == J_LIST) {
+            /* a json or jsonb column, as insert writes one */
+            jsonFree(f->type, p);
+            memset(p, 0, (size_t)f->type->size);
+            if (iris_json_decode(f->type, v->ptr, v->len, p) != 0) {
+                pgMsgLen = snprintf(pgMsg, sizeof pgMsg, "the column %.*s has '%.*s', which isn't JSON for the field %.*s",
+                                    (int)names[c].len, names[c].ptr, (int)(v->len < 60 ? v->len : 60), v->ptr,
+                                    (int)f->nameLen, f->name);
+                return 1;
+            }
+            continue;
+        }
         char *text = malloc((size_t)v->len + 1);
         memcpy(text, v->ptr, (size_t)v->len);
         text[v->len] = 0;
@@ -17466,6 +17489,61 @@ int iris_pg_scan(const JsonType *t, char *out, const Slice *names, const Slice *
         free(text);
     }
     return 0;
+}
+
+/* pg and mysql insert: how many fields a @json struct has */
+int64_t iris_sql_fields(const JsonType *t) { return t->count; }
+
+/* pg and mysql insert: field i of a @json struct as a statement's value,
+   with its key in *name. 0: an integer in *iv; 1: a float in *fv; 2: text
+   in *text; 3: a bool in *iv. Text that has to be made (a u64 above the
+   i64 range, or JSON for a struct, list or map) goes in *tmp, which the
+   caller frees. */
+int64_t iris_sql_field(const JsonType *t, const char *in, int64_t i, Slice *name, int64_t *iv, double *fv,
+                       Slice *text, IrisString *tmp) {
+    const JsonField *f = &((const JsonField *)t->items)[i];
+    const JsonType *ft = f->type;
+    const char *p = in + f->offset;
+    name->ptr = (char *)f->name;
+    name->len = f->nameLen;
+    switch (ft->kind) {
+    case J_INT: case J_UINT: {
+        int64_t v = readInt(p, ft->size, ft->kind == J_INT);
+        if (ft->kind == J_UINT && ft->size == 8 && v < 0) break;    /* too big for an i64: as text */
+        *iv = v;
+        return 0;
+    }
+    case J_FLOAT:
+        *fv = ft->size == 4 ? *(const float *)p : *(const double *)p;
+        return 1;
+    case J_BOOL:
+        *iv = *(const uint8_t *)p;
+        return 3;
+    case J_STR: case J_STRING:
+        /* a str and a String start with the same pointer and length */
+        text->ptr = ((const Slice *)p)->ptr;
+        text->len = ((const Slice *)p)->len;
+        return 2;
+    case J_ENUM: {
+        int64_t v = *(const int32_t *)p;
+        const JsonName *names = ft->items;
+        for (int64_t k = 0; k < ft->count; k++) {
+            if (names[k].value == v) {
+                text->ptr = (char *)names[k].name;
+                text->len = names[k].len;
+                return 2;
+            }
+        }
+        *iv = v;
+        return 0;
+    }
+    default:
+        break;
+    }
+    jsonEncode(tmp, ft, p);
+    text->ptr = tmp->ptr;
+    text->len = tmp->len;
+    return 2;
 }
 
 int iris_env_load(const EnvTable *t, char *out) {
