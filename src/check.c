@@ -1324,8 +1324,24 @@ static void checkFieldAttr(Checker *c, Node *d, Node *f, Node *at) {
         }
         return;
     }
+    if (strcmp(at->name, "id") == 0 || strcmp(at->name, "column") == 0) {
+        /* @id marks the primary key, @column("name") names the column */
+        bool entity = false;
+        for (int i = 0; i < d->attrs.len; i++) {
+            if (strcmp(d->attrs.items[i]->name, "entity") == 0) entity = true;
+        }
+        if (!entity) {
+            error(c, at, "@%s on a field needs @entity on the struct %s too", at->name, d->name);
+        } else if (at->name[0] == 'i' && at->list.len) {
+            error(c, at, "@id takes nothing: it goes on the field that holds the primary key");
+        } else if (at->name[0] == 'c' && (at->list.len != 1 || at->list.items[0]->kind != N_STRING ||
+                                          !at->list.items[0]->textLen)) {
+            error(c, at, "@column takes the column's name in quotes: @column(\"created_at\")");
+        }
+        return;
+    }
     if (strcmp(at->name, "json") != 0) {
-        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @wire(...), @proto(...), @env(...) or @flag(...)", at->name);
+        error(c, at, "@%s isn't an attribute of a field; a field takes @json(...), @id, @column(...), @wire(...), @proto(...), @env(...) or @flag(...)", at->name);
         return;
     }
     if (!(d->flags & F_JSON)) {
@@ -1858,6 +1874,14 @@ static void resolveStruct(Checker *c, Type *t) {
             if (at->list.len > 1 || (at->list.len == 1 && at->list.items[0]->kind != N_STRING)) {
                 error(c, at, "@env on a struct takes nothing, or a prefix for the names in quotes: @env(\"APP\")");
             }
+        } else if (strcmp(at->name, "entity") == 0) {
+            /* a database row, which JSON can read and write too */
+            d->flags |= F_JSON;
+            t->entity = at;
+            if (at->list.len != 1 || at->list.items[0]->kind != N_STRING || !at->list.items[0]->textLen) {
+                error(c, at, "@entity on a struct takes its table's name in quotes: @entity(\"users\")");
+                t->entity = NULL;
+            }
         } else if (strcmp(at->name, "proto") == 0) {
             /* a protobuf message, which JSON can read and write too */
             d->flags |= F_JSON;
@@ -1866,7 +1890,7 @@ static void resolveStruct(Checker *c, Type *t) {
                 error(c, at, "@proto on a struct takes nothing; field numbers go on the fields: @proto(3)");
             }
         } else {
-            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @wire, @proto, @env or @flags", at->name);
+            error(c, at, "@%s isn't an attribute of a struct; a struct takes @json, @entity, @wire, @proto, @env or @flags", at->name);
         }
     }
     for (int i = 0; i < d->list.len; i++) {
@@ -1927,6 +1951,20 @@ static void resolveStruct(Checker *c, Type *t) {
     }
     if (d->flags & F_JSON) {
         checkJsonFields(c, t, d);
+    }
+    if (t->entity) {
+        int ids = 0;
+        for (int i = 0; i < d->list.len; i++) {
+            Node *f = d->list.items[i];
+            for (int k = 0; k < f->attrs.len; k++) {
+                if (strcmp(f->attrs.items[k]->name, "id") == 0 && ++ids == 2) {
+                    error(c, f->attrs.items[k], "%s has two @id fields; @id goes on the one primary key", d->name);
+                }
+            }
+        }
+        if (!ids) {
+            error(c, t->entity, "@entity needs a field with @id, the primary key: @id i64 id");
+        }
     }
     if (t->wire) {
         checkWireFields(c, t, d);
@@ -5472,6 +5510,28 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         e->c = like(c, N_T_NAME, e);
         e->c->type = t;
         return setType(e, rt);
+    }
+    if (strcmp(d->name, "entityOf") == 0) {
+        /* a @json or @entity struct's table, column and key, for the database modules */
+        if (e->list.len != 1) {
+            error(c, e, "entityOf takes a pointer to a @json or @entity struct");
+            return setType(e, &tyError);
+        }
+        Type *t = checkExpr(c, &e->list.items[0], NULL);
+        if (isErr(t)) return setType(e, &tyError);
+        Type *st = t->kind == TY_PTR ? t->elem : NULL;
+        if (!st || st->kind != TY_STRUCT) {
+            error(c, e->list.items[0], "this should be a pointer to a struct, not %s", t->name);
+            return setType(e, &tyError);
+        }
+        resolveStruct(c, st);
+        if (!isJsonStruct(st)) {
+            error(c, e->list.items[0], "%s needs @entity or @json to be a row", st->name);
+            return setType(e, &tyError);
+        }
+        if (!jsonDecodable(c, st, e->list.items[0])) return setType(e, &tyError);
+        e->builtin = BI_ENTITY_OF;
+        return setType(e, ptrTo(&tyU8));
     }
     if (strcmp(d->name, "tableOf") == 0) {
         /* the field table of a @json struct, for the runtime to fill it */

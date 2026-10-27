@@ -116,3 +116,13 @@ try db.commit()
 ```
 
 SQLite is loaded the first time a database is opened. `IRIS_SQLITE` names another copy of it.
+
+## @entity structs
+
+A struct marked `@entity("table")`, with `@id` on its key, is a row: `sqlite.insert` adds it and puts the rowid in an `@id` of 0, `sqlite.find` reads one by its key, `sqlite.update` writes one back and `sqlite.delete` removes one. `sqlite.insertMany` adds a list, many to a statement:
+
+```iris
+_ = try sqlite.insert(&db, &account)
+scoped a := try sqlite.find[Account](&db, .int(1))
+_ = try sqlite.delete[Account](&db, .int(1))
+```

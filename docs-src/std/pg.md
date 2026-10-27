@@ -63,13 +63,22 @@ struct User {
 }
 ```
 
-`pg.insert` adds a `@json` struct as a row, leaving out the fields named in `skip` and reading the columns named in `returning` back into it. `pg.insertMany` adds a list of them, many to a statement:
+A struct marked `@entity("table")`, with `@id` on its key, is a row: `pg.insert` adds it and reads the key PostgreSQL makes back into it, `pg.find` reads one by its key, `pg.update` writes one back and `pg.delete` removes one. `pg.insertMany` adds a list, many to a statement:
 
 ```iris
-u := User{name: "Ada".copy(), age: 36}
-try pg.insert(&db, "users", &u, skip: ["id"], returning: ["id"])
-n := try pg.insertMany(&db, "users", more.items(), skip: ["id"])
+@entity("users")
+struct Account {
+    @id i64 id
+    String name
+}
+
+try pg.insert(&db, &a)
+scoped b := try pg.find[Account](&db, .int(a.id))
+_ = try pg.update(&db, &b)
+_ = try pg.delete[Account](&db, .int(a.id))
 ```
+
+A plain `@json` struct goes in with the table named: `pg.insert(&db, &u, table: "users", skip: ["id"], returning: ["id"])`.
 
 `query` gives `Rows`, which can also be read one row at a time. `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. `close` ends them.
 

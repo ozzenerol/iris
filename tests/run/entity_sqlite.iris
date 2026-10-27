@@ -1,0 +1,97 @@
+// expect: ada 1, bob 2
+// expect: found: 1 Ada 36 2026-10-27 [x]
+// expect: json: {"id":1,"full_name":"Ada","age":36,"created":"2026-10-27","tags":["x"]}
+// expect: updated 1: Ada Lovelace 37
+// expect: missing: SqliteError.noRows
+// expect: many: 3, ids 3 4 5
+// expect: own id: 100 Dee
+// expect: deleted 1, left 5
+// expect: plain @json: 7 Eve
+// expect: no table: SqliteError.failed
+
+import json, sqlite
+
+@json
+@entity("people")
+struct Person {
+    @id i64 id
+    @json("full_name") String name
+    i64 age
+    @column("created_at") String created
+    List[String] tags
+}
+
+@json
+struct Plain {
+    i64 id
+    String name
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, created_at TEXT, tags TEXT)")
+
+    scoped ada := Person{name: "Ada".copy(), age: 36, created: "2026-10-27".copy()}
+    ada.tags.push("x".copy())
+    _ = try sqlite.insert(&db, &ada)
+    scoped bob := Person{name: "Bob".copy()}
+    _ = try sqlite.insert(&db, &bob)
+    print("ada {ada.id}, bob {bob.id}")
+
+    scoped p := try sqlite.find[Person](&db, .int(1))
+    print("found: {p.id} {p.name} {p.age} {p.created} [{p.tags.at(0)}]")
+    scoped String j = json.encode(p)
+    print("json: {j}")
+
+    p.name.free()
+    p.name = "Ada Lovelace".copy()
+    p.age = 37
+    n := try sqlite.update(&db, &p)
+    scoped again := try sqlite.find[Person](&db, .int(1))
+    print("updated {n}: {again.name} {again.age}")
+
+    _ = sqlite.find[Person](&db, .int(99)) catch e {
+        print("missing: {e.code}")
+        Person{}
+    }
+
+    List[Person] more
+    defer {
+        for m in more {
+            m.free()
+        }
+        more.free()
+    }
+    for name in ["Cy", "Di", "Ed"] {
+        more.push(Person{name: name.copy()})
+    }
+    k := try sqlite.insertMany(&db, more.items())
+    all := try sqlite.all[Person](&db, "SELECT * FROM people ORDER BY id")
+    print("many: {k}, ids {all.at(2).id} {all.at(3).id} {all.at(4).id}")
+    for a in all {
+        a.free()
+    }
+    all.free()
+
+    scoped dee := Person{id: 100, name: "Dee".copy()}
+    _ = try sqlite.insert(&db, &dee)
+    scoped d := try sqlite.find[Person](&db, .int(100))
+    print("own id: {d.id} {d.name}")
+
+    gone := try sqlite.delete[Person](&db, .int(2))
+    left := try db.query("SELECT count(*) FROM people")
+    _ = try left.next()
+    print("deleted {gone}, left {left.int(0)}")
+    left.close()
+
+    try db.exec("CREATE TABLE plain (id INTEGER PRIMARY KEY, name TEXT)")
+    scoped eve := Plain{id: 7, name: "Eve".copy()}
+    _ = try sqlite.insert(&db, &eve, table: "plain")
+    scoped e2 := try sqlite.one[Plain](&db, "SELECT * FROM plain")
+    print("plain @json: {e2.id} {e2.name}")
+    _ = sqlite.insert(&db, &eve) catch e {
+        print("no table: {e.code}")
+        0
+    }
+}

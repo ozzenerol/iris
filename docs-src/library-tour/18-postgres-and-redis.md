@@ -151,14 +151,14 @@ import os, pg
 
 ## Adding structs as rows
 
-`pg.insert(&db, table, &row)` adds a `@json` struct as a row, each field in the column of its name. The fields named in `skip` are left out, such as an `id` that PostgreSQL makes, and the columns named in `returning` are read back into the struct. `pg.insertMany` adds a list of structs, many to a statement, and gives how many it added:
+A struct marked `@entity("table")` is a row of that table, with its primary key marked `@id`. `pg.insert(&db, &row)` adds it, `pg.find[T](&db, id)` reads it by its key, `pg.update` writes it back and `pg.delete[T](&db, id)` removes it. An `@id` of 0 is left out of the insert, and the key PostgreSQL makes is read back into it. The [Rows as structs](35-rows-as-structs.html) chapter covers `@entity` in full.
 
 ```iris
 import os, pg
 
-@json
-struct Product {
-    i64 id
+@entity("teas")
+struct Tea {
+    @id i64 id
     String name
     f64 price
     i64 stock
@@ -173,35 +173,37 @@ struct Product {
         CREATE TABLE teas (id serial PRIMARY KEY, name text NOT NULL, price float8, stock int, tags jsonb);
         """)
 
-    scoped Product green = Product{name: "green tea".copy(), price: 3.5, stock: 10}
+    scoped green := Tea{name: "green tea".copy(), price: 3.5, stock: 10}
     green.tags.push("loose".copy())
-    try pg.insert(&db, "teas", &green, skip: ["id"], returning: ["id"])
+    try pg.insert(&db, &green)
     print("green tea is {green.id}")
 
-    List[Product] more
+    List[Tea] more
     defer {
-        for p in more {
-            p.free()
+        for t in more {
+            t.free()
         }
         more.free()
     }
-    more.push(Product{name: "black tea".copy(), price: 2.9, stock: 4})
-    more.push(Product{name: "white tea".copy(), price: 6.2, stock: 2})
-    print("added {try pg.insertMany(&db, "teas", more.items(), skip: ["id"])}")
+    more.push(Tea{name: "black tea".copy(), price: 2.9, stock: 4})
+    more.push(Tea{name: "white tea".copy(), price: 6.2, stock: 2})
+    print("added {try pg.insertMany(&db, more.items())}")
 
-    scoped Product back = try pg.one[Product](&db, "SELECT * FROM teas WHERE id = $1", [.int(green.id)])
-    print("{back.name}: {back.tags.at(0)}")
+    scoped back := try pg.find[Tea](&db, .int(green.id))
+    back.stock -= 1
+    _ = try pg.update(&db, &back)
+    print("{back.name}: {back.tags.at(0)}, {back.stock} left")
 }
 ```
 
 ```output
 green tea is 1
 added 2
-green tea: loose
+green tea: loose, 9 left
 ```
 
-- A list, a map or a `@json` struct in a field goes in as JSON, for a `json` or `jsonb` column, and `all` and `one` read it back.
-- An enum goes in as the name of its value.
+- A list, a map or a `@json` struct in a field goes in as JSON, for a `json` or `jsonb` column, and is read back from it.
+- A plain `@json` struct works with `insert` too, given the table: `pg.insert(&db, &row, table: "teas", skip: ["id"], returning: ["id"])`. `skip` leaves fields out, and `returning` reads columns back.
 - A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
 
 ## Transactions

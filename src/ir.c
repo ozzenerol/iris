@@ -79,6 +79,9 @@ typedef struct {
     Type **jsonTypes;       /* the types whose JSON tables are written, and their names */
     const char **jsonNames;
     int njson, capJson;
+    Type **entTypes;        /* the same for entity tables */
+    const char **entNames;
+    int nent, capEnt;
     Type **wireTypes;       /* the same for @wire tables */
     const char **wireNames;
     int nwire, capWire;
@@ -1444,6 +1447,81 @@ static const char *jsonType(IR *ir, Type *t) {
     return name;
 }
 
+/* The column names of a struct's fields, as jsonFields writes the keys:
+ * @column("name"), else the field's name. *id gets the number of the @id
+ * field, counting embedded fields in line. */
+static void entityFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n, int *id) {
+    NodeList *fields = &t->decl->list;
+    for (int i = 0; i < fields->len; i++) {
+        Node *f = fields->items[i];
+        int64_t off = base + fieldOffset(t, i);
+        if (f->kind == N_EMBED) {
+            entityFields(ir, f->type, off, out, n, id);
+            continue;
+        }
+        const char *col = f->name;
+        size_t colLen = strlen(f->name);
+        for (int k = 0; k < f->attrs.len; k++) {
+            Node *at = f->attrs.items[k];
+            if (strcmp(at->name, "column") == 0 && at->list.len == 1) {
+                col = at->list.items[0]->text;
+                colLen = at->list.items[0]->textLen;
+            } else if (strcmp(at->name, "id") == 0) {
+                *id = *n;
+            }
+        }
+        sbPrintf(out, "%s{ ptr, i64, i64, ptr, i64 } { ptr %s, i64 %zu, i64 %lld, ptr %s, i64 0 }", *n ? ", " : "",
+                 stringConst(ir, col, colLen), colLen, (long long)off, jsonType(ir, f->type));
+        (*n)++;
+    }
+}
+
+/* A row's table for the database modules (rt.c, EntityTable):
+ *   { ptr table, i64 tableLen, i64 id, ptr type }
+ * For an @entity struct, type is a JSON table with the column names and id
+ * the number of the @id field; for a @json struct, its JSON table, no
+ * table name and id -1. */
+static const char *entityTable(IR *ir, Type *t) {
+    for (int i = 0; i < ir->nent; i++) {
+        if (ir->entTypes[i] == t) return ir->entNames[i];
+    }
+    if (ir->nent == ir->capEnt) {
+        int cap = ir->capEnt ? ir->capEnt * 2 : 8;
+        Type **ts = arenaAlloc(ir->arena, sizeof(Type *) * (size_t)cap);
+        const char **ns = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        if (ir->nent) {
+            memcpy(ts, ir->entTypes, sizeof(Type *) * (size_t)ir->nent);
+            memcpy(ns, ir->entNames, sizeof(char *) * (size_t)ir->nent);
+        }
+        ir->entTypes = ts;
+        ir->entNames = ns;
+        ir->capEnt = cap;
+    }
+    int idx = ir->nent;
+    const char *name = fmt(ir, "@entity.%d", idx);
+    ir->entTypes[idx] = t;
+    ir->entNames[idx] = name;
+    ir->nent++;
+    if (!t->entity) {
+        sbPrintf(&ir->head, "%s = private constant { ptr, i64, i64, ptr } { ptr null, i64 0, i64 -1, ptr %s }\n", name,
+                 jsonType(ir, t));
+        return name;
+    }
+    StrBuf b = {0};
+    int n = 0, id = -1;
+    entityFields(ir, t, 0, &b, &n, &id);
+    const char *items = fmt(ir, "@entity.%d.items", idx);
+    sbPrintf(&ir->head, "%s = private constant [%d x { ptr, i64, i64, ptr, i64 }] [%s]\n", items, n, b.buf ? b.buf : "");
+    sbFree(&b);
+    const char *type = fmt(ir, "@entity.%d.type", idx);
+    sbPrintf(&ir->head, "%s = private constant { i32, i32, i64, ptr, ptr } { i32 %d, i32 %lld, i64 %d, ptr %s, ptr null }\n",
+             type, J_STRUCT, (long long)typeSizeOf(t), n, items);
+    Node *tn = t->entity->list.items[0];
+    sbPrintf(&ir->head, "%s = private constant { ptr, i64, i64, ptr } { ptr %s, i64 %d, i64 %d, ptr %s }\n", name,
+             stringConst(ir, tn->text, tn->textLen), tn->textLen, id, type);
+    return name;
+}
+
 /* An @env struct's table: for each field, the variable's name, where the
  * field is, its JSON table (for its kind and an enum's names), whether it
  * is required, and whether it is a Duration. */
@@ -2790,6 +2868,11 @@ static Val emitBuiltin(IR *ir, Node *e) {
         emitExpr(ir, e->list.items[0]);
         return val(jsonType(ir, t), e->type);
     }
+    case BI_ENTITY_OF: {
+        Type *t = e->list.items[0]->type->elem;
+        emitExpr(ir, e->list.items[0]);
+        return val(entityTable(ir, t), e->type);
+    }
     case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: {
         Node *arg = e->list.items[0];
         Type *t = arg->type;
@@ -3310,7 +3393,7 @@ static bool touchesErrors(Node *n, int depth) {
         case BI_ATOMIC_SWAP: case BI_ATOMIC_CAS: case BI_MUTEX_UNLOCK: case BI_MUTEX_TRY_LOCK: case BI_CHAN_FREE:
         case BI_CHAN_TRY_SEND: case BI_CHAN_LEN:
         case BI_JSON_ENCODE: case BI_JSON_FREE: case BI_HASH: case BI_KEY_OWN: case BI_KEY_FREE: case BI_GROW:
-        case BI_TABLE_OF: case BI_ARENA_ALLOC:
+        case BI_TABLE_OF: case BI_ENTITY_OF: case BI_ARENA_ALLOC:
             break;
         default:
             return true;

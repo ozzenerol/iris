@@ -383,6 +383,7 @@ struct Type {
     Type *plain;            /* ... and the integer it reads as */
     int wire;               /* structs: 1 @wire (high byte first), 2 @wire(le); enums: bytes on the wire */
     bool proto;             /* structs: @proto, whose fields keep their numbers in cval (see protoInfo) */
+    Node *entity;           /* structs: the @entity("table") attribute, or NULL */
     /* structs, once laid out: size, alignment and the LLVM elements, padding included */
     bool laidOut;
     int64_t size, align;
@@ -420,6 +421,7 @@ enum {
     BI_HASH, BI_KEY_OWN, BI_KEY_FREE,
     BI_GROW,                /* List's: growSlice(s, n) */
     BI_TABLE_OF,
+    BI_ENTITY_OF,
     BI_ENV_LOAD,
     BI_FLAGS_PARSE,
     BI_ARENA_ALLOC,         /* arena.alloc(T, n): b is a pointer to the Arena */

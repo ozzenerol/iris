@@ -17275,6 +17275,21 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
             *(int32_t *)p = (int32_t)names[k].value;
             break;
         }
+        case J_STRUCT: case J_MAP: case J_SLICE: case J_ARRAY: case J_LIST: {
+            /* JSON text, as insert writes it */
+            const char *text = (const char *)sq.columnText(stmt, c);
+            int64_t len = sq.columnBytes(stmt, c);
+            jsonFree(ft, p);
+            memset(p, 0, (size_t)ft->size);
+            if (iris_json_decode(ft, text ? text : "", len, p) != 0) {
+                char what[200];
+                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't JSON for the field", name,
+                         (int)(len > 60 ? 60 : len), text ? text : "");
+                sqlSay(what, NULL);
+                return 1;
+            }
+            break;
+        }
         default: {
             char what[200];
             snprintf(what, sizeof what, "the field %s can't be filled from a column", name);
@@ -17489,6 +17504,22 @@ int iris_pg_scan(const JsonType *t, char *out, const Slice *names, const Slice *
         free(text);
     }
     return 0;
+}
+
+/* A row's table, from entityOf (ir.c, entityTable): the table's name (none
+   for a @json struct), the number of the @id field or -1, and the JSON
+   table with the column names. */
+typedef struct {
+    const char *table;
+    int64_t tableLen, id;
+    const JsonType *type;
+} EntityTable;
+
+const JsonType *iris_sql_entity(const EntityTable *e, Slice *table, int64_t *id) {
+    table->ptr = (char *)e->table;
+    table->len = e->tableLen;
+    *id = e->id;
+    return e->type;
 }
 
 /* pg and mysql insert: how many fields a @json struct has */

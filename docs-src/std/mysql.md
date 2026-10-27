@@ -28,11 +28,14 @@ n := try db.exec("UPDATE users SET seen = NOW() WHERE id = ?", [.int(7)])
 users := try mysql.all[User](&db, "SELECT id, name FROM users WHERE age > ?", [.int(30)])
 ```
 
-`mysql.insert` adds a `@json` struct as a row, leaving out the fields named in `skip`, and gives the `AUTO_INCREMENT` id it got. `mysql.insertMany` adds a list of them, many to a statement:
+A struct marked `@entity("table")`, with `@id` on its key, is a row: `mysql.insert` adds it and gives the `AUTO_INCREMENT` id, which it also puts in an `@id` of 0. `mysql.find`, `mysql.update` and `mysql.delete` read, write and remove one by its key, and `mysql.insertMany` adds a list, many to a statement:
 
 ```iris
-u.id = try mysql.insert(&db, "users", &u, skip: ["id"])
-n := try mysql.insertMany(&db, "users", more.items(), skip: ["id"])
+_ = try mysql.insert(&db, &account)
+scoped a := try mysql.find[Account](&db, .int(7))
+n := try mysql.insertMany(&db, more.items())
 ```
+
+A plain `@json` struct goes in with the table named: `mysql.insert(&db, &u, table: "users", skip: ["id"])`.
 
 `begin` starts a transaction, which `commit` or `rollback` ends.

@@ -1,0 +1,36 @@
+// error: 8: @entity on a struct takes its table's name in quotes: @entity("users")
+// error: 13: @entity needs a field with @id, the primary key: @id i64 id
+// error: 21: Two has two @id fields; @id goes on the one primary key
+// error: 26: @id on a field needs @entity on the struct Plain too
+// error: 27: @column on a field needs @entity on the struct Plain too
+// error: 32: @column takes the column's name in quotes: @column("created_at")
+
+@entity
+struct NoTable {
+    @id i64 id
+}
+
+@entity("x")
+struct NoId {
+    i64 id
+}
+
+@entity("y")
+struct Two {
+    @id i64 a
+    @id i64 b
+}
+
+@json
+struct Plain {
+    @id i64 id
+    @column("n") String name
+}
+
+@entity("z")
+struct BadColumn {
+    @id @column i64 id
+}
+
+void main() {
+}

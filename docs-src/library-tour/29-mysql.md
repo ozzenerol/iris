@@ -130,14 +130,14 @@ MysqlError.noRows
 
 ## Adding structs as rows
 
-`mysql.insert(&db, table, &row)` adds a `@json` struct as a row, each field in the column of its name, and gives the `AUTO_INCREMENT` id the row got. The fields named in `skip` are left out, such as that id. `mysql.insertMany` adds a list of structs, many to a statement, and gives how many it added:
+A struct marked `@entity("table")` is a row of that table, with its primary key marked `@id`. `mysql.insert(&db, &row)` adds it and gives the `AUTO_INCREMENT` id, which it also puts in an `@id` of 0. `mysql.find[T](&db, id)` reads a row by its key, `mysql.update` writes it back and `mysql.delete[T](&db, id)` removes it. The [Rows as structs](35-rows-as-structs.html) chapter covers `@entity` in full.
 
 ```iris
 import mysql, os
 
-@json
-struct Product {
-    i64 id
+@entity("teas")
+struct Tea {
+    @id i64 id
     String name
     f64 price
     i64 stock
@@ -151,29 +151,32 @@ struct Product {
         CREATE TABLE teas (id int AUTO_INCREMENT PRIMARY KEY, name varchar(100) NOT NULL, price double, stock int);
         """)
 
-    scoped Product green = Product{name: "green tea".copy(), price: 3.5, stock: 10}
-    green.id = try mysql.insert(&db, "teas", &green, skip: ["id"])
+    scoped green := Tea{name: "green tea".copy(), price: 3.5, stock: 10}
+    _ = try mysql.insert(&db, &green)
     print("green tea is {green.id}")
 
-    List[Product] more
+    List[Tea] more
     defer {
-        for p in more {
-            p.free()
+        for t in more {
+            t.free()
         }
         more.free()
     }
-    more.push(Product{name: "black tea".copy(), price: 2.9, stock: 4})
-    more.push(Product{name: "white tea".copy(), price: 6.2, stock: 2})
-    print("added {try mysql.insertMany(&db, "teas", more.items(), skip: ["id"])}")
+    more.push(Tea{name: "black tea".copy(), price: 2.9, stock: 4})
+    more.push(Tea{name: "white tea".copy(), price: 6.2, stock: 2})
+    print("added {try mysql.insertMany(&db, more.items())}")
+
+    print("removed {try mysql.delete[Tea](&db, .int(green.id))}")
 }
 ```
 
 ```output
 green tea is 1
 added 2
+removed 1
 ```
 
-A list, a map or a `@json` struct in a field goes in as JSON, for a `json` column, and `all` and `one` read it back. A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
+A plain `@json` struct works with `insert` too, given the table: `mysql.insert(&db, &row, table: "teas", skip: ["id"])`. A list, a map or a `@json` struct in a field goes in as JSON, for a `json` column. A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
 
 ## Transactions
 

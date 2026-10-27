@@ -54,9 +54,9 @@ struct Empty {
     scoped ada := User{name: "Ada".copy(), age: 36, score: 1.5, admin: true, role: .admin, big: 18446744073709551615, position: 3}
     ada.tags.push("a".copy())
     ada.tags.push("b".copy())
-    try pg.insert(&db, "ins_users", &ada, skip: ["id"], returning: ["id"])
+    try pg.insert(&db, &ada, table: "ins_users", skip: ["id"], returning: ["id"])
     scoped bob := User{name: "Bob".copy()}
-    try pg.insert(&db, "ins_users", &bob, skip: ["id"], returning: ["id"])
+    try pg.insert(&db, &bob, table: "ins_users", skip: ["id"], returning: ["id"])
     print("ids: {ada.id} {bob.id}")
 
     users := try pg.all[User](&db, r"""SELECT id, name, coalesce(age, 0) AS age, score, admin, role, tags, big, "order" FROM ins_users ORDER BY id""")
@@ -78,24 +78,24 @@ struct Empty {
     for i in 0..30000 {
         points.push(Point{x: i, y: i * 2, z: i * 3})
     }
-    n := try pg.insertMany(&db, "ins_points", points.items(), skip: ["id"])
+    n := try pg.insertMany(&db, points.items(), table: "ins_points", skip: ["id"])
     c := try pg.one[Count](&db, "SELECT count(*) AS n, count(DISTINCT id) AS ids FROM ins_points WHERE y = x * 2 AND z = x * 3")
     print("many: {n} rows in {c.ids} ids")
 
     scoped again := User{name: "Ada".copy()}
-    pg.insert(&db, "ins_users", &again, skip: ["id"]) catch e {
+    pg.insert(&db, &again, table: "ins_users", skip: ["id"]) catch e {
         print("duplicate: {e.code}")
     }
 
     scoped tx := try db.begin()
     scoped cy := User{name: "Cy".copy()}
-    try pg.insert(&tx, "ins_users", &cy, skip: ["id"])
+    try pg.insert(&tx, &cy, table: "ins_users", skip: ["id"])
     try tx.rollback()
     left := try pg.one[Count](&db, "SELECT count(*) AS n FROM ins_users WHERE name = 'Cy'")
     print("in a rolled back Tx: {left.n}")
 
     e := Empty{}
-    pg.insert(&db, "ins_users", &e, skip: ["id"]) catch err {
+    pg.insert(&db, &e, table: "ins_users", skip: ["id"]) catch err {
         print("no fields: {err.code}")
     }
     try db.execScript("DROP TABLE ins_users, ins_points")

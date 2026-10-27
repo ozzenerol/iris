@@ -526,7 +526,9 @@ pub !void scan[T](Rows *rows, T *out) {
         values[c] = rows.text(c)
         nulls[c] = if rows.isNull(c) { 1 } else { 0 }
     }
-    if rawScan(tableOf(out), out, names.ptr, values.ptr, nulls.ptr, n) != 0 {
+    str table
+    i64 id
+    if rawScan(rawEntity(entityOf(out), &table, &id), out, names.ptr, values.ptr, nulls.ptr, n) != 0 {
         return error(PgError.failed, "{messagePtr()[0:messageLen()]}")
     }
 }
@@ -567,7 +569,13 @@ pub !T one[T, D: Querier](D *db, str sql, Value[] args = []) {
     return v
 }
 
-// ------------------------------------------------------------ inserts
+// ------------------------------------------------------------ rows from structs
+
+@builtin
+void entityOf()
+
+@extern("iris_sql_entity")
+u8 *rawEntity(u8 *e, str *table, i64 *id)
 
 @extern("iris_sql_fields")
 i64 rawFields(u8 *table)
@@ -575,7 +583,35 @@ i64 rawFields(u8 *table)
 @extern("iris_sql_field")
 i64 rawField(u8 *table, u8 *row, i64 i, str *name, i64 *iv, f64 *fv, str *text, String *tmp)
 
-// A row's columns and values, for insert.
+@extern("iris_pg_scan")
+i32 rawScanText(u8 *table, u8 *out, str *names, str *values, u8 *nulls, i64 n)
+
+// A struct's row: its table (none for a @json struct), the JSON table with
+// its column names, and the number of its @id field, or -1.
+struct Entity {
+    str table
+    u8 *cols
+    i64 id
+}
+
+Entity entityFor[T](T *row) {
+    Entity e
+    e.cols = rawEntity(entityOf(row), &e.table, &e.id)
+    return e
+}
+
+// The table a call works on: the one given, else the struct's @entity.
+!str tableFor(Entity *e, str table) {
+    if table.len > 0 {
+        return table
+    }
+    if e.table.len == 0 {
+        return error(PgError.failed, "the struct has no @entity, so the call needs the table: table: \"users\"")
+    }
+    return e.table
+}
+
+// A row's columns and values.
 struct Fields {
     List[str] names
     List[Value] values
@@ -597,23 +633,24 @@ bool skipped(str[] skip, str name) {
     return false
 }
 
-// Each field of a @json struct but those named in skip, as a column and a
-// value.
-void fieldsOf[T](T *row, str[] skip, Fields *f) {
-    table := tableOf(row)
-    for i in 0..rawFields(table) {
+// The fields of row as columns and values: all but those named in skip and
+// the @id when skipId, or only field number only when it is 0 or more.
+void fieldsOf[T](Entity *e, T *row, str[] skip, bool skipId, i64 only, Fields *f) {
+    for i in 0..rawFields(e.cols) {
+        if only >= 0 && i != only {
+            continue
+        }
         str name
         i64 iv
         f64 fv
         str text
         String tmp
-        kind := rawField(table, row, i, &name, &iv, &fv, &text, &tmp)
-        if skipped(skip, name) {
-            tmp.free()
+        kind := rawField(e.cols, row, i, &name, &iv, &fv, &text, &tmp)
+        f.made.push(tmp)
+        if (skipId && i == e.id) || skipped(skip, name) {
             continue
         }
         f.names.push(name)
-        f.made.push(tmp)
         Value v = match kind {
             0 => .int(iv),
             1 => .float(fv),
@@ -621,6 +658,40 @@ void fieldsOf[T](T *row, str[] skip, Fields *f) {
             _ => .text(text),
         }
         f.values.push(v)
+    }
+}
+
+// Whether row's @id is 0 or empty, so the database fills it.
+bool idZero[T](Entity *e, T *row) {
+    if e.id < 0 {
+        return false
+    }
+    str name
+    i64 iv
+    f64 fv
+    str text
+    String tmp
+    kind := rawField(e.cols, row, e.id, &name, &iv, &fv, &text, &tmp)
+    tmp.free()
+    return if kind == 2 { text.len == 0 } else if kind == 1 { fv == 0.0 } else { iv == 0 }
+}
+
+// The column of field number i.
+str columnOf[T](Entity *e, T *row, i64 i) {
+    str name
+    i64 iv
+    f64 fv
+    str text
+    String tmp
+    _ = rawField(e.cols, row, i, &name, &iv, &fv, &text, &tmp)
+    tmp.free()
+    return name
+}
+
+// Needs an @entity struct with an @id.
+!void needId(Entity *e) {
+    if e.table.len == 0 || e.id < 0 {
+        return error(PgError.failed, "the struct needs @entity(\"table\") and an @id field")
     }
 }
 
@@ -654,63 +725,160 @@ void insertSql(String *sql, str table, str[] names, i64 n) {
             if i > 0 {
                 sql.append(", ")
             }
-            sql.append("$")
-            sql.append("{r * names.len + i + 1}")
+            k := r * names.len + i + 1
+            sql.append("${k}")
         }
         sql.append(")")
     }
 }
 
-// Adds a @json struct to table as a row: each field goes in the column of
-// its name (or its @json name), except the fields named in skip, such as an
-// id the database makes. The columns named in returning are read back into
-// row: pg.insert(&db, "users", &u, skip: ["id"], returning: ["id"]).
-pub !void insert[T, D: Querier](D *db, str table, T *row, str[] skip = [], str[] returning = []) {
+// Sets the column col of row from text, as a row read back would.
+!void setColumn[T](Entity *e, T *row, str col, str value) {
+    str[] names = alloc(str, 1)
+    defer free(names)
+    str[] values = alloc(str, 1)
+    defer free(values)
+    u8[] nulls = alloc(u8, 1)
+    defer free(nulls)
+    names[0] = col
+    values[0] = value
+    nulls[0] = 0
+    if rawScanText(e.cols, row, names.ptr, values.ptr, nulls.ptr, 1) != 0 {
+        return error(PgError.failed, "{messagePtr()[0:messageLen()]}")
+    }
+}
+
+// Adds a struct as a row. Each field goes in its column: the field's name,
+// or its @column name. An @entity struct goes in its table, and an @id of
+// 0 or "" is left out and read back once the database fills it:
+// pg.insert(&db, &user). A @json struct names the table, and can leave out
+// fields with skip and read columns back with returning:
+// pg.insert(&db, &u, table: "users", skip: ["id"], returning: ["id"]).
+pub !void insert[T, D: Querier](D *db, T *row, str table = "", str[] skip = [], str[] returning = []) {
+    e := entityFor(row)
+    name := try tableFor(&e, table)
+    auto := idZero(&e, row)
     scoped Fields f
-    fieldsOf(row, skip, &f)
+    fieldsOf(&e, row, skip, auto, -1, &f)
     if f.names.len == 0 {
         return error(PgError.failed, "the row has no fields to insert")
     }
     scoped String sql
-    insertSql(&sql, table, f.names.items(), 1)
-    if returning.len > 0 {
+    insertSql(&sql, name, f.names.items(), 1)
+    List[str] back
+    defer back.free()
+    for r in returning {
+        back.push(r)
+    }
+    if auto {
+        back.push(columnOf(&e, row, e.id))
+    }
+    if back.len > 0 {
         sql.append(" RETURNING ")
-        for i, name in returning {
+        for i, col in back.items() {
             if i > 0 {
                 sql.append(", ")
             }
-            putName(&sql, name)
+            putName(&sql, col)
         }
     }
     rows := try db.query(sql, f.values.items())
     defer rows.close()
-    if returning.len > 0 && rows.next() {
+    if back.len > 0 && rows.next() {
         try scan(&rows, row)
     }
 }
 
-// Adds @json structs to table as rows, as insert does, many to a statement:
-// how many were added. A PostgreSQL statement takes at most 65535 values,
-// so a long list goes in several, which a Tx makes all or nothing.
-pub !i64 insertMany[T, D: Querier](D *db, str table, T[] rows, str[] skip = []) {
+// Adds structs as rows, as insert does, many to a statement: how many were
+// added. The @id is left out when every row's is 0 or "". A statement takes
+// at most 65535 values, so a long list goes in several, which a Tx makes
+// all or nothing.
+pub !i64 insertMany[T, D: Querier](D *db, T[] rows, str table = "", str[] skip = []) {
+    if rows.len == 0 {
+        return 0
+    }
+    e := entityFor(&rows[0])
+    name := try tableFor(&e, table)
+    bool auto = e.id >= 0
+    for i in 0..rows.len {
+        auto = auto && idZero(&e, &rows[i])
+    }
     i64 done = 0
     for done < rows.len {
         scoped Fields f
-        fieldsOf(&rows[done], skip, &f)
+        fieldsOf(&e, &rows[done], skip, auto, -1, &f)
         cols := f.names.len
         if cols == 0 {
             return error(PgError.failed, "the rows have no fields to insert")
         }
         n := if rows.len - done < 65535 / cols { rows.len - done } else { 65535 / cols }
         for r in 1..n {
-            fieldsOf(&rows[done + r], skip, &f)
+            fieldsOf(&e, &rows[done + r], skip, auto, -1, &f)
         }
         scoped String sql
-        insertSql(&sql, table, f.names.items()[0:cols], n)
+        insertSql(&sql, name, f.names.items()[0:cols], n)
         scoped Rows res = try db.query(sql, f.values.items())
         done += n
     }
     return done
+}
+
+// The row of an @entity struct whose @id is id: pg.find[User](&db, .int(7)).
+// No row fails with PgError.noRows.
+pub !T find[T, D: Querier](D *db, Value id) {
+    T v
+    e := entityFor(&v)
+    try needId(&e)
+    scoped String sql = format("SELECT * FROM {e.table} WHERE ")
+    putName(&sql, columnOf(&e, &v, e.id))
+    sql.append(" = $1")
+    rows := try db.query(sql, [id])
+    defer rows.close()
+    if !rows.next() {
+        return error(PgError.noRows, "{e.table} has no row with that id")
+    }
+    scan(&rows, &v) catch err {
+        v.free()
+        return err
+    }
+    return v
+}
+
+// Writes every field of an @entity struct to its row, found by the @id:
+// how many rows changed, 0 when there is none.
+pub !i64 update[T, D: Querier](D *db, T *row) {
+    e := entityFor(row)
+    try needId(&e)
+    str[] none
+    scoped Fields f
+    fieldsOf(&e, row, none, true, -1, &f)
+    fieldsOf(&e, row, none, false, e.id, &f)
+    scoped String sql = format("UPDATE {e.table} SET ")
+    for i in 0..f.names.len - 1 {
+        if i > 0 {
+            sql.append(", ")
+        }
+        putName(&sql, f.names.at(i))
+        sql.append(" = ${i + 1}")
+    }
+    sql.append(" WHERE ")
+    putName(&sql, f.names.last())
+    sql.append(" = ${f.names.len}")
+    scoped Rows res = try db.query(sql, f.values.items())
+    return res.affected
+}
+
+// Removes the row of an @entity struct whose @id is id:
+// pg.delete[User](&db, .int(7)). It gives how many rows went, 0 or 1.
+pub !i64 delete[T, D: Querier](D *db, Value id) {
+    T v
+    e := entityFor(&v)
+    try needId(&e)
+    scoped String sql = format("DELETE FROM {e.table} WHERE ")
+    putName(&sql, columnOf(&e, &v, e.id))
+    sql.append(" = $1")
+    scoped Rows res = try db.query(sql, [id])
+    return res.affected
 }
 
 String textOf(Value v) => match v {
