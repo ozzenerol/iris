@@ -5181,12 +5181,12 @@ int iris_udp_open(const uint8_t *ip, int64_t port, int connectTo, int *family, i
         int off = 0;                /* IPv4 too */
         setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);
     }
-    if (!connectTo) {
-        /* several sockets, one per thread, can listen on the port; the
-         * kernel spreads the datagrams between them */
-        int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
-    }
+    /* several sockets, one per thread, can listen on the port; the kernel
+     * spreads the datagrams between them. For port 0 the option comes after
+     * bind: before it, the kernel may pick a port that another socket with
+     * the option holds, and the two would share it */
+    int one = 1;
+    if (!connectTo && port != 0) setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
     static const uint8_t any[16] = {0};
     struct sockaddr_storage ss;
     socklen_t len = toSockaddr(ip ? ip : any, port, fam, &ss);
@@ -5196,6 +5196,7 @@ int iris_udp_open(const uint8_t *ip, int64_t port, int connectTo, int *family, i
         close(fd);
         return -1;
     }
+    if (!connectTo && port == 0) setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
     nonBlocking(fd);
     fdForget(fd);
     *family = fam;
