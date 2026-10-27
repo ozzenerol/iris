@@ -1,0 +1,165 @@
+// expect: primary found past a dead seed: 1
+// expect: committed: 2, seen outside before commit: 0
+// expect: aborted: 0
+// expect: second transaction: 1
+// expect: transaction on an ended session: MongoError.closed
+// expect: change insert a
+// expect: change update a
+// expect: change delete
+// expect: no change within the wait: false
+// expect: resumed after step down: insert after
+// expect: write after step down: 1
+// expect: killed cursors: 2
+// expect: resumed after its cursor was killed: insert gone
+
+import bson, mongo, os, str
+
+@json
+struct Note {
+    String name
+    i64 n
+}
+
+void watcher(mongo.Collection notes, chan[String] out) {
+    scoped f := bson.fromJson(r"""[{"$match": {"operationType": {"$in": ["insert", "update", "delete"]}}}]""") catch e {
+        return
+    }
+    scoped cs := notes.watch(&f, fullDocument: true) catch e {
+        out <- format("watch: {e.message}")
+        return
+    }
+    out <- "ready".copy()
+    for i in 0..4 {
+        ok := cs.next() catch e {
+            out <- format("next: {e.message}")
+            return
+        }
+        if !ok {
+            break
+        }
+        d := cs.doc()
+        op, _ := d.get("operationType")
+        full, has := d.get("fullDocument")
+        name, _ := full.doc().get("name")
+        out <- if has && !full.isNull() { format("change {op.text()} {name.text()}") } else { format("change {op.text()}") }
+    }
+}
+
+!void add(mongo.Collection *c, str name, i64 n) {
+    scoped String copy = name.copy()
+    Note note = Note{name: copy, n: n}
+    _ = try mongo.insertOne(c, &note)
+}
+
+!void main() {
+    address := try os.env("IRIS_MONGO_RS_URL")
+    db := try mongo.connect(address)
+    defer db.close()
+    notes := db.collection("rs_notes")
+    try notes.drop()
+    try add(&notes, "x", 1)
+    print("primary found past a dead seed: {try notes.count()}")
+    try notes.drop()
+
+    // transactions
+    scoped create := try bson.fromJson(r"""{"create": "rs_tx"}""")
+    scoped made := try db.command("iris_test", &create)
+    sess := db.startSession()
+    tx := sess.collection("rs_tx")
+    plain := db.collection("rs_tx")
+    // count with no filter reads the collection's metadata, which counts
+    // writes not committed yet
+    scoped any := try bson.fromJson(r"""{"n": {"$gte": 0}}""")
+    try sess.startTransaction()
+    try add(&tx, "a", 1)
+    try add(&tx, "b", 2)
+    outside := try plain.count(&any)
+    try sess.commit()
+    print("committed: {try plain.count(&any)}, seen outside before commit: {outside}")
+    try sess.startTransaction()
+    _ = try tx.deleteMany(null)
+    sess.abort()
+    print("aborted: {2 - try plain.count(&any)}")
+    scoped twoFilter := try bson.fromJson(r"""{"n": 2}""")
+    try sess.startTransaction()
+    _ = try tx.deleteOne(&twoFilter)
+    try sess.commit()
+    print("second transaction: {try plain.count(&any)}")
+    sess.end()
+    sess.startTransaction() catch e {
+        print("transaction on an ended session: {e.code}")
+    }
+
+    // change streams
+    w := db.collection("rs_watch")
+    try w.drop()
+    scoped wc := try bson.fromJson(r"""{"create": "rs_watch"}""")
+    scoped wmade := try db.command("iris_test", &wc)
+    out := chan[String](8)
+    spawn watcher(w, out)
+    scoped String ready = <-out
+    if ready != "ready" {
+        print(ready)
+        return
+    }
+    try add(&w, "a", 1)
+    scoped af := try bson.fromJson(r"""{"name": "a"}""")
+    scoped inc := try bson.fromJson(r"""{"$inc": {"n": 1}}""")
+    _ = try w.updateOne(&af, &inc)
+    _ = try w.deleteOne(&af)
+    for i in 0..3 {
+        scoped String got = <-out
+        print(got)
+    }
+    scoped quiet := try w.watch(wait: 300ms)
+    print("no change within the wait: {try quiet.next()}")
+
+    // the primary steps down: the stream and the writes go on once it is
+    // back
+    scoped stream := try w.watch(fullDocument: true, wait: 30s)
+    scoped down := try bson.fromJson(r"""{"replSetStepDown": 1, "force": true}""")
+    _ = db.command("admin", &down) catch e {
+        bson.doc()
+    }
+    try add(&w, "after", 1)
+    ok := try stream.next()
+    if ok {
+        op, _ := stream.doc().get("operationType")
+        full, _ := stream.doc().get("fullDocument")
+        name, _ := full.doc().get("name")
+        print("resumed after step down: {op.text()} {name.text()}")
+    }
+    print("write after step down: {try w.count()}")
+
+    // the server forgets the stream's cursor: it starts again from its token
+    scoped ops := try bson.fromJson(r"""{"aggregate": 1, "pipeline": [{"$currentOp": {"idleCursors": true, "allUsers": true}},
+        {"$match": {"type": "idleCursor", "cursor.originatingCommand.aggregate": "rs_watch"}}], "cursor": {}}""")
+    scoped found := try db.command("admin", &ops)
+    scoped ids := bson.array()
+    cur, _ := found.raw().get("cursor")
+    batch, _ := cur.doc().get("firstBatch")
+    for op in batch.doc() {
+        c, _ := op.doc().get("cursor")
+        id, _ := c.doc().get("cursorId")
+        ids.long("", id.int())
+    }
+    scoped kill := bson.doc()
+    kill.text("killCursors", "rs_watch")
+    kill.doc("cursors", &ids)
+    scoped killed := try db.command("iris_test", &kill)
+    k, _ := killed.raw().get("cursorsKilled")
+    i64 nk = 0
+    for x in k.doc() {
+        nk += 1
+    }
+    print("killed cursors: {nk}")
+    try add(&w, "gone", 2)
+    if try stream.next() {
+        op, _ := stream.doc().get("operationType")
+        full, _ := stream.doc().get("fullDocument")
+        name, _ := full.doc().get("name")
+        print("resumed after its cursor was killed: {op.text()} {name.text()}")
+    }
+    try w.drop()
+    try plain.drop()
+}

@@ -55,6 +55,8 @@ tea is 24 hex digits: true
 
 - The address is `mongodb://user:password@host:port/database`. `?authSource=admin` names the database that holds the user, which is the address's database unless given.
 - `?tls=true` makes the connection use TLS, and `?tlsCAFile=root.pem` trusts that file's certificates.
+- Several hosts, as in `mongodb://root:secret@db1,db2,db3/shop?replicaSet=rs0`, name the members of a replica set. The client finds the primary and sends every command there.
+- `mongodb+srv://root:secret@cluster.example.com/shop` looks up the hosts in the SRV records of `_mongodb._tcp.cluster.example.com`, and `authSource` and `replicaSet` in its TXT record. It uses TLS.
 - The login is SCRAM-SHA-256, MongoDB's default.
 - A refused login fails with `MongoError.auth`, and a server that can't be reached with `MongoError.connect`.
 - `drop` removes a collection. One that isn't there is no error.
@@ -197,6 +199,59 @@ scone: 6
 ```
 
 `db.command(database, cmd)` runs any other command and gives its reply as a `bson.Doc`.
+
+## Replica sets, transactions and change streams
+
+When the primary steps down or goes away, the client looks for the new one for up to 30 seconds (`?serverSelectionTimeoutMS=` sets this). A command that failed because of that runs again once on the new primary: reads, inserts, and updates and deletes of one document. Those writes carry a transaction number, so the server doesn't do them twice. `?retryWrites=false` turns this off for writes. Updates and deletes of many documents run only once.
+
+A session runs a transaction. `startSession` gives one, and the collections it gives run their commands in it. What happens between `startTransaction` and `commit` is seen by others only after the commit, and not at all after `abort`. A command that fails with `MongoError.transient` means the transaction may work if it runs again: abort it and start over. `end` ends the session.
+
+```iris
+import bson, mongo, os
+
+@json
+struct Account {
+    String name
+    i64 balance
+}
+
+!void main() {
+    db := try mongo.connect(os.env("MONGO_URL") catch "mongodb://root:secret@db1,db2/bank?replicaSet=rs0&authSource=admin")
+    defer db.close()
+    sess := db.startSession()
+    defer sess.end()
+    accounts := sess.collection("accounts")
+    scoped from := try bson.fromJson(r"""{"name": "ada"}""")
+    scoped to := try bson.fromJson(r"""{"name": "bob"}""")
+    scoped take := try bson.fromJson(r"""{"$inc": {"balance": -10}}""")
+    scoped give := try bson.fromJson(r"""{"$inc": {"balance": 10}}""")
+    try sess.startTransaction()
+    _ = try accounts.updateOne(&from, &take)
+    _ = try accounts.updateOne(&to, &give)
+    try sess.commit()
+}
+```
+
+`watch` follows the changes to a collection as they happen. Each document its cursor gives is one change, with `operationType` (`insert`, `update`, `replace`, `delete`...), `documentKey`, and `fullDocument` for an insert, or for an update too with `fullDocument: true`. A pipeline adds stages, such as a `$match` on the kind of change. `next` waits for the next change. With `wait`, it gives false after that long without one, and can be called again. When the primary changes, the stream goes on from the last change it gave.
+
+```iris
+import bson, mongo, os
+
+!void main() {
+    db := try mongo.connect(os.env("MONGO_URL") catch "mongodb://root:secret@db1,db2/shop?replicaSet=rs0&authSource=admin")
+    defer db.close()
+    orders := db.collection("orders")
+    scoped inserts := try bson.fromJson(r"""[{"$match": {"operationType": "insert"}}]""")
+    scoped changes := try orders.watch(&inserts)
+    for try changes.next() {
+        order, _ := changes.doc().get("fullDocument")
+        id, _ := order.doc().get("_id")
+        print("new order {id.id().hex()}")
+    }
+}
+```
+
+Transactions and change streams need a replica set or a sharded cluster. A replica set of one member is enough for development.
 
 ## BSON
 

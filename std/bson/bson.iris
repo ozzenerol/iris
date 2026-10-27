@@ -301,11 +301,12 @@ pub void Doc.date(str key, Date v) {
     self.end()
 }
 
-// Adds binary data.
-pub void Doc.binary(str key, str v) {
+// Adds binary data, of a subtype other than 0 when given (4 for a UUID).
+pub void Doc.binary(str key, str v, u8 subtype = 0) {
     self.start(0x05, key)
     putLe(&self.bytes, v.len, 4)
-    self.bytes.append("\x00")
+    u8[1] t = [subtype]
+    self.bytes.append(t[:])
     self.bytes.append(v)
     self.end()
 }

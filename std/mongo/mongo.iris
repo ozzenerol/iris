@@ -8,29 +8,47 @@
 //     scoped q := try bson.fromJson(r"""{"age": {"$gt": 30}}""")
 //     found := try mongo.find[User](&users, &q)
 //
-// A Client keeps a pool of connections to one server, which every task and
-// thread can share.
+// A Client keeps a pool of connections to one server, or to the primary
+// of a replica set, which every task and thread can share. Sessions run
+// transactions, and watch follows the changes to a collection.
 
 import base64, bson, crypto, net, random, str, time, url
 
 // What MongoDB calls fail with: connect, auth, failed (a command the server
 // refused), duplicate (a duplicate key, code 11000), notFound (findOne
-// found nothing), closed.
-pub enum MongoError { connect, auth, failed, duplicate, notFound, closed }
+// found nothing), closed, transient (a transaction that may work if it
+// runs again).
+pub enum MongoError { connect, auth, failed, duplicate, notFound, closed, transient }
 
 // ------------------------------------------------------------ connections
+
+// A server's name and port.
+struct Host {
+    String name
+    u16 port
+}
 
 struct Settings {
     String user
     String password
     String database
     String authSource
-    String host
-    u16 port
+    List[Host] hosts
+    String replicaSet
+    bool srv
     bool tls
     String ca
     String appName
     Duration timeout
+    Duration selectTimeout
+    bool retryWrites
+}
+
+void freeHosts(List[Host] *hosts) {
+    for h in hosts {
+        h.name.free()
+    }
+    hosts.free()
 }
 
 void Settings.free() {
@@ -38,68 +56,225 @@ void Settings.free() {
     self.password.free()
     self.database.free()
     self.authSource.free()
-    self.host.free()
+    freeHosts(&self.hosts)
+    self.replicaSet.free()
     self.ca.free()
     self.appName.free()
 }
 
-// mongodb://user:password@host:port/database?authSource=admin&tls=true&tlsCAFile=ca.pem
-!Settings settingsOf(str address) {
-    u := url.parse(address) catch e {
-        return error(MongoError.connect, "'{address}' isn't a mongodb:// address")
+// "db.example:27018", "[::1]:27017" or "db.example", with 27017 when no
+// port is given.
+!Host hostOf(str text) {
+    str name = text
+    str portText = ""
+    if str.startsWith(text, "[") {
+        inside, after, ok := str.cut(text[1:], "]")
+        if !ok || (after.len > 0 && !str.startsWith(after, ":")) {
+            return error(MongoError.connect, "'{text}' isn't a host")
+        }
+        name = inside
+        portText = if after.len > 0 { after[1:] } else { "" }
+    } else {
+        before, after, ok := str.cutLast(text, ":")
+        if ok {
+            name = before
+            portText = after
+        }
     }
-    if u.scheme != "mongodb" {
-        return error(MongoError.connect, "'{address}' isn't a mongodb:// address")
+    i64 port = 27017
+    if portText.len > 0 {
+        port = str.parseInt(portText) catch 0
     }
-    if str.contains(u.host, ",") {
-        return error(MongoError.connect, "'{address}' names more than one host; this driver talks to one server")
+    if name.len == 0 || port <= 0 || port > 65535 {
+        return error(MongoError.connect, "'{text}' isn't a host")
     }
-    Settings s
-    errdefer s.free()
-    name, pass, _ := str.cut(u.user, ":")
-    s.user = try url.decode(name)
-    s.password = try url.decode(pass)
-    s.host = (if u.host.len > 0 { u.host } else { "localhost" }).copy()
-    s.port = u16(if u.port > 0 { u.port } else { 27017 })
-    dbname := if str.startsWith(u.path, "/") { u.path[1:] } else { u.path }
-    s.database = try url.decode(if dbname.len > 0 { dbname } else { "test" })
-    s.authSource = try url.decode(if dbname.len > 0 { dbname } else { "admin" })
-    s.timeout = 10s
-    str rest = u.query
+    return Host{name: name.copy(), port: u16(port)}
+}
+
+bool Settings.has(str name, u16 port) {
+    for h in self.hosts {
+        if h.port == port && str.equalFold(h.name, name) {
+            return true
+        }
+    }
+    return false
+}
+
+// Takes one option of the address or, for mongodb+srv, of its TXT record.
+!void Settings.option(str key, str value) {
+    scoped String v = try url.decode(value)
+    if key == "authSource" {
+        self.authSource.free()
+        self.authSource = v.copy()
+    } else if key == "replicaSet" {
+        self.replicaSet.free()
+        self.replicaSet = v.copy()
+    } else if key == "tls" || key == "ssl" {
+        self.tls = v == "true"
+    } else if key == "tlsCAFile" {
+        self.ca.free()
+        self.ca = v.copy()
+        self.tls = true
+    } else if key == "appName" {
+        self.appName.free()
+        self.appName = v.copy()
+    } else if key == "connectTimeoutMS" {
+        ms := str.parseInt(v) catch 10000
+        self.timeout = Duration(ms) * 1ms
+    } else if key == "serverSelectionTimeoutMS" {
+        ms := str.parseInt(v) catch 30000
+        self.selectTimeout = Duration(ms) * 1ms
+    } else if key == "retryWrites" {
+        self.retryWrites = v != "false"
+    } else if key == "authMechanism" && v != "SCRAM-SHA-256" {
+        return error(MongoError.auth, "authMechanism {v}: this driver logs in with SCRAM-SHA-256")
+    }
+}
+
+!void Settings.options(str query) {
+    str rest = query
     for rest.len > 0 {
         pair, after, _ := str.cut(rest, "&")
         rest = after
         key, value, _ := str.cut(pair, "=")
-        scoped String v = try url.decode(value)
-        if key == "authSource" {
-            s.authSource.free()
-            s.authSource = v.copy()
-        } else if key == "tls" || key == "ssl" {
-            s.tls = v == "true"
-        } else if key == "tlsCAFile" {
-            s.ca.free()
-            s.ca = v.copy()
-            s.tls = true
-        } else if key == "appName" {
-            s.appName.free()
-            s.appName = v.copy()
-        } else if key == "connectTimeoutMS" {
-            ms := str.parseInt(v) catch 10000
-            s.timeout = Duration(ms) * 1ms
-        } else if key == "authMechanism" && v != "SCRAM-SHA-256" {
-            return error(MongoError.auth, "authMechanism {v}: this driver logs in with SCRAM-SHA-256")
-        }
+        try self.option(key, value)
     }
+}
+
+// mongodb://user:password@host:port,host2:port/database?authSource=admin&replicaSet=rs0
+// or mongodb+srv://user:password@cluster.example/database
+!Settings settingsOf(str address) {
+    Settings s
+    errdefer s.free()
+    str rest = ""
+    if str.startsWith(address, "mongodb://") {
+        rest = address["mongodb://".len:]
+    } else if str.startsWith(address, "mongodb+srv://") {
+        rest = address["mongodb+srv://".len:]
+        s.srv = true
+        s.tls = true
+    } else {
+        return error(MongoError.connect, "'{address}' isn't a mongodb:// address")
+    }
+    authority, tail, _ := str.cut(rest, "/")
+    str query = ""
+    if !str.contains(rest, "/") {
+        authority, query, _ = str.cut(rest, "?")
+        tail = ""
+    }
+    path, q, _ := str.cut(tail, "?")
+    if q.len > 0 {
+        query = q
+    }
+    userinfo, hosts, hasUser := str.cutLast(authority, "@")
+    if !hasUser {
+        hosts = authority
+        userinfo = ""
+    }
+    name, pass, _ := str.cut(userinfo, ":")
+    s.user = try url.decode(name)
+    s.password = try url.decode(pass)
+    if hosts.len == 0 {
+        hosts = "localhost"
+    }
+    for h in str.split(hosts, ",") {
+        host := try hostOf(h)
+        s.hosts.push(host)
+    }
+    if s.srv && (s.hosts.len != 1 || str.contains(hosts, ":")) {
+        return error(MongoError.connect, "'{address}': mongodb+srv:// takes one host name without a port")
+    }
+    s.database = try url.decode(if path.len > 0 { path } else { "test" })
+    s.authSource = try url.decode(if path.len > 0 { path } else { "admin" })
+    s.timeout = 10s
+    s.selectTimeout = 30s
+    s.retryWrites = true
+    try s.options(query)
     return s
 }
 
-// One connection to the server, used by one task at a time.
+// mongodb+srv: the hosts of the SRV records of _mongodb._tcp.name, which
+// must be in name's domain, and the options of its TXT record.
+!void Settings.lookupSrv() {
+    scoped String name = self.hosts.at(0).name.copy()
+    scoped String service = format("_mongodb._tcp.{name}")
+    records := net.query(service, .srv) catch e {
+        return error(MongoError.connect, "looking up {service}: {e.message}")
+    }
+    defer {
+        for r in records {
+            r.free()
+        }
+        records.free()
+    }
+    List[Host] found
+    errdefer freeHosts(&found)
+    for r in records {
+        if r.kind == .srv {
+            target := str.trimSuffix(r.target, ".")
+            if !srvInDomain(target, name) {
+                return error(MongoError.connect, "{service} names {target}, outside the domain of {name}")
+            }
+            found.push(Host{name: target.copy(), port: r.port})
+        }
+    }
+    if found.len == 0 {
+        return error(MongoError.connect, "{service} has no SRV records")
+    }
+    freeHosts(&self.hosts)
+    self.hosts = found
+    txt := net.query(name, .txt) catch e {
+        return
+    }
+    defer {
+        for r in txt {
+            r.free()
+        }
+        txt.free()
+    }
+    for r in txt {
+        if r.kind != .txt {
+            continue
+        }
+        str rest = r.target
+        for rest.len > 0 {
+            pair, after, _ := str.cut(rest, "&")
+            rest = after
+            key, value, _ := str.cut(pair, "=")
+            if key != "authSource" && key != "replicaSet" && key != "loadBalanced" {
+                return error(MongoError.connect, "the TXT record of {name} has {key}, which only the address may set")
+            }
+            try self.option(key, value)
+        }
+    }
+}
+
+// Whether an SRV target is in the domain of the name looked up: for
+// cluster.example.com, a host that ends in .example.com.
+bool srvInDomain(str target, str name) {
+    _, domain, ok := str.cut(name, ".")
+    if !ok || !str.contains(domain, ".") {
+        return str.endsWith(str.lower(target), str.lower(name))
+    }
+    scoped String t = str.lower(target)
+    scoped String d = format(".{domain}")
+    scoped String dl = str.lower(d)
+    return str.endsWith(t, dl)
+}
+
+// One connection to a server, used by one task at a time.
 struct Conn {
     net.Conn conn
     bool broken
     i32 requestId
-    // the body of the last reply
+    // the body of the last reply, and its error code and labels
     String reply
+    i64 code
+    bool transient
+    i64 gen // the client's generation when it opened
+    // the session its retryable writes carry, and their last txnNumber
+    u8[16] lsid
+    i64 txn
 }
 
 void Conn.close() {
@@ -182,6 +357,61 @@ i64 le32(str b, i64 at) {
     self.reply.append(rest[5:5 + size2])
 }
 
+// The error code of a reply, and whether its labels say a transaction
+// may run again.
+(i64, bool) replyCode(str reply) {
+    r := bson.Raw{bytes: reply}
+    i64 code = 0
+    ok, _ := r.get("ok")
+    if ok.float() != 1.0 {
+        c, _ := r.get("code")
+        code = c.int()
+    } else {
+        wce, has := r.get("writeConcernError")
+        if has {
+            c, _ := wce.doc().get("code")
+            code = c.int()
+        }
+    }
+    bool transient = false
+    labels, hasLabels := r.get("errorLabels")
+    if hasLabels {
+        for l in labels.doc() {
+            if l.text() == "TransientTransactionError" {
+                transient = true
+            }
+        }
+    }
+    return (code, transient)
+}
+
+// The codes of the errors that say the server isn't the primary any
+// more, or is going away: the client looks for the primary again.
+bool notPrimary(i64 code) {
+    match code {
+        6, 7, 89, 91, 189, 262, 9001, 10107, 11600, 11602, 13435, 13436 => return true
+        _ => return false
+    }
+}
+
+// The server's code in an error's message, as checkReply writes it:
+// "... (10107 NotWritablePrimary)". 0 for none.
+i64 codeOf(str message) {
+    at := str.findLast(message, "(")
+    if at < 0 {
+        return 0
+    }
+    i64 code = 0
+    for i in at + 1..message.len {
+        c := message[i]
+        if c < '0' || c > '9' {
+            break
+        }
+        code = code * 10 + i64(c - '0')
+    }
+    return code
+}
+
 // The error the reply describes, if it has ok 0 or write errors.
 !void checkReply(str reply) {
     r := bson.Raw{bytes: reply}
@@ -211,9 +441,21 @@ i64 le32(str b, i64 at) {
 }
 
 // Runs a command: its reply in self.reply, or the error it gives.
+// Runs a command: its reply in self.reply, or the error it gives. A
+// transaction that may run again fails with MongoError.transient.
 !void Conn.command(bson.Doc *cmd, str seqName = "", str seqDocs = "") {
+    self.code = 0
+    self.transient = false
     try self.roundTrip(cmd.bytes, seqName, seqDocs)
-    try checkReply(self.reply)
+    code, transient := replyCode(self.reply)
+    self.code = code
+    self.transient = transient
+    checkReply(self.reply) catch e {
+        if transient {
+            return error(MongoError.transient, "{e.message}")
+        }
+        return e
+    }
 }
 
 // The name in SCRAM's n= and the like: = and , escaped.
@@ -222,15 +464,20 @@ String saslName(str name) {
     return str.replace(a, ",", "=2C")
 }
 
-!Conn dial(Settings *s) {
-    c := net.dial(s.host, s.port, s.timeout) catch e {
-        return error(MongoError.connect, "connecting to {s.host}:{s.port}: {e.message}")
+// Connects to one server and says hello. The hello's reply stays in
+// reply until ready logs in.
+!Conn open(Settings *s, str host, u16 port) {
+    c := net.dial(host, port, s.timeout) catch e {
+        return error(MongoError.connect, "connecting to {host}:{port}: {e.message}")
     }
     Conn mc = Conn{conn: c}
     errdefer mc.close()
+    random.bytes(mc.lsid[:])
+    mc.lsid[6] = mc.lsid[6] & 0x0f | 0x40
+    mc.lsid[8] = mc.lsid[8] & 0x3f | 0x80
     mc.conn.setTimeout(s.timeout)
     if s.tls {
-        mc.conn.startTls(s.host, s.ca) catch e {
+        mc.conn.startTls(host, s.ca) catch e {
             return error(MongoError.connect, "{e.message}")
         }
     }
@@ -252,13 +499,69 @@ String saslName(str name) {
     hello.doc("client", &client)
     hello.text("$db", "admin")
     mc.command(&hello) catch e {
-        return error(MongoError.connect, "the server's hello: {e.message}")
+        return error(MongoError.connect, "the hello of {host}:{port}: {e.message}")
     }
-    if s.user.len > 0 {
-        try mc.login(s)
-    }
-    mc.conn.setTimeout(0s)
     return mc
+}
+
+// Logs in when the address has a user: the connection is ready for
+// commands.
+!void Conn.ready(Settings *s) {
+    if s.user.len > 0 {
+        try self.login(s)
+    }
+    self.conn.setTimeout(0s)
+}
+
+// What a server's hello said.
+struct Hello {
+    bool primary // it takes writes
+    bool member  // a replica set member or mongos, whose writes may carry a txnNumber
+    String setName
+    String primaryName
+    List[String] hosts
+}
+
+void Hello.free() {
+    self.setName.free()
+    self.primaryName.free()
+    self.hosts.freeEach()
+}
+
+Hello helloOf(str reply) {
+    r := bson.Raw{bytes: reply}
+    Hello h
+    w, hasW := r.get("isWritablePrimary")
+    if !hasW {
+        w, _ = r.get("ismaster")
+    }
+    h.primary = w.bool()
+    set, hasSet := r.get("setName")
+    if hasSet {
+        h.setName = set.text().copy()
+    }
+    msg, _ := r.get("msg")
+    h.member = hasSet || msg.text() == "isdbgrid"
+    p, hasP := r.get("primary")
+    if hasP {
+        h.primaryName = p.text().copy()
+    }
+    hs, hasHs := r.get("hosts")
+    if hasHs {
+        for e in hs.doc() {
+            h.hosts.push(e.text().copy())
+        }
+    }
+    return h
+}
+
+bool hasHost(List[Host] *hosts, str name, u16 port) {
+    for h in hosts {
+        if h.port == port && str.equalFold(h.name, name) {
+            return true
+        }
+    }
+    return false
 }
 
 str osType() {
@@ -366,73 +669,229 @@ struct PoolState {
     Mutex lock
     List[Conn] idle
     i64 open
+    // the server in use (a replica set's primary) once one was found,
+    // whether it is a member or mongos, and a task looking for it
+    bool found
+    String host
+    u16 port
+    bool member
+    bool finding
+    i64 gen // goes up when the server in use changes or fails
 }
 
-// A MongoDB server, with a pool of connections that every task and thread
-// can share. close closes them.
+// Closes the idle connections. With the lock held.
+void PoolState.dropIdle() {
+    for c in self.idle {
+        c.close()
+    }
+    self.open -= self.idle.len
+    self.idle.clear()
+}
+
+// MongoDB: one server, or the primary of a replica set, with a pool of
+// connections that every task and thread can share. close closes them.
 pub struct Client {
     PoolState *s
 }
 
-// Connects to the server at address and logs in, keeping at most max
-// connections open. The address is mongodb://user:password@host:port/database;
-// ?authSource= names the database that holds the user (the address's
-// database, else admin), ?tls=true uses TLS and ?tlsCAFile=ca.pem trusts
-// that file's certificates.
+// Connects and logs in, keeping at most max connections open. The address
+// is mongodb://user:password@host:port/database. With several hosts or
+// ?replicaSet=name the client finds the primary and follows it when
+// another takes over. mongodb+srv://user:password@cluster.example/database
+// finds the hosts and options in DNS and uses TLS. ?authSource= names the
+// database that holds the user (the address's database, else admin),
+// ?tls=true uses TLS and ?tlsCAFile=ca.pem trusts that file's certificates.
 pub !Client connect(str address, i64 max = 10) {
     settings := try settingsOf(address)
-    first := dial(&settings) catch e {
-        settings.free()
-        return e
+    if settings.srv {
+        settings.lookupSrv() catch e {
+            settings.free()
+            return e
+        }
     }
     PoolState[] mem = alloc(PoolState, 1)
     s := &mem[0]
     s.settings = settings
     s.max = if max > 0 { max } else { 10 }
-    s.idle.push(first)
     s.open = 1
-    return Client{s: s}
+    s.finding = true
+    Client cl = Client{s: s}
+    first := cl.discover() catch e {
+        s.settings.free()
+        free(mem)
+        return e
+    }
+    s.finding = false
+    s.idle.push(first)
+    return cl
+}
+
+// Finds the server to use, the primary of a replica set or the one host
+// named, and gives a connection to it. A replica set is asked again until
+// serverSelectionTimeoutMS (30s), as while it elects a primary.
+!Conn Client.discover() {
+    s := self.s
+    st := &s.settings
+    direct := st.hosts.len == 1 && st.replicaSet.len == 0 && !st.srv
+    deadline := time.clock() + st.selectTimeout
+    String why
+    defer why.free()
+    for {
+        List[Host] seen
+        defer freeHosts(&seen)
+        for h in st.hosts {
+            seen.push(Host{name: h.name.copy(), port: h.port})
+        }
+        i64 i = 0
+        for i < seen.len {
+            h := seen.at(i)
+            i += 1
+            c := open(st, h.name, h.port) catch e {
+                if direct {
+                    return e
+                }
+                why.free()
+                why = e.message.copy()
+                continue
+            }
+            scoped hello := helloOf(c.reply)
+            if st.replicaSet.len > 0 && hello.setName != st.replicaSet {
+                why.free()
+                why = format("{h.name}:{h.port} isn't in replica set {st.replicaSet}")
+                c.close()
+                continue
+            }
+            if hello.primary || direct {
+                c.ready(st) catch e {
+                    c.close()
+                    return e
+                }
+                s.lock.lock()
+                if !s.found || s.port != h.port || s.host != h.name {
+                    s.gen += 1
+                    s.dropIdle()
+                }
+                s.host.free()
+                s.host = h.name.copy()
+                s.port = h.port
+                s.member = hello.member
+                s.found = true
+                c.gen = s.gen
+                s.lock.unlock()
+                return c
+            }
+            c.close()
+            why.free()
+            why = format("{h.name}:{h.port} isn't the primary")
+            // the members it knows, the primary first
+            if hello.primaryName.len > 0 {
+                p := hostOf(hello.primaryName) catch (Host{})
+                if p.name.len > 0 && !hasHost(&seen, p.name, p.port) {
+                    seen.insert(i, p)
+                } else {
+                    p.name.free()
+                }
+            }
+            for name in hello.hosts {
+                m := hostOf(name) catch (Host{})
+                if m.name.len > 0 && !hasHost(&seen, m.name, m.port) {
+                    seen.push(m)
+                } else {
+                    m.name.free()
+                }
+            }
+        }
+        if time.clock() >= deadline {
+            return error(MongoError.connect, "no primary within {st.selectTimeout}: {why}")
+        }
+        sleep(250ms)
+    }
+    return error(MongoError.connect, "")
 }
 
 !Conn Client.take() {
+    s := self.s
     start := time.clock()
     for {
-        self.s.lock.lock()
-        if self.s.idle.len > 0 {
-            c := self.s.idle.pop()
-            self.s.lock.unlock()
+        s.lock.lock()
+        if s.found && s.idle.len > 0 {
+            c := s.idle.pop()
+            s.lock.unlock()
             return c
         }
-        if self.s.open < self.s.max {
-            self.s.open += 1
-            self.s.lock.unlock()
-            c := dial(&self.s.settings) catch e {
-                self.s.lock.lock()
-                self.s.open -= 1
-                self.s.lock.unlock()
+        if s.open < s.max && s.found {
+            s.open += 1
+            scoped String host = s.host.copy()
+            port := s.port
+            gen := s.gen
+            s.lock.unlock()
+            c := open(&s.settings, host, port) catch e {
+                // the server went away: look for it again
+                self.lose(gen)
+                s.lock.lock()
+                s.open -= 1
+                s.lock.unlock()
+                continue
+            }
+            c.ready(&s.settings) catch e {
+                c.close()
+                s.lock.lock()
+                s.open -= 1
+                s.lock.unlock()
                 return e
             }
+            c.gen = gen
             return c
         }
-        self.s.lock.unlock()
-        if time.clock() - start > 30s {
+        if s.open < s.max && !s.finding {
+            s.open += 1
+            s.finding = true
+            s.lock.unlock()
+            c := self.discover() catch e {
+                s.lock.lock()
+                s.open -= 1
+                s.finding = false
+                s.lock.unlock()
+                return e
+            }
+            s.lock.lock()
+            s.finding = false
+            s.lock.unlock()
+            return c
+        }
+        s.lock.unlock()
+        if time.clock() - start > 30s + s.settings.selectTimeout {
             return error(MongoError.connect, "no connection came free in 30s")
         }
         sleep(1ms)
     }
+    return error(MongoError.connect, "")
+}
+
+// The server in use went away or stopped being the primary: the next take
+// looks for the primary again, and the connections to the old one close.
+void Client.lose(i64 gen) {
+    s := self.s
+    s.lock.lock()
+    if s.gen == gen && s.found {
+        s.found = false
+        s.gen += 1
+        s.dropIdle()
+    }
+    s.lock.unlock()
 }
 
 void Client.give(Conn c) {
-    if c.broken {
+    s := self.s
+    s.lock.lock()
+    if c.broken || c.gen != s.gen {
+        s.open -= 1
+        s.lock.unlock()
         c.close()
-        self.s.lock.lock()
-        self.s.open -= 1
-        self.s.lock.unlock()
         return
     }
-    self.s.lock.lock()
-    self.s.idle.push(c)
-    self.s.lock.unlock()
+    s.idle.push(c)
+    s.lock.unlock()
 }
 
 // Closes every connection.
@@ -444,8 +903,50 @@ pub void Client.close() {
     self.s.idle.free()
     self.s.lock.unlock()
     self.s.settings.free()
+    self.s.host.free()
     free(self.s[0:1])
     self.s = null
+}
+
+// How a command may run again on the new primary when the server in use
+// went away: not at all, as it is (a read, or a write that carries a
+// txnNumber already), or as a write that gets a txnNumber so the server
+// doesn't do it twice (a retryable write).
+enum Retry { no, again, write }
+
+// Runs cmd on the server in use: its reply in out.
+!void Client.exec(bson.Doc *cmd, String *out, str seqName = "", str seqDocs = "", Retry retry = .no) {
+    Retry r = retry
+    for attempt in 0..2 {
+        c := try self.take()
+        if attempt == 0 && r == .write {
+            r = .no
+            if self.s.member && self.s.settings.retryWrites {
+                c.txn += 1
+                scoped lsid := bson.doc()
+                lsid.binary("id", c.lsid[:], 4)
+                cmd.doc("lsid", &lsid)
+                cmd.long("txnNumber", c.txn)
+                r = .again
+            }
+        }
+        c.command(cmd, seqName, seqDocs) catch e {
+            gone := c.broken || notPrimary(c.code)
+            gen := c.gen
+            self.give(c)
+            if gone {
+                self.lose(gen)
+                if r == .again && attempt == 0 {
+                    continue
+                }
+            }
+            return e
+        }
+        out.clear()
+        out.append(c.reply)
+        self.give(c)
+        return
+    }
 }
 
 // The database the address names ("test" when it names none).
@@ -458,15 +959,12 @@ pub !bson.Doc Client.command(str db, bson.Doc *cmd) {
     full.bytes.clear()
     full.bytes.append(cmd.bytes)
     full.text("$db", db)
-    c := try self.take()
-    c.command(&full) catch e {
-        self.give(c)
-        return e
-    }
     bson.Doc out = bson.doc()
     out.bytes.clear()
-    out.bytes.append(c.reply)
-    self.give(c)
+    self.exec(&full, &out.bytes) catch e {
+        out.free()
+        return e
+    }
     return out
 }
 
@@ -476,6 +974,102 @@ pub Collection Client.collection(str name) => Collection{c: self, db: self.s.set
 // A collection of another database.
 pub Collection Client.collectionIn(str db, str name) => Collection{c: self, db: db, name: name}
 
+// ------------------------------------------------------------ sessions
+
+// A session: the collections it gives run their commands in it, and in a
+// transaction between startTransaction and commit or abort. Transactions
+// need a replica set or a sharded cluster. One task uses a session at a
+// time. end ends it.
+pub struct Session {
+    Client *c
+    u8[16] id
+    i64 txn
+    bool inTxn
+    bool sent // a command of the transaction went to the server
+    bool ended
+}
+
+// Starts a session.
+pub Session Client.startSession() {
+    Session s = Session{c: self}
+    random.bytes(s.id[:])
+    s.id[6] = s.id[6] & 0x0f | 0x40
+    s.id[8] = s.id[8] & 0x3f | 0x80
+    return s
+}
+
+// A collection of the address's database whose commands run in the
+// session.
+pub Collection Session.collection(str name) =>
+    Collection{c: self.c, db: self.c.s.settings.database, name: name, sess: self}
+
+// A collection of another database, in the session.
+pub Collection Session.collectionIn(str db, str name) => Collection{c: self.c, db: db, name: name, sess: self}
+
+// Starts a transaction: what the session's collections do from now on
+// is seen by others only after commit, and not at all after abort. A
+// command that fails with MongoError.transient means the whole
+// transaction may work if it runs again: abort, then start over.
+pub !void Session.startTransaction() {
+    if self.ended {
+        return error(MongoError.closed, "the session ended")
+    }
+    if self.inTxn {
+        return error(MongoError.failed, "a transaction is already open in this session")
+    }
+    self.txn += 1
+    self.inTxn = true
+    self.sent = false
+}
+
+!void Session.finish(str name) {
+    if !self.inTxn {
+        return error(MongoError.failed, "no transaction is open in this session")
+    }
+    self.inTxn = false
+    if !self.sent {
+        return
+    }
+    scoped cmd := bson.doc()
+    cmd.int(name, 1)
+    scoped lsid := bson.doc()
+    lsid.binary("id", self.id[:], 4)
+    cmd.doc("lsid", &lsid)
+    cmd.long("txnNumber", self.txn)
+    cmd.bool("autocommit", false)
+    cmd.text("$db", "admin")
+    scoped String reply
+    try self.c.exec(&cmd, &reply, retry: .again)
+}
+
+// Commits the transaction.
+pub !void Session.commit() => try self.finish("commitTransaction")
+
+// Abandons the transaction: what it did is undone.
+pub void Session.abort() {
+    self.finish("abortTransaction") catch e { }
+}
+
+// Ends the session, abandoning a transaction still open.
+pub void Session.end() {
+    if self.ended {
+        return
+    }
+    if self.inTxn {
+        self.abort()
+    }
+    self.ended = true
+    scoped cmd := bson.doc()
+    scoped ids := bson.array()
+    scoped one := bson.doc()
+    one.binary("id", self.id[:], 4)
+    ids.doc("", &one)
+    cmd.doc("endSessions", &ids)
+    cmd.text("$db", "admin")
+    scoped String reply
+    self.c.exec(&cmd, &reply) catch e { }
+}
+
 // ------------------------------------------------------------ collections
 
 // A collection: the calls on its documents.
@@ -483,6 +1077,7 @@ pub struct Collection {
     Client *c
     pub str db
     pub str name
+    Session *sess
 }
 
 // A command on the collection: {name: collection, ...fields, $db: db}.
@@ -492,18 +1087,42 @@ bson.Doc Collection.cmd(str name) {
     return d
 }
 
-// Runs cmd on a connection from the pool, with an optional sequence of
-// documents, and gives the reply's copy to out.
-!void Collection.run(bson.Doc *cmd, String *out, str seqName = "", str seqDocs = "") {
+// Runs cmd, with an optional sequence of documents, in the collection's
+// session when it has one, and gives the reply's copy to out.
+!void Collection.run(bson.Doc *cmd, String *out, str seqName = "", str seqDocs = "", Retry retry = .no) {
     cmd.text("$db", self.db)
-    c := try self.c.take()
-    c.command(cmd, seqName, seqDocs) catch e {
-        self.c.give(c)
+    Retry r = retry
+    sess := self.sess
+    if sess != null {
+        if sess.ended {
+            return error(MongoError.closed, "the session ended")
+        }
+        scoped lsid := bson.doc()
+        lsid.binary("id", sess.id[:], 4)
+        cmd.doc("lsid", &lsid)
+        if sess.inTxn {
+            cmd.long("txnNumber", sess.txn)
+            if !sess.sent {
+                cmd.bool("startTransaction", true)
+                sess.sent = true
+            }
+            cmd.bool("autocommit", false)
+            r = .no
+        } else if r == .write {
+            r = .no
+            if self.c.s.member && self.c.s.settings.retryWrites {
+                sess.txn += 1
+                cmd.long("txnNumber", sess.txn)
+                r = .again
+            }
+        }
+    }
+    self.c.exec(cmd, out, seqName, seqDocs, r) catch e {
+        if sess != null && sess.inTxn && e.code == MongoError.closed {
+            return error(MongoError.transient, "{e.message}")
+        }
         return e
     }
-    out.clear()
-    out.append(c.reply)
-    self.c.give(c)
 }
 
 i64 replyInt(str reply, str key) {
@@ -516,7 +1135,7 @@ i64 replyInt(str reply, str key) {
     scoped cmd := self.cmd("insert")
     cmd.bool("ordered", true)
     scoped String reply
-    try self.run(&cmd, &reply, "documents", docs)
+    try self.run(&cmd, &reply, "documents", docs, .write)
     return replyInt(reply, "n")
 }
 
@@ -573,7 +1192,8 @@ pub struct UpdateResult {
     one.bool("multi", multi)
     scoped cmd := self.cmd("update")
     scoped String reply
-    try self.run(&cmd, &reply, "updates", one.bytes)
+    // updating many isn't a retryable write
+    try self.run(&cmd, &reply, "updates", one.bytes, if multi { Retry.no } else { Retry.write })
     r := bson.Raw{bytes: reply}
     UpdateResult out
     n, _ := r.get("n")
@@ -618,7 +1238,7 @@ pub !UpdateResult replaceOne[T](Collection *c, bson.Doc *filter, T *doc, bool up
     one.int("limit", limit)
     scoped cmd := self.cmd("delete")
     scoped String reply
-    try self.run(&cmd, &reply, "deletes", one.bytes)
+    try self.run(&cmd, &reply, "deletes", one.bytes, if limit == 1 { Retry.write } else { Retry.no })
     return replyInt(reply, "n")
 }
 
@@ -636,7 +1256,7 @@ pub !i64 Collection.count(bson.Doc *filter = null) {
         cmd.doc("query", filter)
     }
     scoped String reply
-    try self.run(&cmd, &reply)
+    try self.run(&cmd, &reply, retry: .again)
     return replyInt(reply, "n")
 }
 
@@ -694,6 +1314,14 @@ pub struct Cursor {
     str items    // the batch array
     str current
     i64 batchSize
+    // a change stream: its resume token, the token at the end of the
+    // batch, the stages after $changeStream, and how long next waits
+    bool watching
+    bool full
+    String token
+    str batchToken
+    String stages
+    Duration wait
 }
 
 // Reads a reply's cursor: its id and its first or next batch.
@@ -705,19 +1333,41 @@ void Cursor.load(str key) {
     items, _ := cur.doc().get(key)
     self.items = items.doc().bytes
     self.at = 0
+    t, has := cur.doc().get("postBatchResumeToken")
+    self.batchToken = if has { t.doc().bytes } else { "" }
 }
 
 // Moves to the next document: false when there are no more.
 pub !bool Cursor.next() {
+    start := time.clock()
     for {
         raw := bson.Raw{bytes: self.items}
-        e, ok := raw.next(&self.at)
+        ev, ok := raw.next(&self.at)
         if ok {
-            self.current = e.doc().bytes
+            self.current = ev.doc().bytes
+            if self.watching {
+                id, has := ev.doc().get("_id")
+                if has {
+                    self.token.clear()
+                    self.token.append(id.doc().bytes)
+                }
+            }
             return true
+        }
+        if self.watching && self.batchToken.len > 0 {
+            self.token.clear()
+            self.token.append(self.batchToken)
+            self.batchToken = ""
         }
         if self.id == 0 {
             return false
+        }
+        Duration left = 1s
+        if self.watching && self.wait > 0s {
+            left = self.wait - (time.clock() - start)
+            if left <= 0s {
+                return false
+            }
         }
         scoped more := bson.doc()
         more.long("getMore", self.id)
@@ -725,9 +1375,30 @@ pub !bool Cursor.next() {
         if self.batchSize > 0 {
             more.int("batchSize", self.batchSize)
         }
-        try self.coll.run(&more, &self.batch)
+        if self.watching {
+            // the server holds the request until a change or this
+            ms := i64(if left < 1s { left } else { 1s }) / 1000000
+            more.long("maxTimeMS", if ms < 1 { 1 } else { ms })
+        }
+        self.coll.run(&more, &self.batch) catch e {
+            if !self.watching || !resumable(e.code == MongoError.closed, e.message) {
+                return e
+            }
+            // a failover: the stream goes on from its token
+            self.id = 0
+            try self.start()
+            continue
+        }
         self.load("nextBatch")
     }
+    return false
+}
+
+// Whether a change stream can go on after the error, from its token.
+bool resumable(bool closed, str message) {
+    code := codeOf(message)
+    return closed || notPrimary(code) || code == 43 || code == 63 || code == 150 || code == 13388 ||
+        code == 234 || code == 133
 }
 
 // The document next moved to, as BSON: read it with bson.decode, or
@@ -747,6 +1418,8 @@ pub void Cursor.free() {
         self.id = 0
     }
     self.batch.free()
+    self.token.free()
+    self.stages.free()
 }
 
 // The documents that match filter (null for all), in sort's order (such as
@@ -774,7 +1447,7 @@ pub !Cursor Collection.find(bson.Doc *filter = null, bson.Doc *sort = null, bson
             cmd.int("batchSize", batchSize)
         }
         Cursor cur = Cursor{coll: *self, batchSize: batchSize}
-        try self.run(&cmd, &cur.batch)
+        try self.run(&cmd, &cur.batch, retry: .again)
         cur.load("firstBatch")
         return cur
     }
@@ -790,9 +1463,58 @@ pub !Cursor Collection.aggregate(bson.Doc *pipeline, i64 batchSize = 0) {
     }
     cmd.doc("cursor", &c)
     Cursor cur = Cursor{coll: *self, batchSize: batchSize}
-    try self.run(&cmd, &cur.batch)
+    // a pipeline that writes ($out, $merge) runs once
+    writes := str.contains(pipeline.bytes, "$out") || str.contains(pipeline.bytes, "$merge")
+    try self.run(&cmd, &cur.batch, retry: if writes { Retry.no } else { Retry.again })
     cur.load("firstBatch")
     return cur
+}
+
+// The changes to the collection as they happen (a change stream, which
+// needs a replica set or a sharded cluster). Each document next gives is
+// one change, with operationType ("insert", "update", "replace",
+// "delete"...), documentKey, and fullDocument for an insert, or for an
+// update too with fullDocument set. pipeline adds stages such as
+// [{"$match": {"operationType": "insert"}}]. next waits for the next
+// change; with wait it gives false after that long without one, and can be
+// called again. When the primary changes, the stream goes on from the last
+// change it gave.
+pub !Cursor Collection.watch(bson.Doc *pipeline = null, bool fullDocument = false, Duration wait = 0s) {
+    Cursor cur = Cursor{coll: *self, watching: true, full: fullDocument, wait: wait}
+    cur.stages.append(if pipeline != null { pipeline.bytes } else { "\x05\x00\x00\x00\x00" })
+    cur.start() catch e {
+        cur.free()
+        return e
+    }
+    return cur
+}
+
+// Runs a change stream's aggregate, from its token when it has one.
+!void Cursor.start() {
+    scoped stage := bson.doc()
+    if self.full {
+        stage.text("fullDocument", "updateLookup")
+    }
+    if self.token.len > 0 {
+        stage.embed("resumeAfter", self.token)
+    }
+    scoped first := bson.doc()
+    first.doc("$changeStream", &stage)
+    scoped pipeline := bson.array()
+    pipeline.doc("", &first)
+    stages := bson.Raw{bytes: self.stages}
+    for e in stages {
+        pipeline.embed("", e.doc().bytes)
+    }
+    scoped cmd := self.coll.cmd("aggregate")
+    cmd.doc("pipeline", &pipeline)
+    scoped c := bson.doc()
+    if self.batchSize > 0 {
+        c.int("batchSize", self.batchSize)
+    }
+    cmd.doc("cursor", &c)
+    try self.coll.run(&cmd, &self.batch, retry: .again)
+    self.load("firstBatch")
 }
 
 // Every document that matches filter as @json structs, as find picks them.
@@ -825,12 +1547,20 @@ pub !T findOne[T](Collection *c, bson.Doc *filter = null, bson.Doc *sort = null)
 test "the settings in an address" {
     scoped s := try settingsOf("mongodb://ada%40x:p%3Ass@db.example:27018/shop?authSource=admin&tls=true&appName=app")
     expect(s.user == "ada@x" && s.password == "p:ss", s.user)
-    expect(s.host == "db.example" && s.port == 27018)
+    expect(s.hosts.len == 1 && s.hosts.at(0).name == "db.example" && s.hosts.at(0).port == 27018)
     expect(s.database == "shop" && s.authSource == "admin")
-    expect(s.tls && s.appName == "app")
+    expect(s.tls && s.appName == "app" && s.retryWrites)
     scoped d := try settingsOf("mongodb://localhost")
-    expect(d.database == "test" && d.authSource == "admin" && d.port == 27017 && !d.tls)
-    _ = settingsOf("mongodb://a,b/x") catch e {
+    expect(d.database == "test" && d.authSource == "admin" && d.hosts.at(0).port == 27017 && !d.tls)
+    scoped rs := try settingsOf("mongodb://a:1,[::1]:2,c/x?replicaSet=rs0&retryWrites=false")
+    expect(rs.hosts.len == 3 && rs.hosts.at(1).name == "::1" && rs.hosts.at(1).port == 2)
+    expect(rs.hosts.at(2).name == "c" && rs.hosts.at(2).port == 27017)
+    expect(rs.replicaSet == "rs0" && !rs.retryWrites && rs.database == "x")
+    scoped q := try settingsOf("mongodb://h?replicaSet=r")
+    expect(q.replicaSet == "r" && q.database == "test")
+    scoped srv := try settingsOf("mongodb+srv://u:p@cluster.example.com/db")
+    expect(srv.srv && srv.tls && srv.hosts.at(0).name == "cluster.example.com")
+    _ = settingsOf("mongodb+srv://a.example.com:27017/x") catch e {
         expect(e.code == MongoError.connect)
         Settings{}
     }
@@ -838,6 +1568,24 @@ test "the settings in an address" {
         expect(e.code == MongoError.connect)
         Settings{}
     }
+    _ = settingsOf("mongodb://a:99999") catch e {
+        expect(e.code == MongoError.connect)
+        Settings{}
+    }
+}
+
+test "SRV targets stay in the domain" {
+    expect(srvInDomain("host1.cluster.example.com", "cluster.example.com"))
+    expect(srvInDomain("a.example.com", "cluster.example.com"))
+    expect(!srvInDomain("a.evil.com", "cluster.example.com"))
+    expect(!srvInDomain("example.com.evil.com", "cluster.example.com"))
+}
+
+test "error codes" {
+    expect(codeOf("not primary (10107 NotWritablePrimary)") == 10107)
+    expect(codeOf("dup (11000)") == 11000)
+    expect(codeOf("nothing") == 0)
+    expect(notPrimary(10107) && !notPrimary(11000))
 }
 
 test "SCRAM names" {

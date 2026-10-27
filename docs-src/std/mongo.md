@@ -27,3 +27,5 @@ r := try users.updateMany(&q, &inc)
 ```
 
 `find` and `aggregate` on a collection give a `Cursor`, which reads the documents a batch at a time.
+
+Several hosts with `?replicaSet=` name a replica set, and the client follows its primary. `mongodb+srv://` finds the hosts in DNS. `Client.startSession` gives a `Session` for transactions, and `Collection.watch` follows the changes to a collection.
