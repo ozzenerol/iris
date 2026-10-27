@@ -102,15 +102,19 @@ void watcher(mongo.Collection notes, chan[String] out) {
         print(ready)
         return
     }
+    // each change is read before the next write: the update's full
+    // document is looked up when it is read, and is gone after the delete
     try add(&w, "a", 1)
+    scoped String inserted = <-out
+    print(inserted)
     scoped af := try bson.fromJson(r"""{"name": "a"}""")
     scoped inc := try bson.fromJson(r"""{"$inc": {"n": 1}}""")
     _ = try w.updateOne(&af, &inc)
+    scoped String updated = <-out
+    print(updated)
     _ = try w.deleteOne(&af)
-    for i in 0..3 {
-        scoped String got = <-out
-        print(got)
-    }
+    scoped String deleted = <-out
+    print(deleted)
     scoped quiet := try w.watch(wait: 300ms)
     print("no change within the wait: {try quiet.next()}")
 
