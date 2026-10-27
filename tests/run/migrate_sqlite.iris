@@ -1,0 +1,94 @@
+// expect: loaded: 1 users, 2 email, 10 name_index
+// expect: up: 3, again: 0, version 10
+// expect: 1 users true
+// expect: 2 email true
+// expect: 10 name_index true
+// expect: Ada <none>
+// expect: down: MigrateError.noDown
+// expect: to 1: 2, version 1
+// expect: email gone: true
+// expect: changed: MigrateError.changed
+// expect: unknown: MigrateError.unknown
+// expect: order: MigrateError.invalid
+// expect: bad file: MigrateError.invalid
+// expect: failed: true, version 1
+// expect: to 0: 1, tables: schema_migrations
+// expect: own table: 2 in versions
+
+import migrate, sqlite
+
+!void loadBad() {
+    f := try migrate.load("tests/data/migrate/bad")
+    f.free()
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    store := migrate.Sqlite{db: &db}
+
+    files := try migrate.load("tests/data/migrate/sql")
+    defer files.free()
+    list := files.items()
+    print("loaded: {list[0].version} {list[0].name}, {list[1].version} {list[1].name}, {list[2].version} {list[2].name}")
+
+    n := try migrate.up(&store, list)
+    again := try migrate.up(&store, list)
+    print("up: {n}, again: {again}, version {try migrate.version(&store)}")
+
+    scoped st := try migrate.status(&store, list)
+    for s in st {
+        print("{s.version} {s.name} {s.applied}")
+    }
+
+    rows := try db.query("SELECT name, email FROM users")
+    _ = try rows.next()
+    print("{rows.text(0)} {if rows.isNull(1) { "<none>" } else { rows.text(1) }}")
+    rows.close()
+
+    // 10 has no down file
+    _ = migrate.down(&store, list) catch e {
+        print("down: {e.code}")
+        0
+    }
+    noIndex := [list[0], list[1], migrate.Migration{version: 10, name: "name_index", up: list[2].up, down: "DROP INDEX users_name;"}]
+    k := try migrate.to(&store, noIndex, 1)
+    print("to 1: {k}, version {try migrate.version(&store)}")
+    db.exec("SELECT email FROM users") catch e {
+        print("email gone: true")
+    }
+
+    edited := [migrate.Migration{version: 1, name: "users", up: "CREATE TABLE users (id INTEGER)"}]
+    _ = migrate.up(&store, edited) catch e {
+        print("changed: {e.code}")
+        0
+    }
+    _ = migrate.up(&store, noIndex[0:0]) catch e {
+        print("unknown: {e.code}")
+        0
+    }
+    backwards := [noIndex[1], noIndex[0]]
+    _ = migrate.up(&store, backwards) catch e {
+        print("order: {e.code}")
+        0
+    }
+    loadBad() catch e {
+        print("bad file: {e.code}")
+    }
+
+    // a failed migration leaves nothing behind
+    broken := [noIndex[0], migrate.Migration{version: 2, name: "broken", up: "CREATE TABLE t (x INTEGER); SELECT * FROM nowhere;", down: "DROP TABLE t;"}]
+    _ = migrate.up(&store, broken) catch e {
+        print("failed: {e.message.len > 0 && e.message[0:18] == "migration 2 broken"}, version {try migrate.version(&store)}")
+        0
+    }
+
+    z := try migrate.to(&store, broken, 0)
+    trows := try db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    _ = try trows.next()
+    print("to 0: {z}, tables: {trows.text(0)}")
+    trows.close()
+
+    own := migrate.Sqlite{db: &db, table: "versions"}
+    print("own table: {try migrate.up(&own, broken[0:1]) + try migrate.up(&own, noIndex[0:2])} in versions")
+}

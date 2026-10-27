@@ -1,0 +1,605 @@
+// Schema migrations for PostgreSQL, MySQL, SQLite and MongoDB. A migration
+// has a version, a name, the change (up) and its undo (down). The versions
+// that ran are kept in a table in the database, schema_migrations unless
+// the store names another, with a checksum of each up.
+//
+//     db := try pg.connect(address)
+//     defer db.close()
+//     store := migrate.Pg{conn: &db}
+//     files := try migrate.load("migrations")
+//     defer files.free()
+//     n := try migrate.up(&store, files.items())
+//
+// Each migration runs in a transaction on PostgreSQL and SQLite. MySQL ends
+// a transaction at each CREATE, ALTER or DROP, so a MySQL migration that
+// fails part way leaves the statements before the failure done. On MongoDB
+// a migration is a JSON array of commands, run one after another.
+
+import bson, fs, math, mongo, mysql, pg, sqlite, str, time
+
+// What migrate fails with: invalid (a version list out of order, or a file
+// name that isn't VERSION_NAME.up.EXT), changed (the up of a migration that
+// ran was changed since), unknown (the database has a version the list
+// lacks), noDown (a migration to undo has no down), locked (another
+// program held the lock too long).
+pub enum MigrateError { invalid, changed, unknown, noDown, locked }
+
+// One migration. Versions are above 0, and a list goes from the lowest to
+// the highest. down may be empty, and such a migration can't be undone.
+pub struct Migration {
+    pub i64 version
+    pub str name
+    pub str up
+    pub str down
+}
+
+// A version that ran, and the checksum of its up then.
+pub struct Applied {
+    pub i64 version
+    pub i64 sum
+}
+
+// A migration and whether it ran, from status.
+pub struct Status {
+    pub i64 version
+    pub str name
+    pub bool applied
+}
+
+// What up, down, to and status run on: Pg, Mysql, Sqlite and Mongo have
+// it, and a struct with these methods adds another database.
+pub interface Store {
+    // Keeps other programs that migrate the same database waiting.
+    !void lock()
+    void unlock()
+    // The versions that ran, the lowest first. It makes the table if
+    // needed.
+    !List[Applied] applied()
+    // Runs m.up and keeps its version and checksum.
+    !void apply(Migration *m, i64 sum)
+    // Runs m.down and forgets its version.
+    !void revert(Migration *m)
+}
+
+// The checksum of a migration's text: 64-bit FNV-1a, kept to 63 bits so
+// every database stores it as a signed integer.
+pub i64 checksum(str text) {
+    i64 h = -3750763034362895579 // 14695981039346656037 as a u64
+    for c in text {
+        h = math.mulWrap(h ^ i64(c), 1099511628211)
+    }
+    return h & 0x7fffffffffffffff
+}
+
+!void check(Migration[] list) {
+    for i in 0..list.len {
+        m := list[i]
+        if m.version <= 0 {
+            return error(MigrateError.invalid, "migration {m.name} has version {m.version}; versions are above 0")
+        }
+        if i > 0 && list[i - 1].version >= m.version {
+            return error(MigrateError.invalid, "version {m.version} comes after {list[i - 1].version}; the list goes from the lowest version to the highest")
+        }
+    }
+}
+
+i64 indexOf(Migration[] list, i64 version) {
+    for i in 0..list.len {
+        if list[i].version == version {
+            return i
+        }
+    }
+    return -1
+}
+
+bool ran(Applied[] done, i64 version) {
+    for a in done {
+        if a.version == version {
+            return true
+        }
+    }
+    return false
+}
+
+// Every version that ran must be in the list, with the same up.
+!void verify(Migration[] list, Applied[] done) {
+    for a in done {
+        i := indexOf(list, a.version)
+        if i < 0 {
+            return error(MigrateError.unknown, "the database has version {a.version}, which isn't in the list")
+        }
+        if checksum(list[i].up) != a.sum {
+            return error(MigrateError.changed, "migration {a.version} {list[i].name} was changed after it ran")
+        }
+    }
+}
+
+!void applyOne[S: Store](S *db, Migration *m) {
+    db.apply(m, checksum(m.up)) catch e {
+        return error(e.code, "migration {m.version} {m.name}: {e.message}")
+    }
+}
+
+!void revertOne[S: Store](S *db, Migration *m) {
+    if m.down.len == 0 {
+        return error(MigrateError.noDown, "migration {m.version} {m.name} has no down")
+    }
+    db.revert(m) catch e {
+        return error(e.code, "migration {m.version} {m.name}: {e.message}")
+    }
+}
+
+// Runs every migration of the list that hasn't run, the lowest version
+// first: how many ran. One with a version below the highest that ran
+// still runs.
+pub !i64 up[S: Store](S *db, Migration[] list) {
+    try check(list)
+    try db.lock()
+    defer db.unlock()
+    done := try db.applied()
+    defer done.free()
+    try verify(list, done.items())
+    i64 n = 0
+    for i in 0..list.len {
+        if !ran(done.items(), list[i].version) {
+            try applyOne(db, &list[i])
+            n += 1
+        }
+    }
+    return n
+}
+
+// Undoes the last steps migrations that ran, the highest version first:
+// how many were undone.
+pub !i64 down[S: Store](S *db, Migration[] list, i64 steps = 1) {
+    try check(list)
+    try db.lock()
+    defer db.unlock()
+    done := try db.applied()
+    defer done.free()
+    try verify(list, done.items())
+    i64 n = 0
+    for n < steps && n < done.len {
+        v := done.at(done.len - 1 - n).version
+        try revertOne(db, &list[indexOf(list, v)])
+        n += 1
+    }
+    return n
+}
+
+// Brings the database to version: runs the migrations up to it that
+// haven't run, then undoes those above it, the highest first. 0 undoes
+// them all. It gives how many ran or were undone.
+pub !i64 to[S: Store](S *db, Migration[] list, i64 version) {
+    try check(list)
+    try db.lock()
+    defer db.unlock()
+    done := try db.applied()
+    defer done.free()
+    try verify(list, done.items())
+    i64 n = 0
+    for i in 0..list.len {
+        if list[i].version <= version && !ran(done.items(), list[i].version) {
+            try applyOne(db, &list[i])
+            n += 1
+        }
+    }
+    for k in 0..done.len {
+        v := done.at(done.len - 1 - k).version
+        if v > version {
+            try revertOne(db, &list[indexOf(list, v)])
+            n += 1
+        }
+    }
+    return n
+}
+
+// Each migration of the list and whether it ran. It fails like up when
+// the database doesn't match the list.
+pub !List[Status] status[S: Store](S *db, Migration[] list) {
+    try check(list)
+    done := try db.applied()
+    defer done.free()
+    try verify(list, done.items())
+    List[Status] out
+    for m in list {
+        out.push(Status{version: m.version, name: m.name, applied: ran(done.items(), m.version)})
+    }
+    return out
+}
+
+// The highest version that ran, or 0.
+pub !i64 version[S: Store](S *db) {
+    done := try db.applied()
+    defer done.free()
+    return if done.len > 0 { done.last().version } else { 0 }
+}
+
+// ------------------------------------------------------------ files
+
+// Migrations read from a folder. free gives their text back.
+pub struct Files {
+    pub List[Migration] list
+    List[String] texts
+}
+
+// The migrations, for up, down, to and status.
+pub Migration[] Files.items() => self.list.items()
+
+// Frees the names and the text.
+pub void Files.free() {
+    self.texts.freeEach()
+    self.list.free()
+}
+
+// The migrations in a folder, from files named VERSION_NAME.up.EXT and
+// VERSION_NAME.down.EXT, such as 0001_users.up.sql: .sql for the SQL
+// databases, .json for MongoDB. The down file may be left out. Other files
+// are skipped.
+pub !Files load(str dir) {
+    d := try fs.readDir(dir)
+    defer d.free()
+    Files f
+    errdefer f.free()
+    for e in d.entries {
+        if e.isDir {
+            continue
+        }
+        // VERSION_NAME.up.EXT
+        stem, _, hasExt := str.cutLast(e.name, ".")
+        base, kind, hasKind := str.cutLast(stem, ".")
+        if !hasExt || !hasKind || (kind != "up" && kind != "down") {
+            continue
+        }
+        digits, name, hasName := str.cut(base, "_")
+        v := str.parseInt(digits) catch -1
+        if !hasName || name.len == 0 || v <= 0 {
+            return error(MigrateError.invalid, "{dir}/{e.name}: a migration file is named VERSION_NAME.{kind}.EXT, such as 0001_users.{kind}.sql")
+        }
+        text := try fs.readAll("{dir}/{e.name}")
+        f.texts.push(text)
+        i := indexOf(f.list.items(), v)
+        if i < 0 {
+            String keep = name.copy()
+            f.texts.push(keep)
+            f.list.push(Migration{version: v, name: keep})
+            i = f.list.len - 1
+        }
+        m := f.list.at(i)
+        if str.compare(m.name, name) != 0 {
+            return error(MigrateError.invalid, "{dir}: version {v} has two names, {m.name} and {name}")
+        }
+        if kind == "up" {
+            m.up = text
+        } else {
+            m.down = text
+        }
+        f.list.set(i, m)
+    }
+    for m in f.list {
+        if m.up.len == 0 {
+            return error(MigrateError.invalid, "{dir}: version {m.version} {m.name} has a down file and no up file")
+        }
+    }
+    f.list.sort(byVersion)
+    return f
+}
+
+bool byVersion(Migration a, Migration b) => a.version < b.version
+
+// A table name made of letters, digits and _, since it goes into SQL as it is.
+!void tableName(str t) {
+    if t.len == 0 {
+        return error(MigrateError.invalid, "the table name is empty")
+    }
+    for c in t {
+        if !str.isAlnum(c) && c != '_' {
+            return error(MigrateError.invalid, "the table name {t} has more than letters, digits and _")
+        }
+    }
+}
+
+// ------------------------------------------------------------ PostgreSQL
+
+// A PostgreSQL connection to migrate. lock takes an advisory lock, so
+// programs that start together run the migrations once.
+pub struct Pg {
+    pub pg.Conn *conn
+    pub str table = "schema_migrations"
+}
+
+// Takes the lock, waiting while another program holds it.
+pub !void Pg.lock() {
+    try tableName(self.table)
+    _ = try self.conn.exec("SELECT pg_advisory_lock($1)", [.int(checksum(self.table))])
+}
+
+// Gives the lock back.
+pub void Pg.unlock() {
+    _ = self.conn.exec("SELECT pg_advisory_unlock($1)", [.int(checksum(self.table))]) catch 0
+}
+
+// The versions that ran, the lowest first. It makes the table if needed.
+pub !List[Applied] Pg.applied() {
+    try tableName(self.table)
+    try self.conn.execScript("CREATE TABLE IF NOT EXISTS {self.table} (version bigint PRIMARY KEY, name text NOT NULL, checksum bigint NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())")
+    scoped String q = format("SELECT version, checksum FROM {self.table} ORDER BY version")
+    rows := try self.conn.query(q)
+    defer rows.close()
+    List[Applied] out
+    for rows.next() {
+        out.push(Applied{version: rows.int(0), sum: rows.int(1)})
+    }
+    return out
+}
+
+// Runs m.up and keeps its version and checksum.
+pub !void Pg.apply(Migration *m, i64 sum) {
+    try self.conn.execScript("BEGIN")
+    errdefer self.conn.execScript("ROLLBACK") catch e { }
+    try self.conn.execScript(m.up)
+    _ = try self.conn.exec("INSERT INTO {self.table} (version, name, checksum) VALUES ($1, $2, $3)", [.int(m.version), .text(m.name), .int(sum)])
+    try self.conn.execScript("COMMIT")
+}
+
+// Runs m.down and forgets its version.
+pub !void Pg.revert(Migration *m) {
+    try self.conn.execScript("BEGIN")
+    errdefer self.conn.execScript("ROLLBACK") catch e { }
+    try self.conn.execScript(m.down)
+    _ = try self.conn.exec("DELETE FROM {self.table} WHERE version = $1", [.int(m.version)])
+    try self.conn.execScript("COMMIT")
+}
+
+// ------------------------------------------------------------ MySQL
+
+// A MySQL or MariaDB connection to migrate. lock takes a named lock with
+// GET_LOCK, and waits for it up to wait.
+pub struct Mysql {
+    pub mysql.Conn *conn
+    pub str table = "schema_migrations"
+    pub Duration wait = 10m
+}
+
+// Takes the lock, waiting while another program holds it.
+pub !void Mysql.lock() {
+    try tableName(self.table)
+    rows := try self.conn.query("SELECT GET_LOCK(?, ?)", [.text("iris_migrate_{self.table}"), .int(self.wait / 1s)])
+    defer rows.close()
+    if !rows.next() || rows.int(0) != 1 {
+        return error(MigrateError.locked, "another program held the lock iris_migrate_{self.table} for longer than {self.wait / 1s}s")
+    }
+}
+
+// Gives the lock back.
+pub void Mysql.unlock() {
+    _ = self.conn.exec("SELECT RELEASE_LOCK(?)", [.text("iris_migrate_{self.table}")]) catch 0
+}
+
+// The versions that ran, the lowest first. It makes the table if needed.
+pub !List[Applied] Mysql.applied() {
+    try tableName(self.table)
+    try self.conn.execScript("CREATE TABLE IF NOT EXISTS {self.table} (version bigint PRIMARY KEY, name varchar(255) NOT NULL, checksum bigint NOT NULL, applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    scoped String q = format("SELECT version, checksum FROM {self.table} ORDER BY version")
+    rows := try self.conn.query(q)
+    defer rows.close()
+    List[Applied] out
+    for rows.next() {
+        out.push(Applied{version: rows.int(0), sum: rows.int(1)})
+    }
+    return out
+}
+
+// Runs m.up and keeps its version and checksum.
+pub !void Mysql.apply(Migration *m, i64 sum) {
+    try self.conn.execScript("START TRANSACTION")
+    errdefer self.conn.execScript("ROLLBACK") catch e { }
+    try self.conn.execScript(m.up)
+    _ = try self.conn.exec("INSERT INTO {self.table} (version, name, checksum) VALUES (?, ?, ?)", [.int(m.version), .text(m.name), .int(sum)])
+    try self.conn.execScript("COMMIT")
+}
+
+// Runs m.down and forgets its version.
+pub !void Mysql.revert(Migration *m) {
+    try self.conn.execScript("START TRANSACTION")
+    errdefer self.conn.execScript("ROLLBACK") catch e { }
+    try self.conn.execScript(m.down)
+    _ = try self.conn.exec("DELETE FROM {self.table} WHERE version = ?", [.int(m.version)])
+    try self.conn.execScript("COMMIT")
+}
+
+// ------------------------------------------------------------ SQLite
+
+// A SQLite database to migrate. Each migration starts with BEGIN
+// IMMEDIATE, which keeps other writers out, and one that another program
+// ran in the meantime is skipped.
+pub struct Sqlite {
+    pub sqlite.Db *db
+    pub str table = "schema_migrations"
+}
+
+// SQLite has no lock to hold between transactions; apply and revert check
+// again inside theirs.
+pub !void Sqlite.lock() => try tableName(self.table)
+
+// Gives the lock back.
+pub void Sqlite.unlock() { }
+
+// The versions that ran, the lowest first. It makes the table if needed.
+pub !List[Applied] Sqlite.applied() {
+    try tableName(self.table)
+    try self.db.exec("CREATE TABLE IF NOT EXISTS {self.table} (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    scoped String q = format("SELECT version, checksum FROM {self.table} ORDER BY version")
+    rows := try self.db.query(q)
+    defer rows.close()
+    List[Applied] out
+    errdefer out.free()
+    for try rows.next() {
+        out.push(Applied{version: rows.int(0), sum: rows.int(1)})
+    }
+    return out
+}
+
+!bool Sqlite.has(i64 version) {
+    scoped String q = format("SELECT 1 FROM {self.table} WHERE version = ?")
+    rows := try self.db.query(q, [.int(version)])
+    defer rows.close()
+    return try rows.next()
+}
+
+// Runs m.up and keeps its version and checksum.
+pub !void Sqlite.apply(Migration *m, i64 sum) {
+    try self.db.exec("BEGIN IMMEDIATE")
+    errdefer self.db.exec("ROLLBACK") catch e { }
+    if try self.has(m.version) {
+        try self.db.exec("COMMIT")
+        return
+    }
+    try self.db.exec(m.up)
+    try self.db.exec("INSERT INTO {self.table} (version, name, checksum) VALUES (?, ?, ?)", [.int(m.version), .text(m.name), .int(sum)])
+    try self.db.exec("COMMIT")
+}
+
+// Runs m.down and forgets its version.
+pub !void Sqlite.revert(Migration *m) {
+    try self.db.exec("BEGIN IMMEDIATE")
+    errdefer self.db.exec("ROLLBACK") catch e { }
+    if !(try self.has(m.version)) {
+        try self.db.exec("COMMIT")
+        return
+    }
+    try self.db.exec(m.down)
+    try self.db.exec("DELETE FROM {self.table} WHERE version = ?", [.int(m.version)])
+    try self.db.exec("COMMIT")
+}
+
+// ------------------------------------------------------------ MongoDB
+
+// A MongoDB database to migrate: the address's database, unless database
+// names another. A migration is a JSON array of commands, each run with
+// Client.command:
+//
+//     [{"createIndexes": "users", "indexes": [{"key": {"email": 1}, "name": "email", "unique": true}]}]
+//
+// lock is a document in the collection TABLE_lock, and a lock older than
+// stale is taken over, since the program that left it is gone.
+pub struct Mongo {
+    pub mongo.Client *client
+    pub str database
+    pub str table = "schema_migrations"
+    pub Duration wait = 10m
+    pub Duration stale = 1h
+}
+
+str Mongo.db() => if self.database.len > 0 { self.database } else { self.client.database() }
+
+// Takes the lock, waiting while another program holds it.
+pub !void Mongo.lock() {
+    try tableName(self.table)
+    scoped String name = format("{self.table}_lock")
+    locks := self.client.collectionIn(self.db(), name)
+    start := time.clock()
+    for {
+        scoped d := bson.doc()
+        d.text("_id", "lock")
+        d.date("at", bson.date(time.now()))
+        locks.insertDoc(&d) catch e {
+            if e.code != mongo.MongoError.duplicate {
+                return e
+            }
+            // a lock left by a program that ended without unlock
+            scoped old := bson.doc()
+            old.text("_id", "lock")
+            scoped before := bson.doc()
+            before.date("$lt", bson.date(time.Time{ns: time.now().ns - self.stale}))
+            old.doc("at", &before)
+            if try locks.deleteOne(&old) == 0 {
+                if time.clock() - start > self.wait {
+                    return error(MigrateError.locked, "another program held the lock in {self.table}_lock for longer than {self.wait / 1s}s")
+                }
+                sleep(100ms)
+            }
+            continue
+        }
+        return
+    }
+}
+
+// Gives the lock back.
+pub void Mongo.unlock() {
+    scoped String name = format("{self.table}_lock")
+    locks := self.client.collectionIn(self.db(), name)
+    scoped d := bson.doc()
+    d.text("_id", "lock")
+    _ = locks.deleteOne(&d) catch 0
+}
+
+// The versions that ran, the lowest first. It makes the table if needed.
+pub !List[Applied] Mongo.applied() {
+    try tableName(self.table)
+    coll := self.client.collectionIn(self.db(), self.table)
+    scoped sort := bson.doc()
+    sort.int("_id", 1)
+    cur := try coll.find(sort: &sort)
+    defer cur.free()
+    List[Applied] out
+    errdefer out.free()
+    for try cur.next() {
+        r := cur.doc()
+        v, _ := r.get("_id")
+        s, _ := r.get("checksum")
+        out.push(Applied{version: v.int(), sum: s.int()})
+    }
+    return out
+}
+
+!void Mongo.run(Migration *m, str script) {
+    if !str.startsWith(str.trim(script), "[") {
+        return error(MigrateError.invalid, "the migration isn't a JSON array of commands")
+    }
+    scoped cmds := bson.fromJson(script) catch e {
+        return error(MigrateError.invalid, "the migration isn't a JSON array of commands: {e.message}")
+    }
+    for el in cmds.raw() {
+        scoped cmd := bson.doc()
+        cmd.bytes.clear()
+        cmd.bytes.append(el.doc().bytes)
+        scoped reply := try self.client.command(self.db(), &cmd)
+    }
+}
+
+// Runs m.up and keeps its version and checksum.
+pub !void Mongo.apply(Migration *m, i64 sum) {
+    try self.run(m, m.up)
+    coll := self.client.collectionIn(self.db(), self.table)
+    scoped d := bson.doc()
+    d.long("_id", m.version)
+    d.text("name", m.name)
+    d.long("checksum", sum)
+    d.date("applied_at", bson.date(time.now()))
+    try coll.insertDoc(&d)
+}
+
+// Runs m.down and forgets its version.
+pub !void Mongo.revert(Migration *m) {
+    try self.run(m, m.down)
+    coll := self.client.collectionIn(self.db(), self.table)
+    scoped d := bson.doc()
+    d.long("_id", m.version)
+    _ = try coll.deleteOne(&d)
+}
+
+test "checksum" {
+    expect(checksum("") == 0x4bf29ce484222325)
+    expect(checksum("CREATE TABLE a (x int)") != checksum("CREATE TABLE a (x bigint)"))
+    expect(checksum("abc") >= 0)
+}
+
+test "order" {
+    good := [Migration{version: 1, name: "a", up: "x"}, Migration{version: 3, name: "b", up: "y"}]
+    try check(good)
+    bad := [Migration{version: 2, name: "a", up: "x"}, Migration{version: 2, name: "b", up: "y"}]
+    check(bad) catch e {
+        expect(e.code == MigrateError.invalid)
+    }
+}

@@ -1,0 +1,64 @@
+// expect: up: 2, again: 0, version 2
+// expect: mig_users: Ada
+// expect: failed: true, version 2
+// expect: two at once: 1 ran, version 3
+// expect: down: 3, tables left: 0
+
+import migrate, os, pg
+
+void race(str address, migrate.Migration[] list, chan[i64] out) {
+    c := pg.connect(address) catch e {
+        out <- -1
+        return
+    }
+    defer c.close()
+    store := migrate.Pg{conn: &c}
+    out <- migrate.up(&store, list) catch -1
+}
+
+!void main() {
+    address := try os.env("IRIS_PG_URL")
+    db := try pg.connect(address)
+    defer db.close()
+    try db.execScript("DROP TABLE IF EXISTS schema_migrations, mig_users, mig_t")
+    store := migrate.Pg{conn: &db}
+
+    list := [
+        migrate.Migration{version: 1, name: "mig_users", up: "CREATE TABLE mig_users (id serial PRIMARY KEY, name text NOT NULL); INSERT INTO mig_users (name) VALUES ('Ada');", down: "DROP TABLE mig_users;"},
+        migrate.Migration{version: 2, name: "email", up: "ALTER TABLE mig_users ADD COLUMN email text;", down: "ALTER TABLE mig_users DROP COLUMN email;"},
+    ]
+    n := try migrate.up(&store, list)
+    again := try migrate.up(&store, list)
+    print("up: {n}, again: {again}, version {try migrate.version(&store)}")
+    rows := try db.query("SELECT name FROM mig_users")
+    _ = rows.next()
+    print("mig_users: {rows.text(0)}")
+    rows.close()
+
+    // PostgreSQL undoes the CREATE TABLE of a migration that fails
+    broken := [list[0], list[1], migrate.Migration{version: 3, name: "broken", up: "CREATE TABLE mig_t (x int); SELECT * FROM nowhere;", down: "DROP TABLE mig_t;"}]
+    _ = migrate.up(&store, broken) catch e {
+        0
+    }
+    rows2 := try db.query("SELECT count(*) FROM pg_tables WHERE tablename = 'mig_t'")
+    _ = rows2.next()
+    print("failed: {rows2.int(0) == 0}, version {try migrate.version(&store)}")
+    rows2.close()
+
+    three := [list[0], list[1], migrate.Migration{version: 3, name: "t", up: "CREATE TABLE mig_t (x int); SELECT pg_sleep(0.2);", down: "DROP TABLE mig_t;"}]
+    out := chan[i64](2)
+    a := thread race(address, three, out)
+    b := thread race(address, three, out)
+    a.join()
+    b.join()
+    x := <-out
+    y := <-out
+    print("two at once: {if x == -1 || y == -1 { -1 } else { x + y }} ran, version {try migrate.version(&store)}")
+
+    d := try migrate.down(&store, three, 10)
+    rows3 := try db.query("SELECT count(*) FROM pg_tables WHERE tablename IN ('mig_users', 'mig_t')")
+    _ = rows3.next()
+    print("down: {d}, tables left: {rows3.int(0)}")
+    rows3.close()
+    try db.execScript("DROP TABLE schema_migrations")
+}

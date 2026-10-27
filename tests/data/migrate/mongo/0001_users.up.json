@@ -1,0 +1,5 @@
+[
+    {"create": "mig_users"},
+    {"createIndexes": "mig_users", "indexes": [{"key": {"email": 1}, "name": "email", "unique": true}]},
+    {"insert": "mig_users", "documents": [{"name": "Ada", "email": "ada@example.com"}]}
+]

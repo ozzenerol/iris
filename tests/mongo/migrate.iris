@@ -1,0 +1,75 @@
+// expect: up: 1, again: 0, version 1
+// expect: users: 1, duplicate email: MongoError.duplicate
+// expect: not an array: MigrateError.invalid
+// expect: failed: version 1
+// expect: two at once: 1 ran, version 2
+// expect: stale lock taken over: 0
+// expect: down: 2, users left: 0
+
+import bson, migrate, mongo, os, time
+
+void race(str address, migrate.Migration[] list, chan[i64] out) {
+    c := mongo.connect(address, 1) catch e {
+        out <- -1
+        return
+    }
+    defer c.close()
+    store := migrate.Mongo{client: &c}
+    out <- migrate.up(&store, list) catch -1
+}
+
+!void main() {
+    address := try os.env("IRIS_MONGO_URL")
+    db := try mongo.connect(address, 2)
+    defer db.close()
+    for name in ["schema_migrations", "schema_migrations_lock", "mig_users", "mig_t"] {
+        coll := db.collection(name)
+        try coll.drop()
+    }
+    store := migrate.Mongo{client: &db}
+
+    files := try migrate.load("tests/data/migrate/mongo")
+    defer files.free()
+    n := try migrate.up(&store, files.items())
+    again := try migrate.up(&store, files.items())
+    print("up: {n}, again: {again}, version {try migrate.version(&store)}")
+
+    users := db.collection("mig_users")
+    scoped dup := try bson.fromJson(r"""{"name": "Bob", "email": "ada@example.com"}""")
+    users.insertDoc(&dup) catch e {
+        print("users: {try users.count()}, duplicate email: {e.code}")
+    }
+
+    list := files.items()
+    bad := [list[0], migrate.Migration{version: 2, name: "bad", up: r"""{"create": "mig_t"}"""}]
+    _ = migrate.up(&store, bad) catch e {
+        print("not an array: {e.code}")
+        0
+    }
+    failing := [list[0], migrate.Migration{version: 2, name: "fails", up: r"""[{"noSuchCommand": 1}]"""}]
+    _ = migrate.up(&store, failing) catch e {
+        0
+    }
+    print("failed: version {try migrate.version(&store)}")
+
+    two := [list[0], migrate.Migration{version: 2, name: "t", up: r"""[{"create": "mig_t"}]""", down: r"""[{"drop": "mig_t"}]"""}]
+    out := chan[i64](2)
+    a := thread race(address, two, out)
+    b := thread race(address, two, out)
+    a.join()
+    b.join()
+    x := <-out
+    y := <-out
+    print("two at once: {if x == -1 || y == -1 { -1 } else { x + y }} ran, version {try migrate.version(&store)}")
+
+    // a lock left by a program that died is taken over once it is stale
+    locks := db.collection("schema_migrations_lock")
+    scoped old := bson.doc()
+    old.text("_id", "lock")
+    old.date("at", bson.date(time.Time{ns: time.now().ns - 2h}))
+    try locks.insertDoc(&old)
+    print("stale lock taken over: {try migrate.up(&store, two)}")
+
+    d := try migrate.down(&store, two, 10)
+    print("down: {d}, users left: {try users.count()}")
+}
