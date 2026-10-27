@@ -278,7 +278,7 @@ void Settings.free() {
             return error(MysqlError.closed, "the server closed the connection: {e.message}")
         }
         n := get24(head, 0)
-        self.seq = head[3] + 1
+        self.seq = u8((i64(head[3]) + 1) & 0xff) // the sequence wraps at 256
         if n > 0 {
             scoped String body = self.conn.readExactly(n) catch e {
                 self.broken = true
@@ -302,7 +302,7 @@ void Settings.free() {
         put16(&out, n & 0xffff)
         put8(&out, n >> 16)
         put8(&out, i64(self.seq))
-        self.seq += 1
+        self.seq = u8((i64(self.seq) + 1) & 0xff)
         out.append(payload[at:at + n])
         at += n
         if n < MAX_PACKET {
