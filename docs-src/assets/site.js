@@ -1,13 +1,16 @@
-/* The sidebar, the search, the theme switch, Copy buttons, the library's panes and the arrow keys. */
+/* The search bar, the theme switch, Copy buttons, the sidebar drawer on
+   small screens, the heading being read, the library's panes and the arrow keys. */
 (function () {
+  var html = document.documentElement;
   document.querySelectorAll(".ver").forEach(function (v) {
     v.textContent = window.IRIS_VERSION || "";
   });
-  var html = document.documentElement;
-  var box = document.getElementById("search-wrapper");
+
+  /* ---- search: the bar over the text, its results under it ---- */
+  var bar = document.querySelector(".toolbar");
   var input = document.getElementById("site-search");
   var list = document.getElementById("site-results");
-  var root = box ? box.getAttribute("data-root") : "";
+  var root = bar ? bar.getAttribute("data-root") : "";
   var entries = window.IRIS_SEARCH || [];
   var sel = -1;
 
@@ -23,6 +26,7 @@
     if ((e.p || "").toLowerCase().indexOf(q) >= 0) return 6;
     return -1;
   }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 
   function show(q) {
     q = q.trim().toLowerCase();
@@ -34,21 +38,19 @@
       if (s >= 0) hits.push([s, entries[i]]);
     }
     hits.sort(function (a, b) { return a[0] - b[0] || a[1].t.length - b[1].t.length; });
-    hits = hits.slice(0, 30);
-    if (!hits.length) {
-      list.innerHTML = '<li class="empty">Nothing matches "' + q.replace(/[<&]/g, "") + '".</li>';
-    } else {
-      list.innerHTML = hits.map(function (h) {
-        var e = h[1];
-        return '<li><a href="' + root + e.u + '"><span class="r-t">' + esc(e.t) +
-          '</span><span class="r-p">' + esc(e.k === "section" || e.k === "chapter" ? e.p : e.k + " · " + e.p) + "</span></a></li>";
-      }).join("");
-    }
+    hits = hits.slice(0, 40);
     list.hidden = false;
+    if (!hits.length) {
+      list.innerHTML = '<li class="empty">Nothing matches "' + esc(q) + '".</li>';
+      return;
+    }
+    list.innerHTML = hits.map(function (h) {
+      var e = h[1];
+      var where = e.k === "section" || e.k === "chapter" ? e.p : e.k + " in " + e.p;
+      return '<li><a href="' + root + e.u + '"><span class="r-t">' + esc(e.t) +
+        '</span><span class="r-p">' + esc(where) + "</span></a></li>";
+    }).join("");
   }
-
-  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
-
   function move(d) {
     var links = list.querySelectorAll("a");
     if (!links.length) return;
@@ -56,79 +58,47 @@
     links.forEach(function (a, i) { a.classList.toggle("sel", i === sel); });
     links[sel].scrollIntoView({ block: "nearest" });
   }
-
-  var searchBtn = document.getElementById("search-toggle");
-  function openSearch(open) {
-    if (!box) return;
-    box.hidden = !open;
-    searchBtn.setAttribute("aria-expanded", String(open));
-    if (open) { input.focus(); input.select(); }
+  function closeSearch() {
+    if (!input) return;
+    input.value = "";
+    show("");
+    input.blur();
   }
-  if (searchBtn) searchBtn.addEventListener("click", function () { openSearch(box.hidden); });
-
   if (input) {
     input.addEventListener("input", function () { show(input.value); });
+    input.addEventListener("focus", function () { if (input.value) show(input.value); });
     input.addEventListener("keydown", function (e) {
       if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
       else if (e.key === "Enter") {
-        var links = list.querySelectorAll("a");
-        var a = links[sel >= 0 ? sel : 0];
-        if (a) { location.href = withTheme(a.href); list.hidden = true; }
-      } else if (e.key === "Escape") { input.value = ""; show(""); openSearch(false); searchBtn.focus(); }
+        var a = list.querySelectorAll("a")[sel >= 0 ? sel : 0];
+        if (a) { list.hidden = true; location.href = withTheme(a.href); }
+      }
     });
+    document.addEventListener("click", function (e) { if (!e.target.closest(".search-form")) list.hidden = true; });
   }
 
-  /* keys: / or s searches, the arrows go to the page before and after */
+  /* keys: / or Ctrl+K searches, Esc closes, the arrows go to the page before and after */
   document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { closeSearch(); setNav(false); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && input) { e.preventDefault(); input.focus(); return; }
     var t = e.target.tagName;
     if (t === "INPUT" || t === "TEXTAREA" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-    if ((e.key === "/" || e.key === "s") && input) { e.preventDefault(); openSearch(true); return; }
+    if ((e.key === "/" || e.key === "s") && input) { e.preventDefault(); input.focus(); return; }
     var rel = e.key === "ArrowLeft" ? "prev" : e.key === "ArrowRight" ? "next" : "";
     var a = rel && document.querySelector('.pager a[rel="' + rel + '"]');
     if (a) { e.preventDefault(); location.href = withTheme(a.href); }
   });
 
-  /* the sidebar: the button opens and closes it; on a wide screen that is
-     remembered, on a narrow one it opens over the text and a click on the
-     text or a link closes it */
-  var sidebar = document.getElementById("sidebar");
-  var sideBtn = document.getElementById("sidebar-toggle");
-  function narrow() { return window.innerWidth < 1080; }
-  function setSidebar(visible, remember) {
-    html.classList.toggle("sidebar-visible", visible);
-    html.classList.toggle("sidebar-hidden", !visible);
-    if (sideBtn) sideBtn.setAttribute("aria-expanded", String(visible));
-    if (remember) { try { localStorage.setItem("iris-sidebar", visible ? "visible" : "hidden"); } catch (e) {} }
-  }
-  if (sideBtn) {
-    sideBtn.setAttribute("aria-expanded", String(html.classList.contains("sidebar-visible")));
-    sideBtn.addEventListener("click", function () {
-      setSidebar(!html.classList.contains("sidebar-visible"), !narrow());
-    });
-    document.addEventListener("click", function (e) {
-      if (narrow() && html.classList.contains("sidebar-visible") && !sidebar.contains(e.target) && !sideBtn.contains(e.target)) {
-        setSidebar(false, false);
-      }
-    });
-  }
-  /* the page being read is in view in the sidebar */
-  var current = sidebar && sidebar.querySelector("a.active");
-  if (current) {
-    var scroller = sidebar.querySelector(".sidebar-scroll");
-    var top = current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-    if (top > scroller.clientHeight - 80) scroller.scrollTop = top - scroller.clientHeight / 3;
-  }
-
-  /* theme: the system's, until the button picks one (remembered) */
+  /* ---- theme: the system's, until the button picks one (remembered) ---- */
   var themeBtn = document.getElementById("theme");
   if (themeBtn) {
     themeBtn.addEventListener("click", function () {
-      var dark = document.documentElement.dataset.theme
-        ? document.documentElement.dataset.theme === "dark"
+      var dark = html.dataset.theme
+        ? html.dataset.theme === "dark"
         : window.matchMedia("(prefers-color-scheme: dark)").matches;
       var next = dark ? "light" : "dark";
-      document.documentElement.dataset.theme = next;
+      html.dataset.theme = next;
       try { localStorage.setItem("iris-theme", next); } catch (e) {}
       window.name = "iris-theme:" + next;
       history.replaceState(history.state, "", withTheme(location.href));
@@ -139,15 +109,15 @@
   window.addEventListener("pageshow", function () {
     var m = /^iris-theme:(dark|light)$/.exec(window.name), t = m && m[1];
     try { t = localStorage.getItem("iris-theme") || t; } catch (e) {}
-    if (t && document.documentElement.dataset.theme !== t) {
-      document.documentElement.dataset.theme = t;
+    if (t && html.dataset.theme !== t) {
+      html.dataset.theme = t;
       history.replaceState(history.state, "", withTheme(location.href));
     }
   });
   /* Opened as files, each page has storage of its own in some browsers, so
      a link to another page of the site carries the theme in its address. */
   function withTheme(url) {
-    var t = document.documentElement.dataset.theme;
+    var t = html.dataset.theme;
     var u = new URL(url, location.href);
     if (!t || u.protocol !== location.protocol || u.host !== location.host) return url;
     u.searchParams.set("theme", t);
@@ -161,6 +131,7 @@
   document.addEventListener("auxclick", carryTheme, true);
   document.addEventListener("contextmenu", carryTheme, true);
 
+  /* ---- Copy buttons ---- */
   /* A Copy button copies el's text, or selects it when the clipboard is out of reach */
   function copyOnClick(b, el) {
     b.addEventListener("click", function () {
@@ -184,8 +155,46 @@
     copyOnClick(b, pre.querySelector("code"));
   });
 
-  /* the library's two panes: the open/closed class lives on <html> (set early,
-     in <head>, to avoid a layout flash); this keeps aria-expanded and storage in sync */
+  /* ---- the chapter list: a drawer on small screens ---- */
+  var navBtn = document.getElementById("nav-toggle");
+  var scrim = document.getElementById("scrim");
+  function setNav(open) {
+    if (!navBtn) return;
+    html.classList.toggle("nav-open", open);
+    navBtn.setAttribute("aria-expanded", String(open));
+    if (scrim) scrim.hidden = !open;
+  }
+  if (navBtn) {
+    navBtn.addEventListener("click", function () { setNav(!html.classList.contains("nav-open")); });
+    if (scrim) scrim.addEventListener("click", function () { setNav(false); });
+  }
+  /* the page being read is in view in the chapter list */
+  var current = document.querySelector(".sidebar .block a.current");
+  if (current) {
+    var scroller = current.closest(".sidebar");
+    var top = current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (top > scroller.clientHeight - 80) scroller.scrollTop = top - scroller.clientHeight / 3;
+  }
+
+  /* ---- the heading being read, under its chapter in the sidebar ---- */
+  var tocLinks = document.querySelectorAll(".sidebar .headings a");
+  if (tocLinks.length && "IntersectionObserver" in window) {
+    var byId = {};
+    tocLinks.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+    var heads = Array.prototype.filter.call(document.querySelectorAll(".prose h2[id]"), function (h) { return byId[h.id]; });
+    var seen = {};
+    var obs = new IntersectionObserver(function (es) {
+      es.forEach(function (e) { seen[e.target.id] = e.isIntersecting; });
+      var first = null;
+      heads.forEach(function (h) { if (!first && seen[h.id]) first = h.id; });
+      if (first) tocLinks.forEach(function (a) { a.classList.toggle("on", a === byId[first]); });
+    }, { rootMargin: "0px 0px -55% 0px" });
+    heads.forEach(function (h) { obs.observe(h); });
+  }
+
+  /* ---- the library's two panes: the open/closed class lives on <html> (set
+     early, in <head>, to avoid a layout flash); this keeps aria-expanded and
+     storage in sync ---- */
   function sync(side) {
     var open = !html.classList.contains("closed-" + side);
     document.querySelectorAll('.side-btn[data-side="' + side + '"]').forEach(function (b) {
