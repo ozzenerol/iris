@@ -447,7 +447,7 @@ after 20:
 SqliteError.constraint: running the SQL: NOT NULL constraint failed: hosts.name
 SqliteError.failed: in the SQL: near &quot;SELEKT&quot;: syntax error
 SqliteError.failed: the SQL has 1 ? but 2 values were given</code></pre>
-<p>Threads can share a <code>Db</code>. Each call waits for the database on the thread that makes it. <code>IRIS_SQLITE</code> names another copy of SQLite to load instead of the system's.</p>
+<p>Threads can share a <code>Db</code>. Each call waits for the database on the thread that makes it. A <code>Db</code> keeps the statements it prepares and runs them again when the same SQL comes back, so a query run in a loop is prepared once. <code>IRIS_SQLITE</code> names another copy of SQLite to load instead of the system's.</p>
 <p>For a database server, <a href="18-postgres-and-redis.html">PostgreSQL and Redis</a> covers <code>pg</code> and <code>redis</code>.</p>
 </main>
 <nav class="pager" aria-label="Previous and next page"><a rel="prev" class="prev" href="../library-tour/32-acme.html" title="Certificates with ACME"><span>&#8249; Previous</span>Certificates with ACME</a><a rel="next" class="next" href="../library-tour/18-postgres-and-redis.html" title="PostgreSQL and Redis"><span>Next &#8250;</span>PostgreSQL and Redis</a></nav>

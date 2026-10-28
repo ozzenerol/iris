@@ -723,6 +723,9 @@ pub !T one[T, D: Querier](D *db, str sql, Value[] args = []) {
 @builtin
 void entityOf()
 
+@builtin
+void rowOf()
+
 @extern("iris_sql_entity")
 u8 *rawEntity(u8 *e, str *table, i64 *id)
 
@@ -735,30 +738,24 @@ i64 rawField(u8 *table, u8 *row, i64 i, str *name, i64 *iv, f64 *fv, str *text, 
 @extern("iris_pg_scan")
 i32 rawScanText(u8 *table, u8 *out, str *names, str *values, u8 *nulls, i64 n)
 
-// A struct's row: its table (none for a @json struct), the JSON table with
-// its column names, and the number of its @id field, or -1.
+// An @entity struct's row: its table, the JSON table with its column names,
+// and the number of its @id field.
 struct Entity {
     str table
     u8 *cols
     i64 id
 }
 
-Entity entityFor[T](T *row) {
+// From rowOf in the public call, so a struct without @entity is an error
+// where it is called.
+Entity entityFor(u8 *row) {
     Entity e
-    e.cols = rawEntity(entityOf(row), &e.table, &e.id)
+    e.cols = rawEntity(row, &e.table, &e.id)
     return e
 }
 
 // The table a call works on: the one given, else the struct's @entity.
-!str tableFor(Entity *e, str table) {
-    if table.len > 0 {
-        return table
-    }
-    if e.table.len == 0 {
-        return error(MysqlError.failed, "the struct has no @entity, so the call needs the table: table: \"users\"")
-    }
-    return e.table
-}
+str tableFor(Entity *e, str table) => if table.len > 0 { table } else { e.table }
 
 // A row's columns and values.
 struct Fields {
@@ -849,13 +846,6 @@ str columnOf[T](Entity *e, T *row, i64 i) {
     return name
 }
 
-// Needs an @entity struct with an @id.
-!void needId(Entity *e) {
-    if e.table.len == 0 || e.id < 0 {
-        return error(MysqlError.failed, "the struct needs @entity(\"table\") and an @id field")
-    }
-}
-
 // A column name in backquotes, so any name works.
 void putName(String *sql, str name) {
     sql.append("`")
@@ -908,15 +898,14 @@ void insertSql(String *sql, str table, str[] names, i64 n) {
     }
 }
 
-// Adds a struct as a row: the id an AUTO_INCREMENT column gave it, or 0.
-// Each field goes in its column: the field's name, or its @column name. An
-// @entity struct goes in its table, and an @id of 0 or "" is left out and
-// set from that id: mysql.insert(&db, &user). A @json struct names the table,
-// and can leave out fields with skip:
-// mysql.insert(&db, &u, table: "users", skip: ["id"]).
+// Adds an @entity struct as a row: the id an AUTO_INCREMENT column gave it,
+// or 0. Each field goes in its column: the field's name, or its @column
+// name. An @id of 0 or "" is left out and set from that id:
+// mysql.insert(&db, &user). table puts it in another table, and skip leaves
+// out columns the database fills: mysql.insert(&db, &u, skip: ["created_at"]).
 pub !i64 insert[T, D: Querier](D *db, T *row, str table = "", str[] skip = []) {
-    e := entityFor(row)
-    name := try tableFor(&e, table)
+    e := entityFor(rowOf(row))
+    name := tableFor(&e, table)
     auto := idZero(&e, row)
     scoped Fields f
     fieldsOf(&e, row, skip, auto, -1, &f)
@@ -942,8 +931,8 @@ pub !i64 insertMany[T, D: Querier](D *db, T[] rows, str table = "", str[] skip =
     if rows.len == 0 {
         return 0
     }
-    e := entityFor(&rows[0])
-    name := try tableFor(&e, table)
+    e := entityFor(rowOf(&rows[0]))
+    name := tableFor(&e, table)
     bool auto = e.id >= 0
     for i in 0..rows.len {
         auto = auto && idZero(&e, &rows[i])
@@ -972,8 +961,7 @@ pub !i64 insertMany[T, D: Querier](D *db, T[] rows, str table = "", str[] skip =
 // .int(7)). No row fails with MysqlError.noRows.
 pub !T find[T, D: Querier](D *db, Value id) {
     T v
-    e := entityFor(&v)
-    try needId(&e)
+    e := entityFor(rowOf(&v))
     scoped String sql = format("SELECT * FROM {e.table} WHERE ")
     putName(&sql, columnOf(&e, &v, e.id))
     sql.append(" = ?")
@@ -992,8 +980,7 @@ pub !T find[T, D: Querier](D *db, Value id) {
 // Writes every field of an @entity struct to its row, found by the @id:
 // how many rows changed, 0 when there is none.
 pub !i64 update[T, D: Querier](D *db, T *row) {
-    e := entityFor(row)
-    try needId(&e)
+    e := entityFor(rowOf(row))
     str[] none
     scoped Fields f
     fieldsOf(&e, row, none, true, -1, &f)
@@ -1017,8 +1004,7 @@ pub !i64 update[T, D: Querier](D *db, T *row) {
 // mysql.delete[User](&db, .int(7)). It gives how many rows went, 0 or 1.
 pub !i64 delete[T, D: Querier](D *db, Value id) {
     T v
-    e := entityFor(&v)
-    try needId(&e)
+    e := entityFor(rowOf(&v))
     scoped String sql = format("DELETE FROM {e.table} WHERE ")
     putName(&sql, columnOf(&e, &v, e.id))
     sql.append(" = ?")

@@ -36,6 +36,6 @@ scoped a := try mysql.find[Account](&db, .int(7))
 n := try mysql.insertMany(&db, more.items())
 ```
 
-A plain `@json` struct goes in with the table named: `mysql.insert(&db, &u, table: "users", skip: ["id"])`.
+`table` puts a row in another table, and `skip` leaves out columns the database fills: `mysql.insert(&db, &a, skip: ["created"])`. A plain `@json` struct is only read, with `all` and `one`.
 
 `begin` starts a transaction, which `commit` or `rollback` ends.

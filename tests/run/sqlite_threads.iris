@@ -1,0 +1,57 @@
+// expect: rows 4000, ages 4000, found 4000
+import sqlite
+
+@entity("people")
+struct Person {
+    @id i64 id
+    String name
+    i64 age
+}
+
+// Four threads share one Db: each adds rows, finds them, writes them back
+// and reads a page of them, so the Db's lock and its kept statements are
+// used from all four at once.
+!i64 round(sqlite.Db *db, i64 who, i64 i) {
+    scoped p := Person{name: format("p{who}-{i}")}
+    _ = try sqlite.insert(db, &p)
+    scoped q := try sqlite.find[Person](db, .int(p.id))
+    q.age = 1
+    _ = try sqlite.update(db, &q)
+    rows := try sqlite.all[Person](db, "SELECT * FROM people WHERE id <= ?", [.int(5)])
+    rows.freeEach()
+    return if q.name == p.name { 1 } else { 0 }
+}
+
+void work(sqlite.Db *db, i64 who, chan[i64] done) {
+    i64 found = 0
+    for i in 0..1000 {
+        found += round(db, who, i) catch e {
+            print("thread {who}: {e.message}")
+            0
+        }
+    }
+    done <- found
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    done := chan[i64](4)
+    Thread[] ts = alloc(Thread, 4)
+    for i in 0..4 {
+        ts[i] = thread work(&db, i, done)
+    }
+    i64 found = 0
+    for _ in 0..4 {
+        found += <-done
+    }
+    for i in 0..4 {
+        ts[i].join()
+    }
+    free(ts)
+    rows := try db.query("SELECT count(*), sum(age) FROM people")
+    _ = try rows.next()
+    print("rows {rows.int(0)}, ages {rows.int(1)}, found {found}")
+    rows.close()
+}

@@ -20,38 +20,44 @@ void rawClose(u8 *db)
 @extern("iris_sql_prepare")
 i32 rawPrepare(u8 *db, u8 *sql, i64 len, i64 *at, u8 **stmt)
 
+@extern("iris_sql_take")
+i32 rawTake(u8 *db, u8 *sql, i64 len, u8 **stmt, i64 *more)
+
+@extern("iris_sql_give")
+void rawGive(u8 *db, u8 *stmt)
+
 @extern("iris_sql_bind")
-i32 rawBind(u8 *stmt, i64 i, i32 kind, i64 iv, f64 fv, u8 *text, i64 len)
+i32 rawBind(u8 *db, u8 *stmt, i64 i, i32 kind, i64 iv, f64 fv, u8 *text, i64 len)
 
 @extern("iris_sql_params")
-i64 rawParams(u8 *stmt)
+i64 rawParams(u8 *db, u8 *stmt)
 
 @extern("iris_sql_step")
-i32 rawStep(u8 *stmt)
+i32 rawStep(u8 *db, u8 *stmt)
 
 @extern("iris_sql_finalize")
-void rawFinalize(u8 *stmt)
+void rawFinalize(u8 *db, u8 *stmt)
 
 @extern("iris_sql_columns")
-i64 rawColumns(u8 *stmt)
+i64 rawColumns(u8 *db, u8 *stmt)
 
 @extern("iris_sql_type")
-i64 rawType(u8 *stmt, i64 i)
+i64 rawType(u8 *db, u8 *stmt, i64 i)
 
 @extern("iris_sql_int")
-i64 rawInt(u8 *stmt, i64 i)
+i64 rawInt(u8 *db, u8 *stmt, i64 i)
 
 @extern("iris_sql_float")
-f64 rawFloat(u8 *stmt, i64 i)
+f64 rawFloat(u8 *db, u8 *stmt, i64 i)
 
 @extern("iris_sql_text")
-u8 *rawText(u8 *stmt, i64 i, i64 *len)
+u8 *rawText(u8 *db, u8 *stmt, i64 i, i64 *len)
 
 @extern("iris_sql_blob")
-u8 *rawBlob(u8 *stmt, i64 i, i64 *len)
+u8 *rawBlob(u8 *db, u8 *stmt, i64 i, i64 *len)
 
 @extern("iris_sql_name")
-u8 *rawName(u8 *stmt, i64 i, i64 *len)
+u8 *rawName(u8 *db, u8 *stmt, i64 i, i64 *len)
 
 @extern("iris_sql_last_id")
 i64 rawLastId(u8 *db)
@@ -60,7 +66,22 @@ i64 rawLastId(u8 *db)
 i64 rawChanges(u8 *db)
 
 @extern("iris_sql_scan")
-i32 rawScan(u8 *stmt, u8 *table, u8 *out)
+i32 rawScan(u8 *db, u8 *stmt, u8 *table, u8 *out, u8 **memo)
+
+@extern("iris_sql_map_free")
+void rawMapFree(u8 *memo)
+
+@extern("iris_sql_find")
+i32 rawFind(u8 *db, u8 *ent, i32 kind, i64 iv, f64 fv, u8 *text, i64 len, u8 *out)
+
+@extern("iris_sql_update")
+i64 rawUpdate(u8 *db, u8 *ent, u8 *row)
+
+@extern("iris_sql_delete")
+i64 rawDelete(u8 *db, u8 *ent, i32 kind, i64 iv, f64 fv, u8 *text, i64 len)
+
+@extern("iris_sql_insert")
+i32 rawInsert(u8 *db, u8 *stmt, u8 *table, u8 *row, i64 *which, i64 n, i64 back, i64 *id, u8 **memo)
 
 @extern("iris_sql_message_ptr")
 u8 *messagePtr()
@@ -95,36 +116,64 @@ pub !Db open(str path) {
     return Db{handle: h}
 }
 
-// Closes the database.
+// Closes the database, and the statements it kept. Its Rows are closed
+// before it.
 pub void Db.close() {
     rawClose(self.handle)
     self.handle = null
 }
 
-!u8 *Db.prepare(str sql, i64 *at, Value[] args) {
+// A Value as the runtime binds it: its kind (0 int, 1 float, 2 text, 3
+// NULL, 4 blob) and what it holds.
+i32 valueOf(Value v, i64 *iv, f64 *fv, u8 **ptr, i64 *len) => match v {
+    .int(n) => {
+        *iv = n
+        0
+    }
+    .float(f) => {
+        *fv = f
+        1
+    }
+    .text(t) => {
+        *ptr = t.ptr
+        *len = t.len
+        2
+    }
+    .blob(b) => {
+        *ptr = b.ptr
+        *len = b.len
+        4
+    }
+    .none => 3
+}
+
+// The first statement of sql with args bound, kept to be used again;
+// rawGive hands it back. *more is true when another statement follows.
+!u8 *Db.prepare(str sql, bool *more, Value[] args) {
     u8 *stmt
-    kind := rawPrepare(self.handle, sql.ptr, sql.len, at, &stmt)
+    i64 after
+    kind := rawTake(self.handle, sql.ptr, sql.len, &stmt, &after)
     if kind != 0 {
         return sqlError(kind)
     }
+    *more = after != 0
     if stmt == null {
         return stmt
     }
-    want := rawParams(stmt)
+    want := rawParams(self.handle, stmt)
     if want != args.len {
-        rawFinalize(stmt)
+        rawGive(self.handle, stmt)
         return error(SqliteError.failed, "the SQL has {want} ? but {args.len} value{if args.len == 1 { "" } else { "s" }} were given")
     }
     for i in 0..args.len {
-        k := match args[i] {
-            .int(v) => rawBind(stmt, i + 1, 0, v, 0.0, null, 0)
-            .float(v) => rawBind(stmt, i + 1, 1, 0, v, null, 0)
-            .text(v) => rawBind(stmt, i + 1, 2, 0, 0.0, v.ptr, v.len)
-            .blob(v) => rawBind(stmt, i + 1, 4, 0, 0.0, v.ptr, v.len)
-            .none => rawBind(stmt, i + 1, 3, 0, 0.0, null, 0)
-        }
+        i64 iv
+        f64 fv
+        u8 *ptr
+        i64 len
+        what := valueOf(args[i], &iv, &fv, &ptr, &len)
+        k := rawBind(self.handle, stmt, i + 1, what, iv, fv, ptr, len)
         if k != 0 {
-            rawFinalize(stmt)
+            rawGive(self.handle, stmt)
             return sqlError(k)
         }
     }
@@ -135,50 +184,64 @@ pub void Db.close() {
 // the next of args. Without args, sql can hold several statements; with
 // args, only one, and more after it is an error.
 pub !void Db.exec(str sql, Value[] args = []) {
-    i64 at
+    bool more
+    stmt := try self.prepare(sql, &more, args)
+    if stmt == null {
+        return
+    }
+    if more {
+        rawGive(self.handle, stmt)
+        if args.len > 0 {
+            return error(SqliteError.failed, "exec with values runs one statement, and the SQL has more after it")
+        }
+        try self.script(sql)
+        return
+    }
+    defer rawGive(self.handle, stmt)
+    try run(self.handle, stmt)
+}
+
+// Runs a statement to its end.
+!void run(u8 *db, u8 *stmt) {
     for {
-        stmt := try self.prepare(sql, &at, args)
-        if stmt == null {
-            return
+        r := rawStep(db, stmt)
+        if r < 0 {
+            return sqlError(-r)
         }
-        if args.len > 0 {
-            // nothing but spaces and comments may follow: SQLite prepares no statement from them
-            rest := at
-            u8 *next
-            kind := rawPrepare(self.handle, sql.ptr, sql.len, &rest, &next)
-            if kind != 0 || next != null {
-                rawFinalize(stmt)
-                if next != null {
-                    rawFinalize(next)
-                }
-                return error(SqliteError.failed, "exec with values runs one statement, and the SQL has more after it")
-            }
-        }
-        for {
-            r := rawStep(stmt)
-            if r < 0 {
-                rawFinalize(stmt)
-                return sqlError(-r)
-            }
-            if r == 0 {
-                break
-            }
-        }
-        rawFinalize(stmt)
-        if args.len > 0 {
+        if r == 0 {
             return
         }
     }
 }
 
+// Runs each statement of sql in turn.
+!void Db.script(str sql) {
+    i64 at
+    for {
+        u8 *stmt
+        kind := rawPrepare(self.handle, sql.ptr, sql.len, &at, &stmt)
+        if kind != 0 {
+            return sqlError(kind)
+        }
+        if stmt == null {
+            return
+        }
+        run(self.handle, stmt) catch e {
+            rawFinalize(self.handle, stmt)
+            return e
+        }
+        rawFinalize(self.handle, stmt)
+    }
+}
+
 // Runs a query; its rows come one at a time from Rows.next.
 pub !Rows Db.query(str sql, Value[] args = []) {
-    i64 at
-    stmt := try self.prepare(sql, &at, args)
+    bool more
+    stmt := try self.prepare(sql, &more, args)
     if stmt == null {
         return error(SqliteError.failed, "the query is empty")
     }
-    return Rows{stmt: stmt}
+    return Rows{db: self.handle, stmt: stmt}
 }
 
 // The rowid of the last row INSERT added.
@@ -198,8 +261,10 @@ pub !void Db.rollback() => try self.exec("ROLLBACK")
 
 // The rows of a query. close gives it back.
 pub struct Rows {
+    u8 *db
     u8 *stmt
     bool done
+    u8 *memo // which field each column fills, for scan
 }
 
 // Moves to the next row: false when there are no more.
@@ -207,7 +272,7 @@ pub !bool Rows.next() {
     if self.done {
         return false
     }
-    r := rawStep(self.stmt)
+    r := rawStep(self.db, self.stmt)
     if r < 0 {
         return sqlError(-r)
     }
@@ -219,25 +284,25 @@ pub !bool Rows.next() {
 }
 
 // The number of columns.
-pub i64 Rows.columns() => rawColumns(self.stmt)
+pub i64 Rows.columns() => rawColumns(self.db, self.stmt)
 
 // A column's name.
 pub str Rows.name(i64 col) {
     i64 n
-    p := rawName(self.stmt, col, &n)
+    p := rawName(self.db, self.stmt, col, &n)
     return p[0:n]
 }
 
 // A column as an integer.
-pub i64 Rows.int(i64 col) => rawInt(self.stmt, col)
+pub i64 Rows.int(i64 col) => rawInt(self.db, self.stmt, col)
 
 // A column as a float.
-pub f64 Rows.float(i64 col) => rawFloat(self.stmt, col)
+pub f64 Rows.float(i64 col) => rawFloat(self.db, self.stmt, col)
 
 // A column as text, valid until the next call to next.
 pub str Rows.text(i64 col) {
     i64 n
-    p := rawText(self.stmt, col, &n)
+    p := rawText(self.db, self.stmt, col, &n)
     return p[0:n]
 }
 
@@ -245,17 +310,19 @@ pub str Rows.text(i64 col) {
 // next. A String field of a @json struct gets them too.
 pub u8[] Rows.bytes(i64 col) {
     i64 n
-    p := rawBlob(self.stmt, col, &n)
+    p := rawBlob(self.db, self.stmt, col, &n)
     return p[0:n]
 }
 
 // Whether a column is NULL.
-pub bool Rows.isNull(i64 col) => rawType(self.stmt, col) == 5
+pub bool Rows.isNull(i64 col) => rawType(self.db, self.stmt, col) == 5
 
 // Ends the query; the row's text is gone after it.
 pub void Rows.close() {
-    rawFinalize(self.stmt)
+    rawGive(self.db, self.stmt)
     self.stmt = null
+    rawMapFree(self.memo)
+    self.memo = null
 }
 
 // close, for scoped.
@@ -266,7 +333,7 @@ pub void Rows.free() => self.close()
 pub !void scan[T](Rows *rows, T *out) {
     str table
     i64 id
-    if rawScan(rows.stmt, rawEntity(entityOf(out), &table, &id), out) != 0 {
+    if rawScan(rows.db, rows.stmt, rawEntity(entityOf(out), &table, &id), out, &rows.memo) != 0 {
         return error(SqliteError.failed, "{message()}")
     }
 }
@@ -316,6 +383,9 @@ pub !T one[T](Db *db, str sql, Value[] args = []) {
 @builtin
 void entityOf()
 
+@builtin
+void rowOf()
+
 @extern("iris_sql_entity")
 u8 *rawEntity(u8 *e, str *table, i64 *id)
 
@@ -334,43 +404,24 @@ u8 *textMessagePtr()
 @extern("iris_pg_message_len")
 i64 textMessageLen()
 
-// A struct's row: its table (none for a @json struct), the JSON table with
-// its column names, and the number of its @id field, or -1.
+// An @entity struct's row: its table, the JSON table with its column names,
+// and the number of its @id field.
 struct Entity {
     str table
     u8 *cols
     i64 id
 }
 
-Entity entityFor[T](T *row) {
+// From rowOf in the public call, so a struct without @entity is an error
+// where it is called.
+Entity entityFor(u8 *row) {
     Entity e
-    e.cols = rawEntity(entityOf(row), &e.table, &e.id)
+    e.cols = rawEntity(row, &e.table, &e.id)
     return e
 }
 
 // The table a call works on: the one given, else the struct's @entity.
-!str tableFor(Entity *e, str table) {
-    if table.len > 0 {
-        return table
-    }
-    if e.table.len == 0 {
-        return error(SqliteError.failed, "the struct has no @entity, so the call needs the table: table: \"users\"")
-    }
-    return e.table
-}
-
-// A row's columns and values.
-struct Fields {
-    List[str] names
-    List[Value] values
-    List[String] made // the JSON and big numbers that values point into
-}
-
-void Fields.free() {
-    self.names.free()
-    self.values.free()
-    self.made.freeEach()
-}
+str tableFor(Entity *e, str table) => if table.len > 0 { table } else { e.table }
 
 bool skipped(str[] skip, str name) {
     for s in skip {
@@ -381,32 +432,29 @@ bool skipped(str[] skip, str name) {
     return false
 }
 
-// The fields of row as columns and values: all but those named in skip and
-// the @id when skipId, or only field number only when it is 0 or more.
-void fieldsOf[T](Entity *e, T *row, str[] skip, bool skipId, i64 only, Fields *f) {
+// The numbers and columns of row's fields that go in a statement: all but
+// those named in skip and the @id when skipId.
+void columnsOf[T](Entity *e, T *row, str[] skip, bool skipId, List[i64] *which, List[str] *names) {
     for i in 0..rawFields(e.cols) {
-        if only >= 0 && i != only {
-            continue
-        }
-        str name
-        i64 iv
-        f64 fv
-        str text
-        String tmp
-        kind := rawField(e.cols, row, i, &name, &iv, &fv, &text, &tmp)
-        f.made.push(tmp)
+        name := columnOf(e, row, i)
         if (skipId && i == e.id) || skipped(skip, name) {
             continue
         }
-        f.names.push(name)
-        Value v = match kind {
-            0 => .int(iv),
-            1 => .float(fv),
-            3 => .int(iv),
-            _ => .text(text),
-        }
-        f.values.push(v)
+        which.push(i)
+        names.push(name)
     }
+}
+
+// A kept statement for sql, which has one statement and the values the
+// caller binds.
+!u8 *Db.statement(str sql) {
+    u8 *stmt
+    i64 more
+    kind := rawTake(self.handle, sql.ptr, sql.len, &stmt, &more)
+    if kind != 0 {
+        return sqlError(kind)
+    }
+    return stmt
 }
 
 // Whether row's @id is 0 or empty, so the database fills it.
@@ -448,22 +496,18 @@ str columnOf[T](Entity *e, T *row, i64 i) {
     return name
 }
 
-// Needs an @entity struct with an @id.
-!void needId(Entity *e) {
-    if e.table.len == 0 || e.id < 0 {
-        return error(SqliteError.failed, "the struct needs @entity(\"table\") and an @id field")
-    }
-}
-
 // A column name in double quotes, so any name works.
 void putName(String *sql, str name) {
     sql.append("\"")
+    i64 from = 0
     for i in 0..name.len {
-        sql.append(name[i:i + 1])
         if name[i] == '"' {
+            sql.append(name[from:i + 1])
             sql.append("\"")
+            from = i + 1
         }
     }
+    sql.append(name[from:name.len])
     sql.append("\"")
 }
 
@@ -507,25 +551,42 @@ void insertSql(String *sql, str table, str[] names, i64 n) {
     }
 }
 
-// Adds a struct as a row: the id an AUTO_INCREMENT column gave it, or 0.
-// Each field goes in its column: the field's name, or its @column name. An
-// @entity struct goes in its table, and an @id of 0 or "" is left out and
-// set from that id: sqlite.insert(&db, &user). A @json struct names the table,
-// and can leave out fields with skip:
-// sqlite.insert(&db, &u, table: "users", skip: ["id"]).
-pub !i64 insert[T](Db *db, T *row, str table = "", str[] skip = []) {
-    e := entityFor(row)
-    name := try tableFor(&e, table)
+// Adds an @entity struct as a row: the id an AUTO_INCREMENT column gave it,
+// or 0. Each field goes in its column: the field's name, or its @column
+// name. An @id of 0 or "" is left out and set from that id:
+// sqlite.insert(&db, &user). table puts it in another table, skip leaves
+// out columns the database fills, and returning reads columns back:
+// sqlite.insert(&db, &u, skip: ["created_at"], returning: ["created_at"]).
+pub !i64 insert[T](Db *db, T *row, str table = "", str[] skip = [], str[] returning = []) {
+    e := entityFor(rowOf(row))
+    name := tableFor(&e, table)
     auto := idZero(&e, row)
-    scoped Fields f
-    fieldsOf(&e, row, skip, auto, -1, &f)
-    if f.names.len == 0 {
+    scoped List[i64] which
+    scoped List[str] names
+    columnsOf(&e, row, skip, auto, &which, &names)
+    if which.len == 0 {
         return error(SqliteError.failed, "the row has no fields to insert")
     }
     scoped String sql
-    insertSql(&sql, name, f.names.items(), 1)
-    try db.exec(sql, f.values.items())
-    id := db.lastId()
+    insertSql(&sql, name, names.items(), 1)
+    if returning.len > 0 {
+        sql.append(" RETURNING ")
+        for i, col in returning {
+            if i > 0 {
+                sql.append(", ")
+            }
+            putName(&sql, col)
+        }
+    }
+    stmt := try db.statement(sql)
+    defer rawGive(db.handle, stmt)
+    i64 id
+    u8 *memo
+    defer rawMapFree(memo)
+    k := rawInsert(db.handle, stmt, e.cols, row, which.items().ptr, which.len, returning.len, &id, &memo)
+    if k != 0 {
+        return sqlError(k)
+    }
     if auto && id > 0 && intId(&e, row) {
         scoped String text = format("{id}")
         try setColumn(&e, row, columnOf(&e, row, e.id), text)
@@ -541,49 +602,50 @@ pub !i64 insertMany[T](Db *db, T[] rows, str table = "", str[] skip = []) {
     if rows.len == 0 {
         return 0
     }
-    e := entityFor(&rows[0])
-    name := try tableFor(&e, table)
+    e := entityFor(rowOf(&rows[0]))
+    name := tableFor(&e, table)
     bool auto = e.id >= 0
     for i in 0..rows.len {
         auto = auto && idZero(&e, &rows[i])
     }
-    i64 done = 0
-    for done < rows.len {
-        scoped Fields f
-        fieldsOf(&e, &rows[done], skip, auto, -1, &f)
-        cols := f.names.len
-        if cols == 0 {
-            return error(SqliteError.failed, "the rows have no fields to insert")
-        }
-        n := if rows.len - done < 32766 / cols { rows.len - done } else { 32766 / cols }
-        for r in 1..n {
-            fieldsOf(&e, &rows[done + r], skip, auto, -1, &f)
-        }
-        scoped String sql
-        insertSql(&sql, name, f.names.items()[0:cols], n)
-        try db.exec(sql, f.values.items())
-        done += n
+    scoped List[i64] which
+    scoped List[str] names
+    columnsOf(&e, &rows[0], skip, auto, &which, &names)
+    if which.len == 0 {
+        return error(SqliteError.failed, "the rows have no fields to insert")
     }
-    return done
+    scoped String sql
+    insertSql(&sql, name, names.items(), 1)
+    stmt := try db.statement(sql)
+    defer rawGive(db.handle, stmt)
+    for i in 0..rows.len {
+        i64 id
+        k := rawInsert(db.handle, stmt, e.cols, &rows[i], which.items().ptr, which.len, 0, &id, null)
+        if k != 0 {
+            return sqlError(k)
+        }
+    }
+    return rows.len
 }
 
 // The row of an @entity struct whose @id is id: sqlite.find[User](&db,
 // .int(7)). No row fails with SqliteError.noRows.
 pub !T find[T](Db *db, Value id) {
     T v
-    e := entityFor(&v)
-    try needId(&e)
-    scoped String sql = format("SELECT * FROM {e.table} WHERE ")
-    putName(&sql, columnOf(&e, &v, e.id))
-    sql.append(" = ?")
-    rows := try db.query(sql, [id])
-    defer rows.close()
-    if !(try rows.next()) {
-        return error(SqliteError.noRows, "{e.table} has no row with that id")
-    }
-    scan(&rows, &v) catch err {
+    ent := rowOf(&v)
+    i64 iv
+    f64 fv
+    u8 *ptr
+    i64 len
+    kind := valueOf(id, &iv, &fv, &ptr, &len)
+    r := rawFind(db.handle, ent, kind, iv, fv, ptr, len, &v)
+    if r < 0 {
         v.free()
-        return err
+        return sqlError(-r)
+    }
+    if r == 0 {
+        e := entityFor(ent)
+        return error(SqliteError.noRows, "{e.table} has no row with that id")
     }
     return v
 }
@@ -591,36 +653,25 @@ pub !T find[T](Db *db, Value id) {
 // Writes every field of an @entity struct to its row, found by the @id:
 // how many rows changed, 0 when there is none.
 pub !i64 update[T](Db *db, T *row) {
-    e := entityFor(row)
-    try needId(&e)
-    str[] none
-    scoped Fields f
-    fieldsOf(&e, row, none, true, -1, &f)
-    fieldsOf(&e, row, none, false, e.id, &f)
-    scoped String sql = format("UPDATE {e.table} SET ")
-    for i in 0..f.names.len - 1 {
-        if i > 0 {
-            sql.append(", ")
-        }
-        putName(&sql, f.names.at(i))
-        sql.append(" = ?")
+    n := rawUpdate(db.handle, rowOf(row), row)
+    if n < 0 {
+        return sqlError(i32(-n))
     }
-    sql.append(" WHERE ")
-    putName(&sql, f.names.last())
-    sql.append(" = ?")
-    try db.exec(sql, f.values.items())
-    return db.changes()
+    return n
 }
 
 // Removes the row of an @entity struct whose @id is id:
 // sqlite.delete[User](&db, .int(7)). It gives how many rows went, 0 or 1.
 pub !i64 delete[T](Db *db, Value id) {
     T v
-    e := entityFor(&v)
-    try needId(&e)
-    scoped String sql = format("DELETE FROM {e.table} WHERE ")
-    putName(&sql, columnOf(&e, &v, e.id))
-    sql.append(" = ?")
-    try db.exec(sql, [id])
-    return db.changes()
+    i64 iv
+    f64 fv
+    u8 *ptr
+    i64 len
+    kind := valueOf(id, &iv, &fv, &ptr, &len)
+    n := rawDelete(db.handle, rowOf(&v), kind, iv, fv, ptr, len)
+    if n < 0 {
+        return sqlError(i32(-n))
+    }
+    return n
 }

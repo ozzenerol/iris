@@ -1,0 +1,47 @@
+import sqlite
+
+const i64 N = 100000
+const i64 K = 20000
+
+@entity("people")
+struct Person {
+    @id i64 id
+    String name
+    String email
+    i64 age
+    f64 score
+}
+
+// 100000 rows added as structs in one transaction, all of them read back,
+// then 20000 found by their key and 20000 written back, in memory.
+!void main() {
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, age INTEGER, score REAL)")
+
+    List[Person] rows
+    for i in 0..N {
+        rows.push(Person{name: format("user {i}"), email: format("user{i}@example.com"), age: i % 90, score: f64(i % 1000) / 4.0})
+    }
+    try db.begin()
+    added := try sqlite.insertMany(&db, rows.items())
+    try db.commit()
+    rows.freeEach()
+
+    i64 total = 0
+    all := try sqlite.all[Person](&db, "SELECT * FROM people")
+    for p in all {
+        total += p.id + p.name.len + p.email.len + p.age + i64(p.score)
+    }
+    all.freeEach()
+
+    try db.begin()
+    for k in 0..K {
+        scoped p := try sqlite.find[Person](&db, .int(k * 5 + 1))
+        total += p.age
+        p.age += 1
+        total += try sqlite.update(&db, &p)
+    }
+    try db.commit()
+    print("{added} {total}")
+}

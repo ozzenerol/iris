@@ -15,7 +15,8 @@ CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "
 LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt", "quic",
-       "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "sys", "mysql-query", "bson", "mongo-query"]
+       "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "sys", "mysql-query", "bson", "mongo-query",
+       "sqlite-rows"]
 # benchmarks that talk to a database server: the tools/ script that starts
 # one, the variable it sets, and the one the programs read
 DB = {"mysql-query": ("mysql-server.sh", "IRIS_MYSQL_URL", "IRIS_BENCH_MYSQL"),
@@ -41,13 +42,18 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw).stdout
 
 
+# Go build flags of a benchmark: sqlite-rows uses the system's SQLite, as
+# Iris and rusqlite do, not the copy go-sqlite3 builds in.
+GO_TAGS = {"sqlite-rows": ["-tags", "libsqlite3"]}
+
+
 def build(names, iris):
     os.makedirs(OUT, exist_ok=True)
     names = sorted({SAME_AS.get(n, n) for n in names})
     for n in names:
         sh([iris, "build", "--mode=release-fast", "-o", f"{OUT}/iris-{n}", f"{HERE}/{n}/main.iris"])
         sh([iris, "build", "--mode=release-safe", "-o", f"{OUT}/iris_safe-{n}", f"{HERE}/{n}/main.iris"])
-        sh(["go", "build", "-o", f"{OUT}/go-{n}", f"./{n}"], cwd=HERE)
+        sh(["go", "build", *GO_TAGS.get(n, []), "-o", f"{OUT}/go-{n}", f"./{n}"], cwd=HERE)
     sh(["cargo", "build", "--release", "-q"], cwd=f"{HERE}/rust")
     for n in names:
         shutil.copy(f"{HERE}/rust/target/release/{n}", f"{OUT}/rust-{n}")

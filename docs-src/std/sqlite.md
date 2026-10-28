@@ -126,3 +126,5 @@ _ = try sqlite.insert(&db, &account)
 scoped a := try sqlite.find[Account](&db, .int(1))
 _ = try sqlite.delete[Account](&db, .int(1))
 ```
+
+`find` reads only the struct's columns, so the table can have more. `table` puts a row in another table, `skip` leaves out columns the database fills, and `returning` reads columns back: `sqlite.insert(&db, &a, skip: ["created"], returning: ["created"])`. A plain `@json` struct is only read, with `all` and `one`.

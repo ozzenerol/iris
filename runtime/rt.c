@@ -17039,6 +17039,8 @@ static struct {
     int (*columnBytes)(void *, int);
     const char *(*columnName)(void *, int);
     int (*finalize)(void *);
+    int (*reset)(void *);
+    int (*clearBindings)(void *);
     const char *(*errmsg)(void *);
     int (*errcode)(void *);
     int64_t (*lastRowid)(void *);
@@ -17100,6 +17102,8 @@ static void sqLoad(void) {
     SQ(columnBytes, "sqlite3_column_bytes");
     SQ(columnName, "sqlite3_column_name");
     SQ(finalize, "sqlite3_finalize");
+    SQ(reset, "sqlite3_reset");
+    SQ(clearBindings, "sqlite3_clear_bindings");
     SQ(errmsg, "sqlite3_errmsg");
     SQ(errcode, "sqlite3_extended_errcode");
     SQ(lastRowid, "sqlite3_last_insert_rowid");
@@ -17119,7 +17123,39 @@ static int sqlKind(int code) {
     }
 }
 
-int iris_sql_open(const char *path, int64_t n, void **db) {
+/* Prepared statements kept for running the same SQL again, as
+   prepare_cached does in other languages: preparing is most of the time of
+   a small statement. A statement in use is busy, and the same SQL meanwhile
+   gets a statement of its own. */
+typedef struct {
+    void *stmt;
+    char *sql;
+    int64_t len;
+    uint64_t hash;
+    bool busy, more;
+    const void *key;            /* an @entity struct's find, update or delete: its table and op */
+    int op;
+} SqCached;
+
+enum { SQ_CACHE = 32 };
+
+/* A Db: the connection, opened without SQLite's own mutex, and a lock that
+   each call below holds while it uses it, so threads can share a Db and a
+   row is read or bound under one lock rather than one for each column. */
+typedef struct {
+    void *h;
+    pthread_mutex_t lock;
+    SqCached cache[SQ_CACHE];
+    int next;
+} SqDb;
+
+#define SQ_LOCK(d) pthread_mutex_lock(&(d)->lock)
+#define SQ_UNLOCK(d) pthread_mutex_unlock(&(d)->lock)
+
+static int sqTake(SqDb *d, const char *sql, int64_t n, void **stmt, int64_t *more);
+static void sqGive(SqDb *d, void *stmt);
+
+int iris_sql_open(const char *path, int64_t n, SqDb **db) {
     pthread_once(&sqOnce, sqLoad);
     if (sq.loaded != 1) {
         sqlSay("SQLite isn't installed (libsqlite3); install it, or set IRIS_SQLITE to its library", NULL);
@@ -17127,8 +17163,8 @@ int iris_sql_open(const char *path, int64_t n, void **db) {
     }
     char *p = cpath(path, n);
     void *h = NULL;
-    /* read, write and create; serialized, so threads can share a Db */
-    int rc = sq.openV2(p, &h, 0x2 | 0x4 | 0x10000 | 0x40, NULL);
+    /* read, write and create; no mutex, as the Db's lock does that */
+    int rc = sq.openV2(p, &h, 0x2 | 0x4 | 0x8000 | 0x40, NULL);
     if (rc != 0) {
         char what[300];
         snprintf(what, sizeof what, "opening %s", p);
@@ -17139,30 +17175,126 @@ int iris_sql_open(const char *path, int64_t n, void **db) {
     }
     free(p);
     sq.busyTimeout(h, 5000);        /* wait up to 5 s for a lock held elsewhere */
-    *db = h;
+    SqDb *d = calloc(1, sizeof *d);
+    d->h = h;
+    pthread_mutex_init(&d->lock, NULL);
+    *db = d;
     return 0;
 }
 
-void iris_sql_close(void *db) {
-    if (db && sq.loaded == 1) sq.closeV2(db);
+void iris_sql_close(SqDb *d) {
+    if (!d || sq.loaded != 1) return;
+    for (int i = 0; i < SQ_CACHE; i++) {
+        if (d->cache[i].stmt) sq.finalize(d->cache[i].stmt);
+        free(d->cache[i].sql);
+    }
+    sq.closeV2(d->h);
+    pthread_mutex_destroy(&d->lock);
+    free(d);
 }
 
-/* One statement of sql, from *at; *at moves past it. NULL stmt with 0 when
-   nothing is left. */
-int iris_sql_prepare(void *db, const char *sql, int64_t n, int64_t *at, void **stmt) {
+static uint64_t sqHash(const char *p, int64_t n) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int64_t i = 0; i < n; i++) h = (h ^ (uint8_t)p[i]) * 1099511628211ULL;
+    return h;
+}
+
+static int sqPrepare(SqDb *d, const char *sql, int64_t n, int64_t *at, void **stmt) {
     const char *start = sql + *at, *tail = NULL;
     *stmt = NULL;
-    int rc = sq.prepareV2(db, start, (int)(n - *at), stmt, &tail);
+    int rc = sq.prepareV2(d->h, start, (int)(n - *at), stmt, &tail);
     if (rc != 0) {
-        sqlSay("in the SQL", sq.errmsg(db));
+        sqlSay("in the SQL", sq.errmsg(d->h));
         return sqlKind(rc);
     }
     *at = tail ? tail - sql : n;
     return 0;
 }
 
-int iris_sql_bind(void *stmt, int64_t i, int kind, int64_t iv, double fv, const char *text, int64_t len) {
+/* One statement of sql, from *at; *at moves past it. NULL stmt with 0 when
+   nothing is left. */
+int iris_sql_prepare(SqDb *d, const char *sql, int64_t n, int64_t *at, void **stmt) {
+    SQ_LOCK(d);
+    int rc = sqPrepare(d, sql, n, at, stmt);
+    SQ_UNLOCK(d);
+    return rc;
+}
+
+/* The first statement of sql, kept to be used again; *more is 1 when
+   another statement follows it. iris_sql_give hands it back. */
+int iris_sql_take(SqDb *d, const char *sql, int64_t n, void **stmt, int64_t *more) {
+    SQ_LOCK(d);
+    int rc = sqTake(d, sql, n, stmt, more);
+    SQ_UNLOCK(d);
+    return rc;
+}
+
+static int sqTake(SqDb *d, const char *sql, int64_t n, void **stmt, int64_t *more) {
+    uint64_t h = sqHash(sql, n);
+    for (int i = 0; i < SQ_CACHE; i++) {
+        SqCached *c = &d->cache[i];
+        if (c->stmt && !c->busy && c->hash == h && c->len == n && !memcmp(c->sql, sql, (size_t)n)) {
+            c->busy = true;
+            *stmt = c->stmt;
+            *more = c->more;
+            return 0;
+        }
+    }
+    int64_t at = 0;
+    int rc = sqPrepare(d, sql, n, &at, stmt);
+    if (rc != 0 || !*stmt) return rc;
+    /* nothing but spaces and comments may follow: SQLite prepares no statement from them */
+    void *next = NULL;
+    *more = 0;
+    if (at < n) {
+        const char *tail = NULL;
+        if (sq.prepareV2(d->h, sql + at, (int)(n - at), &next, &tail) != 0 || next) *more = 1;
+        if (next) sq.finalize(next);
+    }
+    SqCached *c = NULL;
+    for (int i = 0; i < SQ_CACHE && !c; i++) {
+        SqCached *k = &d->cache[(d->next + i) % SQ_CACHE];
+        if (!k->busy) c = k;
+    }
+    if (c) {
+        d->next = (int)(c - d->cache + 1) % SQ_CACHE;
+        if (c->stmt) sq.finalize(c->stmt);
+        free(c->sql);
+        c->stmt = *stmt;
+        c->sql = malloc((size_t)n + 1);
+        memcpy(c->sql, sql, (size_t)n);
+        c->len = n;
+        c->hash = h;
+        c->busy = true;
+        c->more = *more;
+        c->key = NULL;
+    }
+    return 0;
+}
+
+/* Hands back a statement from iris_sql_take: kept, ready to run again, or
+   finalized when it wasn't kept. */
+void iris_sql_give(SqDb *d, void *stmt) {
+    if (!stmt) return;
+    SQ_LOCK(d);
+    sqGive(d, stmt);
+    SQ_UNLOCK(d);
+}
+
+static void sqGive(SqDb *d, void *stmt) {
+    for (int i = 0; i < SQ_CACHE; i++) {
+        if (d->cache[i].stmt == stmt) {
+            sq.reset(stmt);
+            d->cache[i].busy = false;
+            return;
+        }
+    }
+    sq.finalize(stmt);
+}
+
+int iris_sql_bind(SqDb *d, void *stmt, int64_t i, int kind, int64_t iv, double fv, const char *text, int64_t len) {
     int rc;
+    SQ_LOCK(d);
     switch (kind) {
     case 0: rc = sq.bindInt64(stmt, (int)i, iv); break;
     case 1: rc = sq.bindDouble(stmt, (int)i, fv); break;
@@ -17170,65 +17302,143 @@ int iris_sql_bind(void *stmt, int64_t i, int kind, int64_t iv, double fv, const 
     case 4: rc = sq.bindBlob(stmt, (int)i, text ? text : "", (int)len, (void (*)(void *))-1); break;
     default: rc = sq.bindNull(stmt, (int)i); break;
     }
-    if (rc != 0) {
-        sqlSay("binding a value", sq.errmsg(sq.dbHandle(stmt)));
-        return sqlKind(rc);
-    }
-    return 0;
+    if (rc != 0) sqlSay("binding a value", sq.errmsg(d->h));
+    SQ_UNLOCK(d);
+    return rc != 0 ? sqlKind(rc) : 0;
 }
 
-int64_t iris_sql_params(void *stmt) { return sq.bindCount(stmt); }
+int64_t iris_sql_params(SqDb *d, void *stmt) {
+    SQ_LOCK(d);
+    int64_t n = sq.bindCount(stmt);
+    SQ_UNLOCK(d);
+    return n;
+}
 
 /* 1 a row, 0 done, or minus the error kind. */
-int iris_sql_step(void *stmt) {
-    int rc = sq.step(stmt);
-    if (rc == 100) return 1;
-    if (rc == 101) return 0;
-    void *db = sq.dbHandle(stmt);
-    sqlSay("running the SQL", sq.errmsg(db));
-    return -sqlKind(sq.errcode(db));
+int iris_sql_step(SqDb *d, void *stmt) {
+    SQ_LOCK(d);
+    int rc = sq.step(stmt), r = rc == 100 ? 1 : 0;
+    if (rc != 100 && rc != 101) {
+        sqlSay("running the SQL", sq.errmsg(d->h));
+        r = -sqlKind(sq.errcode(d->h));
+    }
+    SQ_UNLOCK(d);
+    return r;
 }
 
-void iris_sql_finalize(void *stmt) {
-    if (stmt) sq.finalize(stmt);
+void iris_sql_finalize(SqDb *d, void *stmt) {
+    if (!stmt) return;
+    SQ_LOCK(d);
+    sq.finalize(stmt);
+    SQ_UNLOCK(d);
 }
 
-int64_t iris_sql_columns(void *stmt) { return sq.columnCount(stmt); }
-int64_t iris_sql_type(void *stmt, int64_t i) { return sq.columnType(stmt, (int)i); }
-int64_t iris_sql_int(void *stmt, int64_t i) { return sq.columnInt64(stmt, (int)i); }
-double iris_sql_float(void *stmt, int64_t i) { return sq.columnDouble(stmt, (int)i); }
-const char *iris_sql_text(void *stmt, int64_t i, int64_t *len) {
+int64_t iris_sql_columns(SqDb *d, void *stmt) {
+    SQ_LOCK(d);
+    int64_t n = sq.columnCount(stmt);
+    SQ_UNLOCK(d);
+    return n;
+}
+int64_t iris_sql_type(SqDb *d, void *stmt, int64_t i) {
+    SQ_LOCK(d);
+    int64_t t = sq.columnType(stmt, (int)i);
+    SQ_UNLOCK(d);
+    return t;
+}
+int64_t iris_sql_int(SqDb *d, void *stmt, int64_t i) {
+    SQ_LOCK(d);
+    int64_t v = sq.columnInt64(stmt, (int)i);
+    SQ_UNLOCK(d);
+    return v;
+}
+double iris_sql_float(SqDb *d, void *stmt, int64_t i) {
+    SQ_LOCK(d);
+    double v = sq.columnDouble(stmt, (int)i);
+    SQ_UNLOCK(d);
+    return v;
+}
+const char *iris_sql_text(SqDb *d, void *stmt, int64_t i, int64_t *len) {
+    SQ_LOCK(d);
     const char *t = (const char *)sq.columnText(stmt, (int)i);
     *len = t ? sq.columnBytes(stmt, (int)i) : 0;
+    SQ_UNLOCK(d);
     return t ? t : "";
 }
 /* A column's bytes as they are, for a BLOB. */
-const char *iris_sql_blob(void *stmt, int64_t i, int64_t *len) {
+const char *iris_sql_blob(SqDb *d, void *stmt, int64_t i, int64_t *len) {
+    SQ_LOCK(d);
     const char *t = (const char *)sq.columnBlob(stmt, (int)i);
     *len = t ? sq.columnBytes(stmt, (int)i) : 0;
+    SQ_UNLOCK(d);
     return t ? t : "";
 }
-const char *iris_sql_name(void *stmt, int64_t i, int64_t *len) {
+const char *iris_sql_name(SqDb *d, void *stmt, int64_t i, int64_t *len) {
+    SQ_LOCK(d);
     const char *t = sq.columnName(stmt, (int)i);
+    SQ_UNLOCK(d);
     *len = t ? (int64_t)strlen(t) : 0;
     return t ? t : "";
 }
-int64_t iris_sql_last_id(void *db) { return sq.lastRowid(db); }
-int64_t iris_sql_changes(void *db) { return sq.changes(db); }
+int64_t iris_sql_last_id(SqDb *d) {
+    SQ_LOCK(d);
+    int64_t v = sq.lastRowid(d->h);
+    SQ_UNLOCK(d);
+    return v;
+}
+int64_t iris_sql_changes(SqDb *d) {
+    SQ_LOCK(d);
+    int64_t v = sq.changes(d->h);
+    SQ_UNLOCK(d);
+    return v;
+}
+
+/* Which field each column of a query fills, or -1, worked out on its
+   first row and kept in its Rows. */
+typedef struct {
+    const JsonType *t;
+    int cols;
+    int32_t field[];
+} SqMap;
+
+void iris_sql_map_free(void *m) { free(m); }
 
 /* Fills the fields of a @json struct from the row's columns of the same
    names. NULL leaves a field as it is; other columns are skipped. */
-int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
+static int sqScan(void *stmt, const JsonType *t, char *out, void **memo);
+
+int iris_sql_scan(SqDb *d, void *stmt, const JsonType *t, char *out, void **memo) {
+    SQ_LOCK(d);
+    int r = sqScan(stmt, t, out, memo);
+    SQ_UNLOCK(d);
+    return r;
+}
+
+static int sqScan(void *stmt, const JsonType *t, char *out, void **memo) {
     const JsonField *fs = t->items;
     int cols = sq.columnCount(stmt);
-    for (int c = 0; c < cols; c++) {
-        const char *name = sq.columnName(stmt, c);
-        size_t nl = name ? strlen(name) : 0;
-        const JsonField *f = NULL;
-        for (int64_t i = 0; i < t->count && !f; i++) {
-            if ((size_t)fs[i].nameLen == nl && !memcmp(fs[i].name, name, nl)) f = &fs[i];
+    SqMap *m = memo ? *memo : NULL;
+    if (memo && (!m || m->t != t || m->cols != cols)) {
+        free(m);
+        m = malloc(sizeof *m + sizeof(int32_t) * (size_t)cols);
+        m->t = t;
+        m->cols = cols;
+        for (int c = 0; c < cols; c++) {
+            const char *name = sq.columnName(stmt, c);
+            size_t nl = name ? strlen(name) : 0;
+            m->field[c] = -1;
+            for (int64_t i = 0; i < t->count; i++) {
+                if ((size_t)fs[i].nameLen == nl && !memcmp(fs[i].name, name, nl)) {
+                    m->field[c] = (int32_t)i;
+                    break;
+                }
+            }
         }
-        if (!f || sq.columnType(stmt, c) == 5) continue;
+        *memo = m;
+    }
+    for (int c = 0; c < cols; c++) {
+        int fi = m ? m->field[c] : c;      /* without a memo, column c fills field c */
+        if (fi < 0 || fi >= t->count || sq.columnType(stmt, c) == 5) continue;
+        const JsonField *f = &fs[fi];
         char *p = out + f->offset;
         const JsonType *ft = f->type;
         switch (ft->kind) {
@@ -17239,7 +17449,7 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
                                           : v >= 0 && (bits == 64 || (uint64_t)v < (1ULL << bits));
             if (!fits) {
                 char what[200];
-                snprintf(what, sizeof what, "the column %s has %lld, which doesn't fit in %c%d", name, (long long)v,
+                snprintf(what, sizeof what, "the column %s has %lld, which doesn't fit in %c%d", sq.columnName(stmt, c), (long long)v,
                          ft->kind == J_INT ? 'i' : 'u', bits);
                 sqlSay(what, NULL);
                 return 1;
@@ -17267,7 +17477,7 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
             while (k < ft->count && !(names[k].len == len && !memcmp(names[k].name, text, (size_t)len))) k++;
             if (k == ft->count) {
                 char what[200];
-                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't one of the enum's values", name,
+                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't one of the enum's values", sq.columnName(stmt, c),
                          (int)(len > 60 ? 60 : len), text ? text : "");
                 sqlSay(what, NULL);
                 return 1;
@@ -17283,7 +17493,7 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
             memset(p, 0, (size_t)ft->size);
             if (iris_json_decode(ft, text ? text : "", len, p) != 0) {
                 char what[200];
-                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't JSON for the field", name,
+                snprintf(what, sizeof what, "the column %s has '%.*s', which isn't JSON for the field", sq.columnName(stmt, c),
                          (int)(len > 60 ? 60 : len), text ? text : "");
                 sqlSay(what, NULL);
                 return 1;
@@ -17292,7 +17502,7 @@ int iris_sql_scan(void *stmt, const JsonType *t, char *out) {
         }
         default: {
             char what[200];
-            snprintf(what, sizeof what, "the field %s can't be filled from a column", name);
+            snprintf(what, sizeof what, "the field %s can't be filled from a column", sq.columnName(stmt, c));
             sqlSay(what, NULL);
             return 1;
         }
@@ -17575,6 +17785,224 @@ int64_t iris_sql_field(const JsonType *t, const char *in, int64_t i, Slice *name
     text->ptr = tmp->ptr;
     text->len = tmp->len;
     return 2;
+}
+
+/* sqlite insert and update: binds fields which[0..n) of row to the
+   statement's values from first on. Text in the row is bound where it is,
+   so the row must stay as it is until the statement has run, unless copy. */
+static int sqBindFields(SqDb *d, void *stmt, const JsonType *t, const char *row, const int64_t *which, int64_t n,
+                        int64_t first, bool copy) {
+    for (int64_t k = 0; k < n; k++) {
+        Slice name, text;
+        int64_t iv = 0;
+        double fv = 0;
+        IrisString tmp = {0};
+        int64_t kind = iris_sql_field(t, row, which[k], &name, &iv, &fv, &text, &tmp);
+        int i = (int)(first + k), rc;
+        switch (kind) {
+        case 0: case 3: rc = sq.bindInt64(stmt, i, iv); break;
+        case 1: rc = sq.bindDouble(stmt, i, fv); break;
+        default:
+            /* static when the text is the row's, a copy when it was made */
+            rc = sq.bindText(stmt, i, text.ptr ? text.ptr : "", (int)text.len,
+                             tmp.ptr || copy ? (void (*)(void *))-1 : (void (*)(void *))0);
+            break;
+        }
+        iris_string_free(&tmp);
+        if (rc != 0) {
+            sqlSay("binding a value", sq.errmsg(d->h));
+            return sqlKind(rc);
+        }
+    }
+    return 0;
+}
+
+/* sqlite find, update and delete of an @entity struct, each under one
+   lock, with SQL made once for each struct and kept with its statement.
+   op 0 finds, 1 updates and 2 deletes. */
+static void sqPutName(IrisString *b, const char *name, int64_t n) {
+    iris_string_append(b, "\"", 1);
+    for (int64_t i = 0; i < n; i++) {
+        iris_string_append(b, name + i, 1);
+        if (name[i] == '"') iris_string_append(b, "\"", 1);
+    }
+    iris_string_append(b, "\"", 1);
+}
+
+static int sqEntityStmt(SqDb *d, const EntityTable *e, int op, void **stmt) {
+    for (int i = 0; i < SQ_CACHE; i++) {
+        SqCached *c = &d->cache[i];
+        if (c->stmt && !c->busy && c->key == e && c->op == op) {
+            c->busy = true;
+            *stmt = c->stmt;
+            return 0;
+        }
+    }
+    const JsonType *t = e->type;
+    const JsonField *fs = t->items;
+    const JsonField *id = &fs[e->id];
+    IrisString b = {0};
+    if (op == 0) {
+        iris_string_append(&b, "SELECT ", 7);
+        for (int64_t i = 0; i < t->count; i++) {
+            if (i > 0) iris_string_append(&b, ", ", 2);
+            sqPutName(&b, fs[i].name, fs[i].nameLen);
+        }
+        iris_string_append(&b, " FROM ", 6);
+    } else {
+        iris_string_append(&b, op == 1 ? "UPDATE " : "DELETE FROM ", op == 1 ? 7 : 12);
+    }
+    iris_string_append(&b, e->table, e->tableLen);
+    if (op == 1) {
+        iris_string_append(&b, " SET ", 5);
+        bool first = true;
+        for (int64_t i = 0; i < t->count; i++) {
+            if (i == e->id) continue;
+            if (!first) iris_string_append(&b, ", ", 2);
+            first = false;
+            sqPutName(&b, fs[i].name, fs[i].nameLen);
+            iris_string_append(&b, " = ?", 4);
+        }
+    }
+    iris_string_append(&b, " WHERE ", 7);
+    sqPutName(&b, id->name, id->nameLen);
+    iris_string_append(&b, " = ?", 4);
+    int64_t more;
+    int rc = sqTake(d, b.ptr, b.len, stmt, &more);
+    iris_string_free(&b);
+    if (rc != 0) return rc;
+    for (int i = 0; i < SQ_CACHE; i++) {
+        SqCached *c = &d->cache[i];
+        if (c->stmt == *stmt) {
+            /* found by the struct from now on */
+            c->key = e;
+            c->op = op;
+        }
+    }
+    return 0;
+}
+
+static int sqBindValue(SqDb *d, void *stmt, int i, int kind, int64_t iv, double fv, const char *text, int64_t len) {
+    int rc;
+    switch (kind) {
+    case 0: rc = sq.bindInt64(stmt, i, iv); break;
+    case 1: rc = sq.bindDouble(stmt, i, fv); break;
+    case 2: rc = sq.bindText(stmt, i, text ? text : "", (int)len, (void (*)(void *))0); break;
+    case 4: rc = sq.bindBlob(stmt, i, text ? text : "", (int)len, (void (*)(void *))0); break;
+    default: rc = sq.bindNull(stmt, i); break;
+    }
+    if (rc != 0) {
+        sqlSay("binding a value", sq.errmsg(d->h));
+        return sqlKind(rc);
+    }
+    return 0;
+}
+
+/* Runs a statement to its end: 0, or the error kind. */
+static int sqRun(SqDb *d, void *stmt) {
+    for (;;) {
+        int rc = sq.step(stmt);
+        if (rc == 100) continue;
+        if (rc == 101) return 0;
+        sqlSay("running the SQL", sq.errmsg(d->h));
+        return sqlKind(sq.errcode(d->h));
+    }
+}
+
+/* The row whose @id is the value into out: 1, 0 when there is none, or
+   minus the error kind. */
+int iris_sql_find(SqDb *d, const EntityTable *e, int kind, int64_t iv, double fv, const char *text, int64_t len,
+                  char *out) {
+    void *stmt;
+    SQ_LOCK(d);
+    int rc = sqEntityStmt(d, e, 0, &stmt), r;
+    if (rc != 0) {
+        SQ_UNLOCK(d);
+        return -rc;
+    }
+    rc = sqBindValue(d, stmt, 1, kind, iv, fv, text, len);
+    if (rc != 0) {
+        r = -rc;
+    } else {
+        rc = sq.step(stmt);
+        if (rc == 100) {
+            r = sqScan(stmt, e->type, out, NULL) ? -1 : 1;
+        } else if (rc == 101) {
+            r = 0;
+        } else {
+            sqlSay("running the SQL", sq.errmsg(d->h));
+            r = -sqlKind(sq.errcode(d->h));
+        }
+    }
+    sqGive(d, stmt);
+    SQ_UNLOCK(d);
+    return r;
+}
+
+/* Writes row to its row, found by its @id: how many rows changed, or
+   minus the error kind. */
+int64_t iris_sql_update(SqDb *d, const EntityTable *e, const char *row) {
+    const JsonType *t = e->type;
+    int64_t which[t->count];
+    int64_t n = 0;
+    for (int64_t i = 0; i < t->count; i++) {
+        if (i != e->id) which[n++] = i;
+    }
+    which[n++] = e->id;
+    void *stmt;
+    SQ_LOCK(d);
+    int rc = sqEntityStmt(d, e, 1, &stmt);
+    if (rc == 0) {
+        rc = sqBindFields(d, stmt, t, row, which, n, 1, false);
+        if (rc == 0) rc = sqRun(d, stmt);
+        sqGive(d, stmt);
+    }
+    int64_t r = rc != 0 ? -rc : sq.changes(d->h);
+    SQ_UNLOCK(d);
+    return r;
+}
+
+/* sqlite insert: runs an INSERT kept with iris_sql_take with fields
+   which[0..n) of row as its values, under one lock so *id is the rowid it
+   made. A RETURNING row is read back into row. 0, or the error kind. */
+int iris_sql_insert(SqDb *d, void *stmt, const JsonType *t, char *row, const int64_t *which, int64_t n,
+                    int64_t back, int64_t *id, void **memo) {
+    SQ_LOCK(d);
+    /* a row read back replaces the text bound from it, so that is copied */
+    int rc = sqBindFields(d, stmt, t, row, which, n, 1, back != 0);
+    while (rc == 0) {
+        int r = sq.step(stmt);
+        if (r == 101) break;
+        if (r == 100) {
+            if (back && sqScan(stmt, t, row, memo) == 0) continue;
+            if (!back) continue;
+            rc = 1;
+            break;
+        }
+        sqlSay("running the SQL", sq.errmsg(d->h));
+        rc = sqlKind(sq.errcode(d->h));
+    }
+    *id = sq.lastRowid(d->h);
+    sq.reset(stmt);
+    SQ_UNLOCK(d);
+    return rc;
+}
+
+/* Removes the row whose @id is the value: how many rows went, or minus the
+   error kind. */
+int64_t iris_sql_delete(SqDb *d, const EntityTable *e, int kind, int64_t iv, double fv, const char *text,
+                        int64_t len) {
+    void *stmt;
+    SQ_LOCK(d);
+    int rc = sqEntityStmt(d, e, 2, &stmt);
+    if (rc == 0) {
+        rc = sqBindValue(d, stmt, 1, kind, iv, fv, text, len);
+        if (rc == 0) rc = sqRun(d, stmt);
+        sqGive(d, stmt);
+    }
+    int64_t r = rc != 0 ? -rc : sq.changes(d->h);
+    SQ_UNLOCK(d);
+    return r;
 }
 
 int iris_env_load(const EnvTable *t, char *out) {

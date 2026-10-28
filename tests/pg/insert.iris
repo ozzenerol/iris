@@ -10,9 +10,9 @@ import os, pg
 
 enum Role { guest, admin }
 
-@json
+@entity("ins_users")
 struct User {
-    i64 id
+    @id i64 id
     String name
     i32 age
     f64 score
@@ -20,11 +20,12 @@ struct User {
     Role role
     List[String] tags
     u64 big
-    @json("order") i64 position
+    @column("order") i64 position
 }
 
-@json
+@entity("ins_points")
 struct Point {
+    @id i64 id
     i64 x
     i64 y
     i64 z
@@ -36,9 +37,9 @@ struct Count {
     i64 ids
 }
 
-@json
+@entity("ins_users")
 struct Empty {
-    i64 id
+    @id i64 id
 }
 
 !void main() {
@@ -54,9 +55,9 @@ struct Empty {
     scoped ada := User{name: "Ada".copy(), age: 36, score: 1.5, admin: true, role: .admin, big: 18446744073709551615, position: 3}
     ada.tags.push("a".copy())
     ada.tags.push("b".copy())
-    try pg.insert(&db, &ada, table: "ins_users", skip: ["id"], returning: ["id"])
+    try pg.insert(&db, &ada, returning: ["big"])
     scoped bob := User{name: "Bob".copy()}
-    try pg.insert(&db, &bob, table: "ins_users", skip: ["id"], returning: ["id"])
+    try pg.insert(&db, &bob, skip: ["age"])
     print("ids: {ada.id} {bob.id}")
 
     users := try pg.all[User](&db, r"""SELECT id, name, coalesce(age, 0) AS age, score, admin, role, tags, big, "order" FROM ins_users ORDER BY id""")
@@ -78,24 +79,24 @@ struct Empty {
     for i in 0..30000 {
         points.push(Point{x: i, y: i * 2, z: i * 3})
     }
-    n := try pg.insertMany(&db, points.items(), table: "ins_points", skip: ["id"])
+    n := try pg.insertMany(&db, points.items())
     c := try pg.one[Count](&db, "SELECT count(*) AS n, count(DISTINCT id) AS ids FROM ins_points WHERE y = x * 2 AND z = x * 3")
     print("many: {n} rows in {c.ids} ids")
 
     scoped again := User{name: "Ada".copy()}
-    pg.insert(&db, &again, table: "ins_users", skip: ["id"]) catch e {
+    pg.insert(&db, &again) catch e {
         print("duplicate: {e.code}")
     }
 
     scoped tx := try db.begin()
     scoped cy := User{name: "Cy".copy()}
-    try pg.insert(&tx, &cy, table: "ins_users", skip: ["id"])
+    try pg.insert(&tx, &cy)
     try tx.rollback()
     left := try pg.one[Count](&db, "SELECT count(*) AS n FROM ins_users WHERE name = 'Cy'")
     print("in a rolled back Tx: {left.n}")
 
     e := Empty{}
-    pg.insert(&db, &e, table: "ins_users", skip: ["id"]) catch err {
+    pg.insert(&db, &e) catch err {
         print("no fields: {err.code}")
     }
     try db.execScript("DROP TABLE ins_users, ins_points")

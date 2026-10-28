@@ -132,10 +132,12 @@ struct Person {
 
 ## Structs without @entity
 
-A plain `@json` struct works with `insert` and `insertMany` when the call names the table. `skip` leaves fields out. On PostgreSQL, `returning` reads columns back into the struct. `find`, `update` and `delete` need `@entity`, since they need the key.
+A plain `@json` struct is only read from rows, with `all` and `one`. Writing one, with `insert`, `insertMany`, `find`, `update` or `delete`, is an error when the program is built: only `@entity` says which table and key a struct is.
+
+`insert` takes three more arguments. `table` puts the row in another table, `skip` leaves out columns the database fills, and on PostgreSQL and SQLite `returning` reads columns back into the struct:
 
 ```iris
-pg.insert(&db, &row, table: "teas", skip: ["id"], returning: ["id"])
+pg.insert(&db, &tea, skip: ["created"], returning: ["created"])
 ```
 
 ## Each database

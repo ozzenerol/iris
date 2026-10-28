@@ -203,7 +203,7 @@ green tea: loose, 9 left
 ```
 
 - A list, a map or a `@json` struct in a field goes in as JSON, for a `json` or `jsonb` column, and is read back from it.
-- A plain `@json` struct works with `insert` too, given the table: `pg.insert(&db, &row, table: "teas", skip: ["id"], returning: ["id"])`. `skip` leaves fields out, and `returning` reads columns back.
+- `skip` leaves out columns the database fills, and `returning` reads columns back: `pg.insert(&db, &tea, skip: ["created"], returning: ["created"])`.
 - A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
 
 ## Transactions

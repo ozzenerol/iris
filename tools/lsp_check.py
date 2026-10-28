@@ -203,7 +203,9 @@ def main():
 
     check("definition of Genre in another file: %r" % (where(8, 32),), where(8, 32) == (["cli", "model.iris"], 0))
     check("definition of a return type: %r" % (where(6, 2),), where(6, 2) == (["cli", "service.iris"], 2))
-    check("definition of sqlite.Db: %r" % (where(3, 12),), where(3, 12) == (["sqlite", "sqlite.iris"], 82))
+    with open(os.path.join(os.path.dirname(__file__), "..", "std", "sqlite", "sqlite.iris")) as f:
+        db_line = next(i for i, line in enumerate(f) if line.startswith("pub struct Db "))
+    check("definition of sqlite.Db: %r" % (where(3, 12),), where(3, 12) == (["sqlite", "sqlite.iris"], db_line))
     check("definition of a module name: %r" % (where(3, 6),), where(3, 6) == (["sqlite", "sqlite.iris"], 0))
     check("definition of a method's receiver: %r" % (where(8, 7),), where(8, 7) == (["cli", "service.iris"], 2))
     check("definition of a field in a literal: %r" % (where(6, 38),), where(6, 38) == (["cli", "service.iris"], 3))

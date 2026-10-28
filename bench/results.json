@@ -839,13 +839,27 @@
    "go": 24.159,
    "go_out": "1500000",
    "go_mem": 9.7
+  },
+  "sqlite-rows": {
+   "iris": 0.103,
+   "iris_out": "100000 5020897300",
+   "iris_mem": 19.6,
+   "iris_safe": 0.101,
+   "iris_safe_out": "100000 5020897300",
+   "iris_safe_mem": 19.7,
+   "rust": 0.11,
+   "rust_out": "100000 5020897300",
+   "rust_mem": 24.0,
+   "go": 0.421,
+   "go_out": "100000 5020897300",
+   "go_mem": 42.6
   }
  },
  "setup": {
   "machine": "iris-testbench, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
-  "iris": "iris 0.83.0",
+  "iris": "iris 0.86.0",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-10-27 13:54"
+  "date": "2026-10-28 10:46"
  }
 }

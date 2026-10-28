@@ -1,0 +1,30 @@
+// error: 21: insert[Plain], made here, has the errors above
+// error: 22: insertMany[Plain], made here, has the errors above
+// error: 23: find[Plain], made here, has the errors above
+// error: 24: update[Plain], made here, has the errors above
+// error: 25: delete[Plain], made here, has the errors above
+// error: 27: insert[Plain, Pool], made here, has the errors above
+// error: 29: insert[Plain, Pool], made here, has the errors above
+import mysql, pg, sqlite
+
+// A @json struct is read from rows, but only an @entity struct is written.
+@json
+struct Plain {
+    i64 id
+    String name
+}
+
+!void main() {
+    db := try sqlite.open(":memory:")
+    p := Plain{}
+    Plain[] ps = [p]
+    _ = try sqlite.insert(&db, &p, table: "plain")
+    _ = try sqlite.insertMany(&db, ps, table: "plain")
+    _ = try sqlite.find[Plain](&db, .int(1))
+    _ = try sqlite.update(&db, &p)
+    _ = try sqlite.delete[Plain](&db, .int(1))
+    pd := try pg.pool("postgres://x@localhost/x")
+    try pg.insert(&pd, &p, table: "plain")
+    md := try mysql.pool("mysql://x@localhost/x")
+    _ = try mysql.insert(&md, &p, table: "plain")
+}

@@ -5511,10 +5511,13 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
         e->c->type = t;
         return setType(e, rt);
     }
-    if (strcmp(d->name, "entityOf") == 0) {
-        /* a @json or @entity struct's table, column and key, for the database modules */
+    if (strcmp(d->name, "entityOf") == 0 || strcmp(d->name, "rowOf") == 0) {
+        /* a struct's table, columns and key, for the database modules:
+         * entityOf reads rows into a @json or @entity struct, rowOf writes
+         * them from an @entity struct */
+        bool write = strcmp(d->name, "rowOf") == 0;
         if (e->list.len != 1) {
-            error(c, e, "entityOf takes a pointer to a @json or @entity struct");
+            error(c, e, "%s takes a pointer to a struct", d->name);
             return setType(e, &tyError);
         }
         Type *t = checkExpr(c, &e->list.items[0], NULL);
@@ -5525,8 +5528,12 @@ static Type *checkIntrinsic(Checker *c, Node *e, Node *d) {
             return setType(e, &tyError);
         }
         resolveStruct(c, st);
+        if (write && !st->entity) {
+            error(c, e->list.items[0], "%s needs @entity(\"table\") to be written as a row", st->name);
+            return setType(e, &tyError);
+        }
         if (!isJsonStruct(st)) {
-            error(c, e->list.items[0], "%s needs @entity or @json to be a row", st->name);
+            error(c, e->list.items[0], "%s needs @entity or @json to be read from a row", st->name);
             return setType(e, &tyError);
         }
         if (!jsonDecodable(c, st, e->list.items[0])) return setType(e, &tyError);

@@ -152,8 +152,9 @@ SqliteError.noRows</code></pre>
 }</code></pre>
 <pre class="out"><code>{&quot;id&quot;:1,&quot;full_name&quot;:&quot;Ada&quot;,&quot;created&quot;:&quot;2026-10-27&quot;,&quot;tags&quot;:[&quot;admin&quot;]}</code></pre>
 <h2 id="structs-without-entity"><a href="#structs-without-entity">Structs without @entity</a></h2>
-<p>A plain <code>@json</code> struct works with <code>insert</code> and <code>insertMany</code> when the call names the table. <code>skip</code> leaves fields out. On PostgreSQL, <code>returning</code> reads columns back into the struct. <code>find</code>, <code>update</code> and <code>delete</code> need <code>@entity</code>, since they need the key.</p>
-<pre class="code"><code>pg.<span class="f">insert</span>(&amp;db, &amp;row, table: <span class="s">&quot;teas&quot;</span>, skip: [<span class="s">&quot;id&quot;</span>], returning: [<span class="s">&quot;id&quot;</span>])</code></pre>
+<p>A plain <code>@json</code> struct is only read from rows, with <code>all</code> and <code>one</code>. Writing one, with <code>insert</code>, <code>insertMany</code>, <code>find</code>, <code>update</code> or <code>delete</code>, is an error when the program is built: only <code>@entity</code> says which table and key a struct is.</p>
+<p><code>insert</code> takes three more arguments. <code>table</code> puts the row in another table, <code>skip</code> leaves out columns the database fills, and on PostgreSQL and SQLite <code>returning</code> reads columns back into the struct:</p>
+<pre class="code"><code>pg.<span class="f">insert</span>(&amp;db, &amp;tea, skip: [<span class="s">&quot;created&quot;</span>], returning: [<span class="s">&quot;created&quot;</span>])</code></pre>
 <h2 id="each-database"><a href="#each-database">Each database</a></h2>
 <ul><li>PostgreSQL reads a made key back with <code>RETURNING</code>, so it works with <code>serial</code>, <code>identity</code> and defaults such as <code>gen_random_uuid()</code>.</li><li>MySQL and SQLite put the <code>AUTO_INCREMENT</code> id, or the rowid, into an <code>@id</code> that is a whole number. <code>insert</code> gives that id too.</li><li>A statement takes at most 65535 values on PostgreSQL and MySQL, and 32766 on SQLite, so <code>insertMany</code> sends a long list in several. In a transaction they all take effect together.</li></ul>
 </main>

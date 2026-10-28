@@ -5,9 +5,9 @@
 // expect: missing: SqliteError.noRows
 // expect: many: 3, ids 3 4 5
 // expect: own id: 100 Dee
+// expect: returning: 1 2026-10-28
 // expect: deleted 1, left 5
 // expect: plain @json: 7 Eve
-// expect: no table: SqliteError.failed
 
 import json, sqlite
 
@@ -79,6 +79,11 @@ struct Plain {
     scoped d := try sqlite.find[Person](&db, .int(100))
     print("own id: {d.id} {d.name}")
 
+    try db.exec("CREATE TABLE stamped (id INTEGER PRIMARY KEY, name TEXT, age INTEGER, created_at TEXT DEFAULT '2026-10-28', tags TEXT)")
+    scoped fay := Person{name: "Fay".copy()}
+    _ = try sqlite.insert(&db, &fay, table: "stamped", skip: ["created_at"], returning: ["created_at"])
+    print("returning: {fay.id} {fay.created}")
+
     gone := try sqlite.delete[Person](&db, .int(2))
     left := try db.query("SELECT count(*) FROM people")
     _ = try left.next()
@@ -86,12 +91,7 @@ struct Plain {
     left.close()
 
     try db.exec("CREATE TABLE plain (id INTEGER PRIMARY KEY, name TEXT)")
-    scoped eve := Plain{id: 7, name: "Eve".copy()}
-    _ = try sqlite.insert(&db, &eve, table: "plain")
+    try db.exec("INSERT INTO plain VALUES (7, 'Eve')")
     scoped e2 := try sqlite.one[Plain](&db, "SELECT * FROM plain")
     print("plain @json: {e2.id} {e2.name}")
-    _ = sqlite.insert(&db, &eve) catch e {
-        print("no table: {e.code}")
-        0
-    }
 }

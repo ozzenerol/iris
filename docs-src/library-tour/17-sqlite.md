@@ -534,6 +534,6 @@ SqliteError.failed: in the SQL: near "SELEKT": syntax error
 SqliteError.failed: the SQL has 1 ? but 2 values were given
 ```
 
-Threads can share a `Db`. Each call waits for the database on the thread that makes it. `IRIS_SQLITE` names another copy of SQLite to load instead of the system's.
+Threads can share a `Db`. Each call waits for the database on the thread that makes it. A `Db` keeps the statements it prepares and runs them again when the same SQL comes back, so a query run in a loop is prepared once. `IRIS_SQLITE` names another copy of SQLite to load instead of the system's.
 
 For a database server, [PostgreSQL and Redis](18-postgres-and-redis.html) covers `pg` and `redis`.

@@ -50,6 +50,7 @@ bson = "2"
 mongodb = "3"
 futures = "0.3"
 procfs = { version = "0.18", default-features = false }
+rusqlite = "0.37"
 
 [profile.release]
 opt-level = 3
@@ -292,3 +293,7 @@ path = "../bson/main.rs"
 [[bin]]
 name = "mongo-query"
 path = "../mongo-query/main.rs"
+
+[[bin]]
+name = "sqlite-rows"
+path = "../sqlite-rows/main.rs"

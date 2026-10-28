@@ -78,7 +78,7 @@ _ = try pg.update(&db, &b)
 _ = try pg.delete[Account](&db, .int(a.id))
 ```
 
-A plain `@json` struct goes in with the table named: `pg.insert(&db, &u, table: "users", skip: ["id"], returning: ["id"])`.
+`table` puts a row in another table, `skip` leaves out columns the database fills, and `returning` reads columns back: `pg.insert(&db, &a, skip: ["created"], returning: ["created"])`. A plain `@json` struct is only read, with `all` and `one`.
 
 `query` gives `Rows`, which can also be read one row at a time. `next` moves to the next row, and `int`, `float`, `bool`, `text` and `isNull` read a column by its number, from 0. `close` ends them.
 

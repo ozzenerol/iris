@@ -176,7 +176,7 @@ added 2
 removed 1
 ```
 
-A plain `@json` struct works with `insert` too, given the table: `mysql.insert(&db, &row, table: "teas", skip: ["id"])`. A list, a map or a `@json` struct in a field goes in as JSON, for a `json` column. A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
+`skip` leaves out columns the database fills: `mysql.insert(&db, &tea, skip: ["created"])`. A list, a map or a `@json` struct in a field goes in as JSON, for a `json` column. A statement takes at most 65535 values, so `insertMany` sends a long list in several. In a transaction they all take effect together.
 
 ## Transactions
 
