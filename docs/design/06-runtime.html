@@ -6,47 +6,65 @@
 <title>The runtime - Iris</title>
 <meta name="description" content="What runtime/rt.c does and how the generated code uses it. The runtime is one C file, carried inside the iris binary and compiled with every program (see The IR writer). Its exported functions start with iris_. The generated code calls the ones writeIR declares, and the standard library calls the rest through @extern.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Code+Pro:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Source+Code+Pro:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
 <script src="../assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+   the one remembered; none follows the system. Pages opened as files can't
+   share storage in every browser, so the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
 if (t) h.dataset.theme = t[1];
 try {
   if (t) localStorage.setItem("iris-theme", t[1]);
   else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-  ["std-left", "std-right"].forEach(function (s) {
-    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
-  });
 } catch (e) {}</script>
 </head>
-<body class="is-docs">
-<header class="mobile-top">
-  <button id="nav-toggle" class="tool-btn" type="button" aria-label="Show the contents" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  <a class="mobile-logo" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
-</header>
-<nav id="sidebar" class="sidebar" aria-label="Contents"><a class="logo" href="../index.html"><img src="../assets/logo.svg" alt=""><span>Iris</span><span class="version ver"></span></a><ul class="sections"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html" class=current>Design</a></li></ul><div class="sidebar-elems"><h2 class="location"><a href="index.html">Design</a></h2><section><ul class="block"><li><a href="01-overview.html"><span class="n">1.</span> Overview</a></li><li><a href="02-front-end.html"><span class="n">2.</span> Loading and parsing</a></li><li><a href="03-checker.html"><span class="n">3.</span> The checker</a></li><li><a href="04-ir.html"><span class="n">4.</span> The IR writer</a></li><li><a href="05-values.html"><span class="n">5.</span> How values are stored</a></li><li><a href="06-runtime.html" class=current aria-current=page><span class="n">6.</span> The runtime</a><ul class="headings"><li><a href="#layout-of-rt-c">Layout of rt.c</a></li><li><a href="#memory">Memory</a></li><li><a href="#errors">Errors</a></li><li><a href="#tasks">Tasks</a></li><li><a href="#channels-and-select">Channels and select</a></li><li><a href="#mutex-and-atomic">Mutex and Atomic</a></li><li><a href="#threads">Threads</a></li><li><a href="#tls-and-compression">TLS and compression</a></li></ul></li><li><a href="07-decisions.html"><span class="n">7.</span> Decisions</a></li><li><a href="08-workflow.html"><span class="n">8.</span> Working on Iris</a></li></ul></section></div></nav>
+<body class="rustdoc docs">
+<nav class="mobile-topbar">
+  <button class="sidebar-menu-toggle" id="nav-toggle" type="button" title="Show the sidebar" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="logo-container" href="../index.html"><img src="../assets/logo.svg" alt="Iris"></a>
+  <h2 class="location">The runtime</h2>
+</nav>
+<nav id="sidebar" class="sidebar" aria-label="Contents"><div class="sidebar-crate"><a class="logo-container" href="../index.html"><img class="rust-logo" src="../assets/logo.svg" alt="logo"></a><h2><a href="../index.html">Iris</a><span class="version ver"></span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">The runtime</a></h2><div class="sidebar-elems-inner"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#layout-of-rt-c">Layout of rt.c</a></li><li><a href="#memory">Memory</a></li><li><a href="#errors">Errors</a></li><li><a href="#tasks">Tasks</a></li><li><a href="#channels-and-select">Channels and select</a></li><li><a href="#mutex-and-atomic">Mutex and Atomic</a></li><li><a href="#threads">Threads</a></li><li><a href="#tls-and-compression">TLS and compression</a></li></ul></div></section><div class="sidebar-elems-inner"><h2 class="in-crate"><a href="index.html">In Design</a></h2><ul class="block"><li><a href="01-overview.html"><span class="n">1.</span> Overview</a></li><li><a href="02-front-end.html"><span class="n">2.</span> Loading and parsing</a></li><li><a href="03-checker.html"><span class="n">3.</span> The checker</a></li><li><a href="04-ir.html"><span class="n">4.</span> The IR writer</a></li><li><a href="05-values.html"><span class="n">5.</span> How values are stored</a></li><li><a href="06-runtime.html" class=current aria-current=page><span class="n">6.</span> The runtime</a></li><li><a href="07-decisions.html"><span class="n">7.</span> Decisions</a></li><li><a href="08-workflow.html"><span class="n">8.</span> Working on Iris</a></li></ul><h3>Documentation</h3><ul class="block crate"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html" class=current>Design</a></li></ul></div></div></nav>
 <div class="scrim" id="scrim" hidden></div>
-<main class="main">
-<div class="toolbar" data-root="../">
-  <div class="search-form">
-    <input id="site-search" type="search" placeholder="Search (press /)" aria-label="Search the documentation" autocomplete="off">
-    <ul id="site-results" class="results" hidden></ul>
-  </div>
-  <button id="theme" class="tool-btn" type="button" aria-label="Switch between light and dark" title="Light or dark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg></button>
-</div>
-<section class="content">
-  <div class="main-heading">
-    <div class="rustdoc-breadcrumbs"><a href="index.html">Design</a></div>
-    <span class="out-of-band">Chapter 6 of 8</span>
-  </div>
-  <div class="docblock prose">
-<h1>The runtime</h1>
-<p class="lede">What <code>runtime/rt.c</code> does and how the generated code uses it. The runtime is one C file, carried inside the <code>iris</code> binary and compiled with every program (see <a href="04-ir.html#calling-clang">The IR writer</a>). Its exported functions start with <code>iris_</code>. The generated code calls the ones <code>writeIR</code> declares, and the standard library calls the rest through <code>@extern</code>.</p>
+<main>
+<div class="width-limiter">
+<nav class="sub" data-root="../">
+  <form class="search-form" onsubmit="return false">
+    <span></span>
+    <div id="sidebar-button" tabindex="-1"><a href="../index.html" title="Show the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></a></div>
+    <input id="site-search" class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type &lsquo;S&rsquo; or &lsquo;/&rsquo; to search, &lsquo;?&rsquo; for more options&hellip;" type="search">
+    <div id="help-button" tabindex="-1"><a href="#" title="Help" role="button">?</a>
+      <div class="popover" id="help" hidden>
+        <h3>Keyboard shortcuts</h3>
+        <dl>
+          <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+          <dt><kbd>S</kbd> / <kbd>/</kbd></dt><dd>Focus the search field</dd>
+          <dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the search results</dd>
+          <dt><kbd>&crarr;</kbd></dt><dd>Go to the active search result</dd>
+          <dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Go to the chapter before or after</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close the search or this window</dd>
+        </dl>
+      </div>
+    </div>
+    <div id="settings-menu" tabindex="-1"><a href="#" title="Settings" role="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg><span class="label">Settings</span></a>
+      <div class="popover" id="settings" hidden>
+        <div class="setting-line"><div class="setting-name">Theme</div>
+          <div class="choices">
+            <label><input type="radio" name="theme" value="system"> System</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <label><input type="radio" name="theme" value="ayu"> Ayu</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</nav>
+<section id="main-content" class="content">
+<div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">Design</a></div><h1>Chapter <span class="mod">The runtime</span></h1><span class="out-of-band"><span class="since">6 of 8</span> &middot; <a class="src" href="https://github.com/ozzenerol/iris/blob/main/docs-src/design/06-runtime.md">Source</a></span></div><div class="docblock"><p class="lede">What <code>runtime/rt.c</code> does and how the generated code uses it. The runtime is one C file, carried inside the <code>iris</code> binary and compiled with every program (see <a href="04-ir.html#calling-clang">The IR writer</a>). Its exported functions start with <code>iris_</code>. The generated code calls the ones <code>writeIR</code> declares, and the standard library calls the rest through <code>@extern</code>.</p>
 <h2 id="layout-of-rt-c"><a href="#layout-of-rt-c">Layout of rt.c</a></h2>
 <p>The file is split into sections, each starting with a <code>/* ---- name */</code> line:</p>
 <ul><li>memory: the allocator, <code>iris_malloc</code>, <code>iris_free</code>, <code>String</code> growth.</li><li>errors and printing: the message and trace buffers, <code>iris_write_*</code>, panics.</li><li>big, os, fs, io, term: the C side of those std modules.</li><li>tasks, io_uring, channels, locks: the scheduler and what tasks wait on.</li><li>net, addresses and UDP, sockets, Unix sockets, TLS: connections.</li><li>threads, json, tests, hashing, time, processes.</li><li>random and crypto: SHA-256, HMAC and the rest, without OpenSSL.</li><li>SQLite, env.load, flags.parse, signals, compress, archives.</li></ul>
@@ -70,10 +88,10 @@ try {
 <h2 id="threads"><a href="#threads">Threads</a></h2>
 <p><code>thread f(a, b)</code> calls <code>iris_thread_new(thunk, env)</code>, which starts a detached pthread. The thread runs the thunk on a scheduler of its own. A thread ends when its function and every task it spawned have finished, and then wakes the task waiting in <code>join</code>. Tasks never move between threads, so a task needs no locks for its own data. <code>http.serve</code> starts one thread per core, each with its own event loop, and several threads may <code>accept</code> on one listener.</p>
 <h2 id="tls-and-compression"><a href="#tls-and-compression">TLS and compression</a></h2>
-<p>TLS uses OpenSSL and compression uses zlib. Both are loaded with <code>dlopen</code> the first time a program uses them, so building needs no headers or link flags, and programs that don't use them don't depend on them. TLS lives inside <code>net.Conn</code>, so reading lines, the HTTP server and the client work the same over TLS. OpenSSL's calls hold SIGPIPE back on Linux.</p>
-  </div>
-  <nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="05-values.html"><span>Previous</span>How values are stored</a><a class="next" rel="next" href="07-decisions.html"><span>Next</span>Decisions</a></nav>
+<p>TLS uses OpenSSL and compression uses zlib. Both are loaded with <code>dlopen</code> the first time a program uses them, so building needs no headers or link flags, and programs that don't use them don't depend on them. TLS lives inside <code>net.Conn</code>, so reading lines, the HTTP server and the client work the same over TLS. OpenSSL's calls hold SIGPIPE back on Linux.</p></div><nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="05-values.html"><span>Previous</span>How values are stored</a><a class="next" rel="next" href="07-decisions.html"><span>Next</span>Decisions</a></nav>
 </section>
+<section id="search" class="content" hidden></section>
+</div>
 </main>
 <script src="../assets/search.js"></script>
 <script src="../assets/site.js"></script>

@@ -6,47 +6,65 @@
 <title>The IR writer - Iris</title>
 <meta name="description" content="How src/ir.c turns the checked tree into LLVM IR text, and how src/main.c hands that text to clang.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Code+Pro:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Source+Code+Pro:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
 <script src="../assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+   the one remembered; none follows the system. Pages opened as files can't
+   share storage in every browser, so the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
 if (t) h.dataset.theme = t[1];
 try {
   if (t) localStorage.setItem("iris-theme", t[1]);
   else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-  ["std-left", "std-right"].forEach(function (s) {
-    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
-  });
 } catch (e) {}</script>
 </head>
-<body class="is-docs">
-<header class="mobile-top">
-  <button id="nav-toggle" class="tool-btn" type="button" aria-label="Show the contents" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  <a class="mobile-logo" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
-</header>
-<nav id="sidebar" class="sidebar" aria-label="Contents"><a class="logo" href="../index.html"><img src="../assets/logo.svg" alt=""><span>Iris</span><span class="version ver"></span></a><ul class="sections"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html" class=current>Design</a></li></ul><div class="sidebar-elems"><h2 class="location"><a href="index.html">Design</a></h2><section><ul class="block"><li><a href="01-overview.html"><span class="n">1.</span> Overview</a></li><li><a href="02-front-end.html"><span class="n">2.</span> Loading and parsing</a></li><li><a href="03-checker.html"><span class="n">3.</span> The checker</a></li><li><a href="04-ir.html" class=current aria-current=page><span class="n">4.</span> The IR writer</a><ul class="headings"><li><a href="#why-text">Why text</a></li><li><a href="#the-module-it-writes">The module it writes</a></li><li><a href="#functions">Functions</a></li><li><a href="#defer-errdefer-and-scoped">defer, errdefer and scoped</a></li><li><a href="#errors">Errors</a></li><li><a href="#temporary-strings">Temporary Strings</a></li><li><a href="#spawn-and-thread">spawn and thread</a></li><li><a href="#checks">Checks</a></li><li><a href="#allocation">Allocation</a></li><li><a href="#json-env-and-flags">JSON, @env and @flags</a></li><li><a href="#debug-information">Debug information</a></li><li><a href="#calling-clang">Calling clang</a></li></ul></li><li><a href="05-values.html"><span class="n">5.</span> How values are stored</a></li><li><a href="06-runtime.html"><span class="n">6.</span> The runtime</a></li><li><a href="07-decisions.html"><span class="n">7.</span> Decisions</a></li><li><a href="08-workflow.html"><span class="n">8.</span> Working on Iris</a></li></ul></section></div></nav>
+<body class="rustdoc docs">
+<nav class="mobile-topbar">
+  <button class="sidebar-menu-toggle" id="nav-toggle" type="button" title="Show the sidebar" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="logo-container" href="../index.html"><img src="../assets/logo.svg" alt="Iris"></a>
+  <h2 class="location">The IR writer</h2>
+</nav>
+<nav id="sidebar" class="sidebar" aria-label="Contents"><div class="sidebar-crate"><a class="logo-container" href="../index.html"><img class="rust-logo" src="../assets/logo.svg" alt="logo"></a><h2><a href="../index.html">Iris</a><span class="version ver"></span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">The IR writer</a></h2><div class="sidebar-elems-inner"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-text">Why text</a></li><li><a href="#the-module-it-writes">The module it writes</a></li><li><a href="#functions">Functions</a></li><li><a href="#defer-errdefer-and-scoped">defer, errdefer and scoped</a></li><li><a href="#errors">Errors</a></li><li><a href="#temporary-strings">Temporary Strings</a></li><li><a href="#spawn-and-thread">spawn and thread</a></li><li><a href="#checks">Checks</a></li><li><a href="#allocation">Allocation</a></li><li><a href="#json-env-and-flags">JSON, @env and @flags</a></li><li><a href="#debug-information">Debug information</a></li><li><a href="#calling-clang">Calling clang</a></li></ul></div></section><div class="sidebar-elems-inner"><h2 class="in-crate"><a href="index.html">In Design</a></h2><ul class="block"><li><a href="01-overview.html"><span class="n">1.</span> Overview</a></li><li><a href="02-front-end.html"><span class="n">2.</span> Loading and parsing</a></li><li><a href="03-checker.html"><span class="n">3.</span> The checker</a></li><li><a href="04-ir.html" class=current aria-current=page><span class="n">4.</span> The IR writer</a></li><li><a href="05-values.html"><span class="n">5.</span> How values are stored</a></li><li><a href="06-runtime.html"><span class="n">6.</span> The runtime</a></li><li><a href="07-decisions.html"><span class="n">7.</span> Decisions</a></li><li><a href="08-workflow.html"><span class="n">8.</span> Working on Iris</a></li></ul><h3>Documentation</h3><ul class="block crate"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html" class=current>Design</a></li></ul></div></div></nav>
 <div class="scrim" id="scrim" hidden></div>
-<main class="main">
-<div class="toolbar" data-root="../">
-  <div class="search-form">
-    <input id="site-search" type="search" placeholder="Search (press /)" aria-label="Search the documentation" autocomplete="off">
-    <ul id="site-results" class="results" hidden></ul>
-  </div>
-  <button id="theme" class="tool-btn" type="button" aria-label="Switch between light and dark" title="Light or dark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg></button>
-</div>
-<section class="content">
-  <div class="main-heading">
-    <div class="rustdoc-breadcrumbs"><a href="index.html">Design</a></div>
-    <span class="out-of-band">Chapter 4 of 8</span>
-  </div>
-  <div class="docblock prose">
-<h1>The IR writer</h1>
-<p class="lede">How <code>src/ir.c</code> turns the checked tree into LLVM IR text, and how <code>src/main.c</code> hands that text to clang.</p>
+<main>
+<div class="width-limiter">
+<nav class="sub" data-root="../">
+  <form class="search-form" onsubmit="return false">
+    <span></span>
+    <div id="sidebar-button" tabindex="-1"><a href="../index.html" title="Show the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></a></div>
+    <input id="site-search" class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type &lsquo;S&rsquo; or &lsquo;/&rsquo; to search, &lsquo;?&rsquo; for more options&hellip;" type="search">
+    <div id="help-button" tabindex="-1"><a href="#" title="Help" role="button">?</a>
+      <div class="popover" id="help" hidden>
+        <h3>Keyboard shortcuts</h3>
+        <dl>
+          <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+          <dt><kbd>S</kbd> / <kbd>/</kbd></dt><dd>Focus the search field</dd>
+          <dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the search results</dd>
+          <dt><kbd>&crarr;</kbd></dt><dd>Go to the active search result</dd>
+          <dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Go to the chapter before or after</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close the search or this window</dd>
+        </dl>
+      </div>
+    </div>
+    <div id="settings-menu" tabindex="-1"><a href="#" title="Settings" role="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg><span class="label">Settings</span></a>
+      <div class="popover" id="settings" hidden>
+        <div class="setting-line"><div class="setting-name">Theme</div>
+          <div class="choices">
+            <label><input type="radio" name="theme" value="system"> System</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <label><input type="radio" name="theme" value="ayu"> Ayu</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</nav>
+<section id="main-content" class="content">
+<div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">Design</a></div><h1>Chapter <span class="mod">The IR writer</span></h1><span class="out-of-band"><span class="since">4 of 8</span> &middot; <a class="src" href="https://github.com/ozzenerol/iris/blob/main/docs-src/design/04-ir.md">Source</a></span></div><div class="docblock"><p class="lede">How <code>src/ir.c</code> turns the checked tree into LLVM IR text, and how <code>src/main.c</code> hands that text to clang.</p>
 <h2 id="why-text"><a href="#why-text">Why text</a></h2>
 <p>The IR writer prints LLVM IR as text into a <code>StrBuf</code>. Writing text needs no LLVM headers or libraries, so any machine with <code>clang</code> can build Iris programs, and the <code>.ll</code> file can be read when the output is wrong. <code>iris ir file.iris</code> prints it.</p>
 <h2 id="the-module-it-writes"><a href="#the-module-it-writes">The module it writes</a></h2>
@@ -88,10 +106,10 @@ try {
 <p><code>compileIR</code> in <code>src/main.c</code> writes <code>program.ll</code> and the runtime's source, <code>rt.c</code>, into a temporary folder and runs clang (<code>IRIS_CC</code> picks another compiler) on both:</p>
 <ol><li>Debug builds use <code>-O0 -fsanitize=address</code>. Both release modes use <code>-O3 -flto</code>, so clang optimizes the program and the runtime as one module when it links, and runtime functions such as <code>iris_string_append</code>, <code>iris_malloc</code> and the channel operations are inlined into the program.</li><li>Release builds also pass <code>-falign-loops=32</code>, and the same to the linker's code generator, so a small hot loop doesn't straddle two 32-byte blocks by chance, which can cost a fifth of its speed.</li><li><code>--cpu</code> adds <code>-march</code> on x86_64 or <code>-mcpu</code> on arm64. <code>--pgo-gen</code> and <code>--pgo</code> add <code>-fprofile-generate</code> and <code>-fprofile-use</code>, after merging <code>.profraw</code> files with <code>llvm-profdata</code>. <code>--target</code> adds <code>-target</code> and <code>IRIS_SYSROOT</code>.</li><li>Every build passes <code>-g</code>, the libraries from <code>link</code> lines and <code>-l</code> options, the project's <code>.c</code> files, <code>-lm</code> and <code>-pthread</code>, and <code>-ldl</code> on Linux, since TLS and compression load their libraries when first used.</li><li>If linking fails, it tries once more: debug builds without AddressSanitizer, whose libraries not every clang has, and release builds without LTO.</li></ol>
 <p>The compiled runtime is cached. <code>cachedRuntime</code> compiles <code>rt.c</code> once per set of flags into <code>~/.cache/iris/rt/&lt;version&gt;-&lt;hash&gt;.o</code> (or <code>$IRIS_PATH/rt</code>) and reuses it, so a build only compiles the program's own code. The file is written under a temporary name and renamed, so builds running at once never see half a file. PGO builds and <code>IRIS_NO_RT_CACHE</code> compile the runtime each time.</p>
-<p><code>iris run</code> starts the program from the temporary folder and removes the folder as soon as the program has started, so a program that is killed leaves nothing behind.</p>
-  </div>
-  <nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="03-checker.html"><span>Previous</span>The checker</a><a class="next" rel="next" href="05-values.html"><span>Next</span>How values are stored</a></nav>
+<p><code>iris run</code> starts the program from the temporary folder and removes the folder as soon as the program has started, so a program that is killed leaves nothing behind.</p></div><nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="03-checker.html"><span>Previous</span>The checker</a><a class="next" rel="next" href="05-values.html"><span>Next</span>How values are stored</a></nav>
 </section>
+<section id="search" class="content" hidden></section>
+</div>
 </main>
 <script src="../assets/search.js"></script>
 <script src="../assets/site.js"></script>

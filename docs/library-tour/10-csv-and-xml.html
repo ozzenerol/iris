@@ -6,47 +6,65 @@
 <title>CSV and XML - Iris</title>
 <meta name="description" content="Spreadsheets, exports and reports often come as CSV, and many older services and feeds use XML. The csv module reads and writes comma-separated values. The xml module reads a document into a tree or one step at a time, and writes one back.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Code+Pro:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Source+Code+Pro:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
 <script src="../assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+   the one remembered; none follows the system. Pages opened as files can't
+   share storage in every browser, so the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
 if (t) h.dataset.theme = t[1];
 try {
   if (t) localStorage.setItem("iris-theme", t[1]);
   else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-  ["std-left", "std-right"].forEach(function (s) {
-    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
-  });
 } catch (e) {}</script>
 </head>
-<body class="is-docs">
-<header class="mobile-top">
-  <button id="nav-toggle" class="tool-btn" type="button" aria-label="Show the contents" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  <a class="mobile-logo" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
-</header>
-<nav id="sidebar" class="sidebar" aria-label="Contents"><a class="logo" href="../index.html"><img src="../assets/logo.svg" alt=""><span>Iris</span><span class="version ver"></span></a><ul class="sections"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html" class=current>Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html">Design</a></li></ul><div class="sidebar-elems"><h2 class="location"><a href="index.html">Library Tour</a></h2><section><h3>Programs and the system</h3><ul class="block"><li><a href="02-files.html">Files</a></li><li><a href="03-time.html">Time</a></li><li><a href="04-logging.html">Input, output and logging</a></li><li><a href="05-flags.html">Command-line flags</a></li><li><a href="06-processes.html">Programs and the environment</a></li><li><a href="07-terminal.html">Terminal output and input</a></li><li><a href="08-configuration.html">Configuration files</a></li><li><a href="33-machine-numbers.html">Machine numbers</a></li><li><a href="28-metrics-and-tracing.html">Metrics and tracing</a></li></ul></section><section><h3>Text and data</h3><ul class="block"><li><a href="01-json.html">JSON</a></li><li><a href="09-regular-expressions.html">Regular expressions</a></li><li><a href="10-csv-and-xml.html" class=current aria-current=page>CSV and XML</a><ul class="headings"><li><a href="#reading-csv">Reading CSV</a></li><li><a href="#writing-csv">Writing CSV</a></li><li><a href="#reading-xml-into-a-tree">Reading XML into a tree</a></li><li><a href="#reading-xml-a-step-at-a-time">Reading XML a step at a time</a></li><li><a href="#writing-xml">Writing XML</a></li></ul></li><li><a href="11-encodings-and-ids.html">Encodings and ids</a></li><li><a href="12-templates.html">Templates</a></li><li><a href="13-compression-and-archives.html">Compression and archives</a></li><li><a href="21-binary-messages.html">Binary messages</a></li><li><a href="26-msgpack-and-cbor.html">MessagePack and CBOR</a></li></ul></section><section><h3>Networking</h3><ul class="block"><li><a href="14-http.html">HTTP</a></li><li><a href="15-networking.html">Networking</a></li><li><a href="24-quic-and-http3.html">QUIC and HTTP/3</a></li><li><a href="25-protobuf-and-grpc.html">Protocol Buffers and gRPC</a></li><li><a href="27-mqtt.html">MQTT</a></li><li><a href="16-email.html">Sending email</a></li><li><a href="22-ssh.html">SSH</a></li><li><a href="23-sftp.html">SFTP and scp</a></li><li><a href="31-s3.html">S3</a></li><li><a href="32-acme.html">Certificates with ACME</a></li></ul></section><section><h3>Databases</h3><ul class="block"><li><a href="17-sqlite.html">SQLite</a></li><li><a href="18-postgres-and-redis.html">PostgreSQL and Redis</a></li><li><a href="29-mysql.html">MySQL</a></li><li><a href="30-mongodb.html">MongoDB</a></li><li><a href="35-rows-as-structs.html">Rows as structs</a></li><li><a href="34-migrations.html">Migrations</a></li></ul></section><section><h3>Numbers and security</h3><ul class="block"><li><a href="19-random-and-crypto.html">Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html">Math and big numbers</a></li></ul></section></div></nav>
+<body class="rustdoc docs">
+<nav class="mobile-topbar">
+  <button class="sidebar-menu-toggle" id="nav-toggle" type="button" title="Show the sidebar" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="logo-container" href="../index.html"><img src="../assets/logo.svg" alt="Iris"></a>
+  <h2 class="location">CSV and XML</h2>
+</nav>
+<nav id="sidebar" class="sidebar" aria-label="Contents"><div class="sidebar-crate"><a class="logo-container" href="../index.html"><img class="rust-logo" src="../assets/logo.svg" alt="logo"></a><h2><a href="../index.html">Iris</a><span class="version ver"></span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">CSV and XML</a></h2><div class="sidebar-elems-inner"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#reading-csv">Reading CSV</a></li><li><a href="#writing-csv">Writing CSV</a></li><li><a href="#reading-xml-into-a-tree">Reading XML into a tree</a></li><li><a href="#reading-xml-a-step-at-a-time">Reading XML a step at a time</a></li><li><a href="#writing-xml">Writing XML</a></li></ul></div></section><div class="sidebar-elems-inner"><h2 class="in-crate"><a href="index.html">In Library Tour</a></h2><h3><a href="index.html#programs-and-the-system">Programs and the system</a></h3><ul class="block"><li><a href="02-files.html">Files</a></li><li><a href="03-time.html">Time</a></li><li><a href="04-logging.html">Input, output and logging</a></li><li><a href="05-flags.html">Command-line flags</a></li><li><a href="06-processes.html">Programs and the environment</a></li><li><a href="07-terminal.html">Terminal output and input</a></li><li><a href="08-configuration.html">Configuration files</a></li><li><a href="33-machine-numbers.html">Machine numbers</a></li><li><a href="28-metrics-and-tracing.html">Metrics and tracing</a></li></ul><h3><a href="index.html#text-and-data">Text and data</a></h3><ul class="block"><li><a href="01-json.html">JSON</a></li><li><a href="09-regular-expressions.html">Regular expressions</a></li><li><a href="10-csv-and-xml.html" class=current aria-current=page>CSV and XML</a></li><li><a href="11-encodings-and-ids.html">Encodings and ids</a></li><li><a href="12-templates.html">Templates</a></li><li><a href="13-compression-and-archives.html">Compression and archives</a></li><li><a href="21-binary-messages.html">Binary messages</a></li><li><a href="26-msgpack-and-cbor.html">MessagePack and CBOR</a></li></ul><h3><a href="index.html#networking">Networking</a></h3><ul class="block"><li><a href="14-http.html">HTTP</a></li><li><a href="15-networking.html">Networking</a></li><li><a href="24-quic-and-http3.html">QUIC and HTTP/3</a></li><li><a href="25-protobuf-and-grpc.html">Protocol Buffers and gRPC</a></li><li><a href="27-mqtt.html">MQTT</a></li><li><a href="16-email.html">Sending email</a></li><li><a href="22-ssh.html">SSH</a></li><li><a href="23-sftp.html">SFTP and scp</a></li><li><a href="31-s3.html">S3</a></li><li><a href="32-acme.html">Certificates with ACME</a></li></ul><h3><a href="index.html#databases">Databases</a></h3><ul class="block"><li><a href="17-sqlite.html">SQLite</a></li><li><a href="18-postgres-and-redis.html">PostgreSQL and Redis</a></li><li><a href="29-mysql.html">MySQL</a></li><li><a href="30-mongodb.html">MongoDB</a></li><li><a href="35-rows-as-structs.html">Rows as structs</a></li><li><a href="34-migrations.html">Migrations</a></li></ul><h3><a href="index.html#numbers-and-security">Numbers and security</a></h3><ul class="block"><li><a href="19-random-and-crypto.html">Random numbers and cryptography</a></li><li><a href="20-math-and-big-numbers.html">Math and big numbers</a></li></ul><h3>Documentation</h3><ul class="block crate"><li><a href="../tour/index.html">Language Tour</a></li><li><a href="../library-tour/index.html" class=current>Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html">Design</a></li></ul></div></div></nav>
 <div class="scrim" id="scrim" hidden></div>
-<main class="main">
-<div class="toolbar" data-root="../">
-  <div class="search-form">
-    <input id="site-search" type="search" placeholder="Search (press /)" aria-label="Search the documentation" autocomplete="off">
-    <ul id="site-results" class="results" hidden></ul>
-  </div>
-  <button id="theme" class="tool-btn" type="button" aria-label="Switch between light and dark" title="Light or dark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg></button>
-</div>
-<section class="content">
-  <div class="main-heading">
-    <div class="rustdoc-breadcrumbs"><a href="index.html">Library Tour</a><span class="sep">::</span><span>Text and data</span></div>
-    <span class="out-of-band"></span>
-  </div>
-  <div class="docblock prose">
-<h1>CSV and XML</h1>
-<p class="lede">Spreadsheets, exports and reports often come as CSV, and many older services and feeds use XML. The <code>csv</code> module reads and writes comma-separated values. The <code>xml</code> module reads a document into a tree or one step at a time, and writes one back.</p>
+<main>
+<div class="width-limiter">
+<nav class="sub" data-root="../">
+  <form class="search-form" onsubmit="return false">
+    <span></span>
+    <div id="sidebar-button" tabindex="-1"><a href="../index.html" title="Show the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></a></div>
+    <input id="site-search" class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type &lsquo;S&rsquo; or &lsquo;/&rsquo; to search, &lsquo;?&rsquo; for more options&hellip;" type="search">
+    <div id="help-button" tabindex="-1"><a href="#" title="Help" role="button">?</a>
+      <div class="popover" id="help" hidden>
+        <h3>Keyboard shortcuts</h3>
+        <dl>
+          <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+          <dt><kbd>S</kbd> / <kbd>/</kbd></dt><dd>Focus the search field</dd>
+          <dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the search results</dd>
+          <dt><kbd>&crarr;</kbd></dt><dd>Go to the active search result</dd>
+          <dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Go to the chapter before or after</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close the search or this window</dd>
+        </dl>
+      </div>
+    </div>
+    <div id="settings-menu" tabindex="-1"><a href="#" title="Settings" role="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg><span class="label">Settings</span></a>
+      <div class="popover" id="settings" hidden>
+        <div class="setting-line"><div class="setting-name">Theme</div>
+          <div class="choices">
+            <label><input type="radio" name="theme" value="system"> System</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <label><input type="radio" name="theme" value="ayu"> Ayu</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</nav>
+<section id="main-content" class="content">
+<div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">Library Tour</a>::<a href="index.html#text-and-data">Text and data</a></div><h1>Guide <span class="mod">CSV and XML</span></h1><span class="out-of-band"><span class="since">12 of 35</span> &middot; <a class="src" href="https://github.com/ozzenerol/iris/blob/main/docs-src/library-tour/10-csv-and-xml.md">Source</a></span></div><div class="docblock"><p class="lede">Spreadsheets, exports and reports often come as CSV, and many older services and feeds use XML. The <code>csv</code> module reads and writes comma-separated values. The <code>xml</code> module reads a document into a tree or one step at a time, and writes one back.</p>
 <h2 id="reading-csv"><a href="#reading-csv">Reading CSV</a></h2>
 <p><code>csv.parse(text)</code> reads every record into a <code>List</code> of <code>csv.Record</code>. A record's <code>len</code> is its number of fields, and <code>at(i)</code> gives field <code>i</code>, or <code>&quot;&quot;</code> past the end. A field in double quotes may contain commas, line breaks, and quotes written twice.</p>
 <pre class="code run"><code><span class="k">import</span> csv
@@ -252,10 +270,10 @@ XmlError.syntax: line 1: a second root element</code></pre>
     <span class="f">print</span>(text)
 }</code></pre>
 <pre class="out"><code>&lt;urlset xmlns=&quot;http://www.sitemaps.org/schemas/sitemap/0.9&quot;&gt;&lt;url&gt;&lt;loc&gt;https://example.com/&lt;/loc&gt;&lt;/url&gt;&lt;url&gt;&lt;loc&gt;https://example.com/docs?a=1&amp;amp;b=2&lt;/loc&gt;&lt;/url&gt;&lt;/urlset&gt;</code></pre>
-<p><code>xml.escape(text)</code> writes those characters in any text as entities, for XML written by hand.</p>
-  </div>
-  <nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="09-regular-expressions.html"><span>Previous</span>Regular expressions</a><a class="next" rel="next" href="11-encodings-and-ids.html"><span>Next</span>Encodings and ids</a></nav>
+<p><code>xml.escape(text)</code> writes those characters in any text as entities, for XML written by hand.</p></div><nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="09-regular-expressions.html"><span>Previous</span>Regular expressions</a><a class="next" rel="next" href="11-encodings-and-ids.html"><span>Next</span>Encodings and ids</a></nav>
 </section>
+<section id="search" class="content" hidden></section>
+</div>
 </main>
 <script src="../assets/search.js"></script>
 <script src="../assets/site.js"></script>

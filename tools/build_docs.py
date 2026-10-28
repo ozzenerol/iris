@@ -90,44 +90,62 @@ PARTS = {
 
 
 ICONS = {
-    "menu": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
-    "theme": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg>',
+    "menu": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+    "gear": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg>',
 }
 
-# the sections, as the sidebar lists them: (folder, label)
+# the sections, as every sidebar lists them under "Documentation": (folder, label)
 TABS = [("tour", "Language Tour"), ("library-tour", "Library Tour"), ("std", "Library reference"),
         ("design", "Design")]
 
 # The sections whose chapters are read in order, and so show their numbers
 NUMBERED = {"tour", "design"}
 
-
-def toolbar(root):
-    """The search bar over the text, with the theme button beside it"""
-    return f"""<div class="toolbar" data-root="{root}">
-  <div class="search-form">
-    <input id="site-search" type="search" placeholder="Search (press /)" aria-label="Search the documentation" autocomplete="off">
-    <ul id="site-results" class="results" hidden></ul>
-  </div>
-  <button id="theme" class="tool-btn" type="button" aria-label="Switch between light and dark" title="Light or dark">{ICONS["theme"]}</button>
-</div>"""
+GITHUB = "https://github.com/ozzenerol/iris/blob/main/"
 
 
-def shell(title, body, root, desc="", side="", kind="docs"):
-    """A whole page. kind docs: the sidebar (side), then the search bar over
-    body. kind std: body is the library's panes, which hold both itself.
-    root: the way back to docs/ ("" or "../")."""
+def search_bar(root):
+    """rustdoc's bar over the text: the search, the help (?) and the settings"""
+    return f"""<nav class="sub" data-root="{root}">
+  <form class="search-form" onsubmit="return false">
+    <span></span>
+    <div id="sidebar-button" tabindex="-1"><a href="{root}index.html" title="Show the sidebar">{ICONS["menu"]}</a></div>
+    <input id="site-search" class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type &lsquo;S&rsquo; or &lsquo;/&rsquo; to search, &lsquo;?&rsquo; for more options&hellip;" type="search">
+    <div id="help-button" tabindex="-1"><a href="#" title="Help" role="button">?</a>
+      <div class="popover" id="help" hidden>
+        <h3>Keyboard shortcuts</h3>
+        <dl>
+          <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+          <dt><kbd>S</kbd> / <kbd>/</kbd></dt><dd>Focus the search field</dd>
+          <dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the search results</dd>
+          <dt><kbd>&crarr;</kbd></dt><dd>Go to the active search result</dd>
+          <dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Go to the chapter before or after</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close the search or this window</dd>
+        </dl>
+      </div>
+    </div>
+    <div id="settings-menu" tabindex="-1"><a href="#" title="Settings" role="button">{ICONS["gear"]}<span class="label">Settings</span></a>
+      <div class="popover" id="settings" hidden>
+        <div class="setting-line"><div class="setting-name">Theme</div>
+          <div class="choices">
+            <label><input type="radio" name="theme" value="system"> System</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <label><input type="radio" name="theme" value="ayu"> Ayu</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</nav>"""
+
+
+def shell(title, body, root, desc="", side="", kind="docs", mobile=""):
+    """A whole page as rustdoc lays one out: the sidebar (side), and beside it
+    the search bar over the main content (body). root: the way back to
+    docs/ ("" or "../"). mobile: the title the top bar shows on phones."""
     full = "Iris" if title == "Iris" else f"{title} - Iris"
     meta = f'<meta name="description" content="{html.escape(desc)}">' if desc else ""
-    if kind == "docs":
-        inner = f"""{side}
-<div class="scrim" id="scrim" hidden></div>
-<main class="main">
-{toolbar(root)}
-{body}
-</main>"""
-    else:
-        inner = body
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -136,30 +154,38 @@ def shell(title, body, root, desc="", side="", kind="docs"):
 <title>{html.escape(full)}</title>
 {meta}
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Code+Pro:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Source+Code+Pro:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&display=swap">
 <link rel="stylesheet" href="{root}assets/style.css">
 <link rel="icon" href="{root}assets/logo.svg" type="image/svg+xml">
 <script src="{root}assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+   the one remembered; none follows the system. Pages opened as files can't
+   share storage in every browser, so the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
 if (t) h.dataset.theme = t[1];
 try {{
   if (t) localStorage.setItem("iris-theme", t[1]);
   else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-  ["std-left", "std-right"].forEach(function (s) {{
-    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
-  }});
 }} catch (e) {{}}</script>
 </head>
-<body class="is-{kind}">
-<header class="mobile-top">
-  <button id="nav-toggle" class="tool-btn" type="button" aria-label="Show the contents" aria-controls="sidebar" aria-expanded="false">{ICONS["menu"]}</button>
-  <a class="mobile-logo" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">Iris</a>
-</header>
-{inner}
+<body class="rustdoc {kind}">
+<nav class="mobile-topbar">
+  <button class="sidebar-menu-toggle" id="nav-toggle" type="button" title="Show the sidebar" aria-controls="sidebar" aria-expanded="false">{ICONS["menu"]}</button>
+  <a class="logo-container" href="{root}index.html"><img src="{root}assets/logo.svg" alt="Iris"></a>
+  <h2 class="location">{html.escape(mobile or title)}</h2>
+</nav>
+{side}
+<div class="scrim" id="scrim" hidden></div>
+<main>
+<div class="width-limiter">
+{search_bar(root)}
+<section id="main-content" class="content">
+{body}
+</section>
+<section id="search" class="content" hidden></section>
+</div>
+</main>
 <script src="{root}assets/search.js"></script>
 <script src="{root}assets/site.js"></script>
 </body>
@@ -167,62 +193,90 @@ try {{
 """
 
 
-def side_top(root, section):
-    """The top of every sidebar: the logo, the version and the sections"""
+def side_crate(root):
+    """The top of every sidebar: the logo, Iris and the version"""
+    return (f'<div class="sidebar-crate"><a class="logo-container" href="{root}index.html">'
+            f'<img class="rust-logo" src="{root}assets/logo.svg" alt="logo"></a>'
+            f'<h2><a href="{root}index.html">Iris</a><span class="version ver"></span></h2></div>')
+
+
+def side_docs(root, section):
+    """The bottom of every sidebar: the parts of the documentation, as rustdoc lists the crates"""
     links = "".join(
         f'<li><a href="{root}{folder}/index.html"{" class=current" if folder == section else ""}>{label}</a></li>'
         for folder, label in TABS)
-    return (f'<a class="logo" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">'
-            f'<span>Iris</span><span class="version ver"></span></a>'
-            f'<ul class="sections">{links}</ul>')
+    return f'<h3>Documentation</h3><ul class="block crate">{links}</ul>'
 
 
-def sidebar(section, label, chs, here, toc):
-    """A section's sidebar: its chapters by part, and under the one being read, its headings"""
-    blocks = []
+def side_nav(root, inner):
+    return (f'<nav id="sidebar" class="sidebar" aria-label="Contents">{side_crate(root)}'
+            f'<div class="sidebar-elems">{inner}</div></nav>')
+
+
+def headings_block(toc):
+    if not toc:
+        return ""
+    return ('<h3><a href="#">Sections</a></h3><ul class="block top-toc">' + "".join(
+        f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc) + "</ul>")
+
+
+def sidebar(section, label, chs, here, toc, title):
+    """A chapter's sidebar, as rustdoc's for an item: the chapter and its
+    headings, then the section's chapters by part, then the documentation"""
     numbered = section in NUMBERED
+    top = ""
+    if here != "index":
+        top = (f'<section id="rustdoc-toc"><h2 class="location"><a href="#">{html.escape(title)}</a></h2>'
+               f'<div class="sidebar-elems-inner">{headings_block(toc)}</div></section>')
+    parts = []
     for part, items in by_part(chs):
         lis = []
         for n, ch in items:
             on = ch[0] == here
             num = f'<span class="n">{n}.</span> ' if numbered else ""
-            li = f'<li><a href="{ch[0]}.html"{" class=current aria-current=page" if on else ""}>{num}{html.escape(ch[1])}</a>'
-            if on and toc:
-                li += "<ul class=\"headings\">" + "".join(
-                    f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc) + "</ul>"
-            lis.append(li + "</li>")
-        head = f'<h3>{html.escape(part)}</h3>' if len(PARTS[section]) > 1 else ""
-        blocks.append(f'<section>{head}<ul class="block">{"".join(lis)}</ul></section>')
-    title = f'<h2 class="location"><a href="index.html">{html.escape(label)}</a></h2>'
-    return (f'<nav id="sidebar" class="sidebar" aria-label="Contents">{side_top("../", section)}'
-            f'<div class="sidebar-elems">{title}{"".join(blocks)}</div></nav>')
+            lis.append(f'<li><a href="{ch[0]}.html"{" class=current aria-current=page" if on else ""}>'
+                       f'{num}{html.escape(ch[1])}</a></li>')
+        head = f'<h3><a href="index.html#{anchor(part)}">{html.escape(part)}</a></h3>' if len(PARTS[section]) > 1 else ""
+        parts.append(f'{head}<ul class="block">{"".join(lis)}</ul>')
+    where = "In " if here != "index" else ""
+    cur = ' class="current"' if here == "index" else ""
+    inner = (top + f'<div class="sidebar-elems-inner"><h2 class="in-crate"><a href="index.html"{cur}>{where}{html.escape(label)}</a></h2>'
+             + "".join(parts) + side_docs("../", section) + "</div>")
+    return side_nav("../", inner)
 
 
-def item_table(rows):
-    """Links with a line about each, the way a module lists its items: [(href, name, desc)]"""
+def anchor(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def item_table(rows, cls="mod"):
+    """Links with a line about each, the way rustdoc lists a module's items: [(href, name, desc)]"""
     return '<dl class="item-table">' + "".join(
-        f'<dt><a href="{h}">{n}</a></dt><dd>{html.escape(d)}</dd>' for h, n, d in rows) + "</dl>"
+        f'<dt><a class="{cls}" href="{h}">{n}</a></dt><dd>{html.escape(d)}</dd>' for h, n, d in rows) + "</dl>"
 
 
-def docs_page(section, label, chs, stem, title, body, toc, desc, crumbs, out_of_band, prev, nxt):
+def section_header(sid, text):
+    return f'<h2 id="{sid}" class="section-header">{html.escape(text)}<a href="#{sid}" class="anchor">&sect;</a></h2>'
+
+
+def strip_h1(body):
+    return re.sub(r"^\s*<h1>.*?</h1>\s*", "", body, count=1, flags=re.S)
+
+
+def main_heading(crumbs, h1, out_of_band):
+    bc = f'<div class="rustdoc-breadcrumbs">{crumbs}</div>' if crumbs else ""
+    return (f'<div class="main-heading">{bc}<h1>{h1}</h1>'
+            f'<span class="out-of-band">{out_of_band}</span></div>')
+
+
+def pager(prev, nxt):
     def link(ch, cls, word):
         if not ch:
-            return ""
+            return "<span></span>"
         return f'<a class="{cls}" rel="{cls}" href="{ch[0]}.html"><span>{word}</span>{html.escape(ch[1])}</a>'
-    pager = ""
-    if prev or nxt:
-        pager = f'<nav class="pager" aria-label="Previous and next">{link(prev, "prev", "Previous")}{link(nxt, "next", "Next")}</nav>'
-    page = f"""<section class="content">
-  <div class="main-heading">
-    <div class="rustdoc-breadcrumbs">{crumbs}</div>
-    <span class="out-of-band">{out_of_band}</span>
-  </div>
-  <div class="docblock prose">
-{body}
-  </div>
-  {pager}
-</section>"""
-    write(f"{section}/{stem}.html", shell(title, page, "../", desc, sidebar(section, label, chs, stem, toc)))
+    if not (prev or nxt):
+        return ""
+    return f'<nav class="pager" aria-label="Previous and next">{link(prev, "prev", "Previous")}{link(nxt, "next", "Next")}</nav>'
 
 
 def chapter_pages(chs, index, section, label):
@@ -231,40 +285,34 @@ def chapter_pages(chs, index, section, label):
         nxt = chs[i + 1] if i + 1 < len(chs) else None
         crumbs = f'<a href="index.html">{html.escape(label)}</a>'
         if len(PARTS[section]) > 1:
-            crumbs += f'<span class="sep">::</span><span>{html.escape(part)}</span>'
-        oob = f"Chapter {i + 1} of {len(chs)}" if section in NUMBERED else ""
-        docs_page(section, label, chs, stem, title, body, toc, lede, crumbs, oob, prev, nxt)
+            crumbs += f'::<a href="index.html#{anchor(part)}">{html.escape(part)}</a>'
+        kind = "Chapter" if section in NUMBERED else "Guide"
+        h1 = f'{kind} <span class="mod">{html.escape(title)}</span>'
+        oob = (f'<span class="since">{i + 1} of {len(chs)}</span> &middot; '
+               f'<a class="src" href="{GITHUB}docs-src/{section}/{stem}.md">Source</a>')
+        page = (main_heading(crumbs, h1, oob)
+                + f'<div class="docblock">{strip_h1(body)}</div>' + pager(prev, nxt))
+        side = sidebar(section, label, chs, stem, toc, title)
+        write(f"{section}/{stem}.html", shell(title, page, "../", lede, side, mobile=title))
         for sid, text in toc:
             index.append({"t": text, "p": title, "u": f"{section}/{stem}.html#{sid}", "k": "section"})
         index.append({"t": title, "p": label, "u": f"{section}/{stem}.html", "k": "chapter"})
 
 
 def section_index(section, label, lede, chs):
+    """A section's front page, as rustdoc's page of a crate: what it is, then
+    its chapters by part"""
     groups = []
     numbered = section in NUMBERED
-    toc = []
     for part, items in by_part(chs):
         rows = [(f"{ch[0]}.html", (f'<span class="n">{n}.</span> ' if numbered else "") + html.escape(ch[1]), ch[2])
                 for n, ch in items]
-        if len(PARTS[section]) > 1:
-            sid = part.lower().replace(" ", "-")
-            groups.append(f'<h2 id="{sid}"><a href="#{sid}">{html.escape(part)}</a></h2>')
-            toc.append((sid, part))
-        groups.append(item_table(rows))
-    body = f"""<h1>{html.escape(label)}</h1>
-<p class="lede">{html.escape(lede)}</p>
-{"".join(groups)}"""
-    docs_page(section, label, chs, "index", label, body, toc, lede, "", f"{len(chs)} chapters", None, chs[0])
-
-
-def hide_button(side, label, arrow):
-    return (f'<button class="side-btn side-hide" type="button" data-side="{side}" aria-expanded="true" '
-            f'aria-label="Hide {label}" title="Hide {label}">{arrow}</button>')
-
-
-def show_button(side, label, arrow, where):
-    return (f'<button class="side-btn side-show side-show-{where}" type="button" data-side="{side}" '
-            f'aria-expanded="true" aria-label="Show {label}" title="Show {label}">{arrow}</button>')
+        title = part if len(PARTS[section]) > 1 else "Chapters"
+        groups.append(section_header(anchor(title), title) + item_table(rows))
+    h1 = f'Book <span class="mod">{html.escape(label)}</span>'
+    body = (main_heading("", h1, f'<span class="since">{len(chs)} chapters</span>')
+            + f'<div class="docblock"><p>{html.escape(lede)}</p></div>' + "".join(groups) + pager(None, chs[0]))
+    write(f"{section}/index.html", shell(label, body, "../", lede, sidebar(section, label, chs, "index", [], label)))
 
 
 def std_pages(index, iris):
@@ -295,36 +343,20 @@ def std_pages(index, iris):
         index.append({"t": m["name"], "p": m["title"], "u": f"std/index.html#{m['name']}", "k": "module"})
     data = {"modules": mods}
     write("std/data.js", "window.IRIS_STD = " + json.dumps(data, separators=(",", ":")) + ";\n")
-    body = """<div class="std" id="std">
-  <aside id="sidebar" class="std-left sidebar" aria-label="Modules">
-    """ + side_top("../", "std") + """
-    <div class="std-top">
-      <div class="side-head"><a href="index.html">Modules</a>""" + hide_button("std-left", "the module list", "&#8249;") + """</div>
-      <input id="std-filter" type="search" placeholder="Filter modules and names" aria-label="Find in the library" autocomplete="off">
-    </div>
-    <nav id="std-modules"></nav>
-    <ul id="std-found" class="std-found" hidden></ul>
-  </aside>
-  <div class="std-center">
-    """ + toolbar("../") + """
-    <main id="std-main" class="std-main"></main>
-  </div>
-  <aside class="std-right" aria-label="In this module">
-    <div class="side-head"><span>In this module</span>""" + hide_button("std-right", "this module's names", "&#8250;") + """</div>
-    <div id="std-right"></div>
-  </aside>
-  """ + show_button("std-left", "the module list", "&#8250;", "l") + show_button("std-right", "this module's names", "&#8249;", "r") + """
-</div>
-<div class="scrim" id="scrim" hidden></div>
+    # std.js fills the sidebar's middle and the main content from the address
+    side = (f'<nav id="sidebar" class="sidebar" aria-label="Contents">{side_crate("../")}'
+            f'<div class="sidebar-elems"><div id="std-side"></div>{side_docs("../", "std")}</div></nav>')
+    body = """<div id="std-main"></div>
 <script src="data.js"></script>
 <script src="../assets/std.js"></script>"""
     write("std/index.html", shell("Library reference", body, "../",
-                                  "The Iris standard library: every module, type and function.", kind="std"))
+                                  "The Iris standard library: every module, type and function.", side, kind="std"))
     return sum(len(m["decls"]) for m in mods)
 
 
 def home_page(index):
-    """The front page: index.md, with the "Where to start" list as a table of the sections"""
+    """The front page: index.md, as rustdoc's page of a crate, with the
+    "Where to start" list as a table of the sections"""
     title, lede, body, toc, _ = md.convert(open(os.path.join(SRC, "index.md")).read())
     rows = [
         ("tour/index.html", "Language Tour", "The whole language, one topic per chapter, with programs you can run. Start here."),
@@ -333,21 +365,14 @@ def home_page(index):
         ("design/index.html", "Design", "How the compiler and runtime work, for people working on Iris."),
     ]
     body = re.sub(r'(<h2 id="where-to-start">.*?</h2>)\s*<ul>.*?</ul>', lambda m: m.group(1) + item_table(rows),
-                  body, count=1, flags=re.S)
-    links = "".join(f'<li><a href="{h}">{n}</a></li>' for h, n, _ in rows)
-    blocks = ""
-    if toc:
-        blocks = ('<section><ul class="block">' + "".join(
-            f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc) + "</ul></section>")
-    side = (f'<nav id="sidebar" class="sidebar" aria-label="Contents">{side_top("", "")}'
-            f'<div class="sidebar-elems"><h2 class="location"><a href="index.html">Iris</a></h2>{blocks}</div></nav>')
-    page = f"""<section class="content">
-  <div class="main-heading"><div class="rustdoc-breadcrumbs"></div></div>
-  <div class="docblock prose">
-{body}
-  </div>
-</section>"""
-    write("index.html", shell("Iris", page, "", "Iris, a compiled language for servers, network tools and system programs.", side))
+                  strip_h1(body), count=1, flags=re.S)
+    inner = (f'<section id="rustdoc-toc"><h2 class="location"><a href="#">Iris</a></h2>'
+             f'<div class="sidebar-elems-inner">{headings_block(toc)}{side_docs("", "")}</div></section>')
+    page = (main_heading("", f'Language <span class="mod">{html.escape(title or "Iris")}</span>',
+                         f'<a class="src" href="https://github.com/ozzenerol/iris">Source</a>')
+            + f'<div class="docblock">{body}</div>')
+    write("index.html", shell("Iris", page, "", "Iris, a compiled language for servers, network tools and system programs.",
+                              side_nav("", inner)))
     index.append({"t": title or "Iris", "p": "Iris", "u": "index.html", "k": "page"})
     for sid, text in toc:
         index.append({"t": text, "p": "Iris", "u": f"index.html#{sid}", "k": "section"})

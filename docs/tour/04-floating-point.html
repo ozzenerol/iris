@@ -6,47 +6,65 @@
 <title>Floating point - Iris</title>
 <meta name="description" content="The two float types, their literals and printing, and how they mix with integers.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Code+Pro:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Source+Code+Pro:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&display=swap">
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
 <script src="../assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+   the one remembered; none follows the system. Pages opened as files can't
+   share storage in every browser, so the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
 if (t) h.dataset.theme = t[1];
 try {
   if (t) localStorage.setItem("iris-theme", t[1]);
   else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-  ["std-left", "std-right"].forEach(function (s) {
-    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
-  });
 } catch (e) {}</script>
 </head>
-<body class="is-docs">
-<header class="mobile-top">
-  <button id="nav-toggle" class="tool-btn" type="button" aria-label="Show the contents" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-  <a class="mobile-logo" href="../index.html"><img src="../assets/logo.svg" alt="">Iris</a>
-</header>
-<nav id="sidebar" class="sidebar" aria-label="Contents"><a class="logo" href="../index.html"><img src="../assets/logo.svg" alt=""><span>Iris</span><span class="version ver"></span></a><ul class="sections"><li><a href="../tour/index.html" class=current>Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html">Design</a></li></ul><div class="sidebar-elems"><h2 class="location"><a href="index.html">Language Tour</a></h2><section><h3>Basics</h3><ul class="block"><li><a href="01-hello.html"><span class="n">1.</span> A first program</a></li><li><a href="02-variables.html"><span class="n">2.</span> Variables</a></li><li><a href="03-integers.html"><span class="n">3.</span> Integers</a></li><li><a href="04-floating-point.html" class=current aria-current=page><span class="n">4.</span> Floating point</a><ul class="headings"><li><a href="#f64-and-f32">f64 and f32</a></li><li><a href="#printing">Printing</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#converting">Converting</a></li><li><a href="#the-math-module">The math module</a></li></ul></li><li><a href="05-booleans-and-operators.html"><span class="n">5.</span> Booleans and operators</a></li><li><a href="06-text.html"><span class="n">6.</span> Text</a></li><li><a href="07-values-in-text.html"><span class="n">7.</span> Values in text</a></li><li><a href="08-if-and-match.html"><span class="n">8.</span> if and match</a></li><li><a href="09-loops.html"><span class="n">9.</span> Loops</a></li></ul></section><section><h3>Functions and data</h3><ul class="block"><li><a href="10-functions.html"><span class="n">10.</span> Functions</a></li><li><a href="11-function-values.html"><span class="n">11.</span> Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="n">12.</span> Arrays and slices</a></li><li><a href="13-structs.html"><span class="n">13.</span> Structs</a></li><li><a href="14-methods.html"><span class="n">14.</span> Methods</a></li><li><a href="15-enums.html"><span class="n">15.</span> Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="n">16.</span> Tuples and type aliases</a></li></ul></section><section><h3>Memory and errors</h3><ul class="block"><li><a href="17-pointers.html"><span class="n">17.</span> Pointers</a></li><li><a href="18-errors.html"><span class="n">18.</span> Errors</a></li><li><a href="19-memory.html"><span class="n">19.</span> Memory</a></li></ul></section><section><h3>Building larger programs</h3><ul class="block"><li><a href="20-generics.html"><span class="n">20.</span> Generics</a></li><li><a href="21-interfaces.html"><span class="n">21.</span> Interfaces</a></li><li><a href="22-collections.html"><span class="n">22.</span> Collections</a></li><li><a href="23-modules.html"><span class="n">23.</span> Modules</a></li></ul></section><section><h3>Concurrency</h3><ul class="block"><li><a href="24-tasks-and-channels.html"><span class="n">24.</span> Tasks and channels</a></li><li><a href="25-threads.html"><span class="n">25.</span> Threads</a></li></ul></section><section><h3>Going further</h3><ul class="block"><li><a href="26-compile-time.html"><span class="n">26.</span> Compile time</a></li><li><a href="27-attributes.html"><span class="n">27.</span> Attributes</a></li><li><a href="28-calling-c.html"><span class="n">28.</span> Calling C</a></li><li><a href="29-testing.html"><span class="n">29.</span> Testing</a></li><li><a href="30-tools.html"><span class="n">30.</span> Tools</a></li></ul></section></div></nav>
+<body class="rustdoc docs">
+<nav class="mobile-topbar">
+  <button class="sidebar-menu-toggle" id="nav-toggle" type="button" title="Show the sidebar" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="logo-container" href="../index.html"><img src="../assets/logo.svg" alt="Iris"></a>
+  <h2 class="location">Floating point</h2>
+</nav>
+<nav id="sidebar" class="sidebar" aria-label="Contents"><div class="sidebar-crate"><a class="logo-container" href="../index.html"><img class="rust-logo" src="../assets/logo.svg" alt="logo"></a><h2><a href="../index.html">Iris</a><span class="version ver"></span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Floating point</a></h2><div class="sidebar-elems-inner"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#f64-and-f32">f64 and f32</a></li><li><a href="#printing">Printing</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#converting">Converting</a></li><li><a href="#the-math-module">The math module</a></li></ul></div></section><div class="sidebar-elems-inner"><h2 class="in-crate"><a href="index.html">In Language Tour</a></h2><h3><a href="index.html#basics">Basics</a></h3><ul class="block"><li><a href="01-hello.html"><span class="n">1.</span> A first program</a></li><li><a href="02-variables.html"><span class="n">2.</span> Variables</a></li><li><a href="03-integers.html"><span class="n">3.</span> Integers</a></li><li><a href="04-floating-point.html" class=current aria-current=page><span class="n">4.</span> Floating point</a></li><li><a href="05-booleans-and-operators.html"><span class="n">5.</span> Booleans and operators</a></li><li><a href="06-text.html"><span class="n">6.</span> Text</a></li><li><a href="07-values-in-text.html"><span class="n">7.</span> Values in text</a></li><li><a href="08-if-and-match.html"><span class="n">8.</span> if and match</a></li><li><a href="09-loops.html"><span class="n">9.</span> Loops</a></li></ul><h3><a href="index.html#functions-and-data">Functions and data</a></h3><ul class="block"><li><a href="10-functions.html"><span class="n">10.</span> Functions</a></li><li><a href="11-function-values.html"><span class="n">11.</span> Functions as values</a></li><li><a href="12-arrays-and-slices.html"><span class="n">12.</span> Arrays and slices</a></li><li><a href="13-structs.html"><span class="n">13.</span> Structs</a></li><li><a href="14-methods.html"><span class="n">14.</span> Methods</a></li><li><a href="15-enums.html"><span class="n">15.</span> Enums</a></li><li><a href="16-tuples-and-aliases.html"><span class="n">16.</span> Tuples and type aliases</a></li></ul><h3><a href="index.html#memory-and-errors">Memory and errors</a></h3><ul class="block"><li><a href="17-pointers.html"><span class="n">17.</span> Pointers</a></li><li><a href="18-errors.html"><span class="n">18.</span> Errors</a></li><li><a href="19-memory.html"><span class="n">19.</span> Memory</a></li></ul><h3><a href="index.html#building-larger-programs">Building larger programs</a></h3><ul class="block"><li><a href="20-generics.html"><span class="n">20.</span> Generics</a></li><li><a href="21-interfaces.html"><span class="n">21.</span> Interfaces</a></li><li><a href="22-collections.html"><span class="n">22.</span> Collections</a></li><li><a href="23-modules.html"><span class="n">23.</span> Modules</a></li></ul><h3><a href="index.html#concurrency">Concurrency</a></h3><ul class="block"><li><a href="24-tasks-and-channels.html"><span class="n">24.</span> Tasks and channels</a></li><li><a href="25-threads.html"><span class="n">25.</span> Threads</a></li></ul><h3><a href="index.html#going-further">Going further</a></h3><ul class="block"><li><a href="26-compile-time.html"><span class="n">26.</span> Compile time</a></li><li><a href="27-attributes.html"><span class="n">27.</span> Attributes</a></li><li><a href="28-calling-c.html"><span class="n">28.</span> Calling C</a></li><li><a href="29-testing.html"><span class="n">29.</span> Testing</a></li><li><a href="30-tools.html"><span class="n">30.</span> Tools</a></li></ul><h3>Documentation</h3><ul class="block crate"><li><a href="../tour/index.html" class=current>Language Tour</a></li><li><a href="../library-tour/index.html">Library Tour</a></li><li><a href="../std/index.html">Library reference</a></li><li><a href="../design/index.html">Design</a></li></ul></div></div></nav>
 <div class="scrim" id="scrim" hidden></div>
-<main class="main">
-<div class="toolbar" data-root="../">
-  <div class="search-form">
-    <input id="site-search" type="search" placeholder="Search (press /)" aria-label="Search the documentation" autocomplete="off">
-    <ul id="site-results" class="results" hidden></ul>
-  </div>
-  <button id="theme" class="tool-btn" type="button" aria-label="Switch between light and dark" title="Light or dark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg></button>
-</div>
-<section class="content">
-  <div class="main-heading">
-    <div class="rustdoc-breadcrumbs"><a href="index.html">Language Tour</a><span class="sep">::</span><span>Basics</span></div>
-    <span class="out-of-band">Chapter 4 of 30</span>
-  </div>
-  <div class="docblock prose">
-<h1>Floating point</h1>
-<p class="lede">The two float types, their literals and printing, and how they mix with integers.</p>
+<main>
+<div class="width-limiter">
+<nav class="sub" data-root="../">
+  <form class="search-form" onsubmit="return false">
+    <span></span>
+    <div id="sidebar-button" tabindex="-1"><a href="../index.html" title="Show the sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></a></div>
+    <input id="site-search" class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Type &lsquo;S&rsquo; or &lsquo;/&rsquo; to search, &lsquo;?&rsquo; for more options&hellip;" type="search">
+    <div id="help-button" tabindex="-1"><a href="#" title="Help" role="button">?</a>
+      <div class="popover" id="help" hidden>
+        <h3>Keyboard shortcuts</h3>
+        <dl>
+          <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+          <dt><kbd>S</kbd> / <kbd>/</kbd></dt><dd>Focus the search field</dd>
+          <dt><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></dt><dd>Move through the search results</dd>
+          <dt><kbd>&crarr;</kbd></dt><dd>Go to the active search result</dd>
+          <dt><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></dt><dd>Go to the chapter before or after</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close the search or this window</dd>
+        </dl>
+      </div>
+    </div>
+    <div id="settings-menu" tabindex="-1"><a href="#" title="Settings" role="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4z"/></svg><span class="label">Settings</span></a>
+      <div class="popover" id="settings" hidden>
+        <div class="setting-line"><div class="setting-name">Theme</div>
+          <div class="choices">
+            <label><input type="radio" name="theme" value="system"> System</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <label><input type="radio" name="theme" value="ayu"> Ayu</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+</nav>
+<section id="main-content" class="content">
+<div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">Language Tour</a>::<a href="index.html#basics">Basics</a></div><h1>Chapter <span class="mod">Floating point</span></h1><span class="out-of-band"><span class="since">4 of 30</span> &middot; <a class="src" href="https://github.com/ozzenerol/iris/blob/main/docs-src/tour/04-floating-point.md">Source</a></span></div><div class="docblock"><p class="lede">The two float types, their literals and printing, and how they mix with integers.</p>
 <h2 id="f64-and-f32"><a href="#f64-and-f32">f64 and f32</a></h2>
 <p><code>f64</code> is a 64-bit float with about 15 significant digits. <code>f32</code> is half the size with about 7. Use <code>f64</code> by default. Use <code>f32</code> for large arrays and for C functions and file formats that need it.</p>
 <p>A literal with a point or an exponent is an <code>f64</code>:</p>
@@ -127,10 +145,10 @@ false true</code></pre>
 16 bits for a port, 1024 1.4142135623730951
 2 3 -2
 3 4 9</code></pre>
-<p>The <a href="../std/index.html#math">math</a> page lists everything. <code>str.parseFloat</code> reads a float from text (see <a href="06-text.html">Text</a>).</p>
-  </div>
-  <nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="03-integers.html"><span>Previous</span>Integers</a><a class="next" rel="next" href="05-booleans-and-operators.html"><span>Next</span>Booleans and operators</a></nav>
+<p>The <a href="../std/index.html#math">math</a> page lists everything. <code>str.parseFloat</code> reads a float from text (see <a href="06-text.html">Text</a>).</p></div><nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="03-integers.html"><span>Previous</span>Integers</a><a class="next" rel="next" href="05-booleans-and-operators.html"><span>Next</span>Booleans and operators</a></nav>
 </section>
+<section id="search" class="content" hidden></section>
+</div>
 </main>
 <script src="../assets/search.js"></script>
 <script src="../assets/site.js"></script>

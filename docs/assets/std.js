@@ -1,21 +1,23 @@
-/* The library browser: #module shows a module, #module/name one of its
-   declarations, nothing the overview. Data: window.IRIS_STD (std/data.js). */
+/* The library reference, as rustdoc shows a crate: #module is a module's
+   page, #module/name one of its items, nothing the library's front page.
+   It fills the sidebar's middle and the main content.
+   Data: window.IRIS_STD (std/data.js). */
 (function () {
   var data = window.IRIS_STD;
   var mods = data.modules;
   var main = document.getElementById("std-main");
-  var right = document.getElementById("std-right");
-  var tree = document.getElementById("std-modules");
-  var found = document.getElementById("std-found");
-  var filter = document.getElementById("std-filter");
+  var side = document.getElementById("std-side");
+  var GITHUB = "https://github.com/ozzenerol/iris/blob/main/std/";
 
-  var KINDS = [["struct", "Types"], ["enum", "Types"], ["interface", "Types"], ["type", "Types"],
-               ["func", "Functions"], ["builtin", "Functions"], ["method", "Methods"], ["const", "Constants"],
-               ["var", "Variables"]];
-  var GROUP_ORDER = ["Types", "Functions", "Methods", "Constants", "Variables"];
-  function groupOf(kind) {
-    for (var i = 0; i < KINDS.length; i++) if (KINDS[i][0] === kind) return KINDS[i][1];
-    return "Other";
+  /* rustdoc's sections of a module, in its order: [kind, heading, what an item is called, its colour class] */
+  var KINDS = [["struct", "Structs", "Struct", "struct"], ["enum", "Enums", "Enum", "enum"],
+               ["interface", "Interfaces", "Interface", "interface"], ["type", "Type Aliases", "Type", "type"],
+               ["func", "Functions", "Function", "fn"], ["builtin", "Builtins", "Builtin", "builtin"],
+               ["method", "Methods", "Method", "method"], ["const", "Constants", "Constant", "constant"],
+               ["var", "Variables", "Variable", "static"]];
+  function kindOf(k) {
+    for (var i = 0; i < KINDS.length; i++) if (KINDS[i][0] === k) return KINDS[i];
+    return [k, k, k, "fn"];
   }
 
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
@@ -141,135 +143,149 @@
   }
 
   function modByName(name) { for (var i = 0; i < mods.length; i++) if (mods[i].name === name) return mods[i]; return null; }
-  /* a declaration's name in its module: Router.get for a method */
-  function shortName(m, d) {
-    return d.name;
-  }
   function href(m, d) { return "#" + m.name + (d ? "/" + d.name : ""); }
+  function link(m, d, text) {
+    return '<a class="' + kindOf(d ? d.kind : "mod")[3] + '" href="' + href(m, d) + '">' + esc(text) + "</a>";
+  }
+  function modLink(m) { return '<a class="mod" href="' + href(m) + '">' + esc(m.name) + "</a>"; }
 
-  function grouped(m) {
-    var g = {};
-    m.decls.forEach(function (d) { var k = groupOf(d.kind); (g[k] = g[k] || []).push(d); });
+  /* the type a method belongs to: File for File.read */
+  function owner(d) { var p = d.name.split("."); return p.length > 1 ? p[p.length - 2] : ""; }
+  function typeNames(m) {
+    var t = {};
+    m.decls.forEach(function (d) { if (d.kind === "struct" || d.kind === "enum" || d.kind === "interface" || d.kind === "type") t[d.name] = true; });
+    return t;
+  }
+  /* a module's items by section; methods of its own types go on the type's page */
+  function sections(m) {
+    var own = typeNames(m), g = {};
+    m.decls.forEach(function (d) {
+      if (d.kind === "method" && own[owner(d)]) return;
+      (g[d.kind] = g[d.kind] || []).push(d);
+    });
     return g;
   }
+  function methodsOf(m, type) {
+    var out = [];
+    mods.forEach(function (mm) {
+      if (mm !== m && m.name !== "core") return;
+      mm.decls.forEach(function (x) { if (x.kind === "method" && owner(x) === type) out.push([mm, x]); });
+    });
+    return out;
+  }
 
-  /* ---- left: the module tree, or what the filter finds ---- */
-  function renderTree(cur) {
-    var html = "", group = null;
+  function heading(crumbs, h1, oob) {
+    return '<div class="main-heading">' + (crumbs ? '<div class="rustdoc-breadcrumbs">' + crumbs + "</div>" : "") +
+      "<h1>" + h1 + '</h1><span class="out-of-band">' + oob + "</span></div>";
+  }
+  function sectionHeader(id, text) {
+    return '<h2 id="' + id + '" class="section-header">' + esc(text) + '<a href="' + location.pathname + "#" + id + '" class="anchor">&sect;</a></h2>';
+  }
+  function itemTable(rows) {
+    return '<dl class="item-table">' + rows.map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>"; }).join("") + "</dl>";
+  }
+  function src(d) { return '<a class="src" href="' + GITHUB + d.file + "#L" + d.line + '">Source</a>'; }
+
+  /* ---- the sidebar ---- */
+  function block(title, items) {
+    return "<h3>" + esc(title) + '</h3><ul class="block">' + items.join("") + "</ul>";
+  }
+  function li(h, text, on) { return '<li><a href="' + h + '"' + (on ? ' class="current"' : "") + ">" + esc(text) + "</a></li>"; }
+  function modulesBlocks(cur) {
+    var out = "", group = null, items = [];
     mods.forEach(function (m) {
-      if (m.group !== group) { if (group !== null) html += "</ul>"; group = m.group; html += "<h4>" + esc(group) + "</h4><ul>"; }
-      html += '<li><a href="' + href(m) + '"' + (cur === m ? ' class="on"' : "") + ">" + esc(m.name) + "</a></li>";
+      if (m.group !== group) { if (items.length) out += block(group, items); group = m.group; items = []; }
+      items.push(li(href(m), m.name, m === cur));
     });
-    tree.innerHTML = html + "</ul>";
-    var on = tree.querySelector("a.on");
-    if (on) on.scrollIntoView({ block: "nearest" });
+    return out + (items.length ? block(group, items) : "");
+  }
+  function itemsBlocks(m, cur) {
+    var g = sections(m), out = "";
+    KINDS.forEach(function (k) {
+      if (!g[k[0]]) return;
+      out += block(k[1], g[k[0]].map(function (d) { return li(href(m, d), d.name, d === cur); }));
+    });
+    return out;
+  }
+  function renderSide(m, d) {
+    var out;
+    if (!m) {
+      out = '<h2 class="location"><a href="#">Library</a></h2><div class="sidebar-elems-inner">' + modulesBlocks(null) + "</div>";
+    } else if (!d) {
+      out = '<h2 class="location"><a href="' + href(m) + '">Module ' + esc(m.name) + "</a></h2>" +
+        '<div class="sidebar-elems-inner">' + itemsBlocks(m, null) +
+        '<h2 class="in-crate"><a href="#">In the library</a></h2>' + modulesBlocks(m) + "</div>";
+    } else {
+      var k = kindOf(d.kind), inner = "";
+      if (d.kind === "struct" || d.kind === "enum" || d.kind === "interface") {
+        var ms = methodsOf(m, d.name);
+        if (ms.length) inner += block("Methods", ms.map(function (p) {
+          return li(href(p[0], p[1]), p[1].name.split(".").pop(), false);
+        }));
+      }
+      out = '<h2 class="location"><a href="' + href(m, d) + '">' + esc(k[2] + " " + d.name) + "</a></h2>" +
+        '<div class="sidebar-elems-inner">' + inner +
+        '<h2 class="in-crate"><a href="' + href(m) + '">In ' + esc(m.name) + "</a></h2>" + itemsBlocks(m, d) + "</div>";
+    }
+    side.innerHTML = out;
   }
 
-  var ALL = [];
-  mods.forEach(function (m) {
-    ALL.push({ m: m, d: null, t: m.name, k: "module" });
-    m.decls.forEach(function (d) { ALL.push({ m: m, d: d, t: m.name === "core" ? d.name : m.name + "." + d.name, k: d.kind }); });
-  });
-  function find(q) {
-    q = q.trim().toLowerCase();
-    if (!q) { found.hidden = true; tree.hidden = false; return; }
-    var hits = [];
-    ALL.forEach(function (e) {
-      var t = e.t.toLowerCase(), last = t.slice(t.lastIndexOf(".") + 1);
-      var s = last === q ? 0 : last.indexOf(q) === 0 ? 1 : t.indexOf(q) === 0 ? 2 : t.indexOf(q) >= 0 ? 3 : -1;
-      if (s >= 0) hits.push([s, e]);
-    });
-    hits.sort(function (a, b) { return a[0] - b[0] || a[1].t.length - b[1].t.length || (a[1].t < b[1].t ? -1 : 1); });
-    found.innerHTML = hits.slice(0, 200).map(function (h) {
-      var e = h[1];
-      return '<li><a href="' + href(e.m, e.d) + '"><span>' + esc(e.t) + '</span><span class="kind">' + esc(e.k) + "</span></a></li>";
-    }).join("") || '<li style="color:var(--muted);padding:4px 6px">Nothing matches.</li>';
-    found.hidden = false;
-    tree.hidden = true;
-  }
-  filter.addEventListener("input", function () { find(filter.value); });
-  filter.addEventListener("keydown", function (e) {
-    if (e.key === "Enter") { var a = found.querySelector("a"); if (a) location.hash = a.getAttribute("href"); }
-    if (e.key === "Escape") { filter.value = ""; find(""); }
-  });
-
-  /* ---- right: the module's names ---- */
-  function renderRight(m, cur) {
-    if (!m) { right.innerHTML = ""; return; }
-    var g = grouped(m), html = '<h4><a href="' + href(m) + '" style="padding:0;font-family:var(--sans);font-size:12px">' + esc(m.name) + "</a></h4>";
-    GROUP_ORDER.forEach(function (k) {
-      if (!g[k]) return;
-      html += "<h4>" + k + "</h4><ul>" + g[k].map(function (d) {
-        return '<li><a href="' + href(m, d) + '"' + (d === cur ? ' class="on"' : "") + ">" + esc(shortName(m, d)) + "</a></li>";
-      }).join("") + "</ul>";
-    });
-    right.innerHTML = html;
-    var on = right.querySelector("a.on");
-    if (on) on.scrollIntoView({ block: "nearest" });
-  }
-
-  /* ---- middle ---- */
+  /* ---- the main content ---- */
   function overview() {
-    var html = "<h1 style=\"font-family:var(--sans)\">Standard library</h1>" +
-      '<p class="lede">Every module of the Iris standard library. A program imports a module (<code>import str</code>) and uses its names with its name in front (<code>str.cut</code>). <code>core</code>, with <code>List</code> and <code>Map</code>, needs no import. Generated from the library\'s source, Iris ' + esc(window.IRIS_VERSION || "") + ".</p>" +
-      '<div class="modgrid" style="margin-top:28px">';
-    var group = null;
+    var html = heading("", 'Library <span class="mod">std</span>', '<span class="since">' + esc(window.IRIS_VERSION || "") + "</span>") +
+      '<div class="docblock"><p>Every module of the Iris standard library. A program imports a module (<code>import str</code>) and uses its names with its name in front (<code>str.cut</code>). <code>core</code>, with <code>List</code> and <code>Map</code>, needs no import. Generated from the library\'s source.</p></div>';
+    var group = null, rows = [];
+    function flush() { if (rows.length) html += sectionHeader(group.toLowerCase().replace(/[^a-z0-9]+/g, "-"), group) + itemTable(rows); rows = []; }
     mods.forEach(function (m) {
-      if (m.group !== group) { if (group !== null) html += "</section>"; group = m.group; html += "<section><h4>" + esc(group) + "</h4>"; }
-      html += '<a href="' + href(m) + '">' + esc(m.name) + "</a><span>" + esc(m.summary) + "</span>";
+      if (m.group !== group) { flush(); group = m.group; }
+      rows.push([modLink(m), inline(m.summary)]);
     });
-    main.innerHTML = html + "</section></div>";
-  }
-
-  function members(m, list) {
-    return '<div class="members">' + list.map(function (d) {
-      return '<a href="' + href(m, d) + '">' + esc(shortName(m, d)) + "</a><span>" + inline(firstSentence(d.doc)) + "</span>";
-    }).join("") + "</div>";
+    flush();
+    main.innerHTML = html;
   }
 
   function modulePage(m) {
-    var g = grouped(m);
-    var html = '<div class="crumb"><a href="#">Library</a> / ' + esc(m.group) + '<span class="badge">module</span></div>' +
-      "<h1>" + esc(m.name) + "</h1>" + '<p class="lede">' + inline(m.summary) + "</p>" +
-      (m.name === "core" ? "" : '<pre class="code imp"><code>' + hl("import " + m.name) + "</code></pre>") +
-      (m.doc ? '<div class="intro prose">' + docHtml(m.doc) + "</div>" : "") +
-      (m.intro ? '<div class="intro prose">' + m.intro + "</div>" : "");
-    GROUP_ORDER.forEach(function (k) {
-      if (!g[k]) return;
-      html += "<h2>" + k + " (" + g[k].length + ")</h2>";
-      if (k === "Constants") {
-        html += '<div class="table"><table><tbody>' + g[k].map(function (d) {
-          return '<tr><td><a href="' + href(m, d) + '"><code>' + esc(shortName(m, d)) + "</code></a></td><td><code>" + esc(d.sig) + "</code></td><td>" + inline(firstSentence(d.doc)) + "</td></tr>";
-        }).join("") + "</tbody></table></div>";
-      } else {
-        html += members(m, g[k]);
-      }
+    var g = sections(m);
+    var html = heading('<a href="#">std</a>', 'Module <span class="mod">' + esc(m.name) + "</span>",
+      '<a class="src" href="' + GITHUB + m.name + '">Source</a>') +
+      '<div class="docblock">' + "<p>" + inline(m.summary) + "</p>" +
+      (m.name === "core" ? "" : '<pre class="code"><code>' + hl("import " + m.name) + "</code></pre>") +
+      (m.doc ? docHtml(m.doc) : "") + (m.intro || "") + "</div>";
+    KINDS.forEach(function (k) {
+      if (!g[k[0]]) return;
+      html += sectionHeader(k[0] + "s", k[1]) + itemTable(g[k[0]].map(function (d) {
+        return [link(m, d, d.name), inline(firstSentence(d.doc))];
+      }));
     });
     main.innerHTML = html;
   }
 
   function declPage(m, d) {
-    var short = shortName(m, d);
-    var html = '<div class="crumb"><a href="#">Library</a> / <a href="' + href(m) + '">' + esc(m.name) + '</a><span class="badge">' + esc(d.kind) + "</span>" +
-      (d.platform && d.platform.length ? '<span class="badge">' + esc(d.platform.join(", ")) + "</span>" : "") + "</div>" +
-      "<h1>" + esc(short) + "</h1>" +
-      '<pre class="code sig"><code>' + hl(d.sig) + "</code></pre>";
-    html += d.doc ? '<div class="docline prose">' + docHtml(d.doc) + "</div>" : '<p class="docline" style="color:var(--muted)">No description yet.</p>';
-    if (d.kind === "struct") {
-      var type = d.name.split(".").pop();
-      var methods = [];
-      mods.forEach(function (mm) {
-        mm.decls.forEach(function (x) {
-          if (x.kind === "method" && x.name.split(".").slice(-2)[0] === type && (mm === m || m.name === "core")) methods.push([mm, x]);
-        });
-      });
-      if (methods.length) {
-        html += "<h2>Methods (" + methods.length + ")</h2>" + '<div class="members">' + methods.map(function (p) {
-          return '<a href="' + href(p[0], p[1]) + '">' + esc(shortName(p[0], p[1])) + "</a><span>" + inline(firstSentence(p[1].doc)) + "</span>";
+    var k = kindOf(d.kind);
+    var name = d.name.split(".").pop();
+    var crumbs = '<a href="#">std</a>::<a href="' + href(m) + '">' + esc(m.name) + "</a>";
+    if (d.kind === "method") {
+      var own = owner(d), t = null;
+      mods.forEach(function (mm) { mm.decls.forEach(function (x) { if (!t && x.name === own && x.kind !== "method") t = [mm, x]; }); });
+      crumbs += "::" + (t ? link(t[0], t[1], own) : esc(own));
+    }
+    var oob = (d.platform && d.platform.length ? '<span class="since">' + esc(d.platform.join(", ")) + "</span> &middot; " : "") + src(d);
+    var html = heading(crumbs, esc(k[2]) + ' <span class="' + k[3] + '">' + esc(name) + "</span>", oob) +
+      '<div class="item-decl"><pre class="code"><code>' + hl(d.sig) + "</code></pre></div>" +
+      '<div class="docblock">' + (d.doc ? docHtml(d.doc) : "<p>No description yet.</p>") + "</div>";
+    if (d.kind === "struct" || d.kind === "enum" || d.kind === "interface") {
+      var ms = methodsOf(m, d.name);
+      if (ms.length) {
+        html += sectionHeader("methods", "Methods") + '<div class="impl-items">' + ms.map(function (p) {
+          var x = p[1], short = x.name.split(".").pop();
+          return '<section id="method.' + esc(short) + '"><h4 class="code-header">' +
+            hl(x.sig).replace(new RegExp("(\\b" + short.replace(/[^\w]/g, "") + ")(</span>)?\\("), function (all, nm, close) {
+              return '<a class="fn" href="' + href(p[0], x) + '">' + nm + "</a>" + (close || "") + "(";
+            }) +
+            '</h4><div class="docblock">' + docHtml(x.doc) + "</div></section>";
         }).join("") + "</div>";
       }
     }
-    html += '<div class="from">Defined in <a href="https://github.com/ozzenerol/iris/blob/main/std/' + d.file + "#L" + d.line + '">std/' + esc(d.file) + ":" + d.line + "</a></div>";
     main.innerHTML = html;
   }
 
@@ -282,12 +298,18 @@
       var name = h.slice(slash + 1);
       m.decls.forEach(function (x) { if (x.name === name) d = x; });
     }
-    if (!m) { overview(); document.title = "Library - Iris"; }
-    else if (!d) { modulePage(m); document.title = m.name + " - Iris"; }
-    else { declPage(m, d); document.title = shortName(m, d) + " (" + m.name + ") - Iris"; }
-    renderTree(m);
-    renderRight(m, d);
-    main.scrollTop = 0;
+    var title;
+    if (!m) { overview(); title = "Library reference"; }
+    else if (!d) { modulePage(m); title = m.name; }
+    else { declPage(m, d); title = d.name + " in " + m.name; }
+    document.title = title + " - Iris";
+    var mobile = document.querySelector(".mobile-topbar .location");
+    if (mobile) mobile.textContent = title;
+    renderSide(m, d);
+    if (window.irisCopyButtons) window.irisCopyButtons(main);
+    if (window.irisCloseNav) window.irisCloseNav();
+    var search = document.getElementById("search"), content = document.getElementById("main-content");
+    if (search && !search.hidden) { search.hidden = true; content.hidden = false; var i = document.getElementById("site-search"); if (i) i.value = ""; }
     window.scrollTo(0, 0);
   }
 
