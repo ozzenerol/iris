@@ -1,9 +1,10 @@
-/* The search box, the theme switch, Copy buttons, the sidebars and "On this page". */
+/* The sidebar, the search, the theme switch, Copy buttons, the library's panes and the arrow keys. */
 (function () {
   document.querySelectorAll(".ver").forEach(function (v) {
     v.textContent = window.IRIS_VERSION || "";
   });
-  var box = document.querySelector(".search");
+  var html = document.documentElement;
+  var box = document.getElementById("search-wrapper");
   var input = document.getElementById("site-search");
   var list = document.getElementById("site-results");
   var root = box ? box.getAttribute("data-root") : "";
@@ -56,6 +57,15 @@
     links[sel].scrollIntoView({ block: "nearest" });
   }
 
+  var searchBtn = document.getElementById("search-toggle");
+  function openSearch(open) {
+    if (!box) return;
+    box.hidden = !open;
+    searchBtn.setAttribute("aria-expanded", String(open));
+    if (open) { input.focus(); input.select(); }
+  }
+  if (searchBtn) searchBtn.addEventListener("click", function () { openSearch(box.hidden); });
+
   if (input) {
     input.addEventListener("input", function () { show(input.value); });
     input.addEventListener("keydown", function (e) {
@@ -65,13 +75,49 @@
         var links = list.querySelectorAll("a");
         var a = links[sel >= 0 ? sel : 0];
         if (a) { location.href = withTheme(a.href); list.hidden = true; }
-      } else if (e.key === "Escape") { input.value = ""; show(""); input.blur(); }
+      } else if (e.key === "Escape") { input.value = ""; show(""); openSearch(false); searchBtn.focus(); }
     });
-    document.addEventListener("click", function (e) { if (!box.contains(e.target)) list.hidden = true; });
-    document.addEventListener("keydown", function (e) {
-      var t = e.target.tagName;
-      if (e.key === "/" && t !== "INPUT" && t !== "TEXTAREA") { e.preventDefault(); input.focus(); }
+  }
+
+  /* keys: / or s searches, the arrows go to the page before and after */
+  document.addEventListener("keydown", function (e) {
+    var t = e.target.tagName;
+    if (t === "INPUT" || t === "TEXTAREA" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if ((e.key === "/" || e.key === "s") && input) { e.preventDefault(); openSearch(true); return; }
+    var rel = e.key === "ArrowLeft" ? "prev" : e.key === "ArrowRight" ? "next" : "";
+    var a = rel && document.querySelector('.pager a[rel="' + rel + '"]');
+    if (a) { e.preventDefault(); location.href = withTheme(a.href); }
+  });
+
+  /* the sidebar: the button opens and closes it; on a wide screen that is
+     remembered, on a narrow one it opens over the text and a click on the
+     text or a link closes it */
+  var sidebar = document.getElementById("sidebar");
+  var sideBtn = document.getElementById("sidebar-toggle");
+  function narrow() { return window.innerWidth < 1080; }
+  function setSidebar(visible, remember) {
+    html.classList.toggle("sidebar-visible", visible);
+    html.classList.toggle("sidebar-hidden", !visible);
+    if (sideBtn) sideBtn.setAttribute("aria-expanded", String(visible));
+    if (remember) { try { localStorage.setItem("iris-sidebar", visible ? "visible" : "hidden"); } catch (e) {} }
+  }
+  if (sideBtn) {
+    sideBtn.setAttribute("aria-expanded", String(html.classList.contains("sidebar-visible")));
+    sideBtn.addEventListener("click", function () {
+      setSidebar(!html.classList.contains("sidebar-visible"), !narrow());
     });
+    document.addEventListener("click", function (e) {
+      if (narrow() && html.classList.contains("sidebar-visible") && !sidebar.contains(e.target) && !sideBtn.contains(e.target)) {
+        setSidebar(false, false);
+      }
+    });
+  }
+  /* the page being read is in view in the sidebar */
+  var current = sidebar && sidebar.querySelector("a.active");
+  if (current) {
+    var scroller = sidebar.querySelector(".sidebar-scroll");
+    var top = current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (top > scroller.clientHeight - 80) scroller.scrollTop = top - scroller.clientHeight / 3;
   }
 
   /* theme: the system's, until the button picks one (remembered) */
@@ -138,49 +184,21 @@
     copyOnClick(b, pre.querySelector("code"));
   });
 
-  /* closable sidebars: chapters, on this page, and the library's two panes.
-     the open/closed class lives on <html> (set early, in <head>, to avoid a layout
-     flash) and the CSS keys off it; this keeps aria-expanded and storage in sync. */
+  /* the library's two panes: the open/closed class lives on <html> (set early,
+     in <head>, to avoid a layout flash); this keeps aria-expanded and storage in sync */
   function sync(side) {
-    var open = !document.documentElement.classList.contains("closed-" + side);
+    var open = !html.classList.contains("closed-" + side);
     document.querySelectorAll('.side-btn[data-side="' + side + '"]').forEach(function (b) {
       b.setAttribute("aria-expanded", String(open));
     });
   }
-  ["chapters", "onpage", "std-left", "std-right"].forEach(sync);
+  ["std-left", "std-right"].forEach(sync);
   document.querySelectorAll(".side-btn").forEach(function (b) {
     b.addEventListener("click", function () {
       var side = b.getAttribute("data-side");
-      var closed = document.documentElement.classList.toggle("closed-" + side);
+      var closed = html.classList.toggle("closed-" + side);
       sync(side);
       try { localStorage.setItem("iris-side-" + side, closed ? "closed" : "open"); } catch (e) {}
-      if (!closed) {
-        var other = document.querySelector('.side-hide[data-side="' + side + '"]');
-        if (other) other.focus();
-      }
     });
   });
-
-  /* the chapter being read is in view in the chapter list */
-  var current = document.querySelector(".chapters a.on");
-  if (current) {
-    var list = current.closest(".chapters");
-    var top = current.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    if (top > list.clientHeight - 80) list.scrollTop = top - list.clientHeight / 3;
-  }
-
-  /* "On this page": the section being read */
-  var links = document.querySelectorAll(".onpage a");
-  if (links.length && "IntersectionObserver" in window) {
-    var byId = {};
-    links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
-    var seen = {};
-    var obs = new IntersectionObserver(function (es) {
-      es.forEach(function (e) { seen[e.target.id] = e.isIntersecting; });
-      var first = null;
-      document.querySelectorAll(".prose h2[id]").forEach(function (h) { if (!first && seen[h.id]) first = h.id; });
-      if (first) links.forEach(function (a) { a.classList.toggle("on", a === byId[first]); });
-    }, { rootMargin: "-60px 0px -60% 0px" });
-    document.querySelectorAll(".prose h2[id]").forEach(function (h) { obs.observe(h); });
-  }
 })();

@@ -89,13 +89,20 @@ PARTS = {
 }
 
 
-def shell(title, body, root, section="", wide=False, desc=""):
-    """A whole page: the top bar, body, footer. root: the way back to docs/ ("" or "../")."""
-    def nav(href, label, key):
-        on = ' class="on"' if key == section else ""
-        return f'<a href="{root}{href}"{on}>{label}</a>'
+ICONS = {
+    "menu": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+    "search": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>',
+    "theme": '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" class="fill"/></svg>',
+}
+
+
+def shell(title, body, root, desc="", sidebar="", wide=False):
+    """A whole page: the sidebar (on book pages), the menu bar and the body.
+    root: the way back to docs/ ("" or "../")."""
     full = "Iris" if title == "Iris" else f"{title} - Iris"
     meta = f'<meta name="description" content="{html.escape(desc)}">' if desc else ""
+    toggle = (f'<button id="sidebar-toggle" class="icon-button" type="button" aria-label="Show or hide the chapters" '
+              f'title="Chapters" aria-controls="sidebar">{ICONS["menu"]}</button>') if sidebar else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -110,45 +117,44 @@ def shell(title, body, root, section="", wide=False, desc=""):
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
    the one remembered. Pages opened as files can't share storage in every
-   browser, so the first two carry it there. */
-var t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
-if (t) document.documentElement.dataset.theme = t[1];
+   browser, so the first two carry it there. The sidebar: open on a wide
+   screen unless it was closed, closed on a narrow one. */
+var h = document.documentElement, t = /^iris-theme:(dark|light)$/.exec(window.name) || /[?&]theme=(dark|light)/.exec(location.search);
+if (t) h.dataset.theme = t[1];
+var side = window.innerWidth >= 1080 ? "visible" : "hidden";
 try {{
   if (t) localStorage.setItem("iris-theme", t[1]);
-  else if ((t = localStorage.getItem("iris-theme"))) document.documentElement.dataset.theme = t;
-  ["chapters", "onpage", "std-left", "std-right"].forEach(function (s) {{
-    if (localStorage.getItem("iris-side-" + s) === "closed") document.documentElement.classList.add("closed-" + s);
+  else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
+  if (side === "visible" && localStorage.getItem("iris-sidebar") === "hidden") side = "hidden";
+  ["std-left", "std-right"].forEach(function (s) {{
+    if (localStorage.getItem("iris-side-" + s) === "closed") h.classList.add("closed-" + s);
   }});
-}} catch (e) {{}}</script>
+}} catch (e) {{}}
+h.classList.add("sidebar-" + side);</script>
 </head>
-<body{' class="wide"' if wide else ''}>
-<header class="top">
-  <div class="bar">
-    <a class="brand" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">Iris</a>
-    <nav class="main">
-      {nav("tour/index.html", "Language Tour", "tour")}
-      {nav("library-tour/index.html", "Library Tour", "library-tour")}
-      {nav("std/index.html", "Library", "std")}
-      {nav("design/index.html", "Design", "design")}
-    </nav>
-    <div class="search" data-root="{root}">
-      <input id="site-search" type="search" placeholder="Search" aria-label="Search the documentation" autocomplete="off">
-      <kbd>/</kbd>
-      <ul id="site-results" class="results" hidden></ul>
-    </div>
+<body class="{"book" if sidebar else "wide" if wide else "plain"}">
+{sidebar}
+<div class="page-wrapper">
+<header class="menu-bar">
+  <div class="left-buttons">
+    {toggle}
+    <button id="theme" class="icon-button" type="button" aria-label="Switch between light and dark" title="Light or dark">{ICONS["theme"]}</button>
+    <button id="search-toggle" class="icon-button" type="button" aria-label="Search" title="Search (/)" aria-controls="search-wrapper">{ICONS["search"]}</button>
+  </div>
+  <a class="menu-title" href="{root}index.html"><img src="{root}assets/logo.svg" alt="">Iris</a>
+  <div class="right-buttons">
+    <a class="wide-only" href="{root}tour/index.html">Language Tour</a>
+    <a class="wide-only" href="{root}library-tour/index.html">Library Tour</a>
+    <a href="{root}std/index.html">Library</a>
     <span class="ver"></span>
-    <button id="theme" class="theme" aria-label="Switch between light and dark">&#9680;</button>
   </div>
 </header>
+<div id="search-wrapper" class="search-wrapper" data-root="{root}" hidden>
+  <input id="site-search" type="search" placeholder="Search the documentation" aria-label="Search the documentation" autocomplete="off">
+  <ul id="site-results" class="results" hidden></ul>
+</div>
 {body}
-<footer>
-  <div class="bar">
-    <span>Iris <span class="ver"></span></span>
-    <a href="{root}tour/index.html">Language Tour</a>
-    <a href="{root}library-tour/index.html">Library Tour</a>
-    <a href="{root}std/index.html">Library</a>
-  </div>
-</footer>
+</div>
 <script src="{root}assets/search.js"></script>
 <script src="{root}assets/site.js"></script>
 </body>
@@ -196,17 +202,97 @@ def by_part(chs):
 NUMBERED = {"tour", "design"}
 
 
-def chapter_list(parts, section, stem_on=None):
-    """The chapters by part, as the sidebar and the phone's menu show them"""
-    out = []
-    for part, items in parts:
+class Book:
+    """Every page of the book in reading order, and the sidebar that lists them:
+    the introduction, then each section's index page and chapters, by part."""
+
+    def __init__(self, sections):
+        self.entries = [("page", "Introduction", "index.html", "", 0)]
+        self.order = [("index.html", "Introduction")]
+        for section, label, chs in sections:
+            href = f"{section}/index.html"
+            self.entries.append(("part", label, href, "", 0))
+            self.order.append((href, label))
+            parts = by_part(chs)
+            for g, (part, items) in enumerate(parts, 1):
+                if len(parts) > 1:
+                    self.entries.append(("group", part, None, f"{g}.", 0))
+                for i, (n, ch) in enumerate(items, 1):
+                    num = f"{g}.{i}." if len(parts) > 1 else f"{n}."
+                    href = f"{section}/{ch[0]}.html"
+                    self.entries.append(("page", ch[1], href, num, 1 if len(parts) > 1 else 0))
+                    self.order.append((href, ch[1]))
+        self.entries.append(("part", "Reference", None, "", 0))
+        self.entries.append(("page", "Standard library", "std/index.html", "", 0))
+
+    def sidebar(self, root, here):
+        items = []
+        for kind, title, href, num, depth in self.entries:
+            t = html.escape(title)
+            n = f'<strong aria-hidden="true">{num}</strong> ' if num else ""
+            on = ' class="active" aria-current="page"' if href == here else ""
+            if kind == "part":
+                inner = f'<a href="{root}{href}"{on}>{t}</a>' if href else t
+                items.append(f'<li class="part-title">{inner}</li>')
+            elif kind == "group":
+                items.append(f'<li class="chapter-item group">{n}{t}</li>')
+            else:
+                items.append(f'<li class="chapter-item depth-{depth}"><a href="{root}{href}"{on}>{n}{t}</a></li>')
+        return (f'<nav id="sidebar" class="sidebar" aria-label="Chapters"><div class="sidebar-scroll">'
+                f'<ol class="chapters">{"".join(items)}</ol></div></nav>')
+
+    def page(self, rel, title, body, desc=""):
+        """A book page at docs/rel: the sidebar, the text and the arrows to the pages before and after"""
+        root = "../" * rel.count("/")
+        hrefs = [h for h, _ in self.order]
+        i = hrefs.index(rel)
+        arrows = []
+        wide = []
+        if i > 0:
+            h, t = self.order[i - 1]
+            arrows.append(f'<a rel="prev" class="prev" href="{root}{h}" title="{html.escape(t)}">'
+                          f'<span>&#8249; Previous</span>{html.escape(t)}</a>')
+            wide.append(f'<a rel="prev" class="nav-chapters previous" href="{root}{h}" '
+                        f'title="Previous: {html.escape(t)}" aria-label="Previous: {html.escape(t)}">&#8249;</a>')
+        if i + 1 < len(self.order):
+            h, t = self.order[i + 1]
+            arrows.append(f'<a rel="next" class="next" href="{root}{h}" title="{html.escape(t)}">'
+                          f'<span>Next &#8250;</span>{html.escape(t)}</a>')
+            wide.append(f'<a rel="next" class="nav-chapters next" href="{root}{h}" '
+                        f'title="Next: {html.escape(t)}" aria-label="Next: {html.escape(t)}">&#8250;</a>')
+        page = f"""<div class="content">
+<main class="prose">
+{body}
+</main>
+<nav class="pager" aria-label="Previous and next page">{"".join(arrows)}</nav>
+</div>
+<nav class="nav-wide" aria-label="Previous and next page">{"".join(wide)}</nav>"""
+        write(rel, shell(title, page, root, desc, sidebar=self.sidebar(root, rel)))
+
+
+def chapter_pages(book, chs, index, section, label):
+    for stem, title, lede, body, toc, part in chs:
+        book.page(f"{section}/{stem}.html", title, body, desc=lede)
+        for sid, text in toc:
+            index.append({"t": text, "p": title, "u": f"{section}/{stem}.html#{sid}", "k": "section"})
+        index.append({"t": title, "p": label, "u": f"{section}/{stem}.html", "k": "chapter"})
+
+
+def section_index(book, section, label, lede, chs):
+    groups = []
+    for g, (part, items) in enumerate(by_part(chs), 1):
+        many = len(PARTS[section]) > 1
         lis = "".join(
-            f'<li><a href="{ch[0]}.html"{' class="on" aria-current="page"' if ch[0] == stem_on else ''}>'
-            + (f'<span class="num">{n}</span>' if section in NUMBERED else "")
-            + f'{html.escape(ch[1])}</a></li>'
-            for n, ch in items)
-        out.append(f'<h5>{html.escape(part)}</h5><ol>{lis}</ol>')
-    return "".join(out)
+            f'<li><a href="{ch[0]}.html">'
+            + (f'<span class="num">{f"{g}.{i}" if many else n}</span>' if section in NUMBERED or many else "")
+            + f'<b>{html.escape(ch[1])}</b><span class="desc">{html.escape(ch[2])}</span></a></li>'
+            for i, (n, ch) in enumerate(items, 1))
+        head = f'<h2>{g}. {html.escape(part)}</h2>' if many else ""
+        groups.append(f'{head}<ol class="toc">{lis}</ol>')
+    body = f"""<h1>{html.escape(label)}</h1>
+<p class="lede">{html.escape(lede)}</p>
+{"".join(groups)}"""
+    book.page(f"{section}/index.html", label, body, desc=lede)
 
 
 def hide_button(side, label, arrow):
@@ -217,71 +303,6 @@ def hide_button(side, label, arrow):
 def show_button(side, label, arrow, where):
     return (f'<button class="side-btn side-show side-show-{where}" type="button" data-side="{side}" '
             f'aria-expanded="true" aria-label="Show {label}" title="Show {label}">{arrow}</button>')
-
-
-def chapter_pages(chs, index, section, label):
-    parts = by_part(chs)
-    total = len(chs)
-    for n, (stem, title, lede, body, toc, part) in enumerate(chs):
-        side = chapter_list(parts, section, stem)
-        on_page = "".join(f'<li><a href="#{sid}">{html.escape(text)}</a></li>' for sid, text in toc)
-        prev_link = next_link = ""
-        if n > 0:
-            p = chs[n - 1]
-            prev_link = f'<a class="prev" href="{p[0]}.html"><span>&#8249; Previous</span>{html.escape(p[1])}</a>'
-        if n + 1 < len(chs):
-            q = chs[n + 1]
-            next_link = f'<a class="next" href="{q[0]}.html"><span>Next &#8250;</span>{html.escape(q[1])}</a>'
-        crumbs = (f'<div class="crumbs"><a href="index.html">{html.escape(label)}</a><span aria-hidden="true">/</span>'
-                  f'<span>{html.escape(part)}</span><span class="pos">{n + 1} of {total}</span></div>')
-        menu = (f'<details class="chap-menu"><summary>All chapters</summary>'
-                f'<nav aria-label="Chapters">{side}</nav></details>')
-        onpage = ""
-        if toc:
-            onpage = f"""<aside class="onpage" aria-label="On this page">
-    <div class="side-head"><span>On this page</span>{hide_button("onpage", "on this page", "&#8250;")}</div>
-    <ul>{on_page}</ul>
-  </aside>
-  {show_button("onpage", "on this page", "&#8249;", "r")}"""
-        page = f"""<div class="doc">
-  <aside class="chapters" aria-label="Chapters">
-    <div class="side-head"><a href="index.html">{html.escape(label)}</a>{hide_button("chapters", "the chapter list", "&#8249;")}</div>
-    <nav>{side}</nav>
-  </aside>
-  {show_button("chapters", "the chapter list", "&#8250;", "l")}
-  <article class="prose">
-{crumbs}
-{menu}
-{body}
-    <nav class="pager" aria-label="Previous and next chapter">{prev_link}{next_link}</nav>
-  </article>
-  {onpage}
-</div>"""
-        write(f"{section}/{stem}.html", shell(title, page, "../", section, wide=True, desc=lede))
-        for sid, text in toc:
-            index.append({"t": text, "p": title, "u": f"{section}/{stem}.html#{sid}", "k": "section"})
-        index.append({"t": title, "p": label, "u": f"{section}/{stem}.html", "k": "chapter"})
-
-
-def section_index(section, label, lede, chs):
-    groups = []
-    for part, items in by_part(chs):
-        lis = "".join(
-            f'<li><a href="{ch[0]}.html">'
-            + (f'<span class="num">{n}</span>' if section in NUMBERED else "")
-            + f'<b>{html.escape(ch[1])}</b><span class="desc">{html.escape(ch[2])}</span></a></li>'
-            for n, ch in items)
-        head = f'<h2>{html.escape(part)}</h2>' if len(PARTS[section]) > 1 else ""
-        groups.append(f'{head}<ol class="toc{" plain" if section not in NUMBERED else ""}">{lis}</ol>')
-    start = f'<p class="start"><a class="button" href="{chs[0][0]}.html">Start with {html.escape(chs[0][1])} &#8250;</a></p>' \
-        if section in NUMBERED else ""
-    body = f"""<main class="narrow">
-  <h1>{html.escape(label)}</h1>
-  <p class="lede">{html.escape(lede)}</p>
-  {start}
-  {"".join(groups)}
-</main>"""
-    write(f"{section}/index.html", shell(label, body, "../", section, desc=lede))
 
 
 def std_pages(index, iris):
@@ -330,28 +351,18 @@ def std_pages(index, iris):
 </div>
 <script src="data.js"></script>
 <script src="../assets/std.js"></script>"""
-    write("std/index.html", shell("Library", body, "../", "std", wide=True,
+    write("std/index.html", shell("Library", body, "../", wide=True,
                                   desc="The Iris standard library: every module, type and function."))
     return sum(len(m["decls"]) for m in mods)
 
 
-START = """<nav class="paths-cards" aria-label="Where to start">
-  <a href="tour/index.html"><b>Language Tour</b><span>The whole language, one topic per chapter. Start here.</span></a>
-  <a href="library-tour/index.html"><b>Library Tour</b><span>One task per chapter: files, HTTP, databases, formats and more.</span></a>
-  <a href="std/index.html"><b>Library</b><span>Every module, type and function of the standard library.</span></a>
-</nav>"""
-
-
-def prose_page(name, title, section, desc, index):
-    src = open(os.path.join(SRC, name + ".md")).read()
-    page_title, lede, body, toc, _ = md.convert(src)
-    if name == "index":
-        # where to go next, right under the first lines
-        cut = body.index("</p>", body.index('class="lede"')) + 4
-        body = body[:cut] + START + body[cut:]
-    write(name + ".html", shell(title, f'<main class="narrow prose">\n{body}\n</main>', "", section,
-                                desc=desc or lede))
-    index.append({"t": page_title or title, "p": "Iris", "u": name + ".html", "k": "page"})
+def intro_page(book, index):
+    title, lede, body, toc, _ = md.convert(open(os.path.join(SRC, "index.md")).read())
+    book.page("index.html", "Iris", body,
+              desc="Iris, a compiled language for servers, network tools and system programs.")
+    index.append({"t": title or "Iris", "p": "Iris", "u": "index.html", "k": "page"})
+    for sid, text in toc:
+        index.append({"t": text, "p": "Introduction", "u": f"index.html#{sid}", "k": "section"})
 
 
 def broken_links():
@@ -379,13 +390,15 @@ def main():
     open(os.path.join(OUT, ".nojekyll"), "w").close()
     index = []
     counts = []
+    all_chs = {section: chapters(section) for section, _, _ in SECTIONS}
+    book = Book([(section, label, all_chs[section]) for section, label, _ in SECTIONS])
+    intro_page(book, index)
     for section, label, lede in SECTIONS:
-        chs = chapters(section)
-        chapter_pages(chs, index, section, label)
-        section_index(section, label, lede, chs)
+        chs = all_chs[section]
+        chapter_pages(book, chs, index, section, label)
+        section_index(book, section, label, lede, chs)
         counts.append(f"{len(chs)} {section}")
     n = std_pages(index, iris)
-    prose_page("index", "Iris", "", "Iris, a compiled language for servers, network tools and system programs.", index)
     # the only file a new version changes; site.js puts it into each page
     write("assets/version.js", "window.IRIS_VERSION = " + json.dumps(VERSION) + ";\n")
     write("assets/search.js", "window.IRIS_SEARCH = " + json.dumps(index, separators=(",", ":")) + ";\n")
