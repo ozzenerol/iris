@@ -1,7 +1,9 @@
 /* iris lsp: a language server for editors, over standard input and output.
  *
  * It answers diagnostics, hover, go to definition, document symbols,
- * completion after a dot, and formatting. The editor sends whole documents
+ * completion (of names, after a dot and after @; a module that isn't
+ * imported yet completes and adds its import), quick fixes that add a
+ * missing import, and formatting. The editor sends whole documents
  * (full sync); open documents are read instead of the files on disk.
  *
  * Each request that needs the compiler runs in a child process (fork): the
@@ -1285,6 +1287,10 @@ static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
     sbFree(&r);
 }
 
+/* Edits that taking a completion item makes besides inserting it: the line
+ * that imports its module (a JSON array), or NULL. */
+static const char *gItemEdits;
+
 static void putItem(StrBuf *r, bool *first, const char *label, int kind, const char *detail) {
     if (!*first) sbPutc(r, ',');
     *first = false;
@@ -1295,7 +1301,106 @@ static void putItem(StrBuf *r, bool *first, const char *label, int kind, const c
         sbPuts(r, ",\"detail\":");
         putStr(r, detail);
     }
+    if (gItemEdits) {
+        sbPuts(r, ",\"additionalTextEdits\":");
+        sbPuts(r, gItemEdits);
+    }
     sbPutc(r, '}');
+}
+
+/* ---------------------------------------------------------------- imports */
+
+/* Whether name is a standard library module that has to be imported. */
+static bool isStdModule(const char *name) {
+    const char *names[128];
+    int n = stdModuleNames(names, 128);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(names[i], name) == 0) return strcmp(name, "core") != 0;
+    }
+    return false;
+}
+
+/* Whether the line at s, up to end, is an import line. */
+static bool isImportLine(const char *s, const char *end) {
+    return end - s > 7 && memcmp(s, "import", 6) == 0 && (s[6] == ' ' || s[6] == '\t');
+}
+
+/* Whether an import line of text names the module. */
+static bool importsModule(const char *text, size_t len, const char *name) {
+    size_t nl = strlen(name);
+    for (const char *s = text, *end = text + len; s < end;) {
+        const char *e = memchr(s, '\n', (size_t)(end - s));
+        if (!e) e = end;
+        if (isImportLine(s, e)) {
+            for (const char *p = s + 6; p < e;) {
+                if (*p == '/' && p + 1 < e && p[1] == '/') break;
+                if (*p == '"') {
+                    const char *q = memchr(p + 1, '"', (size_t)(e - p - 1));
+                    p = q ? q + 1 : e;
+                } else if (isalnum((unsigned char)*p) || *p == '_') {
+                    const char *w = p;
+                    while (p < e && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                    if ((size_t)(p - w) == nl && memcmp(w, name, nl) == 0) return true;
+                } else {
+                    p++;
+                }
+            }
+        }
+        s = e + 1;
+    }
+    return false;
+}
+
+/* The edit that imports the module, as a JSON array: a line under the last
+ * import line, or at the top with a blank line after it. */
+static void importEdits(StrBuf *b, const char *text, size_t len, const char *name) {
+    int line = 0, after = -1;
+    for (const char *s = text, *end = text + len; s < end; line++) {
+        const char *e = memchr(s, '\n', (size_t)(end - s));
+        if (!e) e = end;
+        if (isImportLine(s, e)) after = line + 1;
+        s = e + 1;
+    }
+    char t[160];
+    snprintf(t, sizeof t, after >= 0 ? "import %s\n" : "import %s\n\n", name);
+    int at = after >= 0 ? after : 0;
+    sbPrintf(b, "[{\"range\":{\"start\":{\"line\":%d,\"character\":0},\"end\":{\"line\":%d,\"character\":0}},\"newText\":",
+             at, at);
+    putStr(b, t);
+    sbPuts(b, "}]");
+}
+
+/* Quick fixes: import the module a diagnostic says is missing. */
+static void codeActions(StrBuf *out, J *id, J *params, const char *uri, Doc *doc) {
+    StrBuf r = {0};
+    sbPutc(&r, '[');
+    bool first = true;
+    char done[16][128];
+    int ndone = 0;
+    J *ds = jget(jget(params, "context"), "diagnostics");
+    for (J *d = ds && doc ? ds->child : NULL; d; d = d->next) {
+        const char *msg = jstr(d, "message");
+        char name[128];
+        int used = 0;
+        if (!msg || sscanf(msg, "%127[A-Za-z0-9_] is a standard library module that isn't imported%n", name, &used) != 1 ||
+            !used) {
+            continue;
+        }
+        bool seen = false;
+        for (int i = 0; i < ndone; i++) seen |= strcmp(done[i], name) == 0;
+        if (seen || importsModule(doc->text, doc->len, name) || ndone == 16) continue;
+        strcpy(done[ndone++], name);
+        if (!first) sbPutc(&r, ',');
+        first = false;
+        sbPrintf(&r, "{\"title\":\"import %s\",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":{", name);
+        putStr(&r, uri);
+        sbPutc(&r, ':');
+        importEdits(&r, doc->text, doc->len, name);
+        sbPuts(&r, "}}}");
+    }
+    sbPutc(&r, ']');
+    reply(out, id, r.buf);
+    sbFree(&r);
 }
 
 /* The functions of std/str that text has as methods. */
@@ -1573,6 +1678,20 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
         }
     }
     static const char *builtins[] = {"print", "format", "panic", "error", "alloc", "free", "sizeof", "sleep", "after", "expect"};
+    /* the standard library's modules this file doesn't import yet: taking one adds its import */
+    if (src) {
+        const char *mods[128];
+        int n = stdModuleNames(mods, 128);
+        for (int i = 0; i < n; i++) {
+            if (!isStdModule(mods[i]) || importsModule(src->text, src->len, mods[i])) continue;
+            StrBuf e = {0};
+            importEdits(&e, src->text, src->len, mods[i]);
+            gItemEdits = e.buf;
+            addItem(&it, mods[i], 9, "standard library, adds its import");
+            gItemEdits = NULL;
+            sbFree(&e);
+        }
+    }
     for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) addItem(&it, builtins[i], 3, "built-in");
     static const char *types[] = {"void", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
                                   "str", "String", "Error", "Duration", "Mutex", "Thread", "Atomic"};
@@ -1582,6 +1701,133 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
                                   "import", "try", "catch", "defer", "errdefer", "scoped", "spawn", "select", "chan",
                                   "thread", "threadlocal", "asm", "test", "not", "and", "or", "is", "true", "false", "null"};
     for (size_t i = 0; i < sizeof words / sizeof words[0]; i++) addItem(&it, words[i], 14, NULL);
+    sbPutc(&it.r, ']');
+    reply(out, id, it.r.buf);
+    sbFree(&it.r);
+    free(it.seen);
+}
+
+/* ---------------------------------------------------------------- completion of attributes */
+
+typedef struct {
+    const char *name, *detail;
+} Attr;
+
+static const Attr structAttrs[] = {
+    {"json", "turns it into JSON and back"},
+    {"entity", "a row of a table: @entity(\"users\")"},
+    {"wire", "a binary message: @wire or @wire(le)"},
+    {"proto", "a protobuf message"},
+    {"env", "filled from environment variables: @env or @env(\"APP\")"},
+    {"flags", "filled from the program's arguments: @flags(\"what it does\")"},
+};
+static const Attr fieldAttrs[] = {
+    {"json", "its JSON name: @json(\"id\", required)"},
+    {"id", "the primary key of an @entity"},
+    {"column", "its column's name: @column(\"created_at\")"},
+    {"wire", "how it is sent: @wire(be), @wire(len: u16, max: 1024)"},
+    {"proto", "its field number: @proto(1), @proto(2, zigzag)"},
+    {"env", "its variable: @env(\"PORT\", required)"},
+    {"flag", "its flag: @flag('p', \"the port\")"},
+};
+static const Attr funcAttrs[] = {
+    {"inline", "always puts its code where it is called"},
+    {"unchecked", "leaves out the checks of debug builds"},
+    {"noreturn", "a call to it never comes back"},
+    {"export", "callable from C by its name"},
+};
+static const Attr enumAttrs[] = {
+    {"wire", "sent as an integer: @wire(u8), @wire(u16) or @wire(u32)"},
+};
+
+static void addAttrs(Items *it, const Attr *a, size_t n) {
+    for (size_t i = 0; i < n; i++) addItem(it, a[i].name, 14, a[i].detail);
+}
+
+/* Whether the code at s starts with the word w. */
+static bool startsWord(const char *s, const char *end, const char *w) {
+    size_t n = strlen(w);
+    return (size_t)(end - s) >= n && memcmp(s, w, n) == 0 &&
+           (s + n == end || !(isalnum((unsigned char)s[n]) || s[n] == '_'));
+}
+
+/* Skips blanks, attributes and pub at the start of a declaration. */
+static const char *declStart(const char *s, const char *end) {
+    for (;;) {
+        while (s < end && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) s++;
+        if (s < end && *s == '@') {
+            s++;
+            while (s < end && (isalnum((unsigned char)*s) || *s == '_')) s++;
+            if (s < end && *s == '(') {
+                while (s < end && *s != ')' && *s != '\n') s++;
+                if (s < end && *s == ')') s++;
+            }
+        } else if (startsWord(s, end, "pub")) {
+            s += 3;
+        } else if (s + 1 < end && s[0] == '/' && s[1] == '/') {
+            while (s < end && *s != '\n') s++;
+        } else {
+            return s;
+        }
+    }
+}
+
+/* After @: the attributes of the declaration the @ goes on. In a struct's
+ * body, a field's; at the top, those of the struct, enum or function below,
+ * or all of them before nothing yet; in a function's body, none. */
+static void attrCompletion(StrBuf *out, J *id, const char *text, size_t len, size_t at) {
+    Items it = {.first = true};
+    sbPutc(&it.r, '[');
+    /* the braces open at the @, outside strings and comments */
+    size_t open[64];
+    int depth = 0;
+    for (size_t i = 0; i < at; i++) {
+        char ch = text[i];
+        if (ch == '/' && i + 1 < at && text[i + 1] == '/') {
+            while (i < at && text[i] != '\n') i++;
+        } else if (ch == '/' && i + 1 < at && text[i + 1] == '*') {
+            for (i += 2; i + 1 < at && !(text[i] == '*' && text[i + 1] == '/'); i++) {}
+            i++;
+        } else if (ch == '"' && i + 2 < at && text[i + 1] == '"' && text[i + 2] == '"') {
+            for (i += 3; i + 2 < at && !(text[i] == '"' && text[i + 1] == '"' && text[i + 2] == '"'); i++) {}
+            i += 2;
+        } else if (ch == '"' || ch == '\'') {
+            for (i++; i < at && text[i] != ch && text[i] != '\n'; i++) {
+                if (text[i] == '\\') i++;
+            }
+        } else if (ch == '{') {
+            size_t ls = i;
+            while (ls > 0 && text[ls - 1] != '\n') ls--;
+            if (depth < 64) open[depth] = ls;
+            depth++;
+        } else if (ch == '}' && depth > 0) {
+            depth--;
+        }
+    }
+    const char *end = text + len;
+    if (depth > 0) {
+        const char *d = depth <= 64 ? declStart(text + open[depth - 1], end) : end;
+        if (depth == 1 && startsWord(d, end, "struct")) addAttrs(&it, fieldAttrs, sizeof fieldAttrs / sizeof *fieldAttrs);
+    } else {
+        /* the declaration below: past the name being typed and other attributes */
+        const char *s = text + at + 1;
+        while (s < end && (isalnum((unsigned char)*s) || *s == '_')) s++;
+        if (s < end && *s == '(') {
+            while (s < end && *s != ')' && *s != '\n') s++;
+        }
+        while (s < end && *s != '\n') s++;
+        s = declStart(s, end);
+        if (s >= end) {
+            addAttrs(&it, structAttrs, sizeof structAttrs / sizeof *structAttrs);
+            addAttrs(&it, funcAttrs, sizeof funcAttrs / sizeof *funcAttrs);
+        } else if (startsWord(s, end, "struct")) {
+            addAttrs(&it, structAttrs, sizeof structAttrs / sizeof *structAttrs);
+        } else if (startsWord(s, end, "enum")) {
+            addAttrs(&it, enumAttrs, sizeof enumAttrs / sizeof *enumAttrs);
+        } else {
+            addAttrs(&it, funcAttrs, sizeof funcAttrs / sizeof *funcAttrs);
+        }
+    }
     sbPutc(&it.r, ']');
     reply(out, id, it.r.buf);
     sbFree(&it.r);
@@ -1682,6 +1928,11 @@ static void handleInChild(J *msg, StrBuf *out) {
         free(path);
         return;
     }
+    if (strcmp(method, "textDocument/codeAction") == 0) {
+        codeActions(out, id, params, uri, doc);
+        free(path);
+        return;
+    }
     J *pos = jget(params, "position");
     int line = 0, character = 0;
     if (pos) {
@@ -1698,6 +1949,11 @@ static void handleInChild(J *msg, StrBuf *out) {
         char *ls = (char *)lineStartOf(doc->text, doc->len, line);
         char *typed = ls + col - 1;
         while (typed > ls && (isalnum((unsigned char)typed[-1]) || typed[-1] == '_')) typed--;
+        if (typed > ls && typed[-1] == '@') {
+            attrCompletion(out, id, doc->text, doc->len, (size_t)(typed - 1 - doc->text));
+            free(path);
+            return;
+        }
         const char *t = ls;
         while (t < typed && (*t == ' ' || *t == '\t')) t++;
         inImport = !strncmp(t, "import", 6) && (t[6] == ' ' || t[6] == '\t') && !memchr(t, '"', (size_t)(typed - t));
@@ -1718,6 +1974,22 @@ static void handleInChild(J *msg, StrBuf *out) {
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
     if (gLenient && doc) closeOpen(doc);
+    /* time. before import time: the module is loaded by an import at the end,
+     * where no line moves, and each item adds the real import */
+    StrBuf autoImport = {0};
+    if (word[0] && doc && strcmp(method, "textDocument/completion") == 0 && isStdModule(word) &&
+        !importsModule(doc->text, doc->len, word)) {
+        importEdits(&autoImport, doc->text, doc->len, word);
+        size_t wl = strlen(word);
+        char *text = malloc(doc->len + wl + 10);
+        if (text) {
+            memcpy(text, doc->text, doc->len);
+            size_t len = doc->len;
+            len += (size_t)sprintf(text + len, "\nimport %s\n", word);
+            doc->text = text;
+            doc->len = len;
+        }
+    }
     char *std = path ? stdPathOf(path) : NULL;
     Program *prog;
     Source *src;
@@ -1751,13 +2023,16 @@ static void handleInChild(J *msg, StrBuf *out) {
         if (inImport) {
             importCompletion(out, id);
         } else if (word[0]) {
+            gItemEdits = autoImport.buf;
             completion(out, id, prog, src, word, line);
+            gItemEdits = NULL;
         } else {
             nameCompletion(out, id, prog, src, line, col);
         }
     } else {
         putDiagnostics(out, prog, path);
     }
+    sbFree(&autoImport);
     free(path);
 }
 
@@ -1858,7 +2133,7 @@ int cmdLsp(void) {
             putId(&b, id);
             sbPrintf(&b, ",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"hoverProvider\":true,"
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,"
-                         "\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]}},"
+                         "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]}},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -1894,6 +2169,7 @@ int cmdLsp(void) {
         } else if (strcmp(method, "textDocument/hover") == 0 || strcmp(method, "textDocument/definition") == 0 ||
                    strcmp(method, "textDocument/documentSymbol") == 0 ||
                    strcmp(method, "textDocument/completion") == 0 ||
+                   strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/formatting") == 0) {
             runInChild(msg);
         } else if (id) {

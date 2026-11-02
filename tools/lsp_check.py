@@ -160,6 +160,65 @@ def main():
     got = complete("import core\n\nvoid main() {\n    core.|\n}\n")
     check("after core.: %r" % sorted(got), {"List", "Map"} <= got)
 
+    # attributes after @: the ones the declaration below takes
+    got = complete("@|\nstruct User {\n    i64 id\n}\n")
+    check("@ before a struct: %r" % sorted(got), got == {"json", "entity", "wire", "proto", "env", "flags"})
+    got = complete("@json\n@e|\npub struct User {\n    i64 id\n}\n")
+    check("@e under @json: %r" % sorted(got), got == {"json", "entity", "wire", "proto", "env", "flags"})
+    got = complete("@entity(\"users\")\nstruct User {\n    @|\n    i64 id\n    str name = \"{x}\"\n}\n")
+    check("@ on a field: %r" % sorted(got), got == {"json", "id", "column", "wire", "proto", "env", "flag"})
+    got = complete("@|\n!void main() {\n}\n")
+    check("@ before a function: %r" % sorted(got), got == {"inline", "unchecked", "noreturn", "export"})
+    got = complete("@|\nenum Kind { cat, dog }\n")
+    check("@ before an enum: %r" % sorted(got), got == {"wire"})
+    got = complete("@|\n")
+    check("@ before nothing: %r" % sorted(got),
+          got == {"json", "entity", "wire", "proto", "env", "flags", "inline", "unchecked", "noreturn", "export"})
+    got = complete("void main() {\n    // { not a brace\n    @|\n}\n")
+    check("@ in a function body: %r" % sorted(got), got == set())
+
+    # auto imports: a module that isn't imported yet completes, and taking a
+    # name adds its import line
+    def items(text):
+        """the completion items at the | in text"""
+        at = text.index("|")
+        body = text.replace("|", "")
+        version[0] += 1
+        c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]},
+                                            "contentChanges": [{"text": body}]})
+        c.read()
+        before = body[:at]
+        pos = {"line": before.count("\n"), "character": len(before.split("\n")[-1])}
+        comp = c.request("textDocument/completion", {"textDocument": td, "position": pos})
+        return {x["label"]: x for x in (comp and comp["result"]) or []}
+
+    def added(item):
+        edits = item.get("additionalTextEdits") or []
+        return [(e["range"]["start"]["line"], e["newText"]) for e in edits]
+
+    got = items("void main() {\n    t := time.|\n}\n")
+    check("time. without the import: %r" % sorted(got), "now" in got and added(got["now"]) == [(0, "import time\n\n")])
+    got = items("import fs\nimport json\n\nvoid main() {\n    t := time.|\n}\n")
+    check("time. under other imports: %r" % sorted(got), "now" in got and added(got["now"]) == [(2, "import time\n")])
+    got = items("import time\n\nvoid main() {\n    t := time.|\n}\n")
+    check("time. imported: %r" % sorted(got), "now" in got and added(got["now"]) == [])
+    got = items("import fs\n\nvoid main() {\n    x := js|\n}\n")
+    check("a module's name adds its import: %r" % sorted(got),
+          "json" in got and added(got["json"]) == [(1, "import json\n")] and added(got["fs"]) == [])
+
+    # a quick fix adds the import a name needs
+    version[0] += 1
+    body = "import fs\n\nvoid main() {\n    t := time.now()\n}\n"
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": body}]})
+    diag = c.read()
+    diags = (diag and diag["params"]["diagnostics"]) or []
+    acts = c.request("textDocument/codeAction", {"textDocument": td, "range": diags[0]["range"] if diags else {},
+                                                 "context": {"diagnostics": diags}})
+    acts = (acts and acts["result"]) or []
+    edits = [e for a in acts for e in a.get("edit", {}).get("changes", {}).get(uri, [])]
+    check("quick fix for time: %r" % acts, [a["title"] for a in acts] == ["import time"]
+          and [(e["range"]["start"]["line"], e["newText"]) for e in edits] == [(1, "import time\n")])
+
     # fixing the error clears the diagnostics; formatting
     fixed = SOURCE.replace("    n := missing + 1\n", "    n:=1+2\n")
     version[0] += 1

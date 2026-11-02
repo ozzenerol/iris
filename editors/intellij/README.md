@@ -3,7 +3,10 @@
 A plugin for IntelliJ IDEA 2026.2 and other JetBrains IDEs on the same platform (GoLand, CLion...).
 
 - Highlights `.iris` files, indents with 4 spaces, comments lines with Ctrl+/, matches braces and quotes.
-- Runs `iris lsp` for errors, hover, go to definition, completion and formatting.
+- Indents a new line one level after `{`, `(` or `[`.
+- Runs `iris lsp` for errors, hover, go to definition, completion and formatting. Typing `@` lists the
+  attributes the declaration below takes. A standard module that isn't imported yet completes, and
+  taking a name from it adds its import. Alt+Enter on a missing import adds it.
 - Adds an Iris run configuration and a run button beside `main`, every `test` and every `bench`.
 - Turns `file.iris:LINE:COL` in compiler errors and panics into links.
 

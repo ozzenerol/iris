@@ -22,6 +22,7 @@
         <lang.commenter language="Iris" implementationClass="iris.intellij.IrisCommenter"/>
         <lang.braceMatcher language="Iris" implementationClass="iris.intellij.IrisBraceMatcher"/>
         <langCodeStyleSettingsProvider implementation="iris.intellij.IrisCodeStyleSettingsProvider"/>
+        <lineIndentProvider implementation="iris.intellij.IrisLineIndentProvider"/>
         <lang.quoteHandler language="Iris" implementationClass="iris.intellij.IrisQuoteHandler"/>
 
         <applicationService serviceImplementation="iris.intellij.IrisSettings"/>

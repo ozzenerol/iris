@@ -127,7 +127,7 @@ public final class IrisLexer extends LexerBase {
             charLiteral();
         } else if (Character.isDigit(c)) {
             number();
-        } else if (c == '@' && identStart(at(pos + 1))) {
+        } else if (c == '@') {
             pos++;
             while (identChar(at(pos))) {
                 pos++;
