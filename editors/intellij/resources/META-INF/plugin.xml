@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>iris.intellij</id>
+    <name>Iris</name>
+    <vendor url="https://github.com/ozzenerol/iris">ozzenerol</vendor>
+    <version>0.87.0</version>
+    <idea-version since-build="262"/>
+    <description><![CDATA[
+    Iris language support: highlighting for .iris files, iris lsp (errors, hover, go to definition,
+    completion, formatting), and an Iris run configuration with a run button beside main, every test
+    and every bench.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends optional="true" config-file="iris-lsp.xml">com.intellij.modules.lsp</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="Iris" language="Iris" extensions="iris" fieldName="INSTANCE" implementationClass="iris.intellij.IrisFileType"/>
+        <lang.parserDefinition language="Iris" implementationClass="iris.intellij.IrisParserDefinition"/>
+        <lang.syntaxHighlighterFactory language="Iris" implementationClass="iris.intellij.IrisSyntaxHighlighterFactory"/>
+        <colorSettingsPage implementation="iris.intellij.IrisColorSettingsPage"/>
+        <lang.commenter language="Iris" implementationClass="iris.intellij.IrisCommenter"/>
+        <lang.braceMatcher language="Iris" implementationClass="iris.intellij.IrisBraceMatcher"/>
+        <lang.quoteHandler language="Iris" implementationClass="iris.intellij.IrisQuoteHandler"/>
+
+        <applicationService serviceImplementation="iris.intellij.IrisSettings"/>
+        <applicationConfigurable parentId="language" instance="iris.intellij.IrisConfigurable" id="iris.settings" displayName="Iris"/>
+
+        <configurationType implementation="iris.intellij.IrisRunConfigurationType"/>
+        <runConfigurationProducer implementation="iris.intellij.IrisRunConfigurationProducer"/>
+        <runLineMarkerContributor language="Iris" implementationClass="iris.intellij.IrisRunLineMarkerContributor"/>
+        <consoleFilterProvider implementation="iris.intellij.IrisConsoleFilterProvider"/>
+    </extensions>
+</idea-plugin>

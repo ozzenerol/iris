@@ -50,7 +50,11 @@ docs:
 vscode:
 	cd editors/vscode && npm ci --no-audit --no-fund && npx --yes @vscode/vsce@3.6.0 package --skip-license -o iris.vsix
 
+# the IntelliJ plugin, editors/intellij/iris-intellij.jar
+intellij:
+	editors/intellij/build.sh
+
 clean:
 	rm -rf iris iris-debug build
 
-.PHONY: test test-debug docs vscode clean
+.PHONY: test test-debug docs vscode intellij clean

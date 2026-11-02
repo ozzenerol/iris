@@ -1,0 +1,5 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.lsp.integrationProvider implementation="iris.intellij.lsp.IrisLspServerSupportProvider"/>
+    </extensions>
+</idea-plugin>

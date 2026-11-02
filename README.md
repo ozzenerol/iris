@@ -152,6 +152,16 @@ code --install-extension editors/vscode/iris.vsix
 
 To debug, open a `.iris` file, set a breakpoint and press F5. The extension builds the program with `iris build` and runs it under gdb 14 or newer. A `launch.json` entry of type `iris` takes `program` (a file or a project folder), `args`, `cwd`, `env` and `mode`. See `editors/vscode/README.md`.
 
+### IntelliJ
+
+The plugin in `editors/intellij` highlights `.iris` files, runs `iris lsp`, and adds an Iris run configuration with a run button beside `main`, every test and every bench. Build it, then install `editors/intellij/iris-intellij.jar` with Settings, Plugins, Install Plugin from Disk:
+
+```
+make intellij
+```
+
+See `editors/intellij/README.md`.
+
 ## Docs
 
 The docs are Markdown files in `docs-src/`. Build and serve them:
