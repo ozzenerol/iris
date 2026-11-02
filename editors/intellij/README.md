@@ -2,7 +2,7 @@
 
 A plugin for IntelliJ IDEA 2026.2 and other JetBrains IDEs on the same platform (GoLand, CLion...).
 
-- Highlights `.iris` files, comments lines with Ctrl+/, matches braces and quotes.
+- Highlights `.iris` files, indents with 4 spaces, comments lines with Ctrl+/, matches braces and quotes.
 - Runs `iris lsp` for errors, hover, go to definition, completion and formatting.
 - Adds an Iris run configuration and a run button beside `main`, every `test` and every `bench`.
 - Turns `file.iris:LINE:COL` in compiler errors and panics into links.

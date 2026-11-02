@@ -154,7 +154,14 @@
           }
         ]
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "[iris]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      }
+    }
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

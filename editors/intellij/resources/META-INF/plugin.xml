@@ -21,6 +21,7 @@
         <colorSettingsPage implementation="iris.intellij.IrisColorSettingsPage"/>
         <lang.commenter language="Iris" implementationClass="iris.intellij.IrisCommenter"/>
         <lang.braceMatcher language="Iris" implementationClass="iris.intellij.IrisBraceMatcher"/>
+        <langCodeStyleSettingsProvider implementation="iris.intellij.IrisCodeStyleSettingsProvider"/>
         <lang.quoteHandler language="Iris" implementationClass="iris.intellij.IrisQuoteHandler"/>
 
         <applicationService serviceImplementation="iris.intellij.IrisSettings"/>
