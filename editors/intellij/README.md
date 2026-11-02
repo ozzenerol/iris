@@ -2,6 +2,7 @@
 
 A plugin for IntelliJ IDEA 2026.2 and other JetBrains IDEs on the same platform (GoLand, CLion...).
 
+- New, Iris File (first in the menu) makes an empty file or a program with `main`.
 - Highlights `.iris` files, indents with 4 spaces, comments lines with Ctrl+/, matches braces and quotes.
 - Indents a new line one level after `{`, `(` or `[`.
 - Runs `iris lsp` for errors, hover, go to definition, completion and formatting. Typing `@` lists the

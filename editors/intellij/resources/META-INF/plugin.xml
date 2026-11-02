@@ -32,5 +32,13 @@
         <runConfigurationProducer implementation="iris.intellij.IrisRunConfigurationProducer"/>
         <runLineMarkerContributor language="Iris" implementationClass="iris.intellij.IrisRunLineMarkerContributor"/>
         <consoleFilterProvider implementation="iris.intellij.IrisConsoleFilterProvider"/>
+        <internalFileTemplate name="Iris File"/>
+        <internalFileTemplate name="Iris Program"/>
     </extensions>
+
+    <actions>
+        <action id="Iris.NewFile" class="iris.intellij.IrisNewFileAction" text="Iris File" description="Create an Iris file">
+            <add-to-group group-id="NewGroup" anchor="first"/>
+        </action>
+    </actions>
 </idea-plugin>
