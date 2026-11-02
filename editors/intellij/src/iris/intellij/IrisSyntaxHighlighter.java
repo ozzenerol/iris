@@ -16,6 +16,7 @@ public final class IrisSyntaxHighlighter extends SyntaxHighlighterBase {
     public static final TextAttributesKey LINE_COMMENT = createTextAttributesKey("IRIS_LINE_COMMENT", DefaultLanguageHighlighterColors.LINE_COMMENT);
     public static final TextAttributesKey BLOCK_COMMENT = createTextAttributesKey("IRIS_BLOCK_COMMENT", DefaultLanguageHighlighterColors.BLOCK_COMMENT);
     public static final TextAttributesKey STRING = createTextAttributesKey("IRIS_STRING", DefaultLanguageHighlighterColors.STRING);
+    public static final TextAttributesKey INTERPOLATION = createTextAttributesKey("IRIS_INTERPOLATION", DefaultLanguageHighlighterColors.VALID_STRING_ESCAPE);
     public static final TextAttributesKey NUMBER = createTextAttributesKey("IRIS_NUMBER", DefaultLanguageHighlighterColors.NUMBER);
     public static final TextAttributesKey KEYWORD = createTextAttributesKey("IRIS_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD);
     public static final TextAttributesKey CONSTANT = createTextAttributesKey("IRIS_CONSTANT", DefaultLanguageHighlighterColors.KEYWORD);
@@ -40,6 +41,7 @@ public final class IrisSyntaxHighlighter extends SyntaxHighlighterBase {
         KEYS.put(IrisTokenTypes.BLOCK_COMMENT, BLOCK_COMMENT);
         KEYS.put(IrisTokenTypes.STRING, STRING);
         KEYS.put(IrisTokenTypes.CHAR, STRING);
+        KEYS.put(IrisTokenTypes.INTERPOLATION, INTERPOLATION);
         KEYS.put(IrisTokenTypes.NUMBER, NUMBER);
         KEYS.put(IrisTokenTypes.KEYWORD, KEYWORD);
         KEYS.put(IrisTokenTypes.CONSTANT, CONSTANT);

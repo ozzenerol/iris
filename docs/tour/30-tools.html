@@ -105,8 +105,8 @@ iris doc main.iris User    # one name in it</code></pre>
 <p>A comment at the top of a module's file, with a blank line after it, describes the module. For the standard library and packages, only <code>pub</code> names are shown. For a program's own files, everything is. The <a href="../std/index.html">Library</a> pages are made from the same comments.</p>
 <h2 id="editors"><a href="#editors">Editors</a></h2>
 <p><code>iris lsp</code> is a language server. An editor that speaks LSP gets:</p>
-<ul><li>the errors as the code is typed</li><li>the type and comment of a name under the pointer</li><li>going to a name's declaration, also into the standard library</li><li>a file's outline</li><li>completion</li><li>formatting with <code>iris fmt</code></li></ul>
-<p>Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an <code>import</code> line the standard library's modules. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.</p>
+<ul><li>the errors as the code is typed</li><li>the type and comment of a name under the pointer</li><li>going to a name's declaration, also into the standard library</li><li>a file's outline</li><li>completion</li><li>a quick fix that adds a missing import</li><li>formatting with <code>iris fmt</code></li></ul>
+<p>Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an <code>import</code> line the standard library's modules. A standard library module that the file doesn't import yet is offered too, by its name and after its dot, and taking it adds its <code>import</code> line. After <code>@</code> it offers the attributes of the declaration below: a struct's, a field's, an enum's or a function's. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.</p>
 <p>Neovim 0.11 or newer needs the syntax files from the repository's <code>editors/vim</code> folder, which <code>build-and-install.sh</code> also copies to <code>/usr/local/share/iris/editors/vim</code>:</p>
 <pre class="out"><code>vim.opt.rtp:append(&quot;/path/to/iris/editors/vim&quot;)
 vim.lsp.config(&quot;iris&quot;, {
@@ -119,7 +119,9 @@ vim.lsp.enable(&quot;iris&quot;)</code></pre>
 <p>The VS Code extension in <code>editors/vscode</code> highlights <code>.iris</code> files and the <code>iris</code> code blocks in Markdown, and starts <code>iris lsp</code>. <code>make vscode</code> packages it (it needs Node.js and npm):</p>
 <pre class="code"><code>make vscode
 code --install-extension editors/vscode/iris.vsix</code></pre>
-<p>The <code>iris.path</code> setting picks the <code>iris</code> program when it isn't the one on the PATH. Other editors start <code>iris lsp</code> as the language server for <code>.iris</code> files.</p>
+<p>The <code>iris.path</code> setting picks the <code>iris</code> program when it isn't the one on the PATH.</p>
+<p>The IntelliJ plugin in <code>editors/intellij</code> works in IntelliJ IDEA 2026.2 and the other JetBrains IDEs of that version. It highlights <code>.iris</code> files, indents with 4 spaces, starts <code>iris lsp</code>, and adds an Iris run configuration. A run button beside <code>main</code>, every <code>test</code> and every <code>bench</code> runs it, and <code>file.iris:LINE:COL</code> in the output opens that line. <code>make intellij</code> builds it against the installed IDE, and Settings, Plugins, Install Plugin from Disk installs <code>editors/intellij/iris-intellij.jar</code>.</p>
+<p>Other editors start <code>iris lsp</code> as the language server for <code>.iris</code> files.</p>
 <h2 id="other-platforms"><a href="#other-platforms">Other platforms</a></h2>
 <p><code>--target</code> builds for another platform:</p>
 <pre class="code"><code>iris build --target=aarch64-linux main.iris

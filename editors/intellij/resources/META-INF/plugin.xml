@@ -2,7 +2,7 @@
     <id>iris.intellij</id>
     <name>Iris</name>
     <vendor url="https://github.com/ozzenerol/iris">ozzenerol</vendor>
-    <version>0.87.0</version>
+    <version>0.88.0</version>
     <idea-version since-build="262"/>
     <description><![CDATA[
     Iris language support: highlighting for .iris files, iris lsp (errors, hover, go to definition,

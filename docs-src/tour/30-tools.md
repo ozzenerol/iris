@@ -120,9 +120,10 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - going to a name's declaration, also into the standard library
 - a file's outline
 - completion
+- a quick fix that adds a missing import
 - formatting with `iris fmt`
 
-Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
+Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. A standard library module that the file doesn't import yet is offered too, by its name and after its dot, and taking it adds its `import` line. After `@` it offers the attributes of the declaration below: a struct's, a field's, an enum's or a function's. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
 
 Neovim 0.11 or newer needs the syntax files from the repository's `editors/vim` folder, which `build-and-install.sh` also copies to `/usr/local/share/iris/editors/vim`:
 
@@ -145,7 +146,11 @@ make vscode
 code --install-extension editors/vscode/iris.vsix
 ```
 
-The `iris.path` setting picks the `iris` program when it isn't the one on the PATH. Other editors start `iris lsp` as the language server for `.iris` files.
+The `iris.path` setting picks the `iris` program when it isn't the one on the PATH.
+
+The IntelliJ plugin in `editors/intellij` works in IntelliJ IDEA 2026.2 and the other JetBrains IDEs of that version. It highlights `.iris` files, indents with 4 spaces, starts `iris lsp`, and adds an Iris run configuration. A run button beside `main`, every `test` and every `bench` runs it, and `file.iris:LINE:COL` in the output opens that line. `make intellij` builds it against the installed IDE, and Settings, Plugins, Install Plugin from Disk installs `editors/intellij/iris-intellij.jar`.
+
+Other editors start `iris lsp` as the language server for `.iris` files.
 
 ## Other platforms
 

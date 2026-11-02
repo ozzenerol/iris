@@ -12,6 +12,7 @@ public final class IrisTokenTypes {
     public static final IElementType BLOCK_COMMENT = new Token("BLOCK_COMMENT");
     public static final IElementType STRING = new Token("STRING");
     public static final IElementType CHAR = new Token("CHAR");
+    public static final IElementType INTERPOLATION = new Token("INTERPOLATION");
     public static final IElementType NUMBER = new Token("NUMBER");
     public static final IElementType KEYWORD = new Token("KEYWORD");
     public static final IElementType CONSTANT = new Token("CONSTANT");

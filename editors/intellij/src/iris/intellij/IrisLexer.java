@@ -26,18 +26,22 @@ public final class IrisLexer extends LexerBase {
     private int start;
     private int pos;
     private IElementType type;
+    /** 0 in code; otherwise kind * 16 + depth: kind 1 is "...", 2 is """...""", depth 0 is the
+     * string's text and 1 or more the braces open in a {value} inside it. */
+    private int state;
 
     @Override
     public void start(CharSequence buffer, int startOffset, int endOffset, int initialState) {
         buf = buffer;
         end = endOffset;
         pos = startOffset;
+        state = initialState;
         advance();
     }
 
     @Override
     public int getState() {
-        return 0;
+        return state;
     }
 
     @Override
@@ -93,7 +97,31 @@ public final class IrisLexer extends LexerBase {
             type = null;
             return;
         }
+        int kind = state >> 4;
+        int depth = state & 15;
+        if (kind != 0 && depth == 0) {
+            stringText(kind);
+            return;
+        }
         char c = at(pos);
+        if (kind == 1 && c == '\n') {
+            /* a line's string left open inside a {value}: it ends with the line */
+            state = 0;
+            kind = 0;
+        }
+        if (kind != 0 && c == '{') {
+            state = kind << 4 | Math.min(depth + 1, 15);
+        } else if (kind != 0 && c == '}') {
+            pos++;
+            if (depth == 1) {
+                state = kind << 4;
+                type = IrisTokenTypes.INTERPOLATION;
+                return;
+            }
+            state = kind << 4 | depth - 1;
+            type = IrisTokenTypes.RBRACE;
+            return;
+        }
         if (Character.isWhitespace(c)) {
             while (pos < end && Character.isWhitespace(at(pos))) {
                 pos++;
@@ -114,15 +142,21 @@ public final class IrisLexer extends LexerBase {
         } else if (startsWith("r\"\"\"")) {
             pos += 4;
             tripleString(false);
-        } else if (startsWith("\"\"\"")) {
+        } else if (startsWith("\"\"\"") && kind == 0) {
             pos += 3;
-            tripleString(true);
+            state = 2 << 4;
+            stringText(2);
         } else if (startsWith("r\"")) {
             pos += 2;
             lineString(false);
-        } else if (c == '"') {
+        } else if (c == '"' && kind != 0) {
+            /* a string inside a {value}: its own braces are not read */
             pos++;
             lineString(true);
+        } else if (c == '"') {
+            pos++;
+            state = 1 << 4;
+            stringText(1);
         } else if (c == '\'') {
             charLiteral();
         } else if (Character.isDigit(c)) {
@@ -154,6 +188,52 @@ public final class IrisLexer extends LexerBase {
                 }
             }
         }
+    }
+
+    /** The text of a string up to a {value}, its end or the end of the line. A { that starts a
+     * value is a token of its own. */
+    private void stringText(int kind) {
+        if (at(pos) == '{' && at(pos + 1) != '{' && pos < end && pos > start) {
+            type = IrisTokenTypes.STRING;   /* the opening quote, then the { on its own */
+            return;
+        }
+        if (at(pos) == '{' && at(pos + 1) != '{' && pos < end) {
+            pos++;
+            state = kind << 4 | 1;
+            type = IrisTokenTypes.INTERPOLATION;
+            return;
+        }
+        while (pos < end) {
+            char ch = at(pos);
+            if (kind == 2 && startsWith("\"\"\"")) {
+                pos += 3;
+                state = 0;
+                break;
+            }
+            if (kind == 1 && ch == '"') {
+                pos++;
+                state = 0;
+                break;
+            }
+            if (kind == 1 && ch == '\n') {
+                state = 0;
+                break;
+            }
+            if (ch == '\\') {
+                pos += 2;
+            } else if ((ch == '{' && at(pos + 1) == '{') || (ch == '}' && at(pos + 1) == '}')) {
+                pos += 2;
+            } else if (ch == '{') {
+                break;
+            } else {
+                pos++;
+            }
+        }
+        pos = Math.min(pos, end);
+        if (pos >= end && state != 0 && start == pos) {
+            state = 0;
+        }
+        type = IrisTokenTypes.STRING;
     }
 
     private void tripleString(boolean escapes) {

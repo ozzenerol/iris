@@ -14,6 +14,7 @@ public final class IrisColorSettingsPage implements ColorSettingsPage {
         new AttributesDescriptor("Comments//Line comment", IrisSyntaxHighlighter.LINE_COMMENT),
         new AttributesDescriptor("Comments//Block comment", IrisSyntaxHighlighter.BLOCK_COMMENT),
         new AttributesDescriptor("String", IrisSyntaxHighlighter.STRING),
+        new AttributesDescriptor("Braces of a value in text", IrisSyntaxHighlighter.INTERPOLATION),
         new AttributesDescriptor("Number", IrisSyntaxHighlighter.NUMBER),
         new AttributesDescriptor("Keyword", IrisSyntaxHighlighter.KEYWORD),
         new AttributesDescriptor("true, false, null, self", IrisSyntaxHighlighter.CONSTANT),
