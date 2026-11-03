@@ -1,0 +1,45 @@
+// expect: no first name
+// expect: first name: Ana
+// expect: String works
+// expect: hello, stranger
+// expect: Ana
+// expect: [] 0
+// expect: x
+// expect: 3
+
+const NONE = empty
+
+str greet(str name = empty) {
+    if name is empty {
+        return "hello, stranger"
+    }
+    return name
+}
+
+void shadowed() {
+    i64 empty = 3
+    print("{empty}")
+}
+
+void main() {
+    str firstName = ""
+    if firstName is empty {
+        print("no first name")
+    }
+    firstName = "Ana"
+    if firstName is not empty {
+        print("first name: {firstName}")
+    }
+    String s = format("{firstName}")
+    defer s.free()
+    if s != empty {
+        print("String works")
+    }
+    print(greet())
+    print(greet(firstName))
+    print("[{NONE}] {empty.len}")
+    str t = empty
+    t = if t == empty { "x" } else { t }
+    print(t)
+    shadowed()
+}

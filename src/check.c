@@ -3045,6 +3045,11 @@ static void checkConstDecl(Checker *c, Node *d) {
         return;
     }
     Type *declared = d->a ? resolveType(c, d->a) : (d->flags & F_COMPTIMED) ? d->type : NULL;
+    if (d->b->kind == N_IDENT && strcmp(d->b->name, "empty") == 0 && !lookup(c, "empty")) {
+        d->b->kind = N_STRING;      /* const NONE = empty */
+        d->b->text = "";
+        d->b->textLen = 0;
+    }
     int64_t v;
     bool b;
     int before = gErrors;
@@ -3923,6 +3928,13 @@ static Type *checkExprInner(Checker *c, Node **slot, Type *expected) {
             return setType(e, &tyError);
         }
         Node *d = lookup(c, e->name);
+        if (!d && strcmp(e->name, "empty") == 0) {
+            /* empty is the empty text, unless a declaration takes the name */
+            e->kind = N_STRING;
+            e->text = "";
+            e->textLen = 0;
+            return setType(e, &tyStr);
+        }
         if (!d) {
             if (strcmp(e->name, "print") == 0 || strcmp(e->name, "panic") == 0 ||
                 strcmp(e->name, "format") == 0 || strcmp(e->name, "alloc") == 0 ||

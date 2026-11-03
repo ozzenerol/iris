@@ -1,0 +1,7 @@
+// error: 5: the value is str, but i64 is needed
+
+void main() {
+    str name = "a"
+    i64 n = empty
+    print("{name} {n}")
+}

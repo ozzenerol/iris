@@ -51,6 +51,32 @@ true true
 -3 1 0
 ```
 
+`empty` is the empty text, `""`. It reads well with `is`:
+
+```iris run
+str greet(str name = empty) {
+    if name is empty {
+        return "hello, stranger"
+    }
+    return name
+}
+
+void main() {
+    firstName := "Ana"
+    if firstName is not empty {
+        print("first name: {firstName}")
+    }
+    print(greet())
+}
+```
+
+```output
+first name: Ana
+hello, stranger
+```
+
+`empty` is not a keyword. A variable, parameter or constant named `empty` takes the name where it is declared.
+
 ## UTF-8
 
 Text is UTF-8. Characters outside ASCII take several bytes, so `len` counts bytes and an index can land inside a character:

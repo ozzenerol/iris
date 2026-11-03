@@ -91,6 +91,24 @@ first byte 71, last 49</code></pre>
 }</code></pre>
 <pre class="out"><code>true true
 -3 1 0</code></pre>
+<p><code>empty</code> is the empty text, <code>&quot;&quot;</code>. It reads well with <code>is</code>:</p>
+<pre class="code run"><code><span class="t">str</span> <span class="f">greet</span>(<span class="t">str</span> name = empty) {
+    <span class="k">if</span> name <span class="k">is</span> empty {
+        <span class="k">return</span> <span class="s">&quot;hello, stranger&quot;</span>
+    }
+    <span class="k">return</span> name
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    firstName := <span class="s">&quot;Ana&quot;</span>
+    <span class="k">if</span> firstName <span class="k">is</span> <span class="k">not</span> empty {
+        <span class="f">print</span>(<span class="s">&quot;first name: </span><span class="e">{</span>firstName<span class="e">}</span><span class="s">&quot;</span>)
+    }
+    <span class="f">print</span>(<span class="f">greet</span>())
+}</code></pre>
+<pre class="out"><code>first name: Ana
+hello, stranger</code></pre>
+<p><code>empty</code> is not a keyword. A variable, parameter or constant named <code>empty</code> takes the name where it is declared.</p>
 <h2 id="utf-8"><a href="#utf-8">UTF-8</a></h2>
 <p>Text is UTF-8. Characters outside ASCII take several bytes, so <code>len</code> counts bytes and an index can land inside a character:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {
