@@ -140,6 +140,8 @@ typedef struct {
     int instCount;          /* instances made so far, for their IR names */
     NodeList genericMethods;
     NodeList exports;       /* @export functions, to catch two with one name */
+    NodeList shadows;       /* parameters and variables named like an imported module (see qualify) */
+    NodeList shadowing;     /* ... and those in scope while qualify walks a function */
     Program *prog;
 } Checker;
 
@@ -217,6 +219,18 @@ static Node *lookupPlain(Checker *c, const char *name) {
     return NULL;
 }
 
+/* The module a name imports, past any local of the same name: in
+ * config.Config config, the type still names the module. */
+static Node *lookupModule(Checker *c, const char *name) {
+    for (Scope *s = c->scope; s; s = s->parent) {
+        Sym *sym = findIn(s, name);
+        if (sym && sym->decl->kind == N_IMPORT) {
+            return sym->decl;
+        }
+    }
+    return NULL;
+}
+
 static bool visible(Checker *c, Node *d) {
     return !d->module || !c->module || strcmp(d->module, c->module) == 0 || (d->flags & F_PUB);
 }
@@ -234,8 +248,8 @@ static Node *lookup(Checker *c, const char *name) {
     }
     memcpy(mod, name, n);
     mod[n] = 0;
-    Node *imp = lookupPlain(c, mod);
-    if (!imp || imp->kind != N_IMPORT || !imp->scope) {
+    Node *imp = lookupModule(c, mod);
+    if (!imp || !imp->scope) {
         return NULL;
     }
     Sym *sym = findIn((Scope *)imp->scope, dot + 1);
@@ -259,7 +273,9 @@ static void addSym(Checker *c, Scope *s, const char *name, Node *decl) {
 }
 
 /* Declares a local. A name used by a local in an enclosing block of the
- * same function is an error: no shadowing. */
+ * same function is an error: no shadowing. A local may take the name of
+ * an imported module; in its scope the name is the local, and mod.Type
+ * in a type still names the module. */
 static void declareLocal(Checker *c, const char *name, Node *decl) {
     if (strcmp(name, "_") == 0) {
         error(c, decl, "'_' can't be used as a variable name");
@@ -277,8 +293,16 @@ static void declareLocal(Checker *c, const char *name, Node *decl) {
     }
     Node *imp = lookupPlain(c, name);
     if (imp && imp->kind == N_IMPORT) {
-        error(c, decl, "%s is the name of an imported module", name);
-        return;
+        /* by place, since a generic function's copies are new nodes */
+        bool ok = false;
+        for (int i = 0; i < c->shadows.len && !ok; i++) {
+            Node *s = c->shadows.items[i];
+            ok = s == decl || (s->src == decl->src && s->line == decl->line && s->col == decl->col);
+        }
+        if (!ok) {
+            error(c, decl, "%s is the name of an imported module; a parameter or a variable can take it, this can't", name);
+            return;
+        }
     }
     addSym(c, c->scope, name, decl);
 }
@@ -919,8 +943,8 @@ static Type *resolveType(Checker *c, Node *t) {
             size_t n = (size_t)(dot - t->name) < sizeof mod - 1 ? (size_t)(dot - t->name) : sizeof mod - 1;
             memcpy(mod, t->name, n);
             mod[n] = 0;
-            Node *imp = lookupPlain(c, mod);
-            if (!imp || imp->kind != N_IMPORT) {
+            Node *imp = lookupModule(c, mod);
+            if (!imp) {
                 error(c, t, "%s is not an imported module", mod);
             } else if (findIn((Scope *)imp->scope, dot + 1)) {
                 error(c, t, "%s isn't pub, so only its own module can use it", t->name);
@@ -7235,11 +7259,66 @@ static void checkGlobalValue(Checker *c, Node **slot, Type *t) {
 
 /* Rewrites mod.name into one name, "mod.name", which lookup finds in the
  * module. Reports names that don't exist or aren't pub. */
+/* A parameter or variable that takes the name of an imported module: in
+ * its scope, name.x is the local's. */
+static void shadowName(Checker *c, Node *decl) {
+    Node *imp = decl->name ? lookupPlain(c, decl->name) : NULL;
+    if (imp && imp->kind == N_IMPORT) {
+        listPush(c->arena, &c->shadows, decl);
+        listPush(c->arena, &c->shadowing, decl);
+    }
+}
+
+static bool shadowed(Checker *c, const char *name) {
+    for (int i = c->shadowing.len - 1; i >= 0; i--) {
+        if (strcmp(c->shadowing.items[i]->name, name) == 0) return true;
+    }
+    return false;
+}
+
 static void qualify(Checker *c, Node *n) {
     if (!n) {
         return;
     }
-    if (n->kind == N_FIELD_ACCESS && n->a && n->a->kind == N_IDENT && !strchr(n->a->name, '.')) {
+    if (n->kind == N_FUNC) {
+        int mark = c->shadowing.len;
+        for (int i = 0; i < n->attrs.len; i++) qualify(c, n->attrs.items[i]);
+        for (int i = 0; i < n->list2.len; i++) qualify(c, n->list2.items[i]);
+        qualify(c, n->a);
+        qualify(c, n->b);
+        qualify(c, n->d);
+        for (int i = 0; i < n->list.len; i++) {
+            qualify(c, n->list.items[i]);
+            if (n->list.items[i]->kind == N_PARAM) shadowName(c, n->list.items[i]);
+        }
+        qualify(c, n->c);
+        c->shadowing.len = mark;
+        return;
+    }
+    if (n->kind == N_FOR && (n->flags & F_FOR_IN)) {
+        int mark = c->shadowing.len;
+        qualify(c, n->a);
+        for (int i = 0; i < n->list.len; i++) shadowName(c, n->list.items[i]);
+        qualify(c, n->c);
+        c->shadowing.len = mark;
+        return;
+    }
+    if (n->kind == N_BLOCK) {
+        int mark = c->shadowing.len;
+        for (int i = 0; i < n->list.len; i++) {
+            Node *s = n->list.items[i];
+            qualify(c, s);
+            if (s->kind == N_VAR) {
+                shadowName(c, s);
+            } else if (s->kind == N_DEFINE) {
+                for (int k = 0; k < s->list.len; k++) shadowName(c, s->list.items[k]);
+            }
+        }
+        c->shadowing.len = mark;
+        return;
+    }
+    if (n->kind == N_FIELD_ACCESS && n->a && n->a->kind == N_IDENT && !strchr(n->a->name, '.') &&
+        !shadowed(c, n->a->name)) {
         Node *imp = lookupPlain(c, n->a->name);
         if (imp && imp->kind == N_IMPORT && imp->scope) {
             Sym *sym = findIn((Scope *)imp->scope, n->name);

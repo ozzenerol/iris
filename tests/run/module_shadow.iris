@@ -1,0 +1,43 @@
+// expect: {"port":8080}
+// expect: 8080 16160
+// expect: 7
+// expect: a local
+// expect: [x]
+// expect: 0
+// expect: 1
+import json, str
+
+@json
+struct Config {
+    i64 port
+}
+
+i64 Config.twice() => self.port * 2
+
+struct Server {
+    Config json
+}
+
+// a parameter named like a module: json.x is the parameter's
+i64 show(Config json) {
+    return json.twice()
+}
+
+T keep[T](T str) => str
+
+void main() {
+    c := Config{port: 8080}
+    scoped String s = json.encode(c)
+    print(s)
+    srv := Server{json: c}
+    print("{srv.json.port} {show(c)}")
+    print("{keep(7)}")
+    if true {
+        str := "a local"
+        print(str)
+    }
+    print("[{str.trim("  x  ")}]")
+    for json in 0..2 {
+        print("{json}")
+    }
+}

@@ -58,6 +58,18 @@ import "upstream", "upstream/probe"
 - Two modules can't import each other, directly or through others. The program says which one depends on which.
 - A file's own names can't equal the name of a module it imports.
 
+A parameter or a variable can take the name of an imported module. Where it is in scope, the name is the local and `name.x` is one of its fields or methods. A type written `module.Type` still names the module, so a parameter can be called after its module:
+
+```iris
+import "config"
+
+!Server newServer(config.Config config) {
+    return Server{config: config, port: config.port}
+}
+```
+
+The module's name works again once the local's block ends.
+
 Names from a module are used with its name in front, so names in different modules never clash. `upstream.parse` and `json.parse` are two different functions.
 
 ## pub

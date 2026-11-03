@@ -96,6 +96,13 @@ iris mod init github.com/me/proxy</code></pre>
     <span class="k">try</span> probe.<span class="f">check</span>(servers)
 }</code></pre>
 <ul><li>A quoted path's module goes by its last part: <code>&quot;upstream/probe&quot;</code> is <code>probe</code>.</li><li>Imports go at the top of each file that uses them, and only that file sees them.</li><li>Two modules can't import each other, directly or through others. The program says which one depends on which.</li><li>A file's own names can't equal the name of a module it imports.</li></ul>
+<p>A parameter or a variable can take the name of an imported module. Where it is in scope, the name is the local and <code>name.x</code> is one of its fields or methods. A type written <code>module.Type</code> still names the module, so a parameter can be called after its module:</p>
+<pre class="code"><code><span class="k">import</span> <span class="s">&quot;config&quot;</span>
+
+!<span class="t">Server</span> <span class="f">newServer</span>(config.<span class="t">Config</span> config) {
+    <span class="k">return</span> <span class="t">Server</span>{config: config, port: config.port}
+}</code></pre>
+<p>The module's name works again once the local's block ends.</p>
 <p>Names from a module are used with its name in front, so names in different modules never clash. <code>upstream.parse</code> and <code>json.parse</code> are two different functions.</p>
 <h2 id="pub"><a href="#pub">pub</a></h2>
 <p>A module's names are its own unless they are marked <code>pub</code>. Other modules can use only those:</p>

@@ -1,8 +1,8 @@
+// net := 5 takes the module's name for a local, which is allowed
 // error: main.iris:11: the field fd of Server isn't pub, so only its own module can use it
 // error: main.iris:12: net.secret isn't pub, so only its own module can use it
 // error: main.iris:13: the module net has no Nope
 // error: main.iris:14: the field fd of Server isn't pub, so only its own module can set it
-// error: main.iris:15: net is the name of an imported module
 import "net"
 
 void main() {
