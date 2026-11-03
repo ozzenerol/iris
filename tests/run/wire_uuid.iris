@@ -1,0 +1,17 @@
+// expect: 17 bytes
+// expect: 2 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+import uuid, wire
+
+@wire
+pub struct Connection {
+    pub u8 protocolVersion
+    pub uuid.Uuid deviceId
+}
+
+!void main() {
+    id := try uuid.parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    scoped String bytes = try wire.encode(Connection{protocolVersion: 2, deviceId: id})
+    print("{bytes.len} bytes")
+    c := try wire.decode(Connection, bytes)
+    print("{c.protocolVersion} {c.deviceId}")
+}

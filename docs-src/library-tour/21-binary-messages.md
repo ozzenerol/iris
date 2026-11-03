@@ -144,6 +144,7 @@ Floats are sent as their IEEE 754 bits, in the same byte order as integers. The 
 | an enum with `@wire(u8)`, `@wire(u16)` or `@wire(u32)` | 1, 2 or 4 bytes |
 | `T[n]` | n values of `T`, one after another |
 | a `@wire` struct, as a field or embedded | its fields, in line |
+| `uuid.Uuid` | its 16 bytes |
 | bitfields that share an integer | that integer |
 | `String`, `T[]` | a length, then the bytes or items |
 

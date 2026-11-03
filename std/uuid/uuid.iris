@@ -9,6 +9,7 @@ import random, time
 pub enum UuidError { invalid }
 
 // A UUID: its 16 bytes.
+@wire
 pub struct Uuid {
     pub u8[16] bytes
 }
