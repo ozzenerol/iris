@@ -95,9 +95,7 @@ void main() {
     term.historyFile(".notes_history")
 
     for {
-        line := term.readLine("> ") catch e {
-            break
-        }
+        line := term.readLine("> ") catch break
         print("you wrote {line}")
         line.free()
     }

@@ -75,18 +75,14 @@ if (t !== "system") h.dataset.theme = t;</script>
 
 <span class="t">void</span> <span class="f">echo</span>(quic.<span class="t">Stream</span> s) {
     <span class="k">defer</span> s.<span class="f">close</span>()
-    <span class="k">scoped</span> <span class="t">String</span> got = s.<span class="f">readAll</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    <span class="k">scoped</span> <span class="t">String</span> got = s.<span class="f">readAll</span>() <span class="k">catch</span> <span class="k">return</span>
     s.<span class="f">write</span>(<span class="s">&quot;you sent </span><span class="e">{</span>got.len<span class="e">}</span><span class="s"> bytes: </span><span class="e">{</span>got<span class="e">}</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
     s.<span class="f">closeWrite</span>()
 }
 
 <span class="t">void</span> <span class="f">handle</span>(quic.<span class="t">Conn</span> c) {
     <span class="k">for</span> {
-        s := c.<span class="f">acceptStream</span>() <span class="k">catch</span> e {
-            <span class="k">break</span>
-        }
+        s := c.<span class="f">acceptStream</span>() <span class="k">catch</span> <span class="k">break</span>
         <span class="k">spawn</span> <span class="f">echo</span>(s)
     }
     c.<span class="f">close</span>()
@@ -94,9 +90,7 @@ if (t !== "system") h.dataset.theme = t;</script>
 
 <span class="t">void</span> <span class="f">serve</span>(quic.<span class="t">Listener</span> ln) {
     <span class="k">for</span> {
-        c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
         <span class="k">spawn</span> <span class="f">handle</span>(c)
     }
 }

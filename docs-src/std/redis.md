@@ -85,9 +85,7 @@ void listen(str address) {
     }
 
     for {
-        scoped m := sub.next() catch e {
-            return
-        }
+        scoped m := sub.next() catch return
         print("{m.channel}: {m.data}")
     }
 }

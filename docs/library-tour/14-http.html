@@ -288,9 +288,7 @@ at /backends/1
     <span class="k">try</span> c.<span class="f">write</span>(<span class="s">&quot;GET / HTTP/1.1</span><span class="e">\r</span><span class="e">\n</span><span class="s">Host: localhost</span><span class="e">\r</span><span class="e">\n</span><span class="s">Cookie: user=ada; theme=dark</span><span class="e">\r</span><span class="e">\n</span><span class="s">Connection: close</span><span class="e">\r</span><span class="e">\n</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>)
 
     <span class="k">for</span> {
-        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-            <span class="k">break</span>
-        }
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">break</span>
         <span class="k">if</span> <span class="t">str</span>.<span class="f">startsWith</span>(line, <span class="s">&quot;Set-Cookie&quot;</span>) || <span class="t">str</span>.<span class="f">startsWith</span>(line, <span class="s">&quot;welcome&quot;</span>) {
             <span class="f">print</span>(line)
         }
@@ -509,9 +507,7 @@ HttpError.badUrl: ftp://example.com/: the address should start with http:// or h
 
 <span class="t">void</span> <span class="f">ticks</span>(http.<span class="t">Request</span> *req, http.<span class="t">Response</span> *res) {
     <span class="k">for</span> i <span class="k">in</span> <span class="n">1</span>..<span class="n">4</span> {
-        res.<span class="f">event</span>(<span class="s">&quot;tick </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        res.<span class="f">event</span>(<span class="s">&quot;tick </span><span class="e">{</span>i<span class="e">}</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         <span class="f">sleep</span>(<span class="n">10ms</span>)
     }
 }

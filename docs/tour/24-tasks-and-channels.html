@@ -96,15 +96,11 @@ done</code></pre>
 
 <span class="c">// Reads the lines of one connection and passes each one on.</span>
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln, <span class="k">chan</span>[<span class="t">String</span>] lines) {
-    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> conn.<span class="f">close</span>()
 
     <span class="k">for</span> {
-        line := conn.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        line := conn.<span class="f">readLine</span>(<span class="n">1024</span>) <span class="k">catch</span> <span class="k">return</span>
         lines &lt;- line
     }
 }
@@ -153,9 +149,7 @@ took 20</code></pre>
     }
     ready &lt;- ln.port
 
-    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> conn.<span class="f">close</span>()
     conn.<span class="f">write</span>(<span class="s">&quot;220 ready</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
 }
@@ -233,17 +227,11 @@ took 20</code></pre>
 
 <span class="c">// Asks a server for a line and passes the reply on.</span>
 <span class="t">void</span> <span class="f">ask</span>(<span class="t">u16</span> port, <span class="k">chan</span>[<span class="t">String</span>] replies) {
-    c := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, port) <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, port) <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> c.<span class="f">close</span>()
 
-    c.<span class="f">write</span>(<span class="s">&quot;PING</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
-    line := c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c.<span class="f">write</span>(<span class="s">&quot;PING</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
+    line := c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">return</span>
     replies &lt;- line
 }
 

@@ -355,9 +355,7 @@ RedisError.server: WRONGTYPE Operation against a key holding the wrong kind of v
     ready &lt;- <span class="k">true</span>
 
     <span class="k">for</span> _ <span class="k">in</span> <span class="n">0</span>..<span class="n">2</span> {
-        <span class="k">scoped</span> m := sub.<span class="f">next</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        <span class="k">scoped</span> m := sub.<span class="f">next</span>() <span class="k">catch</span> <span class="k">return</span>
         <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>m.channel<span class="e">}</span><span class="s">: </span><span class="e">{</span>m.data<span class="e">}</span><span class="s">&quot;</span>)
     }
 }

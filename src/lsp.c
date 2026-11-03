@@ -794,7 +794,10 @@ static void walk(Find *f, Node *n, Node *parent, Node *fn) {
         if (dot) start += (int)(dot + 1 - n->name);     /* sqlite.Db: the Db */
         if (n->kind == N_FUNC && (n->b || (n->flags & F_INSTANCE))) start = methodNameCol(f->src, n);
         if (n->kind == N_ENUM_DOT) len++;               /* .admin, from the dot */
-        if (parent && parent->kind == N_CATCH && parent->d == n) start = wordCol(f->src, n->line, n->col + 5, n->name);
+        if (parent && parent->kind == N_CATCH && parent->d == n) {
+            start = wordCol(f->src, n->line, n->col + 5, n->name);
+            if (parent->ival) len = 0;                  /* catch return: the error has no name */
+        }
         if (f->col >= start && f->col < start + len) {
             f->best = n;
             f->parent = parent;
@@ -1588,7 +1591,7 @@ static void localNames(Items *it, Source *src, Node *n, size_t cursor) {
         }
         break;
     case N_CATCH:
-        if (n->name && inBlock(src, n->c, cursor)) addItem(it, n->name, 6, "Error");
+        if (n->name && !n->ival && inBlock(src, n->c, cursor)) addItem(it, n->name, 6, "Error");
         break;
     default:
         break;

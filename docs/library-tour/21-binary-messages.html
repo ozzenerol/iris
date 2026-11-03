@@ -113,19 +113,13 @@ if (t !== "system") h.dataset.theme = t;</script>
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Conn</span> conn) {
     <span class="k">defer</span> conn.<span class="f">close</span>()
     <span class="k">for</span> {
-        req := wire.<span class="f">read</span>(<span class="t">Request</span>, conn) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
-        wire.<span class="f">write</span>(conn, <span class="t">Reply</span>{id: req.id, sum: <span class="t">u32</span>(req.a) + <span class="t">u32</span>(req.b)}) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        req := wire.<span class="f">read</span>(<span class="t">Request</span>, conn) <span class="k">catch</span> <span class="k">return</span>
+        wire.<span class="f">write</span>(conn, <span class="t">Reply</span>{id: req.id, sum: <span class="t">u32</span>(req.a) + <span class="t">u32</span>(req.b)}) <span class="k">catch</span> <span class="k">return</span>
     }
 }
 
 <span class="t">void</span> <span class="f">acceptOne</span>(net.<span class="t">Listener</span> *ln) {
-    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    conn := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="f">serve</span>(conn)
 }
 
@@ -359,9 +353,7 @@ WireError.extra: 1 byte is left after the message</code></pre>
     <span class="t">u8</span>[<span class="n">1500</span>] buf
     <span class="k">for</span> _ <span class="k">in</span> <span class="n">1</span>..<span class="n">3</span> {
         n, from := <span class="k">try</span> server.<span class="f">readFrom</span>(buf[<span class="n">0</span>:])
-        p := wire.<span class="f">decode</span>(<span class="t">Probe</span>, buf[<span class="n">0</span>:n]) <span class="k">catch</span> e {
-            <span class="k">continue</span>
-        }
+        p := wire.<span class="f">decode</span>(<span class="t">Probe</span>, buf[<span class="n">0</span>:n]) <span class="k">catch</span> <span class="k">continue</span>
         <span class="f">print</span>(<span class="s">&quot;probe </span><span class="e">{</span>p.seq<span class="e">}</span><span class="s">, sent at </span><span class="e">{</span>p.sentAt<span class="e">}</span><span class="s">, </span><span class="e">{</span>n<span class="e">}</span><span class="s"> bytes&quot;</span>)
     }
 }</code></pre>

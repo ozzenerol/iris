@@ -131,9 +131,7 @@ SHA256: and 43 more characters</code></pre>
 
 <span class="t">void</span> <span class="f">tunnel</span>(ssh.<span class="t">Client</span> *c, net.<span class="t">Conn</span> local) {
     <span class="k">defer</span> local.<span class="f">close</span>()
-    ch := c.<span class="f">forward</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">5432</span>) <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    ch := c.<span class="f">forward</span>(<span class="s">&quot;10.0.0.5&quot;</span>, <span class="n">5432</span>) <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> ch.<span class="f">close</span>()
     ch.<span class="f">pipe</span>(&amp;local)
 }

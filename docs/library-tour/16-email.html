@@ -99,22 +99,18 @@ if (t !== "system") h.dataset.theme = t;</script>
 <pre class="code run"><code><span class="k">import</span> net, smtp
 
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
-    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> c.<span class="f">close</span>()
-    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
 
     <span class="t">bool</span> inData = <span class="k">false</span>
     <span class="k">for</span> {
-        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">return</span>
 
         <span class="k">if</span> inData {
             <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
                 inData = <span class="k">false</span>
-                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
             } <span class="k">else</span> <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;Subject:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;To:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Type:&quot;</span>) {
                 shown, _, _ := line.<span class="f">cut</span>(<span class="s">&quot;;&quot;</span>)
                 <span class="f">print</span>(<span class="s">&quot;  </span><span class="e">{</span>shown<span class="e">}</span><span class="s">&quot;</span>)
@@ -124,15 +120,15 @@ if (t !== "system") h.dataset.theme = t;</script>
 
         <span class="f">print</span>(line)
         <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;EHLO&quot;</span>) {
-            c.<span class="f">write</span>(<span class="s">&quot;250 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            c.<span class="f">write</span>(<span class="s">&quot;250 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;DATA&quot;</span> {
             inData = <span class="k">true</span>
-            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;QUIT&quot;</span> {
             c.<span class="f">write</span>(<span class="s">&quot;221 bye</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
             <span class="k">return</span>
         } <span class="k">else</span> {
-            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         }
     }
 }
@@ -169,34 +165,30 @@ QUIT</code></pre>
 <pre class="code run"><code><span class="k">import</span> fs, net, smtp
 
 <span class="t">void</span> <span class="f">serve</span>(net.<span class="t">Listener</span> ln) {
-    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> c.<span class="f">close</span>()
-    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+    c.<span class="f">write</span>(<span class="s">&quot;220 test server</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
 
     <span class="t">bool</span> inData = <span class="k">false</span>
     <span class="k">for</span> {
-        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">return</span>
 
         <span class="k">if</span> inData {
             <span class="k">if</span> line == <span class="s">&quot;.&quot;</span> {
                 inData = <span class="k">false</span>
-                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+                c.<span class="f">write</span>(<span class="s">&quot;250 queued</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
             } <span class="k">else</span> <span class="k">if</span> line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Type:&quot;</span>) || line.<span class="f">startsWith</span>(<span class="s">&quot;Content-Disposition:&quot;</span>) {
                 shown, _, _ := line.<span class="f">cut</span>(<span class="s">&quot;; boundary&quot;</span>)
                 <span class="f">print</span>(shown)
             }
         } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;DATA&quot;</span> {
             inData = <span class="k">true</span>
-            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            c.<span class="f">write</span>(<span class="s">&quot;354 go on</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         } <span class="k">else</span> <span class="k">if</span> line == <span class="s">&quot;QUIT&quot;</span> {
             c.<span class="f">write</span>(<span class="s">&quot;221 bye</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
             <span class="k">return</span>
         } <span class="k">else</span> {
-            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { <span class="k">return</span> }
+            c.<span class="f">write</span>(<span class="s">&quot;250 ok</span><span class="e">\r</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> <span class="k">return</span>
         }
     }
 }

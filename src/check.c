@@ -5069,8 +5069,11 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
     Type *value = t->kind == TY_RESULT ? t->elem : &tyError;
     if (e->b) {
         if (value == &tyVoid) {
-            error(c, e->b, "this call gives no value, so catch can't give one; use catch e { ... }");
-            checkExpr(c, &e->b, NULL);
+            /* catch panic(...) leaves, so it needs no value */
+            Type *bt = checkExpr(c, &e->b, NULL);
+            if (!isErr(bt) && bt->kind != TY_NORETURN) {
+                error(c, e->b, "this call gives no value, so catch can't give one; use catch e { ... }");
+            }
             return setType(e, &tyVoid);
         }
         checkExpr(c, &e->b, isErr(value) ? expected : value);
@@ -5102,6 +5105,16 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
         res = value;
     }
     popScope(c);
+    if (e->ival && e->c->list.len == 1 && e->c->list.items[0]->kind == N_RETURN && c->func &&
+        c->func->type && c->func->type->kind == TY_RESULT) {
+        /* catch return in a function that can fail: success, unless it
+           returns an error of its own */
+        Node *r = e->c->list.items[0];
+        if (!r->a || !r->a->type || r->a->type->kind != TY_ERRVAL) {
+            error(c, r, "%s can fail, so catch return would drop the error; use try to pass it up, or catch e { ... }",
+                  c->func->name);
+        }
+    }
     return setType(e, res);
 }
 

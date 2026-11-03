@@ -60,19 +60,13 @@ struct Reply {
 void serve(net.Conn conn) {
     defer conn.close()
     for {
-        req := wire.read(Request, conn) catch e {
-            return
-        }
-        wire.write(conn, Reply{id: req.id, sum: u32(req.a) + u32(req.b)}) catch e {
-            return
-        }
+        req := wire.read(Request, conn) catch return
+        wire.write(conn, Reply{id: req.id, sum: u32(req.a) + u32(req.b)}) catch return
     }
 }
 
 void acceptOne(net.Listener *ln) {
-    conn := ln.accept() catch e {
-        return
-    }
+    conn := ln.accept() catch return
     serve(conn)
 }
 
@@ -402,9 +396,7 @@ struct Probe {
     u8[1500] buf
     for _ in 1..3 {
         n, from := try server.readFrom(buf[0:])
-        p := wire.decode(Probe, buf[0:n]) catch e {
-            continue
-        }
+        p := wire.decode(Probe, buf[0:n]) catch continue
         print("probe {p.seq}, sent at {p.sentAt}, {n} bytes")
     }
 }

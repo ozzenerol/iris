@@ -1,0 +1,31 @@
+// error: 10: a can fail, so catch return would drop the error; use try to pass it up, or catch e { ... }
+// error: 15: b can fail, so catch return would drop the error; use try to pass it up, or catch e { ... }
+// error: 19: 'continue' can only be used inside a loop
+// error: 23: this call gives no value, so catch can't give one; use catch e { ... }
+import str
+
+enum Bad { nope }
+
+!i64 a(str s) {
+    n := str.parseInt(s) catch return 0
+    return n
+}
+
+!void b(str s) {
+    n := str.parseInt(s) catch return
+}
+
+void c(str s) {
+    n := str.parseInt(s) catch continue
+}
+
+void d() {
+    b("1") catch 5
+}
+
+!i64 fine(str s) {
+    n := str.parseInt(s) catch return error(Bad.nope, "bad")
+    return n
+}
+
+void main() {}

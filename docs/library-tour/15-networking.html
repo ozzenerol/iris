@@ -78,9 +78,7 @@ if (t !== "system") h.dataset.theme = t;</script>
     <span class="k">defer</span> c.<span class="f">close</span>()
 
     <span class="k">for</span> {
-        line := c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        line := c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">return</span>
         c.<span class="f">write</span>(<span class="s">&quot;you said: </span><span class="e">{</span>line<span class="e">}</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e {
             line.<span class="f">free</span>()
             <span class="k">return</span>
@@ -91,9 +89,7 @@ if (t !== "system") h.dataset.theme = t;</script>
 
 <span class="t">void</span> <span class="f">server</span>(net.<span class="t">Listener</span> ln) {
     <span class="k">for</span> {
-        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        conn := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
         <span class="k">spawn</span> <span class="f">handle</span>(conn)
     }
 }
@@ -193,9 +189,7 @@ keepalive: false</code></pre>
 <pre class="code run"><code><span class="k">import</span> net, <span class="t">str</span>
 
 <span class="t">void</span> <span class="f">shout</span>(net.<span class="t">Listener</span> ln) {
-    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> c.<span class="f">close</span>()
 
     <span class="t">String</span> text
@@ -203,9 +197,7 @@ keepalive: false</code></pre>
     <span class="t">u8</span>[<span class="n">256</span>] buf
 
     <span class="k">for</span> {
-        n := c.<span class="f">read</span>(buf) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        n := c.<span class="f">read</span>(buf) <span class="k">catch</span> <span class="k">return</span>
         <span class="k">if</span> n == <span class="n">0</span> {
             <span class="k">break</span>
         }
@@ -238,26 +230,18 @@ keepalive: false</code></pre>
 <pre class="code run"><code><span class="k">import</span> net
 
 <span class="t">void</span> <span class="f">backend</span>(net.<span class="t">Listener</span> ln) {
-    c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> c.<span class="f">close</span>()
 
-    <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    <span class="k">scoped</span> <span class="t">String</span> line = c.<span class="f">readLine</span>() <span class="k">catch</span> <span class="k">return</span>
     c.<span class="f">write</span>(<span class="s">&quot;</span><span class="e">{</span>line<span class="e">}</span><span class="s">, from the backend</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
 }
 
 <span class="t">void</span> <span class="f">proxy</span>(net.<span class="t">Listener</span> ln, <span class="t">u16</span> backendPort, <span class="k">chan</span>[<span class="t">String</span>] log) {
-    client := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    client := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> client.<span class="f">close</span>()
 
-    server := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, backendPort, timeout: <span class="n">2s</span>) <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    server := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, backendPort, timeout: <span class="n">2s</span>) <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> server.<span class="f">close</span>()
 
     up, down := net.<span class="f">relay</span>(&amp;client, &amp;server, idle: <span class="n">30s</span>) <span class="k">catch</span> e {
@@ -326,14 +310,10 @@ tls, and the reads still get its first 3 bytes</code></pre>
     <span class="k">defer</span> client.<span class="f">close</span>()
     client.<span class="f">setTimeout</span>(<span class="n">5s</span>)
 
-    name := client.<span class="f">peekServerName</span>() <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    name := client.<span class="f">peekServerName</span>() <span class="k">catch</span> <span class="k">return</span>
     port := <span class="k">if</span> name == <span class="s">&quot;api.example.com&quot;</span> { <span class="n">9001</span> } <span class="k">else</span> { <span class="n">9002</span> }
 
-    backend := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, <span class="t">u16</span>(port)) <span class="k">catch</span> e {
-        <span class="k">return</span>
-    }
+    backend := net.<span class="f">dial</span>(<span class="s">&quot;127.0.0.1&quot;</span>, <span class="t">u16</span>(port)) <span class="k">catch</span> <span class="k">return</span>
     <span class="k">defer</span> backend.<span class="f">close</span>()
     <span class="c">// copies both ways, as in the proxy above</span>
 }</code></pre>
@@ -350,9 +330,7 @@ tls, and the reads still get its first 3 bytes</code></pre>
 <span class="t">void</span> <span class="f">handle</span>(net.<span class="t">Conn</span> conn) {
     <span class="k">defer</span> conn.<span class="f">close</span>()
     <span class="k">for</span> {
-        h := wire.<span class="f">read</span>(<span class="t">Header</span>, conn) <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        h := wire.<span class="f">read</span>(<span class="t">Header</span>, conn) <span class="k">catch</span> <span class="k">return</span>
         <span class="c">// h.kind says what follows</span>
     }
 }</code></pre>

@@ -1,0 +1,15 @@
+// panic: flush failed
+// expect: flushed
+enum IoError { full }
+
+!void flush(bool ok) {
+    if !ok {
+        return error(IoError.full, "disk full")
+    }
+}
+
+void main() {
+    flush(true) catch panic("flush failed")
+    print("flushed")
+    flush(false) catch panic("flush failed")
+}

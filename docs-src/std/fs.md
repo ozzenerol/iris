@@ -45,9 +45,7 @@ import fs
 
     i64 n = 0
     for {
-        line := f.readLine() catch e {
-            break
-        }
+        line := f.readLine() catch break
         n += 1
         print("{n}: {line}")
         line.free()

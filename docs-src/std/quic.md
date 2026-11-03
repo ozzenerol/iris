@@ -6,9 +6,7 @@
 import net, quic
 
 void handle(quic.Conn c) {
-    s := c.acceptStream() catch e {
-        return
-    }
+    s := c.acceptStream() catch return
     scoped String got = s.readAll() catch "".copy()
     s.write("got {got}") catch e { }
     s.closeWrite()
@@ -18,9 +16,7 @@ void handle(quic.Conn c) {
 }
 
 void serve(quic.Listener ln) {
-    c := ln.accept() catch e {
-        return
-    }
+    c := ln.accept() catch return
     handle(c)
 }
 

@@ -99,9 +99,7 @@ import net, ssh
 
 void tunnel(ssh.Client *c, net.Conn local) {
     defer local.close()
-    ch := c.forward("10.0.0.5", 5432) catch e {
-        return
-    }
+    ch := c.forward("10.0.0.5", 5432) catch return
     defer ch.close()
     ch.pipe(&local)
 }

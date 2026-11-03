@@ -57,22 +57,18 @@ This program runs a small mail server of its own in a task to show what `smtp` s
 import net, smtp
 
 void serve(net.Listener ln) {
-    c := ln.accept() catch e {
-        return
-    }
+    c := ln.accept() catch return
     defer c.close()
-    c.write("220 test server\r\n") catch e { return }
+    c.write("220 test server\r\n") catch return
 
     bool inData = false
     for {
-        scoped String line = c.readLine() catch e {
-            return
-        }
+        scoped String line = c.readLine() catch return
 
         if inData {
             if line == "." {
                 inData = false
-                c.write("250 queued\r\n") catch e { return }
+                c.write("250 queued\r\n") catch return
             } else if line.startsWith("Subject:") || line.startsWith("To:") || line.startsWith("Content-Type:") {
                 shown, _, _ := line.cut(";")
                 print("  {shown}")
@@ -82,15 +78,15 @@ void serve(net.Listener ln) {
 
         print(line)
         if line.startsWith("EHLO") {
-            c.write("250 test server\r\n") catch e { return }
+            c.write("250 test server\r\n") catch return
         } else if line == "DATA" {
             inData = true
-            c.write("354 go on\r\n") catch e { return }
+            c.write("354 go on\r\n") catch return
         } else if line == "QUIT" {
             c.write("221 bye\r\n") catch e { }
             return
         } else {
-            c.write("250 ok\r\n") catch e { return }
+            c.write("250 ok\r\n") catch return
         }
     }
 }
@@ -137,34 +133,30 @@ An attachment with an `id` is shown inside the HTML instead of offered as a file
 import fs, net, smtp
 
 void serve(net.Listener ln) {
-    c := ln.accept() catch e {
-        return
-    }
+    c := ln.accept() catch return
     defer c.close()
-    c.write("220 test server\r\n") catch e { return }
+    c.write("220 test server\r\n") catch return
 
     bool inData = false
     for {
-        scoped String line = c.readLine() catch e {
-            return
-        }
+        scoped String line = c.readLine() catch return
 
         if inData {
             if line == "." {
                 inData = false
-                c.write("250 queued\r\n") catch e { return }
+                c.write("250 queued\r\n") catch return
             } else if line.startsWith("Content-Type:") || line.startsWith("Content-Disposition:") {
                 shown, _, _ := line.cut("; boundary")
                 print(shown)
             }
         } else if line == "DATA" {
             inData = true
-            c.write("354 go on\r\n") catch e { return }
+            c.write("354 go on\r\n") catch return
         } else if line == "QUIT" {
             c.write("221 bye\r\n") catch e { }
             return
         } else {
-            c.write("250 ok\r\n") catch e { return }
+            c.write("250 ok\r\n") catch return
         }
     }
 }
