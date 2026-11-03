@@ -6696,7 +6696,42 @@ int iris_group_lookup(const char *name, int64_t nameLen, int64_t gid, IrisString
    json.encode, json.decode and the free of @json structs work from a table
    the compiler writes for each type (ir.c, jsonType). */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP, J_UUID };
+
+/* A UUID's 16 bytes as 36 characters of lowercase hex: 8-4-4-4-12. */
+static void uuidText(const unsigned char *b, char *out) {
+    static const char hx[] = "0123456789abcdef";
+    int o = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) out[o++] = '-';
+        out[o++] = hx[b[i] >> 4];
+        out[o++] = hx[b[i] & 15];
+    }
+}
+
+/* Reads 8-4-4-4-12 hex digits (either case), or 32 without dashes. */
+static bool uuidParse(const char *s, int64_t n, unsigned char *b) {
+    bool dashes = n == 36;
+    if (n != 36 && n != 32) return false;
+    int k = 0;
+    for (int64_t i = 0; i < n;) {
+        if (dashes && (i == 8 || i == 13 || i == 18 || i == 23)) {
+            if (s[i] != '-') return false;
+            i++;
+            continue;
+        }
+        int v[2];
+        for (int j = 0; j < 2; j++) {
+            char c = s[i + j];
+            v[j] = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (v[j] < 0) return false;
+        }
+        b[k++] = (unsigned char)(v[0] << 4 | v[1]);
+        i += 2;
+    }
+    return true;
+}
+
 
 typedef struct JsonType {
     int32_t kind, size;
@@ -6855,6 +6890,12 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
         }
         int n = snprintf(buf, sizeof buf, "%lld", (long long)v);
         iris_string_append(out, buf, n);
+        break;
+    }
+    case J_UUID: {
+        char u[36];
+        uuidText((const unsigned char *)p, u);
+        jsonQuote(out, u, 36);
         break;
     }
     case J_STRUCT: {
@@ -7698,6 +7739,16 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
             }
         }
         iris_string_free(&name);
+        return ok;
+    }
+    case J_UUID: {
+        if (*in->p != '"') return jsonExpected(in, "a UUID as a string");
+        IrisString text = {0};
+        bool ok = jsonString(in, &text);
+        if (ok && !uuidParse(text.ptr, text.len, (unsigned char *)p)) {
+            ok = jsonFail(in, 2, "expected a UUID like 6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+        }
+        iris_string_free(&text);
         return ok;
     }
     case J_STRUCT:
@@ -17469,6 +17520,16 @@ static int sqScan(void *stmt, const JsonType *t, char *out, void **memo) {
             iris_string_append(s, text ? text : "", sq.columnBytes(stmt, c));
             break;
         }
+        case J_UUID: {
+            const char *text = (const char *)sq.columnText(stmt, c);
+            if (!uuidParse(text ? text : "", sq.columnBytes(stmt, c), (unsigned char *)p)) {
+                char what[200];
+                snprintf(what, sizeof what, "the column %s isn't a UUID", sq.columnName(stmt, c));
+                sqlSay(what, NULL);
+                return 1;
+            }
+            break;
+        }
         case J_ENUM: {
             const JsonName *names = ft->items;
             const char *text = (const char *)sq.columnText(stmt, c);
@@ -17655,6 +17716,8 @@ static const char *setFromText(const JsonType *ft, bool duration, char *p, const
         *(int32_t *)p = (int32_t)names[k].value;
         return NULL;
     }
+    case J_UUID:
+        return uuidParse(v, (int64_t)strlen(v), (unsigned char *)p) ? NULL : "isn't a UUID";
     default:
         return "can't be read from text";
     }
@@ -17777,6 +17840,15 @@ int64_t iris_sql_field(const JsonType *t, const char *in, int64_t i, Slice *name
         }
         *iv = v;
         return 0;
+    }
+    case J_UUID: {
+        char u[36];
+        uuidText((const unsigned char *)p, u);
+        tmp->len = 0;
+        iris_string_append(tmp, u, 36);
+        text->ptr = tmp->ptr;
+        text->len = tmp->len;
+        return 2;
     }
     default:
         break;
@@ -18063,6 +18135,7 @@ static void flagValueHint(const FlagField *f, IrisString *s) {
     case J_INT: case J_UINT: hint = f->duration ? "<duration>" : "<n>"; break;
     case J_FLOAT: hint = "<number>"; break;
     case J_STR: case J_STRING: hint = "<text>"; break;
+    case J_UUID: hint = "<uuid>"; break;
     case J_ENUM: {
         const JsonName *names = t->items;
         iris_string_append(s, "<", 1);
@@ -19727,6 +19800,12 @@ static void binEncode(IrisString *o, int fmt, const JsonType *t, const char *p) 
         binText(o, fmt, s->ptr, s->len);
         break;
     }
+    case J_UUID: {
+        char u[36];
+        uuidText((const unsigned char *)p, u);
+        binText(o, fmt, u, 36);
+        break;
+    }
     case J_ENUM: {
         int64_t v = *(const int32_t *)p;
         const JsonName *names = t->items;
@@ -20334,6 +20413,13 @@ static bool binValue(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k)
     case J_BOOL:
         if (k->kind != BT_BOOL) return binExpected(in, "a bool", k);
         *(uint8_t *)p = (uint8_t)k->u;
+        return true;
+    case J_UUID:
+        if (k->kind == BT_BIN && k->n == 16) {
+            memcpy(p, k->s, 16);
+            return true;
+        }
+        if (k->kind != BT_STR || !uuidParse(k->s, k->n, (unsigned char *)p)) return binExpected(in, "a UUID", k);
         return true;
     case J_STRING: {
         if (k->kind != BT_STR && k->kind != BT_BIN) return binExpected(in, "text", k);
@@ -22440,6 +22526,13 @@ static void bsonElement(IrisString *o, const JsonType *t, const char *p, const c
         bsonString(o, s->ptr, s->len);
         break;
     }
+    case J_UUID: {
+        char u[36];
+        uuidText((const unsigned char *)p, u);
+        bsonKey(o, 0x02, k, kn);
+        bsonString(o, u, 36);
+        break;
+    }
     case J_ENUM: {
         int64_t v = *(const int32_t *)p;
         const JsonName *names = t->items;
@@ -22888,6 +22981,13 @@ static bool bsonValue(BsonIn *in, int type, const unsigned char *v, int64_t n, c
         return true;
     case J_STR:
         return bsonFail(in, 2, "a str field can't keep a value; make it a String");
+    case J_UUID:
+        if (type == 0x05 && n == 21) {      /* binary: length, subtype, 16 bytes */
+            memcpy(p, v + 5, 16);
+            return true;
+        }
+        if (type != 0x02 || !uuidParse((const char *)v + 4, n - 5, (unsigned char *)p)) return bsonWrong(in, "a UUID", type);
+        return true;
     case J_STRING: {
         IrisString *s = (IrisString *)p;
         if (type == 0x02 || type == 0x0D || type == 0x0E) {

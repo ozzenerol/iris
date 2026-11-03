@@ -307,7 +307,7 @@ JsonError.wrongType: level: &quot;fatal&quot; isn&#x27;t one of the enum&#x27;s 
 {&quot;request_id&quot;:3,&quot;remote_addr&quot;:&quot;10.0.0.5&quot;,&quot;status&quot;:200}
 JsonError.missing: the required field &quot;request_id&quot; is missing</code></pre>
 <h2 id="what-a-json-struct-can-hold"><a href="#what-a-json-struct-can-hold">What a @json struct can hold</a></h2>
-<ul><li>integers, floats and <code>bool</code></li><li><code>String</code> and plain enums</li><li>other <code>@json</code> structs</li><li>slices, arrays and <code>List</code>s of these</li><li><code>Map</code>s from <code>str</code> or <code>String</code> keys to these</li></ul>
+<ul><li>integers, floats and <code>bool</code></li><li><code>String</code> and plain enums</li><li>other <code>@json</code> structs</li><li><code>uuid.Uuid</code>, as text: <code>&quot;6ba7b810-9dad-11d1-80b4-00c04fd430c8&quot;</code>. <code>decode</code> also takes capitals and the 32 digits without dashes.</li><li>slices, arrays and <code>List</code>s of these</li><li><code>Map</code>s from <code>str</code> or <code>String</code> keys to these</li></ul>
 <p>The fields of an embedded struct appear as fields of the outer one. A <code>str</code> field encodes but doesn't decode, because a <code>str</code> can't own the text it points to. Decoded text goes in a <code>String</code>.</p>
 <h2 id="errors"><a href="#errors">Errors</a></h2>
 <p>The errors are values of <code>json.JsonError</code>. The message says where in the text the problem is.</p>

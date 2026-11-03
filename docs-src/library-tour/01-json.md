@@ -308,6 +308,7 @@ JsonError.missing: the required field "request_id" is missing
 - integers, floats and `bool`
 - `String` and plain enums
 - other `@json` structs
+- `uuid.Uuid`, as text: `"6ba7b810-9dad-11d1-80b4-00c04fd430c8"`. `decode` also takes capitals and the 32 digits without dashes.
 - slices, arrays and `List`s of these
 - `Map`s from `str` or `String` keys to these
 

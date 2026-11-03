@@ -1319,7 +1319,7 @@ static void addTemp(IR *ir, const char *slot) {
  * or array points at its element's table; an enum at its values' names,
  * { ptr name, i64 len, i64 value }. */
 
-enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP };
+enum { J_INT = 1, J_UINT, J_FLOAT, J_BOOL, J_STR, J_STRING, J_STRUCT, J_SLICE, J_ARRAY, J_ENUM, J_LIST, J_MAP, J_UUID };
 
 static void jsonFields(IR *ir, Type *t, int64_t base, StrBuf *out, int *n) {
     NodeList *fields = &t->decl->list;
@@ -1406,6 +1406,10 @@ static const char *jsonType(IR *ir, Type *t) {
         if (isJsonList(t)) {
             kind = J_LIST;
             items = jsonType(ir, t->args[0]);
+            break;
+        }
+        if (isJsonUuid(t)) {
+            kind = J_UUID;      /* text: 8-4-4-4-12 hex digits */
             break;
         }
         if (isJsonMap(t)) {

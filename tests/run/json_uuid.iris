@@ -1,0 +1,59 @@
+// expect: edge 6ba7b810-9dad-11d1-80b4-00c04fd430c8 2
+// expect: {"name":"edge","id":"6ba7b810-9dad-11d1-80b4-00c04fd430c8","seen":["00000000-0000-0000-0000-000000000000","6ba7b810-9dad-11d1-80b4-00c04fd430c8"]}
+// expect: upper 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+// expect: no dashes 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+// expect: JsonError.wrongType id: expected a UUID like 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+// expect: JsonError.wrongType id: expected a UUID as a string, found a number
+// expect: msgpack 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+// expect: cbor 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+// expect: sqlite 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+import cbor, json, msgpack, sqlite, uuid
+
+@json
+struct Device {
+    String name
+    uuid.Uuid id
+    List[uuid.Uuid] seen
+}
+
+@json
+struct Row {
+    i64 n
+    uuid.Uuid id
+}
+
+!void main() {
+    text := r"""{"name": "edge", "id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8", "seen": ["00000000-0000-0000-0000-000000000000", "6ba7b810-9dad-11d1-80b4-00c04fd430c8"]}"""
+    scoped d := try json.decode(Device, text)
+    print("{d.name} {d.id} {d.seen.len}")
+    scoped String s = json.encode(d)
+    print(s)
+
+    up := try json.decode(Row, r"""{"n": 1, "id": "6BA7B810-9DAD-11D1-80B4-00C04FD430C8"}""")
+    print("upper {up.id}")
+    nd := try json.decode(Row, r"""{"n": 1, "id": "6ba7b8109dad11d180b400c04fd430c8"}""")
+    print("no dashes {nd.id}")
+    _ = json.decode(Row, r"""{"n": 1, "id": "6ba7b810"}""") catch e {
+        print("{e.code} {e.message}")
+        Row{}
+    }
+    _ = json.decode(Row, r"""{"n": 1, "id": 5}""") catch e {
+        print("{e.code} {e.message}")
+        Row{}
+    }
+
+    row := Row{n: 1, id: d.id}
+    scoped String m = msgpack.encode(row)
+    a := try msgpack.decode(Row, m)
+    print("msgpack {a.id}")
+    scoped String c = cbor.encode(row)
+    b := try cbor.decode(Row, c)
+    print("cbor {b.id}")
+
+    db := try sqlite.open(":memory:")
+    defer db.close()
+    try db.exec("CREATE TABLE r (n INTEGER, id TEXT)")
+    try db.exec("INSERT INTO r VALUES (1, '6ba7b810-9dad-11d1-80b4-00c04fd430c8')")
+    e := try sqlite.one[Row](&db, "SELECT n, id FROM r")
+    print("sqlite {e.id}")
+}

@@ -1383,6 +1383,12 @@ bool isJsonMap(Type *t) {
            strcmp(t->generic->module, "core") == 0 && strcmp(t->generic->name, "Map") == 0;
 }
 
+/* uuid.Uuid, which JSON reads and writes as text: "6ba7b810-9dad-11d1-80b4-00c04fd430c8". */
+bool isJsonUuid(Type *t) {
+    return t->kind == TY_STRUCT && t->decl && t->decl->module && strcmp(t->decl->module, "uuid") == 0 &&
+           strcmp(t->decl->name, "Uuid") == 0;
+}
+
 /* What JSON can hold: numbers, bool, text, plain enums, @json structs, and
  * slices, arrays and Lists of those, and Maps from text to those. */
 static bool jsonType(Checker *c, Type *t, Node *at, const char *owner) {
@@ -1400,6 +1406,7 @@ static bool jsonType(Checker *c, Type *t, Node *at, const char *owner) {
         return isStr(t) || jsonType(c, t->elem, at, owner);
     case TY_STRUCT:
         if (isJsonList(t)) return jsonType(c, t->args[0], at, owner);
+        if (isJsonUuid(t)) return true;
         if (isJsonMap(t)) {
             if (!isStr(t->args[0]) && t->args[0]->kind != TY_STRING) {
                 error(c, at, "a Map in JSON needs str or String keys, since JSON keys are text");

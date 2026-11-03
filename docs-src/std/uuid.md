@@ -25,3 +25,5 @@ false true
 ```
 
 A v7 UUID made in a later millisecond sorts after one made earlier, both as bytes with `compare` and as text. Rows with v7 ids are therefore added at the end of a database index. Two UUIDs made in the same millisecond can come in either order.
+
+A `Uuid` field of a `@json` struct is written as its text and read back from it, in JSON, TOML, YAML, msgpack, cbor and sqlite rows. In a `@wire` struct it is its 16 bytes.

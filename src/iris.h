@@ -400,6 +400,7 @@ int64_t fieldOffset(Type *t, int index);
 bool isJsonStruct(Type *t);
 bool isJsonList(Type *t);
 bool isJsonMap(Type *t);
+bool isJsonUuid(Type *t);
 Node *textMethod(Program *prog, const char *name);
 
 /* What a call does when it isn't a call to a user function. */
