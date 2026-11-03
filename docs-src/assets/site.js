@@ -132,18 +132,17 @@
     if (a) { e.preventDefault(); location.href = withTheme(a.href); }
   });
 
-  /* ---- themes: the system's (light or dark) until one is picked, then that one, remembered ---- */
+  /* ---- themes: ayu until one is picked, then that one, remembered; "system" follows the system's light or dark ---- */
+  function currentTheme() { return html.dataset.theme || "system"; }
   function setTheme(t) {
     if (t === "system") delete html.dataset.theme;
     else html.dataset.theme = t;
-    try { if (t === "system") localStorage.removeItem("iris-theme"); else localStorage.setItem("iris-theme", t); } catch (e) {}
-    window.name = t === "system" ? "" : "iris-theme:" + t;
-    var u = new URL(location.href);
-    u.searchParams.delete("theme");
-    history.replaceState(history.state, "", t === "system" ? u.href : withTheme(u.href));
+    try { localStorage.setItem("iris-theme", t); } catch (e) {}
+    window.name = "iris-theme:" + t;
+    history.replaceState(history.state, "", withTheme(location.href));
   }
   function syncRadios() {
-    var cur = html.dataset.theme || "system";
+    var cur = currentTheme();
     document.querySelectorAll('#settings input[name="theme"]').forEach(function (r) { r.checked = r.value === cur; });
   }
   document.querySelectorAll('#settings input[name="theme"]').forEach(function (r) {
@@ -153,17 +152,20 @@
   /* Back and Forward can show a page as it was left, without running this
      again: it takes the theme picked since then */
   window.addEventListener("pageshow", function () {
-    var m = /^iris-theme:(dark|light|ayu)$/.exec(window.name), t = m && m[1];
+    var m = /^iris-theme:(dark|light|ayu|system)$/.exec(window.name), t = m && m[1];
     try { t = localStorage.getItem("iris-theme") || t; } catch (e) {}
-    if (t && html.dataset.theme !== t) html.dataset.theme = t;
+    if (t && currentTheme() !== t) {
+      if (t === "system") delete html.dataset.theme;
+      else html.dataset.theme = t;
+    }
     syncRadios();
   });
   /* Opened as files, each page has storage of its own in some browsers, so
      a link to another page of the site carries the theme in its address. */
   function withTheme(url) {
-    var t = html.dataset.theme;
+    var t = currentTheme();
     var u = new URL(url, location.href);
-    if (!t || u.protocol !== location.protocol || u.host !== location.host) return url;
+    if (u.protocol !== location.protocol || u.host !== location.host) return url;
     u.searchParams.set("theme", t);
     return u.href;
   }
