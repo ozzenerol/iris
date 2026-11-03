@@ -1,0 +1,11 @@
+// error: 9: this Map[str, i64] holds a Mutex, so it can't be copied; use a pointer to it: &...
+// error: 10: this Locked[List[i64]] holds a Mutex, so it can't be copied; use a pointer to it: &...
+import sync
+
+sync.Map[str, i64] hits
+sync.Locked[List[i64]] queue
+
+void main() {
+    copy := hits
+    q := queue
+}

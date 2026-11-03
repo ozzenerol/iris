@@ -200,7 +200,7 @@ try {
 <p>It suits a cache or a counter that each thread keeps for itself, with no lock. The tasks of one thread share its value.</p>
 <h2 id="waiting-for-many-and-limits"><a href="#waiting-for-many-and-limits">Waiting for many, and limits</a></h2>
 <p>The <code>sync</code> module builds on <code>Mutex</code> and channels and works between tasks and threads alike.</p>
-<ul><li>A <code>WaitGroup</code> waits for a number of them to finish.</li><li>A <code>Semaphore</code> lets only so many in at once.</li><li>A <code>Once</code> runs a function the first time.</li><li>An <code>RwLock</code> lets many readers or one writer in.</li><li><code>Workers</code> hand jobs from a queue to a few tasks.</li></ul>
+<ul><li>A <code>WaitGroup</code> waits for a number of them to finish.</li><li>A <code>Semaphore</code> lets only so many in at once.</li><li>A <code>Once</code> runs a function the first time.</li><li>An <code>RwLock</code> lets many readers or one writer in.</li><li><code>Workers</code> hand jobs from a queue to a few tasks.</li><li>A <code>sync.Map</code> is a <code>Map</code> that every thread can use at once.</li><li>A <code>Locked</code> holds any value behind a <code>Mutex</code>.</li></ul>
 <h3 id="waitgroup"><a href="#waitgroup">WaitGroup</a></h3>
 <p>A <code>WaitGroup</code> counts what is still running. <code>add</code> counts one more before each task or thread starts, <code>done</code> counts one less when it ends, and <code>wait</code> waits until the count is back to 0. <code>defer group.done()</code> at the top of the function counts it however the function ends:</p>
 <pre class="code run"><code><span class="k">import</span> sync
@@ -349,7 +349,79 @@ sync.<span class="t">RwLock</span> lock
     <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>checked.<span class="f">load</span>()<span class="e">}</span><span class="s"> ports checked&quot;</span>)
 }</code></pre>
 <pre class="out"><code>50 ports checked</code></pre>
-<p>A <code>WaitGroup</code>, a <code>Once</code> and an <code>RwLock</code> hold a <code>Mutex</code>, so they can't be copied either. Keep them in a global or a struct, and pass a pointer.</p>
+<h3 id="sync-map"><a href="#sync-map">sync.Map</a></h3>
+<p>A <code>sync.Map[K, V]</code> is a <code>Map</code> that many tasks and threads can use at once. Its keys are spread over 32 parts, each with its own lock, so callers that use different keys seldom wait for each other. It suits tables that every connection touches, such as sessions, rate limits or a cache.</p>
+<p>Reading a value and then setting it are two steps, and another thread can change the key in between. <code>update</code> does both with the key's part locked. It calls a function with the value and whether the key was there, and stores what the function returns. <code>getOrSet</code> keeps the first value set for a key and gives it to every caller:</p>
+<pre class="code run"><code><span class="k">import</span> sync
+
+sync.<span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] hits
+sync.<span class="t">Map</span>[<span class="t">str</span>, <span class="t">i64</span>] firstSeen
+
+<span class="t">i64</span> <span class="f">plusOne</span>(<span class="t">i64</span> n, <span class="t">bool</span> found) =&gt; n + <span class="n">1</span>
+
+<span class="t">void</span> <span class="f">serve</span>(<span class="t">i64</span> id) {
+    <span class="k">for</span> i <span class="k">in</span> <span class="n">0</span>..<span class="n">1000</span> {
+        path := <span class="k">if</span> i % <span class="n">4</span> == <span class="n">0</span> { <span class="s">&quot;/login&quot;</span> } <span class="k">else</span> { <span class="s">&quot;/&quot;</span> }
+        hits.<span class="f">update</span>(path, plusOne)
+    }
+    firstSeen.<span class="f">getOrSet</span>(<span class="s">&quot;server&quot;</span>, id)
+}
+
+<span class="t">i64</span> total = <span class="n">0</span>
+
+<span class="t">void</span> <span class="f">show</span>(<span class="t">str</span> path, <span class="t">i64</span> n) {
+    total += n
+}
+
+<span class="t">void</span> <span class="f">main</span>() {
+    a := <span class="k">thread</span> <span class="f">serve</span>(<span class="n">1</span>)
+    b := <span class="k">thread</span> <span class="f">serve</span>(<span class="n">2</span>)
+    a.<span class="f">join</span>()
+    b.<span class="f">join</span>()
+
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>hits.<span class="f">getOr</span>(<span class="s">&quot;/&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s"> </span><span class="e">{</span>hits.<span class="f">getOr</span>(<span class="s">&quot;/login&quot;</span>, <span class="n">0</span>)<span class="e">}</span><span class="s">&quot;</span>)
+    hits.<span class="f">each</span>(show)
+    <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>total<span class="e">}</span><span class="s"> hits on </span><span class="e">{</span>hits.<span class="f">len</span>()<span class="e">}</span><span class="s"> paths&quot;</span>)
+    _, found := firstSeen.<span class="f">get</span>(<span class="s">&quot;server&quot;</span>)
+    <span class="f">print</span>(<span class="s">&quot;first server recorded: </span><span class="e">{</span>found<span class="e">}</span><span class="s">&quot;</span>)
+    hits.<span class="f">free</span>()
+    firstSeen.<span class="f">free</span>()
+}</code></pre>
+<pre class="out"><code>1500 500
+2000 hits on 2 paths
+first server recorded: true</code></pre>
+<div class="table"><table><thead><tr><th>Method</th><th>What it does</th></tr></thead><tbody><tr><td><code>set(k, v)</code>, <code>get(k)</code>, <code>getOr(k, v)</code>, <code>has(k)</code>, <code>remove(k)</code></td><td>as on a <code>Map</code></td></tr><tr><td><code>getOrSet(k, v)</code></td><td>the value of <code>k</code> and true, or sets <code>k</code> to <code>v</code> and gives <code>v</code> and false</td></tr><tr><td><code>update(k, f)</code></td><td>sets <code>k</code> to <code>f(value, found)</code> and gives the new value</td></tr><tr><td><code>swap(k, v)</code></td><td>sets <code>k</code> to <code>v</code> and gives the old value and whether there was one</td></tr><tr><td><code>take(k)</code></td><td>takes <code>k</code> out and gives its value and whether it was there</td></tr><tr><td><code>len()</code></td><td>the number of keys</td></tr><tr><td><code>each(f)</code></td><td>calls <code>f(k, v)</code> for each key, in no order</td></tr><tr><td><code>clear()</code>, <code>free()</code></td><td>empty it, give its memory back</td></tr></tbody></table></div>
+<ul><li>The function given to <code>update</code> or <code>each</code> runs with a lock held, so it must not use the same map.</li><li>Values are copied in and out. A value that owns memory, such as a <code>String</code>, stays the caller's to free. <code>take</code> and <code>swap</code> hand back the old value so it can be freed.</li><li>Keys follow the <code>Map</code> rules: a <code>str</code> or <code>String</code> key is copied.</li></ul>
+<h3 id="locked"><a href="#locked">Locked</a></h3>
+<p>A <code>sync.Locked[T]</code> holds a value and the <code>Mutex</code> that guards it, so the value can't be reached without the lock. <code>lock</code> takes the lock and gives a pointer to the value, and <code>unlock</code> gives the lock back. <code>with(f)</code> calls <code>f</code> with the pointer while it holds the lock. Any value can be shared this way: a <code>List</code>, a <code>Deque</code>, a <code>Heap</code> or a struct of your own:</p>
+<pre class="code run"><code><span class="k">import</span> sync
+
+sync.<span class="t">Locked</span>[<span class="t">Deque</span>[<span class="t">i64</span>]] queue
+
+<span class="t">void</span> <span class="f">produce</span>(<span class="t">i64</span> from) {
+    <span class="k">for</span> i <span class="k">in</span> from..from + <span class="n">100</span> {
+        q := queue.<span class="f">lock</span>()
+        q.<span class="f">push</span>(i)
+        queue.<span class="f">unlock</span>()
+    }
+}
+
+<span class="t">void</span> <span class="f">report</span>(<span class="t">Deque</span>[<span class="t">i64</span>] *q) =&gt; <span class="f">print</span>(<span class="s">&quot;</span><span class="e">{</span>q.len<span class="e">}</span><span class="s"> jobs queued&quot;</span>)
+
+<span class="t">void</span> <span class="f">main</span>() {
+    a := <span class="k">thread</span> <span class="f">produce</span>(<span class="n">0</span>)
+    b := <span class="k">thread</span> <span class="f">produce</span>(<span class="n">100</span>)
+    a.<span class="f">join</span>()
+    b.<span class="f">join</span>()
+
+    queue.<span class="f">with</span>(report)
+    q := queue.<span class="f">lock</span>()
+    <span class="k">defer</span> queue.<span class="f">unlock</span>()
+    q.<span class="f">free</span>()
+}</code></pre>
+<pre class="out"><code>200 jobs queued</code></pre>
+<p>Don't keep the pointer that <code>lock</code> gives after <code>unlock</code>.</p>
+<p>A <code>WaitGroup</code>, a <code>Once</code>, an <code>RwLock</code>, a <code>sync.Map</code> and a <code>Locked</code> hold a <code>Mutex</code>, so they can't be copied either. Keep them in a global or a struct, and pass a pointer.</p>
 <h2 id="threads-in-the-library"><a href="#threads-in-the-library">Threads in the library</a></h2>
 <p><code>http.serve</code> and <code>Router.serve</code> start a thread for each CPU core, each with its own event loop, so a handler runs on several threads at once. A global it changes needs an <code>Atomic</code>, a <code>Mutex</code> or <code>threadlocal</code>. <code>threads: 1</code> keeps everything on one thread.</p></div><nav class="pager" aria-label="Previous and next"><a class="prev" rel="prev" href="24-tasks-and-channels.html"><span>Previous</span>Tasks and channels</a><a class="next" rel="next" href="26-compile-time.html"><span>Next</span>Compile time</a></nav>
 </section>

@@ -70,3 +70,42 @@ void main() {
 An `RwLock` lets in many readers at once, or one writer. A waiting writer keeps new readers out, and readers that waited go in before the next writer, so neither side waits forever.
 
 A `WaitGroup`, a `Once` and an `RwLock` each hold a `Mutex`, so they can't be copied. Keep them in a global or a struct and pass a pointer.
+
+## Shared collections
+
+A `sync.Map` is a `Map` that many tasks and threads can use at once. `update` changes a value in one step, so two threads counting the same key don't lose a count. A `sync.Locked` keeps any value, such as a `List` or a `Deque`, behind a `Mutex`:
+
+```iris run
+import sync
+
+sync.Map[str, i64] perUser
+sync.Locked[List[str]] log
+
+i64 plusOne(i64 n, bool found) => n + 1
+
+void login(str user) {
+    perUser.update(user, plusOne)
+    l := log.lock()
+    l.push(user)
+    log.unlock()
+}
+
+void main() {
+    a := thread login("ana")
+    b := thread login("ana")
+    c := thread login("bo")
+    a.join()
+    b.join()
+    c.join()
+
+    l := log.lock()
+    print("{perUser.getOr("ana", 0)} {perUser.getOr("bo", 0)} {l.len}")
+    l.free()
+    log.unlock()
+    perUser.free()
+}
+```
+
+```output
+2 1 3
+```

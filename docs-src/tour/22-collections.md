@@ -8,6 +8,8 @@
 
 All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.
 
+None of them can be changed by two threads at once. [Threads](25-threads.html#sync-map) has `sync.Map`, a `Map` that many threads can use, and `sync.Locked`, which shares any of them behind a lock.
+
 ## List
 
 A `List[T]` holds values of type `T` in order. A new list is empty and needs no setup. `free` gives its memory back:

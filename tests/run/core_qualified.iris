@@ -1,0 +1,13 @@
+// expect: mine 2, core 1
+// A module with a Map of its own still reaches core's as core.Map.
+struct Map {
+    i64 n
+}
+
+void main() {
+    Map m = Map{n: 2}
+    core.Map[str, i64] c
+    c.set("a", 1)
+    print("mine {m.n}, core {c.len}")
+    c.free()
+}

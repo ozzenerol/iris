@@ -66,6 +66,7 @@ try {
 <section id="main-content" class="content">
 <div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">Language Tour</a>::<a href="index.html#building-larger-programs">Building larger programs</a></div><h1>Chapter <span class="mod">Collections</span></h1><span class="out-of-band"><span class="since">22 of 30</span> &middot; <a class="src" href="https://github.com/ozzenerol/iris/blob/main/docs-src/tour/22-collections.md">Source</a></span></div><div class="docblock"><ul><li><code>List</code> keeps values in order and grows as values are added.</li><li><code>Map</code> keeps a value for each key, and <code>Set</code> keeps each value once.</li><li><code>Deque</code> is a queue open at both ends.</li><li><code>Heap</code> gives back the value that goes first.</li><li><code>SortedMap</code> keeps its keys in order.</li></ul>
 <p>All of them, and the functions on slices, are in every module without an import. This chapter covers what they do, how loops go over them, and who frees what they hold.</p>
+<p>None of them can be changed by two threads at once. <a href="25-threads.html#sync-map">Threads</a> has <code>sync.Map</code>, a <code>Map</code> that many threads can use, and <code>sync.Locked</code>, which shares any of them behind a lock.</p>
 <h2 id="list"><a href="#list">List</a></h2>
 <p>A <code>List[T]</code> holds values of type <code>T</code> in order. A new list is empty and needs no setup. <code>free</code> gives its memory back:</p>
 <pre class="code run"><code><span class="t">void</span> <span class="f">main</span>() {

@@ -200,6 +200,8 @@ The `sync` module builds on `Mutex` and channels and works between tasks and thr
 - A `Once` runs a function the first time.
 - An `RwLock` lets many readers or one writer in.
 - `Workers` hand jobs from a queue to a few tasks.
+- A `sync.Map` is a `Map` that every thread can use at once.
+- A `Locked` holds any value behind a `Mutex`.
 
 ### WaitGroup
 
@@ -391,7 +393,110 @@ void main() {
 50 ports checked
 ```
 
-A `WaitGroup`, a `Once` and an `RwLock` hold a `Mutex`, so they can't be copied either. Keep them in a global or a struct, and pass a pointer.
+### sync.Map
+
+A `sync.Map[K, V]` is a `Map` that many tasks and threads can use at once. Its keys are spread over 32 parts, each with its own lock, so callers that use different keys seldom wait for each other. It suits tables that every connection touches, such as sessions, rate limits or a cache.
+
+Reading a value and then setting it are two steps, and another thread can change the key in between. `update` does both with the key's part locked. It calls a function with the value and whether the key was there, and stores what the function returns. `getOrSet` keeps the first value set for a key and gives it to every caller:
+
+```iris run
+import sync
+
+sync.Map[str, i64] hits
+sync.Map[str, i64] firstSeen
+
+i64 plusOne(i64 n, bool found) => n + 1
+
+void serve(i64 id) {
+    for i in 0..1000 {
+        path := if i % 4 == 0 { "/login" } else { "/" }
+        hits.update(path, plusOne)
+    }
+    firstSeen.getOrSet("server", id)
+}
+
+i64 total = 0
+
+void show(str path, i64 n) {
+    total += n
+}
+
+void main() {
+    a := thread serve(1)
+    b := thread serve(2)
+    a.join()
+    b.join()
+
+    print("{hits.getOr("/", 0)} {hits.getOr("/login", 0)}")
+    hits.each(show)
+    print("{total} hits on {hits.len()} paths")
+    _, found := firstSeen.get("server")
+    print("first server recorded: {found}")
+    hits.free()
+    firstSeen.free()
+}
+```
+
+```output
+1500 500
+2000 hits on 2 paths
+first server recorded: true
+```
+
+| Method | What it does |
+|---|---|
+| `set(k, v)`, `get(k)`, `getOr(k, v)`, `has(k)`, `remove(k)` | as on a `Map` |
+| `getOrSet(k, v)` | the value of `k` and true, or sets `k` to `v` and gives `v` and false |
+| `update(k, f)` | sets `k` to `f(value, found)` and gives the new value |
+| `swap(k, v)` | sets `k` to `v` and gives the old value and whether there was one |
+| `take(k)` | takes `k` out and gives its value and whether it was there |
+| `len()` | the number of keys |
+| `each(f)` | calls `f(k, v)` for each key, in no order |
+| `clear()`, `free()` | empty it, give its memory back |
+
+- The function given to `update` or `each` runs with a lock held, so it must not use the same map.
+- Values are copied in and out. A value that owns memory, such as a `String`, stays the caller's to free. `take` and `swap` hand back the old value so it can be freed.
+- Keys follow the `Map` rules: a `str` or `String` key is copied.
+
+### Locked
+
+A `sync.Locked[T]` holds a value and the `Mutex` that guards it, so the value can't be reached without the lock. `lock` takes the lock and gives a pointer to the value, and `unlock` gives the lock back. `with(f)` calls `f` with the pointer while it holds the lock. Any value can be shared this way: a `List`, a `Deque`, a `Heap` or a struct of your own:
+
+```iris run
+import sync
+
+sync.Locked[Deque[i64]] queue
+
+void produce(i64 from) {
+    for i in from..from + 100 {
+        q := queue.lock()
+        q.push(i)
+        queue.unlock()
+    }
+}
+
+void report(Deque[i64] *q) => print("{q.len} jobs queued")
+
+void main() {
+    a := thread produce(0)
+    b := thread produce(100)
+    a.join()
+    b.join()
+
+    queue.with(report)
+    q := queue.lock()
+    defer queue.unlock()
+    q.free()
+}
+```
+
+```output
+200 jobs queued
+```
+
+Don't keep the pointer that `lock` gives after `unlock`.
+
+A `WaitGroup`, a `Once`, an `RwLock`, a `sync.Map` and a `Locked` hold a `Mutex`, so they can't be copied either. Keep them in a global or a struct, and pass a pointer.
 
 ## Threads in the library
 

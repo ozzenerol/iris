@@ -1,0 +1,82 @@
+// expect: 100 keys, key 7 seen 160 times
+// expect: a 1 false, a 1 true
+// expect: swap 1 true, then 5
+// expect: take 5 true, then false false
+// expect: String values: one alpha 1
+// expect: sum 4950 over 100 keys
+// expect: 0 after clear
+// expect: jobs 16000, first 0
+// Four threads and four tasks update the same keys; each key must see
+// every update. Then every method once.
+import sync
+
+sync.Map[i64, i64] counts
+sync.Map[str, i64] names
+sync.Map[str, String] owned
+sync.Locked[List[i64]] jobs
+sync.WaitGroup group
+
+i64 inc(i64 v, bool found) => v + 1
+
+void work() {
+    defer group.done()
+    for i in 0..2000 {
+        counts.update(i % 100, inc)
+        q := jobs.lock()
+        q.push(i)
+        jobs.unlock()
+    }
+}
+
+i64 sum = 0
+void add(i64 k, i64 v) {
+    sum += k
+}
+
+void firstOf(List[i64] *q) => print("jobs {q.len}, first {q.items()[0]}")
+
+void main() {
+    List[Thread] ts
+    for _ in 0..4 {
+        group.add()
+        ts.push(thread work())
+        group.add()
+        spawn work()
+    }
+    group.wait()
+    for t in ts {
+        t.join()
+    }
+    ts.free()
+    print("{counts.len()} keys, key 7 seen {counts.getOr(7, 0)} times")
+
+    v, had := names.getOrSet("a", 1)
+    v2, had2 := names.getOrSet("a", 2)
+    print("a {v} {had}, a {v2} {had2}")
+    old, found := names.swap("a", 5)
+    print("swap {old} {found}, then {names.getOr("a", 0)}")
+    t, tf := names.take("a")
+    t2, tf2 := names.has("a"), names.remove("a")
+    print("take {t} {tf}, then {t2} {tf2}")
+
+    owned.set("one", "alpha".copy())
+    s, _ := owned.get("one")
+    print("String values: one {s} {owned.len()}")
+    gone, _ := owned.take("one")
+    gone.free()
+
+    counts.each(add)
+    print("sum {sum} over {counts.len()} keys")
+    counts.clear()
+    print("{counts.len()} after clear")
+
+    jobs.with(firstOf)
+    q := jobs.lock()
+    q.free()
+    jobs.unlock()
+
+    counts.free()
+    names.free()
+    owned.free()
+    group.free()
+}

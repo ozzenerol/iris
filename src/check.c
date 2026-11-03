@@ -249,10 +249,14 @@ static Node *lookup(Checker *c, const char *name) {
     memcpy(mod, name, n);
     mod[n] = 0;
     Node *imp = lookupModule(c, mod);
-    if (!imp || !imp->scope) {
+    Scope *in = imp ? imp->scope : NULL;
+    if (!imp && strcmp(mod, "core") == 0 && c->prog->core) {
+        in = c->prog->core->anchor->scope;  /* core.Map: core's, past a name of the module's own */
+    }
+    if (!in) {
         return NULL;
     }
-    Sym *sym = findIn((Scope *)imp->scope, dot + 1);
+    Sym *sym = findIn(in, dot + 1);
     if (!sym || !visible(c, sym->decl)) {
         return NULL;
     }

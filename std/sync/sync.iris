@@ -1,6 +1,7 @@
-// Waiting for and limiting other tasks and threads: wait groups,
-// semaphores, run-once, read-write locks and a pool of worker tasks. Each
-// works between tasks of one thread and between threads.
+// Waiting for and limiting other tasks and threads, and sharing data
+// between them: wait groups, semaphores, run-once, read-write locks, a pool
+// of worker tasks, a Map many threads can use and a value behind a lock.
+// Each works between tasks of one thread and between threads.
 
 // Waits for a number of tasks or threads to finish: add before starting
 // each, done when each ends, and wait until all are. A WaitGroup can't be
@@ -214,4 +215,181 @@ pub void Workers[T].finish() {
     }
     self.jobs.free()
     self.finished.free()
+}
+
+// One part of a sync.Map: its own lock and the keys that hash to it.
+struct Shard[K, V] {
+    Mutex lock
+    core.Map[K, V] map
+    i64[6] pad // 128 bytes a shard, so two threads on two shards don't share a cache line
+}
+
+@builtin
+u64 hashOf()
+
+// A Map that many tasks and threads can use at once. The keys are spread
+// over 32 parts, each with its own lock, so callers that use different
+// keys seldom wait for each other. Keys are as in a Map: integers, bool,
+// enums, pointers, str or String, and a str or String key is copied. A
+// value is copied in and out, so a value that owns memory, such as a
+// String, belongs to whoever frees it: take and swap give the old one
+// back. A sync.Map can't be copied; keep it in a global or a struct.
+pub struct Map[K, V] {
+    Shard[K, V][32] shards
+}
+
+Shard[K, V] *Map[K, V].shardOf(K k) => &self.shards[i64((hashOf(k) >> 40) & 31)]
+
+// Sets the value of k, adding k if it isn't there.
+pub void Map[K, V].set(K k, V v) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    s.map.set(k, v)
+    s.lock.unlock()
+}
+
+// The value of k, and whether k is there.
+pub (V, bool) Map[K, V].get(K k) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    v, found := s.map.get(k)
+    s.lock.unlock()
+    return (v, found)
+}
+
+// The value of k, or fallback when k isn't there.
+pub V Map[K, V].getOr(K k, V fallback) {
+    v, found := self.get(k)
+    return if found { v } else { fallback }
+}
+
+// Whether k is there.
+pub bool Map[K, V].has(K k) {
+    _, found := self.get(k)
+    return found
+}
+
+// The value of k and true when k is there; otherwise sets k to v and
+// gives v and false. Of many callers that try at once, one sets the value
+// and the others get it.
+pub (V, bool) Map[K, V].getOrSet(K k, V v) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    old, found := s.map.get(k)
+    if !found {
+        s.map.set(k, v)
+        old = v
+    }
+    s.lock.unlock()
+    return (old, found)
+}
+
+// Sets k to v and gives the value it had, and whether it had one.
+pub (V, bool) Map[K, V].swap(K k, V v) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    old, found := s.map.get(k)
+    s.map.set(k, v)
+    s.lock.unlock()
+    return (old, found)
+}
+
+// Sets k to f(value, found), where found says whether k was there, and
+// gives the new value. f runs with k's part locked, so no other caller
+// changes k in between; it must not use the map itself.
+pub V Map[K, V].update(K k, V(V, bool) f) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    old, found := s.map.get(k)
+    v := f(old, found)
+    s.map.set(k, v)
+    s.lock.unlock()
+    return v
+}
+
+// Takes k out; false when it wasn't there.
+pub bool Map[K, V].remove(K k) {
+    _, found := self.take(k)
+    return found
+}
+
+// Takes k out and gives its value, and whether k was there.
+pub (V, bool) Map[K, V].take(K k) {
+    s := self.shardOf(k)
+    s.lock.lock()
+    v, found := s.map.get(k)
+    if found {
+        s.map.remove(k)
+    }
+    s.lock.unlock()
+    return (v, found)
+}
+
+// The number of keys. Other callers may change it right after.
+pub i64 Map[K, V].len() {
+    i64 n = 0
+    for i in 0..32 {
+        s := &self.shards[i]
+        s.lock.lock()
+        n += s.map.len
+        s.lock.unlock()
+    }
+    return n
+}
+
+// Calls f with each key and value, in no particular order. Each part is
+// locked while f runs on its keys, so f must not use the map itself. Keys
+// set or taken out by others meanwhile may or may not be seen.
+pub void Map[K, V].each(void(K, V) f) {
+    for i in 0..32 {
+        s := &self.shards[i]
+        s.lock.lock()
+        for k, v in s.map {
+            f(k, v)
+        }
+        s.lock.unlock()
+    }
+}
+
+// Takes every key out and keeps the memory.
+pub void Map[K, V].clear() {
+    for i in 0..32 {
+        s := &self.shards[i]
+        s.lock.lock()
+        s.map.clear()
+        s.lock.unlock()
+    }
+}
+
+// Gives the map's memory back; the map is empty after. Nothing else may
+// use it meanwhile.
+pub void Map[K, V].free() {
+    for i in 0..32 {
+        self.shards[i].map.free()
+    }
+}
+
+// A value and the Mutex that guards it: the value is reached only with the
+// lock held. Any value can be shared this way, such as a List, a Deque or a
+// SortedMap. A Locked can't be copied; keep it in a global or a struct.
+pub struct Locked[T] {
+    Mutex m
+    T value
+}
+
+// Waits for the lock, takes it and gives the value. Call unlock when done
+// with it, and don't keep the pointer after.
+pub T *Locked[T].lock() {
+    self.m.lock()
+    return &self.value
+}
+
+// Gives the lock back.
+pub void Locked[T].unlock() => self.m.unlock()
+
+// Calls f with the value, holding the lock while it runs.
+pub void Locked[T].with(void(T *) f) {
+    self.m.lock()
+    f(&self.value)
+    self.m.unlock()
 }
