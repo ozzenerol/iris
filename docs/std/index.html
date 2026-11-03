@@ -12,14 +12,17 @@
 <script src="../assets/version.js"></script>
 <script>/* the theme: the one picked last in this tab (its name), else the one in
    the address (?theme=dark, which links carry, also into new tabs), else
-   the one remembered; none follows the system. Pages opened as files can't
-   share storage in every browser, so the first two carry it there. */
-var h = document.documentElement, t = /^iris-theme:(dark|light|ayu)$/.exec(window.name) || /[?&]theme=(dark|light|ayu)/.exec(location.search);
-if (t) h.dataset.theme = t[1];
+   the one remembered, else ayu; "system" follows the system's light or
+   dark. Pages opened as files can't share storage in every browser, so
+   the first two carry it there. */
+var h = document.documentElement, t = /^iris-theme:(dark|light|ayu|system)$/.exec(window.name) || /[?&]theme=(dark|light|ayu|system)/.exec(location.search);
+t = t && t[1];
 try {
-  if (t) localStorage.setItem("iris-theme", t[1]);
-  else if ((t = localStorage.getItem("iris-theme"))) h.dataset.theme = t;
-} catch (e) {}</script>
+  if (t) localStorage.setItem("iris-theme", t);
+  else t = localStorage.getItem("iris-theme");
+} catch (e) {}
+t = t || "ayu";
+if (t !== "system") h.dataset.theme = t;</script>
 </head>
 <body class="rustdoc std">
 <nav class="mobile-topbar">
