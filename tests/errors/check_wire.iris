@@ -7,7 +7,7 @@
 // error: 43: n is NotWire, which needs @wire too
 // error: 44: ptr is i64 *, which @wire can't send
 // error: 45: noLen is String, so it needs its length: @wire(len: u16) for a prefix, or @wire(len: count) for an earlier field
-// error: 46: len: and max: are for String and slice fields; notSized is u8
+// error: 46: len: and max: are for String, slice and List fields; notSized is u8
 // error: 47: the length of noMax can pass 65535 bytes, so say how many it may be: @wire(len: u32, max: 1MiB)
 // error: 48: max is 300, but the length can say at most 255
 // error: 49: later comes after early; the field with the length must come first

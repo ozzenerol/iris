@@ -1,0 +1,18 @@
+// error: 8: records is List[Record], so it needs its length: @wire(len: u16) for a prefix, or @wire(len: count) for an earlier field
+// error: 9: names is List[String]; @wire can't give each item its own length, so put the String in a @wire struct and use a List of that
+
+@wire
+struct Message {
+    u64 timestamp
+    u32 count
+    List[Record] records
+    @wire(len: u8) List[String] names
+}
+
+@wire
+struct Record {
+    u8 kind
+}
+
+void main() {
+}

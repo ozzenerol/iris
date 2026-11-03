@@ -1680,6 +1680,7 @@ static int64_t wireSizeOf(Type *t) {
         return e < 0 ? -1 : e * t->count;
     }
     case TY_STRUCT: {
+        if (isJsonList(t)) return -1;
         int64_t sum = 0;
         Node *d = t->decl;
         for (int i = 0; i < d->list.len; i++) {
@@ -1740,12 +1741,21 @@ static int wireEntries(IR *ir, Type *t, WireEntry **out) {
     return m;
 }
 
-static bool wireSized(Type *t) { return t->kind == TY_STRING || t->kind == TY_SLICE; }
+static bool wireSized(Type *t) { return t->kind == TY_STRING || t->kind == TY_SLICE || isJsonList(t); }
+
+/* A @wire struct in a field: its own functions. A List[T] is sent like a slice. */
+static bool wireNested(Type *t) { return t->kind == TY_STRUCT && !isJsonList(t); }
+
+/* The items of a slice or List[T]. */
+static Type *wireElem(Type *t) { return isJsonList(t) ? t->args[0] : t->elem; }
+
+/* Where the length is: a slice { ptr, len }, a List { { ptr, cap }, len }. */
+static int64_t wireLenOff(Type *t) { return isJsonList(t) ? 16 : 8; }
 
 /* The fewest bytes a value of t takes on the wire. */
 static int64_t wireMinSize(Type *t) {
     int64_t n = wireSizeOf(t);
-    if (n >= 0 || t->kind != TY_STRUCT) return n < 0 ? 0 : n;
+    if (n >= 0 || !wireNested(t)) return n < 0 ? 0 : n;
     int64_t sum = 0;
     Node *d = t->decl;
     for (int i = 0; i < d->list.len; i++) {
@@ -1757,7 +1767,7 @@ static int64_t wireMinSize(Type *t) {
             WireOpts o;
             wireOpts(d, f, &o);
             sum += o.lenBytes;
-        } else if (f->type->kind == TY_STRUCT) {
+        } else if (wireNested(f->type)) {
             sum += wireMinSize(f->type);
         } else {
             sum += wireSizeOf(f->type);
@@ -2158,7 +2168,7 @@ static void wireDec(IR *ir, Type *t, const char *name) {
         }
         i++;
         const char *m = wgepi(&g, "%out", e->off);
-        if (e->type->kind == TY_STRUCT) {
+        if (wireNested(e->type)) {
             const char *c = wtmp(&g), *bad = wtmp(&g);
             win(&g, "%s = call i32 @wire.dec.%d(ptr %%pos, ptr %%end, ptr %s)", c, wireId(ir, e->type), m);
             win(&g, "%s = icmp ne i32 %s, 0", bad, c);
@@ -2178,14 +2188,15 @@ static void wireDec(IR *ir, Type *t, const char *name) {
             win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
             continue;
         }
-        Type *et = e->type->elem;
+        Type *et = wireElem(e->type);
         int64_t ews = wireSizeOf(et), esz = typeSizeOf(et);
         int64_t least = ews >= 0 ? ews : wireMinSize(et);
         if (least > 0) wneed(&g, p, len, fmt(ir, "%lld", (long long)least));
         const char *buf = wtmp(&g);
         win(&g, "%s = call ptr @iris_wire_alloc(i64 %s, i64 %lld, i1 %s)", buf, len, (long long)esz, ews >= 0 ? "false" : "true");
         win(&g, "store ptr %s, ptr %s", buf, m);
-        win(&g, "store i64 %s, ptr %s", len, wgepi(&g, m, 8));
+        win(&g, "store i64 %s, ptr %s", len, wgepi(&g, m, 8));     /* a slice's length, a List's room */
+        if (isJsonList(e->type)) win(&g, "store i64 %s, ptr %s", len, wgepi(&g, m, 16));
         if (et->kind == TY_INT && esz == 1) {
             win(&g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)", buf, p, len);
             win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
@@ -2241,7 +2252,7 @@ static void wireSize(IR *ir, Type *t, const char *name) {
         }
         const char *m = wgepi(&g, "%v", e->off);
         const char *add;
-        if (e->type->kind == TY_STRUCT) {
+        if (wireNested(e->type)) {
             add = wtmp(&g);
             win(&g, "%s = call i64 @wire.size.%d(ptr %s)", add, wireId(ir, e->type), m);
             const char *bad = wtmp(&g);
@@ -2253,7 +2264,7 @@ static void wireSize(IR *ir, Type *t, const char *name) {
             wblock(&g, ok);
         } else {
             const char *len = wtmp(&g);
-            win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+            win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, wireLenOff(e->type)));
             /* the length must fit what says it, and the max */
             int64_t cap = e->o.lenBytes ? wireCap(e->o.lenBytes, false)
                                         : wireCap((int)typeSizeOf(es[e->lenEntry].type), es[e->lenEntry].type->isSigned);
@@ -2264,7 +2275,7 @@ static void wireSize(IR *ir, Type *t, const char *name) {
             bool bytes = e->type->kind == TY_STRING;
             wfail(&g, over, byMax ? (bytes ? 2 : 3) : (bytes ? 8 : 9), e->f, len, fmt(ir, "%lld", (long long)limit), NULL, "i64");
             fixed += e->o.lenBytes;
-            Type *et = bytes ? NULL : e->type->elem;
+            Type *et = bytes ? NULL : wireElem(e->type);
             int64_t ews = et ? wireSizeOf(et) : 1;
             if (ews >= 0) {
                 add = len;
@@ -2329,7 +2340,7 @@ static void wireEnc(IR *ir, Type *t, const char *name) {
                     WireEntry *c = &es[es[i].countOf];
                     int cs = (int)typeSizeOf(es[i].type);
                     const char *len = wtmp(&g);
-                    win(&g, "%s = load i64, ptr %s", len, wgepi(&g, "%v", c->off + 8));
+                    win(&g, "%s = load i64, ptr %s", len, wgepi(&g, "%v", c->off + wireLenOff(c->type)));
                     const char *v = len;
                     if (cs < 8) {
                         v = wtmp(&g);
@@ -2346,13 +2357,13 @@ static void wireEnc(IR *ir, Type *t, const char *name) {
         }
         i++;
         const char *m = wgepi(&g, "%v", e->off);
-        if (e->type->kind == TY_STRUCT) {
+        if (wireNested(e->type)) {
             win(&g, "call void @wire.enc.%d(ptr %%pos, ptr %s)", wireId(ir, e->type), m);
             continue;
         }
         const char *data = wtmp(&g), *len = wtmp(&g);
         win(&g, "%s = load ptr, ptr %s", data, m);
-        win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+        win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, wireLenOff(e->type)));
         const char *p = wtmp(&g);
         win(&g, "%s = load ptr, ptr %%pos", p);
         if (e->o.lenBytes) {
@@ -2365,7 +2376,7 @@ static void wireEnc(IR *ir, Type *t, const char *name) {
             wstore(&g, lb, e->order, v, p);
             p = wgepi(&g, p, lb);
         }
-        Type *et = e->type->kind == TY_STRING ? NULL : e->type->elem;
+        Type *et = e->type->kind == TY_STRING ? NULL : wireElem(e->type);
         if (!et || (et->kind == TY_INT && typeSizeOf(et) == 1)) {
             win(&g, "call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)", p, data, len);
             win(&g, "store ptr %s, ptr %%pos", wgep(&g, p, len));
@@ -2404,17 +2415,17 @@ static void wireFree(IR *ir, Type *t, const char *name) {
         WireEntry *e = &es[i];
         if (wireSizeOf(e->type) >= 0) continue;
         const char *m = wgepi(&g, "%v", e->off);
-        if (e->type->kind == TY_STRUCT) {
+        if (wireNested(e->type)) {
             win(&g, "call void @wire.free.%d(ptr %s)", wireId(ir, e->type), m);
         } else if (e->type->kind == TY_STRING) {
             win(&g, "call void @iris_string_free(ptr %s)", m);
         } else {
-            Type *et = e->type->elem;
+            Type *et = wireElem(e->type);
             const char *data = wtmp(&g);
             win(&g, "%s = load ptr, ptr %s", data, m);
             if (wireSizeOf(et) < 0) {
                 const char *len = wtmp(&g);
-                win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, 8));
+                win(&g, "%s = load i64, ptr %s", len, wgepi(&g, m, wireLenOff(e->type)));
                 WLoop L = wloop(&g, len);
                 const char *mo = wtmp(&g);
                 win(&g, "%s = mul i64 %s, %lld", mo, L.i, (long long)typeSizeOf(et));
@@ -2424,6 +2435,7 @@ static void wireFree(IR *ir, Type *t, const char *name) {
             win(&g, "call void @iris_free(ptr %s)", data);
             win(&g, "store ptr null, ptr %s", m);
             win(&g, "store i64 0, ptr %s", wgepi(&g, m, 8));
+            if (isJsonList(e->type)) win(&g, "store i64 0, ptr %s", wgepi(&g, m, 16));
         }
     }
     win(&g, "ret void");

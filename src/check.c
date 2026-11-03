@@ -1512,7 +1512,7 @@ static bool wireVaries(Type *t) {
         Type *ft = d->list.items[i]->type;
         if (!ft) continue;
         while (ft->kind == TY_ARRAY) ft = ft->elem;
-        if (ft->kind == TY_STRING || ft->kind == TY_SLICE) return true;
+        if (ft->kind == TY_STRING || ft->kind == TY_SLICE || isJsonList(ft)) return true;
         if (ft->kind == TY_STRUCT && ft != t && ft->state == 2 && wireVaries(ft)) return true;
     }
     return false;
@@ -1620,10 +1620,11 @@ static void checkWireFields(Checker *c, Type *t, Node *d) {
         }
         WireOpts o;
         wireOpts(d, f, &o);
-        bool sized = ft->kind == TY_STRING || ft->kind == TY_SLICE;
+        bool list = isJsonList(ft);
+        bool sized = ft->kind == TY_STRING || ft->kind == TY_SLICE || list;
         if (!sized) {
             if (hasLen || hasMax) {
-                error(c, at, "len: and max: are for String and slice fields; %s is %s", f->name, ft->name);
+                error(c, at, "len: and max: are for String, slice and List fields; %s is %s", f->name, ft->name);
             }
             wireFixed(c, ft, f, f->name);
             continue;
@@ -1632,13 +1633,15 @@ static void checkWireFields(Checker *c, Type *t, Node *d) {
             error(c, f, "%s is %s, which can't own the bytes it is read into; use a String", f->name, ft->name);
             continue;
         }
-        if (ft->kind == TY_SLICE) {
-            if (ft->elem->kind == TY_STRING || ft->elem->kind == TY_SLICE) {
-                error(c, f, "%s is %s; @wire can't give each item its own length, so put the %s in a @wire struct and use a slice of that",
-                      f->name, ft->name, ft->elem->name);
+        if (ft->kind == TY_SLICE || list) {
+            Type *et = list ? ft->args[0] : ft->elem;
+            if (et->kind == TY_STRING || et->kind == TY_SLICE || isJsonList(et)) {
+                error(c, f, "%s is %s; @wire can't give each item its own length, so put the %s in a @wire struct and use a %s of that",
+                      f->name, ft->name, et->name, list ? "List" : "slice");
                 continue;
             }
-            if (!wireFixed(c, ft->elem, f, f->name)) continue;
+            if (et->kind == TY_STRUCT && et->state != 1) resolveStruct(c, et);
+            if (!wireFixed(c, et, f, f->name)) continue;
         }
         const char *what = ft->kind == TY_STRING ? "bytes" : "items";
         if (!hasLen) {

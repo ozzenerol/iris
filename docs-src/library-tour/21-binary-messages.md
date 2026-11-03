@@ -146,7 +146,7 @@ Floats are sent as their IEEE 754 bits, in the same byte order as integers. The 
 | a `@wire` struct, as a field or embedded | its fields, in line |
 | `uuid.Uuid` | its 16 bytes |
 | bitfields that share an integer | that integer |
-| `String`, `T[]` | a length, then the bytes or items |
+| `String`, `T[]`, `List[T]` | a length, then the bytes or items |
 
 Structs inside structs add no bytes of their own. A field that is a `@wire` struct is its fields, in its own byte order. An array of four `u8` is four bytes, the usual way to hold an IPv4 address.
 
@@ -219,7 +219,7 @@ A `bool` is the same: a byte other than 0 or 1 is `WireError.badValue`.
 
 ## Text and lists
 
-A `String` or a slice has a length, and the bytes on the wire must say it. `@wire(len: u16)` puts the length in front, as a `u16`. `u8`, `u32` and `u64` work too. For a `String` the length counts bytes, for a slice it counts items.
+A `String`, a slice or a `List` has a length, and the bytes on the wire must say it. `@wire(len: u16)` puts the length in front, as a `u16`. `u8`, `u32` and `u64` work too. For a `String` the length counts bytes, for a slice or a `List` it counts items. A `List` goes on the wire the same way as a slice, and a decoded one can grow with `push`.
 
 ```iris run
 import hex, wire
@@ -287,7 +287,7 @@ struct Names {
 2 names: eth0 wg0
 ```
 
-A slice holds values of a fixed form or `@wire` structs. A slice of `String`s isn't allowed, since nothing would say each one's length. Put the `String` in a `@wire` struct, as `Name` does here, and use a slice of that.
+A slice or a `List` holds values of a fixed form or `@wire` structs. A slice of `String`s isn't allowed, since nothing would say each one's length. Put the `String` in a `@wire` struct, as `Name` does here, and use a slice of that.
 
 ## Limits
 

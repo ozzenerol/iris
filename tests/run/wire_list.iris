@@ -1,0 +1,32 @@
+// expect: 000000000000000700000002010465746830020377673002005001bb
+// expect: 7 2 2 wg0 443
+// expect: 3 lo
+import hex, wire
+
+@wire
+pub struct Message {
+    pub u64 timestamp
+    pub u32 count
+    @wire(len: count, max: 1024) pub List[Record] records
+    @wire(len: u8) pub List[u16] ports
+}
+
+@wire
+pub struct Record {
+    u8 kind
+    @wire(len: u8) String name
+}
+
+!void main() {
+    scoped Message m = Message{timestamp: 7}
+    m.records.push(Record{kind: 1, name: "eth0".copy()})
+    m.records.push(Record{kind: 2, name: "wg0".copy()})
+    m.ports.push(80)
+    m.ports.push(443)
+    scoped String b = try wire.encode(m)
+    print(hex.encode(b))
+    scoped Message back = try wire.decode(Message, b)
+    print("{back.timestamp} {back.count} {back.records.len} {back.records.at(1).name} {back.ports.at(1)}")
+    back.records.push(Record{kind: 3, name: "lo".copy()})
+    print("{back.records.len} {back.records.at(2).name}")
+}
