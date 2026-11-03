@@ -1,0 +1,41 @@
+import sync
+
+const i64 ROUNDS = 2000000
+const i64 KEYS = 100000
+
+sync.Map[i64, i64] counts
+
+i64 plusOne(i64 n, bool found) => n + 1
+
+// one in five is a count, the rest reads, on keys spread over the map
+void work(i64 id) {
+    i64 seen = 0
+    u64 x = u64(id) * 2654435761 + 1
+    for i in 0..ROUNDS {
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        k := i64(x % u64(KEYS))
+        if i % 5 == 0 {
+            counts.update(k, plusOne)
+        } else {
+            seen += counts.getOr(k, 0)
+        }
+    }
+    _ = seen
+}
+
+i64 total = 0
+void add(i64 k, i64 v) {
+    total += v
+}
+
+void main() {
+    ths := [thread work(0), thread work(1), thread work(2), thread work(3)]
+    for t in ths {
+        t.join()
+    }
+    counts.each(add)
+    print("{total}")
+    counts.free()
+}

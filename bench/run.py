@@ -12,7 +12,7 @@ OUT = os.path.join(HERE, "out")
 CPU = ["fib", "sieve", "nbody", "spectral-norm", "mandelbrot", "binary-trees", "fannkuch-redux",
        "hashmap", "sort", "strings", "channels"]
 # the standard library against Go's and the best-known Rust crates
-LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
+LIB = ["fmt-text", "utf8", "bigint", "rwlock", "sync-map", "heap", "sortedmap", "deque", "sort-by", "fs-walk",
        "xml-parse", "toml-parse", "zip", "tar", "template", "sha-hmac", "aes-ctr", "aes-gcm", "chacha20", "crc32c", "base32", "base64", "hex", "ecdsa", "rsa",
        "x509-parse", "yaml-parse", "wire", "ssh", "sftp", "mqtt", "quic",
        "protobuf", "msgpack", "cbor", "metrics", "tracing", "sigv4", "sys", "mysql-query", "bson", "mongo-query",
@@ -22,7 +22,7 @@ LIB = ["fmt-text", "utf8", "bigint", "rwlock", "heap", "sortedmap", "deque", "so
 DB = {"mysql-query": ("mysql-server.sh", "IRIS_MYSQL_URL", "IRIS_BENCH_MYSQL"),
       "mongo-query": ("mongo-server.sh", "IRIS_MONGO_URL", "IRIS_BENCH_MONGO")}
 # CPU programs that run threads get the server's cores rather than one
-THREADED = {"rwlock"}
+THREADED = {"rwlock", "sync-map"}
 NET = ["http-hello", "https-hello", "http-json", "tcp-echo", "http2", "tcp-proxy", "tcp-proxy-bulk", "grpc"]
 # a benchmark that runs another one's programs under a different load
 SAME_AS = {"tcp-proxy-bulk": "tcp-proxy"}

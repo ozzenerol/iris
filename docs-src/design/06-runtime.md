@@ -56,7 +56,7 @@ A channel is a ring buffer of values with two wait queues, one for tasks waiting
 
 ## Mutex and Atomic
 
-`iris_mutex_lock` takes the lock or puts the task on the mutex's wait list and lets the other tasks of its thread run. `unlock` hands the lock to the first waiter. `Atomic[T]` methods need no runtime: they are LLVM atomic instructions.
+A `Mutex` is one atomic word: free, held, or held with tasks waiting. Taking a free lock and giving it back are one atomic step each. `iris_mutex_lock` spins a moment when another thread holds the lock, then puts the task on the mutex's wait list and lets the other tasks of its thread run. `unlock` frees the lock and wakes the first waiter, which tries again. A woken task that loses waits at the front of the list. The lock is never handed to a task that is still asleep, so other threads don't queue behind it. `Atomic[T]` methods need no runtime: they are LLVM atomic instructions.
 
 ## Threads
 

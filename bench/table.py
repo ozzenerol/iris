@@ -32,6 +32,7 @@ LIB_ROWS = [
     ("utf8", "count, walk and check 16 MB of UTF-8", "`chars`, `from_utf8`", "`unicode/utf8`"),
     ("bigint", "20000!, its digits, 300 modular powers", "num-bigint", "`math/big`"),
     ("rwlock", "4 threads reading and writing", "`RwLock`", "`sync.RWMutex`"),
+    ("sync-map", "4 threads counting and reading 100k keys", "dashmap", "`sync.Map`"),
     ("heap", "2M pushes and pops", "`BinaryHeap`", "`container/heap`"),
     ("sortedmap", "1M inserts, lookups and range scans", "`BTreeMap`", "a sorted slice"),
     ("deque", "27M pushes and pops at both ends", "`VecDeque`", "a ring buffer"),

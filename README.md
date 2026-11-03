@@ -54,14 +54,15 @@ The servers do less work than the rates show, since the load generator limits th
 | tcp-proxy | **15,861** | 15,974 | 16,826 | 19,445 |
 | tcp-proxy-bulk | 18,969 | **18,644** | 119,593 | 22,602 |
 
-`bench/` also has 41 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
+`bench/` also has 42 library benchmarks. Each does the same work with Iris's standard library, the best-known Rust crate, and Go's standard library or its usual package. Times are in seconds.
 
 | Benchmark | What it does | Iris | Rust | Go | Rust uses | Go uses |
 |---|---|--:|--:|--:|---|---|
 | fmt-text | 2M lines with widths, hex and precision | **0.236** | 0.436 | 0.715 | `write!` | `fmt.Fprintf` |
 | utf8 | count, walk and check 16 MB of UTF-8 | **0.050** | 0.052 | 0.114 | `chars`, `from_utf8` | `unicode/utf8` |
 | bigint | 20000!, its digits, 300 modular powers | 0.043 | 0.070 | **0.037** | num-bigint | `math/big` |
-| rwlock | 4 threads reading and writing | 0.039 | 0.108 | **0.019** | `RwLock` | `sync.RWMutex` |
+| rwlock | 4 threads reading and writing | 0.038 | 0.108 | **0.019** | `RwLock` | `sync.RWMutex` |
+| sync-map | 4 threads counting and reading 100k keys | **0.059** | 0.106 | 0.119 | dashmap | `sync.Map` |
 | heap | 2M pushes and pops | **0.178** | 0.224 | 0.488 | `BinaryHeap` | `container/heap` |
 | sortedmap | 1M inserts, lookups and range scans | **0.259** | 0.275 | 0.376 | `BTreeMap` | a sorted slice |
 | deque | 27M pushes and pops at both ends | **0.091** | 0.096 | 0.180 | `VecDeque` | a ring buffer |

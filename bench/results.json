@@ -99,18 +99,18 @@
    "go_mem": 1.8
   },
   "hashmap": {
-   "iris": 0.918,
+   "iris": 0.921,
    "iris_out": "9064874 1814018 9373763947513",
    "iris_mem": 417.5,
-   "iris_safe": 0.959,
+   "iris_safe": 0.961,
    "iris_safe_out": "9064874 1814018 9373763947513",
-   "iris_safe_mem": 417.5,
-   "rust": 1.157,
+   "iris_safe_mem": 417.6,
+   "rust": 1.151,
    "rust_out": "9064874 1814018 9373763947513",
-   "rust_mem": 409.9,
-   "go": 2.131,
+   "rust_mem": 410.0,
+   "go": 2.122,
    "go_out": "9064874 1814018 9373763947513",
-   "go_mem": 365.4
+   "go_mem": 360.6
   },
   "sort": {
    "iris": 0.576,
@@ -141,16 +141,16 @@
    "go_mem": 231.6
   },
   "channels": {
-   "iris": 0.221,
+   "iris": 0.219,
    "iris_out": "2000000 12499997500000",
-   "iris_mem": 5.7,
+   "iris_mem": 5.8,
    "iris_safe": 0.22,
    "iris_safe_out": "2000000 12499997500000",
    "iris_safe_mem": 5.7,
-   "rust": 10.988,
+   "rust": 10.864,
    "rust_out": "2000000 12499997500000",
-   "rust_mem": 3.3,
-   "go": 0.572,
+   "rust_mem": 3.2,
+   "go": 0.563,
    "go_out": "2000000 12499997500000",
    "go_mem": 4.4
   },
@@ -253,15 +253,15 @@
    "go_mem": 6.8
   },
   "rwlock": {
-   "iris": 0.039,
+   "iris": 0.038,
    "iris_out": "400000",
-   "iris_mem": 2.0,
+   "iris_mem": 2.1,
    "iris_safe": 0.039,
    "iris_safe_out": "400000",
    "iris_safe_mem": 1.9,
    "rust": 0.108,
    "rust_out": "400000",
-   "rust_mem": 2.0,
+   "rust_mem": 2.1,
    "go": 0.019,
    "go_out": "400000",
    "go_mem": 1.8
@@ -853,13 +853,27 @@
    "go": 0.421,
    "go_out": "100000 5020897300",
    "go_mem": 42.6
+  },
+  "sync-map": {
+   "iris": 0.059,
+   "iris_out": "1600000",
+   "iris_mem": 8.4,
+   "iris_safe": 0.062,
+   "iris_safe_out": "1600000",
+   "iris_safe_mem": 8.7,
+   "rust": 0.106,
+   "rust_out": "1600000",
+   "rust_mem": 4.8,
+   "go": 0.119,
+   "go_out": "1600000",
+   "go_mem": 15.2
   }
  },
  "setup": {
   "machine": "iris-testbench, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
-  "iris": "iris 0.86.0",
+  "iris": "iris 0.88.0",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-10-28 10:46"
+  "date": "2026-11-03 22:02"
  }
 }

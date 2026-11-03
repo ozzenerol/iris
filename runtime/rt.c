@@ -4698,92 +4698,99 @@ int64_t iris_select(int64_t n, Chan **chans, void **bufs, const int8_t *sends, i
 
 /* ---------------------------------------------------------------- locks */
 
-/* Mutex: a zeroed one is unlocked. A task that has to wait lets the other
-   tasks of its thread run; unlock hands the lock to the first waiter. */
+/* Mutex: a zeroed one is unlocked. state is 0 when free, 1 when held and
+   2 when held with tasks waiting, so taking and giving back a free lock is
+   one atomic step each. A task that has to wait lets the other tasks of its
+   thread run. unlock hands nothing over: it frees the lock and wakes the
+   first waiter, which tries again; a woken task that loses waits at the
+   front of the queue. A lock handed to a sleeping task would stay taken
+   until it woke, and every other thread would queue behind it. */
 typedef struct {
-    int lock;
-    int locked;
-    Waiter *head, *tail;
-    void *owner;                /* the holder's thread (its mainTask), when locked */
+    int qlock;
+    int state;
+    WaitQueue waiters;
+    void *owner;                /* the holder's thread (its mainTask), when held */
 } Mutex;
 
 /* This thread, as a Mutex's owner. */
 static inline void *thisThread(void) { return (void *)&mainTask; }
 
+static inline void mutexTaken(Mutex *m) {
+    __atomic_store_n(&m->owner, thisThread(), __ATOMIC_RELAXED);
+}
+
 void iris_mutex_lock(Mutex *m) {
-    spinLock(&m->lock);
-    if (!m->locked) {
-        m->locked = 1;
-        m->owner = thisThread();
-        spinUnlock(&m->lock);
+    int free = 0;
+    if (__atomic_compare_exchange_n(&m->state, &free, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        mutexTaken(m);
         return;
     }
     /* held by another thread: it is likely to let go within a moment, and
        waiting a moment costs less than sleeping and being woken. Held by
        a task of this thread, it can't let go while this one spins. */
-    if (m->owner != thisThread()) {
-        for (int i = 0; i < 100; i++) {
-            spinUnlock(&m->lock);
+    if (__atomic_load_n(&m->owner, __ATOMIC_RELAXED) != thisThread()) {
+        for (int i = 0; i < 64; i++) {
             cpuRelax();
-            if (!__atomic_load_n(&m->locked, __ATOMIC_RELAXED)) {
-                spinLock(&m->lock);
-                if (!m->locked) {
-                    m->locked = 1;
-                    m->owner = thisThread();
-                    spinUnlock(&m->lock);
+            int s = __atomic_load_n(&m->state, __ATOMIC_RELAXED);
+            if (s == 0) {
+                free = 0;
+                if (__atomic_compare_exchange_n(&m->state, &free, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                    mutexTaken(m);
                     return;
                 }
-            } else {
-                spinLock(&m->lock);
+            } else if (s == 2) {
+                break;          /* others sleep already: join them */
             }
         }
     }
-    int claimed = 0;
-    Waiter w = {.task = current, .claimed = &claimed};
-    if (m->tail) {
-        m->tail->next = &w;
-    } else {
-        m->head = &w;
+    bool woken = false;
+    for (;;) {
+        spinLock(&m->qlock);
+        /* 2: whoever unlocks next wakes a waiter */
+        if (__atomic_exchange_n(&m->state, 2, __ATOMIC_ACQUIRE) == 0) {
+            spinUnlock(&m->qlock);
+            mutexTaken(m);
+            return;
+        }
+        int claimed = 0;
+        Waiter w = {.task = current, .claimed = &claimed};
+        if (woken && m->waiters.head) {
+            /* waited once already: first in line */
+            w.next = m->waiters.head;
+            w.prev = NULL;
+            m->waiters.head->prev = &w;
+            m->waiters.head = &w;
+            w.queued = true;
+        } else {
+            queuePush(&m->waiters, &w);
+        }
+        spinUnlock(&m->qlock);
+        schedule();             /* unlock woke it: try again */
+        woken = true;
     }
-    m->tail = &w;
-    spinUnlock(&m->lock);
-    schedule();                 /* unlock gave it the lock */
-    m->owner = thisThread();
 }
 
 bool iris_mutex_try_lock(Mutex *m) {
-    spinLock(&m->lock);
-    bool got = !m->locked;
-    m->locked = 1;
-    if (got) {
-        m->owner = thisThread();
+    int free = 0;
+    if (__atomic_compare_exchange_n(&m->state, &free, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        mutexTaken(m);
+        return true;
     }
-    spinUnlock(&m->lock);
-    return got;
+    return false;
 }
 
 void iris_mutex_unlock(Mutex *m, const char *file, int line, int col, const char *fn) {
-    spinLock(&m->lock);
-    if (!m->locked) {
-        spinUnlock(&m->lock);
+    __atomic_store_n(&m->owner, NULL, __ATOMIC_RELAXED);
+    int old = __atomic_exchange_n(&m->state, 0, __ATOMIC_RELEASE);
+    if (old == 0) {
         stop("unlock of a Mutex that isn't locked", 35, file, line, col, fn);
     }
-    Waiter *w = m->head;
-    if (w) {
-        m->head = w->next;
-        if (!m->head) {
-            m->tail = NULL;
-        }
-        claim(w);
-        Task *t = w->task;
-        m->owner = NULL;        /* the waiter sets itself when it runs */
-        spinUnlock(&m->lock);
-        wakeTask(t);
-        return;
+    if (old == 2) {
+        spinLock(&m->qlock);
+        Waiter *w = takeWaiter(&m->waiters);
+        spinUnlock(&m->qlock);
+        if (w) wakeTask(w->task);
     }
-    m->locked = 0;
-    m->owner = NULL;
-    spinUnlock(&m->lock);
 }
 
 /* The spins below are short on purpose: four threads hammering one lock
