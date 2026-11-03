@@ -6798,6 +6798,15 @@ static void writeInt(char *p, int size, int64_t v) {
     }
 }
 
+/* A plain enum's number: kept in 1, 2 or 4 bytes (enum Level u8), signed
+   when one of its values is negative. */
+static int64_t enumGet(const JsonType *t, const char *p) {
+    const JsonName *names = t->items;
+    bool neg = false;
+    for (int64_t i = 0; i < t->count && !neg; i++) neg = names[i].value < 0;
+    return readInt(p, t->size, neg || t->size == 4);
+}
+
 /* The first quote, backslash or control character from p on, or end. Eight
    bytes are checked at a time while none of them is one. */
 static const char *jsonPlainEnd(const char *p, const char *end) {
@@ -6880,7 +6889,7 @@ static void jsonEncode(IrisString *out, const JsonType *t, const char *p) {
         break;
     }
     case J_ENUM: {
-        int64_t v = *(int32_t *)p;
+        int64_t v = enumGet(t, p);
         const JsonName *names = t->items;
         for (int64_t i = 0; i < t->count; i++) {
             if (names[i].value == v) {
@@ -7730,7 +7739,7 @@ static bool jsonValue(JsonIn *in, const JsonType *t, char *p) {
                 i++;
             }
             if (i < t->count) {
-                *(int32_t *)p = (int32_t)names[i].value;
+                writeInt(p, t->size, names[i].value);
             } else {
                 char msg[160];
                 snprintf(msg, sizeof msg, "\"%.*s\" isn't one of the enum's values", (int)(name.len > 60 ? 60 : name.len),
@@ -17543,7 +17552,7 @@ static int sqScan(void *stmt, const JsonType *t, char *out, void **memo) {
                 sqlSay(what, NULL);
                 return 1;
             }
-            *(int32_t *)p = (int32_t)names[k].value;
+            writeInt(p, ft->size, names[k].value);
             break;
         }
         case J_STRUCT: case J_MAP: case J_SLICE: case J_ARRAY: case J_LIST: {
@@ -17713,7 +17722,7 @@ static const char *setFromText(const JsonType *ft, bool duration, char *p, const
         int64_t k = 0;
         while (k < ft->count && !((size_t)names[k].len == strlen(v) && !memcmp(names[k].name, v, strlen(v)))) k++;
         if (k == ft->count) return "isn't one of the enum's values";
-        *(int32_t *)p = (int32_t)names[k].value;
+        writeInt(p, ft->size, names[k].value);
         return NULL;
     }
     case J_UUID:
@@ -17829,7 +17838,7 @@ int64_t iris_sql_field(const JsonType *t, const char *in, int64_t i, Slice *name
         text->len = ((const Slice *)p)->len;
         return 2;
     case J_ENUM: {
-        int64_t v = *(const int32_t *)p;
+        int64_t v = enumGet(ft, p);
         const JsonName *names = ft->items;
         for (int64_t k = 0; k < ft->count; k++) {
             if (names[k].value == v) {
@@ -18192,7 +18201,7 @@ static void flagDefault(const FlagField *f, const char *p, IrisString *s) {
     }
     case J_ENUM: {
         const JsonName *names = t->items;
-        int32_t v = *(const int32_t *)p;
+        int64_t v = enumGet(t, p);
         for (int64_t k = 0; k < t->count; k++) {
             if (names[k].value == v) {
                 iris_string_append(s, " (default ", 10);
@@ -19807,7 +19816,7 @@ static void binEncode(IrisString *o, int fmt, const JsonType *t, const char *p) 
         break;
     }
     case J_ENUM: {
-        int64_t v = *(const int32_t *)p;
+        int64_t v = enumGet(t, p);
         const JsonName *names = t->items;
         for (int64_t i = 0; i < t->count; i++) {
             if (names[i].value == v) {
@@ -20437,7 +20446,7 @@ static bool binValue(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k)
         if (k->kind == BT_UINT || k->kind == BT_INT) {
             for (int64_t i = 0; i < t->count; i++) {
                 if (names[i].value == (int64_t)k->u) {
-                    *(int32_t *)p = (int32_t)names[i].value;
+                    writeInt(p, t->size, names[i].value);
                     return true;
                 }
             }
@@ -20448,7 +20457,7 @@ static bool binValue(JsonIn *in, int fmt, const JsonType *t, char *p, BinTok *k)
         if (k->kind != BT_STR) return binExpected(in, "text", k);
         for (int64_t i = 0; i < t->count; i++) {
             if (names[i].len == k->n && !memcmp(names[i].name, k->s, (size_t)k->n)) {
-                *(int32_t *)p = (int32_t)names[i].value;
+                writeInt(p, t->size, names[i].value);
                 return true;
             }
         }
@@ -22534,7 +22543,7 @@ static void bsonElement(IrisString *o, const JsonType *t, const char *p, const c
         break;
     }
     case J_ENUM: {
-        int64_t v = *(const int32_t *)p;
+        int64_t v = enumGet(t, p);
         const JsonName *names = t->items;
         for (int64_t i = 0; i < t->count; i++) {
             if (names[i].value == v) {
@@ -23004,7 +23013,7 @@ static bool bsonValue(BsonIn *in, int type, const unsigned char *v, int64_t n, c
     }
     case J_ENUM: {
         if (type == 0x10) {
-            *(int32_t *)p = bsonGet32(v);
+            writeInt(p, t->size, bsonGet32(v));
             return true;
         }
         if (type != 0x02) return bsonWrong(in, "a string", type);
@@ -23013,7 +23022,7 @@ static bool bsonValue(BsonIn *in, int type, const unsigned char *v, int64_t n, c
         int64_t len = n - 5;
         for (int64_t i = 0; i < t->count; i++) {
             if (names[i].len == len && !memcmp(names[i].name, s, (size_t)len)) {
-                *(int32_t *)p = (int32_t)names[i].value;
+                writeInt(p, t->size, names[i].value);
                 return true;
             }
         }

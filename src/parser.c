@@ -1960,9 +1960,16 @@ static Node *parseEnum(Parser *p, NodeList attrs, unsigned flags) {
     e->name = tokText(p, name);
     e->attrs = attrs;
     e->flags = flags;
-    if (isWord(peek(p), "flags")) {
-        next(p);
-        e->flags |= F_FLAGS;
+    /* enum Level u8 { ... }: the integer it is kept in; flags can come before or after */
+    for (int k = 0; k < 2; k++) {
+        if (isWord(peek(p), "flags") && !(e->flags & F_FLAGS)) {
+            next(p);
+            e->flags |= F_FLAGS;
+        } else if (at(p, T_IDENT) && !e->a) {
+            Token *it = next(p);
+            e->a = node(p, N_IDENT, it);
+            e->a->name = tokText(p, it);
+        }
     }
     Token *open = expect(p, P_LBRACE);
     skipNewlines(p);

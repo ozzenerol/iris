@@ -122,7 +122,7 @@ static const char *llType(IR *ir, Type *t) {
     case TY_SLICE: return "{ ptr, i64 }";
     case TY_ARRAY: return fmt(ir, "[%lld x %s]", (long long)t->count, llType(ir, t->elem));
     case TY_STRUCT: case TY_STRING: return t->ir;
-    case TY_ENUM: return t->hasData ? t->ir : "i32";
+    case TY_ENUM: return t->hasData ? t->ir : t->bits == 32 ? "i32" : t->bits == 16 ? "i16" : "i8";
     case TY_TUPLE: {
         StrBuf b = {0};
         sbPuts(&b, "{ ");
@@ -391,9 +391,9 @@ static int dbgType(IR *ir, Type *t) {
                 Node *m = t->decl->list.items[i];
                 sbPrintf(&b, "%s!DIEnumerator(name: \"%s\", value: %lld)", i ? ", " : "", m->name, (long long)m->cval);
             }
-            sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_enumeration_type, name: \"%s\", size: 32, "
+            sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_enumeration_type, name: \"%s\", size: %d, "
                                 "elements: !{%s})\n",
-                     id, name, b.buf ? b.buf : "");
+                     id, name, t->bits, b.buf ? b.buf : "");
             sbFree(&b);
             break;
         }
@@ -716,7 +716,7 @@ static Val emitConvert(IR *ir, Node *e) {
         /* an error code: the enum's number in the high half */
         Val v = emitExpr(ir, e->a);
         const char *w = tmp(ir), *r = tmp(ir);
-        ins(ir, "%s = zext i32 %s to i64", w, v.s);
+        ins(ir, "%s = zext i32 %s to i64", w, enumTag(ir, v));
         ins(ir, "%s = or i64 %s, %lld", r, w, (long long)((uint64_t)from->count << 32));
         return val(r, to);
     }
@@ -1239,7 +1239,8 @@ static void emitText(IR *ir, Node *arg, int sink, const char *dst) {
             ins(ir, "%s = zext i1 %s to i32", x, v.s);
             ins(ir, "call void @iris_write_bool(i32 %d, ptr %s, i32 %s)", sink, dst, x);
         } else if (v.t->kind == TY_ENUM && v.t->isFlags) {
-            ins(ir, "call void @iris_write_flags(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count, v.s);
+            ins(ir, "call void @iris_write_flags(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count,
+                enumTag(ir, v));
         } else if (v.t->kind == TY_ENUM) {
             ins(ir, "call void @iris_write_enum(i32 %d, ptr %s, i64 %lld, i32 %s)", sink, dst, (long long)v.t->count,
                 enumTag(ir, v));
@@ -1290,7 +1291,10 @@ static Val emitEnumValue(IR *ir, Type *et, Node *m, NodeList *args) {
 /* The tag of an enum value: the value itself for a plain enum. */
 static const char *enumTag(IR *ir, Val v) {
     if (!v.t->hasData) {
-        return v.s;
+        if (v.t->bits == 32) return v.s;
+        const char *w = tmp(ir);    /* enum Level u8: widened to the i32 the runtime takes */
+        ins(ir, "%s = %s i%d %s to i32", w, v.t->isSigned ? "sext" : "zext", v.t->bits, v.s);
+        return w;
     }
     const char *t = tmp(ir);
     ins(ir, "%s = extractvalue %s %s, 0", t, v.t->ir, v.s);
@@ -1958,8 +1962,8 @@ static void wdecFixed(WGen *g, Type *t, int order, Node *f, const char *m, const
             (void)c;
         }
         const char *tr = wtmp(g);
-        win(g, "%s = trunc i64 %s to i32", tr, v);
-        win(g, "store i32 %s, ptr %s, align 1", tr, m);
+        win(g, "%s = trunc i64 %s to i%d", tr, v, t->bits);
+        win(g, "store i%d %s, ptr %s, align 1", t->bits, tr, m);
         return;
     }
     case TY_ARRAY: {
@@ -2019,11 +2023,15 @@ static void wencFixed(WGen *g, Type *t, int order, const char *m, const char *w)
     case TY_ENUM: {
         int n = t->wire;
         const char *v = wtmp(g);
-        win(g, "%s = load i32, ptr %s, align 1", v, m);
-        if (n < 4) {
+        win(g, "%s = load i%d, ptr %s, align 1", v, t->bits, m);
+        if (n * 8 < t->bits) {
             const char *tr = wtmp(g);
-            win(g, "%s = trunc i32 %s to i%d", tr, v, n * 8);
+            win(g, "%s = trunc i%d %s to i%d", tr, t->bits, v, n * 8);
             v = tr;
+        } else if (n * 8 > t->bits) {
+            const char *ex = wtmp(g);
+            win(g, "%s = %s i%d %s to i%d", ex, t->isSigned ? "sext" : "zext", t->bits, v, n * 8);
+            v = ex;
         }
         wstore(g, n, order, v, w);
         return;
@@ -2788,8 +2796,9 @@ static Val emitBuiltin(IR *ir, Node *e) {
         Val a = emitExpr(ir, e->a->a);
         Val b = emitExpr(ir, e->list.items[0]);
         const char *x = tmp(ir), *r = tmp(ir);
-        ins(ir, "%s = and i32 %s, %s", x, a.s, b.s);
-        ins(ir, "%s = icmp eq i32 %s, %s", r, x, b.s);
+        const char *lt = llType(ir, a.t);
+        ins(ir, "%s = and %s %s, %s", x, lt, a.s, b.s);
+        ins(ir, "%s = icmp eq %s %s, %s", r, lt, x, b.s);
         return val(r, &tyBool);
     }
     case BI_ERROR: {
@@ -3871,7 +3880,7 @@ static Val emitExpr(IR *ir, Node *e) {
         if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin == 3) {
             Val v = emitExpr(ir, e->a);
             const char *r = tmp(ir);
-            ins(ir, "%s = sext i32 %s to i64", r, v.s);
+            ins(ir, "%s = sext i32 %s to i64", r, enumTag(ir, v));
             return val(r, &tyI64);
         }
         if (e->a->type && e->a->type->kind == TY_ENUM && e->builtin) {

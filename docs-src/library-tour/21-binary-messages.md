@@ -182,7 +182,7 @@ IPv4, 20 byte header, 60 bytes, flags 2, ttl 64
 
 ## Enums
 
-An enum in a `@wire` struct needs `@wire(u8)`, `@wire(u16)` or `@wire(u32)` on its declaration, the integer its values are sent as. The compiler checks that each value fits. Reading a number that isn't one of the values fails with `WireError.badValue`, so a decoded enum always holds one of its values. A flag enum takes any mix of its flags.
+An enum in a `@wire` struct needs `@wire(u8)`, `@wire(u16)` or `@wire(u32)` on its declaration, the integer its values are sent as. An enum kept in `u8`, `i8`, `u16` or `i16` (`enum Kind u8 { ... }`, see [Enums](../tour/15-enums.html#size)) is sent in those bytes without one. The compiler checks that each value fits. Reading a number that isn't one of the values fails with `WireError.badValue`, so a decoded enum always holds one of its values. A flag enum takes any mix of its flags.
 
 ```iris run
 import wire

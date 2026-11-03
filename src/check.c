@@ -475,7 +475,7 @@ static int64_t typeSize(Type *t) {
     case TY_ERRVAL: case TY_ERRCODE: return 8;
     case TY_ARRAY: return t->count * typeSize(t->elem);
     case TY_ENUM:
-        return t->hasData ? 8 + ((t->payload + 7) / 8) * 8 : 4;
+        return t->hasData ? 8 + ((t->payload + 7) / 8) * 8 : t->bits / 8;
     case TY_RESULT:
         return t->elem->kind == TY_VOID ? 8 : ((typeSize(t->elem) + 7) / 8) * 8 + 8;
     case TY_STRUCT: case TY_TUPLE: {
@@ -501,7 +501,7 @@ static int64_t typeAlign(Type *t) {
     case TY_ATOMIC: return typeAlign(t->elem);
     case TY_INT: case TY_FLOAT: return t->bits / 8;
     case TY_ARRAY: return typeAlign(t->elem);
-    case TY_ENUM: return t->hasData ? 8 : 4;
+    case TY_ENUM: return t->hasData ? 8 : t->bits / 8;
     case TY_STRUCT: case TY_TUPLE: {
         if (t->laidOut) return t->align;
         int64_t align = 1;
@@ -656,12 +656,29 @@ static Type *enumType(Checker *c, Node *decl) {
     t->name = decl->name;
     t->decl = decl;
     t->bits = 32;
+    t->isSigned = true;
     t->count = ++c->enumKinds;
     t->isFlags = (decl->flags & F_FLAGS) != 0;
     decl->type = t;
     for (int i = 0; i < decl->list.len; i++) {
         if (decl->list.items[i]->list.len) {
             t->hasData = true;
+        }
+    }
+    if (decl->a) {
+        /* enum Level u8 { ... }: kept in that integer */
+        const char *n = decl->a->name;
+        static const char *names[] = {"u8", "i8", "u16", "i16", "i32"};
+        static const int widths[] = {8, 8, 16, 16, 32};
+        int k = 0;
+        while (k < 5 && strcmp(names[k], n) != 0) k++;
+        if (k == 5) {
+            error(c, decl->a, "an enum is kept in u8, i8, u16, i16 or i32, not %s", n);
+        } else if (t->hasData) {
+            error(c, decl->a, "an enum whose values carry data can't choose its integer");
+        } else {
+            t->bits = widths[k];
+            t->isSigned = n[0] == 'i';
         }
     }
     if (t->hasData) {
@@ -689,9 +706,12 @@ static Type *enumType(Checker *c, Node *decl) {
     if (t->isFlags && t->hasData) {
         error(c, decl, "a flag enum's values can't carry data");
     }
-    if (t->isFlags && decl->list.len > 31) {
-        error(c, decl, "a flag enum can have at most 31 values");
+    int maxFlags = t->bits == 32 ? 31 : t->isSigned ? t->bits - 1 : t->bits;
+    if (t->isFlags && decl->list.len > maxFlags) {
+        error(c, decl, "a flag enum in %s can have at most %d values", decl->a ? decl->a->name : "i32", maxFlags);
     }
+    int64_t vlo = t->isSigned ? -((int64_t)1 << (t->bits - 1)) : 0;
+    int64_t vhi = t->isSigned ? ((int64_t)1 << (t->bits - 1)) - 1 : ((int64_t)1 << t->bits) - 1;
     Scope *saved = c->scope;
     c->scope = decl->scope;
     int64_t next = t->isFlags ? 1 : 0;
@@ -704,11 +724,13 @@ static Type *enumType(Checker *c, Node *decl) {
                 error(c, m->b, "the values of an enum with data can't be given numbers");
             } else if (!evalConst(c, m->b, &v, &b) || b) {
                 error(c, m->b, "an enum value must be an integer known when compiling");
-            } else if (v < INT32_MIN || v > INT32_MAX) {
-                error(c, m->b, "an enum value must fit in i32");
+            } else if (v < vlo || v > vhi) {
+                error(c, m->b, "an enum value must fit in %s", decl->a ? decl->a->name : "i32");
             } else {
                 next = v;
             }
+        } else if (!t->hasData && !t->isFlags && (next < vlo || next > vhi)) {
+            error(c, m, "%s is %lld, which doesn't fit in %s", m->name, (long long)next, decl->a ? decl->a->name : "i32");
         }
         m->cval = next;
         next = t->isFlags ? (next > 0 && next < (1 << 30) ? next * 2 : next + 1) : next + 1;
@@ -783,6 +805,9 @@ static Type *enumType(Checker *c, Node *decl) {
                       (long long)m->cval, t->wire, t->wire == 1 ? "" : "s");
             }
         }
+    }
+    if (!t->wire && decl->a && t->bits < 32 && !t->hasData) {
+        t->wire = t->bits / 8;      /* enum Kind u8: as many bytes on the wire as in memory */
     }
     return t;
 }
@@ -1447,6 +1472,7 @@ static void checkJsonFields(Checker *c, Type *t, Node *d) {
 /* ---------------------------------------------------------------- @wire */
 
 bool isWireStruct(Type *t) {
+    if (t && !t->wire && isJsonUuid(t)) t->wire = 1;   /* uuid.Uuid: its 16 bytes */
     return t && t->kind == TY_STRUCT && t->wire;
 }
 
@@ -1530,6 +1556,9 @@ static bool wireFixed(Checker *c, Type *t, Node *at, const char *owner) {
         return true;
     case TY_STRUCT:
         if (t->state != 1) resolveStruct(c, t);
+        if (!t->wire && isJsonUuid(t)) {
+            t->wire = 1;            /* uuid.Uuid: its 16 bytes, made sendable where a @wire struct holds one */
+        }
         if (!t->wire) {
             error(c, at, "%s is %s, which needs @wire too", owner, t->name);
             return false;

@@ -1,0 +1,16 @@
+// error: 8: an enum value must fit in u8
+// error: 9: an enum value must fit in u8
+// error: 10: an enum is kept in u8, i8, u16, i16 or i32, not i64
+// error: 11: an enum whose values carry data can't choose its integer
+// error: 12: b is 256, which doesn't fit in u8
+// error: 13: a flag enum in i8 can have at most 7 values
+
+enum A u8 { a = 256 }
+enum B u8 { a = -1 }
+enum C i64 { a }
+enum D u8 { a(i64 x), b }
+enum E u8 { a = 255, b }
+enum F i8 flags { a, b, c, d, e, f, g, h }
+
+void main() {
+}

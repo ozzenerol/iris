@@ -1,0 +1,78 @@
+// expect: 1 1 1 2 4 4
+// expect: error 200 error loud true true
+// expect: down -1
+// expect: read|exec true false
+// expect: debug=0
+// expect: info=1
+// expect: warn=2
+// expect: error=200
+// expect: error 2
+// expect: 3
+// expect: {"level":"error","delta":"down","port":"alt"}
+// expect: error down alt
+// expect: 3 c801bb
+// expect: error https
+import json, wire, hex
+
+enum Level u8 { debug, info, warn, error = 200 }
+enum Delta i8 { down = -1, same, up }
+enum Perm u8 flags { read, write, exec }
+enum Port u16 { http = 80, https = 443, alt = 8080 }
+
+@json
+struct Entry {
+    Level level
+    Delta delta
+    Port port
+}
+
+@wire
+struct Head {
+    Level level
+    Port port
+}
+
+struct Packed {
+    Level a
+    Level b
+    u16 c
+}
+
+str describe(Level l) => match l {
+    .debug, .info => "quiet"
+    .warn => "warn"
+    .error => "loud"
+}
+
+!void main() {
+    print("{sizeof(Level)} {sizeof(Delta)} {sizeof(Perm)} {sizeof(Port)} {sizeof(Packed)} {sizeof(Entry)}")
+    Level l = .error
+    print("{l} {l.value} {l.name} {describe(l)} {l == .error} {l != .warn}")
+    Delta d = .down
+    print("{d} {d.value}")
+    Perm p = .read | .exec
+    print("{p} {p.has(.exec)} {p.has(.write)}")
+    Level[4] all = [.debug, .info, .warn, .error]
+    for x in all { print("{x}={x.value}") }
+    List[Level] ls
+    ls.push(.warn)
+    ls.push(.error)
+    print("{ls.at(1)} {ls.len}")
+    ls.free()
+    Map[Level, i64] counts
+    counts.set(.error, 3)
+    print("{counts.getOr(.error, 0)}")
+    counts.free()
+
+    e := Entry{level: .error, delta: .down, port: .alt}
+    scoped String s = json.encode(e)
+    print(s)
+    back := try json.decode(Entry, s)
+    print("{back.level} {back.delta} {back.port}")
+
+    h := Head{level: .error, port: .https}
+    scoped String w = try wire.encode(h)
+    print("{w.len} {hex.encode(w)}")
+    h2 := try wire.decode(Head, w)
+    print("{h2.level} {h2.port}")
+}

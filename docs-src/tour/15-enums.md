@@ -88,6 +88,35 @@ void main() {
 notFound error
 ```
 
+## Size
+
+An enum takes 4 bytes, as an `i32`. An integer type after the name keeps it in `u8`, `i8`, `u16` or `i16` instead, so it takes 1 or 2 bytes in a struct, an array or a `List`:
+
+```iris run
+enum Level u8 { debug, info, warn, error = 200 }
+enum Delta i8 { down = -1, same, up }
+enum Port u16 { http = 80, https = 443 }
+
+struct Event {
+    Level level
+    Delta delta
+    Port port
+}
+
+void main() {
+    print("{sizeof(Level)} {sizeof(Port)} {sizeof(Event)}")
+    l := Level.error
+    print("{l} {l.value} {Delta.down.value}")
+}
+```
+
+```output
+1 2 4
+error 200 -1
+```
+
+Each value must fit the type. An enum whose values carry data can't choose one. A sized enum in a `@wire` struct takes the same bytes on the wire, with no `@wire(u8)` needed (see [Binary messages](../library-tour/21-binary-messages.html)).
+
 ## match
 
 A `match` on an enum needs an arm per value or a `_` arm, so a new value shows every place that must handle it:
@@ -136,7 +165,7 @@ read|write|exec -> read|exec
 [0] 0 7
 ```
 
-A flags value prints its set names joined by `|`. A flags enum has at most 31 values.
+A flags value prints its set names joined by `|`. A flags enum has at most 31 values, 8 in `u8` and 16 in `u16`: `enum Perm u8 flags { read, write, exec }`.
 
 ## Enums with data
 

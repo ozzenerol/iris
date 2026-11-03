@@ -975,7 +975,7 @@ static void signature(StrBuf *b, Node *d) {
         break;
     }
     case N_ENUM: {
-        sbPrintf(b, "enum %s { ", d->name);
+        sbPrintf(b, "enum %s%s%s%s { ", d->name, d->a ? " " : "", d->a ? d->a->name : "", (d->flags & F_FLAGS) ? " flags" : "");
         for (int i = 0; i < d->list.len; i++) {
             sbPrintf(b, "%s%s", i ? ", " : "", d->list.items[i]->name);
         }

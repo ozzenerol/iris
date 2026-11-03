@@ -192,7 +192,7 @@ reply 3: 307</code></pre>
 <pre class="out"><code>IPv4, 20 byte header, 60 bytes, flags 2, ttl 64</code></pre>
 <p><code>Duration</code>, pointers, <code>str</code> and plain enums have no fixed form on the wire, and the compiler says so when a <code>@wire</code> struct holds one.</p>
 <h2 id="enums"><a href="#enums">Enums</a></h2>
-<p>An enum in a <code>@wire</code> struct needs <code>@wire(u8)</code>, <code>@wire(u16)</code> or <code>@wire(u32)</code> on its declaration, the integer its values are sent as. The compiler checks that each value fits. Reading a number that isn't one of the values fails with <code>WireError.badValue</code>, so a decoded enum always holds one of its values. A flag enum takes any mix of its flags.</p>
+<p>An enum in a <code>@wire</code> struct needs <code>@wire(u8)</code>, <code>@wire(u16)</code> or <code>@wire(u32)</code> on its declaration, the integer its values are sent as. An enum kept in <code>u8</code>, <code>i8</code>, <code>u16</code> or <code>i16</code> (<code>enum Kind u8 { ... }</code>, see <a href="../tour/15-enums.html#size">Enums</a>) is sent in those bytes without one. The compiler checks that each value fits. Reading a number that isn't one of the values fails with <code>WireError.badValue</code>, so a decoded enum always holds one of its values. A flag enum takes any mix of its flags.</p>
 <pre class="code run"><code><span class="k">import</span> wire
 
 <span class="a">@wire</span>(<span class="t">u8</span>)
