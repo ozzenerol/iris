@@ -110,7 +110,9 @@ class TextPrinter:
                 cap = _int(v["cap"])
                 if cap < 0 or cap > _LIMIT:
                     self.why = "not set"
-            if self.why is None and not _slice_ok(v, cap):
+            # cap 0 with a length: a view of bytes that the String does not own,
+            # as the method and the path of an http.Request
+            if self.why is None and not _slice_ok(v, cap if cap else None):
                 self.why = "not set"
             if self.why is None:
                 self.n = _int(v["len"])
