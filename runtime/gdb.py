@@ -476,6 +476,9 @@ def iris_lookup(v):
 def text_bytes(v):
     """The bytes of a str, a String, a u8[] or a text in quotes in gdb."""
     t = v.type.strip_typedefs()
+    if t.code == gdb.TYPE_CODE_PTR and t.target().strip_typedefs().code == gdb.TYPE_CODE_STRUCT:
+        v = v.dereference()     # an xmethod's object comes as a pointer
+        t = v.type.strip_typedefs()
     if t.code == gdb.TYPE_CODE_STRUCT:
         names = [f.name for f in t.fields()]
         if "ptr" not in names or "len" not in names:
@@ -511,6 +514,124 @@ def _add_functions():
     _TextFunction("iris_contains", lambda a, b: b in a, "$iris_contains(s, part): 1 when the text s has part in it.")
     _TextFunction("iris_starts", lambda a, b: a.startswith(b), "$iris_starts(s, start): 1 when s starts with start.")
     _TextFunction("iris_ends", lambda a, b: a.endswith(b), "$iris_ends(s, end): 1 when s ends with end.")
+
+
+# ---------------------------------------------------------------- operators
+#
+# gdb runs xmethods only in C++ expressions: the script sets the language to
+# c++ (see the end of the file). Then xs[0], m["key"], m[3], name == "iris"
+# and name != "iris" work as in Iris, in print, watch and breakpoint
+# conditions. A field such as xs.len works in any language.
+
+import gdb.xmethod
+
+
+def _char_ptr():
+    return gdb.lookup_type("char").pointer()
+
+
+def _text_types():
+    """The types a text can come as: "text" in quotes, str and String."""
+    out = [_char_ptr()]
+    for name in ("str", "String"):
+        try:
+            # a C struct tag: gdb.lookup_type doesn't find it in C++ mode
+            out.append(gdb.parse_and_eval("(struct %s *)0" % name).type.target())
+        except gdb.error:
+            pass
+    return out
+
+
+def _index(obj, i, n, item_at):
+    i = int(i)
+    if i < 0 or i >= n:
+        raise gdb.GdbError("index %d out of range (len %d)" % (i, n))
+    return item_at(i)
+
+
+class _Worker(gdb.xmethod.XMethodWorker):
+    def __init__(self, arg_type, fn, result=None):
+        self.arg_type = arg_type
+        self.fn = fn
+        self.result = result
+
+    def get_arg_types(self):
+        return self.arg_type
+
+    def get_result_type(self, obj, *args):
+        return self.result(obj) if callable(self.result) else self.result
+
+    def __call__(self, obj, *args):
+        return self.fn(obj, *args)
+
+
+def _list_item(obj, i):
+    n = _int(obj["len"])
+    return _index(obj, i, n, lambda k: obj["buf"]["ptr"][k])
+
+
+def _slice_item(obj, i):
+    n = _int(obj["len"])
+    return _index(obj, i, n, lambda k: obj["ptr"][k])
+
+
+def _deque_item(obj, i):
+    n = _int(obj["len"])
+    buf = obj["buf"]
+    size = _int(buf["len"])
+    head = _int(obj["head"])
+    return _index(obj, i, n, lambda k: buf["ptr"][(head + k) & (size - 1)])
+
+
+def _key_matches(key, want):
+    kt = key.type.strip_typedefs()
+    if kt.code == gdb.TYPE_CODE_STRUCT:
+        return text_bytes(key) == text_bytes(want)
+    return int(key) == int(want)
+
+
+def _key_text(want):
+    try:
+        return '"%s"' % text_bytes(want).decode("utf-8", "replace")
+    except gdb.GdbError:
+        return str(int(want))
+
+
+def _map_item(obj, key):
+    for k, v in _map_entries(obj):
+        if _key_matches(k, key):
+            return v
+    raise gdb.GdbError("no key %s in the map" % _key_text(key))
+
+
+class _IrisMatcher(gdb.xmethod.XMethodMatcher):
+    def __init__(self):
+        super().__init__("iris")
+
+    def match(self, class_type, method_name):
+        t = class_type.strip_typedefs()
+        name = t.tag or t.name or ""
+        i64 = gdb.lookup_type("long")
+        if method_name == "operator[]":
+            if name.startswith("List["):
+                return _Worker(i64, _list_item, t["buf"].type.strip_typedefs()["ptr"].type.target())
+            if name.startswith("Deque["):
+                return _Worker(i64, _deque_item, t["buf"].type.strip_typedefs()["ptr"].type.target())
+            if name.endswith("[]") or name in ("str", "String"):
+                return _Worker(i64, _slice_item, t["ptr"].type.target())
+            if name.startswith("Map["):
+                entry = t["slots"].type.strip_typedefs()["ptr"].type.target().strip_typedefs()
+                key, val = entry["key"].type, entry["val"].type
+                if key.strip_typedefs().code == gdb.TYPE_CODE_STRUCT:
+                    return [_Worker(a, _map_item, val) for a in _text_types()]
+                return _Worker(key, _map_item, val)
+            return None
+        if name in ("str", "String") and method_name in ("operator==", "operator!="):
+            same = method_name == "operator=="
+            bool_type = gdb.lookup_type("bool")
+            return [_Worker(a, lambda obj, other, same=same: (text_bytes(obj) == text_bytes(other)) == same, bool_type)
+                    for a in _text_types()]
+        return None
 
 
 # ---------------------------------------------------------------- tasks
@@ -785,3 +906,8 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     IrisTasksCommand()
     IrisTaskCommand()
     _add_functions()
+    gdb.xmethod.register_xmethod_matcher(None, _IrisMatcher())
+    # the operators above need C++ expressions; Iris frames are C, so gdb
+    # would warn at each stop that the language is not the frame's
+    gdb.execute("set language c++")
+    gdb.execute("set warn-language-frame-mismatch off")

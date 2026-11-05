@@ -147,10 +147,18 @@ hits = Map[str, i64](len=1) = {[&quot;/&quot;] = 3}
 f = Frame.Data = {stream = 1, size = 1200}
 e = Parse.badPort</code></pre>
 <p>The printers show <code>str</code> and <code>String</code> as text, and <code>List</code>, <code>Map</code>, <code>Set</code>, <code>Deque</code>, slices and channels with their items. An enum with data shows its value and fields, an <code>Error</code> shows its code, and a <code>!T</code> shows its value or its error. A <code>Duration</code> shows as <code>250ms</code>, a tuple as <code>(3, &quot;x&quot;)</code>, a <code>u8[4]</code> as numbers, an <code>Atomic[T]</code> with its value and a <code>Mutex</code> as locked or unlocked. <code>net.Conn</code>, <code>net.Listener</code> and <code>fs.File</code> show their descriptor, or <code>closed</code>. A struct of another module has the module's name first, such as <code>net.Conn</code>.</p>
-<p>A breakpoint condition is in C, where <code>==</code> on text compares addresses. Four functions compare text: <code>str</code>, <code>String</code>, <code>u8[]</code> or text in quotes:</p>
-<pre class="out"><code>(gdb) break greet if $iris_eq(name, &quot;iris&quot;)
-(gdb) break handle if $iris_starts(req.path, &quot;/api/&quot;)</code></pre>
-<p><code>$iris_eq(a, b)</code> is 1 when a and b are the same text. <code>$iris_contains(s, part)</code>, <code>$iris_starts(s, start)</code> and <code>$iris_ends(s, end)</code> look for a part of s.</p>
+<p>Expressions in <code>print</code>, <code>watch</code> and breakpoint conditions can use Iris's operators on Iris values:</p>
+<pre class="out"><code>(gdb) print xs[0]
+$1 = 4
+(gdb) print m[&quot;key&quot;]
+$2 = 9
+(gdb) print xs[5]
+index 5 out of range (len 2)
+(gdb) break greet if name == &quot;iris&quot;</code></pre>
+<ul><li><code>xs[i]</code> works on a <code>List</code>, a <code>Deque</code>, a slice, a <code>str</code> and a <code>String</code>. An index out of range is an error, and gdb reads no memory outside the list.</li><li><code>m[key]</code> works on a <code>Map</code>, with a key in quotes, a <code>str</code>, a <code>String</code> or a number. A key that is not there is an error.</li><li><code>==</code> and <code>!=</code> compare a <code>str</code> or a <code>String</code> with another one or with text in quotes.</li><li><code>xs.len</code> and <code>s.len</code> are fields, as in Iris.</li></ul>
+<p>For this, the printers set gdb's language to C++, where gdb lets Python give operators to a type. Other expressions work as in C.</p>
+<p><code>watch xs.len</code> stops when the length changes. <code>watch -l xs[1]</code> watches the memory of one item, until the list grows and moves its items.</p>
+<p><code>$iris_eq(a, b)</code>, <code>$iris_contains(s, part)</code>, <code>$iris_starts(s, start)</code> and <code>$iris_ends(s, end)</code> also compare text, and give 1 or 0. They take a <code>str</code>, a <code>String</code>, a <code>u8[]</code> or text in quotes.</p>
 <p>A function's name in the debugger is its name, <code>handle</code>, or <code>Server.close</code> for a method. <code>break main.handle</code> and <code>break main.Server.close</code> also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.</p>
 <p>Each block, loop and match arm is a scope in the debug information, and a variable's scope starts at its line. <code>info locals</code> shows only the variables that the code at the stop can use. <code>watch total</code> and <code>watch p.x</code> stop the program when a variable or a field changes.</p>
 <p><code>break iris_panicked</code> stops the program when it panics, after the message is printed. <code>backtrace</code> then shows where the panic came from.</p>

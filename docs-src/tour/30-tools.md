@@ -193,14 +193,28 @@ e = Parse.badPort
 
 The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque`, slices and channels with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error. A `Duration` shows as `250ms`, a tuple as `(3, "x")`, a `u8[4]` as numbers, an `Atomic[T]` with its value and a `Mutex` as locked or unlocked. `net.Conn`, `net.Listener` and `fs.File` show their descriptor, or `closed`. A struct of another module has the module's name first, such as `net.Conn`.
 
-A breakpoint condition is in C, where `==` on text compares addresses. Four functions compare text: `str`, `String`, `u8[]` or text in quotes:
+Expressions in `print`, `watch` and breakpoint conditions can use Iris's operators on Iris values:
 
 ```output
-(gdb) break greet if $iris_eq(name, "iris")
-(gdb) break handle if $iris_starts(req.path, "/api/")
+(gdb) print xs[0]
+$1 = 4
+(gdb) print m["key"]
+$2 = 9
+(gdb) print xs[5]
+index 5 out of range (len 2)
+(gdb) break greet if name == "iris"
 ```
 
-`$iris_eq(a, b)` is 1 when a and b are the same text. `$iris_contains(s, part)`, `$iris_starts(s, start)` and `$iris_ends(s, end)` look for a part of s.
+- `xs[i]` works on a `List`, a `Deque`, a slice, a `str` and a `String`. An index out of range is an error, and gdb reads no memory outside the list.
+- `m[key]` works on a `Map`, with a key in quotes, a `str`, a `String` or a number. A key that is not there is an error.
+- `==` and `!=` compare a `str` or a `String` with another one or with text in quotes.
+- `xs.len` and `s.len` are fields, as in Iris.
+
+For this, the printers set gdb's language to C++, where gdb lets Python give operators to a type. Other expressions work as in C.
+
+`watch xs.len` stops when the length changes. `watch -l xs[1]` watches the memory of one item, until the list grows and moves its items.
+
+`$iris_eq(a, b)`, `$iris_contains(s, part)`, `$iris_starts(s, start)` and `$iris_ends(s, end)` also compare text, and give 1 or 0. They take a `str`, a `String`, a `u8[]` or text in quotes.
 
 A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 

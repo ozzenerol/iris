@@ -1,0 +1,69 @@
+// gdb: break greet if name == "iris"
+// gdb: break main.iris:68
+// gdb: run
+// gdb: print name
+// gdb: continue
+// gdb: print xs[1]
+// gdb: print xs[5]
+// gdb: print xs[-1]
+// gdb: print xs.len
+// gdb: print m["key"]
+// gdb: print m["nope"]
+// gdb: print mi[3]
+// gdb: print mi[4]
+// gdb: print m[s]
+// gdb: print s == "key"
+// gdb: print s != "key"
+// gdb: print s == t
+// gdb: print t == "iris"
+// gdb: print s.len
+// gdb: print s[0]
+// gdb: print d[0]
+// gdb: print sl[1]
+// gdb: print xs[0] + xs[1] == 9 && m["key"] == 9
+// expect: greet (name="iris") at main.iris:
+// expect: $1 = "iris"
+// expect: $2 = 5
+// expect: $3 = 2
+// expect: $4 = 9
+// expect: $5 = "three"
+// expect: $6 = 9
+// expect: $7 = true
+// expect: $8 = false
+// expect: $9 = false
+// expect: $10 = true
+// expect: $11 = 3
+// expect: $12 = 107
+// expect: $13 = 7
+// expect: $14 = 20
+// expect: $15 = true
+// expect: index 5 out of range (len 2)
+// expect: index -1 out of range (len 2)
+// expect: no key "nope" in the map
+// expect: no key 4 in the map
+// absent: greet (name="ann"
+
+void greet(str name) {
+    print(name)
+}
+
+void main() {
+    for name in ["ann", "iris"] {
+        greet(name)
+    }
+    List[i64] xs
+    xs.push(4)
+    xs.push(5)
+    Map[str, i64] m
+    m.set("key", 9)
+    Map[i64, str] mi
+    mi.set(3, "three")
+    str s = "key"
+    String t = format("iris")
+    Deque[i64] d
+    d.push(8)
+    d.pushFront(7)
+    i64[3] arr = [10, 20, 30]
+    i64[] sl = arr[0:3]
+    print("{xs.len} {m.len} {mi.len} {s} {t} {d.len} {sl.len}")
+}
