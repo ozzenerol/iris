@@ -24,7 +24,7 @@
 // expect: $9 = Frame.Close
 // expect: $10 = green
 // expect: $11 = Bad.oops
-// expect: $12 = {0 = 3, 1 = "x"}
+// expect: $12 = (3, "x")
 // expect: $13 = {x = 1, y = 2}
 
 struct P {

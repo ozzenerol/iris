@@ -188,7 +188,10 @@ pub !Conn Listener.accept(Duration timeout = 0s) {
 pub i32 Listener.fd() => self.sock
 
 // Stops listening and closes the socket.
-pub void Listener.close() => rawClose(self.sock)
+pub void Listener.close() {
+    rawClose(self.sock)
+    self.sock = -1 // a debugger shows the listener as closed
+}
 
 // Stops accepting: tasks that wait in accept, on any thread, wake up and
 // fail with NetError.closed, and so does every accept after. The socket
@@ -427,6 +430,7 @@ pub void Conn.close() {
         self.tls = null
     }
     rawClose(self.sock)
+    self.sock = -1 // a debugger shows the connection as closed
     if self.buf.len > 0 {
         free(self.buf)
         self.buf = alloc(u8, 0)

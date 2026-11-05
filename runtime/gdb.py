@@ -12,6 +12,9 @@
 #   iris tasks            one line for each task of the program
 #   iris tasks --json     the same as JSON, for tools
 #   iris task N [CMD]     runs CMD (default: backtrace) on the stack of task N
+#
+# Functions for breakpoint conditions on text (str, String, u8[] or "text"):
+#   $iris_eq(a, b), $iris_contains(s, part), $iris_starts(s, start), $iris_ends(s, end)
 
 import json
 import os
@@ -248,6 +251,172 @@ class DataEnumPrinter:
             yield f.name, self.data[f.name]
 
 
+def duration_text(d):
+    """A Duration in nanoseconds as Iris prints it: 250ms, 1.5s, 1h2m3s."""
+    if d == 0:
+        return "0s"
+    sign = "-" if d < 0 else ""
+    u = -d if d < 0 else d
+
+    def frac(whole, part, digits, unit):
+        text = "%d" % whole
+        if part:
+            text += "." + ("%0*d" % (digits, part)).rstrip("0")
+        return text + unit
+
+    if u < 1000:
+        return sign + frac(u, 0, 1, "ns")
+    if u < 1000000:
+        return sign + frac(u // 1000, u % 1000, 3, "us")
+    if u < 1000000000:
+        return sign + frac(u // 1000000, u % 1000000, 6, "ms")
+    s, part = divmod(u, 1000000000)
+    text = ""
+    if s >= 3600:
+        text += "%dh" % (s // 3600)
+    if s >= 60:
+        text += "%dm" % (s % 3600 // 60)
+    return sign + text + frac(s % 60, part, 9, "s")
+
+
+class DurationPrinter:
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        return duration_text(int(self.v))
+
+
+class ChanPrinter:
+    """chan[T]: the length, the room, the tasks that wait, and the items."""
+
+    def __init__(self, v, name):
+        self.v = v
+        self.name = name
+        self.c = None
+        if int(v) != 0:
+            try:
+                self.c = v.cast(gdb.lookup_type("Chan").pointer()).dereference()
+            except gdb.error:
+                self.c = None
+
+    def to_string(self):
+        if int(self.v) == 0:
+            return "%s(null)" % self.name
+        if self.c is None:
+            return "%s(%#x)" % (self.name, int(self.v))
+        text = "%s(len=%d, cap=%d" % (self.name, int(self.c["len"]), int(self.c["cap"]))
+        if int(self.c["recvWaiters"]["head"]):
+            text += ", tasks wait to receive"
+        if int(self.c["sendWaiters"]["head"]):
+            text += ", tasks wait to send"
+        return text + ")"
+
+    def children(self):
+        if self.c is None:
+            return
+        n, cap = int(self.c["len"]), int(self.c["cap"])
+        if cap <= 0 or _bad_len(n) or n > cap:
+            return
+        elem = self.v.type.strip_typedefs().target()
+        size = int(self.c["elemSize"])
+        head = int(self.c["head"])
+        buf = int(self.c["buf"])
+        for i in range(n):
+            at = buf + ((head + i) % cap) * size
+            yield "[%d]" % i, gdb.Value(at).cast(elem.pointer()).dereference()
+
+    def display_hint(self):
+        return "array"
+
+
+class AtomicPrinter:
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        return "%s(%s)" % (_tag(self.v.type), self.v["value"].format_string())
+
+
+class MutexPrinter:
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        state = int(self.v["state"])
+        if state == 0:
+            return "Mutex(unlocked)"
+        if state == 2:
+            return "Mutex(locked, tasks wait)"
+        return "Mutex(locked)"
+
+
+class FdPrinter:
+    """net.Conn, net.Listener and fs.File: the descriptor, or closed, and
+    the fields that tell what it did."""
+
+    def __init__(self, v, field):
+        self.v = v
+        self.field = field
+
+    def to_string(self):
+        fd = int(self.v[self.field])
+        name = _tag(self.v.type)
+        if fd < 0:
+            return "%s(closed)" % name
+        extra = ""
+        names = [f.name for f in self.v.type.strip_typedefs().fields()]
+        if "tls" in names and int(self.v["tls"]) != 0:
+            extra = ", tls"
+        return "%s(fd=%d%s)" % (name, fd, extra)
+
+    def children(self):
+        for f in self.v.type.strip_typedefs().fields():
+            if f.name in ("port", "received", "sent", "timeout"):
+                yield f.name, self.v[f.name]
+
+
+class BytePrinter:
+    """u8 and i8: a number (gdb shows a byte as a character too)."""
+
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        return str(int(self.v))
+
+
+class ByteArrayPrinter:
+    """u8[4] and i8[4]: the numbers (gdb shows them as text)."""
+
+    def __init__(self, v):
+        self.v = v
+
+    def children(self):
+        lo, hi = self.v.type.strip_typedefs().range()
+        for i in range(lo, hi + 1):
+            yield "[%d]" % i, int(self.v[i])
+
+    def display_hint(self):
+        return "array"
+
+
+def _is_byte(t):
+    t = t.strip_typedefs()
+    return t.code == gdb.TYPE_CODE_INT and t.sizeof == 1 and t.name in ("u8", "i8")
+
+
+class TuplePrinter:
+    """(A, B): the values in parentheses."""
+
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        parts = [self.v[f.name].format_string() for f in self.v.type.strip_typedefs().fields()]
+        return "(" + ", ".join(parts) + ")"
+
+
 def _is_data_enum(t):
     fields = t.fields()
     return (len(fields) == 2 and fields[0].name == "tag" and fields[1].name == "data"
@@ -256,12 +425,31 @@ def _is_data_enum(t):
 
 
 def iris_lookup(v):
+    typedef = v.type.name or ""
+    if typedef.startswith("chan["):
+        return ChanPrinter(v, typedef)
     t = v.type.strip_typedefs()
+    if t.code == gdb.TYPE_CODE_INT and (t.name == "Duration" or typedef == "Duration"):
+        return DurationPrinter(v)
+    if _is_byte(t):
+        return BytePrinter(v)
+    if t.code == gdb.TYPE_CODE_ARRAY and _is_byte(t.target()):
+        return ByteArrayPrinter(v)
     if t.code != gdb.TYPE_CODE_STRUCT:
         return None
     name = t.tag or t.name
     if not name:
         return None
+    if name.startswith("Atomic["):
+        return AtomicPrinter(v)
+    if name == "Mutex":
+        return MutexPrinter(v)
+    if name in ("net.Conn", "net.Listener"):
+        return FdPrinter(v, "sock")
+    if name == "fs.File":
+        return FdPrinter(v, "fd")
+    if name.startswith("(") and name.endswith(")"):
+        return TuplePrinter(v)
     if name in ("str", "String"):
         return TextPrinter(v)
     if name in ("Error", "ErrorCode"):
@@ -281,6 +469,48 @@ def iris_lookup(v):
     if _is_data_enum(t):
         return DataEnumPrinter(v)
     return None
+
+
+# ---------------------------------------------------------------- conditions
+
+def text_bytes(v):
+    """The bytes of a str, a String, a u8[] or a text in quotes in gdb."""
+    t = v.type.strip_typedefs()
+    if t.code == gdb.TYPE_CODE_STRUCT:
+        names = [f.name for f in t.fields()]
+        if "ptr" not in names or "len" not in names:
+            raise gdb.GdbError("iris: %s is not text" % (t.tag or t.name))
+        n = int(v["len"])
+        if _bad_len(n):
+            raise gdb.GdbError("iris: text with length %d" % n)
+        if n == 0:
+            return b""
+        return gdb.selected_inferior().read_memory(int(v["ptr"]), n).tobytes()
+    if t.code == gdb.TYPE_CODE_ARRAY:
+        lo, hi = t.range()
+        data = bytes(int(v[i]) & 0xFF for i in range(lo, hi + 1))
+        return data[:-1] if data.endswith(b"\0") else data
+    if t.code == gdb.TYPE_CODE_PTR:
+        return v.string(encoding="latin-1").encode("latin-1")
+    raise gdb.GdbError("iris: a value of type %s is not text" % t)
+
+
+class _TextFunction(gdb.Function):
+    def __init__(self, name, test, doc):
+        self.__doc__ = doc
+        super().__init__(name)
+        self.test = test
+
+    def invoke(self, a, b):
+        return 1 if self.test(text_bytes(a), text_bytes(b)) else 0
+
+
+def _add_functions():
+    _TextFunction("iris_eq", lambda a, b: a == b,
+                  "$iris_eq(a, b): 1 when the texts a and b are the same. a and b are str, String or \"text\".")
+    _TextFunction("iris_contains", lambda a, b: b in a, "$iris_contains(s, part): 1 when the text s has part in it.")
+    _TextFunction("iris_starts", lambda a, b: a.startswith(b), "$iris_starts(s, start): 1 when s starts with start.")
+    _TextFunction("iris_ends", lambda a, b: a.endswith(b), "$iris_ends(s, end): 1 when s ends with end.")
 
 
 # ---------------------------------------------------------------- tasks
@@ -554,3 +784,4 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     IrisCommand()
     IrisTasksCommand()
     IrisTaskCommand()
+    _add_functions()

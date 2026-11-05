@@ -191,7 +191,16 @@ f = Frame.Data = {stream = 1, size = 1200}
 e = Parse.badPort
 ```
 
-The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque` and slices with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error.
+The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque`, slices and channels with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error. A `Duration` shows as `250ms`, a tuple as `(3, "x")`, a `u8[4]` as numbers, an `Atomic[T]` with its value and a `Mutex` as locked or unlocked. `net.Conn`, `net.Listener` and `fs.File` show their descriptor, or `closed`. A struct of another module has the module's name first, such as `net.Conn`.
+
+A breakpoint condition is in C, where `==` on text compares addresses. Four functions compare text: `str`, `String`, `u8[]` or text in quotes:
+
+```output
+(gdb) break greet if $iris_eq(name, "iris")
+(gdb) break handle if $iris_starts(req.path, "/api/")
+```
+
+`$iris_eq(a, b)` is 1 when a and b are the same text. `$iris_contains(s, part)`, `$iris_starts(s, start)` and `$iris_ends(s, end)` look for a part of s.
 
 A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 

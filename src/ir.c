@@ -346,6 +346,8 @@ static const char *dbgName(IR *ir, Type *t) {
     case TY_RESULT: return fmt(ir, "!%s", t->elem->kind == TY_VOID ? "void" : dbgName(ir, t->elem));
     case TY_DYN: return fmt(ir, "dyn %s", t->decl && t->decl->name ? t->decl->name : "?");
     case TY_ERRVAL: return "Error";
+    case TY_CHAN: return fmt(ir, "chan[%s]", dbgName(ir, t->elem));
+    case TY_ATOMIC: return fmt(ir, "Atomic[%s]", dbgName(ir, t->elem));
     default: return "?";
     }
 }
@@ -430,7 +432,7 @@ static int dbgType(IR *ir, Type *t) {
     switch (t->kind) {
     case TY_INT:
         sbPrintf(&ir->meta, "!%d = !DIBasicType(name: \"%s\", size: %d, encoding: %s)\n", id, name, t->bits,
-                 t->isSigned ? "DW_ATE_signed" : (t->bits == 8 ? "DW_ATE_unsigned_char" : "DW_ATE_unsigned"));
+                 t->isSigned ? "DW_ATE_signed" : "DW_ATE_unsigned");   /* u8 is a number, not a char */
         break;
     case TY_FLOAT:
         sbPrintf(&ir->meta, "!%d = !DIBasicType(name: \"%s\", size: %d, encoding: DW_ATE_float)\n", id, name, t->bits);
@@ -482,8 +484,12 @@ static int dbgType(IR *ir, Type *t) {
         }
         StrBuf b = {0};
         dbgMembers(ir, &b, names, types, offs, n, fs->items);
+        /* a struct of another module has the module's name first: net.Conn,
+         * fs.File; the program's own and core's (List, Map) have none */
+        const char *mod = t->decl->module;
+        const char *shown = mod && strcmp(mod, "main") != 0 && strcmp(mod, "core") != 0 ? fmt(ir, "%s.%s", mod, name) : name;
         sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
-                 id, name, bits, b.buf ? b.buf : "");
+                 id, shown, bits, b.buf ? b.buf : "");
         sbFree(&b);
         break;
     }
@@ -559,7 +565,41 @@ static int dbgType(IR *ir, Type *t) {
         sbFree(&b);
         break;
     }
-    case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD:
+    case TY_CHAN: {
+        /* chan[T]: a name for a pointer to T, so runtime/gdb.py knows the
+         * items' type; the pointer is the runtime's Chan */
+        int e = dbgType(ir, t->elem);
+        int p = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, size: 64)\n", p, e);
+        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"chan[%s]\", baseType: !%d)\n", id,
+                 dbgName(ir, t->elem), p);
+        break;
+    }
+    case TY_ATOMIC: {
+        const char *names[1] = {"value"};
+        Type *types[1] = {t->elem};
+        int64_t offs[1] = {0};
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, 1, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"Atomic[%s]\", size: %lld, elements: !{%s})\n",
+                 id, dbgName(ir, t->elem), bits, b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_MUTEX: {
+        /* runtime/rt.c's Mutex: state is 0 when free, 1 when held, 2 when
+         * held with tasks waiting */
+        const char *names[5] = {"qlock", "state", "waitHead", "waitTail", "owner"};
+        Type *types[5] = {&tyI32, &tyI32, &tyNull, &tyNull, &tyNull};
+        int64_t offs[5] = {0, 4, 8, 16, 24};
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, 5, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"Mutex\", size: %lld, elements: !{%s})\n",
+                 id, bits, b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_NULL: case TY_FUNC: case TY_THREAD:
         sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)\n", id);
         break;
     default:

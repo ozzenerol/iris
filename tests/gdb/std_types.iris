@@ -1,0 +1,90 @@
+// gdb: break main.iris:80
+// gdb: run
+// gdb: print ch
+// gdb: print d
+// gdb: print d2
+// gdb: print n
+// gdb: print mu
+// gdb: print free
+// gdb: print ip
+// gdb: print lv
+// gdb: print pair
+// gdb: print f
+// gdb: print b
+// gdb: print c
+// gdb: print ln
+// gdb: break greet if $iris_eq(name, "iris")
+// gdb: continue
+// gdb: print name
+// gdb: print $iris_contains(full, "ri")
+// gdb: print $iris_starts(name, "ir")
+// gdb: print $iris_ends(full, "x")
+// gdb: print $iris_eq(name, full)
+// gdb: break main.iris:89
+// gdb: continue
+// gdb: print f
+// gdb: print c
+// gdb: print ln
+// expect: $1 = chan[i64](len=2, cap=4) = {7, 8}
+// expect: $2 = 250ms
+// expect: $3 = 1m30s
+// expect: $4 = Atomic[i64](3)
+// expect: $5 = Mutex(locked)
+// expect: $6 = Mutex(unlocked)
+// expect: $7 = {10, 0, 0, 1}
+// expect: $8 = warn
+// expect: $9 = (3, "x")
+// expect: $10 = fs.File(fd=
+// expect: $11 = 200
+// expect: $12 = net.Conn(fd=
+// expect: $13 = net.Listener(fd=
+// expect: greet (name="iris", full="iris!")
+// expect: $14 = "iris"
+// expect: $15 = 1
+// expect: $16 = 1
+// expect: $17 = 0
+// expect: $18 = 0
+// expect: $19 = fs.File(closed)
+// expect: $20 = net.Conn(closed)
+// expect: $21 = net.Listener(closed)
+// absent: greet (name="ann"
+
+import fs
+import net
+
+enum Level u8 { debug, info, warn }
+
+void greet(str name, String full) {
+    print("{name} {full}")
+}
+
+void main() {
+    ch := chan[i64](4)
+    ch <- 7
+    ch <- 8
+    Duration d = 250ms
+    Duration d2 = 90s
+    Atomic[i64] n
+    n.add(3)
+    Mutex mu
+    mu.lock()
+    Mutex free
+    u8[4] ip = [10, 0, 0, 1]
+    u8 b = 200
+    Level lv = Level.warn
+    (i64, str) pair = (3, "x")
+    fs.File f = fs.open("main.iris") catch return
+    ln := net.listen(0, "127.0.0.1") catch return
+    c := net.dial("127.0.0.1", ln.port) catch return
+    s := ln.accept() catch return
+    print("{d} {d2} {ip[0]} {b} {lv} {pair.0} {s.sent}")
+    for name in ["ann", "iris", "bob"] {
+        scoped String full = format("{name}!")
+        greet(name, full)
+    }
+    f.close()
+    c.close()
+    s.close()
+    ln.close()
+    mu.unlock()
+}
