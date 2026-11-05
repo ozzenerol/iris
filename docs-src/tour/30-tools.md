@@ -121,6 +121,8 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - the type and comment of a name under the pointer
 - going to a name's declaration, also into the standard library
 - the usages of a name in the project
+- the structs that have the methods of an interface
+- the calls to a function and the calls in it
 - the uses of the name under the cursor in the file, marked as reads or writes
 - the rename of a name in the project
 - a file's outline, as a tree
@@ -141,6 +143,8 @@ A local variable that no code uses gets a warning, and the editor shows its name
 The outline of a file is a tree. A struct holds its fields and the methods of the file, an enum its members, and an interface its methods. Functions, tests and constants are at the top. The search for a declaration in the project takes a part of the name, in any case, or the starts of its words: `rA` finds `readAll`. It looks in the files of the workspace folder and in the public names of the standard library.
 
 The editor can colour each name by what it names, on top of the colours of the syntax. A constant is marked as read-only, a declaration as a declaration, and a name from the standard library or a built-in as one from the library.
+
+On an interface, the editor finds the structs that have all of its methods. On a method of an interface, it finds those methods of the structs. The call hierarchy of a function shows the functions and tests in the project that call it, and the functions that it calls, with the place of each call.
 
 With the cursor on a name, the editor marks its other uses in the file. The declaration, an assignment, `x++` and a field in a struct literal are writes. The other uses are reads.
 

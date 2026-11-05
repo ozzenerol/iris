@@ -791,6 +791,58 @@ void main() {
     w.notify("exit", None)
     w.p.wait(timeout=10)
 
+    # implementation and the call hierarchy, in a project with an interface
+    iproj = tempfile.mkdtemp()
+    os.makedirs(os.path.join(iproj, "geo"))
+    ifiles = {"iris.mod": "module example.com/ih\n", "geo/geo.iris": 'pub interface Shape {\n    f64 area()\n    str name()\n}\n\npub struct Square {\n    pub f64 side\n}\n\npub f64 Square.area() => self.side * self.side\npub str Square.name() => "square"\n\npub struct Circle {\n    pub f64 r\n}\n\npub f64 Circle.area() => 3.0 * self.r * self.r\npub str Circle.name() => "circle"\n\npub struct Line {\n    pub f64 len\n}\n\npub f64 Line.area() => 0.0\n\npub f64 measure(dyn Shape s) => s.area()\n', "main.iris": 'import "geo"\n\nf64 twice(f64 x) => x * 2.0\n\nf64 both(geo.Square a, geo.Circle b) {\n    return twice(a.area()) + twice(b.area())\n}\n\nvoid main() {\n    a := geo.Square{side: 2.0}\n    b := geo.Circle{r: 1.0}\n    print("{both(a, b)} {twice(1.0)}")\n}\n\ntest "twice" {\n    expect(twice(2.0) == 4.0, "four")\n}\n'}
+    for name, text in ifiles.items():
+        with open(os.path.join(iproj, name), "w") as f:
+            f.write(text)
+    h = Client()
+    hinit = h.request("initialize", {"capabilities": {}, "rootUri": "file://" + iproj})
+    hcap = hinit["result"]["capabilities"]
+    check("implementation and call hierarchy providers",
+          hcap.get("implementationProvider") is True and hcap.get("callHierarchyProvider") is True)
+    guri, muri = "file://" + os.path.join(iproj, "geo/geo.iris"), "file://" + os.path.join(iproj, "main.iris")
+    for u, name in ((guri, "geo/geo.iris"), (muri, "main.iris")):
+        h.notify("textDocument/didOpen", {"textDocument": {"uri": u, "languageId": "iris", "version": 1, "text": ifiles[name]}})
+
+    def impl(line, character):
+        r = h.request("textDocument/implementation", {"textDocument": {"uri": guri}, "position": {"line": line, "character": character}})
+        return [(x["uri"].rsplit("/", 1)[-1], x["range"]["start"]["line"]) for x in (r and r.get("result")) or []]
+
+    check("implementations of an interface: %r" % impl(0, 15), impl(0, 15) == [("geo.iris", 5), ("geo.iris", 12)])
+    check("implementations of an interface method: %r" % impl(1, 9), impl(1, 9) == [("geo.iris", 9), ("geo.iris", 16)])
+    check("no implementation of a function: %r" % impl(25, 9), impl(25, 9) == [])
+
+    def calls(uri, line, character):
+        r = h.request("textDocument/prepareCallHierarchy", {"textDocument": {"uri": uri},
+                                                             "position": {"line": line, "character": character}})
+        items = (r and r.get("result")) or []
+        if not items:
+            return None
+        it = items[0]
+        out = [it["name"], it["kind"]]
+        for kind, key in (("incomingCalls", "from"), ("outgoingCalls", "to")):
+            x = h.request("callHierarchy/" + kind, {"item": it})
+            out.append([(y[key]["name"], [(q["start"]["line"], q["start"]["character"]) for q in y["fromRanges"]])
+                        for y in (x and x.get("result")) or []])
+        return out
+
+    got = calls(muri, 2, 5)
+    check("calls of twice: %r" % got, got == ["twice", 12, [("both", [(5, 11), (5, 29)]), ("main", [(11, 25)]),
+                                                         ('test "twice"', [(15, 11)])], []])
+    got = calls(muri, 4, 6)
+    check("calls of both: %r" % got, got == ["both", 12, [("main", [(11, 12)])],
+                                            [("twice", [(5, 11), (5, 29)]), ("Square.area", [(5, 19)]),
+                                             ("Circle.area", [(5, 37)])]])
+    got = calls(guri, 1, 9)
+    check("calls of an interface method: %r" % got, got == ["Shape.area", 6, [("measure", [(25, 34)])], []])
+    check("no call hierarchy on a struct", calls(guri, 5, 13) is None)
+    h.request("shutdown", None)
+    h.notify("exit", None)
+    h.p.wait(timeout=10)
+
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)
     c.notify("exit", None)
