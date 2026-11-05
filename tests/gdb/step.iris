@@ -1,0 +1,27 @@
+// gdb: break main.iris:24
+// gdb: run
+// gdb: step
+// gdb: info args
+// gdb: next
+// gdb: next
+// gdb: step
+// gdb: info source
+// expect: add (a=3, b=4) at main.iris:18
+// expect: a = 3
+// expect: b = 4
+// expect: main () at main.iris:25
+// expect: value=5) at /
+// expect: Current source file is
+// expect: Located in /
+
+i64 add(i64 a, i64 b) {
+    i64 c = a + b
+    return c
+}
+
+void main() {
+    List[i64] xs
+    i64 r = add(3, 4)
+    xs.push(5)
+    print("{r} {xs.len}")
+}

@@ -1,0 +1,77 @@
+// gdb: break main.iris:73
+// gdb: run
+// gdb: print s
+// gdb: print t
+// gdb: print l
+// gdb: print m
+// gdb: print st
+// gdb: print d
+// gdb: print sl
+// gdb: print f
+// gdb: print g
+// gdb: print c
+// gdb: print e
+// gdb: print pair
+// gdb: print p
+// expect: $1 = "iris"
+// expect: $2 = "hi iris"
+// expect: $3 = List[i64](len=2) = {1, 2}
+// expect: $4 = Map[str, i64](len=1) = {["a"] = 1}
+// expect: $5 = Set[i64](len=1) = {7}
+// expect: $6 = Deque[i64](len=2) = {4, 5}
+// expect: $7 = i64[](len=2) = {1, 2}
+// expect: $8 = Frame.Data = {stream = 1, size = 1200}
+// expect: $9 = Frame.Close
+// expect: $10 = green
+// expect: $11 = Bad.oops
+// expect: $12 = {0 = 3, 1 = "x"}
+// expect: $13 = {x = 1, y = 2}
+
+struct P {
+    i64 x
+    i64 y
+}
+
+enum Color { red, green, blue }
+
+enum Frame {
+    Data(i64 stream, i64 size)
+    Ping(u64 payload)
+    Close
+}
+
+enum Bad { oops, worse }
+
+!i64 parse(i64 n) {
+    if n < 0 {
+        return error(Bad.oops, "negative")
+    }
+    return n * 2
+}
+
+void main() {
+    str s = "iris"
+    scoped String t = format("hi {s}")
+    List[i64] l
+    l.push(1)
+    l.push(2)
+    Map[str, i64] m
+    m.set("a", 1)
+    Set[i64] st
+    st.add(7)
+    Deque[i64] d
+    d.push(5)
+    d.pushFront(4)
+    i64[3] arr = [1, 2, 3]
+    i64[] sl = arr[0:2]
+    Frame f = Frame.Data(1, 1200)
+    Frame g = Frame.Close
+    Color c = Color.green
+    (i64, str) pair = (3, "x")
+    P p = P{x: 1, y: 2}
+    i64 bad = parse(-1) catch e {
+        print(e.message)
+        -1
+    }
+    print("{bad} {l.len} {m.len} {st.len} {d.len} {sl.len} {c} {pair.0} {p.x}")
+}

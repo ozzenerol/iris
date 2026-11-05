@@ -1,0 +1,15 @@
+// load: section
+// gdb: break main.iris:14
+// gdb: run
+// gdb: print l
+// gdb: print s
+// expect: $1 = List[i64](len=2) = {1, 2}
+// expect: $2 = "iris"
+
+void main() {
+    List[i64] l
+    l.push(1)
+    l.push(2)
+    str s = "iris"
+    print("{l.len} {s}")
+}

@@ -50,6 +50,9 @@ extern const char *(*gReadHook)(const char *path, size_t *len);
 /* when set, the names of the .iris files open in a folder, also those not saved yet */
 extern int (*gFolderHook)(const char *dir, const char **names, int max);
 const char *stdSource(const char *path);
+const char *irisVersionDir(void);   /* the folder of the files iris keeps on disk, or NULL */
+const char *irisVersionFile(const char *name, const char *text);
+const char *stdSourceDir(void);   /* a copy of std/ on disk, for debuggers; NULL if none */
 int stdModuleNames(const char **out, int max);
 bool stdModuleExists(const char *name);
 
@@ -456,6 +459,7 @@ typedef struct {
     BuildMode mode;
 } Target;
 extern Target gTarget;
+extern const char irisGdbScript[];   /* runtime/gdb.py, the pretty printers for gdb */
 bool setTarget(const char *name);
 
 /* Writes the checked program as LLVM IR. */

@@ -256,7 +256,7 @@ It also finds memory used after it was freed and memory freed twice, with Addres
 ```output
 ERROR: AddressSanitizer: heap-use-after-free
 WRITE of size 1 at 0x502000000010 thread T0
-    #0 in f.main.main main.iris:4:5
+    #0 in main.main main.iris:4:5
 ```
 
 | Build | Checks |

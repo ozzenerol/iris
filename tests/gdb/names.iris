@@ -1,0 +1,35 @@
+// gdb: break add
+// gdb: break main.add
+// gdb: break P.len
+// gdb: break main.P.len
+// gdb: run
+// gdb: backtrace 2
+// gdb: continue
+// gdb: print *self
+// expect: Breakpoint 1 at
+// expect: Breakpoint 2 at
+// expect: Breakpoint 3 at
+// expect: Breakpoint 4 at
+// expect: add (a=3, b=4) at main.iris:27
+// expect: #0  add (a=3, b=4) at main.iris:27
+// expect: in main () at main.iris:33
+// expect: P.len (self=
+// expect: = {x = 1, y = 2}
+
+struct P {
+    i64 x
+    i64 y
+}
+
+i64 P.len() => self.x + self.y
+
+i64 add(i64 a, i64 b) {
+    i64 c = a + b
+    return c
+}
+
+void main() {
+    P p = P{x: 1, y: 2}
+    i64 r = add(3, 4)
+    print("{r} {p.len()}")
+}

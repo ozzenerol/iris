@@ -35,6 +35,14 @@
   tests/projects/NAME/     a folder with iris.mod: `iris run` on the folder must
                            print what main.iris's comments say; with
                            // error: FILE:LINE: MESSAGE lines, `iris check` must fail
+  tests/gdb/NAME.iris      a debug build under gdb -batch: gdb runs the commands
+                           of the comments, and its output must have the
+                           // expect: lines in order (each one in a line):
+                               // gdb: COMMAND     one per command
+                               // load: section    plain gdb, with the printers from
+                                                   the program's .debug_gdb_scripts
+                                                   (default: iris gdb)
+                           skipped when there is no gdb
   tests/fmt/NAME.iris      `iris fmt -` must print NAME.out, and NAME.out must
                            stay as it is when formatted again
   fmt-std                  the standard library is in the standard layout
@@ -337,6 +345,54 @@ def run_test(iris, path, name, env):
     return failures
 
 
+def gdb_tests(iris, only, failures, skipped):
+    paths = [p for p in sorted(glob.glob(os.path.join(ROOT, "tests/gdb/*.iris")))
+             if not only or any(o in "gdb/" + os.path.basename(p)[:-5] for o in only)]
+    if not paths:
+        return 0
+    if not shutil.which("gdb"):
+        skipped.append("gdb (no gdb)")
+        return 0
+    jobs = [POOL.submit(gdb_test, iris, p, "gdb/" + os.path.basename(p)[:-5]) for p in paths]
+    return gather(jobs, failures)
+
+
+def gdb_test(iris, path, name):
+    with open(path) as f:
+        src = f.read()
+    cmds = re.findall(r"^// gdb: (.*)$", src, re.M)
+    want = re.findall(r"^// expect: (.*)$", src, re.M)
+    section = re.search(r"^// load: section$", src, re.M) is not None
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = os.path.join(tmp, "prog")
+        # the commands name the file as it is: main.iris
+        shutil.copy(path, os.path.join(tmp, "main.iris"))
+        p = subprocess.run([iris, "build", "main.iris", "-o", exe], cwd=tmp, capture_output=True, text=True,
+                           timeout=300)
+        if p.returncode != 0:
+            return [(name, "build failed:\n" + p.stderr)]
+        args = ["-batch", "-nx"]
+        for c in cmds:
+            args += ["-ex", c]
+        if section:
+            cmd = ["gdb", "-iex", "add-auto-load-safe-path " + exe] + args + [exe]
+        else:
+            cmd = [iris, "gdb"] + args + [exe]
+        try:
+            g = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return [(name, "gdb did not stop in 120s")]
+    lines = (g.stdout + g.stderr).splitlines()
+    at = 0
+    for w in want:
+        while at < len(lines) and w not in lines[at]:
+            at += 1
+        if at == len(lines):
+            return [(name, "no line with %r after the ones found before; gdb printed:\n%s" % (w, g.stdout + g.stderr))]
+        at += 1
+    return []
+
+
 def project_tests(iris, only, failures):
     count = 0
     for d in sorted(glob.glob(os.path.join(ROOT, "tests/projects/*/"))):
@@ -588,6 +644,7 @@ def main():
     total += error_tests(args.iris, args.only, failures)
     total += run_tests(args.iris, args.only, failures)
     total += project_tests(args.iris, args.only, failures)
+    total += gdb_tests(args.iris, args.only, failures, skipped)
     total += mod_init_test(args.iris, args.only, failures)
     total += get_test(args.iris, args.only, failures)
     total += pgo_test(args.iris, args.only, failures, skipped)

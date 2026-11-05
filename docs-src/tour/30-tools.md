@@ -16,6 +16,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris mod init [path]` | makes `iris.mod`, which turns the folder into a project |
 | `iris get pkg@version` | downloads a package and adds it to `iris.mod` |
 | `iris lsp` | the language server, for editors |
+| `iris gdb [args]` | runs `gdb` with the pretty printers for Iris values |
 | `iris c header.h` | shows what `import c` makes of C headers |
 | `iris ir main.iris` | prints the LLVM IR the compiler writes |
 | `iris parse file.iris` | prints the syntax tree |
@@ -171,20 +172,41 @@ On a Mac, both macOS targets work as they are. For another Linux, `clang` needs 
 
 ## Debugging
 
-Every build has debug information, so `gdb` and `lldb` show Iris files, lines and names. A breakpoint is set by file and line, and arguments, variables, structs, slices and enums show by name:
+Every build has debug information, so `gdb` and `lldb` show Iris files, lines and names. Set a breakpoint by file and line, or by a function's name. Arguments, variables, structs, slices and enums show by name.
+
+`iris gdb` runs `gdb` with the pretty printers for Iris values. It gives its arguments to `gdb`:
 
 ```output
-$ gdb ./server
-(gdb) break main.iris:42
+$ iris build main.iris -o server
+$ iris gdb ./server
+(gdb) break handle
 (gdb) run
-Breakpoint 1, f.main.handle (req=..., res=...) at main.iris:42
+Breakpoint 1, handle (req=..., res=...) at main.iris:42
 (gdb) info locals
-conn = {fd = 7, peer = {ptr = "10.0.0.5", len = 8, cap = 16}}
+peer = "10.0.0.5"
+names = List[str](len=2) = {"ann", "bob"}
+hits = Map[str, i64](len=1) = {["/"] = 3}
+f = Frame.Data = {stream = 1, size = 1200}
+e = Parse.badPort
 ```
 
-A function's name in the debugger is its module and name, `f.main.handle`, or `m.main.Server.close` for a method. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
+The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque` and slices with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error.
 
-In VS Code, the Iris extension debugs with gdb. Set a breakpoint in a `.iris` file and press F5. The extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
+A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
+
+`break iris_panicked` stops the program when it panics, after the message is printed. `backtrace` then shows where the panic came from.
+
+Each program also carries the printers in its `.debug_gdb_scripts` section. A plain `gdb` loads them when the program's folder is in its `auto-load safe-path`:
+
+```shell
+gdb -iex "add-auto-load-safe-path $PWD" ./server
+```
+
+`iris gdb --printers` prints the path of a copy of the printers' script, for a tool that starts `gdb` itself. The tool loads it with `-iex "source PATH"`.
+
+The standard library and the runtime are inside the compiler. A build writes a copy of them to `~/.cache/iris/VERSION` (or `VERSION` in `IRIS_PATH`), with read-only files, so a debugger shows their source too.
+
+In VS Code, the Iris extension debugs with gdb, with the pretty printers. Set a breakpoint in a `.iris` file and press F5. The extension builds the program and runs it under `gdb -i=dap` (gdb 14 or newer).
 
 ## The libraries Iris loads
 

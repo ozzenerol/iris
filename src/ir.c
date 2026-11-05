@@ -72,6 +72,8 @@ typedef struct {
     int *dbgIds;
     int ndbg, capDbg;
     int dbgScope;           /* the current function's DISubprogram, 0 for none */
+    const char **aliases;   /* the names dbgAlias gave, a hash set */
+    int aliasLen, aliasCap;
     int dbgLine, dbgCol;    /* where the code being written comes from */
     Type **dbgTypes;        /* the types that have a debug type, and its id */
     int *dbgTypeIds;
@@ -186,10 +188,17 @@ static int dbgFile(IR *ir, const char *path) {
         ir->dbgIds = ids;
         ir->capDbg = cap;
     }
-    /* the standard library is inside the compiler: its paths stay as they are */
+    /* the standard library is inside the compiler: a debugger reads the
+     * copy in stdSourceDir, or the path stays as it is */
     char full[4096];
     const char *name = path, *dir = ".";
-    if (strncmp(path, "std/", 4) != 0 && realpath(path, full)) {
+    if (strncmp(path, "std/", 4) == 0) {
+        const char *copy = stdSourceDir();
+        if (copy) {
+            name = path + 4;
+            dir = copy;
+        }
+    } else if (realpath(path, full)) {
         char *slash = strrchr(full, '/');
         *slash = 0;
         dir = full;
@@ -275,6 +284,8 @@ static const char *tempStringSlot(IR *ir, const char *hint) {
 }
 
 static int dbgType(IR *ir, Type *t);
+static Type *memberData(Node *m);
+static uint64_t nameHash(const char *s, size_t n);
 
 /* A struct-like debug type: name, size and members (name, type, offset). */
 static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n, Node **fields) {
@@ -293,6 +304,82 @@ static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int6
         }
         sbPrintf(b, "%s!%d", i ? ", " : "", m);
     }
+}
+
+/* The name of a type in the debug information. */
+static const char *dbgName(IR *ir, Type *t) {
+    if (t->name) return t->name;
+    switch (t->kind) {
+    case TY_TUPLE: {
+        StrBuf b = {0};
+        sbPuts(&b, "(");
+        for (int i = 0; i < t->nelems; i++) sbPrintf(&b, "%s%s", i ? ", " : "", dbgName(ir, t->elems[i]));
+        sbPuts(&b, ")");
+        return sbFinish(&b, ir->arena);
+    }
+    case TY_PTR: return fmt(ir, "%s *", dbgName(ir, t->elem));
+    case TY_SLICE: return fmt(ir, "%s[]", dbgName(ir, t->elem));
+    case TY_ARRAY: return fmt(ir, "%s[%lld]", dbgName(ir, t->elem), (long long)t->count);
+    case TY_RESULT: return fmt(ir, "!%s", t->elem->kind == TY_VOID ? "void" : dbgName(ir, t->elem));
+    case TY_DYN: return fmt(ir, "dyn %s", t->decl && t->decl->name ? t->decl->name : "?");
+    case TY_ERRVAL: return "Error";
+    default: return "?";
+    }
+}
+
+/* The members of a tuple, or of the data of an enum value (fields names
+ * them): names and offsets by the rules of typeSize. */
+static void dbgTupleLayout(IR *ir, Type *t, Node *fields, const char **names, int64_t *offs) {
+    int64_t off = 0;
+    for (int i = 0; i < t->nelems; i++) {
+        int64_t a = typeAlignOf(t->elems[i]);
+        off = (off + a - 1) / a * a;
+        offs[i] = off;
+        off += typeSizeOf(t->elems[i]);
+        names[i] = fields && i < fields->list.len ? fields->list.items[i]->name : fmt(ir, "%d", i);
+    }
+}
+
+/* An enum with data: { tag, data }. The tag is an enumeration of the
+ * members, and data a union of a struct for each member with fields.
+ * runtime/gdb.py shows such a value as Enum.Member and the fields. */
+static void dbgDataEnum(IR *ir, Type *t, int id) {
+    NodeList *ms = &t->decl->list;
+    StrBuf tags = {0}, vars = {0};
+    for (int i = 0; i < ms->len; i++) {
+        Node *m = ms->items[i];
+        sbPrintf(&tags, "%s!DIEnumerator(name: \"%s\", value: %lld)", i ? ", " : "", m->name, (long long)m->cval);
+        Type *data = memberData(m);
+        if (!data) continue;
+        int n = data->nelems;
+        const char **names = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(n ? n : 1));
+        int64_t *offs = arenaAlloc(ir->arena, sizeof(int64_t) * (size_t)(n ? n : 1));
+        dbgTupleLayout(ir, data, m, names, offs);
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, data->elems, offs, n, NULL);
+        int st = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s.%s\", size: %lld, elements: !{%s})\n",
+                 st, t->name, m->name, (long long)typeSizeOf(data) * 8, b.buf ? b.buf : "");
+        sbFree(&b);
+        int mm = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %lld, offset: 0)\n",
+                 mm, m->name, st, (long long)typeSizeOf(data) * 8);
+        sbPrintf(&vars, "%s!%d", vars.buf ? ", " : "", mm);
+    }
+    long long payload = (long long)((t->payload + 7) / 8) * 64;
+    int tagId = ir->metaId++, unionId = ir->metaId++, tagM = ir->metaId++, dataM = ir->metaId++;
+    sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_enumeration_type, name: \"%s.tag\", size: 32, elements: !{%s})\n",
+             tagId, t->name, tags.buf ? tags.buf : "");
+    sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_union_type, name: \"%s.data\", size: %lld, elements: !{%s})\n",
+             unionId, t->name, payload, vars.buf ? vars.buf : "");
+    sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"tag\", baseType: !%d, size: 32, offset: 0)\n",
+             tagM, tagId);
+    sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"data\", baseType: !%d, size: %lld, offset: 64)\n",
+             dataM, unionId, payload);
+    sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{!%d, !%d})\n",
+             id, t->name, (long long)typeSizeOf(t) * 8, tagM, dataM);
+    sbFree(&tags);
+    sbFree(&vars);
 }
 
 /* The debug type of an Iris type, so debuggers can show values. */
@@ -397,9 +484,60 @@ static int dbgType(IR *ir, Type *t) {
             sbFree(&b);
             break;
         }
-        /* an enum with data shows as its bytes */
-        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{})\n",
-                 id, name, bits);
+        dbgDataEnum(ir, t, id);
+        break;
+    case TY_ERRVAL: case TY_ERRCODE: {
+        /* the code: the enum's number in the high 32 bits, the value in the low */
+        const char *names[1] = {"code"};
+        Type *types[1] = {&tyI64};
+        int64_t offs[1] = {0};
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, 1, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: 64, elements: !{%s})\n",
+                 id, t->kind == TY_ERRVAL ? "Error" : "ErrorCode", b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_RESULT: {
+        /* { value, error }: an error code of 0 is no error */
+        bool none = t->elem->kind == TY_VOID;
+        const char *names[2] = {"value", "error"};
+        Type *types[2] = {t->elem, &tyErrorValue};
+        int64_t offs[2] = {0, none ? 0 : (typeSizeOf(t->elem) + 7) / 8 * 8};
+        int from = none ? 1 : 0;
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names + from, types + from, offs + from, 2 - from, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"!%s\", size: %lld, elements: !{%s})\n",
+                 id, none ? "void" : dbgName(ir, t->elem), bits, b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_TUPLE: {
+        int n = t->nelems;
+        const char **names = arenaAlloc(ir->arena, sizeof(char *) * (size_t)(n ? n : 1));
+        int64_t *offs = arenaAlloc(ir->arena, sizeof(int64_t) * (size_t)(n ? n : 1));
+        dbgTupleLayout(ir, t, NULL, names, offs);
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, t->elems, offs, n, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{%s})\n",
+                 id, dbgName(ir, t), bits, b.buf ? b.buf : "");
+        sbFree(&b);
+        break;
+    }
+    case TY_DYN: {
+        /* the value's address and its type's table of methods */
+        const char *names[2] = {"data", "methods"};
+        Type *types[2] = {&tyNull, &tyNull};
+        int64_t offs[2] = {0, 8};
+        StrBuf b = {0};
+        dbgMembers(ir, &b, names, types, offs, 2, NULL);
+        sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: 128, elements: !{%s})\n",
+                 id, dbgName(ir, t), b.buf);
+        sbFree(&b);
+        break;
+    }
+    case TY_NULL: case TY_FUNC: case TY_CHAN: case TY_THREAD:
+        sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)\n", id);
         break;
     default:
         sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"%s\", size: %lld, elements: !{})\n",
@@ -4748,6 +4886,59 @@ static void emitStmtInner(IR *ir, Node *s) {
 
 /* ---------------------------------------------------------------- functions */
 
+/* The type that a method belongs to, or NULL for a function. */
+static Type *selfType(Node *f) {
+    if (f->list.len && (f->list.items[0]->flags & F_SELF)) return f->list.items[0]->type->elem;
+    return NULL;
+}
+
+/* The name of a function in the debug information: add, or P.len for a method. */
+static const char *dbgFuncName(IR *ir, Node *f) {
+    Type *self = selfType(f);
+    return self ? fmt(ir, "%s.%s", dbgName(ir, self), f->name) : f->name;
+}
+
+/* A second symbol for f, module.name (main.add, main.P.len), so that gdb
+ * can "break main.add". A name that two functions have is given once. */
+static void dbgAlias(IR *ir, Node *f, StrBuf *out) {
+    if (strncmp(f->ir, "@\"f.", 4) != 0 && strncmp(f->ir, "@\"m.", 4) != 0) return;
+    /* the module: the text after "f." up to the function's own part */
+    Type *self = selfType(f);
+    const char *own = fmt(ir, ".%s#", self ? self->name : f->name);
+    const char *mod = f->ir + 4, *end = NULL;
+    for (const char *p = strstr(mod, own); p; p = strstr(p + 1, own)) end = p;
+    if (!end) return;
+    const char *name = fmt(ir, "%.*s.%s", (int)(end - mod), mod, dbgFuncName(ir, f));
+    if (ir->aliasCap == 0 || ir->aliasLen * 2 >= ir->aliasCap) {
+        int cap = ir->aliasCap ? ir->aliasCap * 2 : 1024;
+        const char **t = arenaAlloc(ir->arena, sizeof(char *) * (size_t)cap);
+        memset(t, 0, sizeof(char *) * (size_t)cap);
+        for (int i = 0; i < ir->aliasCap; i++) {
+            const char *k = ir->aliases[i];
+            if (!k) continue;
+            uint32_t h = (uint32_t)nameHash(k, strlen(k)) & (uint32_t)(cap - 1);
+            while (t[h]) h = (h + 1) & (uint32_t)(cap - 1);
+            t[h] = k;
+        }
+        ir->aliases = t;
+        ir->aliasCap = cap;
+    }
+    uint32_t h = (uint32_t)nameHash(name, strlen(name)) & (uint32_t)(ir->aliasCap - 1);
+    while (ir->aliases[h]) {
+        if (strcmp(ir->aliases[h], name) == 0) return;
+        h = (h + 1) & (uint32_t)(ir->aliasCap - 1);
+    }
+    ir->aliases[h] = name;
+    ir->aliasLen++;
+    sbPuts(out, "@\"");
+    putEscaped(out, name, strlen(name));
+    sbPrintf(out, "\" = internal alias %s (", llType(ir, f->type));
+    for (int i = 0; i < f->list.len; i++) {
+        sbPrintf(out, "%s%s", i ? ", " : "", paramType(ir, f->list.items[i]->type));
+    }
+    sbPrintf(out, "), ptr %s\n\n", f->ir);
+}
+
 static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     ir->func = f;
     if (f->src) {
@@ -4767,14 +4958,23 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
     if (f->src) {
         /* the function's DISubprogram: debuggers and AddressSanitizer show Iris lines */
         int file = dbgFile(ir, f->src->path);
+        /* the function's type: what it returns (null for void), then the
+         * parameters; gdb's finish shows the value returned */
+        StrBuf sig = {0};
+        sbPuts(&sig, f->type->kind == TY_VOID || f->type->kind == TY_NORETURN ? "null" : fmt(ir, "!%d", dbgType(ir, f->type)));
+        for (int i = 0; i < f->list.len; i++) sbPrintf(&sig, ", !%d", dbgType(ir, f->list.items[i]->type));
+        int sub = ir->metaId++;
+        sbPrintf(&ir->meta, "!%d = !DISubroutineType(types: !{%s})\n", sub, sig.buf);
+        sbFree(&sig);
         int sp = ir->metaId++;
-        const char *link = f->ir[1] == '"' ? f->ir + 2 : f->ir + 1;
-        size_t linkLen = strlen(link) - (f->ir[1] == '"' ? 1 : 0);
-        sbPrintf(&ir->meta, "!%d = distinct !DISubprogram(name: \"%s\", linkageName: \"", sp, f->name);
-        putEscaped(&ir->meta, link, linkLen);
-        sbPrintf(&ir->meta, "\", scope: !%d, file: !%d, line: %d, type: !11, scopeLine: %d, "
+        /* gdb names a C function by its linkageName when it has one: the
+         * name is the Iris name alone, such as add or P.len */
+        sbPrintf(&ir->meta, "!%d = distinct !DISubprogram(name: \"", sp);
+        const char *shown = dbgFuncName(ir, f);
+        putEscaped(&ir->meta, shown, strlen(shown));
+        sbPrintf(&ir->meta, "\", scope: !%d, file: !%d, line: %d, type: !%d, scopeLine: %d, "
                             "spFlags: DISPFlagDefinition%s, unit: !10)\n",
-                 file, file, f->line, f->line, (f->flags & F_EXPORT) ? "" : " | DISPFlagLocalToUnit");
+                 file, file, f->line, sub, f->line, (f->flags & F_EXPORT) ? "" : " | DISPFlagLocalToUnit");
         ir->dbgScope = sp;
         ir->dbgLine = f->line;
         ir->dbgCol = f->col;
@@ -4847,6 +5047,9 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
         sbPuts(out, ir->body.buf);
     }
     sbPuts(out, "}\n\n");
+    if (ir->dbgScope) {
+        dbgAlias(ir, f, out);
+    }
     sbFree(&ir->allocas);
     sbFree(&ir->body);
     ir->func = NULL;
@@ -5426,9 +5629,21 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare i64 @iris_select(i64, ptr, ptr, ptr, i64)\n"
            ""
            "\n!0 = !{!\"branch_weights\", i32 1, i32 1048575}\n");
+    if (strcmp(gTarget.os, "linux") == 0) {
+        /* runtime/gdb.py in the .debug_gdb_scripts section: gdb loads the
+         * pretty printers from the program itself. 4 marks a Python script
+         * in the section; its first line is the script's name. */
+        size_t n = strlen(irisGdbScript);
+        sbPrintf(&out, "@iris.gdb_script = internal constant [%zu x i8] c\"\\04iris-printers\\0A", n + 16);
+        putEscaped(&out, irisGdbScript, n);
+        sbPuts(&out, "\\00\", section \".debug_gdb_scripts\", align 1, no_sanitize_address\n"
+                     "@llvm.used = appending global [1 x ptr] [ptr @iris.gdb_script], section \"llvm.metadata\"\n\n");
+    }
+    /* the producer starts with "clang ": then gdb trusts the line table to
+     * find where a function's body starts, after the parameters are stored */
     sbPrintf(&out, "!llvm.dbg.cu = !{!10}\n!llvm.module.flags = !{!1, !2}\n"
                    "!1 = !{i32 2, !\"Debug Info Version\", i32 3}\n!2 = !{i32 7, !\"Dwarf Version\", i32 4}\n"
-                   "!10 = distinct !DICompileUnit(language: DW_LANG_C, file: !%d, producer: \"iris %s\", "
+                   "!10 = distinct !DICompileUnit(language: DW_LANG_C, file: !%d, producer: \"clang (iris %s)\", "
                    "isOptimized: %s, runtimeVersion: 0, emissionKind: FullDebug)\n!11 = !DISubroutineType(types: !{})\n",
              mainFile, IRIS_VERSION, mode == MODE_DEBUG ? "false" : "true");
     if (ir.meta.buf) {

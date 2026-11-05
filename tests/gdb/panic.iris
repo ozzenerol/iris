@@ -1,0 +1,15 @@
+// gdb: break iris_panicked
+// gdb: run
+// gdb: backtrace
+// expect: iris_panicked (msg=
+// expect: "index 5 is out of range for length 3"
+// expect: i=5) at main.iris:10
+// expect: in main () at main.iris:14
+// expect: panic: index 5 is out of range for length 3
+
+i64 pick(i64[] xs, i64 i) => xs[i]
+
+void main() {
+    i64[3] a = [1, 2, 3]
+    print("{pick(a[0:3], 5)}")
+}

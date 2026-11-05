@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* the standard library's files, turned into bytes by the Makefile */
 #include "std.inc"
@@ -515,6 +516,123 @@ const char *stdSource(const char *path) {
         }
     }
     return NULL;
+}
+
+/* Writes text to path through a file of its own, then renames it, so
+ * builds at the same time never see half a file. The file is read-only. */
+static bool writeReadOnly(const char *path, const char *text, size_t n) {
+    char part[4200];
+    snprintf(part, sizeof part, "%s.%d.part", path, (int)getpid());
+    FILE *f = fopen(part, "wb");
+    if (!f) return false;
+    bool ok = fwrite(text, 1, n, f) == n;
+    ok = fclose(f) == 0 && ok;
+    ok = ok && chmod(part, 0444) == 0 && rename(part, path) == 0;
+    if (!ok) unlink(part);
+    return ok;
+}
+
+/* Makes each folder of path, up to its last '/'. */
+static void makeParents(char *path) {
+    for (char *p = path + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            mkdir(path, 0755);
+            *p = '/';
+        }
+    }
+}
+
+/* The folder of this version's files that iris keeps on disk:
+ * $IRIS_PATH/<version>, else ~/.cache/iris/<version>, next to the
+ * runtimes and the packages. Made when missing; NULL when it can't be. */
+const char *irisVersionDir(void) {
+    static bool done;
+    static char dir[3100];
+    if (done) return dir[0] ? dir : NULL;
+    done = true;
+    const char *base = getenv("IRIS_PATH"), *home = getenv("HOME");
+    if (base && *base && strlen(base) < 3000) {
+        snprintf(dir, sizeof dir, "%s/%s/", base, IRIS_VERSION);
+    } else if (home && *home && strlen(home) < 3000) {
+        snprintf(dir, sizeof dir, "%s/.cache/iris/%s/", home, IRIS_VERSION);
+    } else {
+        return NULL;
+    }
+    makeParents(dir);
+    dir[strlen(dir) - 1] = 0;
+    struct stat st;
+    if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        dir[0] = 0;
+        return NULL;
+    }
+    return dir;
+}
+
+/* Writes text to path in the folder of irisVersionDir, read-only, when the
+ * file is not there with that text. The path of the file, which the caller
+ * frees, or NULL. */
+const char *irisVersionFile(const char *name, const char *text) {
+    const char *base = irisVersionDir();
+    if (!base) return NULL;
+    char *path = malloc(strlen(base) + strlen(name) + 2);
+    sprintf(path, "%s/%s", base, name);
+    size_t n = strlen(text);
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        char *have = malloc(n + 1);
+        size_t got = fread(have, 1, n + 1, f);
+        fclose(f);
+        bool same = got == n && memcmp(have, text, n) == 0;
+        free(have);
+        if (same) return path;
+    }
+    makeParents(path);
+    if (!writeReadOnly(path, text, n)) {
+        free(path);
+        return NULL;
+    }
+    return path;
+}
+
+/* The folder with a copy of the standard library's files, for debuggers:
+ * std in irisVersionDir. The files are written when the folder has none,
+ * or other ones (its .hash file tells). NULL when it can't be made. */
+const char *stdSourceDir(void) {
+    static bool done;
+    static char dir[3200];
+    if (done) return dir[0] ? dir : NULL;
+    done = true;
+    const char *base = irisVersionDir();
+    if (!base) return NULL;
+    snprintf(dir, sizeof dir, "%s/std", base);
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0]; i++) {
+        for (const char *p = stdFiles[i].path; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+        for (const char *p = stdFiles[i].data; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    }
+    char stamp[3300], want[32], have[32] = {0};
+    snprintf(stamp, sizeof stamp, "%s/.hash", dir);
+    snprintf(want, sizeof want, "%016llx\n", (unsigned long long)h);
+    FILE *f = fopen(stamp, "rb");
+    if (f) {
+        size_t n = fread(have, 1, sizeof have - 1, f);
+        have[n] = 0;
+        fclose(f);
+        if (strcmp(have, want) == 0) return dir;
+    }
+    bool ok = true;
+    char path[3400];
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0] && ok; i++) {
+        snprintf(path, sizeof path, "%s/%s", dir, stdFiles[i].path);
+        makeParents(path);
+        ok = writeReadOnly(path, stdFiles[i].data, strlen(stdFiles[i].data));
+    }
+    if (!ok || !writeReadOnly(stamp, want, strlen(want))) {
+        dir[0] = 0;
+        return NULL;
+    }
+    return dir;
 }
 
 /* The names of the standard library's modules, each once, in order; how

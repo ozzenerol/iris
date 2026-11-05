@@ -458,17 +458,27 @@ void iris_init(int argc, char **argv) {
     gArgv = argv;
 }
 
-static void stop(const char *msg, size_t n, const char *file, int line, int col, const char *fn) {
-    fflush(stdout);
-    fprintf(stderr, "panic: %.*s\n  at %s:%d:%d in %s\n", (int)n, msg, file, line, col, fn);
+/* Every panic ends here, after its message is on stderr: a debugger stops a
+   program when it panics with "break iris_panicked". msg is the message. */
+__attribute__((noinline, noreturn, used)) void iris_panicked(const char *msg, int64_t len) {
+    __asm__ volatile("" : : "r"(msg), "r"(len) : "memory");
     exit(2);
 }
 
-static void outOfMemory(void) {
+/* A panic with a message and no place in the program. */
+static void panicText(const char *msg) {
     fflush(stdout);
-    fputs("panic: out of memory\n", stderr);
-    exit(2);
+    fprintf(stderr, "panic: %s\n", msg);
+    iris_panicked(msg, (int64_t)strlen(msg));
 }
+
+static void stop(const char *msg, size_t n, const char *file, int line, int col, const char *fn) {
+    fflush(stdout);
+    fprintf(stderr, "panic: %.*s\n  at %s:%d:%d in %s\n", (int)n, msg, file, line, col, fn);
+    iris_panicked(msg, (int64_t)n);
+}
+
+static void outOfMemory(void) { panicText("out of memory"); }
 
 /* the program's own calloc calls (ir.c, emitCalloc) end here when it fails */
 void iris_out_of_memory(void) {
@@ -3970,9 +3980,7 @@ static void ensurePoller(void) {
     }
 #endif
     if (poller < 0) {
-        fflush(stdout);
-        fputs("panic: can't start the event loop\n", stderr);
-        exit(2);
+        panicText("can't start the event loop");
     }
 }
 
@@ -4035,9 +4043,7 @@ static void pollEventsHow(bool noWait) {
         return;
     }
     if (waitingIo == 0 && timeout < 0 && threads == 1) {
-        fflush(stdout);
-        fputs("panic: every task is waiting and nothing can wake them: a deadlock\n", stderr);
-        exit(2);
+        panicText("every task is waiting and nothing can wake them: a deadlock");
     }
     bool block = waitingIo > 0 || threads > 1;
     if (timeout != 0) {
@@ -6534,9 +6540,7 @@ void *iris_thread_new(void (*fn)(void *), void *arg) {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     if (pthread_create(&t, &attr, threadMain, th) != 0) {
-        fflush(stdout);
-        fputs("panic: can't start a thread\n", stderr);
-        exit(2);
+        panicText("can't start a thread");
     }
     pthread_attr_destroy(&attr);
     return th;
@@ -13555,9 +13559,7 @@ void iris_random_os(char *buf, int64_t len) {
         ssize_t n = getrandom(buf, (size_t)(len > 256 ? 256 : len), 0);
         if (n < 0) {
             if (errno == EINTR) continue;
-            fflush(stdout);
-            fputs("panic: the system's random source failed\n", stderr);
-            exit(2);
+            panicText("the system's random source failed");
         }
         buf += n;
         len -= n;

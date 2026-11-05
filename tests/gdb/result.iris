@@ -1,0 +1,32 @@
+// gdb: break parse
+// gdb: run
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: delete 1
+// gdb: break check
+// gdb: continue
+// gdb: finish
+// expect: Value returned is $1 = 8
+// expect: Value returned is $2 = error(Bad.worse)
+// expect: Value returned is $3 = ok
+
+enum Bad { oops, worse }
+
+!i64 parse(i64 n) {
+    if n < 0 {
+        return error(Bad.worse, "negative")
+    }
+    return n * 2
+}
+
+!void check(i64 n) {
+    _ = try parse(n)
+}
+
+void main() {
+    i64 a = parse(4) catch 0
+    i64 b = parse(-1) catch -1
+    check(1) catch return
+    print("{a} {b}")
+}

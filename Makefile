@@ -15,10 +15,10 @@ build/obj/%.o: src/%.c $(HDR)
 	$(CC) $(CFLAGS) -Ibuild -c -o $@ $<
 
 # these two carry the standard library and the runtime
-build/obj/main.o build/obj/module.o: build/runtime.inc build/std.inc
+build/obj/main.o build/obj/module.o: build/runtime.inc build/std.inc build/gdb.inc
 
 # AddressSanitizer and UBSan build, for finding memory bugs in the compiler
-iris-debug: $(SRC) $(HDR) build/runtime.inc build/std.inc
+iris-debug: $(SRC) $(HDR) build/runtime.inc build/std.inc build/gdb.inc
 	$(CC) -std=c11 -O0 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Ibuild -o $@ $(SRC) -lm
 
 # the standard library's files, as bytes the compiler carries with it
@@ -36,6 +36,11 @@ build/std.inc: $(STD)
 build/runtime.inc: runtime/rt.c runtime/ryu.h
 	mkdir -p build
 	sed -e '/^#include "ryu.h"$$/{r runtime/ryu.h' -e 'd' -e '}' runtime/rt.c | od -An -v -tx1 | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g' > $@
+
+# the gdb pretty printers, as bytes the compiler puts in each program
+build/gdb.inc: runtime/gdb.py
+	mkdir -p build
+	od -An -v -tx1 runtime/gdb.py | sed -e 's/\([0-9a-f][0-9a-f]\)/0x\1,/g' > $@
 
 test: iris
 	python3 tools/run_tests.py

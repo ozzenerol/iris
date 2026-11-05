@@ -85,7 +85,16 @@ const debugConfigs = {
 const debugAdapters = {
     createDebugAdapterDescriptor() {
         const gdb = vscode.workspace.getConfiguration("iris").get("gdbPath") || "gdb";
-        return new vscode.DebugAdapterExecutable(gdb, ["-q", "-i=dap"]);
+        const args = ["-q", "-i=dap"];
+        // the pretty printers for Iris values: str, String, List, Map, errors and enums
+        try {
+            const iris = vscode.workspace.getConfiguration("iris").get("path") || "iris";
+            const script = cp.execFileSync(iris, ["gdb", "--printers"], { encoding: "utf8" }).trim();
+            if (script) args.push("-iex", "source " + script, "-iex", "set auto-load python-scripts off");
+        } catch (e) {
+            // an iris without the printers: values show as plain structs
+        }
+        return new vscode.DebugAdapterExecutable(gdb, args);
     },
 };
 

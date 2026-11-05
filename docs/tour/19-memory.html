@@ -240,7 +240,7 @@ socket closed again</code></pre>
 <p>It also finds memory used after it was freed and memory freed twice, with AddressSanitizer from <code>clang</code>. The report shows the Iris lines where the memory was used, freed and allocated:</p>
 <pre class="out"><code>ERROR: AddressSanitizer: heap-use-after-free
 WRITE of size 1 at 0x502000000010 thread T0
-    #0 in f.main.main main.iris:4:5</code></pre>
+    #0 in main.main main.iris:4:5</code></pre>
 <div class="table"><table><thead><tr><th>Build</th><th>Checks</th></tr></thead><tbody><tr><td><code>debug</code></td><td>all of them</td></tr><tr><td><code>release-safe</code></td><td>indexes and slices, and division by zero</td></tr><tr><td><code>release-fast</code></td><td>none</td></tr></tbody></table></div>
 <p>A function marked <code>@unchecked</code> has no checks in any build. It is meant for code that has been measured and needs the speed:</p>
 <pre class="code"><code><span class="a">@unchecked</span>

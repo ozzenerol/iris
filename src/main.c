@@ -20,6 +20,11 @@ static const char runtimeSource[] = {
 #include "runtime.inc"
     0};
 
+/* runtime/gdb.py, turned into bytes by the Makefile */
+const char irisGdbScript[] = {
+#include "gdb.inc"
+    0};
+
 static void usage(FILE *out) {
     fputs("usage: iris <command> [arguments]\n"
           "\n"
@@ -35,6 +40,8 @@ static void usage(FILE *out) {
           "  mod init [path]              make iris.mod: this folder becomes a project\n"
           "  get <package>@<version>      download a package and add it to iris.mod\n"
           "  lsp                          the language server, for editors\n"
+          "  gdb [arguments]              run gdb with the pretty printers for Iris values\n"
+          "  gdb --printers               print the path of the pretty printers' script\n"
           "  doc <module>[.name]          the documentation of a module, a file or a name\n"
           "  c <header.h>...              show what import c makes of C headers\n"
           "  parse [--snippet] <file>     print the syntax tree\n"
@@ -400,6 +407,8 @@ static bool runtimeCacheDir(char *buf, size_t n) {
 static bool cachedRuntime(char **flags, int nflags, const char *rtPath, char *obj, size_t n) {
     uint64_t h = 1469598103934665603ULL;
     for (const char *p = runtimeSource; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    /* the object names its source file for debuggers */
+    for (const char *p = rtPath; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
     for (int i = 0; i < nflags; i++) {
         for (const char *p = flags[i]; *p; p++) h = (h ^ (unsigned char)*p) * 1099511628211ULL;
         h = (h ^ 0xff) * 1099511628211ULL;
@@ -427,13 +436,55 @@ static bool cachedRuntime(char **flags, int nflags, const char *rtPath, char *ob
     return true;
 }
 
+/* iris gdb: gdb with runtime/gdb.py loaded first. --printers prints the
+ * path of the script instead, for a tool that starts gdb itself. */
+static int cmdGdb(int argc, char **argv) {
+    const char *script = irisVersionFile("gdb/iris_printers.py", irisGdbScript);
+    if (!script) {
+        fprintf(stderr, "iris: can't write the pretty printers' script; set IRIS_PATH to a folder iris can write\n");
+        return 1;
+    }
+    if (argc == 3 && strcmp(argv[2], "--printers") == 0) {
+        printf("%s\n", script);
+        free((char *)script);
+        return 0;
+    }
+    char *source = malloc(strlen(script) + 8);
+    sprintf(source, "source %s", script);
+    char **args = calloc((size_t)argc + 5, sizeof(char *));
+    int n = 0;
+    args[n++] = "gdb";
+    args[n++] = "-iex";
+    args[n++] = source;
+    /* the program's own copy of the script is loaded already: gdb need not
+     * ask for it with its auto-load safe-path warning */
+    args[n++] = "-iex";
+    args[n++] = "set auto-load python-scripts off";
+    for (int i = 2; i < argc; i++) args[n++] = argv[i];
+    args[n] = NULL;
+    execvp("gdb", args);
+    fprintf(stderr, "iris: can't run gdb; install it\n");
+    return 127;
+}
+
 /* Compiles the IR with clang into out, linking the C libraries named. */
 static bool compileIR(const char *ir, const char *out, BuildMode mode, const char *dir, const char **links,
                       int nlinks) {
     char llPath[4200], rtPath[4200];
     snprintf(llPath, sizeof llPath, "%s/program.ll", dir);
     snprintf(rtPath, sizeof rtPath, "%s/rt.c", dir);
-    if (!writeText(llPath, ir, strlen(ir)) || !writeText(rtPath, runtimeSource, sizeof runtimeSource - 1)) {
+    /* the runtime compiles from a copy that stays on disk, so a debugger
+     * shows its source; a temporary copy when that can't be written */
+    char *kept = (char *)irisVersionFile("runtime/rt.c", runtimeSource);
+    bool useKept = kept && strlen(kept) < sizeof rtPath;
+    if (useKept) {
+        snprintf(rtPath, sizeof rtPath, "%s", kept);
+    }
+    free(kept);
+    if (!useKept && !writeText(rtPath, runtimeSource, sizeof runtimeSource - 1)) {
+        return false;
+    }
+    if (!writeText(llPath, ir, strlen(ir))) {
         return false;
     }
     const char *cc = getenv("IRIS_CC");
@@ -1104,6 +1155,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "lsp") == 0) {
         return cmdLsp();
+    }
+    if (strcmp(cmd, "gdb") == 0) {
+        return cmdGdb(argc, argv);
     }
     if (strcmp(cmd, "doc") == 0) {
         return cmdDoc(argc, argv);
