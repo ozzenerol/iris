@@ -13,18 +13,14 @@ import net, quic
 
 void echo(quic.Stream s) {
     defer s.close()
-    scoped String got = s.readAll() catch e {
-        return
-    }
+    scoped String got = s.readAll() catch return
     s.write("you sent {got.len} bytes: {got}") catch e { }
     s.closeWrite()
 }
 
 void handle(quic.Conn c) {
     for {
-        s := c.acceptStream() catch e {
-            break
-        }
+        s := c.acceptStream() catch break
         spawn echo(s)
     }
     c.close()
@@ -32,9 +28,7 @@ void handle(quic.Conn c) {
 
 void serve(quic.Listener ln) {
     for {
-        c := ln.accept() catch e {
-            return
-        }
+        c := ln.accept() catch return
         spawn handle(c)
     }
 }

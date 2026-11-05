@@ -1,0 +1,12 @@
+// error: 7: sync is a standard library module that isn't imported; add import sync
+// error: 8: sync is a standard library module that isn't imported; add import sync
+// error: 9: foo is not an imported module
+// error: 10: the module json has no Mapp
+import json
+
+sync.Map[i16, str] clients
+sync.WaitGroup group
+foo.Map[i16, str] other
+json.Mapp[i16, str] typo
+
+void main() {}

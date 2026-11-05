@@ -205,9 +205,7 @@ interactive: false</code></pre>
     term.<span class="f">historyFile</span>(<span class="s">&quot;/tmp/calc_history&quot;</span>)
 
     <span class="k">for</span> {
-        line := term.<span class="f">readLine</span>(<span class="s">&quot;[cyan]calc&gt;[/] &quot;</span>) <span class="k">catch</span> e {
-            <span class="k">break</span>
-        }
+        line := term.<span class="f">readLine</span>(<span class="s">&quot;[cyan]calc&gt;[/] &quot;</span>) <span class="k">catch</span> <span class="k">break</span>
         <span class="k">defer</span> line.<span class="f">free</span>()
 
         <span class="k">if</span> line == <span class="s">&quot;quit&quot;</span> {

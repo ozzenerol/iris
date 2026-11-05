@@ -1,0 +1,55 @@
+// expect: 12 0
+// expect: 1 1
+// expect: 3 3
+// expect: parsed 7
+// expect: closed 2
+// expect: not a number: z
+// catch return, catch break and catch continue leave without naming the
+// error; defer still runs on the way out.
+import str
+
+enum Bad { nope }
+
+!i64 parse(str s) => try str.parseInt(s)
+
+i64 orZero(str s) {
+    n := parse(s) catch return 0
+    return n
+}
+
+void count(str[] xs) {
+    for x in xs {
+        n := parse(x) catch continue
+        if n < 0 {
+            break
+        }
+        m := parse(x) catch break
+        print("{n} {m}")
+    }
+}
+
+i64 closed = 0
+
+void say(str s) {
+    defer closed += 1
+    n := parse(s) catch return
+    print("parsed {n}")
+}
+
+!i64 strict(str s) {
+    n := parse(s) catch return error(Bad.nope, "not a number: {s}")
+    return n
+}
+
+void main() {
+    print("{orZero("12")} {orZero("x")}")
+    count(["1", "x", "3", "-1", "5"])
+    say("7")
+    say("y")
+    print("closed {closed}")
+    v := strict("z") catch e {
+        print(e.message)
+        return
+    }
+    print("{v}")
+}

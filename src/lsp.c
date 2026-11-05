@@ -781,25 +781,38 @@ static int wordCol(Source *src, int line, int col, const char *name) {
     return col;
 }
 
+/* Where the name of a node is written: its first column and its length.
+ * False for a node that has no name in the text. */
+static bool nameSpan(Source *src, Node *n, Node *parent, int *start, int *len) {
+    /* self is written as the receiver's type, Service.add: the type is what's there */
+    if (!n->name || (n->kind == N_PARAM && (n->flags & F_SELF))) return false;
+    if (!(n->kind == N_IDENT || n->kind == N_FIELD_ACCESS || n->kind == N_FUNC || n->kind == N_STRUCT ||
+          n->kind == N_ENUM || n->kind == N_CONST || n->kind == N_VAR || n->kind == N_PARAM || n->kind == N_FIELD ||
+          n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME ||
+          n->kind == N_FIELD_INIT || n->kind == N_ENUM_DOT || n->kind == N_TYPE_PARAM)) {
+        return false;
+    }
+    *start = n->col;
+    *len = nameLen(n);
+    const char *dot = n->kind == N_T_NAME ? strrchr(n->name, '.') : NULL;
+    if (dot) *start += (int)(dot + 1 - n->name);     /* sqlite.Db: the Db */
+    if (n->kind == N_FUNC && (n->b || (n->flags & F_INSTANCE))) *start = methodNameCol(src, n);
+    if (n->kind == N_ENUM_DOT) (*len)++;            /* .admin, from the dot */
+    if (parent && parent->kind == N_CATCH && parent->d == n) {
+        *start = wordCol(src, n->line, n->col + 5, n->name);
+        if (parent->ival) *len = 0;                 /* catch return: the error has no name */
+    }
+    return true;
+}
+
 static void walk(Find *f, Node *n, Node *parent, Node *fn) {
     if (!n) return;
-    /* self is written as the receiver's type, Service.add: the type is what's there */
-    if (n->src == f->src && n->line == f->line && n->name && !(n->kind == N_PARAM && (n->flags & F_SELF)) &&
-        (n->kind == N_IDENT || n->kind == N_FIELD_ACCESS || n->kind == N_FUNC || n->kind == N_STRUCT ||
-         n->kind == N_ENUM || n->kind == N_CONST || n->kind == N_VAR || n->kind == N_PARAM || n->kind == N_FIELD ||
-         n->kind == N_ENUM_MEMBER || n->kind == N_TYPEDEF || n->kind == N_INTERFACE || n->kind == N_T_NAME ||
-         n->kind == N_FIELD_INIT || n->kind == N_ENUM_DOT || n->kind == N_TYPE_PARAM)) {
-        int start = n->col, len = nameLen(n);
-        const char *dot = n->kind == N_T_NAME ? strrchr(n->name, '.') : NULL;
-        if (dot) start += (int)(dot + 1 - n->name);     /* sqlite.Db: the Db */
-        if (n->kind == N_FUNC && (n->b || (n->flags & F_INSTANCE))) start = methodNameCol(f->src, n);
-        if (n->kind == N_ENUM_DOT) len++;               /* .admin, from the dot */
-        if (parent && parent->kind == N_CATCH && parent->d == n) start = wordCol(f->src, n->line, n->col + 5, n->name);
-        if (f->col >= start && f->col < start + len) {
-            f->best = n;
-            f->parent = parent;
-            f->func = fn;
-        }
+    int start, len;
+    if (n->src == f->src && n->line == f->line && nameSpan(f->src, n, parent, &start, &len) && f->col >= start &&
+        f->col < start + len) {
+        f->best = n;
+        f->parent = parent;
+        f->func = fn;
     }
     if (n->kind == N_FUNC) fn = n;
     walk(f, n->a, n, fn);
@@ -1027,6 +1040,12 @@ static void docComment(StrBuf *b, Node *d) {
 
 /* ---------------------------------------------------------------- requests (in the child) */
 
+/* The keywords of Iris, as in lexer.c. */
+static const char *irisWords[] = {"if", "else", "for", "in", "match", "break", "continue", "return", "struct",
+                                  "union", "enum", "interface", "type", "dyn", "pub", "const", "comptime", "when",
+                                  "import", "try", "catch", "defer", "errdefer", "scoped", "spawn", "select", "chan",
+                                  "thread", "threadlocal", "asm", "test", "not", "and", "or", "is", "true", "false", "null"};
+
 static void reply(StrBuf *out, J *id, const char *result) {
     StrBuf b = {0};
     sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
@@ -1229,6 +1248,245 @@ static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line,
     reply(out, id, r.buf);
     free(u);
     sbFree(&r);
+}
+
+/* ---------------------------------------------------------------- references and rename */
+
+typedef struct {
+    Source *src;
+    int line, col, len;
+} Ref;
+
+typedef struct {
+    Program *prog;
+    Node *decl;
+    Ref *items;
+    int n, cap;
+} Refs;
+
+/* Two nodes for one declaration. A checked copy of a generic has copies of
+ * its locals at the same place in the text. */
+static bool sameDecl(Node *a, Node *b) {
+    if (a == b) return true;
+    if (!a || !b || a->src != b->src || a->line != b->line || a->col != b->col || a->kind != b->kind) return false;
+    int la = writtenLen(a->name), lb = writtenLen(b->name);
+    return la == lb && (la == 0 || strncmp(a->name, b->name, (size_t)la) == 0);
+}
+
+static bool isStdSource(Source *src) {
+    return !src || !src->path || strncmp(src->path, "std/", 4) == 0;
+}
+
+static void addRef(Refs *r, Source *src, int line, int col, int len) {
+    for (int i = 0; i < r->n; i++) {
+        if (r->items[i].src == src && r->items[i].line == line && r->items[i].col == col) return;
+    }
+    if (r->n == r->cap) {
+        r->cap = r->cap ? r->cap * 2 : 32;
+        r->items = realloc(r->items, (size_t)r->cap * sizeof(Ref));
+    }
+    r->items[r->n++] = (Ref){src, line, col, len};
+}
+
+static void refWalk(Refs *r, Node *n, Node *parent, Node *fn) {
+    if (!n) return;
+    int start, len;
+    if (!isStdSource(n->src) && nameSpan(n->src, n, parent, &start, &len) && len > 0) {
+        Node *d = declOf(n, parent);
+        if (!d) d = typeNamed(r->prog, n->src, n, fn);
+        if (n->kind == N_ENUM_DOT) {
+            start++;        /* .admin: the name after the dot */
+            len--;
+        }
+        if (d && sameDecl(d, r->decl)) addRef(r, n->src, n->line, start, len);
+    }
+    if (n->kind == N_FUNC) fn = n;
+    refWalk(r, n->a, n, fn);
+    refWalk(r, n->b, n, fn);
+    refWalk(r, n->c, n, fn);
+    refWalk(r, n->d, n, fn);
+    for (int i = 0; i < n->list.len; i++) refWalk(r, n->list.items[i], n, fn);
+    for (int i = 0; i < n->list2.len; i++) refWalk(r, n->list2.items[i], n, fn);
+}
+
+/* Every place in the project's files that names the declaration d: the code
+ * as written, then the checked copies of generics. */
+static Refs findRefs(Program *prog, Node *d) {
+    Refs r = {prog, d, NULL, 0, 0};
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m->isStd || m->isC) continue;
+        for (int i = 0; i < m->files.len; i++) refWalk(&r, m->files.items[i], NULL, NULL);
+    }
+    for (int i = 0; i < prog->instances.len; i++) refWalk(&r, prog->instances.items[i], NULL, NULL);
+    return r;
+}
+
+static void putLocation(StrBuf *b, Ref *ref) {
+    char *u = fileUri(ref->src->path);
+    sbPuts(b, "{\"uri\":");
+    putStr(b, u ? u : "");
+    sbPuts(b, ",\"range\":");
+    putRange(b, ref->src, ref->line, ref->col, ref->len);
+    sbPutc(b, '}');
+    free(u);
+}
+
+static void references(StrBuf *out, J *id, Program *prog, Source *src, int line, int col, bool withDecl) {
+    Node *d = declAt(prog, src, line, col);
+    if (!d || d->kind == N_IMPORT) {
+        reply(out, id, "[]");
+        return;
+    }
+    Refs r = findRefs(prog, d);
+    StrBuf b = {0};
+    sbPutc(&b, '[');
+    bool first = true;
+    for (int i = 0; i < r.n; i++) {
+        Ref *ref = &r.items[i];
+        int start, len;
+        if (!withDecl && ref->src == d->src && ref->line == d->line && nameSpan(d->src, d, NULL, &start, &len) &&
+            start == ref->col) {
+            continue;       /* the declaration itself */
+        }
+        if (!first) sbPutc(&b, ',');
+        first = false;
+        putLocation(&b, ref);
+    }
+    sbPutc(&b, ']');
+    reply(out, id, b.buf);
+    sbFree(&b);
+    free(r.items);
+}
+
+static void replyError(StrBuf *out, J *id, const char *msg) {
+    StrBuf b = {0};
+    sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    putId(&b, id);
+    sbPuts(&b, ",\"error\":{\"code\":-32803,\"message\":");
+    putStr(&b, msg);
+    sbPuts(&b, "}}");
+    sbPutn(out, b.buf, b.len);
+    sbPutc(out, 0);
+    sbFree(&b);
+}
+
+/* The declaration that a rename at the cursor changes, or NULL and why not. */
+static Node *renameTarget(Program *prog, Source *src, int line, int col, const char **why) {
+    Node *d = declAt(prog, src, line, col);
+    if (!d && builtinAt(prog, src, line, col)) {
+        *why = "a built-in name can't be renamed";
+        return NULL;
+    }
+    if (!d || !d->name || d->kind == N_IMPORT) {
+        *why = "there is no name to rename here";
+        return NULL;
+    }
+    if (isStdSource(d->src)) {
+        *why = "a name of the standard library can't be renamed";
+        return NULL;
+    }
+    return d;
+}
+
+static bool validName(const char *s) {
+    if (!s || !(isalpha((unsigned char)*s) || *s == '_')) return false;
+    for (const char *p = s; *p; p++) {
+        if (!isalnum((unsigned char)*p) && *p != '_') return false;
+    }
+    if (strcmp(s, "_") == 0 || strcmp(s, "self") == 0) return false;
+    for (size_t i = 0; i < sizeof irisWords / sizeof irisWords[0]; i++) {
+        if (strcmp(s, irisWords[i]) == 0) return false;
+    }
+    return true;
+}
+
+static void prepareRename(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    const char *why = NULL;
+    Node *d = renameTarget(prog, src, line, col, &why);
+    Node *parent = NULL;
+    Node *n = d ? nodeAt(prog, src, line, col, &parent, NULL, false) : NULL;
+    if (!n) n = d ? nodeAt(prog, src, line, col, &parent, NULL, true) : NULL;
+    int start, len;
+    if (!d || !n || !nameSpan(src, n, parent, &start, &len) || len == 0) {
+        replyError(out, id, why ? why : "there is no name to rename here");
+        return;
+    }
+    if (n->kind == N_ENUM_DOT) {
+        start++;        /* .admin: the name after the dot */
+        len--;
+    }
+    StrBuf b = {0};
+    sbPuts(&b, "{\"range\":");
+    putRange(&b, src, n->line, start, len);
+    sbPuts(&b, ",\"placeholder\":");
+    putJsonString(&b, lineStartOf(src->text, src->len, n->line) + start - 1, (size_t)len);
+    sbPutc(&b, '}');
+    reply(out, id, b.buf);
+    sbFree(&b);
+}
+
+static void renameAll(StrBuf *out, J *id, Program *prog, Source *src, int line, int col, const char *newName) {
+    const char *why = NULL;
+    Node *d = renameTarget(prog, src, line, col, &why);
+    if (!d) {
+        replyError(out, id, why);
+        return;
+    }
+    if (!validName(newName)) {
+        char msg[400];
+        snprintf(msg, sizeof msg, "%s is not a valid name", newName ? newName : "the new name");
+        replyError(out, id, msg);
+        return;
+    }
+    Refs r = findRefs(prog, d);
+    StrBuf b = {0};
+    sbPuts(&b, "{\"changes\":{");
+    bool firstFile = true;
+    for (int i = 0; i < r.n; i++) {
+        Source *s = r.items[i].src;
+        bool seen = false;
+        for (int k = 0; k < i && !seen; k++) seen = r.items[k].src == s;
+        if (seen) continue;
+        char *u = fileUri(s->path);
+        if (!firstFile) sbPutc(&b, ',');
+        firstFile = false;
+        putStr(&b, u ? u : "");
+        sbPuts(&b, ":[");
+        bool first = true;
+        for (int k = i; k < r.n; k++) {
+            Ref *ref = &r.items[k];
+            if (ref->src != s) continue;
+            if (!first) sbPutc(&b, ',');
+            first = false;
+            sbPuts(&b, "{\"range\":");
+            putRange(&b, s, ref->line, ref->col, ref->len);
+            sbPuts(&b, ",\"newText\":");
+            putStr(&b, newName);
+            sbPutc(&b, '}');
+        }
+        sbPutc(&b, ']');
+        free(u);
+    }
+    sbPuts(&b, "}}");
+    reply(out, id, b.buf);
+    sbFree(&b);
+    free(r.items);
+}
+
+/* The folder with iris.mod above the file, or "" when there is none. */
+static void projectRoot(const char *path, char *root, size_t size) {
+    root[0] = 0;
+    char cur[4096];
+    snprintf(cur, sizeof cur, "%s", path);
+    for (char *slash = strrchr(cur, '/'); slash && slash != cur; slash = strrchr(cur, '/')) {
+        *slash = 0;
+        char mod[4200];
+        snprintf(mod, sizeof mod, "%s/iris.mod", cur);
+        if (access(mod, F_OK) == 0) {
+            snprintf(root, size, "%s", cur);
+            return;
+        }
+    }
 }
 
 static int symbolKind(Node *d) {
@@ -1588,7 +1846,7 @@ static void localNames(Items *it, Source *src, Node *n, size_t cursor) {
         }
         break;
     case N_CATCH:
-        if (n->name && inBlock(src, n->c, cursor)) addItem(it, n->name, 6, "Error");
+        if (n->name && !n->ival && inBlock(src, n->c, cursor)) addItem(it, n->name, 6, "Error");
         break;
     default:
         break;
@@ -1696,11 +1954,7 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
     static const char *types[] = {"void", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
                                   "str", "String", "Error", "Duration", "Mutex", "Thread", "Atomic"};
     for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) addItem(&it, types[i], 7, "type");
-    static const char *words[] = {"if", "else", "for", "in", "match", "break", "continue", "return", "struct",
-                                  "union", "enum", "interface", "type", "dyn", "pub", "const", "comptime", "when",
-                                  "import", "try", "catch", "defer", "errdefer", "scoped", "spawn", "select", "chan",
-                                  "thread", "threadlocal", "asm", "test", "not", "and", "or", "is", "true", "false", "null"};
-    for (size_t i = 0; i < sizeof words / sizeof words[0]; i++) addItem(&it, words[i], 14, NULL);
+    for (size_t i = 0; i < sizeof irisWords / sizeof irisWords[0]; i++) addItem(&it, irisWords[i], 14, NULL);
     sbPutc(&it.r, ']');
     reply(out, id, it.r.buf);
     sbFree(&it.r);
@@ -1972,6 +2226,7 @@ static void handleInChild(J *msg, StrBuf *out) {
     }
     /* a line being typed seldom parses: answer from what the parser could read */
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/hover") == 0 ||
+               strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
     if (gLenient && doc) closeOpen(doc);
     /* time. before import time: the module is loaded by an import at the end,
@@ -2008,8 +2263,22 @@ static void handleInChild(J *msg, StrBuf *out) {
         src = NULL;
         ndiags = 0;
     } else {
-        prog = path ? analyze(path) : NULL;
-        src = path ? sourceOf(prog, path) : NULL;
+        prog = NULL;
+        src = NULL;
+        bool whole = strcmp(method, "textDocument/references") == 0 || strcmp(method, "textDocument/rename") == 0;
+        char root[4096] = "";
+        if (whole && path) projectRoot(path, root, sizeof root);
+        const char *slash = path ? strrchr(path, '/') : NULL;
+        if (root[0] && slash && (strlen(root) != (size_t)(slash - path) || strncmp(root, path, strlen(root)) != 0)) {
+            /* a file in a module of the project: the root's program also has
+             * the files that import it */
+            prog = analyze(root);
+            src = sourceOf(prog, path);
+        }
+        if (!src) {
+            prog = path ? analyze(path) : NULL;
+            src = path ? sourceOf(prog, path) : NULL;
+        }
     }
     free(std);
     int col = doc ? byteCol(doc->text, doc->len, line, character) : character + 1;
@@ -2019,6 +2288,14 @@ static void handleInChild(J *msg, StrBuf *out) {
         definition(out, id, prog, src, line, col);
     } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
         symbols(out, id, prog, src);
+    } else if (strcmp(method, "textDocument/references") == 0) {
+        J *ctx = jget(params, "context");
+        J *decl = ctx ? jget(ctx, "includeDeclaration") : NULL;
+        references(out, id, prog, src, line, col, !decl || decl->type != 'f');
+    } else if (strcmp(method, "textDocument/prepareRename") == 0) {
+        prepareRename(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/rename") == 0) {
+        renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
     } else if (strcmp(method, "textDocument/completion") == 0) {
         if (inImport) {
             importCompletion(out, id);
@@ -2132,7 +2409,8 @@ int cmdLsp(void) {
             sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
             putId(&b, id);
             sbPrintf(&b, ",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"hoverProvider\":true,"
-                         "\"definitionProvider\":true,\"documentSymbolProvider\":true,"
+                         "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
+                         "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]}},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
@@ -2170,6 +2448,8 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/documentSymbol") == 0 ||
                    strcmp(method, "textDocument/completion") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
+                   strcmp(method, "textDocument/references") == 0 ||
+                   strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||
                    strcmp(method, "textDocument/formatting") == 0) {
             runInChild(msg);
         } else if (id) {

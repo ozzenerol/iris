@@ -29,6 +29,7 @@ typedef struct {
 static Node *parseExpr(Parser *p);
 static Node *parseBlock(Parser *p);
 static Node *parseStmt(Parser *p);
+static Node *parseStmtCore(Parser *p);
 static Node *parseSimpleStmt(Parser *p, bool allowList);
 static Node *parseGuard(Parser *p, Node *s);
 static Node *parseIf(Parser *p);
@@ -1142,6 +1143,14 @@ static Node *parseOperand(Parser *p) {
         } else if (at(p, T_IDENT) && peekAt(p, 1)->kind == K_MATCH) {
             c->name = tokText(p, next(p));
             c->c = parseMatch(p);
+        } else if (at(p, K_RETURN) || at(p, K_BREAK) || at(p, K_CONTINUE)) {
+            /* catch return, catch break, catch continue: catch e { return }
+             * with an error no one names ("catch" can't be a name) */
+            c->name = "catch";
+            c->ival = 1;
+            Node *b = node(p, N_BLOCK, peek(p));
+            push(p, &b->list, parseStmtCore(p));
+            c->c = b;
         } else {
             c->b = parseUnary(p);
         }

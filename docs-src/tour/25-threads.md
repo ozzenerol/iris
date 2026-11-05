@@ -74,9 +74,7 @@ Atomic[i64] accepted
 
 void acceptLoop(net.Listener ln) {
     for {
-        c := ln.accept() catch e {
-            return
-        }
+        c := ln.accept() catch return
         accepted.add(1)
         c.write("hi\n") catch e { }
         c.close()

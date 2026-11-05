@@ -46,15 +46,11 @@ import net
 
 // Reads the lines of one connection and passes each one on.
 void serve(net.Listener ln, chan[String] lines) {
-    conn := ln.accept() catch e {
-        return
-    }
+    conn := ln.accept() catch return
     defer conn.close()
 
     for {
-        line := conn.readLine(1024) catch e {
-            return
-        }
+        line := conn.readLine(1024) catch return
         lines <- line
     }
 }
@@ -125,9 +121,7 @@ void serve(chan[u16] ready) {
     }
     ready <- ln.port
 
-    conn := ln.accept() catch e {
-        return
-    }
+    conn := ln.accept() catch return
     defer conn.close()
     conn.write("220 ready\n") catch e { }
 }
@@ -222,17 +216,11 @@ import net
 
 // Asks a server for a line and passes the reply on.
 void ask(u16 port, chan[String] replies) {
-    c := net.dial("127.0.0.1", port) catch e {
-        return
-    }
+    c := net.dial("127.0.0.1", port) catch return
     defer c.close()
 
-    c.write("PING\n") catch e {
-        return
-    }
-    line := c.readLine() catch e {
-        return
-    }
+    c.write("PING\n") catch return
+    line := c.readLine() catch return
     replies <- line
 }
 

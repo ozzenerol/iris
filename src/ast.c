@@ -493,7 +493,9 @@ static void printNode(Node *n, int depth, const char *label) {
         break;
     case N_CATCH:
         sbPuts(&b, "catch");
-        if (n->name) {
+        if (n->ival) {
+            sbPuts(&b, " (short)");
+        } else if (n->name) {
             sbPrintf(&b, " %s", n->name);
         }
         line(depth, label, b.buf);

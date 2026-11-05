@@ -9,9 +9,7 @@ void handle(net.Conn c) {
     defer c.close()
 
     for {
-        line := c.readLine() catch e {
-            return
-        }
+        line := c.readLine() catch return
         c.write(format("echo: {line}\n")) catch e {
             line.free()
             return
@@ -22,9 +20,7 @@ void handle(net.Conn c) {
 
 void server(net.Listener ln) {
     for {
-        conn := ln.accept() catch e {
-            return
-        }
+        conn := ln.accept() catch return
         spawn handle(conn)
     }
 }
@@ -174,14 +170,10 @@ true
 import net
 
 void upper(net.Listener ln) {
-    c := ln.accept() catch e {
-        return
-    }
+    c := ln.accept() catch return
     defer c.close()
 
-    scoped String line = c.readLine() catch e {
-        return
-    }
+    scoped String line = c.readLine() catch return
     c.write("{line} (from the backend)\n") catch e { }
 }
 
@@ -195,14 +187,10 @@ void oneWay(net.Conn *to, net.Conn *from, chan[i64] done) {
 }
 
 void proxy(net.Listener ln, u16 backend) {
-    client := ln.accept() catch e {
-        return
-    }
+    client := ln.accept() catch return
     defer client.close()
 
-    server := net.dial("127.0.0.1", backend, timeout: 2s) catch e {
-        return
-    }
+    server := net.dial("127.0.0.1", backend, timeout: 2s) catch return
     defer server.close()
 
     done := chan[i64](2)
@@ -245,14 +233,10 @@ void route(net.Conn client) {
     defer client.close()
     client.setTimeout(5s)
 
-    name := client.peekServerName() catch e {
-        return
-    }
+    name := client.peekServerName() catch return
     port := if name == "api.example.com" { 9001 } else { 9002 }
 
-    backend := net.dial("127.0.0.1", u16(port)) catch e {
-        return
-    }
+    backend := net.dial("127.0.0.1", u16(port)) catch return
     defer backend.close()
     // copies both ways, as in the proxy above
 }

@@ -174,17 +174,22 @@ static Node *like(Checker *c, NodeKind kind, Node *at) {
 
 /* A name that isn't declared: if it is a standard library module, the
  * import is what's missing. */
-static void notDeclared(Checker *c, Node *at, const char *name) {
+static bool isStdModule(const char *name) {
     static const char *mods[64];
     static int nmods = -1;
     if (nmods < 0) {
         nmods = stdModuleNames(mods, 64);
     }
     for (int i = 0; i < nmods; i++) {
-        if (strcmp(mods[i], name) == 0) {
-            error(c, at, "%s is a standard library module that isn't imported; add import %s", name, name);
-            return;
-        }
+        if (strcmp(mods[i], name) == 0) return true;
+    }
+    return false;
+}
+
+static void notDeclared(Checker *c, Node *at, const char *name) {
+    if (isStdModule(name)) {
+        error(c, at, "%s is a standard library module that isn't imported; add import %s", name, name);
+        return;
     }
     error(c, at, "%s is not declared", name);
 }
@@ -921,6 +926,27 @@ static Type *typeFromName(Checker *c, const char *name, Node *at, bool report) {
     return &tyError;
 }
 
+/* mod.Type that names nothing: say what is wrong with it. */
+static void qualifiedTypeError(Checker *c, Node *at, const char *name) {
+    const char *dot = strchr(name, '.');
+    char mod[128];
+    size_t n = (size_t)(dot - name) < sizeof mod - 1 ? (size_t)(dot - name) : sizeof mod - 1;
+    memcpy(mod, name, n);
+    mod[n] = 0;
+    Node *imp = lookupModule(c, mod);
+    if (!imp) {
+        if (isStdModule(mod)) {
+            error(c, at, "%s is a standard library module that isn't imported; add import %s", mod, mod);
+        } else {
+            error(c, at, "%s is not an imported module", mod);
+        }
+    } else if (findIn((Scope *)imp->scope, dot + 1)) {
+        error(c, at, "%s isn't pub, so only its own module can use it", name);
+    } else {
+        error(c, at, "the module %s has no %s", mod, dot + 1);
+    }
+}
+
 static Type *resolveType(Checker *c, Node *t) {
     bool fieldType = c->fieldType;
     c->fieldType = false;
@@ -941,20 +967,7 @@ static Type *resolveType(Checker *c, Node *t) {
             }
         }
         if (strchr(t->name, '.') && !lookup(c, t->name)) {
-            /* mod.Type: say what is wrong with it */
-            const char *dot = strchr(t->name, '.');
-            char mod[128];
-            size_t n = (size_t)(dot - t->name) < sizeof mod - 1 ? (size_t)(dot - t->name) : sizeof mod - 1;
-            memcpy(mod, t->name, n);
-            mod[n] = 0;
-            Node *imp = lookupModule(c, mod);
-            if (!imp) {
-                error(c, t, "%s is not an imported module", mod);
-            } else if (findIn((Scope *)imp->scope, dot + 1)) {
-                error(c, t, "%s isn't pub, so only its own module can use it", t->name);
-            } else {
-                error(c, t, "the module %s has no %s", mod, dot + 1);
-            }
+            qualifiedTypeError(c, t, t->name);
             return &tyError;
         }
         t->type = typeFromName(c, t->name, t, true);   /* kept for the language server */
@@ -1058,6 +1071,8 @@ static Type *resolveType(Checker *c, Node *t) {
         if (!d || d->kind != N_STRUCT || !d->list2.len) {
             if (d && d->kind == N_STRUCT) {
                 error(c, t, "%s is not generic", base->name);
+            } else if (!d && base->kind == N_T_NAME && strchr(base->name, '.')) {
+                qualifiedTypeError(c, base, base->name);
             } else {
                 error(c, t, "%s is not a generic struct", base->kind == N_T_NAME ? base->name : "this");
             }
@@ -5054,8 +5069,11 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
     Type *value = t->kind == TY_RESULT ? t->elem : &tyError;
     if (e->b) {
         if (value == &tyVoid) {
-            error(c, e->b, "this call gives no value, so catch can't give one; use catch e { ... }");
-            checkExpr(c, &e->b, NULL);
+            /* catch panic(...) leaves, so it needs no value */
+            Type *bt = checkExpr(c, &e->b, NULL);
+            if (!isErr(bt) && bt->kind != TY_NORETURN) {
+                error(c, e->b, "this call gives no value, so catch can't give one; use catch e { ... }");
+            }
             return setType(e, &tyVoid);
         }
         checkExpr(c, &e->b, isErr(value) ? expected : value);
@@ -5087,6 +5105,16 @@ static Type *checkCatch(Checker *c, Node *e, Type *expected) {
         res = value;
     }
     popScope(c);
+    if (e->ival && e->c->list.len == 1 && e->c->list.items[0]->kind == N_RETURN && c->func &&
+        c->func->type && c->func->type->kind == TY_RESULT) {
+        /* catch return in a function that can fail: success, unless it
+           returns an error of its own */
+        Node *r = e->c->list.items[0];
+        if (!r->a || !r->a->type || r->a->type->kind != TY_ERRVAL) {
+            error(c, r, "%s can fail, so catch return would drop the error; use try to pass it up, or catch e { ... }",
+                  c->func->name);
+        }
+    }
     return setType(e, res);
 }
 

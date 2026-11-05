@@ -308,9 +308,7 @@ void serve(net.Listener ln) {
     try c.write("GET / HTTP/1.1\r\nHost: localhost\r\nCookie: user=ada; theme=dark\r\nConnection: close\r\n\r\n")
 
     for {
-        scoped String line = c.readLine() catch e {
-            break
-        }
+        scoped String line = c.readLine() catch break
         if str.startsWith(line, "Set-Cookie") || str.startsWith(line, "welcome") {
             print(line)
         }
@@ -592,9 +590,7 @@ import http, net, str
 
 void ticks(http.Request *req, http.Response *res) {
     for i in 1..4 {
-        res.event("tick {i}") catch e {
-            return
-        }
+        res.event("tick {i}") catch return
         sleep(10ms)
     }
 }

@@ -119,9 +119,7 @@ if (t !== "system") h.dataset.theme = t;</script>
 
 <span class="t">void</span> <span class="f">acceptLoop</span>(net.<span class="t">Listener</span> ln) {
     <span class="k">for</span> {
-        c := ln.<span class="f">accept</span>() <span class="k">catch</span> e {
-            <span class="k">return</span>
-        }
+        c := ln.<span class="f">accept</span>() <span class="k">catch</span> <span class="k">return</span>
         accepted.<span class="f">add</span>(<span class="n">1</span>)
         c.<span class="f">write</span>(<span class="s">&quot;hi</span><span class="e">\n</span><span class="s">&quot;</span>) <span class="k">catch</span> e { }
         c.<span class="f">close</span>()

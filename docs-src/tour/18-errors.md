@@ -159,6 +159,58 @@ log not flushed: the disk is full
 
 `e.message` stays the same throughout the block, even if the block handles other errors.
 
+## Leaving on an error
+
+When all a handler does is leave, `return`, `break` or `continue` can follow `catch` directly. It needs no `e` and no braces. `catch return` is `catch e { return }`, so `defer` and `scoped` cleanup still run:
+
+```iris run
+import str
+
+i64 portOr(str s) {
+    n := str.parseInt(s) catch return 443
+    return n
+}
+
+void main() {
+    print("{portOr("8443")} {portOr("https")}")
+
+    i64 total = 0
+    for s in ["10", "ten", "20", "stop", "30"] {
+        if s == "stop" {
+            break
+        }
+        n := str.parseInt(s) catch continue // skip what isn't a number
+        total += n
+    }
+    print("{total}")
+}
+```
+
+```output
+8443 443
+30
+```
+
+A server's read loop gets shorter the same way:
+
+```iris
+for {
+    scoped line := conn.readLine() catch return
+    conn.write("echo: {line}\n") catch return
+}
+```
+
+`catch panic("...")` stops the program instead. It works on any call, with a value or without.
+
+In a function that can fail, `catch return` would turn the failure into a success, so it is a compile error. Use `try` to pass the error up. `catch return error(...)` returns an error of its own and is allowed:
+
+```iris error
+!i64 load(str s) {
+    n := str.parseInt(s) catch return 0 // error: load can fail, so catch return would drop the error
+    return n
+}
+```
+
 ## Branching on the code
 
 `catch e match e.code` chooses by code. Each arm gives a value or leaves.

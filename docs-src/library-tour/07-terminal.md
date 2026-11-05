@@ -206,9 +206,7 @@ void main() {
     term.historyFile("/tmp/calc_history")
 
     for {
-        line := term.readLine("[cyan]calc>[/] ") catch e {
-            break
-        }
+        line := term.readLine("[cyan]calc>[/] ") catch break
         defer line.free()
 
         if line == "quit" {

@@ -378,9 +378,7 @@ void listen(str address, chan[bool] ready, chan[bool] done) {
     ready <- true
 
     for _ in 0..2 {
-        scoped m := sub.next() catch e {
-            return
-        }
+        scoped m := sub.next() catch return
         print("{m.channel}: {m.data}")
     }
 }
