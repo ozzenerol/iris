@@ -219,6 +219,64 @@ def main():
     check("quick fix for time: %r" % acts, [a["title"] for a in acts] == ["import time"]
           and [(e["range"]["start"]["line"], e["newText"]) for e in edits] == [(1, "import time\n")])
 
+    # snippets for functions and methods, signature help, and the fields that
+    # a struct literal does not set yet
+    def ask(text, method):
+        """the result of the request at the | in text"""
+        at = text.index("|")
+        body = text.replace("|", "")
+        version[0] += 1
+        c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]},
+                                            "contentChanges": [{"text": body}]})
+        before = body[:at]
+        pos = {"line": before.count("\n"), "character": len(before.split("\n")[-1])}
+        r = c.request(method, {"textDocument": td, "position": pos})
+        return r and r.get("result")
+
+    head = ("struct P {\n    i64 x\n    i64 y\n    str name\n}\n\ni64 P.sum(i64 by) => self.x + by\n\n"
+            "i64 add(i64 a, i64 b) => a + b\n\nvoid main() {\n    p := P{x: 1, y: 2, name: \"a\"}\n")
+    got = {x["label"]: x for x in ask(head + "    ad|\n}\n", "textDocument/completion") or []}
+    snip = lambda name: (got.get(name, {}).get("insertText"), got.get(name, {}).get("insertTextFormat"))
+    check("snippet of add: %r" % (snip("add"),), snip("add") == ("add(${1:a}, ${2:b})", 2))
+    check("snippet of main: %r" % (snip("main"),), snip("main") == ("main()", 2))
+    check("snippet of print: %r" % (snip("print"),), snip("print") == ("print(${1:text})", 2))
+    check("no snippet for a type: %r" % (snip("P"),), snip("P") == (None, None))
+    got = {x["label"]: x for x in ask(head + "    p.|\n}\n", "textDocument/completion") or []}
+    check("snippet of a method: %r" % (snip("sum"),), snip("sum") == ("sum(${1:by})", 2))
+    check("no snippet for a field: %r" % (snip("x"),), snip("x") == (None, None))
+    check("signature help trigger characters", init["result"]["capabilities"].get("signatureHelpProvider") ==
+          {"triggerCharacters": ["(", ","]})
+
+    def sig(text):
+        r = ask(text, "textDocument/signatureHelp")
+        if not r:
+            return None
+        s = r["signatures"][r["activeSignature"]]
+        return s["label"], [s["label"][a:b] for a, b in (p["label"] for p in s["parameters"])], r["activeParameter"]
+
+    want = ("i64 add(i64 a, i64 b)", ["i64 a", "i64 b"])
+    check("signature at add(: %r" % (sig(head + "    n := add(|\n}\n"),), sig(head + "    n := add(|\n}\n") == want + (0,))
+    check("signature at add(1, : %r" % (sig(head + "    n := add(1, |\n}\n"),),
+          sig(head + "    n := add(1, |\n}\n") == want + (1,))
+    check("signature with the ) typed: %r" % (sig(head + "    n := add(1, |)\n}\n"),),
+          sig(head + "    n := add(1, |)\n}\n") == want + (1,))
+    check("signature in a literal in a call: %r" % (sig(head + "    n := add(P{x: 1, y: 2|}.x)\n}\n"),),
+          sig(head + "    n := add(P{x: 1, y: 2|}.x)\n}\n") == want + (0,))
+    check("signature of a method: %r" % (sig(head + "    n := p.sum(|\n}\n"),),
+          sig(head + "    n := p.sum(|\n}\n") == ("i64 P.sum(i64 by)", ["i64 by"], 0))
+    check("signature of print: %r" % (sig(head + "    print(|\n}\n"),),
+          sig(head + "    print(|\n}\n") == ("void print(str text)", ["str text"], 0))
+    check("no signature outside a call: %r" % (sig(head + "    n := 1|\n}\n"),), sig(head + "    n := 1|\n}\n") is None)
+
+    fields = lambda text: [x["label"] for x in ask(head + text, "textDocument/completion") or []]
+    check("fields of P{: %r" % fields("    q := P{|}\n}\n"), fields("    q := P{|}\n}\n") == ["x", "y", "name"])
+    check("fields of P{x: 1, : %r" % fields("    q := P{x: 1, |}\n}\n"), fields("    q := P{x: 1, |}\n}\n") == ["y", "name"])
+    check("fields on lines: %r" % fields("    q := P{\n        name: \"a, x: b\",\n        |\n    }\n}\n"),
+          fields("    q := P{\n        name: \"a, x: b\",\n        |\n    }\n}\n") == ["x", "y"])
+    check("a block is no literal", "p" in fields("    if p.x > 0 {\n        |\n    }\n}\n"))
+    # the last text has an error: the next test waits for the diagnostics that clear it
+    check("a value in a literal: %r" % fields("    q := P{x: a|}\n}\n")[:3], "add" in fields("    q := P{x: a|}\n}\n"))
+
     # fixing the error clears the diagnostics; formatting
     fixed = SOURCE.replace("    n := missing + 1\n", "    n:=1+2\n")
     version[0] += 1

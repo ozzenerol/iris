@@ -1549,7 +1549,82 @@ static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
  * that imports its module (a JSON array), or NULL. */
 static const char *gItemEdits;
 
+/* signatureHelp looks for the item with this label and keeps its detail
+ * (the signature) in gFound. */
+static const char *gWantLabel;
+static StrBuf gFound;
+
+/* Where the parameter list of the function called label starts in a
+ * signature such as "i64 Point.sum(i64 by)": the '(' after the name, or NULL. */
+static const char *paramsOf(const char *label, const char *sig) {
+    size_t n = strlen(label);
+    for (const char *p = strstr(sig, label); p; p = strstr(p + 1, label)) {
+        bool start = p == sig || !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
+        if (start && p[n] == '(') return p + n;
+    }
+    return NULL;
+}
+
+/* Calls f for each parameter in the list that starts at open: the start
+ * and the end of its text, and of its name (the last word). Commas inside
+ * [], () and {} do not split, as in Map[str, i64] m. The end of the list. */
+static const char *eachParam(const char *open, void (*f)(void *, const char *, const char *, const char *, const char *),
+                             void *arg) {
+    const char *p = open + 1;
+    int depth = 0;
+    const char *start = p;
+    for (;; p++) {
+        char ch = *p;
+        if (!ch) return p;
+        if (ch == '(' || ch == '[' || ch == '{') {
+            depth++;
+        } else if ((ch == ')' || ch == ']' || ch == '}') && depth > 0) {
+            depth--;
+        } else if ((ch == ',' && depth == 0) || ch == ')') {
+            const char *a = start, *b = p;
+            while (a < b && *a == ' ') a++;
+            while (b > a && b[-1] == ' ') b--;
+            if (b > a) {
+                const char *w = b;
+                while (w > a && (isalnum((unsigned char)w[-1]) || w[-1] == '_')) w--;
+                f(arg, a, b, w, b);
+            }
+            if (ch == ')') return p;
+            start = p + 1;
+        }
+    }
+}
+
+typedef struct {
+    StrBuf *b;
+    int n;
+} SnippetArgs;
+
+static void snippetParam(void *arg, const char *a, const char *b, const char *w, const char *we) {
+    (void)a;
+    (void)b;
+    SnippetArgs *s = arg;
+    s->n++;
+    sbPrintf(s->b, "%s${%d:%.*s}", s->n > 1 ? ", " : "", s->n, (int)(we - w), w);
+}
+
+/* The snippet that a completion of a function or a method inserts:
+ * "add(${1:a}, ${2:b})" from the parameter names in its signature,
+ * "now()" for no parameters. False when the detail has no signature. */
+static bool snippetOf(StrBuf *b, const char *label, const char *detail) {
+    const char *open = detail ? paramsOf(label, detail) : NULL;
+    if (!open) return false;
+    sbPrintf(b, "%s(", label);
+    SnippetArgs s = {b, 0};
+    eachParam(open, snippetParam, &s);
+    sbPutc(b, ')');
+    return true;
+}
+
 static void putItem(StrBuf *r, bool *first, const char *label, int kind, const char *detail) {
+    if (gWantLabel && detail && !gFound.buf && strcmp(label, gWantLabel) == 0 && paramsOf(label, detail)) {
+        sbPuts(&gFound, detail);
+    }
     if (!*first) sbPutc(r, ',');
     *first = false;
     sbPuts(r, "{\"label\":");
@@ -1559,6 +1634,12 @@ static void putItem(StrBuf *r, bool *first, const char *label, int kind, const c
         sbPuts(r, ",\"detail\":");
         putStr(r, detail);
     }
+    StrBuf snip = {0};
+    if ((kind == 2 || kind == 3) && snippetOf(&snip, label, detail)) {
+        sbPuts(r, ",\"insertTextFormat\":2,\"insertText\":");
+        putStr(r, snip.buf);
+    }
+    sbFree(&snip);
     if (gItemEdits) {
         sbPuts(r, ",\"additionalTextEdits\":");
         sbPuts(r, gItemEdits);
@@ -1889,6 +1970,141 @@ static void moduleNames(Items *it, Module *m, bool own) {
     }
 }
 
+static bool startsWord(const char *s, const char *end, const char *w);
+
+/* The innermost '(', '[' or '{' that is open at off, skipping strings,
+ * characters and comments, or -1. With want, the innermost one of that
+ * kind. *commas gets the commas after it, at its own level. */
+static long openAt(const char *t, size_t off, char want, int *commas) {
+    long stack[256];
+    int nc[256];
+    int depth = 0;
+    for (size_t i = 0; i < off; i++) {
+        char ch = t[i];
+        if (ch == '/' && i + 1 < off && t[i + 1] == '/') {
+            while (i < off && t[i] != '\n') i++;
+        } else if (ch == '"' || ch == '\'') {
+            bool triple = ch == '"' && i + 2 < off && t[i + 1] == '"' && t[i + 2] == '"';
+            i += triple ? 3 : 1;
+            while (i < off) {
+                if (t[i] == '\\' && !triple) i++;
+                else if (triple && t[i] == '"' && i + 2 < off && t[i + 1] == '"' && t[i + 2] == '"') { i += 2; break; }
+                else if (!triple && (t[i] == ch || t[i] == '\n')) break;
+                i++;
+            }
+        } else if (ch == '(' || ch == '[' || ch == '{') {
+            if (depth < 256) {
+                stack[depth] = (long)i;
+                nc[depth] = 0;
+            }
+            depth++;
+        } else if ((ch == ')' || ch == ']' || ch == '}') && depth > 0) {
+            depth--;
+        } else if (ch == ',' && depth > 0 && depth <= 256) {
+            nc[depth - 1]++;
+        }
+    }
+    if (depth > 256) depth = 256;
+    while (want && depth > 0 && t[stack[depth - 1]] != want) depth--;
+    if (depth <= 0) return -1;
+    if (commas) *commas = nc[depth - 1];
+    return stack[depth - 1];
+}
+
+/* The start of the name that ends at end: letters, digits, '_' and dots, as
+ * in models.User. */
+static const char *nameBefore(const char *text, const char *end) {
+    const char *s = end;
+    while (s > text && (isalnum((unsigned char)s[-1]) || s[-1] == '_' || s[-1] == '.')) s--;
+    return s;
+}
+
+/* In a struct literal, where a field's name goes (P{x: 1, |}): the fields
+ * that the literal does not set yet. False when the cursor is not there. */
+static bool literalFields(Items *it, Program *prog, Source *src, size_t cursor) {
+    const char *t = src->text;
+    const char *p = t + cursor;
+    while (p > t && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) p--;     /* the name typed so far */
+    while (p > t && isspace((unsigned char)p[-1])) p--;
+    if (p == t || (p[-1] != '{' && p[-1] != ',')) return false;
+    long open = openAt(t, cursor, 0, NULL);
+    if (open < 0 || t[open] != '{') return false;
+    const char *end = t + open;
+    if (end > t && end[-1] == ']') {       /* Box[i64]{...} */
+        int depth = 0;
+        do {
+            end--;
+            if (*end == ']') depth++;
+            else if (*end == '[') depth--;
+        } while (end > t && depth > 0);
+    }
+    const char *name = nameBefore(t, end);
+    if (name == end || !(isalpha((unsigned char)*name) || *name == '_')) return false;
+    const char *before = name;
+    while (before > t && (before[-1] == ' ' || before[-1] == '\t')) before--;
+    const char *word = nameBefore(t, before);
+    if (word < before && (startsWord(word, before, "struct") || startsWord(word, before, "enum") ||
+                          startsWord(word, before, "interface"))) {
+        return false;      /* the body of a declaration */
+    }
+    Node *d = NULL;
+    const char *dot = memchr(name, '.', (size_t)(end - name));
+    for (Module *m = prog->modules; m && !d; m = m->next) {
+        if (dot) {
+            if (m->name && strlen(m->name) == (size_t)(dot - name) && !strncmp(m->name, name, (size_t)(dot - name))) {
+                d = typeIn(m, dot + 1, (size_t)(end - dot - 1));
+            }
+        } else {
+            for (int f = 0; f < m->files.len && !d; f++) {
+                if (m->files.items[f]->src == src) d = typeIn(m, name, (size_t)(end - name));
+            }
+        }
+    }
+    if (!d && !dot) d = typeIn(prog->core, name, (size_t)(end - name));
+    if (!d || d->kind != N_STRUCT) return false;
+    /* the names before a ':' at the top level of the literal */
+    const char *set[256];
+    size_t setLen[256];
+    int nset = 0, depth = 0;
+    bool head = true;
+    for (const char *q = t + open + 1; q < t + cursor; q++) {
+        char ch = *q;
+        if (ch == '"') {
+            for (q++; q < t + cursor && *q != '"' && *q != '\n'; q++) {
+                if (*q == '\\') q++;
+            }
+            continue;
+        }
+        if (ch == '(' || ch == '[' || ch == '{') depth++;
+        else if ((ch == ')' || ch == ']' || ch == '}') && depth > 0) depth--;
+        else if (ch == ',' && depth == 0) head = true;
+        else if (head && (isalpha((unsigned char)ch) || ch == '_')) {
+            const char *a = q;
+            while (q < t + cursor && (isalnum((unsigned char)*q) || *q == '_')) q++;
+            const char *b = q;
+            while (q < t + cursor && isspace((unsigned char)*q)) q++;
+            if (q < t + cursor && *q == ':' && nset < 256) {
+                set[nset] = a;
+                setLen[nset++] = (size_t)(b - a);
+            }
+            head = false;
+            q--;
+        } else if (!isspace((unsigned char)ch)) {
+            head = false;
+        }
+    }
+    for (int i = 0; i < d->list.len; i++) {
+        Node *f = d->list.items[i];
+        if (f->kind == N_EMBED || !f->name) continue;
+        bool done = false;
+        for (int k = 0; k < nset && !done; k++) {
+            done = setLen[k] == strlen(f->name) && !strncmp(set[k], f->name, setLen[k]);
+        }
+        if (!done) addItem(it, f->name, 5, f->type ? f->type->name : NULL);
+    }
+    return true;
+}
+
 /* Any name: locals, the module's names, imports, built-ins and keywords. */
 static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
     Items it = {.first = true};
@@ -1902,6 +2118,13 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
                 ownFile = m->files.items[f];
             }
         }
+    }
+    if (own && src && literalFields(&it, prog, src, offsetOf(src, line, col))) {
+        sbPutc(&it.r, ']');
+        reply(out, id, it.r.buf);
+        sbFree(&it.r);
+        free(it.seen);
+        return;
     }
     if (own && src) {
         size_t cursor = offsetOf(src, line, col);
@@ -1950,7 +2173,16 @@ static void nameCompletion(StrBuf *out, J *id, Program *prog, Source *src, int l
             sbFree(&e);
         }
     }
-    for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) addItem(&it, builtins[i], 3, "built-in");
+    for (size_t i = 0; i < sizeof builtins / sizeof builtins[0]; i++) {
+        /* the declaration from builtin.iris, as "void print(str text)" */
+        const Builtin *bi = builtinOf(builtins[i]);
+        StrBuf d = {0};
+        const char *decl = bi && bi->decl ? bi->decl : "built-in";
+        if (!strncmp(decl, "@noreturn ", 10)) decl += 10;
+        sbPrintf(&d, "%.*s", (int)strcspn(decl, "\n"), decl);
+        addItem(&it, builtins[i], 3, d.buf);
+        sbFree(&d);
+    }
     static const char *types[] = {"void", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
                                   "str", "String", "Error", "Duration", "Mutex", "Thread", "Atomic"};
     for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) addItem(&it, types[i], 7, "type");
@@ -2167,6 +2399,98 @@ static void closeOpen(Doc *doc) {
     doc->len = len;
 }
 
+typedef struct {
+    StrBuf *b;
+    const char *sig;
+    int n;
+} ParamLabels;
+
+static void paramLabel(void *arg, const char *a, const char *b, const char *w, const char *we) {
+    (void)w;
+    (void)we;
+    ParamLabels *l = arg;
+    sbPrintf(l->b, "%s{\"label\":[%d,%d]}", l->n++ ? "," : "", (int)(a - l->sig), (int)(b - l->sig));
+}
+
+/* The call around the cursor, which handleInChild finds before it analyzes
+ * the text: the name of the function, the name before its dot (a value or
+ * a module), and the argument at the cursor. */
+typedef struct {
+    char label[128], word[128];
+    int active;
+} Call;
+
+/* Finds the call that the cursor is in and blanks it, so the line parses as
+ * for a completion. False when the cursor is in no call. */
+static bool callAt(Doc *doc, size_t off, Call *call) {
+    char *t = (char *)doc->text;
+    long open = openAt(t, off, '(', &call->active);
+    if (open < 0) return false;
+    char *end = t + open;
+    while (end > t && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    char *name = (char *)nameBefore(t, end);
+    if (name == end) return false;
+    char *dot = NULL;
+    for (char *q = name; q < end; q++) {
+        if (*q == '.') dot = q;
+    }
+    char *label = dot ? dot + 1 : name;
+    if (end - label <= 0 || end - label >= (long)sizeof call->label) return false;
+    snprintf(call->label, sizeof call->label, "%.*s", (int)(end - label), label);
+    call->word[0] = 0;
+    if (dot) {
+        char *w = dot;
+        while (w > name && w[-1] != '.') w--;
+        if (dot - w <= 0 || dot - w >= (long)sizeof call->word) return false;
+        snprintf(call->word, sizeof call->word, "%.*s", (int)(dot - w), w);
+    }
+    /* blank from the dot (or the name) to the ')' that closes the call */
+    size_t stop = off;
+    int depth = 0;
+    for (size_t i = (size_t)open; i < doc->len; i++) {
+        if (t[i] == '(') depth++;
+        else if (t[i] == ')' && --depth == 0) {
+            stop = i + 1;
+            break;
+        } else if (t[i] == '\n' && i >= off) {
+            break;
+        }
+    }
+    for (char *q = dot ? dot : name; q < t + stop; q++) {
+        if (*q != '\n') *q = ' ';
+    }
+    return true;
+}
+
+/* textDocument/signatureHelp: the signature of the function that the cursor
+ * calls, with the argument at the cursor. */
+static void signatureHelp(StrBuf *out, J *id, Program *prog, Source *src, Call *call, int line, int col) {
+    StrBuf scratch = {0};
+    gWantLabel = call->label;
+    if (call->word[0]) completion(&scratch, id, prog, src, call->word, line);
+    else nameCompletion(&scratch, id, prog, src, line, col);
+    gWantLabel = NULL;
+    sbFree(&scratch);
+    const char *sig = gFound.buf;
+    const char *params = sig ? paramsOf(call->label, sig) : NULL;
+    if (!params) {
+        reply(out, id, NULL);
+        sbFree(&gFound);
+        return;
+    }
+    StrBuf r = {0};
+    sbPuts(&r, "{\"signatures\":[{\"label\":");
+    putStr(&r, sig);
+    sbPuts(&r, ",\"parameters\":[");
+    ParamLabels l = {&r, sig, 0};
+    eachParam(params, paramLabel, &l);
+    int active = call->active < l.n ? call->active : (l.n ? l.n - 1 : 0);
+    sbPrintf(&r, "]}],\"activeSignature\":0,\"activeParameter\":%d}", active);
+    reply(out, id, r.buf);
+    sbFree(&r);
+    sbFree(&gFound);
+}
+
 /* Handles one message in the child; the output is messages separated by
  * NUL bytes. */
 static void handleInChild(J *msg, StrBuf *out) {
@@ -2224,8 +2548,16 @@ static void handleInChild(J *msg, StrBuf *out) {
             *dot = ' ';
         }
     }
+    Call call = {0};
+    bool inCall = false;
+    if (strcmp(method, "textDocument/signatureHelp") == 0 && doc) {
+        const char *ls = lineStartOf(doc->text, doc->len, line);
+        size_t off = (size_t)(ls - doc->text) + (size_t)byteCol(doc->text, doc->len, line, character) - 1;
+        inCall = callAt(doc, off < doc->len ? off : doc->len, &call);
+    }
     /* a line being typed seldom parses: answer from what the parser could read */
-    gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/hover") == 0 ||
+    gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
+               strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
     if (gLenient && doc) closeOpen(doc);
@@ -2296,6 +2628,9 @@ static void handleInChild(J *msg, StrBuf *out) {
         prepareRename(out, id, prog, src, line, col);
     } else if (strcmp(method, "textDocument/rename") == 0) {
         renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
+    } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
+        if (inCall) signatureHelp(out, id, prog, src, &call, line, col);
+        else reply(out, id, NULL);
     } else if (strcmp(method, "textDocument/completion") == 0) {
         if (inImport) {
             importCompletion(out, id);
@@ -2411,7 +2746,8 @@ int cmdLsp(void) {
             sbPrintf(&b, ",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"hoverProvider\":true,"
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
-                         "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]}},"
+                         "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -2447,6 +2783,7 @@ int cmdLsp(void) {
         } else if (strcmp(method, "textDocument/hover") == 0 || strcmp(method, "textDocument/definition") == 0 ||
                    strcmp(method, "textDocument/documentSymbol") == 0 ||
                    strcmp(method, "textDocument/completion") == 0 ||
+                   strcmp(method, "textDocument/signatureHelp") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||
