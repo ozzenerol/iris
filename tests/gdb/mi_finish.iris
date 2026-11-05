@@ -1,0 +1,57 @@
+// mi: -gdb-set mi-async on
+// mi: -break-insert nums
+// mi: -exec-run
+// mi: -stack-select-frame 0
+// mi: -exec-finish
+// mi: -iris-return-value nums
+// mi: -break-delete 1
+// mi: -break-insert inner
+// mi: -exec-continue
+// mi: -exec-finish --thread 1 --frame 1
+// mi: -iris-return-value outer
+// mi: -break-delete 2
+// mi: -break-insert seven
+// mi: -exec-continue
+// mi: -exec-finish
+// mi: -iris-return-value seven
+// expect: *stopped,reason="breakpoint-hit"
+// expect: *stopped,reason="function-finished",frame={addr="0x
+// expect: ^done,registers="yes",gdb-result-var="$2",return-value="List[i64](len=2) = {1, 2}"
+// expect: *stopped,reason="breakpoint-hit"
+// expect: *stopped,reason="function-finished",frame={addr="0x
+// expect: ^done,registers="yes",gdb-result-var="$4",return-value="List[i64](len=1) = {5}"
+// expect: *stopped,reason="breakpoint-hit"
+// expect: gdb-result-var="$5",return-value="7"
+// expect: ^done,registers="no"
+// absent: ^error
+
+// MI's -exec-finish is gdb's own: it stops with reason "function-finished",
+// also with --frame. -iris-return-value then reads a List from the registers.
+
+List[i64] nums() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    return xs
+}
+
+i64 inner() {
+    return 5
+}
+
+List[i64] outer() {
+    List[i64] xs
+    xs.push(inner())
+    return xs
+}
+
+i64 seven() {
+    return 7
+}
+
+void main() {
+    a := nums()
+    b := outer()
+    c := seven()
+    print("{a.len} {b.len} {c}")
+}

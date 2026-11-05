@@ -1,7 +1,7 @@
 // gdb: break main.iris:91
 // gdb: run
 // gdb: step
-// gdb: finish
+// gdb: iris finish
 // gdb: next
 // gdb: next
 // gdb: next

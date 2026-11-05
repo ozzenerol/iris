@@ -1,3 +1,4 @@
+// gdb: help finish
 // gdb: break main
 // gdb: run
 // gdb: info breakpoints
@@ -13,33 +14,34 @@
 // gdb: break wide
 // gdb: break fact if n == 2
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
+// gdb: iris finish
 // gdb: continue
-// gdb: finish
-// gdb: finish
+// gdb: iris finish
+// gdb: iris finish
 // gdb: bt
-// expect: Breakpoint 1.1, main () at main.iris:159
-// expect: in iris.start at main.iris:158
+// expect: Execute until selected stack frame returns.
+// expect: Breakpoint 1.1, main () at main.iris:161
+// expect: in iris.start at main.iris:160
 // expect: Run till exit from #0  seven (
 // expect: Value returned is $1 = 7
 // expect: Run till exit from #0  name (
@@ -63,12 +65,12 @@
 // expect: Run till exit from #0  shape (
 // expect: Value returned is $11 = Shape.rect = {w = 2, h = 3}
 // expect: Run till exit from #0  fact (n=2)
-// expect: in fact (n=3) at main.iris:155
+// expect: in fact (n=3) at main.iris:157
 // expect: Value returned is $12 = 2
-// expect: in fact (n=4) at main.iris:155
+// expect: in fact (n=4) at main.iris:157
 // expect: Value returned is $13 = 6
-// expect: in main () at main.iris:170
-// expect: in iris.start () at main.iris:158
+// expect: in main () at main.iris:172
+// expect: in iris.start () at main.iris:160
 // absent: Breakpoint 1.2,
 // absent: Python Exception
 // absent: Breakpoint -

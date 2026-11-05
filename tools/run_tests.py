@@ -45,6 +45,10 @@
                                // absent: TEXT     no line of the output starts with TEXT
                                // build: test      build with iris test --build
                                // args: A B        the program's arguments
+                               // mi: COMMAND      an MI command: with these, gdb runs
+                                                   as gdb -i=mi3, and each command
+                                                   waits for its result, and after
+                                                   ^running for the *stopped record
                            skipped when there is no gdb
   tests/fmt/NAME.iris      `iris fmt -` must print NAME.out, and NAME.out must
                            stay as it is when formatted again
@@ -360,6 +364,65 @@ def gdb_tests(iris, only, failures, skipped):
     return gather(jobs, failures)
 
 
+def mi_session(cmd, cwd, commands):
+    """Run gdb's MI with the commands, one after the other. Each one waits for
+    its result record, and a command that runs the program also for the
+    *stopped record. Gives the output lines, or None after 120s."""
+    import queue
+    import threading
+    import time
+    p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True)
+    lines = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(l.rstrip("\n")) for l in p.stdout] + [lines.put(None)],
+                     daemon=True).start()
+    out = []
+    end = time.time() + 120
+
+    def until(pred):
+        while True:
+            try:
+                l = lines.get(timeout=max(0.1, end - time.time()))
+            except queue.Empty:
+                return False
+            if l is None:
+                return True
+            out.append(l)
+            if pred(l):
+                return True
+
+    ok = until(lambda l: l.startswith("(gdb)"))
+    for c in commands + ["-gdb-exit"]:
+        if not ok:
+            break
+        p.stdin.write(c + "\n")
+        p.stdin.flush()
+        res = []
+        ok = until(lambda l: re.match(r"^\^", l) is not None and not res.append(l))
+        if ok and res and res[-1].startswith("^running"):
+            ok = until(lambda l: l.startswith("*stopped"))
+    try:
+        p.stdin.close()
+        p.wait(timeout=10)
+    except Exception:
+        p.kill()
+    return out if ok else None
+
+
+def check_lines(name, lines, want, absent):
+    for a in absent:
+        if any(l.startswith(a) for l in lines):
+            return [(name, "a line has %r; gdb printed:\n%s" % (a, "\n".join(lines)))]
+    at = 0
+    for w in want:
+        while at < len(lines) and w not in lines[at]:
+            at += 1
+        if at == len(lines):
+            return [(name, "no line with %r after the ones found before; gdb printed:\n%s" % (w, "\n".join(lines)))]
+        at += 1
+    return []
+
+
 def gdb_test(iris, path, name):
     with open(path) as f:
         src = f.read()
@@ -378,6 +441,13 @@ def gdb_test(iris, path, name):
         p = subprocess.run(build, cwd=tmp, capture_output=True, text=True, timeout=300)
         if p.returncode != 0:
             return [(name, "build failed:\n" + p.stderr)]
+        mi = re.findall(r"^// mi: (.*)$", src, re.M)
+        if mi:
+            cmd = [iris, "gdb", "-i=mi3", "-nx", "--args", exe] + prog_args
+            out = mi_session(cmd, tmp, mi)
+            if out is None:
+                return [(name, "gdb did not answer in 120s")]
+            return check_lines(name, out, want, absent)
         args = ["-batch", "-nx"]
         for c in cmds:
             args += ["-ex", c]

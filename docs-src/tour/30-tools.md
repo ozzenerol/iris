@@ -220,7 +220,9 @@ A function's name in the debugger is its name, `handle`, or `Server.close` for a
 
 `step` and `next` stop only on lines of Iris code. In a `for` loop they stop on the loop's line before each item, and in a `match` only on the arm that runs. The code that the compiler makes for `defer`, `scoped`, `try` and `catch` has no stop of its own. `step` goes into a function of the standard library, and over a call into the runtime. `break main` stops in the Iris `main`. Past the end of `main`, `next` goes on to libc, as in C. In a backtrace, `iris.start` is the C `main` that calls the Iris `main`.
 
-`finish` shows the value that a function returns with the printers, such as `Value returned is $1 = List[i64](len=2) = {1, 2}`. This works for a `List`, a `String`, a tuple and a struct. The compiler returns a struct in registers where C uses memory, so the printers' `finish` reads those registers.
+`iris finish` is `finish` that shows the value of a `List`, a `String`, a tuple or a struct right, such as `Value returned is $1 = List[i64](len=2) = {1, 2}`. The compiler returns a struct in registers where C uses memory, and gdb's own `finish` reads it by the C rules. `iris finish` reads those registers. For a number, a `bool` or a `str`, gdb's `finish` is also right.
+
+A tool that uses gdb's MI sends `-exec-finish`, and then `-iris-return-value F`, where `F` is the function that returned. The answer has `gdb-result-var` and `return-value` as `-exec-finish` has, or `registers="no"` when the value of `-exec-finish` is right.
 
 Each block, loop and match arm is a scope in the debug information, and a variable's scope starts at its line. `info locals` shows only the variables that the code at the stop can use. `watch total` and `watch p.x` stop the program when a variable or a field changes.
 
