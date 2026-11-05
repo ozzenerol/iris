@@ -1,0 +1,112 @@
+// gdb: break main.iris:91
+// gdb: run
+// gdb: step
+// gdb: finish
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: next
+// gdb: kill
+// gdb: delete 1
+// gdb: break main.iris:109
+// gdb: run
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// gdb: step
+// expect: List[i64].push (self=
+// expect: Run till exit from #0  List[i64].push
+// expect: in main () at main.iris:91
+// expect: 92	    xs.push(2)
+// expect: 93	    i64 sum = 0
+// expect: 94	    for x in xs {
+// expect: 95	        sum += x
+// expect: 94	    for x in xs {
+// expect: 95	        sum += x
+// expect: 94	    for x in xs {
+// expect: 97	    Map[str, i64] m
+// expect: 98	    m.set("a", 1)
+// expect: 99	    for k, v in m {
+// expect: 100	        sum += v
+// expect: 99	    for k, v in m {
+// expect: 103	    scoped String s = format("{sum}")
+// expect: 104	    Color c = Color.green
+// expect: 105	    match c {
+// expect: 107	        .green => print("green")
+// expect: 109	    t := twice(6) catch 0
+// expect: 110	    u := twice(-1) catch 7
+// expect: 111	    print("{s} {t} {u}")
+// expect: 102	    defer print("done")
+// expect: twice (n=6) at main.iris:85
+// expect: half (n=6) at main.iris:78
+// expect: 81	    return n / 2
+// expect: twice (n=6) at main.iris:86
+// expect: main () at main.iris:110
+// expect: twice (n=-1) at main.iris:85
+// expect: half (n=-1) at main.iris:78
+// expect: 79	        return error(E.bad, "negative")
+// expect: main () at main.iris:111
+// absent: 106	
+// A step stops only on lines of Iris code: not on the code that the compiler
+// makes for a for loop, a match, defer, scoped or try, and not in the runtime.
+
+enum Color { red, green }
+enum E { bad }
+
+!i64 half(i64 n) {
+    if n < 0 {
+        return error(E.bad, "negative")
+    }
+    return n / 2
+}
+
+!i64 twice(i64 n) {
+    h := try half(n)
+    return h * 4
+}
+
+void main() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    i64 sum = 0
+    for x in xs {
+        sum += x
+    }
+    Map[str, i64] m
+    m.set("a", 1)
+    for k, v in m {
+        sum += v
+    }
+    defer print("done")
+    scoped String s = format("{sum}")
+    Color c = Color.green
+    match c {
+        .red => print("red")
+        .green => print("green")
+    }
+    t := twice(6) catch 0
+    u := twice(-1) catch 7
+    print("{s} {t} {u}")
+}
