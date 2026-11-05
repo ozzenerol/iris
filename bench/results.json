@@ -1,18 +1,12 @@
 {
  "results": {
   "fib": {
-   "iris": 0.531,
+   "iris": 0.569,
    "iris_out": "267914296",
-   "iris_mem": 1.5,
-   "iris_safe": 0.531,
-   "iris_safe_out": "267914296",
-   "iris_safe_mem": 1.6,
-   "rust": 0.474,
+   "iris_mem": 1.6,
+   "rust": 0.475,
    "rust_out": "267914296",
-   "rust_mem": 1.8,
-   "go": 1.068,
-   "go_out": "267914296",
-   "go_mem": 1.8
+   "rust_mem": 1.8
   },
   "sieve": {
    "iris": 0.546,
@@ -141,18 +135,12 @@
    "go_mem": 231.6
   },
   "channels": {
-   "iris": 0.219,
+   "iris": 0.227,
    "iris_out": "2000000 12499997500000",
    "iris_mem": 5.8,
-   "iris_safe": 0.22,
-   "iris_safe_out": "2000000 12499997500000",
-   "iris_safe_mem": 5.7,
-   "rust": 10.864,
+   "rust": 10.996,
    "rust_out": "2000000 12499997500000",
-   "rust_mem": 3.2,
-   "go": 0.563,
-   "go_out": "2000000 12499997500000",
-   "go_mem": 4.4
+   "rust_mem": 3.3
   },
   "http-hello": {
    "iris": 387111,
@@ -253,18 +241,12 @@
    "go_mem": 6.8
   },
   "rwlock": {
-   "iris": 0.038,
+   "iris": 0.044,
    "iris_out": "400000",
    "iris_mem": 2.1,
-   "iris_safe": 0.039,
-   "iris_safe_out": "400000",
-   "iris_safe_mem": 1.9,
-   "rust": 0.108,
+   "rust": 0.112,
    "rust_out": "400000",
-   "rust_mem": 2.1,
-   "go": 0.019,
-   "go_out": "400000",
-   "go_mem": 1.8
+   "rust_mem": 2.1
   },
   "heap": {
    "iris": 0.178,
@@ -547,18 +529,12 @@
    "go_mem": 9.9
   },
   "x509-parse": {
-   "iris": 0.235,
+   "iris": 0.241,
    "iris_out": "63072004200000",
-   "iris_mem": 1.7,
-   "iris_safe": 0.239,
-   "iris_safe_out": "63072004200000",
-   "iris_safe_mem": 1.7,
-   "rust": 0.388,
+   "iris_mem": 1.8,
+   "rust": 0.382,
    "rust_out": "63072004200000",
-   "rust_mem": 1.9,
-   "go": 1.126,
-   "go_out": "63072004200000",
-   "go_mem": 10.1
+   "rust_mem": 2.0
   },
   "yaml-parse": {
    "iris": 0.462,
@@ -701,18 +677,12 @@
    "go_mem": 16.9
   },
   "protobuf": {
-   "iris": 0.479,
+   "iris": 0.506,
    "iris_out": "792193635175380",
-   "iris_mem": 9.7,
-   "iris_safe": 0.477,
-   "iris_safe_out": "792193635175380",
-   "iris_safe_mem": 9.7,
-   "rust": 0.529,
+   "iris_mem": 9.9,
+   "rust": 0.533,
    "rust_out": "792193635175380",
-   "rust_mem": 9.9,
-   "go": 0.923,
-   "go_out": "792193635175380",
-   "go_mem": 22.5
+   "rust_mem": 9.9
   },
   "msgpack": {
    "iris": 0.996,
@@ -729,18 +699,12 @@
    "go_mem": 35.1
   },
   "cbor": {
-   "iris": 1.01,
+   "iris": 1.043,
    "iris_out": "792193746833420",
    "iris_mem": 15.2,
-   "iris_safe": 0.993,
-   "iris_safe_out": "792193746833420",
-   "iris_safe_mem": 15.2,
-   "rust": 2.533,
+   "rust": 2.527,
    "rust_out": "792193746833420",
-   "rust_mem": 15.3,
-   "go": 3.587,
-   "go_out": "792193746833420",
-   "go_mem": 40.6
+   "rust_mem": 15.3
   },
   "metrics": {
    "iris": 0.239,
@@ -855,25 +819,19 @@
    "go_mem": 42.6
   },
   "sync-map": {
-   "iris": 0.059,
+   "iris": 0.089,
    "iris_out": "1600000",
-   "iris_mem": 8.4,
-   "iris_safe": 0.062,
-   "iris_safe_out": "1600000",
-   "iris_safe_mem": 8.7,
-   "rust": 0.106,
+   "iris_mem": 8.6,
+   "rust": 0.104,
    "rust_out": "1600000",
-   "rust_mem": 4.8,
-   "go": 0.119,
-   "go_out": "1600000",
-   "go_mem": 15.2
+   "rust_mem": 4.7
   }
  },
  "setup": {
   "machine": "iris-testbench, AMD Ryzen 7 5700X 8-Core Processor, 8 threads",
-  "iris": "iris 0.88.0",
+  "iris": "iris 0.100.0",
   "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "go": "go version go1.27.0 linux/amd64",
-  "date": "2026-11-03 22:02"
+  "date": "2026-11-05 22:52"
  }
 }
