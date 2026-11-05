@@ -243,6 +243,23 @@ $5 = 4
 - A tool that uses gdb's MI sends `-iris-evaluate-expression EXPR`, which gives `value` as `-data-evaluate-expression` does.
 - Calls work on x86_64 only.
 
+`iris set` gives a variable, a field or an item a value as Iris writes it:
+
+```output
+(gdb) iris set name = "bob"
+(gdb) iris set xs[1] = 9
+(gdb) iris set m["k"] = 3
+(gdb) iris set u.admin = true
+(gdb) iris set c = Color.red
+(gdb) iris set d = 250ms
+```
+
+- The text for a `str` or a `String` goes into new memory from the program's allocator. The old text is not freed.
+- `m[key]` must be a key that is in the map. A new key needs `m.set`.
+- A value of a wrong type is an error, such as `iris: u.age is an i64, and "x" is text`.
+- gdb's own `set var` takes numbers, `true`, `false` and an enum member by its name alone, such as `red`.
+- A tool that uses gdb's MI sends `-iris-var-assign ID VALUE` in place of `-var-assign`, or `-iris-assign EXPR VALUE`. For a value in a map, it sends `-iris-assign` with `m["key"]`.
+
 `iris finish` is `finish` that shows the value of a `List`, a `String`, a tuple or a struct right, such as `Value returned is $1 = List[i64](len=2) = {1, 2}`. The compiler returns a struct in registers where C uses memory, and gdb's own `finish` reads it by the C rules. `iris finish` reads those registers. For a number, a `bool` or a `str`, gdb's `finish` is also right.
 
 A tool that uses gdb's MI sends `-exec-finish`, and then `-iris-return-value F`, where `F` is the function that returned. The answer has `gdb-result-var` and `return-value` as `-exec-finish` has, or `registers="no"` when the value of `-exec-finish` is right.

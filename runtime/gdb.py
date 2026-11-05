@@ -14,10 +14,13 @@
 #   iris task N [CMD]     runs CMD (default: backtrace) on the stack of task N
 #   iris finish           finish, with the value of a List, String, tuple or struct read right
 #   iris print EXPR       print, with calls of Iris functions: add(2, 3), greet("iris")
+#   iris set X = V        X = V with V as Iris writes it: "bob", Color.red, 250ms
 #
 # MI commands for tools:
 #   -iris-return-value F  after -exec-finish: the value that function F returned
 #   -iris-evaluate-expression EXPR   -data-evaluate-expression, as iris print
+#   -iris-assign EXPR VALUE           EXPR = VALUE, as iris set
+#   -iris-var-assign ID VALUE         -var-assign, as iris set
 #
 # Calls: obj.method(args) works in print, in MI and in conditions.
 # $iris_call("name", args...) calls a function, also in conditions.
@@ -1766,6 +1769,270 @@ def _call_event(event):
         pass
 
 
+# ---------------------------------------------------------------- assign
+#
+# gdb's "set var x = v" and MI's -var-assign parse v as C++: they take
+# numbers, true and false, and an enum member by its name alone (red), but
+# not "text" for a str, Color.red or 250ms, and gdb.py can't change that.
+# "iris set x = v" and the MI commands -iris-assign and -iris-var-assign
+# take the value as Iris writes it.
+
+_UNITS = {"ns": 1, "us": 1000, "ms": 1000000, "s": 1000000000, "m": 60000000000, "h": 3600000000000}
+_DURATION = re.compile(r"^\s*-?(\d+(\.\d+)?(ns|us|ms|s|m|h))+\s*$")
+
+
+def _duration_ns(text):
+    """250ms, 1.5s or 1h30m as nanoseconds, or None."""
+    if not _DURATION.match(text):
+        return None
+    t = text.strip()
+    sign = -1 if t.startswith("-") else 1
+    total = 0.0
+    for num, _, unit in re.findall(r"(\d+(\.\d+)?)(ns|us|ms|s|m|h)", t):
+        total += float(num) * _UNITS[unit]
+    return sign * int(round(total))
+
+
+def _iris_text(text):
+    """The bytes of an Iris text in quotes, or None."""
+    t = text.strip()
+    if len(t) < 2 or t[0] != '"' or t[-1] != '"':
+        return None
+    out = bytearray()
+    i = 1
+    while i < len(t) - 1:
+        c = t[i]
+        if c == "\\" and i + 1 < len(t) - 1:
+            n = t[i + 1]
+            out += {"n": b"\n", "t": b"\t", "r": b"\r", "0": b"\0", '"': b'"', "\\": b"\\", "'": b"'"}.get(
+                n, ("\\" + n).encode())
+            i += 2
+            continue
+        out += c.encode("utf-8")
+        i += 1
+    return bytes(out)
+
+
+def _kind(t):
+    """A name of t for a message: str, i64, Color, List[i64]."""
+    t0 = t.strip_typedefs()
+    return t.name or t0.tag or t0.name or str(t)
+
+
+def _a(name):
+    return ("an " if name[:1] in "aeiouAEIOU" else "a ") + name
+
+
+def _value_kind(v):
+    """What a value is, in Iris words, for a message."""
+    t = v.type.strip_typedefs()
+    if t.code == gdb.TYPE_CODE_ARRAY and t.target().strip_typedefs().sizeof == 1:
+        return "text"
+    if t.code == gdb.TYPE_CODE_FLT and t.name in ("double", "float"):
+        return "a number with a fraction"
+    if t.code == gdb.TYPE_CODE_INT and t.name in ("int", "long", "unsigned int", "unsigned long", "long long"):
+        return "an integer"
+    if t.code == gdb.TYPE_CODE_BOOL:
+        return "a bool"
+    return _a(_kind(v.type))
+
+
+def _wrong(lhs, name, text, v):
+    return gdb.GdbError("iris: %s is %s, and %s is %s" % (lhs, _a(name), text, _value_kind(v)))
+
+
+def _check_map_key(lhs):
+    """m[key] for a key that is not in the map: an error with the key."""
+    m = re.match(r"^(.*)\[(.+)\]\s*$", lhs.strip())
+    if not m:
+        return
+    try:
+        base = gdb.parse_and_eval(_rewrite_calls(m.group(1)))
+    except gdb.error:
+        return
+    if not (_tag(base.type) or "").startswith("Map["):
+        return
+    key = gdb.parse_and_eval(m.group(2))
+    if not _map_has(base, key):
+        raise gdb.GdbError("iris: %s has no key %s; a new key needs m.set" % (m.group(1).strip(), m.group(2).strip()))
+
+
+def _alloc(n):
+    """n bytes from the program's allocator, which the program never frees."""
+    p = int(gdb.parse_and_eval("(long)iris_malloc(%d)" % max(n, 1)))
+    if p == 0:
+        raise gdb.GdbError("iris: the program has no memory for the text")
+    return p
+
+
+def _set_bytes(target, data):
+    if target.address is None:
+        raise gdb.GdbError("iris: the target is not a variable, a field or an item")
+    gdb.selected_inferior().write_memory(int(target.address), data)
+
+
+def _assign(lhs, rhs):
+    """lhs = rhs, with rhs as Iris writes it. Gives the new value."""
+    _check_map_key(lhs)
+    try:
+        target = gdb.parse_and_eval(_rewrite_calls(lhs))
+    except gdb.error as e:
+        raise gdb.GdbError("iris: " + _plain_error(e))
+    t = target.type
+    st = t.strip_typedefs()
+    name = _kind(t)
+    text = rhs.strip()
+    if st.code == gdb.TYPE_CODE_STRUCT and _is_text_type(st):
+        data = _iris_text(text)
+        if data is None:
+            try:
+                v = gdb.parse_and_eval(_rewrite_calls(text))
+            except gdb.error as e:
+                raise gdb.GdbError("iris: " + _plain_error(e))
+            if not (_is_text_type(v.type) or v.type.strip_typedefs().code == gdb.TYPE_CODE_ARRAY):
+                raise _wrong(lhs, name, text, v)
+            data = text_bytes(v)
+        ptr = _alloc(len(data))
+        if data:
+            gdb.selected_inferior().write_memory(ptr, data)
+        words = [ptr, len(data)] + ([len(data)] if st.sizeof == 24 else [])
+        _set_bytes(target, b"".join(struct.pack("<Q", w) for w in words))
+    elif name == "Duration":
+        ns = _duration_ns(text)
+        if ns is None:
+            v = gdb.parse_and_eval(_rewrite_calls(text))
+            if _kind(v.type) != "Duration":
+                raise gdb.GdbError("iris: %s is a Duration, such as 250ms or 2s, and %s is not" % (lhs, text))
+            ns = int(v)
+        _set_bytes(target, struct.pack("<q", ns))
+    elif st.code == gdb.TYPE_CODE_ENUM:
+        member = text.rsplit(".", 1)[-1].strip()
+        prefix = text.rsplit(".", 1)[0].strip() if "." in text else ""
+        if prefix and prefix != name:
+            raise gdb.GdbError("iris: %s is %s, and %s is not one of its members" % (lhs, _a(name), text))
+        found = [f for f in st.fields() if f.name == member or f.name.rsplit(".", 1)[-1] == member]
+        if not found:
+            raise gdb.GdbError("iris: %s has no member %s" % (name, member))
+        _set_bytes(target, int(found[0].enumval).to_bytes(st.sizeof, "little", signed=True))
+    elif st.code == gdb.TYPE_CODE_BOOL:
+        if text not in ("true", "false"):
+            try:
+                v = gdb.parse_and_eval(_rewrite_calls(text))
+            except gdb.error as e:
+                raise gdb.GdbError("iris: " + _plain_error(e))
+            if v.type.strip_typedefs().code != gdb.TYPE_CODE_BOOL:
+                raise _wrong(lhs, "bool", text, v)
+            text = "true" if bool(v) else "false"
+        _set_bytes(target, bytes([1 if text == "true" else 0]) + b"\0" * (st.sizeof - 1))
+    elif st.code in (gdb.TYPE_CODE_INT, gdb.TYPE_CODE_CHAR, gdb.TYPE_CODE_FLT):
+        try:
+            v = gdb.parse_and_eval(_rewrite_calls(text))
+        except gdb.error as e:
+            raise gdb.GdbError("iris: " + _plain_error(e))
+        vt = v.type.strip_typedefs()
+        if _iris_text(text) is not None or vt.code in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_BOOL,
+                                                       gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_PTR):
+            raise _wrong(lhs, name, text, v)
+        if st.code == gdb.TYPE_CODE_FLT:
+            _set_bytes(target, struct.pack("<f" if st.sizeof == 4 else "<d", float(v)))
+        else:
+            if vt.code == gdb.TYPE_CODE_FLT:
+                raise _wrong(lhs, name, text, v)
+            n = int(v)
+            bits = st.sizeof * 8
+            low, high = (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if st.is_signed else (0, (1 << bits) - 1)
+            if not low <= n <= high:
+                raise gdb.GdbError("iris: %d does not fit in %s, %s" % (n, lhs, _a(name)))
+            _set_bytes(target, n.to_bytes(st.sizeof, "little", signed=st.is_signed))
+    else:
+        try:
+            v = gdb.parse_and_eval(_rewrite_calls(text))
+        except gdb.error as e:
+            raise gdb.GdbError("iris: " + _plain_error(e))
+        if _kind(v.type) != name or v.type.strip_typedefs().sizeof != st.sizeof:
+            raise _wrong(lhs, name, text, v)
+        _set_bytes(target, _value_bytes(v))
+    return gdb.parse_and_eval(_rewrite_calls(lhs))
+
+
+def _split_assign(arg):
+    """x = v: the = that is not in quotes and not part of == != <= >=."""
+    quote = None
+    for i, c in enumerate(arg):
+        if quote:
+            if c == "\\":
+                continue
+            if c == quote and arg[i - 1] != "\\":
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "=" and arg[i - 1:i] not in ("=", "!", "<", ">") and arg[i + 1:i + 2] != "=":
+            return arg[:i].strip(), arg[i + 1:].strip()
+    raise gdb.GdbError("usage: iris set EXPR = VALUE")
+
+
+class IrisSetCommand(gdb.Command):
+    """Give a variable, a field or an item a value as Iris writes it.
+
+iris set name = "bob"        (str or String: the text goes into new memory)
+iris set xs[1] = 9
+iris set m["k"] = 3          (a key that is in the map)
+iris set u.admin = true
+iris set c = Color.red
+iris set d = 250ms
+A value of a wrong type is an error. The old text of a String is not freed."""
+
+    def __init__(self):
+        super().__init__("iris set", gdb.COMMAND_DATA)
+
+    def invoke(self, arg, from_tty):
+        lhs, rhs = _split_assign(arg)
+        v = _assign(lhs, rhs)
+        if from_tty:
+            gdb.write("%s = %s\n" % (lhs, v.format_string()))
+
+
+if hasattr(gdb, "MICommand"):
+    class IrisAssignMI(gdb.MICommand):
+        """-iris-assign EXPR VALUE: EXPR = VALUE, with VALUE as Iris writes
+        it. The answer has value, as -var-assign has."""
+
+        def __init__(self):
+            super().__init__("-iris-assign")
+
+        def invoke(self, argv):
+            if len(argv) != 2:
+                raise gdb.GdbError("usage: -iris-assign EXPR VALUE")
+            return {"value": _assign(argv[0], argv[1]).format_string()}
+
+    class IrisVarAssignMI(gdb.MICommand):
+        """-iris-var-assign ID VALUE: -var-assign with VALUE as Iris writes
+        it. An item of a List, a Deque or a slice works too. For a value in
+        a Map, send -iris-assign with m["key"]."""
+
+        def __init__(self):
+            super().__init__("-iris-var-assign")
+
+        def invoke(self, argv):
+            if len(argv) != 2:
+                raise gdb.GdbError("usage: -iris-var-assign ID VALUE")
+            return {"value": _assign(_var_path(argv[0]), argv[1]).format_string()}
+
+    def _var_path(var):
+        try:
+            return gdb.execute_mi("-var-info-path-expression", var)["path_expr"]
+        except gdb.error as e:
+            parent, dot, child = var.rpartition(".")
+            if not dot or not re.match(r"^\[\d+\]$", child):
+                raise gdb.GdbError("iris: " + _plain_error(e))
+            base = _var_path(parent)
+            v = gdb.parse_and_eval(base)
+            tag = _tag(v.type) or ""
+            if tag.startswith("Map[") or tag.startswith("Set["):
+                raise gdb.GdbError("iris: send -iris-assign with m[key] for a value in a map")
+            return "(%s)%s" % (base, child)
+
+
 # Each program can load the script again: it adds the printers once.
 if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_printers):
     gdb.pretty_printers.append(iris_lookup)
@@ -1782,6 +2049,10 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     gdb.xmethod.register_xmethod_matcher(None, _IrisCallMatcher())
     _IrisCallFunction()
     IrisPrintCommand()
+    IrisSetCommand()
+    if hasattr(gdb, "MICommand"):
+        IrisAssignMI()
+        IrisVarAssignMI()
     if hasattr(gdb, "MICommand"):
         IrisEvaluateMI()
     gdb.events.inferior_call.connect(_call_event)

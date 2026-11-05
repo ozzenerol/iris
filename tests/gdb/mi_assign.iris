@@ -1,0 +1,60 @@
+// mi: -gdb-set mi-async on
+// mi: -break-insert main.iris:59
+// mi: -exec-run
+// mi: -enable-pretty-printing
+// mi: -var-create v1 * u
+// mi: -var-list-children v1
+// mi: -var-list-children v1.public
+// mi: -var-create v2 * xs
+// mi: -var-list-children v2
+// mi: -var-create v3 * s
+// mi: -iris-var-assign v3 "\"bob\""
+// mi: -iris-var-assign v1.public.name "\"zed\""
+// mi: -iris-var-assign v1.public.color Color.red
+// mi: -iris-var-assign v1.public.wait 250ms
+// mi: -iris-var-assign v2.[1] 9
+// mi: -iris-assign "m[\"k\"]" 3
+// mi: -iris-assign "m[\"zz\"]" 3
+// mi: -iris-assign u.age "\"x\""
+// mi: -var-assign v1.public.age 41
+// mi: -var-update --all-values *
+// mi: -exec-continue
+// expect: ^done,value="\"bob\""
+// expect: ^done,value="\"zed\""
+// expect: ^done,value="red"
+// expect: ^done,value="250ms"
+// expect: ^done,value="9"
+// expect: ^done,value="3"
+// expect: ^error,msg="iris: m has no key \"zz\"; a new key needs m.set"
+// expect: ^error,msg="iris: u.age is an i64, and \"x\" is text"
+// expect: ^done,value="41"
+// expect: 9 3 zed n1 false red 250ms bob x2 blue 2s
+// expect: *stopped,reason="exited-normally"
+
+// MI: -iris-assign and -iris-var-assign take the value as Iris writes it,
+// for a variable, a field of a struct varobj and an item of a List varobj.
+
+enum Color { red, green, blue }
+
+struct User {
+    str name
+    String note
+    bool admin
+    Color color
+    Duration wait
+    i64 age
+}
+
+void main() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    Map[str, i64] m
+    m.set("k", 1)
+    User u = User{name: "ann", note: format("n{1}"), admin: false, color: Color.green, wait: 1s, age: 3}
+    str s = "abc"
+    String t = format("x{2}")
+    Color c = Color.blue
+    Duration d = 2s
+    print("{xs.at(1)} {m.getOr("k", 0)} {u.name} {u.note} {u.admin} {u.color} {u.wait} {s} {t} {c} {d}")
+}

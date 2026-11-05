@@ -1,0 +1,67 @@
+// gdb: break main.iris:66
+// gdb: run
+// gdb: iris set s = "bob"
+// gdb: iris set t = "new\ttext"
+// gdb: iris set u.name = "zed"
+// gdb: iris set u.note = s
+// gdb: iris set xs[1] = 9
+// gdb: iris set m["k"] = 3
+// gdb: iris set u.admin = true
+// gdb: iris set c = Color.red
+// gdb: iris set u.color = .blue
+// gdb: iris set d = 250ms
+// gdb: iris set u.wait = 1m30s
+// gdb: set var u.age = 7
+// gdb: info locals
+// gdb: iris set m["zz"] = 3
+// gdb: iris set u.age = "x"
+// gdb: iris set u.admin = 1
+// gdb: iris set u.age = 2.5
+// gdb: iris set c = Color.pink
+// gdb: iris set d = 5
+// gdb: iris set xs = 3
+// gdb: continue
+// expect: d = 250ms
+// expect: c = red
+// expect: t = "new\ttext"
+// expect: s = "bob"
+// expect: u = {name = "zed", note = "bob", admin = true, color = blue, wait = 1m30s, age = 7}
+// expect: m = Map[str, i64](len=1) = {["k"] = 3}
+// expect: xs = List[i64](len=2) = {1, 9}
+// expect: 9 3 zed bob true blue 1m30s bob new	text red 250ms
+// expect: exited normally
+// expect: iris: m has no key "zz"; a new key needs m.set
+// expect: iris: u.age is an i64, and "x" is text
+// expect: iris: u.admin is a bool, and 1 is an integer
+// expect: iris: u.age is an i64, and 2.5 is a number with a fraction
+// expect: iris: Color has no member pink
+// expect: iris: d is a Duration, such as 250ms or 2s, and 5 is not
+// expect: iris: xs is a List[i64], and 3 is an integer
+
+// iris set gives a variable, a field or an item a value as Iris writes it,
+// and the program goes on with the new values.
+
+enum Color { red, green, blue }
+
+struct User {
+    str name
+    String note
+    bool admin
+    Color color
+    Duration wait
+    i64 age
+}
+
+void main() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    Map[str, i64] m
+    m.set("k", 1)
+    User u = User{name: "ann", note: format("n{1}"), admin: false, color: Color.green, wait: 1s, age: 3}
+    str s = "abc"
+    String t = format("x{2}")
+    Color c = Color.blue
+    Duration d = 2s
+    print("{xs.at(1)} {m.getOr("k", 0)} {u.name} {u.note} {u.admin} {u.color} {u.wait} {s} {t} {c} {d}")
+}
