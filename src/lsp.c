@@ -1255,6 +1255,7 @@ static void definition(StrBuf *out, J *id, Program *prog, Source *src, int line,
 typedef struct {
     Source *src;
     int line, col, len;
+    bool write;     /* the declaration, or a place that gets a value */
 } Ref;
 
 typedef struct {
@@ -1277,15 +1278,32 @@ static bool isStdSource(Source *src) {
     return !src || !src->path || strncmp(src->path, "std/", 4) == 0;
 }
 
-static void addRef(Refs *r, Source *src, int line, int col, int len) {
+static void addRef(Refs *r, Source *src, int line, int col, int len, bool write) {
     for (int i = 0; i < r->n; i++) {
-        if (r->items[i].src == src && r->items[i].line == line && r->items[i].col == col) return;
+        if (r->items[i].src == src && r->items[i].line == line && r->items[i].col == col) {
+            r->items[i].write = r->items[i].write || write;
+            return;
+        }
     }
     if (r->n == r->cap) {
         r->cap = r->cap ? r->cap * 2 : 32;
         r->items = realloc(r->items, (size_t)r->cap * sizeof(Ref));
     }
-    r->items[r->n++] = (Ref){src, line, col, len};
+    r->items[r->n++] = (Ref){src, line, col, len, write};
+}
+
+/* Whether the name n gives its declaration d a value: the declaration
+ * itself, the target of = or +=, x++ and a field in a struct literal. */
+static bool isWrite(Node *n, Node *parent, Node *d) {
+    if (n == d || sameDecl(n, d) || n->kind == N_FIELD_INIT) return true;
+    if (!parent) return false;
+    if (parent->kind == N_INCDEC) return parent->a == n;
+    if (parent->kind == N_ASSIGN) {
+        for (int i = 0; i < parent->list.len; i++) {
+            if (parent->list.items[i] == n) return true;
+        }
+    }
+    return false;
 }
 
 static void refWalk(Refs *r, Node *n, Node *parent, Node *fn) {
@@ -1298,7 +1316,7 @@ static void refWalk(Refs *r, Node *n, Node *parent, Node *fn) {
             start++;        /* .admin: the name after the dot */
             len--;
         }
-        if (d && sameDecl(d, r->decl)) addRef(r, n->src, n->line, start, len);
+        if (d && sameDecl(d, r->decl)) addRef(r, n->src, n->line, start, len, isWrite(n, parent, d));
     }
     if (n->kind == N_FUNC) fn = n;
     refWalk(r, n->a, n, fn);
@@ -1351,6 +1369,40 @@ static void references(StrBuf *out, J *id, Program *prog, Source *src, int line,
         if (!first) sbPutc(&b, ',');
         first = false;
         putLocation(&b, ref);
+    }
+    sbPutc(&b, ']');
+    reply(out, id, b.buf);
+    sbFree(&b);
+    free(r.items);
+}
+
+static int refOrder(const void *a, const void *b) {
+    const Ref *x = a, *y = b;
+    return x->line != y->line ? x->line - y->line : x->col - y->col;
+}
+
+/* textDocument/documentHighlight: the uses in this file of the name at the
+ * cursor. Kind 3 (write) for the declaration and the places that get a
+ * value, kind 2 (read) for the others. */
+static void highlights(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    Node *d = declAt(prog, src, line, col);
+    if (!d || d->kind == N_IMPORT) {
+        reply(out, id, "[]");
+        return;
+    }
+    Refs r = findRefs(prog, d);
+    if (r.n) qsort(r.items, (size_t)r.n, sizeof *r.items, refOrder);
+    StrBuf b = {0};
+    sbPutc(&b, '[');
+    bool first = true;
+    for (int i = 0; i < r.n; i++) {
+        Ref *ref = &r.items[i];
+        if (ref->src != src) continue;
+        if (!first) sbPutc(&b, ',');
+        first = false;
+        sbPuts(&b, "{\"range\":");
+        putRange(&b, ref->src, ref->line, ref->col, ref->len);
+        sbPrintf(&b, ",\"kind\":%d}", ref->write ? 3 : 2);
     }
     sbPutc(&b, ']');
     reply(out, id, b.buf);
@@ -2644,7 +2696,7 @@ static void handleInChild(J *msg, StrBuf *out) {
     }
     /* a line being typed seldom parses: answer from what the parser could read */
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
-               strcmp(method, "textDocument/inlayHint") == 0 ||
+               strcmp(method, "textDocument/inlayHint") == 0 || strcmp(method, "textDocument/documentHighlight") == 0 ||
                strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
@@ -2716,6 +2768,8 @@ static void handleInChild(J *msg, StrBuf *out) {
         prepareRename(out, id, prog, src, line, col);
     } else if (strcmp(method, "textDocument/rename") == 0) {
         renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
+    } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
+        highlights(out, id, prog, src, line, col);
     } else if (strcmp(method, "textDocument/inlayHint") == 0) {
         inlayHints(out, id, params, prog, src);
     } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
@@ -2837,7 +2891,7 @@ int cmdLsp(void) {
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
-                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true},"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -2875,6 +2929,7 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/completion") == 0 ||
                    strcmp(method, "textDocument/signatureHelp") == 0 ||
                    strcmp(method, "textDocument/inlayHint") == 0 ||
+                   strcmp(method, "textDocument/documentHighlight") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||

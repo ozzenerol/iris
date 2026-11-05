@@ -293,6 +293,33 @@ def main():
     got = hints(17, 18)
     check("inlay hints in a range: %r" % got, [h[0] for h in got] == [17, 17, 18, 18])
 
+    # document highlights: the uses of a name in the file, 3 for a write and 2 for a read
+    check("document highlight provider", init["result"]["capabilities"].get("documentHighlightProvider") is True)
+    body = ("struct P {\n    i64 x\n}\n\ni64 P.get() => self.x\n\nvoid bump(i64 n) {\n    n += 1\n    print(\"{n}\")\n}\n\n"
+            "void main() {\n    count := 0\n    count = count + 1\n    count++\n    p := P{x: count}\n    p.x = 5\n"
+            "    print(\"{p.x} {p.get()}\")\n    for i in 0..count {\n        bump(i)\n    }\n    bump(count)\n}\n")
+    version[0] += 1
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": body}]})
+
+    def marks(line, character):
+        r = c.request("textDocument/documentHighlight", {"textDocument": td, "position": {"line": line, "character": character}})
+        return [(h["range"]["start"]["line"], h["range"]["start"]["character"],
+                 h["range"]["end"]["character"] - h["range"]["start"]["character"], h["kind"])
+                for h in (r and r.get("result")) or []]
+
+    got = marks(13, 13)
+    check("highlights of a local: %r" % got, got == [(12, 4, 5, 3), (13, 4, 5, 3), (13, 12, 5, 2), (14, 4, 5, 3),
+                                                     (15, 14, 5, 2), (18, 16, 5, 2), (21, 9, 5, 2)])
+    got = marks(1, 8)
+    check("highlights of a field: %r" % got, got == [(1, 8, 1, 3), (4, 20, 1, 2), (15, 11, 1, 3), (16, 6, 1, 3),
+                                                     (17, 14, 1, 2)])
+    got = marks(8, 12)
+    check("highlights of a parameter: %r" % got, got == [(6, 14, 1, 3), (7, 4, 1, 3), (8, 12, 1, 2)])
+    got = marks(21, 5)
+    check("highlights of a function: %r" % got, got == [(6, 5, 4, 3), (19, 8, 4, 2), (21, 4, 4, 2)])
+    got = marks(10, 0)
+    check("no highlights on a blank line: %r" % got, got == [])
+
     fields = lambda text: [x["label"] for x in ask(head + text, "textDocument/completion") or []]
     check("fields of P{: %r" % fields("    q := P{|}\n}\n"), fields("    q := P{|}\n}\n") == ["x", "y", "name"])
     check("fields of P{x: 1, : %r" % fields("    q := P{x: 1, |}\n}\n"), fields("    q := P{x: 1, |}\n}\n") == ["y", "name"])

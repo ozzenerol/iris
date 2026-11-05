@@ -121,6 +121,7 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - the type and comment of a name under the pointer
 - going to a name's declaration, also into the standard library
 - the usages of a name in the project
+- the uses of the name under the cursor in the file, marked as reads or writes
 - the rename of a name in the project
 - a file's outline
 - completion
@@ -132,6 +133,8 @@ A comment at the top of a module's file, with a blank line after it, describes t
 Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. A standard library module that the file doesn't import yet is offered too, by its name and after its dot, and taking it adds its `import` line. After `@` it offers the attributes of the declaration below: a struct's, a field's, an enum's or a function's. Inside a struct literal, where a field's name goes, it offers only the fields that the literal does not set yet. A function or a method comes with its parameter names as a snippet: `add(a, b)`, and the editor moves from one name to the next. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
 
 After `(` and `,` in a call, the editor shows the signature of the function, as `i64 add(i64 a, i64 b)`, with the parameter at the cursor marked. A call with two or more arguments shows the parameter name before each literal value: `add(a: 1, b: 2)`. A variable, a named argument and a call with one argument get no name.
+
+With the cursor on a name, the editor marks its other uses in the file. The declaration, an assignment, `x++` and a field in a struct literal are writes. The other uses are reads.
 
 The usages and the rename find the name in all files of the project: locals, parameters, fields, methods, functions, types, type parameters and enum members. A name in a module of the project also has its usages in the files that import the module. The rename doesn't change the names of the standard library or the built-ins. The new name must be a valid name and must not be a keyword.
 
