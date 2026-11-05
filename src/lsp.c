@@ -1499,6 +1499,278 @@ static void addUnused(Program *prog) {
     }
 }
 
+/* ---------------------------------------------------------------- implementation and calls */
+
+static const char *statementEnd(const char *s, const char *end);
+
+/* The range of a declaration: from its line to the end of its block. */
+static void putDeclRange(StrBuf *b, Node *d) {
+    Source *src = d->src;
+    const char *t = src->text, *end = t + src->len;
+    const char *stop = statementEnd(t + offsetOf(src, d->line, d->col), end);
+    int endLine = d->line;
+    for (const char *p = lineStartOf(t, src->len, d->line); p < stop; p++) endLine += *p == '\n';
+    sbPuts(b, "{\"start\":");
+    putPos(b, src, d->line, 1);
+    sbPuts(b, ",\"end\":");
+    putPos(b, src, endLine, (int)(stop - lineStartOf(t, src->len, endLine)) + 1);
+    sbPutc(b, '}');
+}
+
+/* A Location: the file and the name of the declaration. */
+static void putDeclLocation(StrBuf *b, Node *d) {
+    int start, len;
+    if (!nameSpan(d->src, d, NULL, &start, &len)) {
+        start = d->col;
+        len = 1;
+    }
+    char *u = fileUri(d->src->path);
+    sbPuts(b, "{\"uri\":");
+    putStr(b, u ? u : "");
+    sbPuts(b, ",\"range\":");
+    putRange(b, d->src, d->line, start, d->name ? writtenLen(d->name) : len);
+    sbPutc(b, '}');
+    free(u);
+}
+
+/* The interface whose method list holds m, or NULL. */
+static Node *interfaceOf(Program *prog, Node *m) {
+    for (Module *mod = prog->modules; mod; mod = mod->next) {
+        for (int f = 0; f < mod->files.len; f++) {
+            Node *file = mod->files.items[f];
+            for (int i = 0; i < file->list.len; i++) {
+                Node *d = file->list.items[i];
+                if (d->kind != N_INTERFACE) continue;
+                for (int k = 0; k < d->list.len; k++) {
+                    if (sameDecl(d->list.items[k], m)) return d;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static bool sameTypeName(Type *a, Type *b) {
+    if (!a || !b || a->kind == TY_ERROR || b->kind == TY_ERROR) return true;     /* not known: no reason to say no */
+    return a->name && b->name && !strcmp(a->name, b->name);
+}
+
+/* The method of t that the interface method want names, when t has it with
+ * the same number of parameters and, where both are known, the same types.
+ * Self in the interface stands for t, so a type named Self is not compared. */
+static Node *methodFor(Type *t, Node *want) {
+    for (int i = 0; i < t->methods.len; i++) {
+        Node *m = t->methods.items[i];
+        if (!m->name || strcmp(m->name, want->name) != 0 || m->list.len - 1 != want->list.len) continue;
+        bool same = !want->type || (want->type->name && !strcmp(want->type->name, "Self")) || sameTypeName(m->type, want->type);
+        for (int j = 0; same && j < want->list.len; j++) {
+            Type *pt = want->list.items[j]->type;
+            if (pt && pt->name && !strcmp(pt->name, "Self")) continue;
+            same = sameTypeName(pt, m->list.items[j + 1]->type);
+        }
+        if (same) return m;
+    }
+    return NULL;
+}
+
+/* textDocument/implementation: on an interface, the structs that have all
+ * its methods; on a method of an interface, those structs' methods. */
+static void implementation(StrBuf *out, J *id, Program *prog, Source *src, int line, int col) {
+    Node *d = declAt(prog, src, line, col);
+    Node *iface = d && d->kind == N_INTERFACE ? d : d && d->kind == N_FUNC ? interfaceOf(prog, d) : NULL;
+    if (!iface) {
+        reply(out, id, "[]");
+        return;
+    }
+    StrBuf b = {0};
+    sbPutc(&b, '[');
+    bool first = true;
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m->isC) continue;
+        for (int f = 0; f < m->files.len; f++) {
+            Node *file = m->files.items[f];
+            for (int i = 0; i < file->list.len; i++) {
+                Node *st = file->list.items[i];
+                if (st->kind != N_STRUCT || !st->type || st->type->kind != TY_STRUCT || !iface->list.len) continue;
+                Node *hit = NULL;
+                bool all = true;
+                for (int k = 0; k < iface->list.len && all; k++) {
+                    Node *mm = methodFor(st->type, iface->list.items[k]);
+                    all = mm != NULL;
+                    if (mm && sameDecl(iface->list.items[k], d)) hit = mm;
+                }
+                if (!all) continue;
+                Node *at = d == iface ? st : hit;
+                if (!at || !at->src) continue;
+                if (!first) sbPutc(&b, ',');
+                first = false;
+                putDeclLocation(&b, at);
+            }
+        }
+    }
+    sbPutc(&b, ']');
+    reply(out, id, b.buf);
+    sbFree(&b);
+}
+
+/* A CallHierarchyItem for a function, a method or a test. */
+static void putCallItem(StrBuf *b, Program *prog, Node *fn) {
+    StrBuf name = {0}, detail = {0};
+    bool method = fn->kind == N_FUNC && fn->list.len && (fn->list.items[0]->flags & F_SELF);
+    Node *iface = fn->kind == N_FUNC && !method ? interfaceOf(prog, fn) : NULL;
+    if (fn->kind == N_TEST || (fn->flags & F_TESTFN)) {
+        sbPrintf(&name, "test \"%s\"", fn->text ? fn->text : "");
+    } else {
+        if (iface) {
+            sbPrintf(&name, "%s.", iface->name);       /* Shape.area */
+            method = true;
+        } else if (method) {
+            Type *rt = fn->list.items[0]->type;
+            putTypeName(&name, rt && rt->kind == TY_PTR ? rt->elem : rt);
+            sbPutc(&name, '.');
+        }
+        sbPrintf(&name, "%.*s", writtenLen(fn->name), fn->name);
+        signature(&detail, fn);
+    }
+    sbPuts(b, "{\"name\":");
+    putStr(b, name.buf);
+    sbPrintf(b, ",\"kind\":%d", method ? 6 : 12);
+    if (detail.buf) {
+        sbPuts(b, ",\"detail\":");
+        putStr(b, detail.buf);
+    }
+    char *u = fileUri(fn->src->path);
+    sbPuts(b, ",\"uri\":");
+    putStr(b, u ? u : "");
+    free(u);
+    sbPuts(b, ",\"range\":");
+    putDeclRange(b, fn);
+    int start, len;
+    if (fn->kind != N_FUNC || !fn->name || !nameSpan(fn->src, fn, NULL, &start, &len)) {
+        start = fn->col;
+        len = 4;
+    }
+    sbPuts(b, ",\"selectionRange\":");
+    putRange(b, fn->src, fn->line, start, fn->kind == N_FUNC && fn->name ? writtenLen(fn->name) : len);
+    sbPutc(b, '}');
+    sbFree(&name);
+    sbFree(&detail);
+}
+
+/* One call that the walk found: the function that makes it, the function it
+ * calls, and where the name of the callee is. */
+typedef struct {
+    Node *caller, *callee;
+    Source *src;
+    int line, col, len;
+} Call1;
+
+typedef struct {
+    Call1 *items;
+    int n, cap;
+    Node *want;         /* incoming: the callee; outgoing: the caller */
+    bool incoming;
+} Calls;
+
+static void callWalk(Calls *cs, Node *n, Node *fn) {
+    if (!n) return;
+    if (n->kind == N_FUNC || n->kind == N_TEST) fn = n;
+    if (n->kind == N_CALL && n->ref && n->ref->kind == N_FUNC && fn && n->src && !isStdSource(n->src)) {
+        bool hit = cs->incoming ? sameDecl(n->ref, cs->want) : sameDecl(fn, cs->want);
+        int start = n->col, len = 0;
+        if (hit && n->a && nameSpan(n->src, n->a, n, &start, &len) && len > 0) {
+            /* the callee's name as written: sum in p.sum(2) */
+        } else if (hit) {
+            start = wordCol(n->src, n->line, n->col, n->ref->name);
+            len = writtenLen(n->ref->name);
+        }
+        if (hit) {
+            bool seen = false;
+            for (int i = 0; i < cs->n && !seen; i++) {
+                seen = cs->items[i].src == n->src && cs->items[i].line == n->line && cs->items[i].col == start;
+            }
+            if (!seen) {
+                if (cs->n == cs->cap) {
+                    cs->cap = cs->cap ? cs->cap * 2 : 32;
+                    cs->items = realloc(cs->items, (size_t)cs->cap * sizeof *cs->items);
+                }
+                cs->items[cs->n++] = (Call1){fn, n->ref, n->src, n->line, start, len};
+            }
+        }
+    }
+    callWalk(cs, n->a, fn);
+    callWalk(cs, n->b, fn);
+    callWalk(cs, n->c, fn);
+    callWalk(cs, n->d, fn);
+    for (int i = 0; i < n->list.len; i++) callWalk(cs, n->list.items[i], fn);
+    for (int i = 0; i < n->list2.len; i++) callWalk(cs, n->list2.items[i], fn);
+}
+
+/* prepareCallHierarchy: the function at the cursor. callHierarchy/incomingCalls
+ * and outgoingCalls: the calls to it from the project's files, and the calls
+ * in its body, grouped by the other function. */
+static void callHierarchy(StrBuf *out, J *id, const char *method, Program *prog, Source *src, int line, int col) {
+    Node *d = declAt(prog, src, line, col);
+    if (d && d->kind == N_FUNC && (d->flags & F_INSTANCE)) {
+        /* a copy of a generic: the function as written */
+        Node *orig = declAt(prog, d->src, d->line, d->col);
+        if (orig) d = orig;
+    }
+    bool isFn = d && (d->kind == N_FUNC || d->kind == N_TEST) && d->src;
+    if (!strcmp(method, "textDocument/prepareCallHierarchy")) {
+        if (!isFn) {
+            reply(out, id, NULL);
+            return;
+        }
+        StrBuf b = {0};
+        sbPutc(&b, '[');
+        putCallItem(&b, prog, d);
+        sbPutc(&b, ']');
+        reply(out, id, b.buf);
+        sbFree(&b);
+        return;
+    }
+    if (!isFn) {
+        reply(out, id, "[]");
+        return;
+    }
+    Calls cs = {.want = d, .incoming = !strcmp(method, "callHierarchy/incomingCalls")};
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m->isStd || m->isC) continue;
+        for (int i = 0; i < m->files.len; i++) callWalk(&cs, m->files.items[i], NULL);
+    }
+    for (int i = 0; i < prog->instances.len; i++) callWalk(&cs, prog->instances.items[i], NULL);
+    StrBuf b = {0};
+    sbPutc(&b, '[');
+    bool first = true;
+    bool *done = calloc((size_t)cs.n + 1, sizeof *done);
+    for (int i = 0; i < cs.n; i++) {
+        if (done[i]) continue;
+        Node *other = cs.incoming ? cs.items[i].caller : cs.items[i].callee;
+        if (!other->src) continue;
+        if (!first) sbPutc(&b, ',');
+        first = false;
+        sbPuts(&b, cs.incoming ? "{\"from\":" : "{\"to\":");
+        putCallItem(&b, prog, other);
+        sbPuts(&b, ",\"fromRanges\":[");
+        bool firstRange = true;
+        for (int k = i; k < cs.n; k++) {
+            Node *o = cs.incoming ? cs.items[k].caller : cs.items[k].callee;
+            if (done[k] || !sameDecl(o, other)) continue;
+            done[k] = true;
+            if (!firstRange) sbPutc(&b, ',');
+            firstRange = false;
+            putRange(&b, cs.items[k].src, cs.items[k].line, cs.items[k].col, cs.items[k].len);
+        }
+        sbPuts(&b, "]}");
+    }
+    sbPutc(&b, ']');
+    reply(out, id, b.buf);
+    sbFree(&b);
+    free(done);
+    free(cs.items);
+}
+
 /* ---------------------------------------------------------------- semantic tokens */
 
 /* The token types and modifier bits, in the order of the legend that
@@ -3302,6 +3574,8 @@ static void handleInChild(J *msg, StrBuf *out) {
     J *params = jget(msg, "params");
     J *td = jget(params, "textDocument");
     const char *uri = jstr(td, "uri");
+    J *item = jget(params, "item");        /* callHierarchy/incomingCalls and outgoingCalls */
+    if (!uri && item) uri = jstr(item, "uri");
     Doc *doc = uri ? findDoc(uri) : NULL;
     char *path = uri ? pathOf(uri) : NULL;
     if (strcmp(method, "textDocument/formatting") == 0) {
@@ -3320,6 +3594,7 @@ static void handleInChild(J *msg, StrBuf *out) {
         return;
     }
     J *pos = jget(params, "position");
+    if (!pos && item) pos = jget(jget(item, "selectionRange"), "start");
     int line = 0, character = 0;
     if (pos) {
         J *l = jget(pos, "line"), *c = jget(pos, "character");
@@ -3368,6 +3643,8 @@ static void handleInChild(J *msg, StrBuf *out) {
                strcmp(method, "textDocument/inlayHint") == 0 || strcmp(method, "textDocument/documentHighlight") == 0 ||
                strcmp(method, "textDocument/semanticTokens/full") == 0 ||
                strcmp(method, "textDocument/hover") == 0 ||
+               strcmp(method, "textDocument/implementation") == 0 || strcmp(method, "textDocument/prepareCallHierarchy") == 0 ||
+               !strncmp(method, "callHierarchy/", 14) ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
     if (gLenient && doc) closeOpen(doc);
@@ -3407,7 +3684,9 @@ static void handleInChild(J *msg, StrBuf *out) {
     } else {
         prog = NULL;
         src = NULL;
-        bool whole = strcmp(method, "textDocument/references") == 0 || strcmp(method, "textDocument/rename") == 0;
+        bool whole = strcmp(method, "textDocument/references") == 0 || strcmp(method, "textDocument/rename") == 0 ||
+                     strcmp(method, "textDocument/implementation") == 0 ||
+                     strcmp(method, "textDocument/prepareCallHierarchy") == 0 || !strncmp(method, "callHierarchy/", 14);
         char root[4096] = "";
         if (whole && path) projectRoot(path, root, sizeof root);
         const char *slash = path ? strrchr(path, '/') : NULL;
@@ -3440,6 +3719,10 @@ static void handleInChild(J *msg, StrBuf *out) {
         renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
     } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
         highlights(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/implementation") == 0) {
+        implementation(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/prepareCallHierarchy") == 0 || !strncmp(method, "callHierarchy/", 14)) {
+        callHierarchy(out, id, method, prog, src, line, col);
     } else if (strcmp(method, "textDocument/semanticTokens/full") == 0) {
         semanticTokens(out, id, prog, src);
     } else if (strcmp(method, "textDocument/inlayHint") == 0) {
@@ -3572,7 +3855,7 @@ int cmdLsp(void) {
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
-                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true,"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true,\"implementationProvider\":true,\"callHierarchyProvider\":true,"
                          "\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"namespace\",\"type\",\"struct\",\"enum\","
                          "\"enumMember\",\"parameter\",\"variable\",\"property\",\"function\",\"method\"],"
                          "\"tokenModifiers\":[\"declaration\",\"readonly\",\"defaultLibrary\"]},\"full\":true}},"
@@ -3615,6 +3898,9 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/inlayHint") == 0 ||
                    strcmp(method, "textDocument/documentHighlight") == 0 || strcmp(method, "workspace/symbol") == 0 ||
                    strcmp(method, "textDocument/semanticTokens/full") == 0 ||
+                   strcmp(method, "textDocument/implementation") == 0 ||
+                   strcmp(method, "textDocument/prepareCallHierarchy") == 0 ||
+                   strcmp(method, "callHierarchy/incomingCalls") == 0 || strcmp(method, "callHierarchy/outgoingCalls") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||
