@@ -1,0 +1,31 @@
+// gdb: break main.iris:27
+// gdb: run
+// gdb: iris task 2 frame function handle
+// expect: ) at main.iris:14
+
+// A task waits in a std call with a default parameter (readLine's limit),
+// and the call has a catch. The caller's frame shows the line of the call.
+
+import net
+
+void handle(net.Conn c) {
+    defer c.close()
+    for {
+        line := c.readLine() catch e {
+            break
+        }
+        line.free()
+    }
+}
+
+!void main() {
+    ln := try net.listen(0, "127.0.0.1")
+    c := try net.dial("127.0.0.1", ln.port)
+    conn := try ln.accept()
+    spawn handle(conn)
+    sleep(100ms)
+    i64 here = 1
+    print("{here}")
+    c.close()
+    sleep(100ms)
+}

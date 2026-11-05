@@ -217,6 +217,11 @@ static int dbgFile(IR *ir, const char *path) {
 
 /* Where the code written next comes from. */
 static void dbgAt(IR *ir, Node *n) {
+    /* a node of another file, such as the default value of a parameter,
+     * keeps the line of the code that uses it */
+    if (n && n->src && ir->func && ir->func->src && n->src != ir->func->src) {
+        return;
+    }
     if (n && n->line > 0) {
         ir->dbgLine = n->line;
         ir->dbgCol = n->col;
