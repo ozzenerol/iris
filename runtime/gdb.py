@@ -12,6 +12,10 @@
 #   iris tasks            one line for each task of the program
 #   iris tasks --json     the same as JSON, for tools
 #   iris task N [CMD]     runs CMD (default: backtrace) on the stack of task N
+#   iris finish           finish, with the value of a List, String, tuple or struct read right
+#
+# MI command for tools:
+#   -iris-return-value F  after -exec-finish: the value that function F returned
 #
 # Functions for breakpoint conditions on text (str, String, u8[] or "text"):
 #   $iris_eq(a, b), $iris_contains(s, part), $iris_starts(s, start), $iris_ends(s, end)
@@ -1063,18 +1067,19 @@ def _return_type(frame):
 class IrisFinishCommand(gdb.Command):
     """Run until the selected frame returns, and print the value that it returns.
 
-This is gdb's finish. It reads the value from the registers where the Iris
-compiler puts it, so a List, a String, a tuple or a struct shows right."""
+This is gdb's finish, with the value read from the registers where the Iris
+compiler puts it: a List, a String, a tuple or a struct shows right. gdb's
+own finish stays as it is, for MI (-exec-finish) and for other values."""
 
     def __init__(self):
-        super().__init__("finish", gdb.COMMAND_RUNNING)
+        super().__init__("iris finish", gdb.COMMAND_RUNNING)
 
     def invoke(self, arg, from_tty):
         if arg.strip():
-            raise gdb.GdbError("finish takes no argument")
+            raise gdb.GdbError("usage: iris finish")
         frame = gdb.selected_frame()
         if frame.older() is None:
-            raise gdb.GdbError('"finish" not meaningful in the outermost frame.')
+            raise gdb.GdbError('"iris finish" not meaningful in the outermost frame.')
         where = gdb.execute("frame", to_string=True).splitlines()[0]
         gdb.write("Run till exit from %s\n" % where)
         rtype = _return_type(frame)
@@ -1109,6 +1114,42 @@ def _drop_c_main(bp):
             l.enabled = False
 
 
+def _function_type(name):
+    """The return type of the function NAME, or None."""
+    for look in (lambda: gdb.lookup_symbol(name)[0], lambda: gdb.lookup_static_symbol(name),
+                 lambda: gdb.lookup_global_symbol(name)):
+        try:
+            sym = look()
+        except gdb.error:
+            sym = None
+        if sym is not None and sym.type is not None and sym.type.strip_typedefs().code == gdb.TYPE_CODE_FUNC:
+            r = sym.type.strip_typedefs().target()
+            return None if r is None or r.strip_typedefs().code == gdb.TYPE_CODE_VOID else r
+    return None
+
+
+if hasattr(gdb, "MICommand"):
+    class IrisReturnValueMI(gdb.MICommand):
+        """-iris-return-value FUNCTION: the value that FUNCTION returned, right
+        after -exec-finish stops in its caller. The result has gdb-result-var
+        and return-value as -exec-finish does, or registers="no" when gdb's
+        own return-value of -exec-finish is right for this type."""
+
+        def __init__(self):
+            super().__init__("-iris-return-value")
+
+        def invoke(self, argv):
+            if len(argv) != 1:
+                raise gdb.GdbError("usage: -iris-return-value FUNCTION")
+            rtype = _function_type(argv[0])
+            leaves = _llvm_leaves(rtype)
+            if not leaves:
+                return {"registers": "no"}
+            value = _llvm_return(gdb.newest_frame(), rtype, leaves)
+            n = gdb.add_history(value)
+            return {"registers": "yes", "gdb-result-var": "$%d" % n, "return-value": value.format_string()}
+
+
 # Each program can load the script again: it adds the printers once.
 if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_printers):
     gdb.pretty_printers.append(iris_lookup)
@@ -1116,6 +1157,8 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     IrisTasksCommand()
     IrisTaskCommand()
     IrisFinishCommand()
+    if hasattr(gdb, "MICommand"):
+        IrisReturnValueMI()
     gdb.events.breakpoint_created.connect(_drop_c_main)
     gdb.events.breakpoint_modified.connect(_drop_c_main)
     _add_functions()
