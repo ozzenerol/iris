@@ -1499,6 +1499,143 @@ static void addUnused(Program *prog) {
     }
 }
 
+/* ---------------------------------------------------------------- semantic tokens */
+
+/* The token types and modifier bits, in the order of the legend that
+ * initialize gives (semanticTokensProvider). */
+enum { ST_NAMESPACE, ST_TYPE, ST_STRUCT, ST_ENUM, ST_MEMBER, ST_PARAM, ST_VAR, ST_PROP, ST_FUNC, ST_METHOD };
+enum { SM_DECL = 1, SM_READONLY = 2, SM_STD = 4 };
+
+typedef struct {
+    int line, col, len, type, mods;
+} SemTok;
+
+typedef struct {
+    Program *prog;
+    Source *src;
+    SemTok *toks;
+    int n, cap;
+} Sem;
+
+static void semAdd(Sem *s, int line, int col, int len, int type, int mods) {
+    if (len <= 0 || line < 1 || col < 1) return;
+    if (s->n == s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 256;
+        s->toks = realloc(s->toks, (size_t)s->cap * sizeof *s->toks);
+    }
+    s->toks[s->n++] = (SemTok){line, col, len, type, mods};
+}
+
+/* A module that the program loads, by its name in the code: json, fs. */
+static bool isModuleName(Program *prog, const char *s, size_t n) {
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m != prog->main && !m->isC && m->name && strlen(m->name) == n && !strncmp(m->name, s, n)) return true;
+    }
+    return false;
+}
+
+static int semType(Node *d, int *mods) {
+    switch (d->kind) {
+    case N_STRUCT: return ST_STRUCT;
+    case N_ENUM: return ST_ENUM;
+    case N_INTERFACE: case N_TYPEDEF: case N_TYPE_PARAM: return ST_TYPE;
+    case N_ENUM_MEMBER: return ST_MEMBER;
+    case N_PARAM: case N_SELF_PARAM: return ST_PARAM;
+    case N_FIELD: case N_EMBED: return ST_PROP;
+    case N_FUNC: return d->list.len && (d->list.items[0]->flags & F_SELF) ? ST_METHOD : ST_FUNC;
+    case N_CONST:
+        *mods |= SM_READONLY;
+        return ST_VAR;
+    default: return ST_VAR;
+    }
+}
+
+static void semWalk(Sem *s, Node *n, Node *parent, Node *fn) {
+    if (!n) return;
+    if (n->src == s->src) {
+        int start, len;
+        if (n->kind == N_IMPORT_ITEM && !(n->flags & F_C_IMPORT) && !n->text && n->name) {
+            semAdd(s, n->line, n->col, (int)strlen(n->name), ST_NAMESPACE, SM_DECL);
+        } else if (nameSpan(s->src, n, parent, &start, &len) && len > 0) {
+            Node *d = declOf(n, parent);
+            if (!d) d = typeNamed(s->prog, s->src, n, fn);
+            if (n->kind == N_ENUM_DOT) {
+                start++;        /* .admin: the name after the dot */
+                len--;
+            }
+            if (n->kind == N_T_NAME && n->name && strchr(n->name, '.')) {
+                /* sqlite.Db: the module before the dot */
+                semAdd(s, n->line, n->col, (int)(strrchr(n->name, '.') - n->name), ST_NAMESPACE, 0);
+            }
+            const char *ls = lineStartOf(s->src->text, s->src->len, n->line), *t = ls + start - 1;
+            if ((n->kind == N_FIELD_ACCESS || n->kind == N_IDENT) && t - 1 > ls && t[-1] == '.') {
+                /* json.encode: the checker keeps no node for json */
+                const char *m = t - 1;
+                while (m > ls && (isalnum((unsigned char)m[-1]) || m[-1] == '_')) m--;
+                if (m < t - 1 && (m == ls || m[-1] != '.') && isModuleName(s->prog, m, (size_t)(t - 1 - m))) {
+                    semAdd(s, n->line, (int)(m - ls) + 1, (int)(t - 1 - m), ST_NAMESPACE, 0);
+                }
+            }
+            if (d && (d->kind == N_IMPORT || d->kind == N_IMPORT_ITEM)) {
+                semAdd(s, n->line, start, len, ST_NAMESPACE, 0);
+            } else if (d) {
+                int mods = 0;
+                int type = semType(d, &mods);
+                if (d == n || sameDecl(n, d)) mods |= SM_DECL;
+                if (!d->src || isStdSource(d->src)) mods |= SM_STD;
+                semAdd(s, n->line, start, len, type, mods);
+            } else if ((n->kind == N_IDENT || n->kind == N_FIELD_ACCESS) && isModuleName(s->prog, t, (size_t)len)) {
+                semAdd(s, n->line, start, len, ST_NAMESPACE, 0);
+            } else if (n->kind == N_IDENT && parent && parent->kind == N_CALL && parent->a == n && n->name &&
+                       builtinOf(n->name)) {
+                semAdd(s, n->line, start, len, ST_FUNC, SM_STD);      /* print, format, panic */
+            }
+        }
+    }
+    if (n->kind == N_FUNC) fn = n;
+    semWalk(s, n->a, n, fn);
+    semWalk(s, n->b, n, fn);
+    semWalk(s, n->c, n, fn);
+    semWalk(s, n->d, n, fn);
+    for (int i = 0; i < n->list.len; i++) semWalk(s, n->list.items[i], n, fn);
+    for (int i = 0; i < n->list2.len; i++) semWalk(s, n->list2.items[i], n, fn);
+}
+
+static int semOrder(const void *a, const void *b) {
+    const SemTok *x = a, *y = b;
+    return x->line != y->line ? x->line - y->line : x->col - y->col;
+}
+
+/* textDocument/semanticTokens/full: the names of the file by what they
+ * name, as LSP encodes them: five numbers for each token, relative to the
+ * token before it, in UTF-16 units. */
+static void semanticTokens(StrBuf *out, J *id, Program *prog, Source *src) {
+    Sem s = {prog, src, NULL, 0, 0};
+    for (Module *m = prog && src ? prog->modules : NULL; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            if (m->files.items[f]->src == src) semWalk(&s, m->files.items[f], NULL, NULL);
+        }
+    }
+    if (s.n) qsort(s.toks, (size_t)s.n, sizeof *s.toks, semOrder);
+    StrBuf r = {0};
+    sbPuts(&r, "{\"data\":[");
+    int line = 1, col = 0, count = 0;
+    for (int i = 0; i < s.n; i++) {
+        SemTok *k = &s.toks[i];
+        if (i && k->line == s.toks[i - 1].line && k->col < s.toks[i - 1].col + s.toks[i - 1].len) continue;  /* overlaps */
+        const char *ls = lineStartOf(src->text, src->len, k->line), *le = src->text + src->len;
+        int c = utf16Col(ls, le, k->col), e = utf16Col(ls, le, k->col + k->len);
+        int dl = k->line - line, dc = dl ? c : c - col;
+        sbPrintf(&r, "%s%d,%d,%d,%d,%d", count++ ? "," : "", dl, dc, e - c, k->type, k->mods);
+        line = k->line;
+        col = c;
+    }
+    sbPuts(&r, "]}");
+    reply(out, id, r.buf);
+    sbFree(&r);
+    free(s.toks);
+}
+
 /* textDocument/documentHighlight: the uses in this file of the name at the
  * cursor. Kind 3 (write) for the declaration and the places that get a
  * value, kind 2 (read) for the others. */
@@ -3229,6 +3366,7 @@ static void handleInChild(J *msg, StrBuf *out) {
     /* a line being typed seldom parses: answer from what the parser could read */
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
                strcmp(method, "textDocument/inlayHint") == 0 || strcmp(method, "textDocument/documentHighlight") == 0 ||
+               strcmp(method, "textDocument/semanticTokens/full") == 0 ||
                strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
@@ -3302,6 +3440,8 @@ static void handleInChild(J *msg, StrBuf *out) {
         renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
     } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
         highlights(out, id, prog, src, line, col);
+    } else if (strcmp(method, "textDocument/semanticTokens/full") == 0) {
+        semanticTokens(out, id, prog, src);
     } else if (strcmp(method, "textDocument/inlayHint") == 0) {
         inlayHints(out, id, params, prog, src);
     } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
@@ -3432,7 +3572,10 @@ int cmdLsp(void) {
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
-                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true},"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true,"
+                         "\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"namespace\",\"type\",\"struct\",\"enum\","
+                         "\"enumMember\",\"parameter\",\"variable\",\"property\",\"function\",\"method\"],"
+                         "\"tokenModifiers\":[\"declaration\",\"readonly\",\"defaultLibrary\"]},\"full\":true}},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -3471,6 +3614,7 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/signatureHelp") == 0 ||
                    strcmp(method, "textDocument/inlayHint") == 0 ||
                    strcmp(method, "textDocument/documentHighlight") == 0 || strcmp(method, "workspace/symbol") == 0 ||
+                   strcmp(method, "textDocument/semanticTokens/full") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||

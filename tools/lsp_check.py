@@ -329,6 +329,41 @@ def main():
     got = marks(10, 0)
     check("no highlights on a blank line: %r" % got, got == [])
 
+    # semantic tokens: each name by what it names
+    legend = init["result"]["capabilities"].get("semanticTokensProvider", {}).get("legend", {})
+    check("semantic token legend: %r" % legend, legend == {
+        "tokenTypes": ["namespace", "type", "struct", "enum", "enumMember", "parameter", "variable", "property",
+                       "function", "method"],
+        "tokenModifiers": ["declaration", "readonly", "defaultLibrary"]})
+    body = ("import json, sqlite\n\nconst i64 MAX = 3\n\nenum Kind { cat, dog }\n\n@json\nstruct Point {\n    i64 x\n"
+            "    Kind k\n}\n\ni64 Point.sum(i64 by) => self.x + by + MAX\n\nvoid main() {\n    p := Point{x: 1, k: .cat}\n"
+            "    s := json.encode(p)\n    sqlite.Db db\n    for i in 0..p.sum(2) {\n        print(\"{i}\")\n    }\n"
+            "    v := \"\u00e9\" + s\n}\n")
+    version[0] += 1
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": body}]})
+    r = c.request("textDocument/semanticTokens/full", {"textDocument": td})
+    data = (r and r.get("result") or {}).get("data", [])
+    lines, toks, line, col = body.split("\n"), [], 0, 0
+    for i in range(0, len(data), 5):
+        dl, dc, n, ty, md = data[i:i + 5]
+        line += dl
+        col = dc if dl else col + dc
+        mods = "".join("DRS"[b] for b in range(3) if md >> b & 1)
+        toks.append((line, lines[line][col:col + n], legend.get("tokenTypes", [""] * 10)[ty], mods))
+    check("semantic tokens: %r" % toks, toks == [
+        (0, "json", "namespace", "D"), (0, "sqlite", "namespace", "D"), (2, "MAX", "variable", "DR"),
+        (4, "Kind", "enum", "D"), (4, "cat", "enumMember", "D"), (4, "dog", "enumMember", "D"),
+        (7, "Point", "struct", "D"), (8, "x", "property", "D"), (9, "Kind", "enum", ""), (9, "k", "property", "D"),
+        (12, "Point", "struct", ""), (12, "sum", "method", "D"), (12, "by", "parameter", "D"),
+        (12, "self", "parameter", ""), (12, "x", "property", ""), (12, "by", "parameter", ""),
+        (12, "MAX", "variable", "R"), (14, "main", "function", "D"), (15, "p", "variable", "D"),
+        (15, "Point", "struct", ""), (15, "x", "property", ""), (15, "k", "property", ""),
+        (15, "cat", "enumMember", ""), (16, "s", "variable", "D"), (16, "json", "namespace", ""),
+        (16, "encode", "function", "S"), (16, "p", "variable", ""), (17, "sqlite", "namespace", ""),
+        (17, "Db", "struct", "S"), (17, "db", "variable", "D"), (18, "i", "variable", "D"), (18, "p", "variable", ""),
+        (18, "sum", "method", ""), (19, "print", "function", "S"), (19, "i", "variable", ""),
+        (21, "v", "variable", "D"), (21, "s", "variable", "")])
+
     fields = lambda text: [x["label"] for x in ask(head + text, "textDocument/completion") or []]
     check("fields of P{: %r" % fields("    q := P{|}\n}\n"), fields("    q := P{|}\n}\n") == ["x", "y", "name"])
     check("fields of P{x: 1, : %r" % fields("    q := P{x: 1, |}\n}\n"), fields("    q := P{x: 1, |}\n}\n") == ["y", "name"])
