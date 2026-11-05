@@ -218,6 +218,10 @@ For this, the printers set gdb's language to C++, where gdb lets Python give ope
 
 A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 
+`step` and `next` stop only on lines of Iris code. In a `for` loop they stop on the loop's line before each item, and in a `match` only on the arm that runs. The code that the compiler makes for `defer`, `scoped`, `try` and `catch` has no stop of its own. `step` goes into a function of the standard library, and over a call into the runtime. `break main` stops in the Iris `main`. Past the end of `main`, `next` goes on to libc, as in C. In a backtrace, `iris.start` is the C `main` that calls the Iris `main`.
+
+`finish` shows the value that a function returns with the printers, such as `Value returned is $1 = List[i64](len=2) = {1, 2}`. This works for a `List`, a `String`, a tuple and a struct. The compiler returns a struct in registers where C uses memory, so the printers' `finish` reads those registers.
+
 Each block, loop and match arm is a scope in the debug information, and a variable's scope starts at its line. `info locals` shows only the variables that the code at the stop can use. `watch total` and `watch p.x` stop the program when a variable or a field changes.
 
 `break iris_panicked` stops the program when it panics, after the message is printed. `backtrace` then shows where the panic came from.

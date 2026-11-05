@@ -1,0 +1,173 @@
+// gdb: break main
+// gdb: run
+// gdb: info breakpoints
+// gdb: break half
+// gdb: break name
+// gdb: break nums
+// gdb: break pair
+// gdb: break point
+// gdb: break reals
+// gdb: break seven
+// gdb: break shape
+// gdb: break text
+// gdb: break wide
+// gdb: break fact if n == 2
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: continue
+// gdb: finish
+// gdb: finish
+// gdb: bt
+// expect: Breakpoint 1.1, main () at main.iris:159
+// expect: in iris.start at main.iris:158
+// expect: Run till exit from #0  seven (
+// expect: Value returned is $1 = 7
+// expect: Run till exit from #0  name (
+// expect: Value returned is $2 = "iris"
+// expect: Run till exit from #0  nums (
+// expect: Value returned is $3 = List[i64](len=2) = {1, 2}
+// expect: Run till exit from #0  text (
+// expect: Value returned is $4 = "a1"
+// expect: Run till exit from #0  half (
+// expect: Value returned is $5 = 4
+// expect: Run till exit from #0  half (
+// expect: Value returned is $6 = error(Bad.neg)
+// expect: Run till exit from #0  point (
+// expect: Value returned is $7 = {x = 3, y = 4}
+// expect: Run till exit from #0  reals (
+// expect: Value returned is $8 = {a = 1.5, b = 2.5, c = 3.5}
+// expect: Run till exit from #0  wide (
+// expect: Value returned is $9 = {a = 1, b = 2, c = 3, d = 4}
+// expect: Run till exit from #0  pair (
+// expect: Value returned is $10 = (5, "x")
+// expect: Run till exit from #0  shape (
+// expect: Value returned is $11 = Shape.rect = {w = 2, h = 3}
+// expect: Run till exit from #0  fact (n=2)
+// expect: in fact (n=3) at main.iris:155
+// expect: Value returned is $12 = 2
+// expect: in fact (n=4) at main.iris:155
+// expect: Value returned is $13 = 6
+// expect: in main () at main.iris:170
+// expect: in iris.start () at main.iris:158
+// absent: Breakpoint 1.2,
+// absent: Python Exception
+// absent: Breakpoint -
+
+// finish shows the value that a function returns with its Iris type. LLVM
+// returns a struct in registers where C would use memory, and the printers
+// read it from there. "break main" stops in the Iris main only.
+
+enum Bad { neg }
+
+enum Shape {
+    circle(f64 r)
+    rect(i64 w, i64 h)
+}
+
+struct P {
+    i32 x
+    i32 y
+}
+
+struct R {
+    f64 a
+    f64 b
+    f64 c
+}
+
+struct W {
+    i64 a
+    i64 b
+    i64 c
+    i64 d
+}
+
+i64 seven() {
+    return 7
+}
+
+str name() {
+    return "iris"
+}
+
+List[i64] nums() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    return xs
+}
+
+String text() {
+    return format("a{1}")
+}
+
+!i64 half(i64 n) {
+    if n < 0 {
+        return error(Bad.neg, "negative")
+    }
+    return n / 2
+}
+
+P point() {
+    return P{x: 3, y: 4}
+}
+
+R reals() {
+    return R{a: 1.5, b: 2.5, c: 3.5}
+}
+
+W wide() {
+    return W{a: 1, b: 2, c: 3, d: 4}
+}
+
+(i64, str) pair() {
+    return (5, "x")
+}
+
+Shape shape() {
+    return Shape.rect(2, 3)
+}
+
+i64 fact(i64 n) {
+    if n < 2 {
+        return 1
+    }
+    return n * fact(n - 1)
+}
+
+void main() {
+    a := seven()
+    b := name()
+    c := nums()
+    scoped String d = text()
+    e := half(8) catch 0
+    f := half(-1) catch 0
+    p := point()
+    r := reals()
+    w := wide()
+    t0, t1 := pair()
+    s := shape()
+    g := fact(4)
+    print("{a} {b} {c.len} {d} {e} {f} {p.x} {r.c} {w.d} {t0} {t1} {g}")
+    c.free()
+}

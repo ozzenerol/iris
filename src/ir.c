@@ -72,6 +72,7 @@ typedef struct {
     int *dbgIds;
     int ndbg, capDbg;
     int dbgScope;           /* the current DISubprogram or DILexicalBlock, 0 for none */
+    bool dbgPin;            /* dbgLine stays as it is: code the compiler made for a line */
     const char **aliases;   /* the names dbgAlias gave, a hash set */
     int aliasLen, aliasCap;
     int dbgLine, dbgCol;    /* where the code being written comes from */
@@ -222,7 +223,7 @@ static void dbgAt(IR *ir, Node *n) {
     if (n && n->src && ir->func && ir->func->src && n->src != ir->func->src) {
         return;
     }
-    if (n && n->line > 0) {
+    if (n && n->line > 0 && !ir->dbgPin) {
         ir->dbgLine = n->line;
         ir->dbgCol = n->col;
     }
@@ -4233,6 +4234,7 @@ static Val emitIf(IR *ir, Node *n, bool wantValue) {
     Type *t = n->type;
     bool value = wantValue && hasValue(t);
     const char *slot = value ? allocaFor(ir, t, "if") : NULL;
+    dbgAt(ir, n);       /* an else if's test is its own line's, not the block's before it */
     Val c = emitExpr(ir, n->a);
     int yes = newLabel(ir), no = newLabel(ir), end = newLabel(ir);
     condBr(ir, c.s, yes, n->d ? no : end);
@@ -4281,6 +4283,16 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
     for (int i = 0; i < m->list.len; i++) {
         Node *arm = m->list.items[i];
         int body = newLabel(ir), next = newLabel(ir);
+        /* the tests of the patterns are the match line's: a step stops
+         * only on the arm that runs, not on the arms it tests */
+        dbgAt(ir, m);
+        if (i > 0) {
+            /* after the arm before it in the code: line 0, so a step does
+             * not stop on the match line a second time */
+            ir->dbgLine = 0;
+            ir->dbgCol = 0;
+        }
+        ir->dbgPin = true;
         for (int j = 0; j < arm->list.len; j++) {
             Node *p = arm->list.items[j];
             int tryNext = j + 1 < arm->list.len ? newLabel(ir) : next;
@@ -4307,7 +4319,9 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
                 placeLabel(ir, tryNext);
             }
         }
+        ir->dbgPin = false;
         placeLabel(ir, body);
+        dbgAt(ir, arm->c && arm->c->line > 0 ? arm->c : arm);
         int armScope = dbgEnter(ir, arm);
         if (dataEnum && arm->list.len == 1 && arm->list.items[0]->kind == N_CALL) {
             /* take the value apart into the names the pattern gives */
@@ -4465,6 +4479,7 @@ static void emitForIn(IR *ir, Node *s) {
         ir->loop = &loop;
         emitBlock(ir, s->c);
         ir->loop = loop.outer;
+        dbgAt(ir, s);   /* the step to the next item is the for line's, as in C */
         placeLabel(ir, post);
         Val cur = load(ir, v->ir, t);
         const char *nx = tmp(ir);
@@ -4511,6 +4526,7 @@ static void emitForIn(IR *ir, Node *s) {
         ir->loop = &loop;
         emitBlock(ir, s->c);
         ir->loop = loop.outer;
+        dbgAt(ir, s);   /* the step to the next item is the for line's, as in C */
         placeLabel(ir, post);
         br(ir, cond);
         placeLabel(ir, end);
@@ -4553,6 +4569,7 @@ static void emitForIn(IR *ir, Node *s) {
         ir->loop = &loop;
         emitBlock(ir, s->c);
         ir->loop = loop.outer;
+        dbgAt(ir, s);   /* the step to the next item is the for line's, as in C */
         placeLabel(ir, post);
         Val cur = load(ir, iSlot, &tyI64);
         const char *nx = tmp(ir);
@@ -4574,6 +4591,7 @@ static void emitForIn(IR *ir, Node *s) {
     ir->loop = &loop;
     emitBlock(ir, s->c);
     ir->loop = loop.outer;
+    dbgAt(ir, s);
     placeLabel(ir, post);
     br(ir, cond);
     placeLabel(ir, end);
@@ -5611,6 +5629,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
     if (funcs.buf) {
         sbPuts(&out, funcs.buf);
     }
+    size_t wrapAt = out.len;        /* the C main, which calls the Iris main */
     sbPrintf(&out, "define i32 @main(i32 %%argc, ptr %%argv)%s {\n", mode == MODE_DEBUG ? " #0" : "");
     sbPuts(&out, "  call void @iris_init(i32 %argc, ptr %argv)\n");
     if (gBenching) {
@@ -5645,6 +5664,34 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
                  mainFn->ir);
     } else {
         sbPrintf(&out, "  call void %s()\n  ret i32 0\n}\n\n", mainFn ? mainFn->ir : "@\"f.main.main#0\"");
+    }
+    if (!gBenching && !gTesting && mainFn && mainFn->src) {
+        /* the C main gets a DISubprogram, iris.start, and the line of the
+         * Iris main for each instruction: "next" past the end of main goes
+         * on to libc, as in C, and a backtrace shows no line of other code */
+        int mfile = dbgFile(&ir, mainFn->src->path);
+        int sp = ir.metaId++, loc = ir.metaId++;
+        sbPrintf(&ir.meta, "!%d = distinct !DISubprogram(name: \"iris.start\", scope: !%d, file: !%d, line: %d, "
+                           "type: !11, scopeLine: %d, flags: DIFlagArtificial, spFlags: DISPFlagDefinition, unit: !10)\n"
+                           "!%d = !DILocation(line: %d, scope: !%d)\n",
+                 sp, mfile, mfile, mainFn->line, mainFn->line, loc, mainFn->line, sp);
+        StrBuf w = {0};
+        const char *at = out.buf + wrapAt;
+        for (const char *nl; (nl = strchr(at, '\n')); at = nl + 1) {
+            size_t n = (size_t)(nl - at);
+            if (at == out.buf + wrapAt) {
+                sbPutn(&w, at, n - 2);                  /* the define line, before its " {" */
+                sbPrintf(&w, " !dbg !%d {\n", sp);
+            } else if (n > 2 && at[0] == ' ' && at[1] == ' ') {
+                sbPutn(&w, at, n);
+                sbPrintf(&w, ", !dbg !%d\n", loc);
+            } else {
+                sbPutn(&w, at, n + 1);
+            }
+        }
+        out.len = wrapAt;
+        sbPutn(&out, w.buf, w.len);
+        sbFree(&w);
     }
     /* libc functions the generated code uses, unless import c declared them */
     static const struct { const char *name, *decl; } libc[] = {

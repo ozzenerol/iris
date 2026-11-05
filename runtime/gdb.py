@@ -18,6 +18,7 @@
 
 import json
 import os
+import re
 import gdb
 import struct
 
@@ -899,15 +900,231 @@ of a thread are put on the task's stack while CMD runs, and back after."""
         raise gdb.GdbError("iris: no task %d" % n)
 
 
+# "finish" and the return value. On x86_64, LLVM returns a struct in up to 3
+# integer registers (rax, rdx, rcx) and 4 float registers (xmm0, xmm1, st0,
+# st1), one leaf of the struct in each. C puts 2 eightbytes in registers and
+# a larger struct in memory, and gdb reads the value by the C rules. So gdb
+# shows the wrong value for a List, a String, a tuple or a struct of i32.
+# This "finish" reads the registers as LLVM sets them.
+
+_INT_RET = ("rax", "rdx", "rcx")
+_FLOAT_RET = ("xmm0", "xmm1", "st0", "st1")
+
+
+def _leaves(t, off, out):
+    """Add the scalar leaves of t that LLVM returns, as (offset, size, is_float).
+    Return False for a layout that is not certain, such as a bit field."""
+    t = t.strip_typedefs()
+    c = t.code
+    if c == gdb.TYPE_CODE_STRUCT:
+        end = 0
+        for f in t.fields():
+            if not hasattr(f, "bitpos") or f.is_base_class:
+                continue
+            if f.bitsize or f.bitpos % 8:
+                return False
+            at = f.bitpos // 8
+            ft = f.type.strip_typedefs()
+            # check.c puts an [N x i8] slot into a gap that LLVM would not leave
+            if at - end >= max(1, min(ft.alignof, 8)):
+                return False
+            if not _leaves(ft, off + at, out):
+                return False
+            end = at + ft.sizeof
+        return True
+    if c == gdb.TYPE_CODE_ARRAY:
+        el = t.target()
+        if el.sizeof == 0:
+            return True
+        for i in range(t.sizeof // el.sizeof):
+            if not _leaves(el, off + i * el.sizeof, out):
+                return False
+        return True
+    if c == gdb.TYPE_CODE_UNION:
+        # the payload of an enum with data: an [N x i64] array in the IR
+        for i in range((t.sizeof + 7) // 8):
+            out.append((off + 8 * i, 8, False))
+        return True
+    if c == gdb.TYPE_CODE_FLT:
+        if t.sizeof not in (4, 8):
+            return False
+        out.append((off, t.sizeof, True))
+        return True
+    if c in (gdb.TYPE_CODE_INT, gdb.TYPE_CODE_PTR, gdb.TYPE_CODE_BOOL, gdb.TYPE_CODE_ENUM,
+             gdb.TYPE_CODE_CHAR):
+        if t.sizeof > 8:
+            return False
+        out.append((off, t.sizeof, False))
+        return True
+    return False
+
+
+def _float_bytes(frame, reg, size):
+    v = frame.read_register(reg)
+    if reg.startswith("st"):
+        return struct.pack("<f" if size == 4 else "<d", float(v))
+    return int(v["uint128"]).to_bytes(16, "little")[:size]
+
+
+def _llvm_leaves(t):
+    """Give the leaves of t when LLVM returns t in registers on x86_64 and C
+    does not. Give None for a scalar, for a struct that LLVM returns in memory
+    (as C does, with the address in rax) and for other machines."""
+    if t is None or _arch_name() != "x86_64":
+        return None
+    t = t.strip_typedefs()
+    if t.code not in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_UNION):
+        return None
+    leaves = []
+    if not _leaves(t, 0, leaves):
+        return None
+    if sum(not l[2] for l in leaves) > len(_INT_RET) or sum(l[2] for l in leaves) > len(_FLOAT_RET):
+        return None
+    return leaves
+
+
+def _arch_name():
+    try:
+        return _arch()
+    except gdb.GdbError:
+        return None
+
+
+def _llvm_return(frame, t, leaves):
+    """Read a value of type t from the registers where LLVM returns it."""
+    t = t.strip_typedefs()
+    buf = bytearray(t.sizeof)
+    ints = [l for l in leaves if not l[2]]
+    floats = [l for l in leaves if l[2]]
+    for (off, size, _), reg in zip(ints, _INT_RET):
+        n = int(frame.read_register(reg)) & ((1 << 64) - 1)
+        part = n.to_bytes(8, "little")[:min(size, t.sizeof - off)]
+        buf[off:off + len(part)] = part
+    for (off, size, _), reg in zip(floats, _FLOAT_RET):
+        buf[off:off + size] = _float_bytes(frame, reg, size)
+    return gdb.Value(bytes(buf), t)
+
+
+class _RegisterReturn(gdb.Breakpoint):
+    """Stops where the frame returns to its caller, in the same thread, and
+    reads the value that LLVM put in the registers."""
+
+    def __init__(self, frame, rtype, leaves):
+        self.caller = frame.older()
+        super().__init__("*0x%x" % self.caller.pc(), internal=True)
+        self.thread = gdb.selected_thread().global_num
+        self.rtype = rtype
+        self.leaves = leaves
+        self.value = None
+        self.hit = False
+
+    def stop(self):
+        if gdb.newest_frame() != self.caller:
+            return False            # the return of a deeper call
+        self.hit = True
+        try:
+            self.value = _llvm_return(gdb.newest_frame(), self.rtype, self.leaves)
+        except gdb.error:
+            self.value = None
+        return True
+
+
+class _GdbReturn(gdb.FinishBreakpoint):
+    """gdb's own finish breakpoint, for a value that gdb reads right."""
+
+    def __init__(self, frame):
+        super().__init__(frame, internal=True)
+        self.value = None
+        self.hit = False
+
+    def stop(self):
+        self.hit = True
+        if self.return_value is not None:
+            self.value = self.return_value
+            self.value.fetch_lazy()
+        return True
+
+    def out_of_scope(self):
+        pass
+
+
+def _return_type(frame):
+    fn = frame.function()
+    if fn is None:
+        return None
+    t = fn.type.strip_typedefs()
+    if t.code != gdb.TYPE_CODE_FUNC or t.target() is None:
+        return None
+    if t.target().strip_typedefs().code == gdb.TYPE_CODE_VOID:
+        return None
+    return t.target()
+
+
+class IrisFinishCommand(gdb.Command):
+    """Run until the selected frame returns, and print the value that it returns.
+
+This is gdb's finish. It reads the value from the registers where the Iris
+compiler puts it, so a List, a String, a tuple or a struct shows right."""
+
+    def __init__(self):
+        super().__init__("finish", gdb.COMMAND_RUNNING)
+
+    def invoke(self, arg, from_tty):
+        if arg.strip():
+            raise gdb.GdbError("finish takes no argument")
+        frame = gdb.selected_frame()
+        if frame.older() is None:
+            raise gdb.GdbError('"finish" not meaningful in the outermost frame.')
+        where = gdb.execute("frame", to_string=True).splitlines()[0]
+        gdb.write("Run till exit from %s\n" % where)
+        rtype = _return_type(frame)
+        leaves = _llvm_leaves(rtype)
+        bp = _RegisterReturn(frame, rtype, leaves) if leaves else _GdbReturn(frame)
+        bp.silent = True            # gdb's finish shows no breakpoint number
+        try:
+            gdb.execute("continue")
+        finally:
+            hit, value = bp.hit, bp.value
+            if bp.is_valid():
+                bp.delete()
+        if not hit:
+            return                  # a breakpoint or a signal stopped it, and gdb said so
+        gdb.write(re.sub(r"^#0\s+", "", gdb.execute("frame", to_string=True)))
+        if value is not None:
+            n = gdb.add_history(value)
+            gdb.write("Value returned is $%d = %s\n" % (n, value.format_string()))
+
+
+def _drop_c_main(bp):
+    """"break main" finds the Iris main and the C main that calls it. The C
+    main (iris.start in the debug info) is compiler-made: its location goes off."""
+    try:
+        locs = bp.locations
+    except (AttributeError, RuntimeError):
+        return
+    if len(locs) < 2:
+        return
+    for l in locs:
+        if l.enabled and (l.function == "iris.start" or (l.source is None and l.function == "main")):
+            l.enabled = False
+
+
 # Each program can load the script again: it adds the printers once.
 if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_printers):
     gdb.pretty_printers.append(iris_lookup)
     IrisCommand()
     IrisTasksCommand()
     IrisTaskCommand()
+    IrisFinishCommand()
+    gdb.events.breakpoint_created.connect(_drop_c_main)
+    gdb.events.breakpoint_modified.connect(_drop_c_main)
     _add_functions()
     gdb.xmethod.register_xmethod_matcher(None, _IrisMatcher())
     # the operators above need C++ expressions; Iris frames are C, so gdb
     # would warn at each stop that the language is not the frame's
     gdb.execute("set language c++")
     gdb.execute("set warn-language-frame-mismatch off")
+    # step goes into Iris code only: over the runtime (C) and over the next
+    # methods of the std types that for loops call
+    gdb.execute("skip -gfile */runtime/rt.c", to_string=True)
+    gdb.execute("skip -gfile */std/*/*.iris -rfunction \\.next$", to_string=True)
