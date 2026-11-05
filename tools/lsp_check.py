@@ -98,12 +98,21 @@ def main():
     check("definition of Point: %r" % loc, loc and loc["uri"].endswith("main.iris") and loc["range"]["start"]["line"] == 3)
 
     s = c.request("textDocument/documentSymbol", {"textDocument": td})
-    names = [x["name"] for x in (s and s["result"]) or []]
-    check("symbols: %r" % names, names == ["Point", "Point.sum", "main"])
-    def inside(x):
+    tree = lambda xs: [(x["name"], x["kind"], tree(x.get("children", []))) for x in xs]
+    got = tree((s and s["result"]) or [])
+    check("symbols: %r" % got, got == [("Point", 23, [("x", 8, []), ("y", 8, []), ("sum", 6, [])]), ("main", 12, [])])
+    point = ((s and s["result"]) or [{}])[0]
+    check("the range of a struct, to the end of its method: %r" % point.get("range"),
+          (point["range"]["start"]["line"], point["range"]["end"]["line"]) == (3, 9))
+
+    def inside(x, parent=None):
+        """the name inside the range, and the range inside the parent's"""
         pos = lambda q: (q["line"], q["character"])
         a, b = x["range"], x["selectionRange"]
-        return pos(a["start"]) <= pos(b["start"]) and pos(b["end"]) <= pos(a["end"])
+        ok = pos(a["start"]) <= pos(b["start"]) and pos(b["end"]) <= pos(a["end"])
+        if parent:
+            ok = ok and pos(parent["start"]) <= pos(a["start"]) and pos(a["end"]) <= pos(parent["end"])
+        return ok and all(inside(k, a) for k in x.get("children", []))
     check("symbol names inside their ranges", all(inside(x) for x in (s and s["result"]) or []))
 
     # completion after "p." and after "json."
@@ -725,6 +734,27 @@ void main() {
     sym = c.request("textDocument/documentSymbol", {"textDocument": {"uri": "file://" + jpath}})
     check("symbols of a std file: %r" % (sym and len(sym["result"]),), sym and len(sym["result"]) > 3)
     check("std symbol names inside their ranges", sym and all(inside(x) for x in sym["result"]))
+
+    # workspace symbols: a second server with the shelf project as its folder
+    w = Client()
+    winit = w.request("initialize", {"capabilities": {}, "rootUri": "file://" + proj})
+    check("workspace symbol provider", winit["result"]["capabilities"].get("workspaceSymbolProvider") is True)
+
+    def wsym(query):
+        r = w.request("workspace/symbol", {"query": query})
+        return [(x["name"], x["kind"], x.get("containerName"), x["location"]["uri"].rsplit("/", 2)[-2:],
+                 x["location"]["range"]["start"]["line"]) for x in (r and r.get("result")) or []]
+
+    got = wsym("genre")
+    check("workspace symbol by a part: %r" % got, got[:1] == [("Genre", 10, None, ["cli", "model.iris"], 0)])
+    got = wsym("SA")
+    check("workspace symbol by the starts of words: %r" % got, ("Service.add", 6, None, ["cli", "service.iris"], 8) in got)
+    got = [x for x in wsym("readall") if x[2] == "fs"]
+    check("workspace symbol in std: %r" % got, ("readAll", 12, "fs", ["fs", "fs.iris"], 35) in got)
+    check("workspace symbol with no match", wsym("zzzzq") == [])
+    w.request("shutdown", None)
+    w.notify("exit", None)
+    w.p.wait(timeout=10)
 
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)

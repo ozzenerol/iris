@@ -55,6 +55,8 @@ const char *irisVersionFile(const char *name, const char *text);
 const char *stdSourceDir(void);   /* a copy of std/ on disk, for debuggers; NULL if none */
 int stdModuleNames(const char **out, int max);
 int stdModulesExporting(const char *name, const char **out, int max);
+size_t pubDeclName(const char *s, const char *end, const char **name, int *kind, bool methods);
+const char *stdFileAt(int i, const char **text);
 bool stdModuleExists(const char *name);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);

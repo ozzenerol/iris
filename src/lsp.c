@@ -15,6 +15,7 @@
 #include "iris.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -1670,6 +1671,47 @@ static int symbolKind(Node *d) {
     }
 }
 
+static const char *statementEnd(const char *s, const char *end);
+
+/* The struct, enum or interface that a method's receiver names, or NULL. */
+static Node *receiverDecl(Node *fn) {
+    if (fn->kind != N_FUNC || !fn->list.len || !(fn->list.items[0]->flags & F_SELF)) return NULL;
+    Type *rt = fn->list.items[0]->type;
+    if (rt && rt->kind == TY_PTR) rt = rt->elem;
+    return rt ? rt->decl : NULL;
+}
+
+/* One DocumentSymbol: the range is the whole declaration, from its first
+ * line to the end of its block, and selectionRange is the name. With last,
+ * the range goes on to the end of last: a type's range holds its methods,
+ * as a child's range must be in its parent's. */
+static void putSymbol(StrBuf *r, Source *src, Node *named, const char *name, int kind, const char *detail, Node *last) {
+    const char *t = src->text, *end = t + src->len;
+    const char *start = lineStartOf(t, src->len, named->line);
+    Node *to = last && last->line > named->line ? last : named;
+    const char *stop = statementEnd(t + offsetOf(src, to->line, to->col), end);
+    int endLine = named->line;
+    for (const char *p = start; p < stop; p++) endLine += *p == '\n';
+    const char *ls = lineStartOf(t, src->len, endLine);
+    sbPuts(r, "{\"name\":");
+    putStr(r, name);
+    sbPrintf(r, ",\"kind\":%d", kind);
+    if (detail && *detail) {
+        sbPuts(r, ",\"detail\":");
+        putStr(r, detail);
+    }
+    sbPuts(r, ",\"range\":{\"start\":");
+    putPos(r, src, named->line, 1);
+    sbPuts(r, ",\"end\":");
+    putPos(r, src, endLine, (int)(stop - ls) + 1);
+    sbPuts(r, "},\"selectionRange\":");
+    int col = wordCol(src, named->line, named->col, named->name);
+    putRange(r, src, named->line, col, writtenLen(named->name));
+}
+
+/* textDocument/documentSymbol: the file's declarations as a tree. A struct
+ * has its fields and the methods of this file, an enum its members, an
+ * interface its methods. */
 static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
     StrBuf r = {0};
     sbPutc(&r, '[');
@@ -1681,37 +1723,270 @@ static void symbols(StrBuf *out, J *id, Program *prog, Source *src) {
             for (int i = 0; i < file->list.len; i++) {
                 Node *d = file->list.items[i];
                 Node *named = d->kind == N_DEFINE && d->list.len == 1 ? d->list.items[0] : d;
-                if (!named->name || d->kind == N_IMPORT) continue;
-                StrBuf name = {0};
-                if (d->kind == N_FUNC && (d->flags & F_TESTFN)) {
+                if (d->kind == N_IMPORT) continue;
+                Node *owner = receiverDecl(d);
+                if (owner && owner->src == src) continue;      /* under its type */
+                StrBuf name = {0}, detail = {0};
+                int kind = symbolKind(d);
+                if (d->kind == N_TEST) {
+                    sbPrintf(&name, "%s \"%s\"", (d->flags & F_BENCH) ? "bench" : "test", d->text ? d->text : "");
+                    kind = 12;
+                } else if (d->kind == N_FUNC && (d->flags & F_TESTFN)) {
                     sbPrintf(&name, "test \"%s\"", d->text);
-                } else if (d->kind == N_FUNC && d->list.len && (d->list.items[0]->flags & F_SELF)) {
+                } else if (!named->name) {
+                    continue;
+                } else if (owner || (d->kind == N_FUNC && d->list.len && (d->list.items[0]->flags & F_SELF))) {
                     Type *rt = d->list.items[0]->type;
                     putTypeName(&name, rt && rt->kind == TY_PTR ? rt->elem : rt);
                     sbPrintf(&name, ".%s", d->name);
                 } else {
                     sbPuts(&name, named->name);
                 }
+                if ((d->kind == N_FUNC && !(d->flags & F_TESTFN)) || d->kind == N_CONST) signature(&detail, d);
                 if (!first) sbPutc(&r, ',');
                 first = false;
-                sbPuts(&r, "{\"name\":");
-                putJsonString(&r, name.buf, name.len);
-                sbPrintf(&r, ",\"kind\":%d,\"range\":", symbolKind(d));
-                /* the whole line, so the name in selectionRange always lies inside it */
-                sbPuts(&r, "{\"start\":");
-                putPos(&r, src, named->line, 1);
-                sbPuts(&r, ",\"end\":");
-                putPos(&r, src, named->line + 1, 1);
-                sbPuts(&r, "},\"selectionRange\":");
-                putRange(&r, src, named->line, named->col, (int)strlen(named->name));
-                sbPutc(&r, '}');
+                /* a test has no name node: its line is the place */
+                Node at = *named;
+                if (!at.name) at.name = d->kind == N_TEST ? ((d->flags & F_BENCH) ? "bench" : "test") : "";
+                Node *last = NULL;
+                for (int k = 0; k < file->list.len; k++) {
+                    Node *fn = file->list.items[k];
+                    if (receiverDecl(fn) == d && (!last || fn->line > last->line)) last = fn;
+                }
+                putSymbol(&r, src, &at, name.buf, kind, detail.buf, last);
                 sbFree(&name);
+                sbFree(&detail);
+                if (d->kind == N_STRUCT || d->kind == N_ENUM || d->kind == N_INTERFACE) {
+                    sbPuts(&r, ",\"children\":[");
+                    bool firstKid = true;
+                    for (int k = 0; k < d->list.len; k++) {
+                        Node *c = d->list.items[k];
+                        if (!c->name || c->src != src) continue;
+                        StrBuf cd = {0};
+                        int ck = c->kind == N_ENUM_MEMBER ? 22 : c->kind == N_FUNC ? 6 : 8;
+                        if (c->kind == N_FUNC) signature(&cd, c);
+                        else if (c->type && c->kind != N_ENUM_MEMBER) sbPuts(&cd, c->type->name);
+                        if (!firstKid) sbPutc(&r, ',');
+                        firstKid = false;
+                        putSymbol(&r, src, c, c->name, ck, cd.buf, NULL);
+                        sbPutc(&r, '}');
+                        sbFree(&cd);
+                    }
+                    /* the methods of this file whose receiver is the type */
+                    for (int k = 0; k < file->list.len; k++) {
+                        Node *fn = file->list.items[k];
+                        if (receiverDecl(fn) != d) continue;
+                        StrBuf cd = {0};
+                        signature(&cd, fn);
+                        if (!firstKid) sbPutc(&r, ',');
+                        firstKid = false;
+                        putSymbol(&r, src, fn, fn->name, 6, cd.buf, NULL);
+                        sbPutc(&r, '}');
+                        sbFree(&cd);
+                    }
+                    sbPutc(&r, ']');
+                }
+                sbPutc(&r, '}');
             }
         }
     }
     sbPutc(&r, ']');
     reply(out, id, r.buf);
     sbFree(&r);
+}
+
+/* ---------------------------------------------------------------- workspace symbols */
+
+static char gRoot[4096];        /* the folder of the workspace, from initialize */
+
+/* Whether query matches name: a part of it, with no regard to case, or the
+ * starts of its words in order (rA, RdA and reAl match readAll). */
+static bool humpMatch(const char *q, const char *name, bool start) {
+    if (!*q) return true;
+    for (const char *p = name; *p; p++) {
+        bool hump = p == name || isupper((unsigned char)*p) || p[-1] == '_' || p[-1] == '.' ||
+                    (isdigit((unsigned char)*p) && !isdigit((unsigned char)p[-1]));
+        if (start && p != name) return false;
+        if (!start && !hump) continue;
+        if (tolower((unsigned char)*p) != tolower((unsigned char)*q)) continue;
+        /* the rest of the query: on in this word, or at a later word */
+        const char *qq = q + 1, *pp = p + 1;
+        while (*qq && *pp && tolower((unsigned char)*qq) == tolower((unsigned char)*pp)) {
+            if (humpMatch(qq, pp, false)) return true;
+            qq++;
+            pp++;
+        }
+        if (humpMatch(qq, pp, false)) return true;
+    }
+    return false;
+}
+
+static bool symbolMatch(const char *query, const char *name) {
+    size_t q = strlen(query), n = strlen(name);
+    for (size_t i = 0; i + q <= n; i++) {
+        if (!strncasecmp(name + i, query, q)) return true;
+    }
+    return humpMatch(query, name, false);
+}
+
+typedef struct {
+    StrBuf r;
+    int n;
+    const char *query;
+} WsSymbols;
+
+/* The declarations at the start of the lines of text: what a line that
+ * starts at column 0 declares (pub or not), and test "name" blocks. */
+static void textSymbols(WsSymbols *w, const char *path, const char *text, const char *container) {
+    int line = 1;
+    char *uri = NULL;
+    for (const char *ls = text; *ls && w->n < 500; line++) {
+        const char *le = strchr(ls, '\n');
+        if (!le) le = ls + strlen(ls);
+        const char *s = ls, *name = NULL;
+        size_t len = 0;
+        int kind = 0;
+        char buf[200];
+        if (!strncmp(s, "pub ", 4)) s += 4;
+        if (!strncmp(s, "test \"", 6) || !strncmp(s, "bench \"", 7)) {
+            const char *q = strchr(s, '"'), *qe = q ? memchr(q + 1, '"', (size_t)(le - q - 1)) : NULL;
+            if (qe) {
+                snprintf(buf, sizeof buf, "%.*s", (int)(qe - s + 1), s);
+                name = buf;
+                len = strlen(buf);
+                kind = 12;
+            }
+        } else if ((isalpha((unsigned char)*s) || *s == '!' || *s == '(' || *s == '?') && strncmp(s, "import ", 7) &&
+                   strncmp(s, "module ", 7) && strncmp(s, "when ", 5)) {
+            const char *nm, *from = s;
+            if (*from == '(') {     /* a tuple result: (i64, str) split(...) */
+                int depth = 0;
+                for (; from < le; from++) {
+                    if (*from == '(') depth++;
+                    else if (*from == ')' && --depth == 0) break;
+                }
+                if (from < le) from++;
+            }
+            len = pubDeclName(from, le, &nm, &kind, true);
+            if (len && len < sizeof buf) {
+                snprintf(buf, sizeof buf, "%.*s", (int)len, nm);
+                name = buf;
+                s = nm;
+            } else {
+                len = 0;
+            }
+        }
+        if (len && symbolMatch(w->query, name)) {
+            if (!uri) uri = fileUri(path);
+            int col = (int)(s - ls);
+            int u0 = utf16Col(ls, le, col + 1), u1 = utf16Col(ls, le, col + 1 + (int)len);
+            if (w->n++) sbPutc(&w->r, ',');
+            sbPuts(&w->r, "{\"name\":");
+            putStr(&w->r, name);
+            sbPrintf(&w->r, ",\"kind\":%d,\"location\":{\"uri\":", kind);
+            putStr(&w->r, uri ? uri : "");
+            sbPrintf(&w->r, ",\"range\":{\"start\":{\"line\":%d,\"character\":%d},\"end\":{\"line\":%d,\"character\":%d}}}",
+                     line - 1, u0, line - 1, u1);
+            if (container) {
+                sbPuts(&w->r, ",\"containerName\":");
+                putStr(&w->r, container);
+            }
+            sbPutc(&w->r, '}');
+        }
+        ls = *le ? le + 1 : le;
+    }
+    free(uri);
+}
+
+/* The text of a file: the editor's when it is open, else the disk's. */
+static char *fileText(const char *path) {
+    for (int i = 0; i < ndocs; i++) {
+        if (samePath(docs[i].path, path)) return strdup(docs[i].text);
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    StrBuf b = {0};
+    char chunk[8192];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) sbPutn(&b, chunk, n);
+    fclose(f);
+    sbPutc(&b, 0);
+    return b.buf;
+}
+
+/* The .iris files under dir, at most a few thousand, not in hidden folders. */
+static void projectFiles(const char *dir, char ***out, int *n, int depth) {
+    if (depth > 8 || *n >= 4000) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    for (struct dirent *e; (e = readdir(d)) && *n < 4000;) {
+        if (e->d_name[0] == '.') continue;
+        char path[4600];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        size_t len = strlen(e->d_name);
+        if (S_ISDIR(st.st_mode)) {
+            projectFiles(path, out, n, depth + 1);
+        } else if (len > 5 && !strcmp(e->d_name + len - 5, ".iris")) {
+            *out = realloc(*out, sizeof **out * (size_t)(*n + 1));
+            (*out)[(*n)++] = strdup(path);
+        }
+    }
+    closedir(d);
+}
+
+/* workspace/symbol: the declarations whose names match the query, in the
+ * project's files (the workspace folder and the open files) and in std. */
+static void workspaceSymbols(StrBuf *out, J *id, const char *query) {
+    WsSymbols w = {.query = query ? query : ""};
+    sbPutc(&w.r, '[');
+    char **files = NULL;
+    int n = 0;
+    if (gRoot[0]) projectFiles(gRoot, &files, &n, 0);
+    for (int i = 0; i < ndocs; i++) {
+        bool seen = false;
+        for (int k = 0; k < n && !seen; k++) seen = samePath(files[k], docs[i].path);
+        if (!seen && docs[i].path && strncmp(docs[i].path, "std/", 4) && !isBuiltinFile(docs[i].path) &&
+            !stdPathOf(docs[i].path)) {
+            files = realloc(files, sizeof *files * (size_t)(n + 1));
+            files[n++] = strdup(docs[i].path);
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        char *text = fileText(files[i]);
+        if (text) textSymbols(&w, files[i], text, NULL);
+        free(text);
+        free(files[i]);
+    }
+    free(files);
+    const char *text;
+    for (int i = 0; stdFileAt(i, &text); i++) {
+        const char *rel = stdFileAt(i, &text), *slash = strchr(rel, '/');
+        if (!slash || strchr(slash + 1, '/')) continue;
+        char path[300], mod[128];
+        snprintf(path, sizeof path, "std/%s", rel);
+        snprintf(mod, sizeof mod, "%.*s", (int)(slash - rel), rel);
+        /* std files: only the pub names */
+        WsSymbols pub = {.query = w.query, .n = w.n};
+        pub.r = w.r;
+        StrBuf only = {0};
+        for (const char *ls = text; *ls;) {
+            const char *le = strchr(ls, '\n');
+            if (!le) le = ls + strlen(ls);
+            if (!strncmp(ls, "pub ", 4)) sbPutn(&only, ls, (size_t)(le - ls));
+            sbPutc(&only, '\n');
+            ls = *le ? le + 1 : le;
+        }
+        sbPutc(&only, 0);
+        textSymbols(&pub, path, only.buf, mod);
+        sbFree(&only);
+        w.r = pub.r;
+        w.n = pub.n;
+    }
+    sbPutc(&w.r, ']');
+    reply(out, id, w.r.buf);
+    sbFree(&w.r);
 }
 
 /* Edits that taking a completion item makes besides inserting it: the line
@@ -2902,6 +3177,11 @@ static void handleInChild(J *msg, StrBuf *out) {
         free(path);
         return;
     }
+    if (strcmp(method, "workspace/symbol") == 0) {
+        workspaceSymbols(out, id, jstr(params, "query"));
+        free(path);
+        return;
+    }
     J *pos = jget(params, "position");
     int line = 0, character = 0;
     if (pos) {
@@ -3137,6 +3417,14 @@ int cmdLsp(void) {
         if (!method) {
             /* a reply to something the server never asks */
         } else if (strcmp(method, "initialize") == 0) {
+            /* the workspace folder, for workspace/symbol */
+            const char *root = jstr(params, "rootUri");
+            J *folders = jget(params, "workspaceFolders");
+            if (!root && folders && folders->type == 'a' && folders->child) root = jstr(folders->child, "uri");
+            char *rp = root ? pathOf(root) : NULL;
+            if (!rp && jstr(params, "rootPath")) rp = strdup(jstr(params, "rootPath"));
+            if (rp) snprintf(gRoot, sizeof gRoot, "%s", rp);
+            free(rp);
             StrBuf b = {0};
             sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
             putId(&b, id);
@@ -3144,7 +3432,7 @@ int cmdLsp(void) {
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
-                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true},"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -3182,7 +3470,7 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/completion") == 0 ||
                    strcmp(method, "textDocument/signatureHelp") == 0 ||
                    strcmp(method, "textDocument/inlayHint") == 0 ||
-                   strcmp(method, "textDocument/documentHighlight") == 0 ||
+                   strcmp(method, "textDocument/documentHighlight") == 0 || strcmp(method, "workspace/symbol") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||

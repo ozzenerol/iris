@@ -656,22 +656,27 @@ int stdModuleNames(const char **out, int max) {
     return n;
 }
 
-/* The name that a top-level "pub" line of a std file declares, or 0 for
- * a method (Reader.read) or a line it can't read. */
-static size_t pubName(const char *s, const char *end, const char **name) {
-    static const char *kinds[] = {"struct ", "enum ", "interface ", "union ", "type "};
+/* The name that the rest of a top-level "pub" line declares (s is after
+ * "pub "), and its kind as LSP numbers it: 23 struct, 10 enum, 11 interface,
+ * 26 type, 14 const, 12 function, 6 method. A method's name is Reader.read;
+ * with methods false it gives 0 for one, as for a line it can't read. */
+size_t pubDeclName(const char *s, const char *end, const char **name, int *kind, bool methods) {
+    static const struct { const char *word; int kind; } kinds[] = {
+        {"struct ", 23}, {"enum ", 10}, {"interface ", 11}, {"union ", 23}, {"type ", 26}, {"const ", 14}};
     for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
-        size_t n = strlen(kinds[k]);
-        if ((size_t)(end - s) > n && !strncmp(s, kinds[k], n)) {
+        size_t n = strlen(kinds[k].word);
+        if ((size_t)(end - s) > n && !strncmp(s, kinds[k].word, n) && kinds[k].kind != 14) {
             const char *a = s + n, *b = a;
             while (b < end && (isalnum((unsigned char)*b) || *b == '_')) b++;
             *name = a;
+            *kind = kinds[k].kind;
             return (size_t)(b - a);
         }
     }
     /* a function, a const or a variable: the name before '(', '[' or '=' */
     const char *stop = s;
     while (stop < end && *stop != '(' && *stop != '=') stop++;
+    *kind = !strncmp(s, "const ", 6) ? 14 : stop < end && *stop == '(' ? 12 : 13;
     const char *b = stop;
     while (b > s && b[-1] == ' ') b--;
     if (b > s && b[-1] == ']') {        /* first[T](...) */
@@ -680,9 +685,22 @@ static size_t pubName(const char *s, const char *end, const char **name) {
     }
     const char *a = b;
     while (a > s && (isalnum((unsigned char)a[-1]) || a[-1] == '_')) a--;
-    if (a == b || (a > s && a[-1] == '.') || isdigit((unsigned char)*a)) return 0;
+    if (a == b || isdigit((unsigned char)*a)) return 0;
+    if (a > s && a[-1] == '.') {
+        if (!methods) return 0;
+        a--;        /* Reader.read: the receiver too */
+        while (a > s && (isalnum((unsigned char)a[-1]) || a[-1] == '_')) a--;
+        *kind = 6;
+    }
     *name = a;
     return (size_t)(b - a);
+}
+
+/* The std file at i, as "fs/fs.iris", and its text; NULL past the last one. */
+const char *stdFileAt(int i, const char **text) {
+    if (i < 0 || (size_t)i >= sizeof stdFiles / sizeof stdFiles[0]) return NULL;
+    *text = stdFiles[i].data;
+    return stdFiles[i].path;
 }
 
 /* The std modules that declare name as pub, as "fs". At most max; the caller
@@ -702,7 +720,9 @@ int stdModulesExporting(const char *name, const char **out, int max) {
             if (!end) end = line + strlen(line);
             const char *got;
             size_t gl;
-            if (!strncmp(line, "pub ", 4) && (gl = pubName(line + 4, end, &got)) == want && !strncmp(got, name, want)) {
+            int kind;
+            if (!strncmp(line, "pub ", 4) && (gl = pubDeclName(line + 4, end, &got, &kind, false)) == want &&
+                !strncmp(got, name, want)) {
                 char *m = malloc(len + 1);
                 if (m) {
                     memcpy(m, path, len);

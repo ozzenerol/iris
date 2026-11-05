@@ -123,7 +123,8 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - the usages of a name in the project
 - the uses of the name under the cursor in the file, marked as reads or writes
 - the rename of a name in the project
-- a file's outline
+- a file's outline, as a tree
+- the declarations of the project and the standard library, found by a part of the name
 - completion
 - the parameters of the function that the cursor calls
 - the parameter names at calls with literal values
@@ -135,6 +136,8 @@ Completion offers the variables in scope at the cursor, the file's functions and
 After `(` and `,` in a call, the editor shows the signature of the function, as `i64 add(i64 a, i64 b)`, with the parameter at the cursor marked. A call with two or more arguments shows the parameter name before each literal value: `add(a: 1, b: 2)`. A variable, a named argument and a call with one argument get no name.
 
 A local variable that no code uses gets a warning, and the editor shows its name faded. A `scoped` variable gets none, as its value is freed at the end of the block. The quick fix removes the variable when its value has no call. When the value has a call, the fix keeps the call: `x := f()` becomes `_ = f()`. A name of a standard library module written without the module, as `readAll(path)`, gets a fix for each module that has the name: it writes `fs.readAll` and adds `import fs` when the file does not import it.
+
+The outline of a file is a tree. A struct holds its fields and the methods of the file, an enum its members, and an interface its methods. Functions, tests and constants are at the top. The search for a declaration in the project takes a part of the name, in any case, or the starts of its words: `rA` finds `readAll`. It looks in the files of the workspace folder and in the public names of the standard library.
 
 With the cursor on a name, the editor marks its other uses in the file. The declaration, an assignment, `x++` and a field in a struct literal are writes. The other uses are reads.
 
