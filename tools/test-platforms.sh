@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Builds Iris and runs the tests on the three platforms, in parallel:
-#   linux-x86_64   the LXC container (root@192.168.1.152)
-#   macos-arm64    the Mac (dev@192.168.1.13)
-#   linux-arm64    Docker on the Mac
-# Usage: tools/test-platforms.sh [platform...]   (default: all three)
+# Builds Iris and runs the tests, normal and ASan, on the LXC container (root@192.168.1.152).
+# The Mac and its Docker are no longer used.
+# Usage: tools/test-platforms.sh
 set -uo pipefail
 LXC="${IRIS_LXC:-root@192.168.1.152}"
-MAC="${IRIS_MAC:-dev@192.168.1.13}"
 cd "$(dirname "$0")/.."
-platforms=("${@:-linux-x86_64 macos-arm64 linux-arm64}")
-[ $# -eq 0 ] && platforms=(linux-x86_64 macos-arm64 linux-arm64)
+platforms=(linux-x86_64)
 id="iris-test-$$"
 logdir="${TMPDIR:-/tmp}/$id"
 mkdir -p "$logdir"
@@ -34,20 +30,6 @@ run() {
         case "$l" in *"got the LXC"*) echo "$l" >&3 ;; esac
         printf '%s\n' "$l"
       done >&2) ;;
-  macos-arm64)
-    bundle | ssh -o BatchMode=yes "$MAC" "
-      export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH
-      rm -rf /tmp/$id-mac && mkdir -p /tmp/$id-mac && cd /tmp/$id-mac && tar -xzf - &&
-      { $steps; }; rc=\$?; rm -rf /tmp/$id-mac; exit \$rc" ;;
-  linux-arm64)
-    bundle | ssh -o BatchMode=yes "$MAC" "
-      export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH
-      docker info >/dev/null 2>&1 || { open -a Docker;
-        for i in \$(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done; }
-      rm -rf /tmp/$id-dock && mkdir -p /tmp/$id-dock && cd /tmp/$id-dock && tar -xzf - &&
-      docker build -q --platform linux/arm64 -t iris-test:arm64 docker >/dev/null &&
-      tar -cf - . | docker run --rm -i --platform linux/arm64 iris-test:arm64 \
-        bash -c 'tar -xf - && $steps'; rc=\$?; rm -rf /tmp/$id-dock; exit \$rc" ;;
   *) echo "unknown platform $1"; return 2 ;;
   esac
 }
