@@ -216,7 +216,7 @@ def main():
                                                  "context": {"diagnostics": diags}})
     acts = (acts and acts["result"]) or []
     edits = [e for a in acts for e in a.get("edit", {}).get("changes", {}).get(uri, [])]
-    check("quick fix for time: %r" % acts, [a["title"] for a in acts] == ["import time"]
+    check("quick fix for time: %r" % acts, [a["title"] for a in acts] == ["Import time"]
           and [(e["range"]["start"]["line"], e["newText"]) for e in edits] == [(1, "import time\n")])
 
     # snippets for functions and methods, signature help, and the fields that
@@ -329,12 +329,80 @@ def main():
     # the last text has an error: the next test waits for the diagnostics that clear it
     check("a value in a literal: %r" % fields("    q := P{x: a|}\n}\n")[:3], "add" in fields("    q := P{x: a|}\n}\n"))
 
+    # quick fixes: the diagnostics of a text, then the code actions for each one,
+    # applied to the text
+    def apply(text, edits):
+        lines = text.split("\n")
+        offs = [0]
+        for l in lines:
+            offs.append(offs[-1] + len(l) + 1)
+        at = lambda p: offs[p["line"]] + p["character"] if p["line"] < len(lines) else len(text)
+        for e in sorted(edits, key=lambda e: at(e["range"]["start"]), reverse=True):
+            text = text[:at(e["range"]["start"])] + e["newText"] + text[at(e["range"]["end"]):]
+        return text
+
+    def fixes(text):
+        """{message: [(title, preferred, text after the fix)]} for the diagnostics of text"""
+        version[0] += 1
+        c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]},
+                                            "contentChanges": [{"text": text}]})
+        diags = []
+        while True:
+            m = c.read()
+            if m is None or (m.get("method") == "textDocument/publishDiagnostics" and m["params"]["uri"] == uri):
+                diags = (m and m["params"]["diagnostics"]) or []
+                break
+        out = {}
+        for d in diags:
+            acts = c.request("textDocument/codeAction", {"textDocument": td, "range": d["range"],
+                                                         "context": {"diagnostics": [d]}})
+            out[d["message"]] = [(a["title"], a.get("isPreferred", False), apply(text, a["edit"]["changes"][uri]))
+                                 for a in (acts and acts.get("result")) or []]
+        return out, diags
+
+    text = ("import fs\n\nvoid main() {\n    t := readAll(\"x\") catch e {\n        return\n    }\n"
+            "    print(\"{t}\")\n    h := sha256(\"x\")\n    print(\"{h.len}\")\n}\n")
+    got, diags = fixes(text)
+    check("fixes for a std name: %r" % got.get("readAll is not declared"), got.get("readAll is not declared") ==
+          [("Use fs.readAll", True, text.replace("t := readAll", "t := fs.readAll")),
+           ("Import io and use io.readAll", False, text.replace("t := readAll", "t := io.readAll").replace(
+               "import fs\n", "import fs\nimport io\n"))])
+    check("fix for a name of one module: %r" % got.get("sha256 is not declared"), got.get("sha256 is not declared") ==
+          [("Import crypto and use crypto.sha256", True, text.replace("h := sha256", "h := crypto.sha256").replace(
+              "import fs\n", "import fs\nimport crypto\n"))])
+    text = "void main() {\n    u := Url{}\n    print(\"{u.host}\")\n}\n"
+    got, diags = fixes(text)
+    check("fix for a std struct: %r" % got, got.get("Url is not a struct") ==
+          [("Import url and use url.Url", True, "import url\n\n" + text.replace("Url{}", "url.Url{}"))])
+
+    body = ("i64 f() => 1\n\nvoid main() {\n    a := 1\n    i64 b = f()\n    c := [1,\n        2]\n    d := f()\n"
+            "    x, y := (f(), 2)\n    print(\"{x}\")\n    Point p\n    scoped String s = format(\"a\")\n    _ = f()\n}\n"
+            "\nstruct Point {\n    i64 x\n}\n")
+    got, diags = fixes(body)
+    warn = sorted((d["range"]["start"]["line"], d["message"], d["severity"], d.get("tags")) for d in diags)
+    check("variables that are not used: %r" % warn, warn == [
+        (3, "the variable a is not used", 2, [1]), (4, "the variable b is not used", 2, [1]),
+        (5, "the variable c is not used", 2, [1]), (7, "the variable d is not used", 2, [1]),
+        (8, "the variable y is not used", 2, [1]), (10, "the variable p is not used", 2, [1])])
+    fix = lambda name: got.get("the variable %s is not used" % name, [])
+    lines = body.split("\n")
+    without = lambda *drop: "\n".join(l for i, l in enumerate(lines) if i not in drop)
+    check("remove a: %r" % fix("a"), fix("a") == [("Remove the variable", True, without(3))])
+    check("rename b: %r" % fix("b"), fix("b") == [("Rename to _", True, body.replace("i64 b = f()", "_ = f()"))])
+    check("remove c on two lines: %r" % fix("c"), fix("c") == [("Remove the variable", True, without(5, 6))])
+    check("rename d: %r" % fix("d"), fix("d") == [("Rename to _", True, body.replace("d := f()", "_ = f()"))])
+    check("rename y: %r" % fix("y"), fix("y") == [("Rename to _", True, body.replace("x, y :=", "x, _ :="))])
+    check("remove p: %r" % fix("p"), fix("p") == [("Remove the variable", True, without(10))])
+    # an error in the program: no warnings, as the checker did not link every name
+    got, diags = fixes("void main() {\n    a := 1\n    b := missing\n}\n")
+    check("no warnings with an error: %r" % diags, [d["severity"] for d in diags] == [1])
+
     # fixing the error clears the diagnostics; formatting
     fixed = SOURCE.replace("    n := missing + 1\n", "    n:=1+2\n")
     version[0] += 1
     c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": fixed}]})
     diag = c.read()
-    check("diagnostics cleared: %r" % diag, diag and diag["params"]["diagnostics"] == [])
+    check("diagnostics cleared: %r" % diag, diag and [d for d in diag["params"]["diagnostics"] if d["severity"] == 1] == [])
     fm = c.request("textDocument/formatting", {"textDocument": td, "options": {"tabSize": 4, "insertSpaces": True}})
     edits = fm and fm["result"]
     check("formatting: %r" % edits, edits and "n := 1 + 2" in edits[0]["newText"])

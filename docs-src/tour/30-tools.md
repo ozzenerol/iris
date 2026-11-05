@@ -127,12 +127,14 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - completion
 - the parameters of the function that the cursor calls
 - the parameter names at calls with literal values
-- a quick fix that adds a missing import
+- quick fixes: a missing import, a standard library name without its module, a variable that is not used
 - formatting with `iris fmt`
 
 Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. A standard library module that the file doesn't import yet is offered too, by its name and after its dot, and taking it adds its `import` line. After `@` it offers the attributes of the declaration below: a struct's, a field's, an enum's or a function's. Inside a struct literal, where a field's name goes, it offers only the fields that the literal does not set yet. A function or a method comes with its parameter names as a snippet: `add(a, b)`, and the editor moves from one name to the next. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
 
 After `(` and `,` in a call, the editor shows the signature of the function, as `i64 add(i64 a, i64 b)`, with the parameter at the cursor marked. A call with two or more arguments shows the parameter name before each literal value: `add(a: 1, b: 2)`. A variable, a named argument and a call with one argument get no name.
+
+A local variable that no code uses gets a warning, and the editor shows its name faded. A `scoped` variable gets none, as its value is freed at the end of the block. The quick fix removes the variable when its value has no call. When the value has a call, the fix keeps the call: `x := f()` becomes `_ = f()`. A name of a standard library module written without the module, as `readAll(path)`, gets a fix for each module that has the name: it writes `fs.readAll` and adds `import fs` when the file does not import it.
 
 With the cursor on a name, the editor marks its other uses in the file. The declaration, an assignment, `x++` and a field in a struct literal are writes. The other uses are reads.
 

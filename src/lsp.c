@@ -416,6 +416,7 @@ typedef struct {
     Source *src;
     int line, col;
     char *msg;
+    bool warning;       /* a variable that is not used, from the server; else a compiler error */
 } Diag;
 
 static Diag diags[512];
@@ -423,7 +424,7 @@ static int ndiags;
 
 static void collect(Source *src, int line, int col, const char *msg) {
     if (ndiags < (int)(sizeof diags / sizeof diags[0])) {
-        diags[ndiags++] = (Diag){src, line, col, strdup(msg)};
+        diags[ndiags++] = (Diag){src, line, col, strdup(msg), false};
     }
 }
 
@@ -695,7 +696,9 @@ static void putDiagnostics(StrBuf *out, Program *prog, const char *mainPath) {
             first = false;
             sbPuts(&b, "{\"range\":");
             putRange(&b, diags[i].src, diags[i].line, diags[i].col, wordLen(diags[i].src, diags[i].line, diags[i].col));
-            sbPuts(&b, ",\"severity\":1,\"source\":\"iris\",\"message\":");
+            /* a warning is "unnecessary": the editor shows the name faded */
+            sbPuts(&b, diags[i].warning ? ",\"severity\":2,\"tags\":[1]" : ",\"severity\":1");
+            sbPuts(&b, ",\"source\":\"iris\",\"message\":");
             putStr(&b, diags[i].msg);
             sbPutc(&b, '}');
         }
@@ -1381,6 +1384,120 @@ static int refOrder(const void *a, const void *b) {
     return x->line != y->line ? x->line - y->line : x->col - y->col;
 }
 
+/* ---------------------------------------------------------------- variables that are not used */
+
+typedef struct {
+    Source *src;
+    int line, col;
+} Place;
+
+/* The declarations that code uses: a hash set of their places. */
+static Place *gUsed;
+static size_t capUsed, nUsed;
+
+static size_t placeHash(Source *src, int line, int col) {
+    uint64_t h = (uint64_t)(uintptr_t)src * 0x9E3779B97F4A7C15ULL ^ (uint64_t)line * 0xC2B2AE3D27D4EB4FULL ^ (uint64_t)col;
+    return (size_t)(h ^ (h >> 29));
+}
+
+static bool isUsed(Node *d) {
+    if (!capUsed) return false;
+    for (size_t i = placeHash(d->src, d->line, d->col) & (capUsed - 1);; i = (i + 1) & (capUsed - 1)) {
+        if (!gUsed[i].src) return false;
+        if (gUsed[i].src == d->src && gUsed[i].line == d->line && gUsed[i].col == d->col) return true;
+    }
+}
+
+static void addUsed(Source *src, int line, int col) {
+    if (!src) return;
+    if ((nUsed + 1) * 2 > capUsed) {
+        size_t old = capUsed;
+        Place *was = gUsed;
+        capUsed = capUsed ? capUsed * 2 : 1024;
+        gUsed = calloc(capUsed, sizeof *gUsed);
+        nUsed = 0;
+        for (size_t i = 0; i < old; i++) {
+            if (was[i].src) addUsed(was[i].src, was[i].line, was[i].col);
+        }
+        free(was);
+    }
+    for (size_t i = placeHash(src, line, col) & (capUsed - 1);; i = (i + 1) & (capUsed - 1)) {
+        if (!gUsed[i].src) {
+            gUsed[i] = (Place){src, line, col};
+            nUsed++;
+            return;
+        }
+        if (gUsed[i].src == src && gUsed[i].line == line && gUsed[i].col == col) return;
+    }
+}
+
+/* Marks each declaration that a name in the code refers to. */
+static void useWalk(Node *n, Node *parent) {
+    if (!n) return;
+    if (n->kind == N_IDENT || n->kind == N_FIELD_ACCESS) {
+        Node *d = declOf(n, parent);
+        if (d && d != n && !sameDecl(n, d)) addUsed(d->src, d->line, d->col);
+    }
+    useWalk(n->a, n);
+    useWalk(n->b, n);
+    useWalk(n->c, n);
+    useWalk(n->d, n);
+    for (int i = 0; i < n->list.len; i++) useWalk(n->list.items[i], n);
+    for (int i = 0; i < n->list2.len; i++) useWalk(n->list2.items[i], n);
+}
+
+/* A scoped variable is not reported: its value is freed at the end of the
+ * block, and a name is needed for that. */
+static void unusedLocal(Node *v, Node *decl) {
+    if ((decl->flags & F_SCOPED) || (v->flags & F_SCOPED)) return;
+    if (!v->name || !strcmp(v->name, "_") || isUsed(v) || ndiags >= (int)(sizeof diags / sizeof diags[0])) return;
+    char msg[200];
+    snprintf(msg, sizeof msg, "the variable %s is not used", v->name);
+    diags[ndiags++] = (Diag){v->src, v->line, wordCol(v->src, v->line, v->col, v->name), strdup(msg), true};
+}
+
+/* The local variables of a function body that no code uses. */
+static void localWalk(Node *n) {
+    if (!n) return;
+    if (n->kind == N_DEFINE) {
+        for (int i = 0; i < n->list.len; i++) unusedLocal(n->list.items[i], n);
+    } else if (n->kind == N_VAR) {
+        unusedLocal(n, n);
+    }
+    localWalk(n->a);
+    localWalk(n->b);
+    localWalk(n->c);
+    localWalk(n->d);
+    for (int i = 0; i < n->list.len; i++) localWalk(n->list.items[i]);
+    for (int i = 0; i < n->list2.len; i++) localWalk(n->list2.items[i]);
+}
+
+/* Adds a warning for each local variable that no code uses, in the files of
+ * the program that are not std. Only when the program has no errors: the
+ * checker then linked every name. A generic function is checked as its
+ * copies, so its own body is not looked at. */
+static void addUnused(Program *prog) {
+    if (!prog || ndiags) return;
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m->isStd || m->isC) continue;
+        for (int i = 0; i < m->files.len; i++) useWalk(m->files.items[i], NULL);
+    }
+    for (int i = 0; i < prog->instances.len; i++) useWalk(prog->instances.items[i], NULL);
+    for (Module *m = prog->modules; m; m = m->next) {
+        if (m->isStd || m->isC) continue;
+        for (int i = 0; i < m->files.len; i++) {
+            Node *file = m->files.items[i];
+            if (isStdSource(file->src)) continue;
+            for (int k = 0; k < file->list.len; k++) {
+                Node *d = file->list.items[k];
+                if (d->kind != N_FUNC && d->kind != N_TEST) continue;
+                if (d->list2.len || (d->b && d->b->kind == N_T_GENERIC)) continue;
+                localWalk(d->c);
+            }
+        }
+    }
+}
+
 /* textDocument/documentHighlight: the uses in this file of the name at the
  * cursor. Kind 3 (write) for the declaration and the places that get a
  * value, kind 2 (read) for the others. */
@@ -1761,7 +1878,101 @@ static void importEdits(StrBuf *b, const char *text, size_t len, const char *nam
     sbPuts(b, "}]");
 }
 
-/* Quick fixes: import the module a diagnostic says is missing. */
+/* One quick fix: {"title":..., "kind":"quickfix", "edit":{"changes":{uri: edits}}}. */
+static void putFix(StrBuf *r, bool *first, const char *title, bool preferred, const char *uri, const char *edits) {
+    if (!*first) sbPutc(r, ',');
+    *first = false;
+    sbPuts(r, "{\"title\":");
+    putStr(r, title);
+    sbPrintf(r, ",\"kind\":\"quickfix\"%s,\"edit\":{\"changes\":{", preferred ? ",\"isPreferred\":true" : "");
+    putStr(r, uri);
+    sbPutc(r, ':');
+    sbPuts(r, edits);
+    sbPuts(r, "}}}");
+}
+
+static void putEdit(StrBuf *b, int l1, int c1, int l2, int c2, const char *text) {
+    sbPrintf(b, "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},\"end\":{\"line\":%d,\"character\":%d}},\"newText\":",
+             l1, c1, l2, c2);
+    putStr(b, text);
+    sbPutc(b, '}');
+}
+
+/* The end of the statement that starts at s: the newline after it at the
+ * top level, past brackets, braces and text on more lines. */
+static const char *statementEnd(const char *s, const char *end) {
+    int depth = 0;
+    for (const char *p = s; p < end; p++) {
+        if (*p == '/' && p + 1 < end && p[1] == '/') {
+            while (p < end && *p != '\n') p++;
+            if (p == end) return end;
+        }
+        if (*p == '"') {
+            for (p++; p < end && *p != '"' && *p != '\n'; p++) {
+                if (*p == '\\') p++;
+            }
+            continue;
+        }
+        if (*p == '(' || *p == '[' || *p == '{') depth++;
+        else if ((*p == ')' || *p == ']' || *p == '}') && depth > 0) depth--;
+        else if (*p == '\n' && depth == 0) return p;
+    }
+    return end;
+}
+
+/* The fixes for "the variable x is not used" at line and character (0-based):
+ * "Remove the variable" when its value has no call (nothing happens when the
+ * value goes), else "Rename to _", which keeps the call: x := f() becomes _ = f(). */
+static void unusedFixes(StrBuf *r, bool *first, const char *uri, Doc *doc, const char *name, int line, int character) {
+    const char *text = doc->text, *end = text + doc->len;
+    const char *ls = lineStartOf(text, doc->len, line + 1);
+    const char *at = ls + byteCol(text, doc->len, line + 1, character) - 1;
+    size_t n = strlen(name);
+    if (at + n > end || strncmp(at, name, n) != 0) return;
+    const char *start = ls;
+    while (start < at && (*start == ' ' || *start == '\t')) start++;
+    const char *after = at + n;
+    while (after < end && (*after == ' ' || *after == '\t')) after++;
+    const char *before = at;
+    while (before > start && (before[-1] == ' ' || before[-1] == '\t')) before--;
+    bool define = after + 1 < end && after[0] == ':' && after[1] == '=';
+    bool several = (before > start && before[-1] == ',') || (after < end && *after == ',');
+    bool assign = !define && after < end && after[0] == '=' && (after + 1 == end || after[1] != '=');
+    const char *value = define ? after + 2 : assign ? after + 1 : after;
+    if (several) {
+        /* a, x := f(): only the name can go */
+        const char *op = strstr(at, ":=");
+        if (!op) return;
+        value = op + 2;
+    }
+    const char *stop = statementEnd(value, end);
+    bool call = false;
+    for (const char *p = value; p < stop && !call; p++) call = *p == '(' || (*p == '<' && p + 1 < stop && p[1] == '-');
+    int col = (int)(at - ls), first0 = (int)(start - ls);
+    StrBuf e = {0};
+    sbPutc(&e, '[');
+    const char *title;
+    if (!call && !several) {
+        int lastLine = line;
+        for (const char *p = ls; p < stop; p++) lastLine += *p == '\n';
+        putEdit(&e, line, 0, lastLine + 1, 0, "");
+        title = "Remove the variable";
+    } else if (several) {
+        putEdit(&e, line, col, line, col + (int)n, "_");
+        title = "Rename to _";
+    } else {
+        /* x := f() and i64 x = f() become _ = f() */
+        putEdit(&e, line, first0, line, (int)(value - ls), "_ =");
+        title = "Rename to _";
+    }
+    sbPutc(&e, ']');
+    putFix(r, first, title, true, uri, e.buf);
+    sbFree(&e);
+}
+
+/* Quick fixes for the diagnostics of the range: the import of a std module
+ * that the code names, a std name written without its module (readAll
+ * becomes fs.readAll), and a variable that is not used. */
 static void codeActions(StrBuf *out, J *id, J *params, const char *uri, Doc *doc) {
     StrBuf r = {0};
     sbPutc(&r, '[');
@@ -1771,23 +1982,64 @@ static void codeActions(StrBuf *out, J *id, J *params, const char *uri, Doc *doc
     J *ds = jget(jget(params, "context"), "diagnostics");
     for (J *d = ds && doc ? ds->child : NULL; d; d = d->next) {
         const char *msg = jstr(d, "message");
+        J *st = jget(jget(d, "range"), "start");
+        J *dl = st ? jget(st, "line") : NULL, *dc = st ? jget(st, "character") : NULL;
+        int line = dl ? (int)dl->num : 0, character = dc ? (int)dc->num : 0;
         char name[128];
         int used = 0;
-        if (!msg || sscanf(msg, "%127[A-Za-z0-9_] is a standard library module that isn't imported%n", name, &used) != 1 ||
-            !used) {
+        if (!msg) continue;
+        if (sscanf(msg, "the variable %127[A-Za-z0-9_] is not used%n", name, &used) == 1 && used) {
+            unusedFixes(&r, &first, uri, doc, name, line, character);
             continue;
         }
-        bool seen = false;
-        for (int i = 0; i < ndone; i++) seen |= strcmp(done[i], name) == 0;
-        if (seen || importsModule(doc->text, doc->len, name) || ndone == 16) continue;
-        strcpy(done[ndone++], name);
-        if (!first) sbPutc(&r, ',');
-        first = false;
-        sbPrintf(&r, "{\"title\":\"import %s\",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":{", name);
-        putStr(&r, uri);
-        sbPutc(&r, ':');
-        importEdits(&r, doc->text, doc->len, name);
-        sbPuts(&r, "}}}");
+        used = 0;
+        if (sscanf(msg, "%127[A-Za-z0-9_] is a standard library module that isn't imported%n", name, &used) == 1 && used) {
+            bool seen = false;
+            for (int i = 0; i < ndone; i++) seen |= strcmp(done[i], name) == 0;
+            if (seen || importsModule(doc->text, doc->len, name) || ndone == 16) continue;
+            strcpy(done[ndone++], name);
+            StrBuf e = {0}, title = {0};
+            importEdits(&e, doc->text, doc->len, name);
+            sbPrintf(&title, "Import %s", name);
+            putFix(&r, &first, title.buf, true, uri, e.buf);
+            sbFree(&e);
+            sbFree(&title);
+            continue;
+        }
+        used = 0;
+        if ((sscanf(msg, "%127[A-Za-z0-9_] is not declared%n", name, &used) == 1 && used && !msg[used]) ||
+            ((used = 0), sscanf(msg, "%127[A-Za-z0-9_] is not a struct%n", name, &used) == 1 && used && !msg[used])) {
+            const char *mods[16];
+            /* the preferred fix: the only module, or the only one that the file imports */
+            int nm = stdModulesExporting(name, mods, 16), shown = 0, imports = 0;
+            for (int i = 0; i < nm; i++) {
+                shown += isStdModule(mods[i]);
+                imports += isStdModule(mods[i]) && importsModule(doc->text, doc->len, mods[i]);
+            }
+            for (int i = 0; i < nm; i++) {
+                if (isStdModule(mods[i])) {
+                    bool imported = importsModule(doc->text, doc->len, mods[i]);
+                    StrBuf e = {0}, title = {0}, full = {0};
+                    sbPrintf(&full, "%s.%s", mods[i], name);
+                    if (imported) {
+                        sbPutc(&e, '[');
+                    } else {
+                        importEdits(&e, doc->text, doc->len, mods[i]);
+                        e.len--;        /* the ']' */
+                        sbPutc(&e, ',');
+                    }
+                    putEdit(&e, line, character, line, character + (int)strlen(name), full.buf);
+                    sbPutc(&e, ']');
+                    if (imported) sbPrintf(&title, "Use %s", full.buf);
+                    else sbPrintf(&title, "Import %s and use %s", mods[i], full.buf);
+                    putFix(&r, &first, title.buf, shown == 1 || (imports == 1 && imported), uri, e.buf);
+                    sbFree(&e);
+                    sbFree(&title);
+                    sbFree(&full);
+                }
+                free((char *)mods[i]);
+            }
+        }
     }
     sbPutc(&r, ']');
     reply(out, id, r.buf);
@@ -2786,6 +3038,7 @@ static void handleInChild(J *msg, StrBuf *out) {
             nameCompletion(out, id, prog, src, line, col);
         }
     } else {
+        addUnused(prog);
         putDiagnostics(out, prog, path);
     }
     sbFree(&autoImport);

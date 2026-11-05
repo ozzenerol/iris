@@ -16,6 +16,7 @@
 
 #include <dirent.h>
 #include <limits.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -651,6 +652,67 @@ int stdModuleNames(const char **out, int max) {
         memcpy(name, path, len);
         name[len] = 0;
         out[n++] = name;
+    }
+    return n;
+}
+
+/* The name that a top-level "pub" line of a std file declares, or 0 for
+ * a method (Reader.read) or a line it can't read. */
+static size_t pubName(const char *s, const char *end, const char **name) {
+    static const char *kinds[] = {"struct ", "enum ", "interface ", "union ", "type "};
+    for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
+        size_t n = strlen(kinds[k]);
+        if ((size_t)(end - s) > n && !strncmp(s, kinds[k], n)) {
+            const char *a = s + n, *b = a;
+            while (b < end && (isalnum((unsigned char)*b) || *b == '_')) b++;
+            *name = a;
+            return (size_t)(b - a);
+        }
+    }
+    /* a function, a const or a variable: the name before '(', '[' or '=' */
+    const char *stop = s;
+    while (stop < end && *stop != '(' && *stop != '=') stop++;
+    const char *b = stop;
+    while (b > s && b[-1] == ' ') b--;
+    if (b > s && b[-1] == ']') {        /* first[T](...) */
+        while (b > s && b[-1] != '[') b--;
+        if (b > s) b--;
+    }
+    const char *a = b;
+    while (a > s && (isalnum((unsigned char)a[-1]) || a[-1] == '_')) a--;
+    if (a == b || (a > s && a[-1] == '.') || isdigit((unsigned char)*a)) return 0;
+    *name = a;
+    return (size_t)(b - a);
+}
+
+/* The std modules that declare name as pub, as "fs". At most max; the caller
+ * frees each one. */
+int stdModulesExporting(const char *name, const char **out, int max) {
+    int n = 0;
+    size_t want = strlen(name);
+    for (size_t i = 0; i < sizeof stdFiles / sizeof stdFiles[0] && n < max; i++) {
+        const char *path = stdFiles[i].path, *slash = strchr(path, '/');
+        if (!slash || strchr(slash + 1, '/')) continue;     /* not a file of a module's own folder */
+        size_t len = (size_t)(slash - path);
+        bool seen = false;
+        for (int k = 0; k < n && !seen; k++) seen = strlen(out[k]) == len && !strncmp(out[k], path, len);
+        if (seen) continue;
+        for (const char *line = stdFiles[i].data; line && *line;) {
+            const char *end = strchr(line, '\n');
+            if (!end) end = line + strlen(line);
+            const char *got;
+            size_t gl;
+            if (!strncmp(line, "pub ", 4) && (gl = pubName(line + 4, end, &got)) == want && !strncmp(got, name, want)) {
+                char *m = malloc(len + 1);
+                if (m) {
+                    memcpy(m, path, len);
+                    m[len] = 0;
+                    out[n++] = m;
+                }
+                break;
+            }
+            line = *end ? end + 1 : end;
+        }
     }
     return n;
 }

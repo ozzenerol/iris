@@ -54,6 +54,7 @@ const char *irisVersionDir(void);   /* the folder of the files iris keeps on dis
 const char *irisVersionFile(const char *name, const char *text);
 const char *stdSourceDir(void);   /* a copy of std/ on disk, for debuggers; NULL if none */
 int stdModuleNames(const char **out, int max);
+int stdModulesExporting(const char *name, const char **out, int max);
 bool stdModuleExists(const char *name);
 
 void errorAt(Source *src, int line, int col, const char *fmt, ...);
