@@ -1,1 +1,1 @@
-window.IRIS_VERSION = "v0.91.0";
+window.IRIS_VERSION = "v0.92.0";
