@@ -2399,6 +2399,93 @@ static void closeOpen(Doc *doc) {
     doc->len = len;
 }
 
+/* ---------------------------------------------------------------- inlay hints */
+
+typedef struct {
+    StrBuf r;
+    bool first;
+    Source *src;
+    int from, to;       /* the lines of the range that the editor asks for */
+} Hints;
+
+/* A value written as it is: 1, -2.5, "text", 'c', true, null. */
+static bool isLiteral(Node *n) {
+    if (n->kind == N_UNARY && n->a && (n->a->kind == N_INT || n->a->kind == N_FLOAT)) return true;
+    return n->kind == N_INT || n->kind == N_FLOAT || n->kind == N_STRING || n->kind == N_INTERP ||
+           n->kind == N_CHAR || n->kind == N_BOOL || n->kind == N_NULL;
+}
+
+/* Whether the argument at off already has its name in the code: add(b: 2). */
+static bool namedInText(Source *src, size_t off) {
+    const char *t = src->text;
+    while (off > 0 && isspace((unsigned char)t[off - 1])) off--;
+    return off > 0 && t[off - 1] == ':';
+}
+
+/* The parameter names of a call whose arguments are literals: add(a: 1, b: 2).
+ * A call with one argument gets no hint, nor does an argument with a name. */
+static void callHints(Hints *h, Node *call) {
+    Node *fn = call->ref;
+    if (!fn || fn->kind != N_FUNC || call->list.len < fn->list.len) return;
+    int first = fn->list.len && (fn->list.items[0]->flags & F_SELF) ? 1 : 0;
+    Node *given[64];
+    Node *params[64];
+    int n = 0;
+    for (int j = first; j < fn->list.len && n < 64; j++) {
+        Node *param = fn->list.items[j], *v = call->list.items[j];
+        while (v && v->kind == N_CONVERT && v->a) v = v->a;
+        /* a default value and the T... list are not in the call's text */
+        if (!v || v == param->b || (param->flags & F_REST) || v->src != h->src || !param->name) continue;
+        given[n] = v;
+        params[n++] = param;
+    }
+    if (n < 2) return;
+    for (int i = 0; i < n; i++) {
+        Node *v = given[i];
+        if (!isLiteral(v) || v->line < h->from || v->line > h->to) continue;
+        if (namedInText(h->src, offsetOf(h->src, v->line, v->col))) continue;
+        if (!h->first) sbPutc(&h->r, ',');
+        h->first = false;
+        sbPuts(&h->r, "{\"position\":");
+        putPos(&h->r, h->src, v->line, v->col);
+        sbPuts(&h->r, ",\"label\":");
+        StrBuf label = {0};
+        sbPrintf(&label, "%s:", params[i]->name);
+        putStr(&h->r, label.buf);
+        sbFree(&label);
+        sbPuts(&h->r, ",\"kind\":2,\"paddingRight\":true}");
+    }
+}
+
+static void hintWalk(Hints *h, Node *n) {
+    if (!n) return;
+    if (n->kind == N_CALL && n->src == h->src) callHints(h, n);
+    hintWalk(h, n->a);
+    hintWalk(h, n->b);
+    hintWalk(h, n->c);
+    hintWalk(h, n->d);
+    for (int i = 0; i < n->list.len; i++) hintWalk(h, n->list.items[i]);
+    for (int i = 0; i < n->list2.len; i++) hintWalk(h, n->list2.items[i]);
+}
+
+/* textDocument/inlayHint: the parameter names at calls with literals. */
+static void inlayHints(StrBuf *out, J *id, J *params, Program *prog, Source *src) {
+    Hints h = {.first = true, .src = src, .from = 1, .to = 1 << 30};
+    J *range = jget(params, "range");
+    J *a = range ? jget(jget(range, "start"), "line") : NULL, *b = range ? jget(jget(range, "end"), "line") : NULL;
+    if (a) h.from = (int)a->num + 1;
+    if (b) h.to = (int)b->num + 1;
+    sbPutc(&h.r, '[');
+    for (Module *m = prog && src ? prog->modules : NULL; m; m = m->next) {
+        for (int f = 0; f < m->files.len; f++) {
+            if (m->files.items[f]->src == src) hintWalk(&h, m->files.items[f]);
+        }
+    }
+    sbPutc(&h.r, ']');
+    reply(out, id, h.r.buf);
+    sbFree(&h.r);
+}
+
 typedef struct {
     StrBuf *b;
     const char *sig;
@@ -2557,6 +2644,7 @@ static void handleInChild(J *msg, StrBuf *out) {
     }
     /* a line being typed seldom parses: answer from what the parser could read */
     gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
+               strcmp(method, "textDocument/inlayHint") == 0 ||
                strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
@@ -2628,6 +2716,8 @@ static void handleInChild(J *msg, StrBuf *out) {
         prepareRename(out, id, prog, src, line, col);
     } else if (strcmp(method, "textDocument/rename") == 0) {
         renameAll(out, id, prog, src, line, col, jstr(params, "newName"));
+    } else if (strcmp(method, "textDocument/inlayHint") == 0) {
+        inlayHints(out, id, params, prog, src);
     } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
         if (inCall) signatureHelp(out, id, prog, src, &call, line, col);
         else reply(out, id, NULL);
@@ -2747,7 +2837,7 @@ int cmdLsp(void) {
                          "\"definitionProvider\":true,\"documentSymbolProvider\":true,\"referencesProvider\":true,"
                          "\"renameProvider\":{\"prepareProvider\":true},"
                          "\"documentFormattingProvider\":true,\"codeActionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\",\"@\"]},"
-                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},"
+                         "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"inlayHintProvider\":true},"
                          "\"serverInfo\":{\"name\":\"iris\",\"version\":\"%s\"}}}", IRIS_VERSION);
             sendMsg(b.buf, b.len);
             sbFree(&b);
@@ -2784,6 +2874,7 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/documentSymbol") == 0 ||
                    strcmp(method, "textDocument/completion") == 0 ||
                    strcmp(method, "textDocument/signatureHelp") == 0 ||
+                   strcmp(method, "textDocument/inlayHint") == 0 ||
                    strcmp(method, "textDocument/codeAction") == 0 ||
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||

@@ -268,6 +268,31 @@ def main():
           sig(head + "    print(|\n}\n") == ("void print(str text)", ["str text"], 0))
     check("no signature outside a call: %r" % (sig(head + "    n := 1|\n}\n"),), sig(head + "    n := 1|\n}\n") is None)
 
+    # inlay hints: the parameter names at calls with literal arguments
+    check("inlay hint provider", init["result"]["capabilities"].get("inlayHintProvider") is True)
+    body = ("struct P {\n    i64 x\n}\n\ni64 P.move(i64 dx, i64 dy) => self.x + dx + dy\n"
+            "i64 add(i64 a, i64 b) => a + b\ni64 neg(i64 a) => -a\n"
+            "void say(str text, bool loud, f64 level = 1.0) { }\n\nvoid main() {\n    a := 1\n    p := P{x: 1}\n"
+            "    n := add(1, -2)\n    m := add(a, 2)\n    k := add(a, a)\n    o := add(b: 5, a: 3)\n    q := neg(4)\n"
+            "    r := p.move(1, 2)\n    say(\"hi {a}\", true)\n    t := add(\n        7,\n        8)\n"
+            "    print(\"{n}{m}{k}{o}{q}{r}{t}\")\n}\n")
+    version[0] += 1
+    c.notify("textDocument/didChange", {"textDocument": {"uri": uri, "version": version[0]}, "contentChanges": [{"text": body}]})
+    lines = body.split("\n")
+
+    def hints(first, last):
+        r = c.request("textDocument/inlayHint", {"textDocument": td, "range": {
+            "start": {"line": first, "character": 0}, "end": {"line": last, "character": 0}}})
+        return [(h["position"]["line"], h["label"], lines[h["position"]["line"]][h["position"]["character"]:][:4])
+                for h in (r and r.get("result")) or []]
+
+    got = hints(0, len(lines))
+    check("inlay hints: %r" % got, got == [(12, "a:", "1, -"), (12, "b:", "-2)"), (13, "b:", "2)"),
+                                           (17, "dx:", "1, 2"), (17, "dy:", "2)"), (18, "text:", '"hi '),
+                                           (18, "loud:", "true"), (20, "a:", "7,"), (21, "b:", "8)")])
+    got = hints(17, 18)
+    check("inlay hints in a range: %r" % got, [h[0] for h in got] == [17, 17, 18, 18])
+
     fields = lambda text: [x["label"] for x in ask(head + text, "textDocument/completion") or []]
     check("fields of P{: %r" % fields("    q := P{|}\n}\n"), fields("    q := P{|}\n}\n") == ["x", "y", "name"])
     check("fields of P{x: 1, : %r" % fields("    q := P{x: 1, |}\n}\n"), fields("    q := P{x: 1, |}\n}\n") == ["y", "name"])
