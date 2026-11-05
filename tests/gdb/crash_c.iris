@@ -1,0 +1,16 @@
+// gdb: run
+// gdb: frame function main
+// expect: Program received signal SIGSEGV
+// expect: main at main.iris:14
+// expect: in main () at main.iris:14
+
+// A C function from import c that faults: the stop is in libc, and the top
+// Iris frame is the line of the call.
+
+import c "string.h"
+
+void main() {
+    u8 *p = null
+    n := c.strlen(p)
+    print("{n}")
+}

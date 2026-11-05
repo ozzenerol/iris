@@ -21,6 +21,7 @@
 #   -iris-evaluate-expression EXPR   -data-evaluate-expression, as iris print
 #   -iris-assign EXPR VALUE           EXPR = VALUE, as iris set
 #   -iris-var-assign ID VALUE         -var-assign, as iris set
+#   -iris-fault SIGNAL                after a fault: the top Iris frame, and a stack overflow
 #
 # Calls: obj.method(args) works in print, in MI and in conditions.
 # $iris_call("name", args...) calls a function, also in conditions.
@@ -74,9 +75,10 @@ def _slice_ok(sl, cap=None):
 
 
 def _items(ptr, n):
-    """The first n items at ptr, at most "print elements" of them. An item
-    that gdb cannot read shows as <unreadable>, and the items stop there."""
-    for i in range(min(n, _max_items())):
+    """The first n items at ptr, read one by one as gdb asks for them: gdb
+    stops at "print elements", and MI at the range of -var-list-children.
+    An item that gdb cannot read shows as <unreadable>, and the items stop."""
+    for i in range(n):
         try:
             v = ptr[i]
             v.fetch_lazy()
@@ -208,7 +210,7 @@ class DequePrinter:
         buf = self.v["buf"]
         size = _int(buf["len"])
         head = _int(self.v["head"])
-        for i in range(min(self.n, _max_items())):
+        for i in range(self.n):
             try:
                 v = buf["ptr"][(head + i) & (size - 1)]
                 v.fetch_lazy()
@@ -279,7 +281,7 @@ class MapPrinter:
         if not self.ok:
             return
         i = 0
-        for k, val in _map_entries(self.v, _max_items()):
+        for k, val in _map_entries(self.v, _LIMIT):
             if k is None:
                 yield "[%d]" % i, "<unreadable>"
                 yield "[%d]" % (i + 1), "<unreadable>"
@@ -312,7 +314,7 @@ class SetPrinter:
         if not self.ok:
             return
         i = 0
-        for k, _ in _map_entries(self.v["m"], _max_items()):
+        for k, _ in _map_entries(self.v["m"], _LIMIT):
             if k is None:
                 yield "[%d]" % i, "<unreadable>"
                 return
@@ -479,7 +481,7 @@ class ChanPrinter:
         size = int(self.c["elemSize"])
         head = int(self.c["head"])
         buf = int(self.c["buf"])
-        for i in range(min(n, _max_items())):
+        for i in range(n):
             at = buf + ((head + i) % cap) * size
             try:
                 v = gdb.Value(at).cast(elem.pointer()).dereference()
@@ -2033,6 +2035,102 @@ if hasattr(gdb, "MICommand"):
             return "(%s)%s" % (base, child)
 
 
+# ---------------------------------------------------------------- crashes
+#
+# A program that gets a fault signal stops in gdb with that signal: the
+# runtime has no handler of its own for SIGSEGV, SIGBUS, SIGFPE, SIGILL or
+# SIGABRT. The fault is often in C code (libc, the runtime). After the stop,
+# gdb.py names the top frame in Iris code, and says when a SIGSEGV is a
+# stack overflow: a fault on the guard page under a task's stack, or next
+# to the stack pointer of the thread.
+
+_FAULTS = ("SIGSEGV", "SIGBUS", "SIGFPE", "SIGILL", "SIGABRT")
+
+
+def _top_iris_frame():
+    """The first frame in a .iris file: (number, frame), or (None, None)."""
+    f = gdb.newest_frame()
+    n = 0
+    while f is not None and n < 10000:
+        sal = f.find_sal()
+        if sal.symtab is not None and sal.symtab.filename.endswith(".iris"):
+            return n, f
+        f = f.older()
+        n += 1
+    return None, None
+
+
+def _fault_address():
+    try:
+        return int(gdb.parse_and_eval("$_siginfo._sifields._sigfault.si_addr"))
+    except gdb.error:
+        return None
+
+
+def _overflow_task(addr):
+    """The task whose guard page addr is in, or None."""
+    try:
+        for t, _ in _tasks():
+            stack = int(t["stack"])
+            if stack and stack - 4096 <= addr < stack:
+                return t
+    except gdb.error:
+        pass
+    return None
+
+
+def _overflow_text(signal):
+    """For a SIGSEGV or SIGBUS that is a stack overflow: what overflowed."""
+    if signal not in ("SIGSEGV", "SIGBUS"):
+        return None
+    addr = _fault_address()
+    if addr is None:
+        return None
+    t = _overflow_task(addr)
+    if t is not None:
+        return "a stack overflow in task %d (%s), whose stack is %d KiB" % (
+            int(t["id"]), _task_name(t), int(t["stackSize"]) // 1024)
+    sp = int(gdb.newest_frame().read_register("sp"))
+    return "a stack overflow" if abs(addr - sp) < 1 << 16 else None
+
+
+def _on_stop(event):
+    if not isinstance(event, gdb.SignalEvent) or event.stop_signal not in _FAULTS:
+        return
+    try:
+        n, frame = _top_iris_frame()
+        overflow = _overflow_text(event.stop_signal)
+        if overflow:
+            gdb.write("iris: %s is %s\n" % (event.stop_signal, overflow))
+        if frame is not None:
+            sal = frame.find_sal()
+            gdb.write("iris: the top Iris frame is #%d, %s at %s:%d\n" % (
+                n, frame.name() or "??", os.path.basename(sal.symtab.filename), sal.line))
+    except (gdb.error, RuntimeError):
+        pass
+
+
+if hasattr(gdb, "MICommand"):
+    class IrisFaultMI(gdb.MICommand):
+        """-iris-fault SIGNAL: after a stop with a fault signal, the level and
+        place of the top Iris frame, and overflow when it is a stack overflow."""
+
+        def __init__(self):
+            super().__init__("-iris-fault")
+
+        def invoke(self, argv):
+            out = {}
+            n, frame = _top_iris_frame()
+            if frame is not None:
+                sal = frame.find_sal()
+                out.update({"level": str(n), "func": frame.name() or "", "file": sal.symtab.fullname(),
+                            "line": str(sal.line)})
+            overflow = _overflow_text(argv[0] if argv else "SIGSEGV")
+            if overflow:
+                out["overflow"] = overflow
+            return out
+
+
 # Each program can load the script again: it adds the printers once.
 if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_printers):
     gdb.pretty_printers.append(iris_lookup)
@@ -2056,6 +2154,9 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     if hasattr(gdb, "MICommand"):
         IrisEvaluateMI()
     gdb.events.inferior_call.connect(_call_event)
+    gdb.events.stop.connect(_on_stop)
+    if hasattr(gdb, "MICommand"):
+        IrisFaultMI()
     # a call from gdb that panics or gets a signal gives the program back
     # as it was before the call
     gdb.execute("set unwindonsignal on")

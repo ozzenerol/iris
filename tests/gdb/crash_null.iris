@@ -1,0 +1,22 @@
+// gdb: run
+// gdb: bt 2
+// expect: Program received signal SIGSEGV
+// expect: in readX (p=0x0) at main.iris:16
+// expect: iris: the top Iris frame is #0, readX at main.iris:16
+// expect: in main () at main.iris:21
+
+// A null pointer read in @unchecked code: SIGSEGV, and the top Iris frame.
+
+struct Point {
+    i64 x
+}
+
+@unchecked
+i64 readX(Point *p) {
+    return p.x
+}
+
+void main() {
+    Point *p = null
+    print("{readX(p)}")
+}

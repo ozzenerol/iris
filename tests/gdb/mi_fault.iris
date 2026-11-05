@@ -1,0 +1,23 @@
+// mi: -gdb-set mi-async on
+// mi: -exec-run
+// mi: -iris-fault SIGSEGV
+// expect: signal-name="SIGSEGV"
+// expect: line="10",overflow="a stack overflow in task 2 (work), whose stack is 256 KiB"
+
+// -iris-fault gives the top Iris frame and the stack overflow after a SIGSEGV in a task.
+
+i64 down(i64 n) {
+    i64[64] pad
+    pad[0] = n
+    return down(n + 1) + pad[0]
+}
+
+void work(chan[i64] done) {
+    done <- down(0)
+}
+
+void main() {
+    done := chan[i64](1)
+    spawn work(done)
+    print("{<-done}")
+}

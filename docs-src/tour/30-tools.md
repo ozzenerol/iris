@@ -266,6 +266,14 @@ A tool that uses gdb's MI sends `-exec-finish`, and then `-iris-return-value F`,
 
 Each block, loop and match arm is a scope in the debug information, and a variable's scope starts at its line. `info locals` shows only the variables that the code at the stop can use. `watch total` and `watch p.x` stop the program when a variable or a field changes.
 
+A crash that is not a panic, such as a null pointer read in `@unchecked` code, a fault in a C function or `abort()`, stops the program in gdb with its signal. The runtime has no handler of its own for `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` or `SIGABRT`. The fault is often in C code, so the printers name the top frame in Iris code. They also say when a `SIGSEGV` is a stack overflow, in the main stack or on the guard page under a task's stack:
+
+```output
+Program received signal SIGSEGV, Segmentation fault.
+iris: SIGSEGV is a stack overflow in task 2 (work), whose stack is 256 KiB
+iris: the top Iris frame is #1, down at main.iris:2
+```
+
 `break iris_panicked` stops the program when it panics, after the message is printed. `backtrace` then shows where the panic came from.
 
 `info threads` names each thread after the function that `thread` started. `iris tasks` lists the tasks of every thread: the task's number, gdb's thread, its state, the function it runs, where it is in Iris code and the runtime call it waits in. A `*` marks the task of the selected thread:

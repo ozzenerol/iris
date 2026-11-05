@@ -1,0 +1,12 @@
+// gdb: run
+// expect: Program received signal SIGABRT
+// expect: main at main.iris:11
+
+// abort() from C: SIGABRT, and the top Iris frame.
+
+import c "stdlib.h"
+
+void main() {
+    print("before")
+    c.abort()
+}

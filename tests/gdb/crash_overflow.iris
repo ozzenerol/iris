@@ -1,0 +1,16 @@
+// gdb: run
+// expect: Program received signal SIGSEGV
+// expect: iris: SIGSEGV is a stack overflow
+// expect: iris: the top Iris frame is #1, down at main.iris:9
+
+// Deep recursion on the main stack: SIGSEGV, named as a stack overflow.
+
+i64 down(i64 n) {
+    i64[64] pad
+    pad[0] = n
+    return down(n + 1) + pad[0]
+}
+
+void main() {
+    print("{down(0)}")
+}

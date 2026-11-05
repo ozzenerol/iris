@@ -1,0 +1,24 @@
+// gdb: run
+// gdb: bt 3
+// expect: Program received signal SIGSEGV
+// expect: iris: SIGSEGV is a stack overflow in task 2 (work), whose stack is 256 KiB
+// expect: iris: the top Iris frame is #1, down at main.iris:11
+// expect: in down (n=
+
+// Deep recursion in a task: SIGSEGV on the guard page under its stack.
+
+i64 down(i64 n) {
+    i64[64] pad
+    pad[0] = n
+    return down(n + 1) + pad[0]
+}
+
+void work(chan[i64] done) {
+    done <- down(0)
+}
+
+void main() {
+    done := chan[i64](1)
+    spawn work(done)
+    print("{<-done}")
+}
