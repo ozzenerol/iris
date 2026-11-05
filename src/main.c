@@ -440,8 +440,24 @@ static bool cachedRuntime(char **flags, int nflags, const char *rtPath, char *ob
 
 /* iris gdb: gdb with runtime/gdb.py loaded first. --printers prints the
  * path of the script instead, for a tool that starts gdb itself. */
+/* iris_printers.py imports iris_gdb.py, the printers. An import keeps the
+ * compiled code in __pycache__: a gdb that sources the printers does not
+ * compile them again each time it starts. */
+static const char gdbLoader[] =
+    "# The Iris pretty printers: this file imports iris_gdb.py from its folder.\n"
+    "# Python keeps the compiled iris_gdb.py in __pycache__, so gdb starts faster.\n"
+    "import os, sys\n"
+    "if 'iris_gdb' not in sys.modules:\n"
+    "    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+    "    try:\n"
+    "        import iris_gdb\n"
+    "    finally:\n"
+    "        del sys.path[0]\n";
+
 static int cmdGdb(int argc, char **argv) {
-    const char *script = irisVersionFile("gdb/iris_printers.py", irisGdbScript);
+    const char *code = irisVersionFile("gdb/iris_gdb.py", irisGdbScript);
+    const char *script = code ? irisVersionFile("gdb/iris_printers.py", gdbLoader) : NULL;
+    free((char *)code);
     if (!script) {
         fprintf(stderr, "iris: can't write the pretty printers' script; set IRIS_PATH to a folder iris can write\n");
         return 1;

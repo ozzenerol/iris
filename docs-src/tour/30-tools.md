@@ -306,7 +306,7 @@ Each program also carries the printers in its `.debug_gdb_scripts` section. A pl
 gdb -iex "add-auto-load-safe-path $PWD" ./server
 ```
 
-`iris gdb --printers` prints the path of a copy of the printers' script, for a tool that starts `gdb` itself. The tool loads it with `-iex "source PATH"`.
+`iris gdb --printers` prints the path of a copy of the printers' script, for a tool that starts `gdb` itself. The tool loads it with `-iex "source PATH"`. The script imports the printers from the same folder. Python keeps their compiled code in `__pycache__` there, so gdb does not compile them again at each start.
 
 The standard library and the runtime are inside the compiler. A build writes a copy of them to `~/.cache/iris/VERSION` (or `VERSION` in `IRIS_PATH`), with read-only files, so a debugger shows their source too.
 

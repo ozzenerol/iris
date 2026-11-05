@@ -206,7 +206,7 @@ v = 0</code></pre>
 <p>A task that waits keeps its registers on its own stack. While the commands run, gdb's thread takes them, and gives its own back after. The program then goes on as before.</p>
 <p>Each program also carries the printers in its <code>.debug_gdb_scripts</code> section. A plain <code>gdb</code> loads them when the program's folder is in its <code>auto-load safe-path</code>:</p>
 <pre class="code"><code>gdb -iex &quot;add-auto-load-safe-path $PWD&quot; ./server</code></pre>
-<p><code>iris gdb --printers</code> prints the path of a copy of the printers' script, for a tool that starts <code>gdb</code> itself. The tool loads it with <code>-iex &quot;source PATH&quot;</code>.</p>
+<p><code>iris gdb --printers</code> prints the path of a copy of the printers' script, for a tool that starts <code>gdb</code> itself. The tool loads it with <code>-iex &quot;source PATH&quot;</code>. The script imports the printers from the same folder. Python keeps their compiled code in <code>__pycache__</code> there, so gdb does not compile them again at each start.</p>
 <p>The standard library and the runtime are inside the compiler. A build writes a copy of them to <code>~/.cache/iris/VERSION</code> (or <code>VERSION</code> in <code>IRIS_PATH</code>), with read-only files, so a debugger shows their source too.</p>
 <p>In VS Code, the Iris extension debugs with gdb, with the pretty printers. Set a breakpoint in a <code>.iris</code> file and press F5. The extension builds the program and runs it under <code>gdb -i=dap</code> (gdb 14 or newer).</p>
 <h2 id="the-libraries-iris-loads"><a href="#the-libraries-iris-loads">The libraries Iris loads</a></h2>
