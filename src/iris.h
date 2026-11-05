@@ -336,6 +336,7 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
 /* The language server's loading: a file with syntax errors still loads, from
  * what the parser could read, so names around the error stay known. */
 extern bool gLenient;
+extern void (*gDiskHook)(const char *path);     /* a file or a folder that the loader reads from disk */
 extern void (*gLoadFailedHook)(void);   /* lenient: called where a strict load returns NULL */
 
 /* ---------------------------------------------------------------- check.c */

@@ -867,6 +867,38 @@ void main() {
     hv = hover_text(13, 15)
     check("hover on a text that does not parse: %r" % hv, hv and "i64 Point.total()" in hv)
 
+    # a file that is not open and changes on disk: the next request reads it again
+    pd = tempfile.mkdtemp()
+    os.makedirs(os.path.join(pd, "geo"))
+    with open(os.path.join(pd, "iris.mod"), "w") as f:
+        f.write("module example.com/disk\n")
+    with open(os.path.join(pd, "geo", "geo.iris"), "w") as f:
+        f.write("pub i64 size() => 1\n")
+    ptext = 'import "geo"\n\nvoid main() {\n    print("{geo.size()}")\n    print("{geo.other()}")\n    n := missing\n}\n'
+    puri = "file://" + os.path.join(pd, "main.iris")
+    with open(os.path.join(pd, "main.iris"), "w") as f:
+        f.write(ptext)
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": puri, "languageId": "iris", "version": 1, "text": ptext}})
+    c.read()
+    def phover():
+        r = c.request("textDocument/hover", {"textDocument": {"uri": puri}, "position": {"line": 3, "character": 17}})
+        return r and r.get("result") and r["result"]["contents"]["value"]
+    hv = phover()
+    check("hover on a function of a module on disk: %r" % hv, hv and "i64 size()" in hv)
+    with open(os.path.join(pd, "geo", "geo.iris"), "w") as f:
+        f.write("pub i64 size(i64 scale = 2) => scale\n")
+    hv = phover()
+    check("hover after the file changed on disk: %r" % hv, hv and "i64 size(i64 scale" in hv)
+    def ohover():
+        r = c.request("textDocument/hover", {"textDocument": {"uri": puri}, "position": {"line": 4, "character": 17}})
+        return r and r.get("result") and r["result"]["contents"]["value"]
+    hv = ohover()
+    check("hover on a function that is not there yet: %r" % hv, not hv or "other()" not in hv)
+    with open(os.path.join(pd, "geo", "more.iris"), "w") as f:
+        f.write("pub i64 other() => 3\n")
+    hv = ohover()
+    check("hover after a file came to the folder: %r" % hv, hv and "i64 other()" in hv)
+
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)
     c.notify("exit", None)

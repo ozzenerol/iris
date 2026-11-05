@@ -1466,11 +1466,19 @@ static int refOrder(const void *a, const void *b) {
 typedef struct {
     Source *src;
     int line, col;
+    unsigned gen;       /* the slot is empty when this is not useGen */
 } Place;
 
-/* The declarations that code uses: a hash set of their places. */
+/* The declarations that the code of one function uses: a hash set of their
+ * places. A new function empties it with a new useGen. */
 static Place *gUsed;
 static size_t capUsed, nUsed;
+static unsigned useGen = 1;
+
+static void newUses(void) {
+    useGen++;
+    nUsed = 0;
+}
 
 static size_t placeHash(Source *src, int line, int col) {
     uint64_t h = (uint64_t)(uintptr_t)src * 0x9E3779B97F4A7C15ULL ^ (uint64_t)line * 0xC2B2AE3D27D4EB4FULL ^ (uint64_t)col;
@@ -1480,7 +1488,7 @@ static size_t placeHash(Source *src, int line, int col) {
 static bool isUsed(Node *d) {
     if (!capUsed) return false;
     for (size_t i = placeHash(d->src, d->line, d->col) & (capUsed - 1);; i = (i + 1) & (capUsed - 1)) {
-        if (!gUsed[i].src) return false;
+        if (gUsed[i].gen != useGen) return false;
         if (gUsed[i].src == d->src && gUsed[i].line == d->line && gUsed[i].col == d->col) return true;
     }
 }
@@ -1494,13 +1502,13 @@ static void addUsed(Source *src, int line, int col) {
         gUsed = calloc(capUsed, sizeof *gUsed);
         nUsed = 0;
         for (size_t i = 0; i < old; i++) {
-            if (was[i].src) addUsed(was[i].src, was[i].line, was[i].col);
+            if (was[i].gen == useGen) addUsed(was[i].src, was[i].line, was[i].col);
         }
         free(was);
     }
     for (size_t i = placeHash(src, line, col) & (capUsed - 1);; i = (i + 1) & (capUsed - 1)) {
-        if (!gUsed[i].src) {
-            gUsed[i] = (Place){src, line, col};
+        if (gUsed[i].gen != useGen) {
+            gUsed[i] = (Place){src, line, col, useGen};
             nUsed++;
             return;
         }
@@ -1555,11 +1563,8 @@ static void localWalk(Node *n) {
  * copies, so its own body is not looked at. */
 static void addUnused(Program *prog) {
     if (!prog || ndiags) return;
-    for (Module *m = prog->modules; m; m = m->next) {
-        if (m->isStd || m->isC) continue;
-        for (int i = 0; i < m->files.len; i++) useWalk(m->files.items[i], NULL);
-    }
-    for (int i = 0; i < prog->instances.len; i++) useWalk(prog->instances.items[i], NULL);
+    /* only code in its own function uses a local: each function is walked
+     * for its uses and then for its locals, while it is in the cache */
     for (Module *m = prog->modules; m; m = m->next) {
         if (m->isStd || m->isC) continue;
         for (int i = 0; i < m->files.len; i++) {
@@ -1569,6 +1574,8 @@ static void addUnused(Program *prog) {
                 Node *d = file->list.items[k];
                 if (d->kind != N_FUNC && d->kind != N_TEST) continue;
                 if (d->list2.len || (d->b && d->b->kind == N_T_GENERIC)) continue;
+                newUses();
+                useWalk(d, NULL);
                 localWalk(d->c);
             }
         }
@@ -3852,7 +3859,7 @@ static void writeAll(int fd, const char *buf, size_t len) {
     }
 }
 
-static void readReplies(J *msg, int fd, pid_t pid);
+static bool readReplies(J *msg, int fd, pid_t pid);
 
 /* Runs a message in a child; sends what it wrote. */
 static void runInChild(J *msg) {
@@ -4010,6 +4017,56 @@ static char *recvRequest(int sock, int *fd) {
     return body;
 }
 
+/* The files and folders that the worker's analysis read from disk, as
+ * they were then. A folder's time changes when a file comes or goes. */
+typedef struct {
+    char *path;
+    bool there;
+    long long sec, nsec, size;
+} DiskFile;
+
+static DiskFile *diskFiles;
+static int ndiskFiles, capDiskFiles;
+
+static DiskFile diskState(const char *path) {
+    struct stat st;
+    DiskFile f = {NULL, stat(path, &st) == 0, 0, 0, 0};
+    if (f.there) {
+        f.size = (long long)st.st_size;
+#ifdef __APPLE__
+        f.sec = (long long)st.st_mtimespec.tv_sec;
+        f.nsec = (long long)st.st_mtimespec.tv_nsec;
+#else
+        f.sec = (long long)st.st_mtim.tv_sec;
+        f.nsec = (long long)st.st_mtim.tv_nsec;
+#endif
+    }
+    return f;
+}
+
+static void diskRead(const char *path) {
+    for (int i = 0; i < ndiskFiles; i++) {
+        if (!strcmp(diskFiles[i].path, path)) return;
+    }
+    if (ndiskFiles == capDiskFiles) {
+        capDiskFiles = capDiskFiles ? capDiskFiles * 2 : 64;
+        DiskFile *more = realloc(diskFiles, sizeof *diskFiles * (size_t)capDiskFiles);
+        if (!more) return;
+        diskFiles = more;
+    }
+    DiskFile f = diskState(path);
+    f.path = strdup(path);
+    if (f.path) diskFiles[ndiskFiles++] = f;
+}
+
+static bool diskChanged(void) {
+    for (int i = 0; i < ndiskFiles; i++) {
+        DiskFile f = diskState(diskFiles[i].path), *was = &diskFiles[i];
+        if (f.there != was->there || f.sec != was->sec || f.nsec != was->nsec || f.size != was->size) return true;
+    }
+    return false;
+}
+
 static void workerMain(int sock, const char *key) {
     const char *nl = strchr(key, '\n');
     int closed = nl && nl[1] == '1';
@@ -4019,13 +4076,21 @@ static void workerMain(int sock, const char *key) {
     }
     gLenient = true;
     gLoadFailedHook = loadFailed;
+    gDiskHook = diskRead;
     kept.prog = analyze(path);
     gLoadFailedHook = NULL;
+    gDiskHook = NULL;
     kept.path = path;
     for (;;) {
         int fd = -1;
         char *body = recvRequest(sock, &fd);
         if (!body) _exit(0);
+        if (diskChanged()) {
+            /* a file changed on disk: the server starts a new analysis */
+            writeAll(fd, "@stale", 7);
+            close(fd);
+            _exit(0);
+        }
         pid_t g = fork();
         if (g == 0) {
             close(sock);
@@ -4074,33 +4139,58 @@ static void runRequest(J *msg, const char *body) {
         runInChild(msg);
         return;
     }
-    if (worker.pid > 0 && waitpid(worker.pid, NULL, WNOHANG) != 0) worker.pid = 0;    /* it died */
-    if (worker.pid <= 0 || strcmp(worker.key, key) != 0) {
-        stopWorker();
-        if (!startWorker(key)) {
-            free(key);
-            runInChild(msg);
-            return;
+    /* the worker has the text of the documents: a change goes without it */
+    const char *method = jstr(msg, "method");
+    StrBuf small = {0};
+    if (!strcmp(method, "textDocument/didOpen") || !strcmp(method, "textDocument/didChange")) {
+        sbPrintf(&small, "{\"jsonrpc\":\"2.0\",\"method\":\"%s\",\"params\":{\"textDocument\":{\"uri\":", method);
+        putStr(&small, jstr(jget(jget(msg, "params"), "textDocument"), "uri"));
+        sbPuts(&small, "}}}");
+        body = small.buf;
+    }
+    bool stale = false;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (worker.pid > 0 && waitpid(worker.pid, NULL, WNOHANG) != 0) worker.pid = 0;    /* it died */
+        if (worker.pid <= 0 || strcmp(worker.key, key) != 0) {
+            stopWorker();
+            char *k = strdup(key);
+            if (!k || !startWorker(k)) {
+                free(k);
+                stale = false;
+                runInChild(msg);
+                break;
+            }
         }
-    } else {
-        free(key);
+        int fds[2];
+        if (pipe(fds) != 0) break;
+        bool sent = sendRequest(worker.sock, body, fds[1]);
+        close(fds[1]);
+        if (!sent) {
+            close(fds[0]);
+            stopWorker();
+            stale = false;
+            runInChild(msg);
+            break;
+        }
+        stale = readReplies(msg, fds[0], 0);
+        if (!stale) break;
+        stopWorker();       /* a file changed on disk since the analysis */
     }
-    int fds[2];
-    if (pipe(fds) != 0) return;
-    bool sent = sendRequest(worker.sock, body, fds[1]);
-    close(fds[1]);
-    if (!sent) {
-        close(fds[0]);
-        stopWorker();
-        runInChild(msg);
-        return;
+    J *id = jget(msg, "id");
+    if (stale && id) {
+        StrBuf b = {0};
+        reply(&b, id, NULL);
+        sendMsg(b.buf, strlen(b.buf));
+        sbFree(&b);
     }
-    readReplies(msg, fds[0], 0);
+    sbFree(&small);
+    free(key);
 }
 
 /* Reads the replies that a child writes to fd and sends them. pid is the
- * child, or 0 for a child of the worker. */
-static void readReplies(J *msg, int fd, pid_t pid) {
+ * child, or 0 for a child of the worker. True when the worker answered
+ * that its analysis is stale: nothing was sent then. */
+static bool readReplies(J *msg, int fd, pid_t pid) {
     int fds[1] = {fd};
     StrBuf in = {0};
     char buf[65536];
@@ -4118,6 +4208,10 @@ static void readReplies(J *msg, int fd, pid_t pid) {
     }
     close(fds[0]);
     if (pid > 0) waitpid(pid, NULL, 0);
+    if (pid == 0 && in.len >= 6 && !memcmp(in.buf, "@stale", 6)) {
+        sbFree(&in);
+        return true;
+    }
     bool answered = false;
     size_t i = 0;
     while (i < in.len) {
@@ -4149,6 +4243,7 @@ static void readReplies(J *msg, int fd, pid_t pid) {
         sendMsg(b.buf, strlen(b.buf));
         sbFree(&b);
     }
+    return false;
 }
 
 int cmdLsp(void) {

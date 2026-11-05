@@ -55,6 +55,8 @@ static void loadError(Loader *L, Node *at, const char *fmt, const char *arg) {
 
 const char *(*gReadHook)(const char *path, size_t *len);
 int (*gFolderHook)(const char *dir, const char **names, int max);
+void (*gDiskHook)(const char *path);
+
 
 static char *readWhole(Arena *a, const char *path, size_t *len) {
     if (gReadHook) {
@@ -64,6 +66,7 @@ static char *readWhole(Arena *a, const char *path, size_t *len) {
             return arenaStrndup(a, text, *len);
         }
     }
+    if (gDiskHook) gDiskHook(path);
     FILE *f = fopen(path, "rb");
     if (!f) {
         return NULL;
@@ -124,6 +127,7 @@ static int cmpStr(const void *a, const void *b) { return strcmp(*(char *const *)
 
 /* Every .iris file in a folder, sorted, parsed into the module. */
 static void readFolder(Loader *L, Module *m, const char *dir, Node *at) {
+    if (gDiskHook) gDiskHook(dir);
     DIR *d = opendir(dir);
     if (!d) {
         loadError(L, at, "can't read the folder %s", dir);

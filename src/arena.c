@@ -1,5 +1,8 @@
 /* Arenas and growing strings. */
+#define _DEFAULT_SOURCE           /* MAP_ANONYMOUS, madvise */
 #include "iris.h"
+
+#include <sys/mman.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,11 +11,17 @@
 struct ArenaBlock {
     ArenaBlock *next;
     size_t used, cap;
-    size_t pad;             /* keeps data 16-byte aligned */
+    size_t mapped;          /* the bytes of its mmap, 0 when malloc gave it; also keeps data 16-byte aligned */
     char data[];
 };
 
+/* The first block has 64 KB, each next one twice as much, up to 32 MB. A
+ * block of 2 MB or more comes from mmap on a 2 MB boundary with huge
+ * pages: a big program (a 20000-line file has 55 MB of nodes) then takes
+ * some hundred page faults in place of 14000. */
 #define BLOCK_SIZE (64 * 1024)
+#define BLOCK_MAX (32 * 1024 * 1024)
+#define HUGE_PAGE (2 * 1024 * 1024)
 
 static void *xmalloc(size_t n) {
     void *p = malloc(n);
@@ -27,12 +36,33 @@ void *arenaAlloc(Arena *a, size_t size) {
     size = (size + 15) & ~(size_t)15;
     ArenaBlock *b = a->head;
     if (!b || b->used + size > b->cap) {
-        size_t cap = size > BLOCK_SIZE ? size : BLOCK_SIZE;
-        b = xmalloc(sizeof(ArenaBlock) + cap);
-        b->next = a->head;
-        b->used = 0;
-        b->cap = cap;
-        a->head = b;
+        size_t grow = b ? b->cap * 2 : BLOCK_SIZE;
+        if (grow > BLOCK_MAX) grow = BLOCK_MAX;
+        size_t cap = size > grow ? size : grow;
+        ArenaBlock *nb = NULL;
+        size_t mapped = 0;
+        if (cap >= HUGE_PAGE) {
+            mapped = (sizeof(ArenaBlock) + cap + HUGE_PAGE - 1) & ~(size_t)(HUGE_PAGE - 1);
+            char *m = mmap(NULL, mapped + HUGE_PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (m != MAP_FAILED) {
+                char *start = (char *)(((uintptr_t)m + HUGE_PAGE - 1) & ~(uintptr_t)(HUGE_PAGE - 1));
+                if (start > m) munmap(m, (size_t)(start - m));
+                if (start + mapped < m + mapped + HUGE_PAGE) munmap(start + mapped, (size_t)(m + HUGE_PAGE - start));
+#ifdef MADV_HUGEPAGE
+                madvise(start, mapped, MADV_HUGEPAGE);
+#endif
+                nb = (ArenaBlock *)start;
+                cap = mapped - sizeof(ArenaBlock);
+            } else {
+                mapped = 0;
+            }
+        }
+        if (!nb) nb = xmalloc(sizeof(ArenaBlock) + cap);
+        nb->next = b;
+        nb->used = 0;
+        nb->cap = cap;
+        nb->mapped = mapped;
+        a->head = b = nb;
     }
     void *p = b->data + b->used;
     b->used += size;
@@ -51,7 +81,8 @@ void arenaFree(Arena *a) {
     ArenaBlock *b = a->head;
     while (b) {
         ArenaBlock *next = b->next;
-        free(b);
+        if (b->mapped) munmap(b, b->mapped);
+        else free(b);
         b = next;
     }
     a->head = NULL;
