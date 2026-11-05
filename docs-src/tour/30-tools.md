@@ -220,6 +220,29 @@ A function's name in the debugger is its name, `handle`, or `Server.close` for a
 
 `step` and `next` stop only on lines of Iris code. In a `for` loop they stop on the loop's line before each item, and in a `match` only on the arm that runs. The code that the compiler makes for `defer`, `scoped`, `try` and `catch` has no stop of its own. `step` goes into a function of the standard library, and over a call into the runtime. `break main` stops in the Iris `main`. Past the end of `main`, `next` goes on to libc, as in C. In a backtrace, `iris.start` is the C `main` that calls the Iris `main`.
 
+gdb can call the program's functions. `iris print` passes the arguments as Iris does and shows the value right, also for a `List`, a `String`, a tuple or a struct:
+
+```output
+(gdb) iris print add(2, 3)
+$1 = 5
+(gdb) iris print greet("iris")
+$2 = "hi iris"
+(gdb) iris print pair(5)
+$3 = List[i64](len=2) = {5, 6}
+(gdb) print p.swap()
+$4 = {x = 2, y = 1}
+(gdb) print xs.at(0)
+$5 = 4
+(gdb) break check if $iris_call("add", n, 1) == 3
+```
+
+- A method, such as `p.swap()` or `b.total()`, works in a plain `print` and in breakpoint conditions.
+- `$iris_call("name", args)` calls a function in a condition. A plain `print add(2, 3)` works for numbers only.
+- `at`, `last` and `first` on a `List` or a `Deque`, `has` and `getOr` on a `Map`, `has` on a `Set`, and `fd`, `buffered` and `bufferSize` on a `net.Conn` work also when the program does not use them. gdb reads the value, and the program does not run.
+- A call that panics prints the panic, and gdb gives the program back as it was before the call. Other functions run only when the program has a copy of them.
+- A tool that uses gdb's MI sends `-iris-evaluate-expression EXPR`, which gives `value` as `-data-evaluate-expression` does.
+- Calls work on x86_64 only.
+
 `iris finish` is `finish` that shows the value of a `List`, a `String`, a tuple or a struct right, such as `Value returned is $1 = List[i64](len=2) = {1, 2}`. The compiler returns a struct in registers where C uses memory, and gdb's own `finish` reads it by the C rules. `iris finish` reads those registers. For a number, a `bool` or a `str`, gdb's `finish` is also right.
 
 A tool that uses gdb's MI sends `-exec-finish`, and then `-iris-return-value F`, where `F` is the function that returned. The answer has `gdb-result-var` and `return-value` as `-exec-finish` has, or `registers="no"` when the value of `-exec-finish` is right.

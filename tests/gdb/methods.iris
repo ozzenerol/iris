@@ -1,0 +1,54 @@
+// gdb: break main.iris:53
+// gdb: run
+// gdb: p xs.at(1)
+// gdb: p xs.last()
+// gdb: p xs.at(5)
+// gdb: p m.has("a")
+// gdb: p m.has("b")
+// gdb: p m.getOr("b", 42)
+// gdb: p mi.has(3)
+// gdb: p mi.getOr(3, "no")
+// gdb: p mi.getOr(4, "no")
+// gdb: p st.has(5)
+// gdb: p st.has(6)
+// gdb: p dq.first()
+// gdb: p dq.at(1)
+// gdb: p dq.last()
+// gdb: p xs.at(0) + xs.len == 6
+// gdb: p m.has("a") && xs.last() == 9
+// expect: = 9
+// expect: = 9
+// expect: = true
+// expect: = false
+// expect: = 42
+// expect: = true
+// expect: = "three"
+// expect: = "no"
+// expect: = true
+// expect: = false
+// expect: = 7
+// expect: = 8
+// expect: = 8
+// expect: = true
+// expect: = true
+// expect: index 5 out of range (len 2)
+
+// Methods of the core types that change nothing run in gdb.py, also when
+// the program has no copy of them, in print and in conditions.
+
+void main() {
+    List[i64] xs
+    xs.push(4)
+    xs.push(9)
+    Map[str, i64] m
+    m.set("a", 1)
+    Map[i64, str] mi
+    mi.set(3, "three")
+    Set[i64] st
+    st.add(5)
+    Deque[i64] dq
+    dq.push(7)
+    dq.push(8)
+    String s = format("abc")
+    print("{xs.len} {m.len} {mi.len} {st.len} {dq.len} {s}")
+}

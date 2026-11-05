@@ -458,10 +458,89 @@ void iris_init(int argc, char **argv) {
     gArgv = argv;
 }
 
+/* Calls that gdb makes (runtime/gdb.py). gdb sets iris_dbg_calling while a
+   call of its own runs: a panic then stops with a signal, and gdb gives the
+   program back as it was before the call ("set unwindonsignal on"). */
+__attribute__((used)) volatile int32_t iris_dbg_calling;
+
+#if defined(__x86_64__)
+/* gdb calls a C function with the C rules, and an Iris function takes its
+   arguments and gives its result the way LLVM does: each field of a struct
+   in a register of its own. gdb writes the registers and the stack words of
+   the call here, and calls iris_dbg_call, which makes the call and keeps
+   rax, rdx, rcx, xmm0 and xmm1. The layout is fixed: gdb.py reads it. */
+typedef struct {
+    void *fn;                       /*   0 */
+    uint64_t ints[6];               /*   8: rdi rsi rdx rcx r8 r9 */
+    uint64_t floats[8];             /*  56: xmm0 to xmm7, the low 8 bytes */
+    int64_t nstack;                 /* 120 */
+    uint64_t stack[32];             /* 128 */
+    uint64_t out[5];                /* 384: rax rdx rcx xmm0 xmm1 */
+} IrisDbgCall;
+__attribute__((used)) IrisDbgCall iris_dbg_call_args;
+__attribute__((used)) char iris_dbg_scratch[1 << 16];   /* text and structs of a call */
+
+__asm__(".text\n"
+        ".globl iris_dbg_call\n"
+        ".type iris_dbg_call, @function\n"
+        "iris_dbg_call:\n"
+        "  push %rbp\n"
+        "  mov %rsp, %rbp\n"
+        "  push %rbx\n"
+        "  push %r12\n"
+        "  lea iris_dbg_call_args(%rip), %rbx\n"
+        "  mov 120(%rbx), %r12\n"         /* the words on the stack */
+        "  mov %r12, %rax\n"
+        "  shl $3, %rax\n"
+        "  sub %rax, %rsp\n"
+        "  and $-16, %rsp\n"
+        "  xor %r10, %r10\n"
+        "1:\n"
+        "  cmp %r12, %r10\n"
+        "  jge 2f\n"
+        "  mov 128(%rbx,%r10,8), %rax\n"
+        "  mov %rax, (%rsp,%r10,8)\n"
+        "  inc %r10\n"
+        "  jmp 1b\n"
+        "2:\n"
+        "  movsd 56(%rbx), %xmm0\n"
+        "  movsd 64(%rbx), %xmm1\n"
+        "  movsd 72(%rbx), %xmm2\n"
+        "  movsd 80(%rbx), %xmm3\n"
+        "  movsd 88(%rbx), %xmm4\n"
+        "  movsd 96(%rbx), %xmm5\n"
+        "  movsd 104(%rbx), %xmm6\n"
+        "  movsd 112(%rbx), %xmm7\n"
+        "  mov 8(%rbx), %rdi\n"
+        "  mov 16(%rbx), %rsi\n"
+        "  mov 24(%rbx), %rdx\n"
+        "  mov 32(%rbx), %rcx\n"
+        "  mov 40(%rbx), %r8\n"
+        "  mov 48(%rbx), %r9\n"
+        "  mov (%rbx), %r11\n"
+        "  mov $8, %eax\n"
+        "  call *%r11\n"
+        "  mov %rax, 384(%rbx)\n"
+        "  mov %rdx, 392(%rbx)\n"
+        "  mov %rcx, 400(%rbx)\n"
+        "  movsd %xmm0, 408(%rbx)\n"
+        "  movsd %xmm1, 416(%rbx)\n"
+        "  lea -16(%rbp), %rsp\n"
+        "  pop %r12\n"
+        "  pop %rbx\n"
+        "  pop %rbp\n"
+        "  ret\n"
+        ".size iris_dbg_call, .-iris_dbg_call\n");
+#endif
+
 /* Every panic ends here, after its message is on stderr: a debugger stops a
    program when it panics with "break iris_panicked". msg is the message. */
 __attribute__((noinline, noreturn, used)) void iris_panicked(const char *msg, int64_t len) {
     __asm__ volatile("" : : "r"(msg), "r"(len) : "memory");
+    if (iris_dbg_calling) {
+        panicLen = 0;               /* the program goes on: the next panic has its own text */
+        __builtin_trap();           /* in a call from gdb: gdb takes the program back */
+    }
     exit(2);
 }
 

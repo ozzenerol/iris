@@ -13,9 +13,14 @@
 #   iris tasks --json     the same as JSON, for tools
 #   iris task N [CMD]     runs CMD (default: backtrace) on the stack of task N
 #   iris finish           finish, with the value of a List, String, tuple or struct read right
+#   iris print EXPR       print, with calls of Iris functions: add(2, 3), greet("iris")
 #
-# MI command for tools:
+# MI commands for tools:
 #   -iris-return-value F  after -exec-finish: the value that function F returned
+#   -iris-evaluate-expression EXPR   -data-evaluate-expression, as iris print
+#
+# Calls: obj.method(args) works in print, in MI and in conditions.
+# $iris_call("name", args...) calls a function, also in conditions.
 #
 # Functions for breakpoint conditions on text (str, String, u8[] or "text"):
 #   $iris_eq(a, b), $iris_contains(s, part), $iris_starts(s, start), $iris_ends(s, end)
@@ -717,7 +722,11 @@ class _Worker(gdb.xmethod.XMethodWorker):
         return self.result(obj) if callable(self.result) else self.result
 
     def __call__(self, obj, *args):
-        return self.fn(obj, *args)
+        r = self.fn(obj, *args)
+        if isinstance(r, gdb.Value) or isinstance(r, bool):
+            return r
+        rt = self.get_result_type(obj, *args)
+        return gdb.Value(r).cast(rt) if rt is not None else gdb.Value(r)
 
 
 def _list_item(obj, i):
@@ -763,6 +772,72 @@ def _map_item(obj, key):
     raise gdb.GdbError("no key %s in the map" % _key_text(key))
 
 
+def _deref(obj):
+    return obj.dereference() if obj.type.strip_typedefs().code == gdb.TYPE_CODE_PTR else obj
+
+
+def _map_has(obj, key):
+    obj = _deref(obj)
+    if not _map_ok(obj):
+        raise gdb.GdbError("iris: the map is not set")
+    for k, _ in _map_entries(obj, _LIMIT):
+        if k is None:
+            raise gdb.GdbError("iris: gdb cannot read the map")
+        if _key_matches(k, key):
+            return True
+    return False
+
+
+def _map_get_or(obj, key, fallback):
+    return _map_item(_deref(obj), key) if _map_has(obj, key) else fallback
+
+
+def _pure_method(t, name, method):
+    """Methods of the core types that read the value and change nothing:
+    gdb.py runs them, so they work when the program has no copy of them."""
+    i64 = gdb.lookup_type("long")
+    bool_type = gdb.lookup_type("bool")
+    if name.startswith("List["):
+        item = t["buf"].type.strip_typedefs()["ptr"].type.target()
+        if method == "at":
+            return _Worker(i64, lambda obj, i: _list_item(_deref(obj), i), item)
+        if method == "last":
+            return _Worker(None, lambda obj: _list_item(_deref(obj), _int(_deref(obj)["len"]) - 1), item)
+    if name.startswith("Deque["):
+        item = t["buf"].type.strip_typedefs()["ptr"].type.target()
+        if method == "at":
+            return _Worker(i64, lambda obj, i: _deque_item(_deref(obj), i), item)
+        if method == "first":
+            return _Worker(None, lambda obj: _deque_item(_deref(obj), 0), item)
+        if method == "last":
+            return _Worker(None, lambda obj: _deque_item(_deref(obj), _int(_deref(obj)["len"]) - 1), item)
+    if name in ("net.Conn", "net.Listener") and method == "fd":
+        return _Worker(None, lambda obj: _int(_deref(obj)["sock"]), gdb.lookup_type("int"))
+    if name == "net.Conn" and method == "bufferSize":
+        return _Worker(None, lambda obj: _int(_deref(obj)["buf"]["len"]), i64)
+    if name == "net.Conn" and method == "buffered":
+        str_type = gdb.parse_and_eval("(struct str *)0").type.target()
+
+        def buffered(obj):
+            c = _deref(obj)
+            start, end = _int(c["start"]), _int(c["end"])
+            data = struct.pack("<Qq", _int(c["buf"]["ptr"]) + start, max(0, end - start))
+            return gdb.Value(data, str_type)
+        return _Worker(None, buffered, str_type)
+    if name.startswith(("Map[", "Set[")) and method in ("has", "getOr"):
+        m = t if name.startswith("Map[") else t["m"].type.strip_typedefs()
+        entry = m["slots"].type.strip_typedefs()["ptr"].type.target().strip_typedefs()
+        key, val = entry["key"].type, entry["val"].type
+        keys = _text_types() if key.strip_typedefs().code == gdb.TYPE_CODE_STRUCT else [key]
+        of_map = (lambda obj: _deref(obj)) if name.startswith("Map[") else (lambda obj: _deref(obj)["m"])
+        if method == "has":
+            return [_Worker(k, lambda obj, kv: _map_has(of_map(obj), kv), bool_type) for k in keys]
+        if name.startswith("Map["):
+            vals = _text_types() if _is_text_type(val) else [val]
+            return [_Worker([k, v], lambda obj, kv, fb: _map_get_or(obj, kv, fb), val) for k in keys for v in vals]
+    return None
+
+
 class _IrisMatcher(gdb.xmethod.XMethodMatcher):
     def __init__(self):
         super().__init__("iris")
@@ -785,6 +860,8 @@ class _IrisMatcher(gdb.xmethod.XMethodMatcher):
                     return [_Worker(a, _map_item, val) for a in _text_types()]
                 return _Worker(key, _map_item, val)
             return None
+        if not method_name.startswith("operator"):
+            return _pure_method(t, name, method_name)
         if name in ("str", "String") and method_name in ("operator==", "operator!="):
             same = method_name == "operator=="
             bool_type = gdb.lookup_type("bool")
@@ -1304,6 +1381,391 @@ if hasattr(gdb, "MICommand"):
             return {"registers": "yes", "gdb-result-var": "$%d" % n, "return-value": value.format_string()}
 
 
+# ---------------------------------------------------------------- calls
+#
+# gdb calls a function with the C rules. An Iris function takes a struct
+# the way LLVM does: each field in a register of its own, and the same for
+# the value it gives back. So a call of an Iris function goes through
+# iris_dbg_call in runtime/rt.c: gdb.py writes the registers and the stack
+# words into iris_dbg_call_args, gdb calls iris_dbg_call with the C rules,
+# and iris_dbg_call keeps the registers of the result.
+
+_CALL_INTS = 6
+_CALL_FLOATS = 8
+_CALL_STACK = 32
+_OUT_AT = 384
+
+
+def _addr_of(name):
+    try:
+        return int(gdb.parse_and_eval("(long)&%s" % name))
+    except gdb.error:
+        return None
+
+
+def _is_text_type(t):
+    t = t.strip_typedefs()
+    return t.code == gdb.TYPE_CODE_STRUCT and (t.tag or t.name) in ("str", "String", "u8[]")
+
+
+def _by_ref(t):
+    """A struct above 32 bytes goes as a pointer to a copy (ir.c, byRef)."""
+    t = t.strip_typedefs()
+    if t.code != gdb.TYPE_CODE_STRUCT or t.sizeof <= 32:
+        return False
+    name = t.tag or t.name or ""
+    if name.startswith(("(", "!")) or name == "String" or name.endswith("[]"):
+        return False
+    return [f.name for f in t.fields()] != ["tag", "data"]
+
+
+def _value_bytes(v):
+    t = v.type.strip_typedefs()
+    if v.address is not None:
+        return gdb.selected_inferior().read_memory(int(v.address), t.sizeof).tobytes()
+    return bytes(v.bytes)
+
+
+class _Call:
+    """The registers, stack words and scratch memory of one call."""
+
+    def __init__(self):
+        self.ints, self.floats, self.stack = [], [], []
+        self.scratch = _addr_of("iris_dbg_scratch")
+        self.used = 0
+
+    def put_int(self, n):
+        n &= (1 << 64) - 1
+        (self.ints if len(self.ints) < _CALL_INTS else self.stack).append(n)
+
+    def put_float(self, bits):
+        (self.floats if len(self.floats) < _CALL_FLOATS else self.stack).append(bits)
+
+    def copy(self, data, align=16):
+        """Copy data into the scratch memory, and give its address."""
+        at = (self.used + align - 1) // align * align
+        if at + len(data) > 1 << 16:
+            raise gdb.GdbError("iris: the arguments of the call are too big")
+        gdb.selected_inferior().write_memory(self.scratch + at, data)
+        self.used = at + max(len(data), 1)
+        return self.scratch + at
+
+    def put_bytes(self, data, t):
+        """A value of type t, as LLVM passes it."""
+        leaves = []
+        if not _leaves(t, 0, leaves):
+            raise gdb.GdbError("iris: a call can't pass a %s" % _tag(t))
+        for off, size, is_float in leaves:
+            part = data[off:off + size]
+            if is_float:
+                self.put_float(int.from_bytes(part.ljust(8, b"\0"), "little"))
+            else:
+                self.put_int(int.from_bytes(part, "little"))
+
+    def put_arg(self, v, t):
+        """The argument v for a parameter of type t."""
+        st = t.strip_typedefs()
+        vt = v.type.strip_typedefs()
+        if _is_text_type(st) and vt.code in (gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_PTR):
+            text = text_bytes(v)            # "text" in quotes
+            ptr = self.copy(text, 1)
+            words = [ptr, len(text)] + ([len(text)] if st.sizeof == 24 else [])
+            self.put_bytes(b"".join(struct.pack("<Q", w) for w in words), st)
+            return
+        if _is_text_type(st) and st.sizeof == 16 and _is_text_type(vt):
+            # a String or a u8[] for a str: its text, as Iris passes it
+            self.put_int(int(v["ptr"]))
+            self.put_int(int(v["len"]))
+            return
+        if st.code == gdb.TYPE_CODE_PTR:
+            if vt.code == gdb.TYPE_CODE_STRUCT:    # self: the object's address
+                self.put_int(int(v.address) if v.address is not None else self.copy(_value_bytes(v)))
+            else:
+                self.put_int(int(v))
+            return
+        if st.code == gdb.TYPE_CODE_FLT:
+            data = struct.pack("<f" if st.sizeof == 4 else "<d", float(v))
+            self.put_float(int.from_bytes(data.ljust(8, b"\0"), "little"))
+            return
+        if st.code in (gdb.TYPE_CODE_INT, gdb.TYPE_CODE_BOOL, gdb.TYPE_CODE_ENUM, gdb.TYPE_CODE_CHAR):
+            self.put_int(int(v))
+            return
+        if vt.code != gdb.TYPE_CODE_STRUCT or vt.sizeof != st.sizeof:
+            raise gdb.GdbError("iris: a %s can't be a %s" % (_tag(vt), _tag(st)))
+        data = _value_bytes(v)
+        if _by_ref(st):
+            self.put_int(self.copy(data))
+        else:
+            self.put_bytes(data, st)
+
+    def run(self, fn_addr):
+        base = _addr_of("iris_dbg_call_args")
+        if len(self.stack) > _CALL_STACK:
+            raise gdb.GdbError("iris: the call has too many arguments")
+        words = ([fn_addr] + (self.ints + [0] * _CALL_INTS)[:_CALL_INTS] +
+                 (self.floats + [0] * _CALL_FLOATS)[:_CALL_FLOATS] + [len(self.stack)] +
+                 (self.stack + [0] * _CALL_STACK)[:_CALL_STACK])
+        inf = gdb.selected_inferior()
+        inf.write_memory(base, b"".join(struct.pack("<Q", w & ((1 << 64) - 1)) for w in words))
+        try:
+            gdb.parse_and_eval("((void (*)(void))iris_dbg_call)()")
+        except gdb.error as e:
+            if "SIGILL" in str(e):
+                raise gdb.GdbError("iris: the call panicked; the program is as it was before the call")
+            raise gdb.GdbError("iris: " + _plain_error(e))
+        return struct.unpack("<5Q", inf.read_memory(base + _OUT_AT, 40).tobytes())
+
+
+def _plain_error(e):
+    """The message of a gdb error, without the "Error occurred in Python" in front."""
+    text = str(e)
+    while text.startswith("Error occurred in Python: "):
+        text = text[len("Error occurred in Python: "):]
+    return text
+
+
+def _result(out, t, sret):
+    """The value of type t that the call gave: rax rdx rcx xmm0 xmm1 in out."""
+    st = t.strip_typedefs()
+    if sret is not None:
+        return gdb.Value(gdb.selected_inferior().read_memory(sret, st.sizeof).tobytes(), st)
+    if st.code == gdb.TYPE_CODE_FLT:
+        data = out[3].to_bytes(8, "little")[:st.sizeof]
+        return gdb.Value(data, st)
+    if st.code in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_UNION):
+        leaves = []
+        _leaves(st, 0, leaves)
+        buf = bytearray(st.sizeof)
+        ints = iter(out[0:3])
+        floats = iter(out[3:5])
+        for off, size, is_float in leaves:
+            w = next(floats) if is_float else next(ints)
+            part = w.to_bytes(8, "little")[:min(size, st.sizeof - off)]
+            buf[off:off + len(part)] = part
+        return gdb.Value(bytes(buf), st)
+    return gdb.Value(out[0].to_bytes(8, "little")[:st.sizeof], st)
+
+
+def _call_function(sym, args):
+    """Call the Iris function sym with the gdb values args, and give its
+    value (None for a function that gives none)."""
+    if _arch_name() != "x86_64":
+        raise gdb.GdbError("iris: calls of Iris functions work on x86_64 only")
+    if _addr_of("iris_dbg_call_args") is None or _addr_of("iris_dbg_scratch") is None:
+        raise gdb.GdbError("iris: this program has no iris_dbg_call; build it with iris 0.97 or newer")
+    ft = sym.type.strip_typedefs()
+    params = [f.type for f in ft.fields()]
+    if len(args) != len(params):
+        raise gdb.GdbError("iris: %s takes %d argument%s, and %d %s given" % (
+            sym.name, len(params), "" if len(params) == 1 else "s", len(args), "is" if len(args) == 1 else "are"))
+    rt = ft.target()
+    void = rt is None or rt.strip_typedefs().code == gdb.TYPE_CODE_VOID
+    call = _Call()
+    sret = None
+    if not void:
+        st = rt.strip_typedefs()
+        if st.code in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_UNION):
+            leaves = []
+            if not _leaves(st, 0, leaves):
+                raise gdb.GdbError("iris: a call can't give back a %s" % _tag(st))
+            n_int = sum(not l[2] for l in leaves)
+            n_float = sum(l[2] for l in leaves)
+            if n_int > 3 or n_float > 4:
+                sret = call.copy(b"\0" * st.sizeof)     # LLVM gives it in memory
+                call.put_int(sret)
+            elif n_float > 2:
+                raise gdb.GdbError("iris: a call can't give back a %s" % _tag(st))
+    for v, t in zip(args, params):
+        call.put_arg(v, t)
+    out = call.run(int(sym.value().address))
+    if void:
+        return None
+    return _result(out, rt, sret)
+
+
+def _function(name):
+    """The function symbol NAME, or None."""
+    for look in (lambda: gdb.lookup_static_symbol(name), lambda: gdb.lookup_global_symbol(name),
+                 lambda: gdb.lookup_symbol(name)[0]):
+        try:
+            sym = look()
+        except gdb.error:
+            sym = None
+        if sym is not None and sym.type is not None and sym.type.strip_typedefs().code == gdb.TYPE_CODE_FUNC:
+            return sym
+    return None
+
+
+class _IrisCallFunction(gdb.Function):
+    """$iris_call("name", args...): calls the Iris function name, as Iris does."""
+
+    def __init__(self):
+        super().__init__("iris_call")
+
+    def invoke(self, name, *args):
+        sym = _function(name.string())
+        if sym is None:
+            raise gdb.GdbError("iris: no function %s in the program" % name.string())
+        v = _call_function(sym, list(args))
+        return v if v is not None else gdb.Value(0)
+
+
+def _method_name(tag, method):
+    """gdb's name of a method: Conn.port for net.Conn, List[i64].at."""
+    head = tag.split("[", 1)[0]
+    if "." in head:
+        tag = tag[head.rindex(".") + 1:]
+    return "%s.%s" % (tag, method)
+
+
+class _CallWorker(gdb.xmethod.XMethodWorker):
+    def __init__(self, sym, arg_types, result):
+        self.sym = sym
+        self.arg_types = arg_types
+        self.result = result
+
+    def get_arg_types(self):
+        return self.arg_types or None
+
+    def get_result_type(self, obj, *args):
+        return self.result
+
+    def __call__(self, obj, *args):
+        if obj.type.strip_typedefs().code == gdb.TYPE_CODE_PTR:
+            obj = obj.dereference()
+        v = _call_function(self.sym, [obj] + list(args))
+        return v if v is not None else gdb.Value(0)
+
+
+def _call_workers(sym):
+    """Workers for the method sym: one for each way to give its text
+    parameters ("text" in quotes, or a str or String)."""
+    ft = sym.type.strip_typedefs()
+    params = [f.type for f in ft.fields()][1:]
+    rt = ft.target()
+    if rt is None or rt.strip_typedefs().code == gdb.TYPE_CODE_VOID:
+        rt = gdb.lookup_type("int")
+    texts = [i for i, t in enumerate(params) if _is_text_type(t)][:3]
+    out = []
+    for mask in range(1 << len(texts)):
+        types = list(params)
+        for bit, i in enumerate(texts):
+            if mask & (1 << bit):
+                types[i] = _char_ptr()
+        out.append(_CallWorker(sym, types, rt))
+    return out
+
+
+class _IrisCallMatcher(gdb.xmethod.XMethodMatcher):
+    """obj.method(args): the Iris method, called as Iris does."""
+
+    def __init__(self):
+        super().__init__("iris calls")
+
+    def match(self, class_type, method_name):
+        if method_name.startswith("operator"):
+            return None
+        t = class_type.strip_typedefs()
+        tag = t.tag or t.name or ""
+        sym = _function(_method_name(tag, method_name))
+        if sym is None:
+            return None
+        return _call_workers(sym)
+
+
+def _rewrite_calls(expr):
+    """name(args) for an Iris function becomes $iris_call("name", args), so
+    gdb doesn't call it with the C rules. Text in quotes stays as it is."""
+    out = []
+    i = 0
+    n = len(expr)
+    while i < n:
+        c = expr[i]
+        if c in "\"'":
+            j = i + 1
+            while j < n and expr[j] != c:
+                j += 2 if expr[j] == "\\" else 1
+            out.append(expr[i:j + 1])
+            i = j + 1
+            continue
+        if c.isalpha() or c == "_":
+            j = i
+            while j < n and (expr[j].isalnum() or expr[j] == "_"):
+                j += 1
+            name = expr[i:j]
+            k = j
+            while k < n and expr[k] == " ":
+                k += 1
+            before = "".join(out).rstrip()
+            member = before.endswith((".", "->", "$", "::"))
+            if k < n and expr[k] == "(" and not member and _function(name) is not None:
+                m = k + 1
+                while m < n and expr[m] == " ":
+                    m += 1
+                empty = m < n and expr[m] == ")"
+                out.append('$iris_call("%s"%s' % (name, "" if empty else ", "))
+                i = m if empty else k + 1
+                continue
+            out.append(name)
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+class IrisPrintCommand(gdb.Command):
+    """Print an Iris expression: iris print [/FMT] EXPR.
+
+A call of an Iris function, such as add(2, 3), greet("iris") or pair(5),
+goes in as Iris passes its arguments, and its value shows right. Methods,
+such as xs.at(0) or c.fd(), work in a plain print too."""
+
+    def __init__(self):
+        super().__init__("iris print", gdb.COMMAND_DATA)
+
+    def invoke(self, arg, from_tty):
+        arg = arg.strip()
+        fmt = ""
+        if arg.startswith("/"):
+            fmt, _, arg = arg.partition(" ")
+            fmt += " "
+        try:
+            gdb.execute("print %s%s" % (fmt, _rewrite_calls(arg)), from_tty)
+        except gdb.error as e:
+            raise gdb.GdbError(_plain_error(e))
+
+
+if hasattr(gdb, "MICommand"):
+    class IrisEvaluateMI(gdb.MICommand):
+        """-iris-evaluate-expression EXPR: -data-evaluate-expression with
+        calls of Iris functions as iris print makes them."""
+
+        def __init__(self):
+            super().__init__("-iris-evaluate-expression")
+
+        def invoke(self, argv):
+            if not argv:
+                raise gdb.GdbError("usage: -iris-evaluate-expression EXPR")
+            try:
+                v = gdb.parse_and_eval(_rewrite_calls(" ".join(argv)))
+                return {"value": v.format_string()}
+            except gdb.error as e:
+                raise gdb.GdbError(_plain_error(e))
+
+
+def _call_event(event):
+    """A call that gdb makes: a panic in it stops with a signal (rt.c)."""
+    at = _addr_of("iris_dbg_calling")
+    if at is None:
+        return
+    flag = 1 if isinstance(event, gdb.InferiorCallPreEvent) else 0
+    try:
+        gdb.selected_inferior().write_memory(at, struct.pack("<i", flag))
+    except (gdb.MemoryError, gdb.error):
+        pass
+
+
 # Each program can load the script again: it adds the printers once.
 if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_printers):
     gdb.pretty_printers.append(iris_lookup)
@@ -1317,6 +1779,15 @@ if not any(getattr(p, "__name__", "") == "iris_lookup" for p in gdb.pretty_print
     gdb.events.breakpoint_modified.connect(_drop_c_main)
     _add_functions()
     gdb.xmethod.register_xmethod_matcher(None, _IrisMatcher())
+    gdb.xmethod.register_xmethod_matcher(None, _IrisCallMatcher())
+    _IrisCallFunction()
+    IrisPrintCommand()
+    if hasattr(gdb, "MICommand"):
+        IrisEvaluateMI()
+    gdb.events.inferior_call.connect(_call_event)
+    # a call from gdb that panics or gets a signal gives the program back
+    # as it was before the call
+    gdb.execute("set unwindonsignal on")
     # the operators above need C++ expressions; Iris frames are C, so gdb
     # would warn at each stop that the language is not the frame's
     gdb.execute("set language c++")
