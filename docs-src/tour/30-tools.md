@@ -118,12 +118,16 @@ A comment at the top of a module's file, with a blank line after it, describes t
 - the errors as the code is typed
 - the type and comment of a name under the pointer
 - going to a name's declaration, also into the standard library
+- the usages of a name in the project
+- the rename of a name in the project
 - a file's outline
 - completion
 - a quick fix that adds a missing import
 - formatting with `iris fmt`
 
 Completion offers the variables in scope at the cursor, the file's functions and types, the imported modules and the built-ins. After a dot it offers a module's names or a value's fields and methods, and in an `import` line the standard library's modules. A standard library module that the file doesn't import yet is offered too, by its name and after its dot, and taking it adds its `import` line. After `@` it offers the attributes of the declaration below: a struct's, a field's, an enum's or a function's. The server reads the editor's unsaved text and keeps answering while the line being typed doesn't parse yet.
+
+The usages and the rename find the name in all files of the project: locals, parameters, fields, methods, functions, types, type parameters and enum members. A name in a module of the project also has its usages in the files that import the module. The rename doesn't change the names of the standard library or the built-ins. The new name must be a valid name and must not be a keyword.
 
 Neovim 0.11 or newer needs the syntax files from the repository's `editors/vim` folder, which `build-and-install.sh` also copies to `/usr/local/share/iris/editors/vim`:
 

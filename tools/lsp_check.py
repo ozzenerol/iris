@@ -382,6 +382,155 @@ f64 total(dyn Shape s) => s.area()
     got = goto(npath, ntext.split("\n"), 0, "User")
     check("definition in a file not saved yet: %r" % (got,), got and got[0] == "models.iris" and got[1] == 3)
 
+    # find usages and rename: locals, parameters, fields, methods, types, type
+    # parameters, generics, enum members, and names in another module of the project
+    rproj = tempfile.mkdtemp()
+    os.makedirs(os.path.join(rproj, "models"))
+    rfiles = {
+        "iris.mod": "module example.com/refs\n",
+        "models/models.iris": ("pub enum Role { admin, member }\n\npub struct User {\n    pub String name\n"
+                               "    pub Role role\n}\n\npub i64 User.score() => self.name.len\n\n"
+                               "pub i64 twice(i64 n) => n * 2\n"),
+        "main.iris": """import "models"
+
+struct Point {
+    i64 x
+    i64 y
+}
+
+i64 Point.sum() => self.x + self.y
+
+T biggest[T](T a, T b) => a if a > b else b
+
+i64 other() {
+    p := 5
+    return p
+}
+
+void main() {
+    p := Point{x: 1, y: 2}
+    total := p.sum() + p.x
+    print("{p.x} {total} {other()}")
+    u := models.User{name: "a".copy(), role: .admin}
+    print("{u.score()} {models.twice(total)} {biggest(total, 3)}")
+    if u.role == .admin {
+        print("admin")
+    }
+    u.name.free()
+    List[i64] xs = List[i64]{}
+    xs.push(1)
+    xs.free()
+}
+""",
+    }
+    for name, text in rfiles.items():
+        with open(os.path.join(rproj, name), "w") as f:
+            f.write(text)
+    rpath = os.path.join(rproj, "main.iris")
+    rlines = rfiles["main.iris"].split("\n")
+    mpath = os.path.join(rproj, "models", "models.iris")
+    mlines = rfiles["models/models.iris"].split("\n")
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": "file://" + rpath, "languageId": "iris", "version": 1,
+                                                       "text": rfiles["main.iris"]}})
+
+    def at(path, lines, line, word, nth=1):
+        col = -1
+        for _ in range(nth):
+            col = lines[line].index(word, col + 1)
+        return {"textDocument": {"uri": "file://" + path}, "position": {"line": line, "character": col}}
+
+    def usages(path, lines, line, word, nth=1, decl=True):
+        params = at(path, lines, line, word, nth)
+        params["context"] = {"includeDeclaration": decl}
+        r = c.request("textDocument/references", params)
+        res = r and r.get("result")
+        if res is None:
+            return None
+        return sorted((x["uri"].rsplit("/", 1)[-1], x["range"]["start"]["line"], x["range"]["start"]["character"],
+                       x["range"]["end"]["character"]) for x in res)
+
+    m, mo = "main.iris", "models.iris"
+    cases = [
+        ("a local", (rpath, rlines, 17, "p"), [(m, 17, 4, 5), (m, 18, 13, 14), (m, 18, 23, 24), (m, 19, 12, 13)]),
+        ("a local with the name of a local in another function", (rpath, rlines, 12, "p"),
+         [(m, 12, 4, 5), (m, 13, 11, 12)]),
+        ("a field", (rpath, rlines, 3, "x"),
+         [(m, 3, 8, 9), (m, 7, 24, 25), (m, 17, 15, 16), (m, 18, 25, 26), (m, 19, 14, 15)]),
+        ("a method", (rpath, rlines, 18, "sum"), [(m, 7, 10, 13), (m, 18, 15, 18)]),
+        ("a struct", (rpath, rlines, 2, "Point"), [(m, 2, 7, 12), (m, 7, 4, 9), (m, 17, 9, 14)]),
+        ("a parameter", (rpath, rlines, 9, "a", 2), [(m, 9, 15, 16), (m, 9, 26, 27), (m, 9, 31, 32)]),
+        ("a type parameter", (rpath, rlines, 9, "T"), [(m, 9, 0, 1), (m, 9, 10, 11), (m, 9, 13, 14), (m, 9, 18, 19)]),
+        ("a generic function", (rpath, rlines, 21, "biggest"), [(m, 9, 2, 9), (m, 21, 46, 53)]),
+        ("a type of another module", (rpath, rlines, 20, "User"), [(m, 20, 16, 20), (mo, 2, 11, 15), (mo, 7, 8, 12)]),
+        ("a method of another module", (rpath, rlines, 21, "score"), [(m, 21, 14, 19), (mo, 7, 13, 18)]),
+        ("a function of another module", (rpath, rlines, 21, "twice"), [(m, 21, 31, 36), (mo, 9, 8, 13)]),
+        ("an enum member", (rpath, rlines, 20, "admin"), [(m, 20, 46, 51), (m, 22, 18, 23), (mo, 0, 16, 21)]),
+        ("from the module's own file", (mpath, mlines, 2, "User"), [(m, 20, 16, 20), (mo, 2, 11, 15), (mo, 7, 8, 12)]),
+    ]
+    for what, where_, want in cases:
+        got = usages(*where_)
+        check("usages of %s: %r" % (what, got), got == want)
+    got = usages(rpath, rlines, 18, "sum", decl=False)
+    check("usages without the declaration: %r" % (got,), got == [(m, 18, 15, 18)])
+    got = usages(rpath, rlines, 19, "print")
+    check("usages of a built-in: %r" % (got,), got == [])
+
+    def prepare(path, lines, line, word, nth=1):
+        r = c.request("textDocument/prepareRename", at(path, lines, line, word, nth))
+        return r and (r["result"]["placeholder"] if r.get("result") else r.get("error", {}).get("message"))
+
+    check("prepare a rename of a local", prepare(rpath, rlines, 17, "p") == "p")
+    check("prepare a rename of an enum member", prepare(rpath, rlines, 22, "admin") == "admin")
+    got = prepare(rpath, rlines, 19, "print")
+    check("no rename of a built-in: %r" % (got,), got == "a built-in name can't be renamed")
+    got = prepare(rpath, rlines, 27, "push")
+    check("no rename of a std name: %r" % (got,), got == "a name of the standard library can't be renamed")
+
+    def rename(path, lines, line, word, new, nth=1):
+        params = at(path, lines, line, word, nth)
+        params["newName"] = new
+        return c.request("textDocument/rename", params)
+
+    for bad in ["for", "1x", "a-b", "", "self"]:
+        r = rename(rpath, rlines, 3, "x", bad)
+        check("refuse the name %r: %r" % (bad, r), r and "error" in r and "is not a valid name" in r["error"]["message"])
+
+    def apply(changes):
+        texts = {}
+        for uri, edits in changes.items():
+            with open(uri[7:]) as f:
+                lines = f.read().split("\n")
+            for e in sorted(edits, key=lambda e: (e["range"]["start"]["line"], e["range"]["start"]["character"]),
+                            reverse=True):
+                s, n = e["range"]["start"], e["range"]["end"]
+                assert s["line"] == n["line"]
+                ln = lines[s["line"]]
+                lines[s["line"]] = ln[:s["character"]] + e["newText"] + ln[n["character"]:]
+            texts[uri[7:]] = "\n".join(lines)
+        return texts
+
+    # a rename gives a program that still compiles, with the new name everywhere
+    for what, where_, new in [("a field", (rpath, rlines, 3, "x"), "px"),
+                              ("an enum member", (rpath, rlines, 20, "admin"), "boss"),
+                              ("a type of another module", (mpath, mlines, 2, "User"), "Person"),
+                              ("a method", (rpath, rlines, 7, "sum"), "total")]:
+        r = rename(*where_, new)
+        changes = r and r.get("result") and r["result"]["changes"]
+        if not changes:
+            check("rename %s: %r" % (what, r), False)
+            continue
+        texts = apply(changes)
+        copy = tempfile.mkdtemp()
+        for name, text in rfiles.items():
+            os.makedirs(os.path.dirname(os.path.join(copy, name)), exist_ok=True)
+            full = os.path.join(rproj, name)
+            with open(os.path.join(copy, name), "w") as f:
+                f.write(texts.get(full, text))
+        p = subprocess.run([IRIS, "check", os.path.join(copy, "main.iris")], capture_output=True, text=True)
+        check("rename %s compiles: %s" % (what, p.stdout + p.stderr), p.returncode == 0)
+        check("rename %s changes %d places" % (what, sum(len(e) for e in changes.values())),
+              all(new in t for t in texts.values()))
+
     # a std file opened by go to definition: its names resolve and it has no errors
     loc = c.request("textDocument/definition", {"textDocument": {"uri": "file://" + gpath},
                                                 "position": {"line": 29, "character": glines[29].index("decode")}})
