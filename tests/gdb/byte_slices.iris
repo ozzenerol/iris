@@ -1,0 +1,44 @@
+// gdb: break use
+// gdb: run
+// gdb: whatis buf
+// gdb: print buf
+// gdb: whatis s
+// gdb: print s
+// gdb: whatis xs
+// gdb: print buf[1]
+// gdb: ptype b
+// gdb: print b
+// gdb: up
+// gdb: info locals
+// expect: type = u8 []
+// expect: = u8[](len=4) = {104, 105, 0, 7}
+// expect: type = str
+// expect: = "hi"
+// expect: type = i64 []
+// expect: = 105
+// expect: u8 [] data;
+// expect: str label;
+// expect: i64 [] nums;
+// expect: = {data = u8[](len=4) = {104, 105, 0, 7}, label = "box", nums = i64[](len=3) = {1, 2, 3}}
+// expect: buf = u8[](len=4) = {104, 105, 0, 7}
+
+// str and u8[] are one type to the checker. The debug type follows the
+// declaration: a u8[] shows as numbers, a str as text, in a struct too.
+
+struct Box {
+    u8[] data
+    str label
+    i64[] nums
+}
+
+i64 use(u8[] buf, str s, i64[] xs, Box b) {
+    return buf.len + s.len + xs.len + b.data.len
+}
+
+void main() {
+    u8[4] raw = [104, 105, 0, 7]
+    u8[] buf = raw[0:4]
+    i64[3] ns = [1, 2, 3]
+    Box b = Box{data: buf, label: "box", nums: ns[0:3]}
+    print("{use(buf, "hi", ns[0:3], b)}")
+}

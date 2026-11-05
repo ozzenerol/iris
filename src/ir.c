@@ -315,12 +315,20 @@ static Type *memberData(Node *m);
 static uint64_t nameHash(const char *s, size_t n);
 static const char *dbgFuncName(IR *ir, Node *f);
 
+/* str and u8[] are one type to the checker. The debug type follows what the
+ * declaration writes, so gdb shows a u8[] as numbers and a str as text. */
+static Type tyBytesDbg = {.kind = TY_SLICE, .name = "u8[]", .elem = &tyU8};
+
+static Type *dbgDeclType(Type *t, Node *syntax) {
+    return t == &tyStr && syntax && syntax->kind == N_T_SLICE ? &tyBytesDbg : t;
+}
+
 /* A struct-like debug type: name, size and members (name, type, offset). */
 static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n, Node **fields) {
     for (int i = 0; i < n; i++) {
-        int mt = dbgType(ir, types[i]);
-        int m = ir->metaId++;
         Node *f = fields ? fields[i] : NULL;
+        int mt = dbgType(ir, dbgDeclType(types[i], f ? f->a : NULL));
+        int m = ir->metaId++;
         if (f && f->bitWidth) {
             int low = types[i]->bigEndian ? types[i]->bits - f->bitOff - f->bitWidth : f->bitOff;
             sbPrintf(&ir->meta, "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", baseType: !%d, size: %d, "
@@ -638,7 +646,7 @@ static const char *varSlotAt(IR *ir, Type *t, Node *decl, int arg, const char *a
     const char *slot = at ? at : allocaFor(ir, t, decl->name);
     if (ir->dbgScope && decl->name && strcmp(decl->name, "_") != 0) {
         int file = dbgFile(ir, ir->func->src->path);
-        int ty = dbgType(ir, t);
+        int ty = dbgType(ir, dbgDeclType(t, decl->a));
         int v = ir->metaId++;
         sbPrintf(&ir->meta, "!%d = !DILocalVariable(name: \"%s\", %sscope: !%d, file: !%d, line: %d, type: !%d)\n", v,
                  decl->name, arg ? fmt(ir, "arg: %d, ", arg) : "", ir->dbgScope, file, decl->line, ty);
@@ -5063,8 +5071,12 @@ static void emitFunction(IR *ir, Node *f, StrBuf *out) {
         /* the function's type: what it returns (null for void), then the
          * parameters; gdb's finish shows the value returned */
         StrBuf sig = {0};
-        sbPuts(&sig, f->type->kind == TY_VOID || f->type->kind == TY_NORETURN ? "null" : fmt(ir, "!%d", dbgType(ir, f->type)));
-        for (int i = 0; i < f->list.len; i++) sbPrintf(&sig, ", !%d", dbgType(ir, f->list.items[i]->type));
+        sbPuts(&sig, f->type->kind == TY_VOID || f->type->kind == TY_NORETURN ? "null"
+                                                                       : fmt(ir, "!%d", dbgType(ir, dbgDeclType(f->type, f->a))));
+        for (int i = 0; i < f->list.len; i++) {
+            Node *p = f->list.items[i];
+            sbPrintf(&sig, ", !%d", dbgType(ir, dbgDeclType(p->type, p->a)));
+        }
         int sub = ir->metaId++;
         sbPrintf(&ir->meta, "!%d = !DISubroutineType(types: !{%s})\n", sub, sig.buf);
         sbFree(&sig);
