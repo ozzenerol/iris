@@ -26,7 +26,7 @@ import re
 import gdb
 import struct
 
-_LIMIT = 1 << 31   # a length above this comes from memory that isn't set yet
+_LIMIT = 1 << 32   # a length or a cap above this comes from memory that isn't set yet
 
 
 def _tag(t):
@@ -38,9 +38,48 @@ def _int(v):
     return int(v)
 
 
+def _max_items():
+    """How many items a printer reads: gdb's "set print elements"."""
+    n = gdb.parameter("print elements")
+    return _LIMIT if n is None or n <= 0 else n
+
+
+def _readable(addr, size=1):
+    try:
+        gdb.selected_inferior().read_memory(addr, size)
+        return True
+    except (gdb.MemoryError, gdb.error, OverflowError, ValueError):
+        return False
+
+
+def _slice_ok(sl, cap=None):
+    """A { ptr, len } that can be real: 0 <= len <= _LIMIT (and <= cap), and a
+    pointer that is not null when len > 0."""
+    try:
+        n = _int(sl["len"])
+        ptr = _int(sl["ptr"])
+    except (gdb.MemoryError, gdb.error):
+        return False
+    if n < 0 or n > _LIMIT or (cap is not None and n > cap):
+        return False
+    return n == 0 or ptr != 0
+
+
 def _items(ptr, n):
-    for i in range(n):
-        yield "[%d]" % i, ptr[i]
+    """The first n items at ptr, at most "print elements" of them. An item
+    that gdb cannot read shows as <unreadable>, and the items stop there."""
+    for i in range(min(n, _max_items())):
+        try:
+            v = ptr[i]
+            v.fetch_lazy()
+        except (gdb.MemoryError, gdb.error):
+            yield "[%d]" % i, "<unreadable>"
+            return
+        yield "[%d]" % i, v
+
+
+def _not_set(v):
+    return "%s(not set)" % _tag(v.type)
 
 
 def _bad_len(n):
@@ -52,16 +91,38 @@ class TextPrinter:
 
     def __init__(self, v):
         self.v = v
+        self.n = 0
+        self.why = None
+        names = [f.name for f in v.type.strip_typedefs().fields()]
+        cap = None
+        try:
+            if "cap" in names:
+                cap = _int(v["cap"])
+                if cap < 0 or cap > _LIMIT:
+                    self.why = "not set"
+            if self.why is None and not _slice_ok(v, cap):
+                self.why = "not set"
+            if self.why is None:
+                self.n = _int(v["len"])
+                ptr = _int(v["ptr"])
+                if self.n > 0 and not _readable(ptr):
+                    self.why = "unreadable"
+        except (gdb.MemoryError, gdb.error):
+            self.why = "unreadable"
 
     def to_string(self):
-        n = _int(self.v["len"])
-        if _bad_len(n):
-            return "<text with length %d>" % n
-        if n == 0:
+        if self.why:
+            return "%s(%s)" % (_tag(self.v.type), self.why)
+        if self.n == 0:
             return ""
-        return self.v["ptr"].lazy_string(encoding="utf-8", length=n)
+        # gdb reads at most "print elements" bytes of it
+        if not _readable(_int(self.v["ptr"]) + min(self.n, _max_items()) - 1):
+            return "%s(unreadable)" % _tag(self.v.type)
+        return self.v["ptr"].lazy_string(encoding="utf-8", length=self.n)
 
     def display_hint(self):
+        if self.why or (self.n and not _readable(_int(self.v["ptr"]) + min(self.n, _max_items()) - 1)):
+            return None
         return "string"
 
 
@@ -70,13 +131,16 @@ class SlicePrinter:
 
     def __init__(self, v):
         self.v = v
-        self.n = _int(v["len"])
+        self.ok = _slice_ok(v)
+        self.n = _int(v["len"]) if self.ok else 0
 
     def to_string(self):
+        if not self.ok:
+            return _not_set(self.v)
         return "%s(len=%d)" % (_tag(self.v.type), self.n)
 
     def children(self):
-        if _bad_len(self.n):
+        if not self.ok:
             return iter(())
         return _items(self.v["ptr"], self.n)
 
@@ -89,13 +153,20 @@ class ListPrinter:
 
     def __init__(self, v):
         self.v = v
-        self.n = _int(v["len"])
+        try:
+            buf = v["buf"]
+            self.n = _int(v["len"])
+            self.ok = _slice_ok(buf) and 0 <= self.n <= _int(buf["len"])
+        except (gdb.MemoryError, gdb.error):
+            self.ok = False
 
     def to_string(self):
+        if not self.ok:
+            return _not_set(self.v)
         return "%s(len=%d)" % (_tag(self.v.type), self.n)
 
     def children(self):
-        if _bad_len(self.n):
+        if not self.ok:
             return iter(())
         return _items(self.v["buf"]["ptr"], self.n)
 
@@ -108,35 +179,80 @@ class DequePrinter:
 
     def __init__(self, v):
         self.v = v
-        self.n = _int(v["len"])
+        try:
+            buf = v["buf"]
+            self.n = _int(v["len"])
+            size = _int(buf["len"])
+            head = _int(v["head"])
+            self.ok = (_slice_ok(buf) and 0 <= self.n <= size and (size & (size - 1)) == 0 and
+                       (size == 0 or 0 <= head < size))
+        except (gdb.MemoryError, gdb.error):
+            self.ok = False
 
     def to_string(self):
+        if not self.ok:
+            return _not_set(self.v)
         return "%s(len=%d)" % (_tag(self.v.type), self.n)
 
     def children(self):
+        if not self.ok:
+            return
         buf = self.v["buf"]
         size = _int(buf["len"])
-        if _bad_len(self.n) or size <= 0:
-            return
         head = _int(self.v["head"])
-        for i in range(self.n):
-            yield "[%d]" % i, buf["ptr"][(head + i) & (size - 1)]
+        for i in range(min(self.n, _max_items())):
+            try:
+                v = buf["ptr"][(head + i) & (size - 1)]
+                v.fetch_lazy()
+            except (gdb.MemoryError, gdb.error):
+                yield "[%d]" % i, "<unreadable>"
+                return
+            yield "[%d]" % i, v
 
     def display_hint(self):
         return "array"
 
 
-def _map_entries(m):
-    """The (key, value) pairs of a Map: the slots whose state has bit 0x80."""
+def _map_ok(m):
+    """slots and state have the same length, and len fits in it."""
+    try:
+        slots, state = m["slots"], m["state"]
+        n = _int(m["len"])
+        return (_slice_ok(slots) and _slice_ok(state) and _int(slots["len"]) == _int(state["len"]) and
+                0 <= n <= _int(slots["len"]))
+    except (gdb.MemoryError, gdb.error):
+        return False
+
+
+def _map_entries(m, limit):
+    """The (key, value) pairs of a Map: the slots whose state has bit 0x80.
+    A slot that gdb cannot read gives (None, None), and the pairs stop."""
     slots = m["slots"]
-    state = m["state"]
     size = _int(slots["len"])
-    if _bad_len(size):
-        return
-    for i in range(size):
-        if _int(state["ptr"][i]) & 0x80:
-            e = slots["ptr"][i]
-            yield e["key"], e["val"]
+    state = _int(m["state"]["ptr"])
+    inf = gdb.selected_inferior()
+    found = 0
+    at = 0
+    while at < size and found < limit:
+        n = min(4096, size - at)
+        try:
+            chunk = inf.read_memory(state + at, n).tobytes()
+        except (gdb.MemoryError, gdb.error):
+            yield None, None
+            return
+        for i, b in enumerate(chunk):
+            if b & 0x80:
+                try:
+                    e = slots["ptr"][at + i]
+                    e.fetch_lazy()
+                except (gdb.MemoryError, gdb.error):
+                    yield None, None
+                    return
+                yield e["key"], e["val"]
+                found += 1
+                if found >= limit:
+                    return
+        at += n
 
 
 class MapPrinter:
@@ -144,13 +260,22 @@ class MapPrinter:
 
     def __init__(self, v):
         self.v = v
+        self.ok = _map_ok(v)
 
     def to_string(self):
+        if not self.ok:
+            return _not_set(self.v)
         return "%s(len=%d)" % (_tag(self.v.type), _int(self.v["len"]))
 
     def children(self):
+        if not self.ok:
+            return
         i = 0
-        for k, val in _map_entries(self.v):
+        for k, val in _map_entries(self.v, _max_items()):
+            if k is None:
+                yield "[%d]" % i, "<unreadable>"
+                yield "[%d]" % (i + 1), "<unreadable>"
+                return
             yield "[%d]" % i, k
             yield "[%d]" % (i + 1), val
             i += 2
@@ -164,13 +289,25 @@ class SetPrinter:
 
     def __init__(self, v):
         self.v = v
+        try:
+            n = _int(v["len"])
+            self.ok = _map_ok(v["m"]) and 0 <= n <= _int(v["m"]["slots"]["len"])
+        except (gdb.MemoryError, gdb.error):
+            self.ok = False
 
     def to_string(self):
+        if not self.ok:
+            return _not_set(self.v)
         return "%s(len=%d)" % (_tag(self.v.type), _int(self.v["len"]))
 
     def children(self):
+        if not self.ok:
+            return
         i = 0
-        for k, _ in _map_entries(self.v["m"]):
+        for k, _ in _map_entries(self.v["m"], _max_items()):
+            if k is None:
+                yield "[%d]" % i, "<unreadable>"
+                return
             yield "[%d]" % i, k
             i += 1
 
@@ -299,15 +436,22 @@ class ChanPrinter:
         self.v = v
         self.name = name
         self.c = None
+        self.ok = True
         if int(v) != 0:
             try:
                 self.c = v.cast(gdb.lookup_type("Chan").pointer()).dereference()
+                n, cap = int(self.c["len"]), int(self.c["cap"])
+                self.ok = 0 <= n <= cap <= _LIMIT and (cap == 0 or int(self.c["buf"]) != 0)
+            except gdb.MemoryError:
+                self.ok = False
             except gdb.error:
                 self.c = None
 
     def to_string(self):
         if int(self.v) == 0:
             return "%s(null)" % self.name
+        if not self.ok:
+            return "%s(not set)" % self.name
         if self.c is None:
             return "%s(%#x)" % (self.name, int(self.v))
         text = "%s(len=%d, cap=%d" % (self.name, int(self.c["len"]), int(self.c["cap"]))
@@ -318,18 +462,24 @@ class ChanPrinter:
         return text + ")"
 
     def children(self):
-        if self.c is None:
+        if self.c is None or not self.ok:
             return
         n, cap = int(self.c["len"]), int(self.c["cap"])
-        if cap <= 0 or _bad_len(n) or n > cap:
+        if cap <= 0:
             return
         elem = self.v.type.strip_typedefs().target()
         size = int(self.c["elemSize"])
         head = int(self.c["head"])
         buf = int(self.c["buf"])
-        for i in range(n):
+        for i in range(min(n, _max_items())):
             at = buf + ((head + i) % cap) * size
-            yield "[%d]" % i, gdb.Value(at).cast(elem.pointer()).dereference()
+            try:
+                v = gdb.Value(at).cast(elem.pointer()).dereference()
+                v.fetch_lazy()
+            except (gdb.MemoryError, gdb.error):
+                yield "[%d]" % i, "<unreadable>"
+                return
+            yield "[%d]" % i, v
 
     def display_hint(self):
         return "array"
@@ -603,7 +753,11 @@ def _key_text(want):
 
 
 def _map_item(obj, key):
-    for k, v in _map_entries(obj):
+    if not _map_ok(obj):
+        raise gdb.GdbError("iris: the map is not set")
+    for k, v in _map_entries(obj, _LIMIT):
+        if k is None:
+            raise gdb.GdbError("iris: gdb cannot read the map")
         if _key_matches(k, key):
             return v
     raise gdb.GdbError("no key %s in the map" % _key_text(key))

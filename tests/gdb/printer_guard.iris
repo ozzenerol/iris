@@ -1,0 +1,61 @@
+// gdb: break main.iris:60
+// gdb: run
+// gdb: set print elements 2
+// gdb: p xs
+// gdb: set print elements 200
+// gdb: set var xs.len = 2
+// gdb: set var xs.buf.ptr = 0
+// gdb: p xs
+// gdb: set var m.len = 1099511627776
+// gdb: p m
+// gdb: set var st.m.state.len = 3
+// gdb: p st
+// gdb: set var dq.head = 99
+// gdb: p dq
+// gdb: p s
+// gdb: set var s.cap = 1
+// gdb: p s
+// gdb: set var t.ptr = (u8*)8
+// gdb: p t
+// gdb: set var sl.ptr = (i64*)8
+// gdb: p sl
+// gdb: set var sl.len = -3
+// gdb: p sl
+// gdb: p ch
+// gdb: set var ((Chan*)ch)->cap = -1
+// gdb: p ch
+// expect: = List[i64](len=2) = {1, 2...}
+// expect: = List[i64](not set)
+// expect: = Map[str, i64](not set)
+// expect: = Set[i64](not set)
+// expect: = Deque[i64](not set)
+// expect: = "hi 1"
+// expect: = String(not set)
+// expect: = str(unreadable)
+// expect: = i64[](len=3) = {<unreadable>}
+// expect: = i64[](not set)
+// expect: = chan[i64](len=1, cap=2) = {5}
+// expect: = chan[i64](not set)
+
+// The printers check a value before they read its items. A value that
+// cannot be real shows as (not set), and memory that gdb cannot read as
+// <unreadable>. The commands write such values with set var.
+
+void main() {
+    List[i64] xs
+    xs.push(1)
+    xs.push(2)
+    Map[str, i64] m
+    m.set("a", 1)
+    Set[i64] st
+    st.add(4)
+    Deque[i64] dq
+    dq.push(3)
+    String s = format("hi {1}")
+    str t = "text"
+    i64[3] arr = [7, 8, 9]
+    i64[] sl = arr[0:3]
+    ch := chan[i64](2)
+    ch <- 5
+    print("{xs.len} {m.len} {st.len} {dq.len} {s} {t} {sl.len}")
+}
