@@ -661,6 +661,39 @@ static const char *varSlotAt(IR *ir, Type *t, Node *decl, int arg, const char *a
 
 static const char *varSlot(IR *ir, Type *t, Node *decl, int arg) { return varSlotAt(ir, t, decl, arg, NULL); }
 
+/* The variable of catch e { } as a debugger sees it: a struct Error with
+ * the code and the message, which the block keeps in %errmsg.depth. The
+ * code itself uses e's own slot. */
+static void dbgErrorCopy(IR *ir, Node *var, const char *code, int depth) {
+    if (!ir->dbgScope || !var->name || strcmp(var->name, "_") == 0) return;
+    const char *full = fmt(ir, "%%dbg.error.%d", ir->metaId);
+    sbPrintf(&ir->allocas, "  %s = alloca { i64, ptr, i64 }\n", full);
+    const char *len = tmp(ir), *pp = tmp(ir), *lp = tmp(ir);
+    ins(ir, "store i64 %s, ptr %s", code, full);
+    ins(ir, "%s = getelementptr { i64, ptr, i64 }, ptr %s, i32 0, i32 1", pp, full);
+    ins(ir, "store ptr %%errmsg.%d, ptr %s", depth, pp);
+    ins(ir, "%s = load i64, ptr %%errlen.%d", len, depth);
+    ins(ir, "%s = getelementptr { i64, ptr, i64 }, ptr %s, i32 0, i32 2", lp, full);
+    ins(ir, "store i64 %s, ptr %s", len, lp);
+    const char *names[2] = {"code", "message"};
+    Type *types[2] = {&tyI64, &tyStr};
+    int64_t offs[2] = {0, 8};
+    StrBuf b = {0};
+    dbgMembers(ir, &b, names, types, offs, 2, NULL);
+    int ty = ir->metaId++;
+    sbPrintf(&ir->meta, "!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"Error\", size: 192, elements: !{%s})\n",
+             ty, b.buf);
+    sbFree(&b);
+    int file = dbgFile(ir, ir->func->src->path);
+    int v = ir->metaId++;
+    sbPrintf(&ir->meta, "!%d = !DILocalVariable(name: \"%s\", scope: !%d, file: !%d, line: %d, type: !%d)\n", v,
+             var->name, ir->dbgScope, file, var->line, ty);
+    sbPrintf(&ir->allocas,
+             "  call void @llvm.dbg.declare(metadata ptr %s, metadata !%d, metadata !DIExpression()), "
+             "!dbg !DILocation(line: %d, column: %d, scope: !%d)\n",
+             full, v, var->line, var->col, ir->dbgScope);
+}
+
 /* A constant integer as LLVM writes it: the value sign-extended from the
  * type's width. */
 static const char *intConst(IR *ir, int64_t v, Type *t) {
@@ -3849,19 +3882,25 @@ static Val emitCatch(IR *ir, Node *e) {
     } else {
         Node *var = e->d;
         int scope = dbgEnter(ir, var);
-        var->ir = varSlot(ir, &tyErrorValue, var, 0);
-        ins(ir, "store i64 %s, ptr %s", err, var->ir);
         /* the message is copied for the block: errors made while it runs,
          * even ones caught further down, don't change e.message */
         int depth = ir->catchDepth;
         var->ival = 0;
         if (depth < 16) {
+            /* the code reads the code from a slot of its own; the debugger
+             * sees e as a copy with the message too */
+            var->ir = allocaFor(ir, &tyErrorValue, var->name);
+            ins(ir, "store i64 %s, ptr %s", err, var->ir);
             if (!(ir->msgBufs & (1u << depth))) {
                 ir->msgBufs |= 1u << depth;
                 sbPrintf(&ir->allocas, "  %%errmsg.%d = alloca [1024 x i8]\n  %%errlen.%d = alloca i64\n", depth, depth);
             }
             ins(ir, "call void @iris_error_save(ptr %%errmsg.%d, ptr %%errlen.%d)", depth, depth);
             var->ival = (uint64_t)depth + 1;
+            dbgErrorCopy(ir, var, err, depth);
+        } else {
+            var->ir = varSlot(ir, &tyErrorValue, var, 0);
+            ins(ir, "store i64 %s, ptr %s", err, var->ir);
         }
         ir->catchDepth++;
         if (e->c->kind == N_MATCH) {

@@ -210,7 +210,7 @@ f = Frame.Data = {stream = 1, size = 1200}
 e = Parse.badPort
 ```
 
-The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque`, slices and channels with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error. A `Duration` shows as `250ms`, a tuple as `(3, "x")`, a `u8[4]` as numbers, an `Atomic[T]` with its value and a `Mutex` as locked or unlocked. `net.Conn`, `net.Listener` and `fs.File` show their descriptor, or `closed`. A struct of another module has the module's name first, such as `net.Conn`.
+The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque`, slices and channels with their items. An enum with data shows its value and fields, an `Error` shows its code, and a `!T` shows its value or its error. The variable of `catch e { }` also shows the message, and `print e.message` gives it. A `Duration` shows as `250ms`, a tuple as `(3, "x")`, a `u8[4]` as numbers, an `Atomic[T]` with its value and a `Mutex` as locked or unlocked. `net.Conn`, `net.Listener` and `fs.File` show their descriptor, or `closed`. A `net.Addr` shows as `127.0.0.1:8080` or `[::1]:8080`, and without the port when the port is 0. A struct of another module has the module's name first, such as `net.Conn`.
 
 Expressions in `print`, `watch` and breakpoint conditions can use Iris's operators on Iris values:
 

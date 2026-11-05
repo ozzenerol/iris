@@ -1,0 +1,43 @@
+// gdb: break main.iris:30
+// gdb: break main.iris:40
+// gdb: run
+// gdb: print err
+// gdb: print err.message
+// gdb: print err.code == 0
+// gdb: continue
+// gdb: print peer
+// gdb: print v6
+// gdb: print bare
+// gdb: print addrs
+// expect: $1 = OrderError.empty "no items in 7"
+// expect: $2 = "no items in 7"
+// expect: $3 = false
+// expect: $4 = 127.0.0.1:
+// expect: $5 = [::1]:8080
+// expect: $6 = 10.0.0.1
+// expect: $7 = List[Addr](len=1) = {127.0.0.1:443}
+
+// net.Addr as an address and a port, and the error of catch e { } with its message.
+
+import net
+
+enum OrderError { empty }
+
+!i64 count(i64 id) => error(OrderError.empty, "no items in {id}")
+
+!void main() {
+    n := count(7) catch err {
+        print("{err.message}")
+        0
+    }
+    ln := try net.listen(0, "127.0.0.1")
+    c := try net.dial("127.0.0.1", ln.port)
+    peer := c.remoteAddr()
+    v6 := net.Addr{ip: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], port: 8080}
+    bare := net.Addr{ip: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 10, 0, 0, 1], port: 0}
+    List[net.Addr] addrs
+    addrs.push(net.Addr{ip: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 127, 0, 0, 1], port: 443})
+    print("{n} {peer.port} {v6.port} {bare.port} {addrs.len}")
+    c.close()
+    addrs.free()
+}

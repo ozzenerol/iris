@@ -367,7 +367,16 @@ class ErrorPrinter:
         self.v = v
 
     def to_string(self):
-        return error_code_text(_int(self.v["code"]))
+        code = error_code_text(_int(self.v["code"]))
+        names = [f.name for f in self.v.type.strip_typedefs().fields()]
+        if "message" not in names:
+            return code
+        # the variable of catch e { }: the message that the block keeps
+        try:
+            text = text_bytes(self.v["message"]).decode("utf-8", "replace")
+        except (gdb.error, gdb.GdbError, gdb.MemoryError):
+            return code
+        return "%s %s" % (code, json.dumps(text, ensure_ascii=False)) if text else code
 
 
 class ResultPrinter:
@@ -518,6 +527,27 @@ class MutexPrinter:
         return "Mutex(locked)"
 
 
+class AddrPrinter:
+    """net.Addr: 127.0.0.1:8080, [::1]:8080, or the address alone when the
+    port is 0, as a lookup gives it."""
+
+    def __init__(self, v):
+        self.v = v
+
+    def to_string(self):
+        import ipaddress
+        try:
+            ip = bytes(_int(self.v["ip"][i]) & 0xFF for i in range(16))
+            port = _int(self.v["port"])
+        except gdb.error:
+            return "net.Addr(not readable)"
+        if ip[:10] == bytes(10) and ip[10:12] == b"\xff\xff":
+            host = str(ipaddress.IPv4Address(ip[12:]))
+            return "%s:%d" % (host, port) if port else host
+        host = str(ipaddress.IPv6Address(ip))
+        return "[%s]:%d" % (host, port) if port else host
+
+
 class FdPrinter:
     """net.Conn, net.Listener and fs.File: the descriptor, or closed, and
     the fields that tell what it did."""
@@ -531,6 +561,9 @@ class FdPrinter:
         name = _tag(self.v.type)
         if fd < 0:
             return "%s(closed)" % name
+        if fd >= 1 << 20:
+            # above Linux's limit on descriptors: memory that is not set yet
+            return "%s(not set)" % name
         extra = ""
         names = [f.name for f in self.v.type.strip_typedefs().fields()]
         if "tls" in names and int(self.v["tls"]) != 0:
@@ -613,6 +646,8 @@ def iris_lookup(v):
         return MutexPrinter(v)
     if name in ("net.Conn", "net.Listener"):
         return FdPrinter(v, "sock")
+    if name == "net.Addr":
+        return AddrPrinter(v)
     if name == "fs.File":
         return FdPrinter(v, "fd")
     if name.startswith("(") and name.endswith(")"):
