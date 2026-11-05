@@ -1,0 +1,20 @@
+// build: test
+// args: fails
+// gdb: break main.iris:19
+// gdb: run
+// gdb: backtrace 1
+// gdb: continue
+// expect: test "fails" () at main.iris:
+// expect: #0  test "fails" () at main.iris:
+// expect: FAIL fails
+// expect: 1 test, 0 passed, 1 failed
+
+i64 add(i64 a, i64 b) => a + b
+
+test "adds" {
+    expect(add(1, 2) == 3)
+}
+
+test "fails" {
+    expect(add(1, 2) == 4)
+}

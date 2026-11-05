@@ -286,6 +286,7 @@ static const char *tempStringSlot(IR *ir, const char *hint) {
 static int dbgType(IR *ir, Type *t);
 static Type *memberData(Node *m);
 static uint64_t nameHash(const char *s, size_t n);
+static const char *dbgFuncName(IR *ir, Node *f);
 
 /* A struct-like debug type: name, size and members (name, type, offset). */
 static void dbgMembers(IR *ir, StrBuf *b, const char **names, Type **types, int64_t *offs, int n, Node **fields) {
@@ -4590,11 +4591,15 @@ static const char *emitSpawn(IR *ir, Node *call, bool thread) {
         ins(ir, "store %s %s, ptr %s", llType(ir, vals[i].t), vals[i].s, f);
     }
     int id = ++ir->spawns;
-    const char *thunk = fmt(ir, "@\"spawn.%d\"", id);
+    /* the thunk's name has the function's: debuggers show it for the task
+     * ("iris tasks" in runtime/gdb.py), and a thread takes it as its name */
+    const char *shown = indirect || !d ? NULL : dbgFuncName(ir, d);
+    const char *thunk = shown ? fmt(ir, "@\"spawn.%d:%s\"", id, shown) : fmt(ir, "@\"spawn.%d\"", id);
     const char *handle = NULL;
     if (thread) {
         handle = tmp(ir);
-        ins(ir, "%s = call ptr @iris_thread_new(ptr %s, ptr %s)", handle, thunk, mem);
+        ins(ir, "%s = call ptr @iris_thread_new(ptr %s, ptr %s, ptr %s)", handle, thunk, mem,
+            shown ? cString(ir, shown) : "null");
     } else {
         ins(ir, "call void @iris_spawn(ptr %s, ptr %s)", thunk, mem);
     }
@@ -4894,6 +4899,9 @@ static Type *selfType(Node *f) {
 
 /* The name of a function in the debug information: add, or P.len for a method. */
 static const char *dbgFuncName(IR *ir, Node *f) {
+    if (f->flags & F_TESTFN) {
+        return fmt(ir, (f->flags & F_BENCH) ? "bench \"%s\"" : "test \"%s\"", f->text);   /* as panics name it */
+    }
     Type *self = selfType(f);
     return self ? fmt(ir, "%s.%s", dbgName(ir, self), f->name) : f->name;
 }
@@ -4901,6 +4909,7 @@ static const char *dbgFuncName(IR *ir, Node *f) {
 /* A second symbol for f, module.name (main.add, main.P.len), so that gdb
  * can "break main.add". A name that two functions have is given once. */
 static void dbgAlias(IR *ir, Node *f, StrBuf *out) {
+    if (f->flags & F_TESTFN) return;
     if (strncmp(f->ir, "@\"f.", 4) != 0 && strncmp(f->ir, "@\"m.", 4) != 0) return;
     /* the module: the text after "f." up to the function's own part */
     Type *self = selfType(f);
@@ -5595,7 +5604,7 @@ char *writeIR(Arena *a, Program *prog, BuildMode mode) {
            "declare void @iris_write_float(i32, ptr, double, i32)\n"
            "declare void @iris_spawn(ptr, ptr)\n"
            "declare void @llvm.dbg.declare(metadata, metadata, metadata)\n"
-           "declare ptr @iris_thread_new(ptr, ptr)\n"
+           "declare ptr @iris_thread_new(ptr, ptr, ptr)\n"
            "declare void @iris_thread_join(ptr)\n"
            "declare void @iris_thread_detach(ptr)\n"
            "declare void @iris_json_encode(ptr, ptr, ptr)\n"

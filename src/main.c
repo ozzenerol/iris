@@ -33,6 +33,8 @@ static void usage(FILE *out) {
           "  build [options] <file>       compile a program (-o <name> for the output)\n"
           "  check <file>                 check a program without compiling it\n"
           "  test [options] [file] [name] run the test blocks (those whose name has <name>)\n"
+          "  test --build [-o <name>] [file]  write the test program without running it;\n"
+          "                               run it as <name> [test name]\n"
           "  bench [options] [file] [name] run the bench blocks, built with release-fast\n"
           "                               (--time=<duration> per bench, default 1s)\n"
           "  ir [options] <file>          print the LLVM IR\n"
@@ -673,7 +675,7 @@ static long long parseBenchTime(const char *s) {
 static int cmdCompile(const char *cmd, int argc, char **argv) {
     bool bench = strcmp(cmd, "bench") == 0;
     BuildMode mode = bench ? MODE_RELEASE_FAST : MODE_DEBUG;
-    bool modeGiven = false, pgoAuto = false, targetGiven = false;
+    bool modeGiven = false, pgoAuto = false, targetGiven = false, buildOnly = false;
     const char *out = NULL, *path = NULL;
     const char *includes[64], *links[64];
     int nincludes = 0, nlinks = 0;
@@ -708,8 +710,11 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             gPgoGen = true;
         } else if (strncmp(argv[i], "--pgo=", 6) == 0 && argv[i][6]) {
             gPgoUse = argv[i] + 6;
-        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc && strcmp(cmd, "build") == 0) {
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc &&
+                   (strcmp(cmd, "build") == 0 || strcmp(cmd, "test") == 0 || bench)) {
             out = argv[++i];
+        } else if (strcmp(argv[i], "--build") == 0 && (strcmp(cmd, "test") == 0 || bench)) {
+            buildOnly = true;       /* write the test program and don't run it: for a debugger */
         } else if (bench && strncmp(argv[i], "--time=", 7) == 0) {
             long long ns = parseBenchTime(argv[i] + 7);
             if (ns <= 0) {
@@ -744,6 +749,14 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
     }
     if (!path || (i < argc && strcmp(cmd, "run") != 0 && !test)) {
         usage(stderr);
+        return 2;
+    }
+    if (test && out && !buildOnly) {
+        fprintf(stderr, "iris: -o for %s needs --build\n", cmd);
+        return 2;
+    }
+    if (buildOnly && i < argc) {
+        fprintf(stderr, "iris: %s --build takes no name; give the name to the program when it runs\n", cmd);
         return 2;
     }
 
@@ -817,7 +830,7 @@ static int cmdCompile(const char *cmd, int argc, char **argv) {
             snprintf(def, sizeof def, "a.out");
         }
     }
-    if (strcmp(cmd, "build") == 0) {
+    if (strcmp(cmd, "build") == 0 || buildOnly) {
         if (!out) {
             out = def;
         }

@@ -3492,6 +3492,10 @@ struct Task {
     void *asanFake;             /* AddressSanitizer's bookkeeping while switched out */
     const void *asanBottom;     /* the main task's stack, learned on the first switch */
     size_t asanSize;
+    /* for debuggers (runtime/gdb.py, "iris tasks"): every live task of a
+       thread is in its Sched's list, with a number of its own */
+    Task *allNext, *allPrev;
+    int64_t id;
 };
 
 /* Each thread has its own scheduler: its tasks never move to another one. */
@@ -3518,6 +3522,10 @@ static _Thread_local int fdWaitsCap;
 /* What other threads see of a thread's scheduler: the tasks they woke,
    and a descriptor that wakes the thread's event loop. */
 typedef struct Sched {
+    Task *tasks;                /* the thread's live tasks, for debuggers */
+    Task *running;              /* the task that runs now: debuggers read it */
+    int64_t tid;                /* the thread's id in the system (the LWP gdb shows) */
+    int ended;                  /* the thread has finished */
     int lock;
     Task *inboxHead, *inboxTail;
     int wakeR, wakeW;           /* an eventfd on Linux (both the same), a pipe elsewhere */
@@ -3538,6 +3546,27 @@ static int stoppedLen, stoppedCap;
 static int stopGen;
 static Sched **allScheds;
 static int schedsLen, schedsCap;
+
+static int64_t taskIds;
+
+/* Puts t in its thread's list of live tasks, with a new number. */
+static void listTask(Task *t) {
+    t->id = __atomic_add_fetch(&taskIds, 1, __ATOMIC_RELAXED);
+    t->allPrev = NULL;
+    t->allNext = t->sched->tasks;
+    if (t->allNext) t->allNext->allPrev = t;
+    t->sched->tasks = t;
+}
+
+static void unlistTask(Task *t) {
+    if (t->allPrev) {
+        t->allPrev->allNext = t->allNext;
+    } else if (t->sched->tasks == t) {
+        t->sched->tasks = t->allNext;
+    }
+    if (t->allNext) t->allNext->allPrev = t->allPrev;
+    t->allNext = t->allPrev = NULL;
+}
 
 /* A hint to the CPU that this is a spin loop. */
 static inline void cpuRelax(void) {
@@ -3606,6 +3635,11 @@ static Task *startThread(void) {
     s->stopSeen = stopGen;
     spinUnlock(&stopLock);
     mainTask.sched = s;
+#if defined(__linux__) && defined(SYS_gettid)
+    s->tid = (int64_t)syscall(SYS_gettid);
+#endif
+    listTask(&mainTask);
+    s->running = &mainTask;
     currentTask = &mainTask;
     return currentTask;
 }
@@ -4152,6 +4186,7 @@ static void switchTo(Task *next) {
         return;
     }
     currentTask = next;
+    next->sched->running = next;
     switchedFrom = prev;
 #ifdef IRIS_ASAN
     __sanitizer_start_switch_fiber(prev->dead ? NULL : &prev->asanFake,
@@ -4186,6 +4221,7 @@ static void taskEntry(void) {
     }
     current->fn(current->arg);
     current->dead = 1;
+    unlistTask(current);
     deadTask = current;
     if (--liveTasks == 0 && waitingForTasks) {
         waitingForTasks = false;
@@ -4217,6 +4253,7 @@ void iris_spawn(void (*fn)(void *), void *arg) {
     }
     t->stackSize = STACK_SIZE;
     t->sched = current->sched;
+    listTask(t);
     liveTasks++;
     t->fn = fn;
     t->arg = arg;
@@ -6499,17 +6536,27 @@ typedef struct {
     Task *joiner;
     void (*fn)(void *);
     void *arg;
+    char name[16];              /* the function's name, at most 15 bytes, or empty */
 } Thread;
 
 static void *threadMain(void *p) {
     Thread *th = p;
     (void)current;
+    mainTask.fn = th->fn;       /* not called: debuggers name the task by it */
+#ifdef __linux__
+    if (th->name[0]) {
+        pthread_setname_np(pthread_self(), th->name);   /* gdb's "info threads" shows it */
+    }
+#endif
     th->fn(th->arg);
     if (liveTasks > 0) {          /* the thread's tasks finish first */
         waitingForTasks = true;
         schedule();
     }
     freeTaskCache();
+    unlistTask(&mainTask);      /* it is in this thread's memory, which goes now */
+    mySched->running = NULL;
+    mySched->ended = 1;
     spinLock(&th->lock);
     th->done = 1;
     Task *j = th->joiner;
@@ -6525,14 +6572,18 @@ static void *threadMain(void *p) {
     return NULL;
 }
 
-/* thread f(args): starts the thunk fn(arg) on a new thread. */
-void *iris_thread_new(void (*fn)(void *), void *arg) {
+/* thread f(args): starts the thunk fn(arg) on a new thread. name is f's
+   name, for debuggers; NULL for a function value. */
+void *iris_thread_new(void (*fn)(void *), void *arg, const char *name) {
     Thread *th = calloc(1, sizeof(Thread));
     if (!th) {
         outOfMemory();
     }
     th->fn = fn;
     th->arg = arg;
+    if (name) {
+        snprintf(th->name, sizeof th->name, "%s", name);
+    }
     (void)current;
     __atomic_add_fetch(&liveThreads, 1, __ATOMIC_SEQ_CST);
     pthread_t t;

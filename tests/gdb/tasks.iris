@@ -1,0 +1,50 @@
+// gdb: break main.iris:47
+// gdb: run
+// gdb: info threads
+// gdb: iris tasks
+// gdb: iris task 2 frame function waiter; info args
+// gdb: iris task 4 frame function worker; info locals
+// gdb: next
+// expect: "worker"
+// expect: Id    Thread  State     Function
+// expect: * 1     1       running   main                 main.iris:
+// expect:   2     1       waiting   waiter               main.iris:
+// expect:   3     1       sleeping  sleeper              main.iris:
+// expect:   4     2       sleeping  worker               main.iris:
+// expect:   5     1       new       sleeper              -
+// expect: in waiter (ch=
+// expect: ch =
+// expect: in worker (n=4, started=
+// expect: x = 8
+// expect: ch <- 5
+
+void waiter(chan[i64] ch) {
+    i64 v = <-ch
+    print("got {v}")
+}
+
+void sleeper() {
+    sleep(10s)
+}
+
+void worker(i64 n, chan[i64] started) {
+    i64 x = n * 2
+    started <- 1
+    sleep(2s)
+    print("{x}")
+}
+
+void main() {
+    ch := chan[i64](1)
+    spawn waiter(ch)
+    spawn sleeper()
+    started := chan[i64](1)
+    t := thread worker(4, started)
+    _ = <-started
+    sleep(100ms)
+    i64 here = 1
+    spawn sleeper()
+    print("{here}")
+    ch <- 5
+    t.join()
+}

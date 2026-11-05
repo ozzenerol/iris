@@ -42,6 +42,8 @@
                                // load: section    plain gdb, with the printers from
                                                    the program's .debug_gdb_scripts
                                                    (default: iris gdb)
+                               // build: test      build with iris test --build
+                               // args: A B        the program's arguments
                            skipped when there is no gdb
   tests/fmt/NAME.iris      `iris fmt -` must print NAME.out, and NAME.out must
                            stay as it is when formatted again
@@ -363,21 +365,24 @@ def gdb_test(iris, path, name):
     cmds = re.findall(r"^// gdb: (.*)$", src, re.M)
     want = re.findall(r"^// expect: (.*)$", src, re.M)
     section = re.search(r"^// load: section$", src, re.M) is not None
+    as_test = re.search(r"^// build: test$", src, re.M) is not None
+    m = re.search(r"^// args: (.*)$", src, re.M)
+    prog_args = m.group(1).split() if m else []
     with tempfile.TemporaryDirectory() as tmp:
         exe = os.path.join(tmp, "prog")
         # the commands name the file as it is: main.iris
         shutil.copy(path, os.path.join(tmp, "main.iris"))
-        p = subprocess.run([iris, "build", "main.iris", "-o", exe], cwd=tmp, capture_output=True, text=True,
-                           timeout=300)
+        build = [iris, "test", "--build", "-o", exe, "main.iris"] if as_test else [iris, "build", "main.iris", "-o", exe]
+        p = subprocess.run(build, cwd=tmp, capture_output=True, text=True, timeout=300)
         if p.returncode != 0:
             return [(name, "build failed:\n" + p.stderr)]
         args = ["-batch", "-nx"]
         for c in cmds:
             args += ["-ex", c]
         if section:
-            cmd = ["gdb", "-iex", "add-auto-load-safe-path " + exe] + args + [exe]
+            cmd = ["gdb", "-iex", "add-auto-load-safe-path " + exe] + args + ["--args", exe] + prog_args
         else:
-            cmd = [iris, "gdb"] + args + [exe]
+            cmd = [iris, "gdb"] + args + ["--args", exe] + prog_args
         try:
             g = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:

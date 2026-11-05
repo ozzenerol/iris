@@ -122,6 +122,7 @@ FAIL parse a port
 FAIL a bad port
 3 tests, 1 passed, 2 failed</code></pre>
 <ul><li>The exit status is 1 when a test failed, so a build script or CI stops there.</li><li>A name after the file runs only the tests whose name contains it: <code>iris test main.iris port</code>.</li><li>In a project, <code>iris test</code> in its folder runs the main module's tests.</li><li>Tests are debug builds with every check on. An index out of range, an overflow, a <code>null</code> pointer or memory used after it was freed stops the run with its message.</li></ul>
+<p><code>iris test --build -o tests main.iris</code> writes the test program and does not run it. Run it with a test's name, or with no name for all of them: <code>./tests port</code>. A debugger can then run the tests with breakpoints, such as <code>iris gdb --args ./tests port</code> (see <a href="30-tools.html#debugging">Debugging</a>). In the debugger a test's function is named <code>test &quot;parse a port&quot;</code>.</p>
 <h2 id="tests-that-need-more"><a href="#tests-that-need-more">Tests that need more</a></h2>
 <p>A test that needs files, a network server or a database makes them itself and cleans up with <code>defer</code>. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:</p>
 <pre class="code"><code><span class="k">test</span> <span class="s">&quot;the server answers&quot;</span> {

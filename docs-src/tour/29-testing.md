@@ -89,6 +89,8 @@ FAIL a bad port
 - In a project, `iris test` in its folder runs the main module's tests.
 - Tests are debug builds with every check on. An index out of range, an overflow, a `null` pointer or memory used after it was freed stops the run with its message.
 
+`iris test --build -o tests main.iris` writes the test program and does not run it. Run it with a test's name, or with no name for all of them: `./tests port`. A debugger can then run the tests with breakpoints, such as `iris gdb --args ./tests port` (see [Debugging](30-tools.html#debugging)). In the debugger a test's function is named `test "parse a port"`.
+
 ## Tests that need more
 
 A test that needs files, a network server or a database makes them itself and cleans up with `defer`. Tasks and channels work in tests as in programs, so a test can start a server on port 0 in a task and talk to it:

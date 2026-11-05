@@ -10,6 +10,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris build main.iris` | compiles a program, or a project when given its folder; `-o name` names the output |
 | `iris check main.iris` | checks a program and its tests without compiling it |
 | `iris test [file] [name]` | runs the test blocks, or those whose name contains `name` |
+| `iris test --build -o tests [file]` | writes the test program and does not run it; `./tests name` runs it |
 | `iris bench [file] [name]` | runs the bench blocks, built with `release-fast` |
 | `iris fmt file-or-folder` | puts code in the standard layout |
 | `iris doc http` | shows the documentation of a module, a name, a file or a project |
@@ -195,6 +196,30 @@ The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque` 
 A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 
 `break iris_panicked` stops the program when it panics, after the message is printed. `backtrace` then shows where the panic came from.
+
+`info threads` names each thread after the function that `thread` started. `iris tasks` lists the tasks of every thread: the task's number, gdb's thread, its state, the function it runs, where it is in Iris code and the runtime call it waits in. A `*` marks the task of the selected thread:
+
+```output
+(gdb) iris tasks
+  Id    Thread  State     Function             Where                        Waits in
+* 1     1       running   main                 main.iris:46
+  2     1       waiting   waiter               main.iris:24                 iris_chan_recv
+  3     1       sleeping  sleeper              main.iris:29                 iris_sleep
+  4     2       sleeping  worker               main.iris:34                 iris_sleep
+  5     1       new       sleeper              -
+```
+
+The states are `running`, `ready` (it runs when the running task waits), `new` (spawned, not started yet), `sleeping` (in `sleep` or a timeout) and `waiting` (for a channel, a lock, the network or a file). `iris tasks --json` gives the same as JSON, for tools.
+
+`iris task N` shows the stack of task N. `iris task N CMD` runs other commands on that stack, with `;` between them:
+
+```output
+(gdb) iris task 2 frame function waiter; info locals
+#3  0x000055555567a62f in waiter (ch=0x507000000020) at main.iris:24
+v = 0
+```
+
+A task that waits keeps its registers on its own stack. While the commands run, gdb's thread takes them, and gives its own back after. The program then goes on as before.
 
 Each program also carries the printers in its `.debug_gdb_scripts` section. A plain `gdb` loads them when the program's folder is in its `auto-load safe-path`:
 
