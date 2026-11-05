@@ -71,7 +71,7 @@ typedef struct {
     const char **dbgPaths;  /* the files that have a DIFile, and its id */
     int *dbgIds;
     int ndbg, capDbg;
-    int dbgScope;           /* the current function's DISubprogram, 0 for none */
+    int dbgScope;           /* the current DISubprogram or DILexicalBlock, 0 for none */
     const char **aliases;   /* the names dbgAlias gave, a hash set */
     int aliasLen, aliasCap;
     int dbgLine, dbgCol;    /* where the code being written comes from */
@@ -224,6 +224,28 @@ static void dbgAt(IR *ir, Node *n) {
 }
 
 static const char *tmp(IR *ir) { return fmt(ir, "%%t%d", ++ir->tmp); }
+
+static int dbgFile(IR *ir, const char *path);
+
+/* A DILexicalBlock in the current scope, which becomes the current one:
+ * the variables declared in it are known to a debugger only while code of
+ * the block runs. Gives the scope to go back to with dbgLeave. */
+static int dbgEnter(IR *ir, Node *at) {
+    int old = ir->dbgScope;
+    if (!old || !ir->func || !ir->func->src) return old;
+    int file = dbgFile(ir, ir->func->src->path);
+    int id = ir->metaId++;
+    sbPrintf(&ir->meta, "!%d = distinct !DILexicalBlock(scope: !%d, file: !%d, line: %d, column: %d)\n", id, old,
+             file, at && at->line > 0 ? at->line : ir->dbgLine, at && at->line > 0 ? at->col : ir->dbgCol);
+    ir->dbgScope = id;
+    return old;
+}
+
+static void dbgLeave(IR *ir, int old) { ir->dbgScope = old; }
+
+/* Statements that declare names: each starts a scope of its own that lasts
+ * to the end of the block, so a name is not known before its line. */
+static bool declares(Node *s) { return s->kind == N_VAR || s->kind == N_DEFINE; }
 
 static int newLabel(IR *ir) { return ++ir->label; }
 
@@ -3772,6 +3794,7 @@ static Val emitCatch(IR *ir, Node *e) {
         }
     } else {
         Node *var = e->d;
+        int scope = dbgEnter(ir, var);
         var->ir = varSlot(ir, &tyErrorValue, var, 0);
         ins(ir, "store i64 %s, ptr %s", err, var->ir);
         /* the message is copied for the block: errors made while it runs,
@@ -3797,6 +3820,7 @@ static Val emitCatch(IR *ir, Node *e) {
         } else {
             emitBlock(ir, e->c);
         }
+        dbgLeave(ir, scope);
         ir->catchDepth--;
     }
     br(ir, end);
@@ -4128,10 +4152,14 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
         }
         return;
     }
+    int scope = dbgEnter(ir, b);
     DeferFrame frame;
     pushFrame(ir, &frame);
     for (int i = 0; i < b->list.len; i++) {
         Node *s = b->list.items[i];
+        if (declares(s)) {
+            dbgEnter(ir, s);
+        }
         if (i == b->list.len - 1 && s->kind == N_EXPR_STMT) {
             Val v = emitExpr(ir, s->a);
             if (!ir->terminated && v.t->kind != TY_NORETURN) {
@@ -4145,6 +4173,7 @@ static void emitValueBlock(IR *ir, Node *b, const char *slot, Type *t) {
         runFrame(ir, &frame, false);
     }
     popFrame(ir);
+    dbgLeave(ir, scope);
 }
 
 static Val emitIf(IR *ir, Node *n, bool wantValue) {
@@ -4226,6 +4255,7 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
             }
         }
         placeLabel(ir, body);
+        int armScope = dbgEnter(ir, arm);
         if (dataEnum && arm->list.len == 1 && arm->list.items[0]->kind == N_CALL) {
             /* take the value apart into the names the pattern gives */
             Node *p = arm->list.items[0];
@@ -4251,6 +4281,7 @@ static Val emitMatch(IR *ir, Node *m, bool wantValue) {
         } else {
             emitStmt(ir, arm->c);
         }
+        dbgLeave(ir, armScope);
         br(ir, end);
         placeLabel(ir, next);
     }
@@ -4330,19 +4361,33 @@ static void markStackAlloc(IR *ir, Node *b, int i) {
 }
 
 static void emitBlock(IR *ir, Node *b) {
+    int scope = dbgEnter(ir, b);
     DeferFrame frame;
     pushFrame(ir, &frame);
     for (int i = 0; i < b->list.len; i++) {
         markStackAlloc(ir, b, i);
+        if (declares(b->list.items[i])) {
+            dbgEnter(ir, b->list.items[i]);
+        }
         emitStmt(ir, b->list.items[i]);
     }
     if (!ir->terminated) {
         runFrame(ir, &frame, false);
     }
     popFrame(ir);
+    dbgLeave(ir, scope);
 }
 
+static void emitForIn(IR *ir, Node *s);
+
+/* A for loop: its variables have a scope of their own. */
 static void emitFor(IR *ir, Node *s) {
+    int scope = dbgEnter(ir, s);
+    emitForIn(ir, s);
+    dbgLeave(ir, scope);
+}
+
+static void emitForIn(IR *ir, Node *s) {
     Loop loop = {ir->loop, ir->pendingLabel, 0, 0, ir->defers, ir->ntemps};
     ir->pendingLabel = NULL;
     int cond = newLabel(ir), body = newLabel(ir), post = newLabel(ir), end = newLabel(ir);
@@ -4431,7 +4476,8 @@ static void emitFor(IR *ir, Node *s) {
         }
         Node *item = s->list.items[s->list.len - 1];
         Node *idx = s->list.len == 2 ? s->list.items[0] : NULL;
-        const char *iSlot = allocaFor(ir, &tyI64, idx ? idx->name : "i");
+        const char *iSlot = idx && strcmp(idx->name, "_") != 0 ? varSlot(ir, &tyI64, idx, 0)
+                                                                 : allocaFor(ir, &tyI64, "i");
         if (idx) {
             idx->ir = iSlot;
         }
@@ -4707,6 +4753,7 @@ static void emitSelect(IR *ir, Node *s) {
         ins(ir, "%s = icmp eq i64 %s, %d", is, which, i);
         condBr(ir, is, body, next);
         placeLabel(ir, body);
+        int armScope = dbgEnter(ir, arm);
         if (i < n && arm->d && strcmp(arm->d->name, "_") != 0) {
             arm->d->ir = varSlot(ir, arm->d->type, arm->d, 0);
             Val v = load(ir, slots[i], arm->d->type);
@@ -4717,6 +4764,7 @@ static void emitSelect(IR *ir, Node *s) {
         } else {
             emitStmt(ir, arm->c);
         }
+        dbgLeave(ir, armScope);
         br(ir, end);
         placeLabel(ir, next);
     }

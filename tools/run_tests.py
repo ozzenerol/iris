@@ -42,6 +42,7 @@
                                // load: section    plain gdb, with the printers from
                                                    the program's .debug_gdb_scripts
                                                    (default: iris gdb)
+                               // absent: TEXT     no line of the output starts with TEXT
                                // build: test      build with iris test --build
                                // args: A B        the program's arguments
                            skipped when there is no gdb
@@ -364,6 +365,7 @@ def gdb_test(iris, path, name):
         src = f.read()
     cmds = re.findall(r"^// gdb: (.*)$", src, re.M)
     want = re.findall(r"^// expect: (.*)$", src, re.M)
+    absent = re.findall(r"^// absent: (.*)$", src, re.M)
     section = re.search(r"^// load: section$", src, re.M) is not None
     as_test = re.search(r"^// build: test$", src, re.M) is not None
     m = re.search(r"^// args: (.*)$", src, re.M)
@@ -388,6 +390,9 @@ def gdb_test(iris, path, name):
         except subprocess.TimeoutExpired:
             return [(name, "gdb did not stop in 120s")]
     lines = (g.stdout + g.stderr).splitlines()
+    for a in absent:
+        if any(l.startswith(a) for l in lines):
+            return [(name, "a line has %r; gdb printed:\n%s" % (a, g.stdout + g.stderr))]
     at = 0
     for w in want:
         while at < len(lines) and w not in lines[at]:

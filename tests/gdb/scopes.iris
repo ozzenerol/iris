@@ -1,0 +1,66 @@
+// gdb: break main.iris:54
+// gdb: run
+// gdb: info locals
+// gdb: delete
+// gdb: break main.iris:58
+// gdb: continue
+// gdb: info locals
+// gdb: delete
+// gdb: watch total
+// gdb: continue
+// gdb: delete
+// gdb: break main.iris:61
+// gdb: continue
+// gdb: watch p.x
+// gdb: continue
+// gdb: delete
+// gdb: break half
+// gdb: continue
+// gdb: finish
+// expect: i = 0
+// expect: total = 0
+// expect: inner = 10
+// expect: i = 0
+// expect: v = 10
+// expect: total = 3
+// expect: Hardware watchpoint
+// expect: Old value = 3
+// expect: New value = 13
+// expect: Hardware watchpoint
+// expect: Old value = 1
+// expect: New value = 5
+// expect: Value returned is $1 = 2
+// absent: late =
+// absent: h =
+// absent: p =
+
+struct P {
+    i64 x
+    i64 y
+}
+
+enum Odd { odd }
+
+!i64 half(i64 n) {
+    if n % 2 != 0 {
+        return error(Odd.odd, "odd")
+    }
+    return n / 2
+}
+
+void main() {
+    i64 total = 0
+    for i in 0..3 {
+        total += i
+    }
+    for i, v in [10, 20] {
+        i64 inner = v + i
+        total += inner
+    }
+    P p = P{x: 1, y: 2}
+    p.x = 5
+    total += p.x
+    i64 late = total * 2
+    i64 h = half(4) catch 0
+    print("{late} {h}")
+}

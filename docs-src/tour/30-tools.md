@@ -195,6 +195,8 @@ The printers show `str` and `String` as text, and `List`, `Map`, `Set`, `Deque` 
 
 A function's name in the debugger is its name, `handle`, or `Server.close` for a method. `break main.handle` and `break main.Server.close` also work, with the module first. In release builds the optimiser may put a function's code inside its callers, and the function then has no breakpoint of its own.
 
+Each block, loop and match arm is a scope in the debug information, and a variable's scope starts at its line. `info locals` shows only the variables that the code at the stop can use. `watch total` and `watch p.x` stop the program when a variable or a field changes.
+
 `break iris_panicked` stops the program when it panics, after the message is printed. `backtrace` then shows where the panic came from.
 
 `info threads` names each thread after the function that `thread` started. `iris tasks` lists the tasks of every thread: the task's number, gdb's thread, its state, the function it runs, where it is in Iris code and the runtime call it waits in. A `*` marks the task of the selected thread:
