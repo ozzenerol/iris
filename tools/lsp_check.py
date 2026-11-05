@@ -843,6 +843,30 @@ void main() {
     h.notify("exit", None)
     h.p.wait(timeout=10)
 
+    # the analysis that the server keeps is for one version of the documents
+    curi = "file://" + os.path.join(d, "cache.iris")
+    c.notify("textDocument/didOpen", {"textDocument": {"uri": curi, "languageId": "iris", "version": 1, "text": SOURCE}})
+    c.read()
+    ctd = {"uri": curi}
+    def hover_text(line, character):
+        r = c.request("textDocument/hover", {"textDocument": ctd, "position": {"line": line, "character": character}})
+        return r and r.get("result") and r["result"]["contents"]["value"]
+    hv = hover_text(13, 15)
+    check("hover before a change: %r" % hv, hv and "i64 Point.sum()" in hv)
+    renamed = SOURCE.replace("Point.sum()", "Point.total()").replace("p.sum()", "p.total()")
+    c.notify("textDocument/didChange", {"textDocument": {"uri": curi, "version": 2}, "contentChanges": [{"text": renamed}]})
+    c.read()
+    hv = hover_text(13, 15)
+    check("hover after a change: %r" % hv, hv and "i64 Point.total()" in hv)
+    # a text that does not parse: the diagnostics have the parse error and no check errors
+    broken = renamed.replace('    print("{p.total()}")\n', '    print("{p.total()}")\n    x := (1 +\n')
+    c.notify("textDocument/didChange", {"textDocument": {"uri": curi, "version": 3}, "contentChanges": [{"text": broken}]})
+    diag = c.read()
+    msgs = [x["message"] for x in diag["params"]["diagnostics"]] if diag else []
+    check("parse error only: %r" % msgs, msgs and not any("missing" in m for m in msgs))
+    hv = hover_text(13, 15)
+    check("hover on a text that does not parse: %r" % hv, hv and "i64 Point.total()" in hv)
+
     shut = c.request("shutdown", None)
     check("shutdown", shut is not None and "result" in shut)
     c.notify("exit", None)

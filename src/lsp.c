@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -288,6 +289,12 @@ static Doc *findDoc(const char *uri) {
     return NULL;
 }
 
+static void forgetLines(void);
+
+/* Grows each time an open document changes, opens, closes or is saved: an
+ * analysis is good for one value of it. */
+static unsigned long docsGen;
+
 static void setDoc(const char *uri, const char *text) {
     Doc *d = findDoc(uri);
     if (!d) {
@@ -300,6 +307,8 @@ static void setDoc(const char *uri, const char *text) {
     }
     d->text = strdup(text);
     d->len = strlen(text);
+    forgetLines();
+    docsGen++;
 }
 
 static void closeDoc(const char *uri) {
@@ -309,6 +318,8 @@ static void closeDoc(const char *uri) {
     free(d->path);
     free(d->text);
     *d = docs[--ndocs];
+    forgetLines();
+    docsGen++;
 }
 
 /* Paths are compared without "./" parts. */
@@ -368,12 +379,57 @@ static int utf16Col(const char *lineStart, const char *end, int col) {
     return u;
 }
 
-static const char *lineStartOf(const char *text, size_t len, int line) {
-    const char *p = text, *end = text + len;
-    for (int l = 1; l < line && p < end; p++) {
-        if (*p == '\n') l++;
+/* The start of each line of the last texts, so a line costs no scan of
+ * the text before it. setDoc and closeDoc forget them: a new text can get
+ * the address of a freed one. */
+typedef struct {
+    const char *text;
+    size_t len;
+    size_t *starts;     /* the offset of each line; starts[0] is 0 */
+    int n;
+} LineIndex;
+
+static LineIndex lineIndex[8];
+static int lineIndexNext;
+
+static void forgetLines(void) {
+    for (int i = 0; i < 8; i++) {
+        free(lineIndex[i].starts);
+        lineIndex[i] = (LineIndex){0};
     }
-    return p;
+}
+
+static const char *lineStartOf(const char *text, size_t len, int line) {
+    LineIndex *x = NULL;
+    for (int i = 0; i < 8 && !x; i++) {
+        if (lineIndex[i].text == text && lineIndex[i].len == len) x = &lineIndex[i];
+    }
+    if (!x) {
+        x = &lineIndex[lineIndexNext];
+        lineIndexNext = (lineIndexNext + 1) % 8;
+        free(x->starts);
+        int n = 1;
+        for (size_t i = 0; i < len; i++) n += text[i] == '\n';
+        x->starts = malloc(sizeof(size_t) * (size_t)n);
+        if (!x->starts) {
+            *x = (LineIndex){0};
+            const char *p = text, *end = text + len;
+            for (int l = 1; l < line && p < end; p++) {
+                if (*p == '\n') l++;
+            }
+            return p;
+        }
+        x->starts[0] = 0;
+        int k = 1;
+        for (size_t i = 0; i < len; i++) {
+            if (text[i] == '\n') x->starts[k++] = i + 1;
+        }
+        x->text = text;
+        x->len = len;
+        x->n = n;
+    }
+    if (line <= 1) return text;
+    return line > x->n ? text + len : text + x->starts[line - 1];
 }
 
 /* 1-based byte column of a UTF-16 character position on a line. */
@@ -431,7 +487,27 @@ static void collect(Source *src, int line, int col, const char *msg) {
 
 static Arena gA;
 
+/* The analysis that a worker keeps (see runInWorker): the program of one
+ * path, loaded leniently. strictDiags is the count of diagnostics where a
+ * strict load stops, -1 when the load did not fail. */
+static struct {
+    const char *path;
+    Program *prog;
+    int strictDiags;
+} kept = {NULL, NULL, -1};
+
+static void loadFailed(void) {
+    if (kept.strictDiags < 0) kept.strictDiags = ndiags;
+}
+
 static Program *analyze(const char *path) {
+    if (kept.path && strcmp(kept.path, path) == 0) {
+        if (!gLenient && kept.strictDiags >= 0) {
+            ndiags = kept.strictDiags;      /* a strict load reports the parse errors only */
+            return NULL;
+        }
+        return kept.prog;
+    }
     gDiagHook = collect;
     gReadHook = readDoc;
     gFolderHook = docsIn;
@@ -3568,6 +3644,24 @@ static void signatureHelp(StrBuf *out, J *id, Program *prog, Source *src, Call *
 
 /* Handles one message in the child; the output is messages separated by
  * NUL bytes. */
+/* A line being typed seldom parses: these requests answer from what the
+ * parser could read. */
+static bool lenientMethod(const char *method) {
+    return strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
+           strcmp(method, "textDocument/inlayHint") == 0 || strcmp(method, "textDocument/documentHighlight") == 0 ||
+           strcmp(method, "textDocument/semanticTokens/full") == 0 || strcmp(method, "textDocument/hover") == 0 ||
+           strcmp(method, "textDocument/implementation") == 0 || strcmp(method, "textDocument/prepareCallHierarchy") == 0 ||
+           !strncmp(method, "callHierarchy/", 14) || strcmp(method, "textDocument/references") == 0 ||
+           strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
+}
+
+/* The methods that look at the whole project, not one file. */
+static bool wholeMethod(const char *method) {
+    return strcmp(method, "textDocument/references") == 0 || strcmp(method, "textDocument/rename") == 0 ||
+           strcmp(method, "textDocument/implementation") == 0 ||
+           strcmp(method, "textDocument/prepareCallHierarchy") == 0 || !strncmp(method, "callHierarchy/", 14);
+}
+
 static void handleInChild(J *msg, StrBuf *out) {
     const char *method = jstr(msg, "method");
     J *id = jget(msg, "id");
@@ -3639,14 +3733,7 @@ static void handleInChild(J *msg, StrBuf *out) {
         inCall = callAt(doc, off < doc->len ? off : doc->len, &call);
     }
     /* a line being typed seldom parses: answer from what the parser could read */
-    gLenient = strcmp(method, "textDocument/completion") == 0 || strcmp(method, "textDocument/signatureHelp") == 0 ||
-               strcmp(method, "textDocument/inlayHint") == 0 || strcmp(method, "textDocument/documentHighlight") == 0 ||
-               strcmp(method, "textDocument/semanticTokens/full") == 0 ||
-               strcmp(method, "textDocument/hover") == 0 ||
-               strcmp(method, "textDocument/implementation") == 0 || strcmp(method, "textDocument/prepareCallHierarchy") == 0 ||
-               !strncmp(method, "callHierarchy/", 14) ||
-               strcmp(method, "textDocument/references") == 0 ||
-               strcmp(method, "textDocument/definition") == 0 || strcmp(method, "textDocument/documentSymbol") == 0;
+    gLenient = lenientMethod(method);
     if (gLenient && doc) closeOpen(doc);
     /* time. before import time: the module is loaded by an import at the end,
      * where no line moves, and each item adds the real import */
@@ -3684,9 +3771,7 @@ static void handleInChild(J *msg, StrBuf *out) {
     } else {
         prog = NULL;
         src = NULL;
-        bool whole = strcmp(method, "textDocument/references") == 0 || strcmp(method, "textDocument/rename") == 0 ||
-                     strcmp(method, "textDocument/implementation") == 0 ||
-                     strcmp(method, "textDocument/prepareCallHierarchy") == 0 || !strncmp(method, "callHierarchy/", 14);
+        bool whole = wholeMethod(method);
         char root[4096] = "";
         if (whole && path) projectRoot(path, root, sizeof root);
         const char *slash = path ? strrchr(path, '/') : NULL;
@@ -3748,6 +3833,27 @@ static void handleInChild(J *msg, StrBuf *out) {
     free(path);
 }
 
+static void childStack(void) {
+#ifdef __APPLE__
+    /* macOS drops the signal stack in a forked child, and ASan's
+       longjmp check then fails on the parser's error recovery */
+    static char altStack[1 << 16];
+    stack_t ss = {.ss_sp = altStack, .ss_size = sizeof altStack, .ss_flags = 0};
+    sigaltstack(&ss, NULL);
+#endif
+}
+
+static void writeAll(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, len - off);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+}
+
+static void readReplies(J *msg, int fd, pid_t pid);
+
 /* Runs a message in a child; sends what it wrote. */
 static void runInChild(J *msg) {
     int fds[2];
@@ -3756,21 +3862,10 @@ static void runInChild(J *msg) {
     pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
-#ifdef __APPLE__
-        /* macOS drops the signal stack in a forked child, and ASan's
-           longjmp check then fails on the parser's error recovery */
-        static char altStack[1 << 16];
-        stack_t ss = {.ss_sp = altStack, .ss_size = sizeof altStack, .ss_flags = 0};
-        sigaltstack(&ss, NULL);
-#endif
+        childStack();
         StrBuf out = {0};
         handleInChild(msg, &out);
-        size_t off = 0;
-        while (off < out.len) {
-            ssize_t w = write(fds[1], out.buf + off, out.len - off);
-            if (w <= 0) break;
-            off += (size_t)w;
-        }
+        writeAll(fds[1], out.buf, out.len);
         _exit(0);
     }
     close(fds[1]);
@@ -3778,13 +3873,243 @@ static void runInChild(J *msg) {
         close(fds[0]);
         return;
     }
+    readReplies(msg, fds[0], pid);
+}
+
+/* ---------------------------------------------------------------- the worker
+
+   A worker is a child that analyzes the program once for one value of
+   docsGen and keeps the analysis. Each request then runs in a child of
+   the worker (fork), which has the analysis already: a request costs its
+   own work and no analysis. A crash or a hang still costs one reply. The
+   server sends a request as its length, its text and the write end of a
+   pipe for the replies. */
+
+static struct {
+    pid_t pid;
+    int sock;
+    char *key;
+} worker = {0, -1, NULL};
+
+static void stopWorker(void) {
+    if (worker.sock >= 0) close(worker.sock);
+    if (worker.pid > 0) {
+        kill(worker.pid, SIGKILL);
+        waitpid(worker.pid, NULL, 0);
+    }
+    worker.pid = 0;
+    worker.sock = -1;
+    free(worker.key);
+    worker.key = NULL;
+}
+
+/* The analysis that a request needs: docsGen, 1 when the lenient load
+ * closes the open brackets of the document, and the path. NULL when the
+ * request needs an analysis of its own or none. */
+static char *workerKey(J *msg) {
+    const char *method = jstr(msg, "method");
+    J *params = jget(msg, "params");
+    const char *uri = jstr(jget(params, "textDocument"), "uri");
+    J *item = jget(params, "item");
+    if (!uri && item) uri = jstr(item, "uri");
+    if (!method || !uri || !strcmp(method, "textDocument/formatting") || !strcmp(method, "textDocument/codeAction") ||
+        !strcmp(method, "workspace/symbol")) {
+        return NULL;
+    }
+    char *path = pathOf(uri);
+    char *std = path ? stdPathOf(path) : NULL;
+    if (!path || std || isBuiltinFile(path)) {
+        free(path);
+        free(std);
+        return NULL;
+    }
+    Doc *doc = findDoc(uri);
+    if (!strcmp(method, "textDocument/completion")) {
+        /* a dot or an @ before the word changes the text */
+        if (!doc) {
+            free(path);
+            return NULL;
+        }
+        J *pos = jget(params, "position"), *l = jget(pos, "line"), *c = jget(pos, "character");
+        int line = l ? (int)l->num + 1 : 1;
+        int col = byteCol(doc->text, doc->len, line, c ? (int)c->num : 0);
+        const char *ls = lineStartOf(doc->text, doc->len, line), *t = ls + col - 1;
+        while (t > ls && (isalnum((unsigned char)t[-1]) || t[-1] == '_')) t--;
+        if (t > ls && (t[-1] == '.' || t[-1] == '@')) {
+            free(path);
+            return NULL;
+        }
+    }
+    if (wholeMethod(method)) {
+        char root[4096] = "";
+        projectRoot(path, root, sizeof root);
+        const char *slash = strrchr(path, '/');
+        if (root[0] && slash && (strlen(root) != (size_t)(slash - path) || strncmp(root, path, strlen(root)) != 0)) {
+            free(path);
+            return NULL;        /* a file of a module: the root's program */
+        }
+    }
+    int closed = 0;
+    if (lenientMethod(method) && doc) {
+        Doc t = *doc;
+        closeOpen(&t);
+        if (t.text != doc->text) {
+            closed = 1;
+            free(t.text);
+        }
+    }
+    StrBuf k = {0};
+    sbPrintf(&k, "%lu\n%d\n%s", docsGen, closed, path);
+    free(path);
+    return k.buf;
+}
+
+static bool sendRequest(int sock, const char *body, int fd) {
+    uint32_t n = (uint32_t)strlen(body);
+    char ctl[CMSG_SPACE(sizeof(int))];
+    memset(ctl, 0, sizeof ctl);
+    struct iovec iov = {&n, sizeof n};
+    struct msghdr mh = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl, .msg_controllen = sizeof ctl};
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&mh);
+    cm->cmsg_level = SOL_SOCKET;
+    cm->cmsg_type = SCM_RIGHTS;
+    cm->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cm), &fd, sizeof fd);
+    if (sendmsg(sock, &mh, 0) != (ssize_t)sizeof n) return false;
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(sock, body + off, n - off);
+        if (w <= 0) return false;
+        off += (size_t)w;
+    }
+    return true;
+}
+
+static char *recvRequest(int sock, int *fd) {
+    uint32_t n = 0;
+    char ctl[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = {&n, sizeof n};
+    struct msghdr mh = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl, .msg_controllen = sizeof ctl};
+    if (recvmsg(sock, &mh, MSG_WAITALL) != (ssize_t)sizeof n) return NULL;
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&mh);
+    if (!cm || cm->cmsg_type != SCM_RIGHTS) return NULL;
+    memcpy(fd, CMSG_DATA(cm), sizeof *fd);
+    char *body = malloc((size_t)n + 1);
+    size_t off = 0;
+    while (body && off < n) {
+        ssize_t r = read(sock, body + off, n - off);
+        if (r <= 0) {
+            free(body);
+            close(*fd);
+            return NULL;
+        }
+        off += (size_t)r;
+    }
+    if (body) body[n] = 0;
+    else close(*fd);
+    return body;
+}
+
+static void workerMain(int sock, const char *key) {
+    const char *nl = strchr(key, '\n');
+    int closed = nl && nl[1] == '1';
+    const char *path = nl ? nl + 3 : key;
+    for (int i = 0; closed && i < ndocs; i++) {
+        if (samePath(docs[i].path, path)) closeOpen(&docs[i]);
+    }
+    gLenient = true;
+    gLoadFailedHook = loadFailed;
+    kept.prog = analyze(path);
+    gLoadFailedHook = NULL;
+    kept.path = path;
+    for (;;) {
+        int fd = -1;
+        char *body = recvRequest(sock, &fd);
+        if (!body) _exit(0);
+        pid_t g = fork();
+        if (g == 0) {
+            close(sock);
+            alarm(20);      /* a hang: the reply pipe closes */
+            childStack();
+            const char *p = body;
+            J *m = jparse(&p);
+            StrBuf out = {0};
+            if (m) handleInChild(m, &out);
+            writeAll(fd, out.buf, out.len);
+            _exit(0);
+        }
+        close(fd);
+        free(body);
+        if (g > 0) waitpid(g, NULL, 0);
+    }
+}
+
+static bool startWorker(char *key) {
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return false;
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(sv[0]);
+        childStack();
+        workerMain(sv[1], key);
+        _exit(0);
+    }
+    close(sv[1]);
+    if (pid < 0) {
+        close(sv[0]);
+        return false;
+    }
+    worker.pid = pid;
+    worker.sock = sv[0];
+    worker.key = key;
+    return true;
+}
+
+/* Runs a message in a child of the worker that has its analysis, or in a
+ * child of its own when it needs another one. */
+static void runRequest(J *msg, const char *body) {
+    char *key = workerKey(msg);
+    if (!key) {
+        runInChild(msg);
+        return;
+    }
+    if (worker.pid > 0 && waitpid(worker.pid, NULL, WNOHANG) != 0) worker.pid = 0;    /* it died */
+    if (worker.pid <= 0 || strcmp(worker.key, key) != 0) {
+        stopWorker();
+        if (!startWorker(key)) {
+            free(key);
+            runInChild(msg);
+            return;
+        }
+    } else {
+        free(key);
+    }
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    bool sent = sendRequest(worker.sock, body, fds[1]);
+    close(fds[1]);
+    if (!sent) {
+        close(fds[0]);
+        stopWorker();
+        runInChild(msg);
+        return;
+    }
+    readReplies(msg, fds[0], 0);
+}
+
+/* Reads the replies that a child writes to fd and sends them. pid is the
+ * child, or 0 for a child of the worker. */
+static void readReplies(J *msg, int fd, pid_t pid) {
+    int fds[1] = {fd};
     StrBuf in = {0};
     char buf[65536];
     struct pollfd pfd = {fds[0], POLLIN, 0};
     for (;;) {
         int r = poll(&pfd, 1, 10000);
         if (r <= 0) {
-            kill(pid, SIGKILL);     /* the compiler hung: no reply */
+            if (pid > 0) kill(pid, SIGKILL);     /* the compiler hung: no reply */
+            else stopWorker();
             break;
         }
         ssize_t n = read(fds[0], buf, sizeof buf);
@@ -3792,7 +4117,7 @@ static void runInChild(J *msg) {
         sbPutn(&in, buf, (size_t)n);
     }
     close(fds[0]);
-    waitpid(pid, NULL, 0);
+    if (pid > 0) waitpid(pid, NULL, 0);
     bool answered = false;
     size_t i = 0;
     while (i < in.len) {
@@ -3884,10 +4209,13 @@ int cmdLsp(void) {
             }
             if (uri && text) {
                 setDoc(uri, text);
-                runInChild(msg);        /* diagnostics */
+                runRequest(msg, body);        /* diagnostics */
             }
         } else if (strcmp(method, "textDocument/didSave") == 0) {
-            runInChild(msg);
+            docsGen++;      /* the files on disk changed */
+            runRequest(msg, body);
+        } else if (strcmp(method, "workspace/didChangeWatchedFiles") == 0) {
+            docsGen++;      /* a file on disk changed: a new analysis reads it */
         } else if (strcmp(method, "textDocument/didClose") == 0) {
             const char *uri = jstr(jget(params, "textDocument"), "uri");
             if (uri) closeDoc(uri);
@@ -3905,7 +4233,7 @@ int cmdLsp(void) {
                    strcmp(method, "textDocument/references") == 0 ||
                    strcmp(method, "textDocument/prepareRename") == 0 || strcmp(method, "textDocument/rename") == 0 ||
                    strcmp(method, "textDocument/formatting") == 0) {
-            runInChild(msg);
+            runRequest(msg, body);
         } else if (id) {
             StrBuf b = {0};
             sbPuts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");

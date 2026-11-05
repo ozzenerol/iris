@@ -109,7 +109,8 @@ static const struct {
 
 static TokKind keyword(const char *s, int len) {
     for (size_t i = 0; i < sizeof keywords / sizeof keywords[0]; i++) {
-        if ((int)strlen(keywords[i].word) == len && memcmp(keywords[i].word, s, (size_t)len) == 0) {
+        if (keywords[i].word[0] == s[0] && (int)strlen(keywords[i].word) == len &&
+            memcmp(keywords[i].word, s, (size_t)len) == 0) {
             return keywords[i].kind;
         }
     }
@@ -408,6 +409,7 @@ Token *lexRange(Arena *a, Source *src, const char *start, const char *end,
         }
         bool found = false;
         for (size_t i = 0; i < sizeof puncts / sizeof puncts[0]; i++) {
+            if (puncts[i].s[0] != *L.p) continue;
             size_t n = strlen(puncts[i].s);
             if ((size_t)(L.end - L.p) >= n && memcmp(L.p, puncts[i].s, n) == 0) {
                 TokKind k = puncts[i].kind;

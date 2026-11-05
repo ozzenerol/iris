@@ -106,6 +106,8 @@ struct Scope {
     Sym *syms;
     int n, cap;
     bool function;          /* the outermost scope of a function */
+    int *slots;             /* a big scope: 1 + the index of each sym by its name's hash, 0 for none */
+    int nslots;
 };
 
 typedef struct Loop Loop;
@@ -205,7 +207,22 @@ static Scope *pushScope(Checker *c, bool function) {
 
 static void popScope(Checker *c) { c->scope = c->scope->parent; }
 
+static unsigned nameHash(const char *name) {
+    unsigned h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) h = (h ^ *p) * 16777619u;
+    return h;
+}
+
+/* A name's sym, the first one with that name. A scope with many names (a
+ * module's, which has a sym for each function) finds it by a hash. */
 static Sym *findIn(Scope *s, const char *name) {
+    if (s->slots) {
+        unsigned mask = (unsigned)(s->nslots - 1);
+        for (unsigned h = nameHash(name) & mask; s->slots[h]; h = (h + 1) & mask) {
+            if (strcmp(s->syms[s->slots[h] - 1].name, name) == 0) return &s->syms[s->slots[h] - 1];
+        }
+        return NULL;
+    }
     for (int i = 0; i < s->n; i++) {
         if (strcmp(s->syms[i].name, name) == 0) {
             return &s->syms[i];
@@ -268,6 +285,12 @@ static Node *lookup(Checker *c, const char *name) {
     return sym->decl;
 }
 
+static void hashSym(Scope *s, int i) {
+    unsigned mask = (unsigned)(s->nslots - 1), h = nameHash(s->syms[i].name) & mask;
+    while (s->slots[h]) h = (h + 1) & mask;
+    s->slots[h] = i + 1;
+}
+
 static void addSym(Checker *c, Scope *s, const char *name, Node *decl) {
     if (s->n == s->cap) {
         int cap = s->cap ? s->cap * 2 : 8;
@@ -279,6 +302,17 @@ static void addSym(Checker *c, Scope *s, const char *name, Node *decl) {
         s->cap = cap;
     }
     s->syms[s->n++] = (Sym){name, decl};
+    if (s->n < 32) return;
+    if (!s->slots || s->n * 2 > s->nslots) {
+        /* a new table for all the syms; linear probing keeps two syms of
+         * one name in the order that they came */
+        int ns = 64;
+        while (ns < s->n * 4) ns *= 2;
+        s->slots = arenaAlloc(c->arena, sizeof(int) * (size_t)ns);
+        s->nslots = ns;
+        for (int i = 0; i < s->n - 1; i++) hashSym(s, i);
+    }
+    hashSym(s, s->n - 1);
 }
 
 /* Declares a local. A name used by a local in an enclosing block of the

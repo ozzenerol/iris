@@ -434,6 +434,7 @@ static const char *findRoot(Arena *a, const char *dir) {
 }
 
 bool gLenient;
+void (*gLoadFailedHook)(void);
 
 Program *loadProgram(Arena *a, const char *path, const char **includes, int nincludes) {
     Loader L = {0};
@@ -474,6 +475,7 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
     if (L.failed && !gLenient) {
         return NULL;
     }
+    if (L.failed && gLoadFailedHook) gLoadFailedHook();     /* a strict load stops here */
     if (gExtraText) {
         /* comptime's helper: one more file of the program's module */
         listPush(a, &m->files, parseText(&L, gExtraPath, gExtraText, strlen(gExtraText)));
@@ -502,6 +504,7 @@ Program *loadProgram(Arena *a, const char *path, const char **includes, int ninc
         text->state = 2;
         L.prog->text = text;
     }
+    if (L.failed && gLenient && gLoadFailedHook) gLoadFailedHook();
     return L.failed && !gLenient ? NULL : L.prog;
 }
 
