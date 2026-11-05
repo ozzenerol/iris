@@ -10,7 +10,7 @@ The `iris` command builds, runs, tests, formats and documents programs, gets pac
 | `iris build main.iris` | compiles a program, or a project when given its folder; `-o name` names the output |
 | `iris check main.iris` | checks a program and its tests without compiling it |
 | `iris test [file] [name]` | runs the test blocks, or those whose name contains `name` |
-| `iris test --build -o tests [file]` | writes the test program and does not run it; `./tests name` runs it |
+| `iris test --build -o tests [file]` | writes the test program and does not run it; `./tests name` runs it, `./tests --exact name` runs one test |
 | `iris bench [file] [name]` | runs the bench blocks, built with `release-fast` |
 | `iris fmt file-or-folder` | puts code in the standard layout |
 | `iris doc http` | shows the documentation of a module, a name, a file or a project |

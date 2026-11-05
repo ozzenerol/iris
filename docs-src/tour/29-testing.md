@@ -86,10 +86,11 @@ FAIL a bad port
 
 - The exit status is 1 when a test failed, so a build script or CI stops there.
 - A name after the file runs only the tests whose name contains it: `iris test main.iris port`.
+- `--exact` and a name after the file runs only the test with that full name: `iris test main.iris --exact "parse a port"`.
 - In a project, `iris test` in its folder runs the main module's tests.
 - Tests are debug builds with every check on. An index out of range, an overflow, a `null` pointer or memory used after it was freed stops the run with its message.
 
-`iris test --build -o tests main.iris` writes the test program and does not run it. Run it with a test's name, or with no name for all of them: `./tests port`. A debugger can then run the tests with breakpoints, such as `iris gdb --args ./tests port` (see [Debugging](30-tools.html#debugging)). In the debugger a test's function is named `test "parse a port"`.
+`iris test --build -o tests main.iris` writes the test program and does not run it. Run it with a test's name, or with no name for all of them: `./tests port`. `./tests --exact "parse a port"` runs only that test. A debugger can then run the tests with breakpoints, such as `iris gdb --args ./tests --exact "parse a port"` (see [Debugging](30-tools.html#debugging)). In the debugger a test's function is named `test "parse a port"`.
 
 ## Tests that need more
 

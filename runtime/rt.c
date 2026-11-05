@@ -8062,8 +8062,17 @@ int iris_wire_encode(const WireFns *t, const char *p, IrisString *out) {
 static int testsRun, testsFailed;
 static int testFailedNow;
 
+/* The filter of a test or bench program: no argument runs all, NAME runs the
+   names that contain NAME, and --exact NAME runs only the name NAME. */
+static bool testSelected(const char *name) {
+    if (gArgc > 2 && strcmp(gArgv[1], "--exact") == 0) {
+        return strcmp(name, gArgv[2]) == 0;
+    }
+    return gArgc < 2 || strstr(name, gArgv[1]);
+}
+
 bool iris_test_start(const char *name) {
-    if (gArgc > 1 && !strstr(name, gArgv[1])) {
+    if (!testSelected(name)) {
         return false;
     }
     testFailedNow = 0;
@@ -8122,7 +8131,7 @@ int iris_test_summary(void) {
 static int benchesRun, benchesFailed;
 
 bool iris_bench_start(const char *name) {
-    if (gArgc > 1 && !strstr(name, gArgv[1])) {
+    if (!testSelected(name)) {
         return false;
     }
     benchesRun++;
